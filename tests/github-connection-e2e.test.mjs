@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { runGitHubIssueConformance } from "./github-connection-e2e.mjs";
 
@@ -33,6 +35,31 @@ test("GitHub conformance requires a Connection credential before networking", as
 		/CONNECTION_E2E_TOKEN is required/,
 	);
 	assert.equal(requests, 0);
+});
+
+test("GitHub conformance CLI emits structured failure evidence", () => {
+	const result = spawnSync(
+		process.execPath,
+		[
+			fileURLToPath(new URL("./github-connection-e2e.mjs", import.meta.url)),
+			"run-cli",
+		],
+		{
+			encoding: "utf8",
+			env: {
+				...process.env,
+				CONNECTION_E2E_TOKEN: "",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.deepEqual(JSON.parse(result.stderr), {
+		error: "CONNECTION_E2E_TOKEN is required",
+		outcome: "FAILED",
+		runId: "run-cli",
+	});
 });
 
 test("GitHub conformance rejects a mismatched repository before mutation", async () => {
@@ -90,6 +117,103 @@ test("GitHub conformance rejects a mismatched repository before mutation", async
 	]);
 });
 
+test("GitHub conformance rejects an unmarked created issue before later mutation", async () => {
+	const actions = [];
+	const fetch = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		const { arguments: args, name: tool } = request.params;
+		if (tool === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		if (tool === "get_action_guide") {
+			return actionGuide(request.id, args.actionId);
+		}
+		actions.push(args.actionId);
+		const result =
+			args.actionId === "github.get_repository"
+				? testRepository()
+				: {
+						body: "pre-existing issue",
+						number: 19,
+						state: "open",
+						title: "wrong",
+					};
+		return mcpResponse(request.id, {
+			action: args.actionId,
+			callId: `call-${actions.length}`,
+			result,
+			status: "SUCCEEDED",
+		});
+	};
+
+	await assert.rejects(
+		runGitHubIssueConformance({
+			environment: enabledEnvironment(),
+			fetch,
+			runId: "run-unmarked",
+		}),
+		/created issue ownership marker does not match/,
+	);
+	assert.deepEqual(actions, ["github.get_repository", "github.create_issue"]);
+});
+
+test("GitHub conformance rejects an unapproved ActionVersion before mutation", async () => {
+	const actions = [];
+	const fetch = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		const { arguments: args, name: tool } = request.params;
+		if (tool === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		if (tool === "get_action_guide") {
+			return mcpResponse(request.id, {
+				action: {
+					actionId: args.actionId,
+					actionVersionId: `${args.actionId}@v6`,
+					effect:
+						args.actionId.startsWith("github.get_") ||
+						args.actionId.startsWith("github.list_")
+							? "READ"
+							: "WRITE",
+				},
+			});
+		}
+		actions.push(args.actionId);
+		return mcpResponse(request.id, {
+			action: args.actionId,
+			callId: "call-preflight",
+			result: testRepository(),
+			status: "SUCCEEDED",
+		});
+	};
+
+	await assert.rejects(
+		runGitHubIssueConformance({
+			environment: enabledEnvironment(),
+			fetch,
+			runId: "run-version-drift",
+		}),
+		/unapproved ActionVersion/,
+	);
+	assert.deepEqual(actions, ["github.get_repository"]);
+});
+
 test("GitHub conformance completes the marked issue and comment lifecycle", async () => {
 	const actions = [];
 	const guides = [];
@@ -137,7 +261,11 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 					? { body: input.body, number: 17, state: "open", title: input.title }
 					: action === "github.get_issue"
 						? {
-								body: "connection-e2e:run-happy updated",
+								body: actions.some(
+									(entry) => entry.action === "github.update_issue",
+								)
+									? "connection-e2e:run-happy updated"
+									: "connection-e2e:run-happy created",
 								number: 17,
 								state: actions.some(
 									(entry) =>
@@ -146,12 +274,23 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 								)
 									? "closed"
 									: "open",
-								title: "connection-e2e:run-happy updated",
+								title: actions.some(
+									(entry) => entry.action === "github.update_issue",
+								)
+									? "connection-e2e:run-happy updated"
+									: "connection-e2e:run-happy conformance",
 							}
 						: action === "github.create_issue_comment"
 							? { body: input.body, id: 23 }
 							: action === "github.get_issue_comment"
-								? { body: "connection-e2e:run-happy comment updated", id: 23 }
+								? {
+										body: actions.some(
+											(entry) => entry.action === "github.update_issue_comment",
+										)
+											? "connection-e2e:run-happy comment updated"
+											: "connection-e2e:run-happy comment",
+										id: 23,
+									}
 								: action === "github.list_issue_comments"
 									? { comments: [] }
 									: {};
@@ -259,6 +398,7 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 			});
 		}
 		const action = args.actionId;
+		const input = args.input;
 		actions.push(action);
 		if (action === "github.delete_issue_comment") {
 			return Response.json({
@@ -276,12 +416,32 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 						private: true,
 					}
 				: action === "github.create_issue"
-					? { number: 18 }
-					: action === "github.create_issue_comment"
-						? { id: 24 }
-						: action === "github.get_issue_comment"
-							? { body: "connection-e2e:run-uncertain comment updated", id: 24 }
-							: {};
+					? { body: input.body, number: 18, state: "open", title: input.title }
+					: action === "github.get_issue"
+						? {
+								body: "connection-e2e:run-uncertain created",
+								number: 18,
+								state:
+									actions.filter((entry) => entry === "github.update_issue")
+										.length > 1
+										? "closed"
+										: "open",
+								title: "connection-e2e:run-uncertain conformance",
+							}
+						: action === "github.create_issue_comment"
+							? { body: input.body, id: 24 }
+							: action === "github.get_issue_comment"
+								? {
+										body: actions.some(
+											(entry) => entry === "github.update_issue_comment",
+										)
+											? "connection-e2e:run-uncertain comment updated"
+											: "connection-e2e:run-uncertain comment",
+										id: 24,
+									}
+								: action === "github.list_issue_comments"
+									? { comments: [] }
+									: {};
 		return mcpResponse(request.id, {
 			action,
 			callId: `call-${actions.length}`,
@@ -290,16 +450,18 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 		});
 	};
 
-	await assert.rejects(
-		runGitHubIssueConformance({
-			environment: enabledEnvironment(),
-			fetch,
-			runId: "run-uncertain",
-		}),
-		/outcome is uncertain/,
-	);
+	const result = await runGitHubIssueConformance({
+		environment: enabledEnvironment(),
+		fetch,
+		runId: "run-uncertain",
+	});
+	assert.equal(result.cleanup, "RECONCILED");
 	assert.equal(
 		actions.filter((action) => action === "github.delete_issue_comment").length,
+		1,
+	);
+	assert.equal(
+		actions.filter((action) => action === "github.list_issue_comments").length,
 		1,
 	);
 });
@@ -317,4 +479,27 @@ function mcpResponse(id, structuredContent) {
 		jsonrpc: "2.0",
 		result: { structuredContent },
 	});
+}
+
+function actionGuide(id, actionId) {
+	return mcpResponse(id, {
+		action: {
+			actionId,
+			actionVersionId: `${actionId}@v5`,
+			effect:
+				actionId.startsWith("github.get_") ||
+				actionId.startsWith("github.list_")
+					? "READ"
+					: "WRITE",
+		},
+	});
+}
+
+function testRepository() {
+	return {
+		default_branch: "main",
+		full_name: "AGORAconnectionE2E/connector-conformance",
+		id: 1368335067,
+		private: true,
+	};
 }

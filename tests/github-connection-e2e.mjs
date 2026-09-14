@@ -52,7 +52,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		const payload = await response.json();
 		if (payload.error) {
 			throw new Error(
-				`Connection MCP error: ${payload.error.message ?? "unknown"}`,
+				`Connection MCP error ${payload.error.code ?? "unknown"}`,
 			);
 		}
 		return payload.result?.structuredContent;
@@ -89,11 +89,14 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	const actionVersions = {};
 	for (const [actionId, effect] of Object.entries(actionEffects)) {
 		const guide = await call("get_action_guide", { actionId });
+		const approvedVersion = `${actionId}@v5`;
+		if (guide?.action?.actionVersionId !== approvedVersion) {
+			throw new Error(`${actionId} has an unapproved ActionVersion`);
+		}
 		if (
 			guide?.action?.actionId !== actionId ||
 			guide.action.effect !== effect ||
-			typeof guide.action.actionVersionId !== "string" ||
-			!guide.action.actionVersionId
+			typeof guide.action.actionVersionId !== "string"
 		) {
 			throw new Error(`${actionId} contract does not match`);
 		}
@@ -127,6 +130,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	let commentDeleteStarted = false;
 	let issueClosed = false;
 	let issueCloseStarted = false;
+	let cleanup = "SUCCEEDED";
 	try {
 		const issue = await execute("github.create_issue", {
 			...repositoryInput,
@@ -134,9 +138,31 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			idempotencyKey: key("issue-create"),
 			title: `${marker} conformance`,
 		});
-		issueNumber = requirePositiveInteger(issue?.number, "created issue number");
+		const createdIssueNumber = requirePositiveInteger(
+			issue?.number,
+			"created issue number",
+		);
+		if (
+			issue?.body !== `${marker} created` ||
+			issue?.title !== `${marker} conformance` ||
+			issue?.state !== "open"
+		) {
+			throw new Error("created issue ownership marker does not match");
+		}
+		issueNumber = createdIssueNumber;
 
-		await execute("github.get_issue", { ...repositoryInput, issueNumber });
+		const createdIssue = await execute("github.get_issue", {
+			...repositoryInput,
+			issueNumber,
+		});
+		if (
+			createdIssue?.body !== `${marker} created` ||
+			createdIssue?.number !== issueNumber ||
+			createdIssue?.state !== "open" ||
+			createdIssue?.title !== `${marker} conformance`
+		) {
+			throw new Error("created issue readback does not match");
+		}
 		await execute("github.update_issue", {
 			...repositoryInput,
 			body: `${marker} updated`,
@@ -151,11 +177,24 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			idempotencyKey: key("comment-create"),
 			issueNumber,
 		});
-		commentId = requirePositiveInteger(comment?.id, "created comment ID");
-		await execute("github.get_issue_comment", {
+		const createdCommentId = requirePositiveInteger(
+			comment?.id,
+			"created comment ID",
+		);
+		if (comment?.body !== `${marker} comment`) {
+			throw new Error("created comment ownership marker does not match");
+		}
+		commentId = createdCommentId;
+		const createdComment = await execute("github.get_issue_comment", {
 			...repositoryInput,
 			commentId,
 		});
+		if (
+			createdComment?.body !== `${marker} comment` ||
+			createdComment?.id !== commentId
+		) {
+			throw new Error("created comment readback does not match");
+		}
 		await execute("github.update_issue_comment", {
 			...repositoryInput,
 			body: `${marker} comment updated`,
@@ -171,21 +210,38 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		}
 
 		commentDeleteStarted = true;
-		await execute("github.delete_issue_comment", {
-			...repositoryInput,
-			commentId,
-			idempotencyKey: key("comment-delete"),
-		});
-		commentDeleted = true;
-		const comments = await execute("github.list_issue_comments", {
-			...repositoryInput,
-			issueNumber,
-		});
-		if (
-			!Array.isArray(comments?.comments) ||
-			comments.comments.some((entry) => entry?.id === commentId)
-		) {
-			throw new Error("deleted comment is still visible");
+		try {
+			await execute("github.delete_issue_comment", {
+				...repositoryInput,
+				commentId,
+				idempotencyKey: key("comment-delete"),
+			});
+			commentDeleted = true;
+		} catch (error) {
+			const reconciliation = await execute("github.list_issue_comments", {
+				...repositoryInput,
+				issueNumber,
+			});
+			if (
+				!Array.isArray(reconciliation?.comments) ||
+				reconciliation.comments.some((entry) => entry?.id === commentId)
+			) {
+				throw error;
+			}
+			commentDeleted = true;
+			cleanup = "RECONCILED";
+		}
+		if (cleanup === "SUCCEEDED") {
+			const comments = await execute("github.list_issue_comments", {
+				...repositoryInput,
+				issueNumber,
+			});
+			if (
+				!Array.isArray(comments?.comments) ||
+				comments.comments.some((entry) => entry?.id === commentId)
+			) {
+				throw new Error("deleted comment is still visible");
+			}
 		}
 
 		issueCloseStarted = true;
@@ -203,7 +259,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		if (closedIssue?.state !== "closed") {
 			throw new Error("test issue is not closed");
 		}
-		return { actionVersions, calls, cleanup: "SUCCEEDED", issueNumber, runId };
+		return { actionVersions, calls, cleanup, issueNumber, runId };
 	} finally {
 		if (commentId && !commentDeleted && !commentDeleteStarted) {
 			await execute("github.delete_issue_comment", {
@@ -234,15 +290,22 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
+	const runId = process.argv[2]?.trim() || randomUUID();
 	try {
 		const result = await runGitHubIssueConformance({
 			environment: process.env,
 			fetch: globalThis.fetch,
-			runId: process.argv[2]?.trim() || randomUUID(),
+			runId,
 		});
 		console.log(JSON.stringify(result));
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : "GitHub E2E failed");
+		console.error(
+			JSON.stringify({
+				error: error instanceof Error ? error.message : "GitHub E2E failed",
+				outcome: "FAILED",
+				runId,
+			}),
+		);
 		process.exitCode = 1;
 	}
 }

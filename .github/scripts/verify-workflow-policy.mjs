@@ -302,7 +302,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         jobName !== "conformance" ||
         step.name !== "Run deterministic Connection GitHub conformance" ||
         step.run !==
-          'set -o pipefail\nnode tests/github-connection-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | tee connection-github-e2e-result.json\n' ||
+          'set -o pipefail\nnode tests/github-connection-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json\n' ||
         step.env?.CONNECTION_E2E_TOKEN !==
           "${{ secrets.CONNECTION_E2E_TOKEN }}" ||
         occurrences !== 1
