@@ -236,7 +236,6 @@ function assertReadResult(actionId, result) {
 		"github.list_workflow_run_jobs": ["id", 103940918709],
 		"github.list_workflow_runs": ["id", 34833158492],
 		"github.list_repository_workflows": ["id", 357727076],
-		"github.search_code": ["path", "fixtures/read-target.txt"],
 		"github.search_commits": [
 			"sha",
 			"410b111ccf673ab03ecb7239391442e226ad48fd",
@@ -269,6 +268,7 @@ function assertReadResult(actionId, result) {
 		"github.list_repository_forks",
 		"github.list_repository_topics",
 		"github.list_repository_watchers",
+		"github.search_code",
 		"github.search_topics",
 	]);
 	if (!member && expectedEmpty.has(actionId) && result[envelope].length !== 0) {
