@@ -79,14 +79,14 @@ jobs:
 
       - name: Verify Generic ACP and OpenCode conformance in the pinned Linux image
         run: |
-          docker run --rm --pull=never --network=none --read-only \
+          docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
             --env OPENCODE_EXECUTABLE=/opt/opencode/bin/opencode \
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \
-            src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --cache=false
+            src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
       - name: Build applications
         run: pnpm build
