@@ -123,6 +123,15 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		});
 		return projection.result;
 	};
+	const expectProviderNotFound = async (actionId, input) => {
+		try {
+			await call("execute_action", { actionId, input });
+		} catch (error) {
+			if (errorMessage(error) === "Connection MCP error -32001") return;
+			throw error;
+		}
+		throw new Error(`${actionId} remained readable after deletion`);
+	};
 	const marker = `connection-e2e:${runId}`;
 	const assertOwnedIssue = (issue) => {
 		const hasCreatedMarker =
@@ -279,6 +288,10 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				throw new Error("deleted comment is still visible");
 			}
 		}
+		await expectProviderNotFound("github.get_issue_comment", {
+			...repositoryInput,
+			commentId,
+		});
 
 		const issueBeforeClose = await execute("github.get_issue", {
 			...repositoryInput,

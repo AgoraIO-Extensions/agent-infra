@@ -217,6 +217,7 @@ test("GitHub conformance rejects an unapproved ActionVersion before mutation", a
 test("GitHub conformance completes the marked issue and comment lifecycle", async () => {
 	const actions = [];
 	const guides = [];
+	let notFoundReads = 0;
 	const fetch = async (_url, init) => {
 		const request = JSON.parse(init.body);
 		const tool = request.params.name;
@@ -248,6 +249,17 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 		}
 		const action = args.actionId;
 		const input = args.input;
+		if (
+			action === "github.get_issue_comment" &&
+			actions.some((entry) => entry.action === "github.delete_issue_comment")
+		) {
+			notFoundReads += 1;
+			return Response.json({
+				error: { code: -32001, message: "Provider request failed" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
+		}
 		actions.push({ action, input });
 		const result =
 			action === "github.get_repository"
@@ -338,6 +350,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 		"github.delete_issue_comment",
 		"github.list_issue_comments",
 	]);
+	assert.equal(notFoundReads, 1);
 	const writes = actions.filter((entry) =>
 		[
 			"github.create_issue",
@@ -379,6 +392,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 
 test("GitHub conformance never retries a started comment deletion", async () => {
 	const actions = [];
+	let notFoundReads = 0;
 	const fetch = async (_url, init) => {
 		const request = JSON.parse(init.body);
 		const tool = request.params.name;
@@ -409,6 +423,17 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 		}
 		const action = args.actionId;
 		const input = args.input;
+		if (
+			action === "github.get_issue_comment" &&
+			actions.includes("github.delete_issue_comment")
+		) {
+			notFoundReads += 1;
+			return Response.json({
+				error: { code: -32001, message: "Provider request failed" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
+		}
 		actions.push(action);
 		if (action === "github.delete_issue_comment") {
 			return Response.json({
@@ -478,6 +503,7 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 		actions.filter((action) => action === "github.list_issue_comments").length,
 		1,
 	);
+	assert.equal(notFoundReads, 1);
 });
 
 function enabledEnvironment() {
