@@ -315,6 +315,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			"github.create_issue",
 			"github.get_issue",
 			"github.update_issue",
+			"github.get_issue",
 			"github.create_issue_comment",
 			"github.get_issue_comment",
 			"github.update_issue_comment",
@@ -419,14 +420,18 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 					? { body: input.body, number: 18, state: "open", title: input.title }
 					: action === "github.get_issue"
 						? {
-								body: "connection-e2e:run-uncertain created",
+								body: actions.some((entry) => entry === "github.update_issue")
+									? "connection-e2e:run-uncertain updated"
+									: "connection-e2e:run-uncertain created",
 								number: 18,
 								state:
 									actions.filter((entry) => entry === "github.update_issue")
 										.length > 1
 										? "closed"
 										: "open",
-								title: "connection-e2e:run-uncertain conformance",
+								title: actions.some((entry) => entry === "github.update_issue")
+									? "connection-e2e:run-uncertain updated"
+									: "connection-e2e:run-uncertain conformance",
 							}
 						: action === "github.create_issue_comment"
 							? { body: input.body, id: 24 }
