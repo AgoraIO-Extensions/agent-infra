@@ -58,9 +58,9 @@ ConsumerInstance；GitHub OAuth credential 不进入 GitHub Actions。GitHub-hos
 必须能访问 Connection endpoint；网络不可达时本次运行失败，不能自动切换 runner 后重放 mutation。
 若长期不可达，需经评审把 workflow 固定迁移到受控 self-hosted runner。
 
-受监督验收通过 `workflow_dispatch` 从 `connection` ref 加载 workflow，并固定 checkout 受信任的
-`connection` 分支。GitHub schedule 只加载默认分支上的 workflow；默认分支未同步该定义时，scheduled
-run 不作为 `connection` 分支的验收证据。
+受监督验收通过 `workflow_dispatch` 从 `connection` ref 加载 workflow，并将 checkout 固定到本次
+dispatch 对应的不可变 `github.sha`。GitHub schedule 只加载默认分支上的 workflow；默认分支未同步
+该定义时，scheduled run 不作为 `connection` 分支的验收证据。
 
 当前生命周期覆盖 Issue 和 comment 的创建、读取、更新、删除 comment 与关闭 Issue。暂不执行
 repository 删除、协作者变更、fork、workflow、merge 或 release mutation。
