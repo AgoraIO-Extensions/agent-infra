@@ -67,11 +67,72 @@ export interface CodexModelAccess {
 }
 
 const modelCredentialEnvironmentKey = "AGENT_INFRA_CODEX_MODEL_CREDENTIAL";
+// One native process per Conversation owns exactly one directory beneath this
+// boundary; the pinned permission profile denies the boundary itself.
+const conversationBoundaryDirectory = "conversations";
+const conversationPermissionProfileId = "agent_infra_conversation";
+const conversationKeyPattern = /^[a-f0-9]{64}$/;
+const loopbackProxyExclusions = "127.0.0.1,::1,localhost";
+// Conversation data is only ever regular files and directories, so the boundary
+// handles the filesystem rights that reach them. ioctl-dev governs character and
+// block devices, which hold no Conversation data, and handling it would only risk
+// breaking native device access without adding isolation.
+const landlockDataRights = [
+	"execute",
+	"write-file",
+	"read-file",
+	"read-dir",
+	"remove-dir",
+	"remove-file",
+	"make-char",
+	"make-dir",
+	"make-reg",
+	"make-sock",
+	"make-fifo",
+	"make-block",
+	"make-sym",
+	"refer",
+	"truncate",
+].join(",");
+const landlockProgramRights = "execute,read-file,read-dir";
+const landlockMetadataRights = "read-file,read-dir";
+const landlockDirectoryRights = "read-dir";
+// Devices only ever need to be opened and written; the native process never
+// creates or removes entries beneath `/dev`.
+const landlockDeviceRights = "read-file,read-dir,write-file";
+// The platform Landlock domain is the whole Conversation boundary on Linux, so
+// pinned Codex must not add its own filesystem sandbox on top of it: the pinned
+// legacy Landlock backend needs `read-dir` on `/`, and Landlock only ever adds
+// access, so granting that would make every sibling Conversation listable again.
+const linuxNativeSandboxMode = "danger-full-access";
+
+/**
+ * Stable native storage key for one Conversation generation. Derived from
+ * server-resolved identity only, so a wire field can never select or traverse
+ * into another Conversation's native directory.
+ */
+export function codexConversationKey(binding: {
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly sessionGeneration: number;
+}) {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				binding.agentId,
+				binding.conversationId,
+				binding.sessionGeneration,
+			]),
+		)
+		.digest("hex");
+}
 
 export interface CodexAppServerBridgeOptions {
 	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
+	// Server-derived Conversation storage key from codexConversationKey.
+	readonly conversationKey: string;
 	readonly model: string;
 	readonly reasoningEffort: string;
 	readonly modelAccess?: CodexModelAccess;
@@ -107,6 +168,7 @@ export class CodexAppServerBridgeError extends Error {
 interface ValidatedOptions {
 	readonly launchPath?: string;
 	dataDirectory: string;
+	conversationKey: string;
 	model: string;
 	reasoningEffort: string;
 	modelAccess?: CodexModelAccess;
@@ -282,6 +344,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	const allowedKeys = [
 		"launchPath",
 		"dataDirectory",
+		"conversationKey",
 		"model",
 		"reasoningEffort",
 		"modelAccess",
@@ -300,6 +363,8 @@ function validateOptions(input: unknown): ValidatedOptions {
 		[...input.dataDirectory].some(
 			(character) => character.charCodeAt(0) < 32,
 		) ||
+		typeof input.conversationKey !== "string" ||
+		!conversationKeyPattern.test(input.conversationKey) ||
 		typeof input.model !== "string" ||
 		(!realModelPattern.test(input.model) &&
 			!namespacedModelPattern.test(input.model)) ||
@@ -329,6 +394,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	return {
 		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
+		conversationKey: input.conversationKey,
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
 		...(modelAccess ? { modelAccess } : {}),
@@ -478,15 +544,40 @@ async function removeIsolatedDirectory(directory: string) {
 	}
 }
 
+interface ConversationLaunchPolicy extends IsolatedLaunchPolicy {
+	// Native filesystem boundary the enforced policy excludes.
+	boundary: string;
+	root: string;
+	home: string;
+}
+
+async function ensureOwnedDirectory(directory: string, create: boolean) {
+	if (create) {
+		await mkdir(directory, { mode: 0o700 }).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "EEXIST") throw error;
+			},
+		);
+	}
+	const metadata = await lstat(directory);
+	if (
+		!metadata.isDirectory() ||
+		(process.getuid &&
+			(metadata.uid !== process.getuid() || (metadata.mode & 0o077) !== 0))
+	)
+		configurationInvalid();
+}
+
 async function persistentLaunchPolicy(
 	dataDirectory: string,
+	conversationKey: string,
 	isolated: IsolatedLaunchPolicy,
-): Promise<IsolatedLaunchPolicy> {
+): Promise<ConversationLaunchPolicy> {
 	try {
 		// Resolve the deployment parent (for example a mounted PVC), never follow a
-		// symlink at the data root or either native data directory.
+		// symlink at the data root or any native data directory.
 		const parent = await realpath(dirname(dataDirectory));
-		const root = join(parent, basename(dataDirectory));
+		const dataRoot = join(parent, basename(dataDirectory));
 		for (const personal of [
 			process.env.HOME,
 			process.env.CODEX_HOME,
@@ -498,36 +589,35 @@ async function persistentLaunchPolicy(
 				? canonical
 				: `${canonical}${sep}`;
 			if (
-				canonical === root ||
-				canonical.startsWith(`${root}${sep}`) ||
-				root.startsWith(personalPrefix)
+				canonical === dataRoot ||
+				canonical.startsWith(`${dataRoot}${sep}`) ||
+				dataRoot.startsWith(personalPrefix)
 			)
 				configurationInvalid();
 		}
+		// One directory per Conversation generation beneath a shared boundary. The
+		// key is server-derived, so siblings can never be named by a wire field.
+		const boundary = join(dataRoot, conversationBoundaryDirectory);
+		const root = join(boundary, conversationKey);
+		const home = join(root, "home");
+		const workspace = join(root, "workspace");
+		await ensureOwnedDirectory(dataRoot, true);
+		await ensureOwnedDirectory(boundary, true);
+		// A Conversation that already owns storage never has a lost directory
+		// recreated; its native operations and replay fail closed instead.
 		const existing = await lstat(root).catch((error: NodeJS.ErrnoException) => {
 			if (error.code === "ENOENT") return undefined;
 			throw error;
 		});
-		for (const directory of [
-			root,
-			join(root, "home"),
-			join(root, "workspace"),
-		]) {
-			if (!existing) await mkdir(directory, { mode: 0o700 });
-			const metadata = await lstat(directory);
-			if (
-				!metadata.isDirectory() ||
-				(process.getuid &&
-					(metadata.uid !== process.getuid() || (metadata.mode & 0o077) !== 0))
-			)
-				configurationInvalid();
+		for (const directory of [root, home, workspace]) {
+			await ensureOwnedDirectory(directory, !existing);
 		}
 		// Durable native state is not a source of credentials or configuration.
 		for (const file of [
-			join(root, "home", "config.toml"),
-			join(root, "home", "managed_config.toml"),
-			join(root, "home", "auth.json"),
-			join(root, "workspace", ".codex"),
+			join(home, "config.toml"),
+			join(home, "managed_config.toml"),
+			join(home, "auth.json"),
+			join(workspace, ".codex"),
 		]) {
 			const found = await lstat(file).catch((error: NodeJS.ErrnoException) => {
 				if (error.code === "ENOENT") return undefined;
@@ -536,10 +626,13 @@ async function persistentLaunchPolicy(
 			if (found) configurationInvalid();
 		}
 		return {
-			directory: join(root, "workspace"),
+			directory: workspace,
+			boundary,
+			root,
+			home,
 			environment: {
 				...isolated.environment,
-				CODEX_HOME: join(root, "home"),
+				CODEX_HOME: home,
 				TMPDIR: isolated.directory,
 			},
 		};
@@ -547,6 +640,135 @@ async function persistentLaunchPolicy(
 		if (error instanceof CodexAppServerBridgeError) throw error;
 		throw unavailable();
 	}
+}
+
+/**
+ * Darwin cannot wrap the native process in a further restricted Seatbelt
+ * profile: pinned Codex runs its own tools through `sandbox-exec`, and any
+ * enforcing outer profile makes the nested `sandbox_apply` fail, which would
+ * disable every tool instead of isolating Conversations. Pinned Codex therefore
+ * enforces this profile itself. Denying the shared boundary keeps every other
+ * Conversation's native workspace and history unreadable, while the owning
+ * Conversation keeps a writable workspace and a read-only native home, so model
+ * tools cannot write native configuration, skills, or history.
+ */
+function conversationPermissionArguments(policy: ConversationLaunchPolicy) {
+	const filesystem = [
+		[policy.boundary, "deny"],
+		[policy.home, "read"],
+		[policy.directory, "write"],
+	]
+		.map(
+			([path, access]) => `${JSON.stringify(path)}=${JSON.stringify(access)}`,
+		)
+		.join(",");
+	return [
+		"--config",
+		`permissions={${conversationPermissionProfileId}={extends=":workspace",filesystem={${filesystem}}}}`,
+		"--config",
+		`default_permissions=${JSON.stringify(conversationPermissionProfileId)}`,
+	];
+}
+
+/**
+ * A boundary rule may only name a directory whose every component is already
+ * canonical. `lstat` alone would accept a symlinked ancestor, and Landlock
+ * attaches a rule to the resolved directory, so such an entry could silently
+ * widen the boundary to a tree the deployment never intended to allow.
+ */
+async function canonicalDirectory(path: string) {
+	// The helper resolves rule paths in the native process working directory, so
+	// a relative entry would either fail the launch or name another directory.
+	if (!isAbsolute(path) || resolve(path) !== path) return undefined;
+	if ((await realpath(path).catch(() => undefined)) !== path) return undefined;
+	const metadata = await lstat(path).catch(() => undefined);
+	return metadata?.isDirectory() === true ? path : undefined;
+}
+
+function withinTree(path: string, tree: string) {
+	return path === tree || path.startsWith(`${tree}${sep}`);
+}
+
+/**
+ * Linux keeps the pinned legacy Landlock backend, which refuses a permission
+ * profile requiring direct runtime enforcement. The deployment's trusted
+ * `setpriv` therefore applies the boundary to the whole native process instead.
+ * Landlock rules only ever add access, so an allowlist is the only way to
+ * exclude a sibling Conversation; Landlock rulesets stack, so pinned Codex still
+ * applies its own policy to tool children beneath this one.
+ */
+async function conversationLandlockArguments(
+	executable: string,
+	launchPath: string | undefined,
+	policy: ConversationLaunchPolicy,
+) {
+	const rules: string[] = [];
+	const rule = (rights: string, path: string) =>
+		`path-beneath:${rights}:${path}`;
+	// Every rule outside this Conversation is an allowlist entry, so it must not
+	// reach the shared boundary in either direction: an entry inside it would
+	// expose a sibling Conversation, and an entry containing it would expose all
+	// of them. A release installed directly in a system root is rejected here
+	// rather than silently granting that root.
+	const allow = async (rights: string, path: string) => {
+		const directory = await canonicalDirectory(path);
+		if (!directory) return;
+		if (
+			withinTree(directory, policy.boundary) ||
+			withinTree(policy.boundary, directory)
+		)
+			return;
+		rules.push("--landlock-rule", rule(rights, directory));
+	};
+	// This Conversation's own directories are required, so a missing or
+	// non-canonical one fails the launch instead of dropping the rule.
+	const allowOwned = async (rights: string, path: string) => {
+		const directory = await canonicalDirectory(path);
+		if (!directory || !withinTree(directory, policy.root)) throw unavailable();
+		rules.push("--landlock-rule", rule(rights, directory));
+	};
+	// The pinned release and its bundled resources stay read-only.
+	await allow(landlockProgramRights, dirname(dirname(executable)));
+	for (const entry of (launchPath ?? "").split(delimiter)) {
+		if (entry) await allow(landlockProgramRights, entry);
+	}
+	for (const path of ["/bin", "/sbin", "/usr", "/lib", "/lib64"]) {
+		await allow(landlockProgramRights, path);
+	}
+	for (const path of ["/etc", "/sys"]) {
+		await allow(landlockMetadataRights, path);
+	}
+	// `/proc` is only listed, never read. Landlock already denies reading another
+	// domain's process entries, so this closes the remaining path: a model tool
+	// reading its own native process's `environ` and lifting the model credential.
+	await allow(landlockDirectoryRights, "/proc");
+	await allow(landlockDeviceRights, "/dev");
+	// Only the ephemeral HOME/TMPDIR and this Conversation's own directories; the
+	// Conversation root itself is never writable, only the two it owns.
+	const ephemeral = policy.environment.TMPDIR;
+	if (ephemeral) await allow(landlockDataRights, ephemeral);
+	for (const owned of [policy.home, policy.directory]) {
+		await allowOwned(landlockDataRights, owned);
+	}
+	return [
+		"--no-new-privs",
+		"--landlock-access",
+		`fs:${landlockDataRights}`,
+		...rules,
+	];
+}
+
+/**
+ * The platform never routes a native process's loopback traffic through a
+ * proxy: the active model endpoint is always loopback, and a host proxy
+ * configuration must not intercept it. The launch environment carries no proxy
+ * variables of its own, so this only refuses an operating-system proxy.
+ */
+function loopbackProxyEnvironment() {
+	return {
+		NO_PROXY: loopbackProxyExclusions,
+		no_proxy: loopbackProxyExclusions,
+	};
 }
 
 interface CommandOutput {
@@ -753,24 +975,50 @@ export class CodexAppServerBridge {
 		const launchPath = validated.launchPath ?? env.PATH;
 		const executable = await resolveExecutable(launchPath, "codex");
 		const launchPolicy = await createIsolatedLaunchPolicy(launchPath);
-		let nativeLaunchPolicy: IsolatedLaunchPolicy;
+		let nativeLaunchPolicy: ConversationLaunchPolicy;
+		let boundary: string[];
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
 			nativeLaunchPolicy = await persistentLaunchPolicy(
 				validated.dataDirectory,
+				validated.conversationKey,
 				launchPolicy,
 			);
+			// A platform without an enforceable Conversation boundary never starts a
+			// native process; there is no unrestricted fallback.
+			if (platform === "linux") {
+				const helper = await resolveExecutable(launchPath, "setpriv");
+				boundary = [
+					helper,
+					...(await conversationLandlockArguments(
+						executable,
+						launchPath,
+						nativeLaunchPolicy,
+					)),
+					"--",
+				];
+			} else if (platform === "darwin") {
+				boundary = [];
+			} else {
+				throw new CodexAppServerBridgeError(
+					"CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
+					"Codex requires an enforceable Conversation filesystem boundary",
+				);
+			}
 		} catch (error) {
 			await removeIsolatedDirectory(launchPolicy.directory);
 			throw error;
 		}
+		const [command = executable, ...boundaryArguments] = boundary;
 		let process: ChildProcessWithoutNullStreams;
 		try {
 			process = spawn(
-				executable,
+				command,
 				[
+					...boundaryArguments,
+					...(boundary.length > 0 ? [executable] : []),
 					"app-server",
 					"--stdio",
 					"--strict-config",
@@ -782,11 +1030,22 @@ export class CodexAppServerBridge {
 					"mcp_servers={}",
 					"--config",
 					"features.plugins=false",
-					// Landlock enforces the native policy without namespace privileges.
-					// Admission above requires the full pinned filesystem capability set.
+					// On Linux the boundary above is the only filesystem boundary. The
+					// pinned legacy Landlock backend has to read the whole filesystem
+					// tree before it runs a tool, so keeping it enabled would force a
+					// recursive `read-dir` grant on `/` that re-exposes every sibling
+					// Conversation. See the ADR for the measured trade-off.
 					...(platform === "linux"
-						? ["--config", "features.use_legacy_landlock=true"]
-						: []),
+						? [
+								"--config",
+								`sandbox_mode=${JSON.stringify(linuxNativeSandboxMode)}`,
+								// If a pinned code path still sandboxes a child, keep it on
+								// the backend this deployment can run: the namespace sandbox
+								// needs privileges the runtime never has.
+								"--config",
+								"features.use_legacy_landlock=true",
+							]
+						: conversationPermissionArguments(nativeLaunchPolicy)),
 					...modelAccessArguments(validated.modelAccess),
 				],
 				{
@@ -794,6 +1053,7 @@ export class CodexAppServerBridge {
 					cwd: nativeLaunchPolicy.directory,
 					env: {
 						...nativeLaunchPolicy.environment,
+						...loopbackProxyEnvironment(),
 						...(validated.modelAccess
 							? {
 									[modelCredentialEnvironmentKey]:

@@ -67,6 +67,16 @@ jobs:
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/codex-native-recovery.test.ts --cache=false
 
+      - name: Verify native Claude conformance in the pinned Linux image
+        run: |
+          docker run --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/claude-native.test.ts src/claude-runtime-driver.test.ts \
+            src/runtime-driver-conformance.test.ts --cache=false
+
       - name: Build applications
         run: pnpm build
 

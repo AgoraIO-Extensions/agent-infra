@@ -1,0 +1,35 @@
+{
+	"sdkVersion": "0.3.246",
+	"nativeVersion": "2.1.246",
+	"sdk": {
+		"sdk.mjs": "bf86ef08eff553cb8e64262ab1575c76f9a7f4a7a3b4d5dc723e4f3bc6e568af",
+		"package.json": "e629045710dfe1308691ac81a42573508c18d9062a2f4c8676a24e116689714c"
+	},
+	"artifacts": {
+		"darwin-arm64": {
+			"package": "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+			"integrity": "sha512-pYDv2RT+UVOvEapMEWKf7Gm5a87Si1Zf+XR23IMGYbG5mESatNJ8Gz2PmkrwfTezZknb0ljWZe8zgcTFITM3dA==",
+			"executableSha256": "7b09f01cb76a38e0e3a7c47c5d698d382162a5ff26538fc778683770caf9218b"
+		},
+		"linux-arm64-musl": {
+			"package": "@anthropic-ai/claude-agent-sdk-linux-arm64-musl",
+			"integrity": "sha512-AeiDXveuA9dVRDouSRiQzL40P3dOuJPfZOlwwsFNbVUN0D+06WtwgmeWYnyRG4dxsM67Pf4lYcRZ0x9pfEZUwQ==",
+			"executableSha256": "8f7d77a91b95dbeda31393463b2ac7d2b490c577486829b732ce1ac41a747034"
+		},
+		"linux-x64-musl": {
+			"package": "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
+			"integrity": "sha512-+3PrWX3qXgakO3tZImr7keKFry5XIkbHBEaUxgi3/RtPmxGwS+JdVAr0xxzOoC2F6Y66Kn0lUnztRnZHORBc+Q==",
+			"executableSha256": "81de46c50d987b99d2a1b4f3b11f3acf8c6deb57bef2a41f8e770837ddcf52fb"
+		},
+		"linux-arm64": {
+			"package": "@anthropic-ai/claude-agent-sdk-linux-arm64",
+			"integrity": "sha512-t7AEewD7bcjZYMmrfFLjsUSxPo4z+5J5O5cC9V2zOvAhNkefdMeGWI2/1cdqZxuaOiFVt46byjlZuiNNunF+bQ==",
+			"executableSha256": "f98296e6e61c507589d1a973b262976b734700ec4e055cb64afdbf6d9a337db7"
+		},
+		"linux-x64": {
+			"package": "@anthropic-ai/claude-agent-sdk-linux-x64",
+			"integrity": "sha512-BIbBlJ6x7Cys6UFvahUfce26H+U+Q4tLWjKRD39AaV7JvRav8/vfdFytzWq6E+h9hT1OOWYuPYx2gMn5vDhZhQ==",
+			"executableSha256": "1a0a662dc1bb938eaec38545abce9a4a69113d7d7f7c5e1a553ea276617b906a"
+		}
+	}
+}

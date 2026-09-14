@@ -20,6 +20,7 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"eventsource-parser": "3.1.0",
 		"zod": "catalog:"
