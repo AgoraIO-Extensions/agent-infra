@@ -14,6 +14,7 @@ import {
 	testResourceMarker,
 } from "./test-project.ts";
 import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
+import { githubV7ReadScenarios } from "./verification/github-v7-read-scenarios.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -21,6 +22,28 @@ const catalogs = [
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
 ] as const;
+
+test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
+	const catalogReads = githubConnectionCatalog.actions
+		.filter((action) => action.effect === "READ")
+		.map((action) => action.id)
+		.sort();
+	const scenarioIds = githubV7ReadScenarios
+		.map((scenario) => scenario.actionVersionId)
+		.sort();
+
+	assert.equal(catalogReads.length, 78);
+	assert.equal(new Set(scenarioIds).size, githubV7ReadScenarios.length);
+	assert.deepEqual(scenarioIds, catalogReads);
+	for (const scenario of githubV7ReadScenarios) {
+		assert.ok(["ACCOUNT", "REPOSITORY"].includes(scenario.boundary));
+		assert.ok(scenario.fixture.length > 0);
+		assert.equal(scenario.target.externalAccount, "328682695");
+		if (scenario.boundary === "REPOSITORY") {
+			assert.equal(scenario.target.repositoryId, "1368335067");
+		}
+	}
+});
 
 test("every catalog action receives a fail-closed conformance strategy", () => {
 	const coverage = capabilityCoverage(catalogs);
