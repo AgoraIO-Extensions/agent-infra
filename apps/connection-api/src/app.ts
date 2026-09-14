@@ -143,8 +143,17 @@ type JsonRpcRequest = {
 	params?: unknown;
 };
 
-function mcpError(id: JsonRpcRequest["id"], code: number, message: string) {
-	return { error: { code, message }, id: id ?? null, jsonrpc: "2.0" };
+function mcpError(
+	id: JsonRpcRequest["id"],
+	code: number,
+	message: string,
+	data?: Record<string, unknown>,
+) {
+	return {
+		error: { code, ...(data ? { data } : {}), message },
+		id: id ?? null,
+		jsonrpc: "2.0",
+	};
 }
 
 function mcpResult(id: JsonRpcRequest["id"], result: unknown) {
@@ -666,7 +675,19 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 				);
 			} catch (error) {
 				if (error instanceof ConnectionError)
-					return context.json(mcpError(request.id, -32001, error.message));
+					return context.json(
+						mcpError(
+							request.id,
+							-32001,
+							error.message,
+							error.code === "PROVIDER_REAUTHORIZATION_REQUIRED"
+								? {
+										nextAction: { type: "REAUTHORIZE_PROVIDER" },
+										reasonCode: error.code,
+									}
+								: undefined,
+						),
+					);
 				throw error;
 			}
 		});

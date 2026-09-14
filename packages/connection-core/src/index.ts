@@ -792,6 +792,7 @@ export class ConnectionError extends Error {
 			| "IDEMPOTENCY_CONFLICT"
 			| "INVALID_REQUEST"
 			| "PROVIDER_FAILED"
+			| "PROVIDER_REAUTHORIZATION_REQUIRED"
 			| "PROVIDER_UNCERTAIN"
 			| "PROVIDER_UNAVAILABLE"
 			| "RESOURCE_NOT_FOUND"
@@ -1480,6 +1481,20 @@ export class ConnectionApplicationService {
 			}
 			if (error instanceof ConnectionError) {
 				throw error;
+			}
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				(error as { providerCode?: unknown }).providerCode ===
+					"authorization_failed" &&
+				[401, 403].includes(
+					(error as { providerStatus?: number }).providerStatus ?? 0,
+				)
+			) {
+				throw new ConnectionError(
+					"PROVIDER_REAUTHORIZATION_REQUIRED",
+					"Provider authorization is no longer valid",
+				);
 			}
 			throw new ConnectionError("PROVIDER_FAILED", "Provider request failed");
 		}

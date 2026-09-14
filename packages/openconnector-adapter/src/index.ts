@@ -317,11 +317,17 @@ function unwrapResult(
 	kernelActionName: string,
 ): Record<string, unknown> {
 	if (!result.ok) {
+		const providerStatus =
+			typeof result.error?.details === "object" &&
+			result.error.details !== null &&
+			typeof (result.error.details as { status?: unknown }).status === "number"
+				? (result.error.details as { status: number }).status
+				: undefined;
 		const error = Object.assign(
 			new Error(
 				result.error?.message ?? "OpenConnector provider request failed",
 			),
-			{ providerCode: result.error?.code },
+			{ providerCode: result.error?.code, providerStatus },
 		);
 		if (
 			kernelActionName === "create_pull_request" &&

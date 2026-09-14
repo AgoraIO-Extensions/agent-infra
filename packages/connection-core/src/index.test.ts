@@ -836,6 +836,27 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("requires reauthorization when a Provider rejects the credential", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Bad credentials"), {
+					providerCode: "authorization_failed",
+					providerStatus: 401,
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.getRepository", {
+				repository: "acme/widgets",
+			}),
+		).rejects.toMatchObject({
+			code: "PROVIDER_REAUTHORIZATION_REQUIRED",
+		});
+		expect(repository.calls[0]?.status).toBe("FAILED");
+	});
+
 	it("creates a PKCE OAuth transaction and consumes its state only once", async () => {
 		const repository = new MemoryRepository();
 		const oauth: GitHubOAuthProvider = {

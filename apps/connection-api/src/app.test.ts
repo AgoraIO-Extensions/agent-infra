@@ -281,6 +281,7 @@ function createTestApp(
 	options: {
 		actions?: ActionDefinition[];
 		connectionWebUrl?: string;
+		executor?: GitHubExecutor;
 		oauth?: GitHubOAuthProvider;
 		repository?: ConnectionRepository;
 		supportedProviders?: readonly string[];
@@ -310,7 +311,7 @@ function createTestApp(
 		connectionWebUrl: options.connectionWebUrl,
 		service: new ConnectionApplicationService(
 			options.repository ?? new TestRepository(options.actions),
-			executor,
+			options.executor ?? executor,
 			options.oauth,
 		),
 		supportedProviders: options.supportedProviders,
@@ -2008,6 +2009,51 @@ describe("Connection API", () => {
 		]);
 		expect(call.status).toBe(200);
 		expect(JSON.stringify(await call.json())).not.toContain("test-secret");
+	});
+
+	it("returns actionable MCP guidance when Provider reauthorization is required", async () => {
+		const app = createTestApp({
+			executor: {
+				execute: async () => {
+					throw Object.assign(new Error("Bad credentials"), {
+						providerCode: "authorization_failed",
+						providerStatus: 401,
+					});
+				},
+			},
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 4,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: {
+						actionId: "github.getRepository",
+						input: { repository: "acme/widgets" },
+					},
+					name: "execute_action",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		expect(await response.json()).toEqual({
+			error: {
+				code: -32001,
+				data: {
+					nextAction: { type: "REAUTHORIZE_PROVIDER" },
+					reasonCode: "PROVIDER_REAUTHORIZATION_REQUIRED",
+				},
+				message: "Provider authorization is no longer valid",
+			},
+			id: 4,
+			jsonrpc: "2.0",
+		});
 	});
 
 	it("rejects selector fields outside the fixed MCP tool schemas", async () => {
