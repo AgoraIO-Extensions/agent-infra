@@ -260,7 +260,6 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				commentId,
 				idempotencyKey: key("comment-delete"),
 			});
-			commentDeleted = true;
 		} catch (error) {
 			cleanup = "FAILED";
 			const reconciliation = await execute("github.list_issue_comments", {
@@ -273,7 +272,6 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			) {
 				throw error;
 			}
-			commentDeleted = true;
 			cleanup = "RECONCILED";
 		}
 		if (cleanup === "SUCCEEDED") {
@@ -285,13 +283,20 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				!Array.isArray(comments?.comments) ||
 				comments.comments.some((entry) => entry?.id === commentId)
 			) {
+				cleanup = "FAILED";
 				throw new Error("deleted comment is still visible");
 			}
 		}
-		await expectProviderNotFound("github.get_issue_comment", {
-			...repositoryInput,
-			commentId,
-		});
+		try {
+			await expectProviderNotFound("github.get_issue_comment", {
+				...repositoryInput,
+				commentId,
+			});
+			commentDeleted = true;
+		} catch (error) {
+			cleanup = "FAILED";
+			throw error;
+		}
 
 		const issueBeforeClose = await execute("github.get_issue", {
 			...repositoryInput,
