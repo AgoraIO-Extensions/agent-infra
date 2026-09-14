@@ -76,12 +76,10 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 				: action,
 		),
 	};
-	assert.equal(
-		capabilityVerificationMatrix(
-			bumpedCatalog,
-			githubV7VerificationEvidence,
-		).find((item) => item.actionName === "github.get_repository")?.status,
-		"UNVERIFIED",
+	assert.throws(
+		() =>
+			capabilityVerificationMatrix(bumpedCatalog, githubV7VerificationEvidence),
+		/unknown ActionVersions/,
 	);
 });
 

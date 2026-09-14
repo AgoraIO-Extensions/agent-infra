@@ -66,9 +66,19 @@ export function capabilityVerificationMatrix(
 	catalog: VerifiableCatalog,
 	evidence: LiveVerificationEvidence,
 ): CapabilityVerification[] {
+	const catalogActionVersionIds = new Set(
+		catalog.actions.map((action) => action.id),
+	);
 	const actionVersionIds = new Set(evidence.actionVersionIds);
 	if (actionVersionIds.size !== evidence.actionVersionIds.length) {
 		throw new Error("verification evidence contains duplicate ActionVersions");
+	}
+	if (
+		evidence.actionVersionIds.some(
+			(actionVersionId) => !catalogActionVersionIds.has(actionVersionId),
+		)
+	) {
+		throw new Error("verification evidence contains unknown ActionVersions");
 	}
 	for (const [name, value] of Object.entries(evidence)) {
 		if (name !== "actionVersionIds" && name !== "cleanup") {

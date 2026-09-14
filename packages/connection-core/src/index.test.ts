@@ -597,6 +597,7 @@ describe("Connection application service", () => {
 				actionVersionAllowlistByProviderRelease: new Map([
 					[direct.providerReleaseId, new Set(["github.getRepository@v1"])],
 				]),
+				gatedProviderIds: new Set(["github"]),
 			},
 		);
 
@@ -627,6 +628,28 @@ describe("Connection application service", () => {
 			),
 		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 		expect(executions).toBe(0);
+
+		const staleRepository = new MemoryRepository();
+		staleRepository.resolveDirectIdentities = async () => [
+			{ ...direct, providerReleaseId: "github-release-stale" },
+		];
+		const staleService = new ConnectionApplicationService(
+			staleRepository,
+			{ execute: async () => ({}) },
+			undefined,
+			{},
+			{
+				actionVersionAllowlistByProviderRelease: new Map([
+					[direct.providerReleaseId, new Set(["github.getRepository@v1"])],
+				]),
+				gatedProviderIds: new Set(["github"]),
+			},
+		);
+		expect(
+			await staleService.searchDirectActionsForIdentity(direct, {
+				service: "github",
+			}),
+		).toEqual([]);
 	});
 
 	it("builds a deterministic guide for an authorized public Action id", async () => {

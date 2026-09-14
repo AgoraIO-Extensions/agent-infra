@@ -138,6 +138,7 @@ export async function createConnectionRuntime(
 					verifiedGithubActionVersionIds,
 				],
 			]),
+			gatedProviderIds: new Set([githubConnectionCatalog.provider]),
 		},
 	);
 	const app = createConnectionApp({

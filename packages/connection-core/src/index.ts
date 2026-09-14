@@ -888,6 +888,7 @@ export class ConnectionApplicationService {
 				string,
 				ReadonlySet<string>
 			>;
+			gatedProviderIds?: ReadonlySet<string>;
 		} = {},
 	) {}
 
@@ -1619,8 +1620,9 @@ export class ConnectionApplicationService {
 		const allowlist = this.options.actionVersionAllowlistByProviderRelease?.get(
 			invocation.providerReleaseId,
 		);
-		return allowlist
-			? actions.filter((action) => allowlist.has(action.id))
+		if (allowlist) return actions.filter((action) => allowlist.has(action.id));
+		return this.options.gatedProviderIds?.has(invocation.providerId)
+			? []
 			: [...actions];
 	}
 
@@ -1631,10 +1633,13 @@ export class ConnectionApplicationService {
 		const allowlist = this.options.actionVersionAllowlistByProviderRelease?.get(
 			invocation.providerReleaseId,
 		);
-		return allowlist
-			? actionVersionIds.filter((actionVersionId) =>
-					allowlist.has(actionVersionId),
-				)
+		if (allowlist) {
+			return actionVersionIds.filter((actionVersionId) =>
+				allowlist.has(actionVersionId),
+			);
+		}
+		return this.options.gatedProviderIds?.has(invocation.providerId)
+			? []
 			: [...actionVersionIds];
 	}
 }
