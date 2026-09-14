@@ -24,6 +24,7 @@ import {
 
 function fixture() {
 	return {
+		templateModelBindings: [],
 		databaseUrl: "postgres://fixture",
 		workerId: "worker-a",
 		client: fakeKubernetesApi().client,
@@ -52,6 +53,20 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it("rejects a deployment module missing template bindings before opening the Store", async () => {
+		const { templateModelBindings: _bindings, ...options } = fixture();
+		vi.stubGlobal("workloadDeploymentTestFactory", () => options);
+		try {
+			await expect(
+				startPlatformWorkloadWorkerFromDeploymentV1(
+					"data:text/javascript,export const createPlatformWorkloadWorkerOptionsV1 = () => globalThis.workloadDeploymentTestFactory();",
+				),
+			).rejects.toThrow("Template model bindings are required");
+			expect(store.opened).not.toHaveBeenCalled();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 	it.each(["", "worker\0a"])(
 		"rejects invalid Worker identity before opening the Store: %j",
 		(workerId) => {

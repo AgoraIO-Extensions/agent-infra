@@ -22,7 +22,7 @@ export interface ModelAccessValidatorV1 {
 	): Promise<void>;
 }
 
-function validatePolicy(input: ModelAccessInputV1): string {
+export function validateModelAccessPolicyV1(input: ModelAccessInputV1): string {
 	try {
 		const endpoint = ModelEndpointV1Schema.parse(input.endpoint);
 		modelIdentifier.parse(input.modelId);
@@ -74,7 +74,9 @@ export function createResponsesModelAccessValidatorV1(
 	const fetcher = options.fetch ?? globalThis.fetch;
 	return {
 		async validate(input, { signal }) {
-			const credential = validatePolicy(input);
+			const credential = validateModelAccessPolicyV1(input);
+			if (input.endpoint.protocol !== "openai-responses-v1")
+				throw new ModelConfigurationErrorV1();
 			await modelOperationV1(signal, async () => {
 				for (const level of input.reasoningLevels) {
 					const response = await fetcher(
@@ -208,7 +210,7 @@ export function createFakeModelAccessValidatorV1(
 	return {
 		async validate(input, { signal }) {
 			await modelOperationV1(signal, async () => {
-				const credential = validatePolicy(input);
+				const credential = validateModelAccessPolicyV1(input);
 				if (
 					!admitted.some(
 						(grant) =>

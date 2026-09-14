@@ -36,6 +36,7 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeHostV1SchemaDefinitions,
 	RuntimeHostV2SchemaDefinitions,
+	RuntimeModelConfigurationV3Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeReplayRequestV1Schema,
@@ -111,6 +112,10 @@ const artifactPaths = {
 	runtimeJsonSchemaV2: resolve(
 		artifactRoot,
 		"json-schema/runtime.v2.schema.json",
+	),
+	runtimeConfigurationJsonSchemaV3: resolve(
+		artifactRoot,
+		"json-schema/runtime-configuration.v3.schema.json",
 	),
 	runtimeOpenapi: resolve(artifactRoot, "openapi/runtime-host.v1.openapi.json"),
 	runtimeOpenapiV2: resolve(
@@ -453,6 +458,13 @@ function buildArtifacts() {
 		workerResultJsonSchema,
 		runtimeJsonSchema,
 		runtimeJsonSchemaV2,
+		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v3.schema.json",
+			title: "Agent Infra Runtime Configuration V3",
+			definitions: {
+				RuntimeModelConfigurationV3: RuntimeModelConfigurationV3Schema,
+			},
+		}),
 		runtimeOpenapi,
 		runtimeOpenapiV2,
 	};
