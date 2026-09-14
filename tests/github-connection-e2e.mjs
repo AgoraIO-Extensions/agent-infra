@@ -245,7 +245,6 @@ function assertReadResult(actionId, result) {
 		"github.list_repository_labels": ["name", "connection-e2e-fixture"],
 		"github.list_repository_stargazers": ["id", 328682695],
 		"github.list_repository_tags": ["name", "connection-e2e-fixture-v1"],
-		"github.list_user_repositories": ["id", 1368335067],
 		"github.list_workflow_run_artifacts": ["id", 10343191621],
 		"github.list_workflow_run_jobs": ["id", 103940918709],
 		"github.list_workflow_runs": ["id", 34833158492],
@@ -282,6 +281,7 @@ function assertReadResult(actionId, result) {
 		"github.list_repository_forks",
 		"github.list_repository_topics",
 		"github.list_repository_watchers",
+		"github.list_user_repositories",
 		"github.search_code",
 		"github.search_topics",
 	]);
