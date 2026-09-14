@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { readCodexPilotConfiguration } from "./configuration.js";
+import {
+	readCodexPilotConfiguration,
+	readRuntimeModelConfigurationV3,
+} from "./configuration.js";
 
 const configuration = {
 	schemaVersion: 2,
@@ -29,7 +32,48 @@ function environment(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-describe("Codex Pilot deployment configuration", () => {
+describe("Runtime deployment configuration", () => {
+	it("consumes Responses V3 through the Codex startup reader", () => {
+		const env = environment({
+			schemaVersion: 3,
+			modelOptions: configuration.modelOptions.map((option) => ({
+				...option,
+				protocol: "openai-responses-v1",
+				authentication: "bearer",
+			})),
+		});
+		expect(readCodexPilotConfiguration(env).modelOptions[0]).toMatchObject({
+			protocol: "openai-responses-v1",
+			credential: "synthetic-active-credential",
+		});
+		expect(() => readRuntimeModelConfigurationV3(env, "claude")).toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+	});
+	it("accepts Claude V3 only for the fixed Claude Driver and ignores personal credentials", () => {
+		const env = environment({
+			schemaVersion: 3,
+			modelOptions: configuration.modelOptions.map((option) => ({
+				...option,
+				protocol: "anthropic-messages-v1",
+				authentication: "api-key",
+			})),
+		});
+		const resolved = readRuntimeModelConfigurationV3(
+			{ ...env, ANTHROPIC_API_KEY: "synthetic-personal-credential" },
+			"claude",
+		);
+		expect(resolved.modelOptions[0]).toMatchObject({
+			authentication: "api-key",
+			credential: "synthetic-active-credential",
+		});
+		expect(() => readRuntimeModelConfigurationV3(env, "codex")).toThrow(
+			"RUNTIME_CONFIGURATION_INVALID",
+		);
+		expect(() =>
+			readRuntimeModelConfigurationV3(environment(), "claude"),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
 	it.each([
 		"http://model.invalid/v1",
 		"http://localhost/v1",
