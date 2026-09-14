@@ -925,6 +925,14 @@ export class RuntimeHost {
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
+		// A terminal generation-cancel receipt proves the durable barrier completed.
+		// The original Turn may remain unknown or unreadable after native Session loss.
+		if (
+			operation.kind === "generation-cancel" &&
+			isTerminalRuntimeStatus(record.result.status)
+		) {
+			return record.result;
+		}
 		const rawStatus = await callDriverWithUncertainty(() =>
 			this.options.driver.getStatus(
 				record.nativeSessionRef,

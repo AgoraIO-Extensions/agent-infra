@@ -1,0 +1,27 @@
+{
+	"nativeVersion": "1.18.30",
+	"sdkVersion": "1.4.0",
+	"upstreamTag": "v1.18.30",
+	"upstreamCommit": "3104c1428ec91f809e5ab86631300de41eb6952e",
+	"sdkSourceCommit": "c88bb0da97fe1059d4e3032df2724bf39c96f3d2",
+	"artifacts": {
+		"darwin-arm64": {
+			"archiveSha256": "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8",
+			"executableSha256": "2d0c9c339bb91046c6ea951c97664bc2f8a8eaca707f31fbfbb7bc73c4eddc62"
+		},
+		"linux-arm64-musl": {
+			"package": "opencode-linux-arm64-musl",
+			"tarball": "https://registry.npmjs.org/opencode-linux-arm64-musl/-/opencode-linux-arm64-musl-1.18.30.tgz",
+			"integrity": "sha512-IQedvhqaisv886gwk3bR603fPTErdExQa0z3hmqi7waIeuSsQG9B+suhg6iaD74lmxMbYMRlPlg4kIioytiHGg==",
+			"archiveSha256": "295250c1676545a3da14ccd650b7118e64d4f33a5d884c6d7c8d79c753d8238d",
+			"executableSha256": "581c68ed3c39bfc8ce60fcb20cc71f371e388c3f6d3a7ddd6f10a78a1d4128ab"
+		},
+		"linux-x64-musl": {
+			"package": "opencode-linux-x64-baseline-musl",
+			"tarball": "https://registry.npmjs.org/opencode-linux-x64-baseline-musl/-/opencode-linux-x64-baseline-musl-1.18.30.tgz",
+			"integrity": "sha512-8VAJb4VnNP6MbqWHMDMUwJ5k47tb5SPDqM0lcsCgfbeGjDy7rgFtlA8PYSgUgA9VTByBWmpfERR/34VVOHe82g==",
+			"archiveSha256": "d313abe7ae6a68f54f7ca93b0f2672adc0d129b6075db4c1211d27b4864fffcb",
+			"executableSha256": "2433b257165af0ac7fc4c42a638c5850e449f7973890269abe606fffde20a425"
+		}
+	}
+}

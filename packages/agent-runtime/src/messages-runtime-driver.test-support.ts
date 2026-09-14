@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { vi } from "vitest";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
 import type { RuntimeDriverCommand } from "./driver.js";
+import { openOpenCodeRuntime } from "./opencode-bootstrap.js";
 
-export async function openClaudeRuntimeDriverConformanceFixture(
+export async function openMessagesRuntimeDriverConformanceFixture(
 	path: string,
 	loseFirstResult = false,
+	runtime: "claude" | "opencode" = "claude",
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
@@ -70,7 +72,15 @@ export async function openClaudeRuntimeDriverConformanceFixture(
 			authentication: "bearer" as const,
 		})),
 	};
-	let raw = await ClaudeRuntimeDriver.open(options);
+	const open = () =>
+		runtime === "claude"
+			? ClaudeRuntimeDriver.open(options)
+			: openOpenCodeRuntime({
+					...options,
+					executable:
+						process.env.OPENCODE_EXECUTABLE ?? "/opt/opencode/opencode",
+				});
+	let raw = await open();
 	const commands: { command: RuntimeDriverCommand; ref: string }[] = [];
 	function decorate() {
 		const execute = raw.execute.bind(raw);
@@ -162,7 +172,7 @@ export async function openClaudeRuntimeDriverConformanceFixture(
 		rejectNextSelectedTurn: () => {},
 		async restart() {
 			await raw.close();
-			raw = await ClaudeRuntimeDriver.open(options);
+			raw = await open();
 			decorate();
 			return fixture;
 		},
