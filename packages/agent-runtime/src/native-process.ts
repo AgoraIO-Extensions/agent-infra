@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay, setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
 export interface NativeProcessLaunch {
 	command: string;
@@ -44,8 +44,8 @@ async function ownerFile(directory: string) {
 async function retire(
 	file: DurableJsonFile<{ owner?: Owner }>,
 	ownerVariable: OwnerVariable,
+	owner = file.read().owner,
 ) {
-	const owner = file.read().owner;
 	if (!owner) return;
 	if (
 		!Number.isSafeInteger(owner.pid) ||
@@ -71,23 +71,26 @@ async function retire(
 							)
 						).stdout;
 		} catch {
-			throw unavailable();
+			environment = "";
 		}
 		if (
 			!new RegExp(`(?:^|\\s)${ownerVariable}=${owner.token}(?:\\s|$)`).test(
 				environment,
 			)
-		)
-			throw unavailable();
-		try {
-			process.kill(-owner.pid, "SIGKILL");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-				throw unavailable();
+		) {
+			// The original process may exit while its ownership is being read.
+			if (groupExists(owner.pid)) throw unavailable();
+		} else {
+			try {
+				process.kill(-owner.pid, "SIGKILL");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+					throw unavailable();
+			}
+			for (let attempt = 0; attempt < 80 && groupExists(owner.pid); attempt++)
+				await delay(25);
+			if (groupExists(owner.pid)) throw unavailable();
 		}
-		for (let attempt = 0; attempt < 80 && groupExists(owner.pid); attempt++)
-			await delay(25);
-		if (groupExists(owner.pid)) throw unavailable();
 	}
 	await file.update((state) => {
 		delete state.owner;
@@ -124,12 +127,22 @@ export async function spawnNativeProcess(
 	let closing: Promise<void> | undefined;
 	const close = () => {
 		closing ??= (async () => {
+			// Drain libuv's current batch of reaped-child callbacks before checking
+			// the live handle; another child's callback may have called close().
+			await setImmediate();
 			if (child.pid) {
-				try {
-					process.kill(-child.pid, "SIGKILL");
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-						throw unavailable();
+				if (child.exitCode === null && child.signalCode === null) {
+					// Do not yield between checking the live handle and signaling: once
+					// Node reaps the child, its PID may be reused. Native CLIs can change
+					// their process title, hiding environment ownership on macOS.
+					try {
+						process.kill(-child.pid, "SIGKILL");
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+							throw unavailable();
+					}
+				} else {
+					await retire(file, ownerVariable, { pid: child.pid, token });
 				}
 			}
 			await exited;
