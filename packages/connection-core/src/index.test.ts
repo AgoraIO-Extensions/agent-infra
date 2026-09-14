@@ -842,6 +842,7 @@ describe("Connection application service", () => {
 			execute: async () => {
 				throw Object.assign(new Error("Jira Server request failed (400)"), {
 					providerCode: "invalid_input",
+					providerMessage: "resolution: Resolution is required",
 					providerStatus: 400,
 				});
 			},
@@ -855,7 +856,11 @@ describe("Connection application service", () => {
 				repository: "acme/widgets",
 				title: "Invalid",
 			}),
-		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			message:
+				"Provider rejected the action input: resolution: Resolution is required",
+		});
 
 		expect(repository.calls[0]?.status).toBe("FAILED");
 		expect(repository.reconciliationJobs).toHaveLength(0);

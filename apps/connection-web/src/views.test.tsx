@@ -121,6 +121,33 @@ describe("Connection Web 中文界面", () => {
 		expect(screen.getByText("Bitbucket")).toBeTruthy();
 	});
 
+	it("显示授权版本和明确的 Provider 升级处理步骤", () => {
+		render(
+			<ConnectionsView
+				connections={[
+					{
+						actionVersionIds: ["jira.get_issue@v7", "jira.transition_issue@v7"],
+						displayName: "Jira",
+						externalAccount: "alice@example.com",
+						id: "jira",
+						ownerType: "PERSONAL",
+						providerId: "jira",
+						requiresReconnect: true,
+						status: "ACTIVE",
+					},
+				]}
+				onAuthorize={() => undefined}
+				onDisconnect={() => undefined}
+				onReconnect={() => undefined}
+			/>,
+		);
+
+		expect(screen.getByText("授权版本 v7")).toBeTruthy();
+		expect(screen.getByRole("alert").textContent).toContain(
+			"请先重新连接，再重新授权客户端",
+		);
+	});
+
 	it("把所有 Grant 状态显示为中文", () => {
 		render(
 			<>

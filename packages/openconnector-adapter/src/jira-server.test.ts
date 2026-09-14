@@ -55,10 +55,10 @@ test("Jira Server catalog covers OpenConnector overlap and CLI additions", () =>
 	assert.equal(jiraServerConnectionCatalog.deploymentProfile.build, "711000");
 	assert.match(
 		jiraServerConnectionCatalog.providerReleaseId,
-		/-connection-v7$/,
+		/-connection-v8$/,
 	);
 	for (const action of jiraServerConnectionCatalog.actions) {
-		assert.match(action.id, /^jira\.[a-z_]+@v7$/);
+		assert.match(action.id, /^jira\.[a-z_]+@v8$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["jira.server.access"]);
 	}
@@ -189,11 +189,18 @@ test("Jira Server discovers and submits required transition fields", async () =>
 	}
 });
 
-test("Jira Server exposes deterministic write rejection metadata", async () => {
+test("Jira Server exposes bounded structured write rejection metadata", async () => {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async () =>
 		Response.json(
-			{ errors: { reporter: "Reporter is required" } },
+			{
+				debug: "must not be exposed",
+				errorMessages: ["Transition validation failed\nretry"],
+				errors: {
+					ignored: { password: "secret" },
+					reporter: "Reporter is required",
+				},
+			},
 			{ status: 400 },
 		);
 
@@ -211,14 +218,18 @@ test("Jira Server exposes deterministic write rejection metadata", async () => {
 			(
 				error: Error & {
 					providerCode?: string;
+					providerMessage?: string;
 					providerStatus?: number;
 					submissionUncertain?: boolean;
 				},
 			) =>
 				error.providerCode === "invalid_input" &&
+				error.providerMessage ===
+					"Transition validation failed retry; reporter: Reporter is required" &&
 				error.providerStatus === 400 &&
 				error.submissionUncertain !== true &&
-				!error.message.includes("Reporter is required"),
+				!error.providerMessage.includes("secret") &&
+				!error.providerMessage.includes("must not be exposed"),
 		);
 	} finally {
 		globalThis.fetch = originalFetch;

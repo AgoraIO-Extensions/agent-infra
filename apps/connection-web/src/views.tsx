@@ -227,58 +227,74 @@ export function ConnectionsView(props: {
 	}
 	return (
 		<div className="connection-list">
-			{props.connections.map((connection) => (
-				<article className="connection-row" key={connection.id}>
-					<div className="connection-icon" aria-hidden="true">
-						<Link2 size={20} />
-					</div>
-					<div className="connection-main">
-						<div className="connection-title-line">
-							<h2>{connection.displayName}</h2>
-							<span className="ownership-badge">
-								{providerLabel(connection.providerId)}
-							</span>
-							<span className="ownership-badge">
-								{connection.ownerType === "PERSONAL" ? "个人" : "共享"}
-							</span>
+			{props.connections.map((connection) => {
+				const versions = [
+					...new Set(
+						connection.actionVersionIds.flatMap((id) => {
+							const version = id.match(/@(v\d+)$/)?.[1];
+							return version ? [version] : [];
+						}),
+					),
+				];
+				return (
+					<article className="connection-row" key={connection.id}>
+						<div className="connection-icon" aria-hidden="true">
+							<Link2 size={20} />
 						</div>
-						<p>{connection.externalAccount}</p>
-					</div>
-					<Status value={connection.status} />
-					<div className="row-actions">
-						{connection.requiresReconnect ? (
-							<button
-								className="button button-secondary"
-								type="button"
-								onClick={() => props.onReconnect(connection.id)}
-							>
-								<RefreshCw aria-hidden="true" size={16} />
-								重新连接
-							</button>
-						) : (
-							<button
-								className="button button-secondary"
-								type="button"
-								onClick={() => props.onAuthorize(connection.id)}
-							>
-								<ShieldCheck aria-hidden="true" size={16} />
-								授权客户端
-							</button>
-						)}
-						{connection.ownerType === "PERSONAL" ? (
-							<button
-								className="icon-button danger"
-								type="button"
-								onClick={() => props.onDisconnect(connection.id)}
-								aria-label={`断开 ${connection.displayName}`}
-								title="断开 Connection"
-							>
-								<Trash2 aria-hidden="true" size={17} />
-							</button>
-						) : null}
-					</div>
-				</article>
-			))}
+						<div className="connection-main">
+							<div className="connection-title-line">
+								<h2>{connection.displayName}</h2>
+								<span className="ownership-badge">
+									{providerLabel(connection.providerId)}
+								</span>
+								<span className="ownership-badge">
+									{connection.ownerType === "PERSONAL" ? "个人" : "共享"}
+								</span>
+							</div>
+							<p>{connection.externalAccount}</p>
+							{versions.length ? <p>授权版本 {versions.join(", ")}</p> : null}
+							{connection.requiresReconnect ? (
+								<p role="alert">
+									Provider 已升级。请先重新连接，再重新授权客户端。
+								</p>
+							) : null}
+						</div>
+						<Status value={connection.status} />
+						<div className="row-actions">
+							{connection.requiresReconnect ? (
+								<button
+									className="button button-secondary"
+									type="button"
+									onClick={() => props.onReconnect(connection.id)}
+								>
+									<RefreshCw aria-hidden="true" size={16} />
+									重新连接
+								</button>
+							) : (
+								<button
+									className="button button-secondary"
+									type="button"
+									onClick={() => props.onAuthorize(connection.id)}
+								>
+									<ShieldCheck aria-hidden="true" size={16} />
+									授权客户端
+								</button>
+							)}
+							{connection.ownerType === "PERSONAL" ? (
+								<button
+									className="icon-button danger"
+									type="button"
+									onClick={() => props.onDisconnect(connection.id)}
+									aria-label={`断开 ${connection.displayName}`}
+									title="断开 Connection"
+								>
+									<Trash2 aria-hidden="true" size={17} />
+								</button>
+							) : null}
+						</div>
+					</article>
+				);
+			})}
 		</div>
 	);
 }
