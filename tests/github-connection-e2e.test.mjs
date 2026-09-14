@@ -238,7 +238,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			return mcpResponse(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v5`,
+					actionVersionId: `${args.actionId}@v7`,
 					effect:
 						args.actionId.startsWith("github.get_") ||
 						args.actionId.startsWith("github.list_")
@@ -373,7 +373,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 	);
 	assert.deepEqual(result, {
 		actionVersions: Object.fromEntries(
-			guides.map((action) => [action, `${action}@v5`]),
+			guides.map((action) => [action, `${action}@v7`]),
 		),
 		calls: actions.slice(1).map((entry, index) => ({
 			actionId: entry.action,
@@ -416,7 +416,7 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 			return mcpResponse(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v5`,
+					actionVersionId: `${args.actionId}@v7`,
 					effect:
 						args.actionId.startsWith("github.get_") ||
 						args.actionId.startsWith("github.list_")
@@ -533,7 +533,7 @@ function actionGuide(id, actionId) {
 	return mcpResponse(id, {
 		action: {
 			actionId,
-			actionVersionId: `${actionId}@v5`,
+			actionVersionId: `${actionId}@v7`,
 			effect:
 				actionId.startsWith("github.get_") ||
 				actionId.startsWith("github.list_")

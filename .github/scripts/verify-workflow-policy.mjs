@@ -691,6 +691,22 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("CI workflow and required check must both use the CI name");
   }
 
+  const connectionE2eJob =
+    workflows["connection-github-e2e.yml"]?.jobs?.conformance;
+  const connectionE2eCheckout = connectionE2eJob?.steps?.find(
+    (step) => step.name === "Checkout trusted dispatch commit",
+  );
+  if (
+    connectionE2eJob?.if !==
+      "vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'" ||
+    connectionE2eCheckout?.with?.ref !== "${{ github.sha }}" ||
+    connectionE2eCheckout?.with?.["persist-credentials"] !== false
+  ) {
+    errors.push(
+      "Connection GitHub E2E must bind manual runs to the immutable connection dispatch commit",
+    );
+  }
+
   for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
     const runName = workflows[name]?.["run-name"];
     const references = typeof runName === "string"
