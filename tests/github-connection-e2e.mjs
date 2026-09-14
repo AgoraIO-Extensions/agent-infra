@@ -254,6 +254,14 @@ function assertReadResult(actionId, result) {
 	) {
 		throw new Error(`${actionId} fixture does not match`);
 	}
+	const variableFeeds = new Set([
+		"github.list_authenticated_user_events",
+		"github.list_authenticated_user_received_events",
+		"github.list_public_events",
+		"github.list_user_public_events",
+		"github.list_user_received_public_events",
+	]);
+	if (!member && variableFeeds.has(actionId)) return;
 	const expectedEmpty = new Set([
 		"github.get_commit_statuses",
 		"github.list_pull_request_requested_reviewers",
@@ -759,10 +767,10 @@ if (
 	process.argv[1] &&
 	import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-	const suite = process.argv[2] === "read" ? "read" : "issue";
+	const isReadSuite = process.argv[2] === "read" && process.argv.length >= 4;
+	const suite = isReadSuite ? "read" : "issue";
 	const runId =
-		(suite === "read" ? process.argv[3] : process.argv[2])?.trim() ||
-		randomUUID();
+		(isReadSuite ? process.argv[3] : process.argv[2])?.trim() || randomUUID();
 	try {
 		const result = await (suite === "read"
 			? runGitHubReadConformance

@@ -1,10 +1,6 @@
 type GitHubReadScenarioBase = {
 	actionVersionId: `github.${string}@v7`;
-	execution:
-		| "LIVE"
-		| "SKIPPED_MISSING_SECOND_ACTOR"
-		| "SKIPPED_NONDETERMINISTIC_FEED"
-		| "SKIPPED_UNBOUNDED_READ";
+	execution: "LIVE" | "SKIPPED_MISSING_SECOND_ACTOR";
 	fixture: "ISSUE_PR" | "RELEASE_WORKFLOW" | "REPOSITORY_REF" | "USER_ACTIVITY";
 	input: Readonly<Record<string, unknown>>;
 };
@@ -122,6 +118,11 @@ const releaseWorkflow = [
 const userActivity = [
 	"get_current_user",
 	"list_my_repositories",
+	"list_public_events",
+	"list_user_public_events",
+	"list_user_received_public_events",
+	"list_authenticated_user_events",
+	"list_authenticated_user_received_events",
 	"search_users",
 	"get_user",
 	"list_user_repositories",
@@ -281,21 +282,4 @@ export const githubV7ReadScenarios = [
 	),
 	...scenarios(releaseWorkflow, "RELEASE_WORKFLOW"),
 	...scenarios(userActivity, "USER_ACTIVITY", "ACCOUNT"),
-	...scenarios(
-		["list_public_events"],
-		"USER_ACTIVITY",
-		"ACCOUNT",
-		"SKIPPED_UNBOUNDED_READ",
-	),
-	...scenarios(
-		[
-			"list_user_public_events",
-			"list_user_received_public_events",
-			"list_authenticated_user_events",
-			"list_authenticated_user_received_events",
-		],
-		"USER_ACTIVITY",
-		"ACCOUNT",
-		"SKIPPED_NONDETERMINISTIC_FEED",
-	),
 ] as const satisfies readonly GitHubReadScenario[];

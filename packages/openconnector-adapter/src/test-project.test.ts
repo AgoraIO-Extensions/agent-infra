@@ -52,14 +52,7 @@ test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
 		githubV7ReadScenarios
 			.filter((scenario) => scenario.execution !== "LIVE")
 			.map((scenario) => scenario.actionVersionId),
-		[
-			"github.get_pull_request_review@v7",
-			"github.list_public_events@v7",
-			"github.list_user_public_events@v7",
-			"github.list_user_received_public_events@v7",
-			"github.list_authenticated_user_events@v7",
-			"github.list_authenticated_user_received_events@v7",
-		],
+		["github.get_pull_request_review@v7"],
 	);
 	for (const scenario of githubV7ReadScenarios.filter(
 		(item) => item.execution === "LIVE",

@@ -45,33 +45,13 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 		runId: "read-run",
 	});
 
-	assert.equal(actions.length, 72);
+	assert.equal(actions.length, 77);
 	assert.equal(actions[0], "github.get_repository");
-	assert.equal(evidence.calls.length, 72);
+	assert.equal(evidence.calls.length, 77);
 	assert.deepEqual(evidence.skipped, [
 		{
 			actionVersionId: "github.get_pull_request_review@v7",
 			reason: "SKIPPED_MISSING_SECOND_ACTOR",
-		},
-		{
-			actionVersionId: "github.list_public_events@v7",
-			reason: "SKIPPED_UNBOUNDED_READ",
-		},
-		{
-			actionVersionId: "github.list_user_public_events@v7",
-			reason: "SKIPPED_NONDETERMINISTIC_FEED",
-		},
-		{
-			actionVersionId: "github.list_user_received_public_events@v7",
-			reason: "SKIPPED_NONDETERMINISTIC_FEED",
-		},
-		{
-			actionVersionId: "github.list_authenticated_user_events@v7",
-			reason: "SKIPPED_NONDETERMINISTIC_FEED",
-		},
-		{
-			actionVersionId: "github.list_authenticated_user_received_events@v7",
-			reason: "SKIPPED_NONDETERMINISTIC_FEED",
 		},
 	]);
 	assert.ok(
