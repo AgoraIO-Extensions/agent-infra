@@ -11,7 +11,7 @@ const sourceCommit = "5cd85feb1a19cb43a711fe305ea1b40f388792aa";
 const providerId = "jira";
 const apiOrigin = "https://jira.agoralab.co";
 const apiBasePath = "/rest/api/2";
-const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v6`;
+const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v7`;
 const credentialScope = "jira.server.access";
 const maxResponseBytes = 10 * 1024 * 1024;
 const requestTimeoutMs = 12_000;
@@ -150,17 +150,22 @@ const actionSpecs: readonly ActionSpec[] = [
 		required: ["issueIdOrKey"],
 	},
 	{
-		description: "列出 Jira Issue 可用的状态流转。",
+		description: "列出 Jira Issue 可用的状态流转及其字段要求。",
 		effect: "READ",
 		name: "list_issue_transitions",
 		properties: issueProperties,
 		required: ["issueIdOrKey"],
 	},
 	{
-		description: "将 Jira Issue 流转到指定 transition ID。",
+		description:
+			"将 Jira Issue 流转到指定 transition ID，可提交该流转要求的字段。",
 		effect: "WRITE",
 		name: "transition_issue",
-		properties: { issueIdOrKey: stringField, transitionId: stringField },
+		properties: {
+			fields: objectField,
+			issueIdOrKey: stringField,
+			transitionId: stringField,
+		},
 		required: ["issueIdOrKey", "transitionId"],
 	},
 	{
@@ -325,7 +330,7 @@ export const jiraServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v6`,
+		id: `${providerId}.${action.name}@v7`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -485,13 +490,18 @@ export class JiraServerAdapter
 				return this.requestJson(
 					credential,
 					`/issue/${segment(value, "issueIdOrKey")}/transitions`,
+					{ query: { expand: "transitions.fields" } },
 				);
-			case "transition_issue":
+			case "transition_issue": {
+				const fields = objectValue(value, "fields");
 				await this.request(
 					credential,
 					`/issue/${segment(value, "issueIdOrKey")}/transitions`,
 					{
-						body: { transition: { id: stringValue(value, "transitionId") } },
+						body: {
+							transition: { id: stringValue(value, "transitionId") },
+							...(Object.keys(fields).length > 0 ? { fields } : {}),
+						},
 						method: "POST",
 					},
 				);
@@ -499,6 +509,7 @@ export class JiraServerAdapter
 					issueIdOrKey: stringValue(value, "issueIdOrKey"),
 					transitionId: stringValue(value, "transitionId"),
 				};
+			}
 			case "get_issue_changelog":
 				return this.getIssueChangelog(credential, value);
 			case "list_issue_attachments":

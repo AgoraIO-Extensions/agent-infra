@@ -55,10 +55,10 @@ test("Jira Server catalog covers OpenConnector overlap and CLI additions", () =>
 	assert.equal(jiraServerConnectionCatalog.deploymentProfile.build, "711000");
 	assert.match(
 		jiraServerConnectionCatalog.providerReleaseId,
-		/-connection-v6$/,
+		/-connection-v7$/,
 	);
 	for (const action of jiraServerConnectionCatalog.actions) {
-		assert.match(action.id, /^jira\.[a-z_]+@v6$/);
+		assert.match(action.id, /^jira\.[a-z_]+@v7$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["jira.server.access"]);
 	}
@@ -131,6 +131,59 @@ test("Jira Server execution encodes issue paths and maps JSON responses", async 
 		});
 		assert.equal(requests[1]?.init?.method, "POST");
 		assert.equal(requests[1]?.init?.body, JSON.stringify({ body: "hello" }));
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Jira Server discovers and submits required transition fields", async () => {
+	const requests: Array<{ init?: RequestInit; url: string }> = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (input, init) => {
+		requests.push({ init, url: String(input) });
+		return init?.method === "POST"
+			? new Response(null, { status: 204 })
+			: Response.json({ transitions: [] });
+	};
+
+	try {
+		const adapter = createAdapter();
+		await adapter.execute({
+			action: "jira.list_issue_transitions",
+			credential: { accessToken: credential },
+			input: { issueIdOrKey: "EP-802" },
+		});
+		assert.equal(
+			requests[0]?.url,
+			"https://jira.agoralab.co/rest/api/2/issue/EP-802/transitions?expand=transitions.fields",
+		);
+
+		await adapter.execute({
+			action: "jira.transition_issue",
+			credential: { accessToken: credential },
+			input: {
+				fields: { resolution: { id: "1" } },
+				issueIdOrKey: "EP-802",
+				transitionId: "5",
+			},
+		});
+		assert.equal(
+			requests[1]?.init?.body,
+			JSON.stringify({
+				transition: { id: "5" },
+				fields: { resolution: { id: "1" } },
+			}),
+		);
+
+		await adapter.execute({
+			action: "jira.transition_issue",
+			credential: { accessToken: credential },
+			input: { issueIdOrKey: "EP-802", transitionId: "4" },
+		});
+		assert.equal(
+			requests[2]?.init?.body,
+			JSON.stringify({ transition: { id: "4" } }),
+		);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
