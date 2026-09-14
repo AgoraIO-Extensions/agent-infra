@@ -170,6 +170,18 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			issueNumber,
 			title: `${marker} updated`,
 		});
+		const updatedIssue = await execute("github.get_issue", {
+			...repositoryInput,
+			issueNumber,
+		});
+		if (
+			updatedIssue?.body !== `${marker} updated` ||
+			updatedIssue?.number !== issueNumber ||
+			updatedIssue?.state !== "open" ||
+			updatedIssue?.title !== `${marker} updated`
+		) {
+			throw new Error("updated issue readback does not match");
+		}
 
 		const comment = await execute("github.create_issue_comment", {
 			...repositoryInput,
