@@ -149,6 +149,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		".": "./src/index.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./jira-server": "./src/jira-server.ts",
+		"./verification/github-v7": "./src/verification/github-v7.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);
 	assert.doesNotMatch(dockerfile, /local-runtime/);

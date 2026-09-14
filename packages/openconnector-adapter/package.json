@@ -5,7 +5,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./jira-server": "./src/jira-server.ts",
-		"./confluence-server": "./src/confluence-server.ts"
+		"./confluence-server": "./src/confluence-server.ts",
+		"./verification/github-v7": "./src/verification/github-v7.ts"
 	},
 	"scripts": {
 		"check-types": "tsc --noEmit",

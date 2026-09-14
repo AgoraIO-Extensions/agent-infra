@@ -7,10 +7,12 @@ import { jiraServerConnectionCatalog } from "./jira-server.ts";
 import {
 	assertTestProjectMutation,
 	capabilityCoverage,
+	capabilityVerificationMatrix,
 	runTestProjectMutation,
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
+import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -39,6 +41,48 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 			item.effect === "READ" ? "read-smoke" : "isolated-mutation",
 		);
 	}
+});
+
+test("GitHub verification matrix binds exact live evidence to 9 of 145 actions", () => {
+	const matrix = capabilityVerificationMatrix(
+		githubConnectionCatalog,
+		githubV7VerificationEvidence,
+	);
+	assert.equal(matrix.length, 145);
+	assert.equal(
+		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
+		9,
+	);
+	assert.equal(
+		matrix.filter((item) => item.status === "UNVERIFIED").length,
+		136,
+	);
+	assert.ok(
+		matrix
+			.filter((item) => item.status === "LIVE_VERIFIED")
+			.every(
+				(item) =>
+					item.actionVersionId.endsWith("@v7") &&
+					item.evidence?.cleanup === "SUCCEEDED" &&
+					item.evidence.runId === "34821150745-1",
+			),
+	);
+
+	const bumpedCatalog = {
+		...githubConnectionCatalog,
+		actions: githubConnectionCatalog.actions.map((action) =>
+			action.name === "github.get_repository"
+				? { ...action, id: "github.get_repository@v8" }
+				: action,
+		),
+	};
+	assert.equal(
+		capabilityVerificationMatrix(
+			bumpedCatalog,
+			githubV7VerificationEvidence,
+		).find((item) => item.actionName === "github.get_repository")?.status,
+		"UNVERIFIED",
+	);
 });
 
 test("capability coverage rejects duplicate IDs and unknown effects", () => {

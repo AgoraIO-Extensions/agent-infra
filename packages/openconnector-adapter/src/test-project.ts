@@ -7,6 +7,29 @@ type Catalog = {
 	}[];
 };
 
+type VerifiableCatalog = Catalog & { providerReleaseId: string };
+
+export type LiveVerificationEvidence = {
+	actionVersionIds: readonly string[];
+	cleanup: "FAILED" | "SUCCEEDED";
+	containerId: string;
+	externalAccount: string;
+	provider: string;
+	providerReleaseId: string;
+	runId: string;
+};
+
+export type CapabilityVerification = CapabilityCoverage & {
+	actionVersionId: string;
+	evidence?: LiveVerificationEvidence;
+	requirements: {
+		contract: "REQUIRED";
+		liveProvider: "REQUIRED";
+		unit: "REQUIRED";
+	};
+	status: "LIVE_VERIFIED" | "UNVERIFIED";
+};
+
 export type CapabilityCoverage = {
 	actionId: string;
 	actionName: string;
@@ -37,6 +60,41 @@ export function capabilityCoverage(
 			};
 		}),
 	);
+}
+
+export function capabilityVerificationMatrix(
+	catalog: VerifiableCatalog,
+	evidence: LiveVerificationEvidence,
+): CapabilityVerification[] {
+	const actionVersionIds = new Set(evidence.actionVersionIds);
+	if (actionVersionIds.size !== evidence.actionVersionIds.length) {
+		throw new Error("verification evidence contains duplicate ActionVersions");
+	}
+	for (const [name, value] of Object.entries(evidence)) {
+		if (name !== "actionVersionIds" && name !== "cleanup") {
+			requireValue(`verification evidence ${name}`, value);
+		}
+	}
+	const evidenceMatchesCatalog =
+		evidence.cleanup === "SUCCEEDED" &&
+		evidence.provider === catalog.provider &&
+		evidence.providerReleaseId === catalog.providerReleaseId;
+
+	return capabilityCoverage([catalog]).map((coverage) => {
+		const verified =
+			evidenceMatchesCatalog && actionVersionIds.has(coverage.actionId);
+		return {
+			...coverage,
+			actionVersionId: coverage.actionId,
+			...(verified ? { evidence } : {}),
+			requirements: {
+				contract: "REQUIRED",
+				liveProvider: "REQUIRED",
+				unit: "REQUIRED",
+			},
+			status: verified ? "LIVE_VERIFIED" : "UNVERIFIED",
+		};
+	});
 }
 
 export type TestProject = {

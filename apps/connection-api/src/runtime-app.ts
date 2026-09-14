@@ -29,6 +29,7 @@ import {
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/jira-server";
+import { verifiedGithubV7ActionVersionIds } from "@agent-infra/openconnector-adapter/verification/github-v7";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 
 import { createConnectionApp } from "./app";
@@ -54,6 +55,9 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
+	const verifiedGithubActionVersionIds = new Set(
+		verifiedGithubV7ActionVersionIds(githubConnectionCatalog),
+	);
 	const browserCommands = new PostgresBrowserCommandIdempotency(
 		config.databaseUrl,
 		config.credentialKey,
@@ -78,7 +82,11 @@ export async function createConnectionRuntime(
 			confluenceServerConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
-				actionVersionIds: catalog.actions.map((action) => action.id),
+				actionVersionIds:
+					catalog.providerReleaseId ===
+					githubConnectionCatalog.providerReleaseId
+						? [...verifiedGithubActionVersionIds]
+						: catalog.actions.map((action) => action.id),
 				consumer,
 				providerReleaseId: catalog.providerReleaseId,
 			});
@@ -123,6 +131,14 @@ export async function createConnectionRuntime(
 		executors,
 		new OpenConnectorGitHubOAuthAdapter(config.github),
 		{ bitbucket, confluence, jira },
+		{
+			actionVersionAllowlistByProviderRelease: new Map([
+				[
+					githubConnectionCatalog.providerReleaseId,
+					verifiedGithubActionVersionIds,
+				],
+			]),
+		},
 	);
 	const app = createConnectionApp({
 		accessTokens: oauth,

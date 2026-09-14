@@ -581,6 +581,54 @@ describe("Connection application service", () => {
 		).toEqual([]);
 	});
 
+	it("exposes and executes only verified ActionVersions for a gated ProviderRelease", async () => {
+		let executions = 0;
+		const service = new ConnectionApplicationService(
+			new MemoryRepository(),
+			{
+				execute: async () => {
+					executions += 1;
+					return { fullName: "acme/widgets" };
+				},
+			},
+			undefined,
+			{},
+			{
+				actionVersionAllowlistByProviderRelease: new Map([
+					[direct.providerReleaseId, new Set(["github.getRepository@v1"])],
+				]),
+			},
+		);
+
+		expect(
+			await service.searchDirectActionsForIdentity(direct, {
+				service: "github",
+			}),
+		).toEqual([
+			expect.objectContaining({
+				actionVersionId: "github.getRepository@v1",
+			}),
+		]);
+		expect(
+			(await service.listDirectConnectionsForIdentity(direct, "github"))[0]
+				?.actionVersionIds,
+		).toEqual(["github.getRepository@v1"]);
+		await expect(
+			service.executeDirectActionForIdentity(
+				direct,
+				"github.createPullRequest",
+				{
+					base: "main",
+					head: "feature/test",
+					idempotencyKey: "blocked-write",
+					repository: "acme/widgets",
+					title: "Blocked",
+				},
+			),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(executions).toBe(0);
+	});
+
 	it("builds a deterministic guide for an authorized public Action id", async () => {
 		const service = new ConnectionApplicationService(new MemoryRepository(), {
 			execute: async () => ({}),
