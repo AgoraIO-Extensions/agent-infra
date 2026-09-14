@@ -255,7 +255,11 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 		) {
 			notFoundReads += 1;
 			return Response.json({
-				error: { code: -32001, message: "Provider request failed" },
+				error: {
+					code: -32001,
+					data: { providerHttpStatus: 404 },
+					message: "Provider request failed",
+				},
 				id: request.id,
 				jsonrpc: "2.0",
 			});
@@ -429,7 +433,11 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 		) {
 			notFoundReads += 1;
 			return Response.json({
-				error: { code: -32001, message: "Provider request failed" },
+				error: {
+					code: -32001,
+					data: { providerHttpStatus: 404 },
+					message: "Provider request failed",
+				},
 				id: request.id,
 				jsonrpc: "2.0",
 			});
