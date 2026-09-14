@@ -256,16 +256,12 @@ function assertReadResult(actionId, result) {
 	}
 	const expectedEmpty = new Set([
 		"github.get_commit_statuses",
-		"github.list_authenticated_user_events",
-		"github.list_authenticated_user_received_events",
 		"github.list_pull_request_requested_reviewers",
 		"github.list_pull_request_review_comments",
 		"github.list_pull_request_reviews",
 		"github.list_repository_forks",
 		"github.list_repository_topics",
 		"github.list_repository_watchers",
-		"github.list_user_public_events",
-		"github.list_user_received_public_events",
 		"github.search_topics",
 	]);
 	if (!member && expectedEmpty.has(actionId) && result[envelope].length !== 0) {
