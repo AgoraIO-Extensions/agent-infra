@@ -454,6 +454,43 @@ it.skipIf(!process.env.OPENCODE_EXECUTABLE).each(["read", "write", "edit"])(
 			expect(await readFile(join(path, "foreign.txt"), "utf8")).toBe(
 				"prefix\nSYNTHETIC_FOREIGN_CANARY",
 			);
+			calls.length = 0;
+			target = "owner.txt";
+			await writeFile(
+				join(foreignWorkspace, target),
+				"prefix\nSYNTHETIC_RECOVERY_CONTROL",
+			);
+			const afterDenial = await driver.execute({
+				...command,
+				conversationId: "conversation-b",
+				nativeSessionRef: foreign.nativeSessionRef,
+				executionId: "execution-after-denial",
+				turnId: "turn-after-denial",
+				operationId: "after-denial",
+			});
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							afterDenial.nativeSessionRef,
+							"execution-after-denial",
+						),
+					).toBe("completed"),
+				{ timeout: 20_000 },
+			);
+			expect(calls).toHaveLength(2);
+			expect(
+				(
+					await driver.replayEvents(
+						afterDenial.nativeSessionRef,
+						"execution-after-denial",
+					)
+				).filter((e) => e.type === "tool"),
+			).toContainEqual(
+				expect.objectContaining({
+					payload: expect.objectContaining({ phase: "completed" }),
+				}),
+			);
 		} finally {
 			await driver.close();
 			server.closeAllConnections();

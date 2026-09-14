@@ -165,3 +165,8 @@ non-root、只读根文件系统、禁网和独立可写临时目录。
 及 `--executable /opt/opencode/bin/opencode`。OpenCode 使用自身 `export` 命令读取测试
 Session，将实际 read 调用、结果、记忆和恢复后的上下文逐项关联；仅保存布尔验收结果，
 不输出原生历史或配置凭证。
+
+OpenCode 真实模型验收须分别运行 `--negative-target workspace` 和
+`--negative-target memory`，保存两份通过报告。每份都从独立测试状态完成双用户
+正向读写、原 Session 重启恢复、上下文检查及指定目标的双向负向调用。分开运行可避免
+前一次工具拒绝影响模型对另一测试目标的调用选择；缺少任一报告均不能声明隔离验收通过。

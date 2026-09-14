@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 
 // Run from apps/agent-runtime-host (local) or /app (the inspected release image).
 const { values } = parseArgs({ options: {
- runtime: { type: "string", default: "claude" }, executable: { type: "string" }, settings: { type: "string" }, model: { type: "string" }, output: { type: "string" },
+ "negative-target": { type: "string", default: "workspace" }, runtime: { type: "string", default: "claude" }, executable: { type: "string" }, settings: { type: "string" }, model: { type: "string" }, output: { type: "string" },
  "allow-dirty": { type: "boolean", default: false }, "image-digest": { type: "string" }, "source-commit": { type: "string" },
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
@@ -17,6 +17,7 @@ const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-run
 const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation } = await import(pathToFileURL(runtimeEntry).href);
 if (!["claude", "opencode"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
+if (isOpenCode && !["workspace", "memory"].includes(values["negative-target"])) throw Error("Unsupported negative target");
 const executable = values.executable ?? "/opt/opencode/bin/opencode";
 const sdkEntry = isOpenCode ? undefined : createRequire(runtimeEntry).resolve("@anthropic-ai/claude-agent-sdk");
 const provenance = isOpenCode ? await verifyOpenCodeInstallation(executable) : await verifyClaudeInstallation();
@@ -37,7 +38,7 @@ const configVersion = `conformance-${randomUUID()}`;
 const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
 let driver;
 const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, turn: 0 }));
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, executableSha256: provenance.executableSha256, model: values.model, negativeVector: "symlink-escape", checks: [], passed: false };
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, executableSha256: provenance.executableSha256, model: values.model, negativeVector: "symlink-escape", negativeTargets: isOpenCode ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
 const keepAlive = setTimeout(() => {}, 600_000);
 // Inspect only this synthetic Turn through the pinned SDK; never emit transcript content.
 const historyProbe = `
@@ -166,7 +167,7 @@ try {
   check.passed &&= Object.values(check.readEvidence).every(Boolean);
  }
  if (isOpenCode) {
-  for (const negative of ["workspace", "memory"]) {
+  for (const negative of [values["negative-target"]]) {
    driver = await openDriver();
    await Promise.all(users.map(async user => {
     const other = users.find(value => value !== user);
@@ -178,7 +179,7 @@ try {
    await driver.close();
   }
  }
- report.passed = report.checks.length === (isOpenCode ? 8 : 4) && report.checks.every(check => check.passed);
+ report.passed = report.checks.length === (isOpenCode ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; }
 finally { await driver?.close(); clearTimeout(keepAlive); await rm(path, { recursive: true, force: true }); }
 await writeFile(values.output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });
