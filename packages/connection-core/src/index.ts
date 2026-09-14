@@ -1455,7 +1455,6 @@ export class ConnectionApplicationService {
 			const status =
 				isMutating &&
 				(providerResponded ||
-					submissionStarted ||
 					(error instanceof ConnectionError &&
 						error.code === "PROVIDER_UNCERTAIN") ||
 					isSubmissionUncertain(error))
@@ -1491,6 +1490,20 @@ export class ConnectionApplicationService {
 				throw new ConnectionError(
 					"PROVIDER_RESOURCE_NOT_FOUND",
 					"Provider resource was not found",
+				);
+			}
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				(error as { providerCode?: unknown }).providerCode ===
+					"invalid_input" &&
+				[400, 404, 409, 422].includes(
+					(error as { providerStatus?: number }).providerStatus ?? 0,
+				)
+			) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Provider rejected the action input",
 				);
 			}
 			if (

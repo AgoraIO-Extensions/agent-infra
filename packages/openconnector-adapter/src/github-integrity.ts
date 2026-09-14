@@ -1,2 +1,2 @@
 export const githubExecutorDigest =
-	"sha256:82da9b1f9616616a9b7a028f9089cc57d925efbfc292477ba50c0204ea0284a4";
+	"sha256:0a29dba550c2c6613e98c297cffa9c04bbe6472566d85d7f92826f8bb53c9b9a";
