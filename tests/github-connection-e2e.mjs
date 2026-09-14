@@ -8,6 +8,7 @@ const target = {
 	repositoryId: 1368335067,
 };
 const connectionEndpoint = "https://agent-connector.la3.agoralab.co/mcp";
+const requestTimeoutMs = 30_000;
 const actionEffects = {
 	"github.get_repository": "READ",
 	"github.create_issue": "WRITE",
@@ -46,6 +47,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				"content-type": "application/json",
 			},
 			method: "POST",
+			signal: AbortSignal.timeout(requestTimeoutMs),
 		});
 		if (!response.ok)
 			throw new Error(`Connection returned HTTP ${response.status}`);
@@ -122,7 +124,12 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		return projection.result;
 	};
 	const marker = `connection-e2e:${runId}`;
-	const key = (step) => `${runId}:${step}`;
+	const idempotencyKeys = new Set();
+	const key = (step) => {
+		const value = `${runId}:${step}`;
+		idempotencyKeys.add(value);
+		return value;
+	};
 	const repositoryInput = { owner: target.owner, repo: target.repository };
 	let issueNumber;
 	let commentId;
@@ -274,7 +281,14 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			throw new Error("test issue is not closed");
 		}
 		issueClosed = true;
-		result = { actionVersions, calls, cleanup, issueNumber, runId };
+		result = {
+			actionVersions,
+			calls,
+			cleanup,
+			idempotencyKeys: [...idempotencyKeys],
+			issueNumber,
+			runId,
+		};
 	} catch (error) {
 		failure = error;
 	} finally {
@@ -286,6 +300,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 					idempotencyKey: key("comment-cleanup"),
 				});
 			} catch (error) {
+				cleanup = "FAILED";
 				cleanupError = error;
 			}
 		}
@@ -313,22 +328,47 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 						issueNumber,
 					});
 					if (issue?.state !== "closed") {
+						cleanup = "FAILED";
 						cleanupError ??= new Error(
 							"test issue cleanup did not close the issue",
 						);
 					}
 				}
 			} catch (error) {
+				cleanup = "FAILED";
 				cleanupError ??= error;
 			}
 		}
 	}
+	const evidence = {
+		actionVersions,
+		calls,
+		cleanup,
+		idempotencyKeys: [...idempotencyKeys],
+		issueNumber,
+	};
 	if (failure && cleanupError) {
-		throw new Error("GitHub conformance and cleanup failed");
+		throw new ConformanceError(
+			"GitHub conformance and cleanup failed",
+			evidence,
+		);
 	}
-	if (failure) throw failure;
-	if (cleanupError) throw cleanupError;
+	if (failure) throw new ConformanceError(errorMessage(failure), evidence);
+	if (cleanupError) {
+		throw new ConformanceError(errorMessage(cleanupError), evidence);
+	}
 	return result;
+}
+
+class ConformanceError extends Error {
+	constructor(message, evidence) {
+		super(message);
+		this.evidence = evidence;
+	}
+}
+
+function errorMessage(error) {
+	return error instanceof Error ? error.message : "GitHub E2E failed";
 }
 
 function requirePositiveInteger(value, name) {
@@ -353,7 +393,8 @@ if (
 	} catch (error) {
 		console.error(
 			JSON.stringify({
-				error: error instanceof Error ? error.message : "GitHub E2E failed",
+				...(error instanceof ConformanceError ? error.evidence : {}),
+				error: errorMessage(error),
 				outcome: "FAILED",
 				runId,
 			}),
