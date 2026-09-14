@@ -325,7 +325,7 @@ export const jiraServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v5`,
+		id: `${providerId}.${action.name}@v6`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},

@@ -13,7 +13,7 @@
 		"build": "711000",
 		"apiOrigin": "https://jira.agoralab.co",
 		"authentication": "per-user Basic username/password plus server-issued short-lived accessToken request header",
-		"executorDigest": "sha256:a4f46c13537ce29e72c534065de1a517524725e34d34169c7898f5d8585d1a64"
+		"executorDigest": "sha256:3e4abfbb66c6b8ce29b52755656dc191d0b43215e59f131586dca0b6e1026868"
 	},
 	"atlassianCliReference": {
 		"version": "0.1.18",
