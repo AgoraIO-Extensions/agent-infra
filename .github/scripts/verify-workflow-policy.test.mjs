@@ -313,7 +313,7 @@ test("starts review, recovery, and outcome handling from the CI workflow", async
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 10);
+	assert.equal(Object.keys(workflows).length, 11);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -379,6 +379,18 @@ test("keeps the WeCom Secret only in the trusted outcome sender", async () => {
       error.includes("WECOM_BOT_WEBHOOK_URL"),
     ),
   );
+});
+
+test("keeps the Connection E2E token only in its fixed conformance step", async () => {
+	const workflows = await actualWorkflows();
+	workflows["ci.yml"].jobs.ci.steps[0].env = {
+		CONNECTION_E2E_TOKEN: "${{ secrets.CONNECTION_E2E_TOKEN }}",
+	};
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("CONNECTION_E2E_TOKEN"),
+		),
+	);
 });
 
 test("requires bounded deduplicated outcome and post-merge behavior", async () => {
