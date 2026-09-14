@@ -14,11 +14,11 @@ COPY packages/agent-runtime/third-party/opencode-LICENSE ./packages/agent-runtim
 RUN node --use-env-proxy deploy/runtime/install-opencode.mjs "$TARGETARCH" /opt/opencode
 RUN apk add --no-cache 'setpriv=2.42.3-r1'
 COPY . .
-RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
+RUN pnpm --config.fetch-timeout=300000 install --frozen-lockfile --store-dir /pnpm-store
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
-RUN pnpm --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
+RUN pnpm --config.store-dir=/pnpm-store --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
 RUN rm /prod/agent-runtime-host/pnpm-lock.yaml \
     /prod/agent-runtime-host/pnpm-workspace.yaml \
     /prod/agent-runtime-host/node_modules/.modules.yaml \
