@@ -71,6 +71,7 @@ const repositoryRef = [
 	"check_repository_starred",
 	"list_repository_stargazers",
 	"list_repository_watchers",
+	"list_repository_events",
 ] as const;
 
 const issuePr = [
@@ -122,7 +123,6 @@ const userActivity = [
 	"list_user_received_public_events",
 	"list_authenticated_user_events",
 	"list_authenticated_user_received_events",
-	"list_repository_events",
 	"search_users",
 	"get_user",
 	"list_user_repositories",
