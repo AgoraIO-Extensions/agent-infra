@@ -8,6 +8,7 @@ import {
 	assertTestProjectMutation,
 	capabilityCoverage,
 	capabilityVerificationMatrix,
+	type LiveVerificationEvidence,
 	runTestProjectMutation,
 	runTestProjectRead,
 	testResourceMarker,
@@ -108,6 +109,27 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 			/verification evidence does not match the catalog/,
 		);
 	}
+
+	const mutableActionVersionIds = [
+		...githubV7VerificationEvidence.actionVersionIds,
+	];
+	const mutableEvidence: LiveVerificationEvidence = {
+		...githubV7VerificationEvidence,
+		actionVersionIds: mutableActionVersionIds,
+	};
+	const immutableMatrix = capabilityVerificationMatrix(
+		githubConnectionCatalog,
+		mutableEvidence,
+	);
+	mutableEvidence.cleanup = "FAILED";
+	mutableActionVersionIds.length = 0;
+	const retainedEvidence = immutableMatrix.find(
+		(item) => item.status === "LIVE_VERIFIED",
+	)?.evidence;
+	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
+	assert.equal(retainedEvidence?.actionVersionIds.length, 9);
+	assert.ok(Object.isFrozen(retainedEvidence));
+	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
 
 test("capability coverage rejects duplicate IDs and unknown effects", () => {

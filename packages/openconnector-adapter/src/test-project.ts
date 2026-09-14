@@ -92,12 +92,16 @@ export function capabilityVerificationMatrix(
 			requireValue(`verification evidence ${name}`, value);
 		}
 	}
+	const validatedEvidence = Object.freeze({
+		...evidence,
+		actionVersionIds: Object.freeze([...evidence.actionVersionIds]),
+	});
 	return capabilityCoverage([catalog]).map((coverage) => {
 		const verified = actionVersionIds.has(coverage.actionId);
 		return {
 			...coverage,
 			actionVersionId: coverage.actionId,
-			...(verified ? { evidence } : {}),
+			...(verified ? { evidence: validatedEvidence } : {}),
 			requirements: {
 				contract: "REQUIRED",
 				liveProvider: "REQUIRED",
