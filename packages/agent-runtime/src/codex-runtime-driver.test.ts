@@ -19,6 +19,7 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
+	codexConversationKey,
 } from "./codex-app-server-bridge.js";
 import type {
 	CodexModelTurnAdmission,
@@ -977,6 +978,24 @@ class TestCodexBridge {
 		});
 	}
 
+	emitAgentMessageCompleted(
+		text: string,
+		itemId = "codex-native-item-private",
+	) {
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push({
+				method: "item/completed",
+				params: {
+					threadId: this.nativeThreadId,
+					turnId: this.nativeTurnId,
+					completedAtMs: 1,
+					item: { type: "agentMessage", id: itemId, text },
+				},
+			});
+		});
+	}
+
 	emitFrame(frame: CodexAppServerFrame) {
 		return new Promise<void>((resolve) => {
 			this.notificationRead = resolve;
@@ -1504,6 +1523,12 @@ describe("Codex Runtime Driver", () => {
 			reasoningEffort: "high",
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 			dataDirectory: `${join(directory, "driver.json")}.native`,
+			// Native storage is selected by the server-resolved binding only.
+			conversationKey: codexConversationKey({
+				agentId: "agent-codex",
+				conversationId: "conversation-codex",
+				sessionGeneration: 1,
+			}),
 		});
 		expect(bridge.requests.map(({ method }) => method)).toEqual([
 			"initialize",
@@ -3886,6 +3911,76 @@ describe("Codex Runtime Driver", () => {
 			method: "thread/items/list",
 			params: pinnedV2EventRecoveryFrames.threadItemsListRequest,
 		});
+	});
+
+	it("records a completed agent message that the native release never streamed", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+
+		// The pinned release only streams deltas on some transports, so the
+		// completed item is the canonical replay source.
+		await bridge.emitAgentMessageCompleted("completed-only-text");
+		const events = await vi.waitFor(async () => {
+			const text = (
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "text");
+			expect(text).toHaveLength(1);
+			return text;
+		});
+		expect(events[0]).toEqual(
+			expect.objectContaining({ payload: { delta: "completed-only-text" } }),
+		);
+
+		// A completed item after its own deltas only contributes the remainder.
+		await bridge.emitAgentMessageDelta("streamed-");
+		await bridge.emitAgentMessageCompleted(
+			"streamed-tail",
+			"codex-native-item-streamed",
+		);
+		await bridge.emitAgentMessageCompleted(
+			"streamed-tail",
+			"codex-native-item-streamed",
+		);
+		const deltas = await vi.waitFor(async () => {
+			const text = (
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "text");
+			expect(text).toHaveLength(3);
+			return text.map((event) => event.payload);
+		});
+		expect(deltas).toEqual([
+			{ delta: "completed-only-text" },
+			{ delta: "streamed-" },
+			{ delta: "streamed-tail" },
+		]);
+
+		// A completed item after the Turn ended never reopens the journal.
+		await bridge.emitTurnCompleted("completed");
+		await bridge.emitAgentMessageCompleted(
+			"after-terminal",
+			"codex-native-item-late",
+		);
+		await expect
+			.poll(
+				async () =>
+					(
+						await driver.replayEvents(
+							accepted.nativeSessionRef,
+							command.executionId,
+						)
+					).filter((event) => event.type === "text").length,
+			)
+			.toBe(3);
 	});
 
 	it("keeps equal native delta occurrences distinct with stable local cursors", async () => {

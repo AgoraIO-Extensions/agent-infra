@@ -1,3 +1,8 @@
+export {
+	CLAUDE_NATIVE_PROVENANCE,
+	verifyClaudeInstallation,
+} from "./claude-installation.js";
+export * from "./claude-runtime-driver.js";
 export { validateModelAccess as validateCodexModelAccess } from "./codex-app-server-bridge.js";
 export * from "./codex-installation.js";
 export * from "./codex-runtime-driver.js";

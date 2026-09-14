@@ -19,6 +19,7 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
+	codexConversationKey,
 	validateModelAccess,
 } from "./codex-app-server-bridge.js";
 import {
@@ -1154,6 +1155,31 @@ function agentMessageDeltaNotification(frame: CodexAppServerFrame) {
 	};
 }
 
+function agentMessageCompletedNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/completed") return undefined;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!isPlainRecord(params.item)
+	) {
+		protocolInvalid();
+	}
+	// Only the agent message carries replayable text; other item types stay
+	// opaque to the platform.
+	if (params.item.type !== "agentMessage") return undefined;
+	if (!nonEmptyString(params.item.id) || typeof params.item.text !== "string") {
+		protocolInvalid();
+	}
+	return {
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: params.item.id,
+		text: params.item.text,
+	};
+}
+
 function turnCompletedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "turn/completed") return undefined;
 	const params = frame.params;
@@ -1376,13 +1402,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	protected constructor(
 		private readonly file: DurableJsonFile<CodexDriverState>,
-		bridge: CodexAppServerTransport,
+		private readonly openConversationBridge: (
+			conversationKey: string,
+		) => Promise<CodexAppServerTransport>,
+		private readonly assertContainedNativeConfiguration: (
+			rpc: CodexRpc,
+		) => Promise<void>,
 		private readonly modelOptions: ReadonlyMap<
 			string,
 			ConfiguredCodexRuntimeModelOption
 		>,
 		private readonly defaultSelection: { model: string; effort: string },
 		private readonly configVersion: string,
+		private readonly closeModelTransport?: () => Promise<void>,
 		private readonly beginModelTurnAdmission?: (
 			deadline: number,
 			internalModel: string,
@@ -1402,11 +1434,121 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) => void,
 		private readonly cancelModelTurn?: (turn: CodexNativeTurn) => Promise<void>,
 		private readonly revokeModelTurn?: (turn: CodexNativeTurn) => void,
-	) {
-		this.rpc = new CodexRpc(bridge, (frame) => this.recordNotification(frame));
+	) {}
+
+	// One native process per Conversation generation. The key is derived from the
+	// server-resolved binding, never from a wire field.
+	private readonly conversationRpcs = new Map<string, CodexRpc>();
+	// A transport multiplexes one JSON-RPC id space, so it can never carry two
+	// request multiplexers. It is also bound to the Conversation it was opened
+	// for: reusing it for another key would alias two Conversations onto one
+	// native process, which is exactly the isolation this class provides.
+	private readonly rpcsByTransport = new Map<
+		CodexAppServerTransport,
+		{ readonly conversationKey: string; readonly rpc: CodexRpc }
+	>();
+	private readonly inFlightConversationRpcs = new Map<
+		string,
+		Promise<CodexRpc>
+	>();
+	private closed = false;
+	private closing?: Promise<void>;
+
+	/**
+	 * Production opens one native process per Conversation, so a transport is
+	 * permanently bound to the Conversation that opened it. Only a scripted test
+	 * double serves every Conversation from a single transport, because one
+	 * transport can host exactly one JSON-RPC multiplexer.
+	 */
+	protected sharesOneNativeTransport() {
+		return false;
 	}
 
-	private readonly rpc: CodexRpc;
+	private conversationKeyFor(nativeSessionRef: string) {
+		const session = this.session(nativeSessionRef);
+		return codexConversationKey({
+			agentId: session.agentId,
+			conversationId: session.conversationId,
+			sessionGeneration: session.sessionGeneration,
+		});
+	}
+
+	private async rpc(nativeSessionRef: string) {
+		if (this.closed) unavailable();
+		const key = this.conversationKeyFor(nativeSessionRef);
+		const existing = this.conversationRpcs.get(key);
+		if (existing) return existing;
+		const inFlight = this.inFlightConversationRpcs.get(key);
+		if (inFlight) return inFlight;
+		const opening = this.openConversationRpc(key);
+		this.inFlightConversationRpcs.set(key, opening);
+		try {
+			return await opening;
+		} finally {
+			if (this.inFlightConversationRpcs.get(key) === opening) {
+				this.inFlightConversationRpcs.delete(key);
+			}
+		}
+	}
+
+	protected async openConversationRpc(conversationKey: string) {
+		let bridge: CodexAppServerTransport;
+		try {
+			bridge = await this.openConversationBridge(conversationKey);
+		} catch {
+			unavailable();
+		}
+		const opened = this.rpcsByTransport.get(bridge);
+		if (opened) {
+			// A production transport is a freshly opened native process, so seeing one
+			// again for another Conversation would alias two Conversations onto one
+			// process and undo the isolation this class exists to provide.
+			if (
+				opened.conversationKey !== conversationKey &&
+				!this.sharesOneNativeTransport()
+			)
+				unavailable();
+			this.conversationRpcs.set(conversationKey, opened.rpc);
+			return opened.rpc;
+		}
+		const rpc = new CodexRpc(bridge, (frame) =>
+			// Native thread and turn IDs are scoped to one app-server process, so
+			// notification routing is bound to the Conversation that owns the
+			// transport rather than to the ID alone.
+			this.recordNotification(
+				frame,
+				// The scripted test double serves every Conversation from one
+				// transport, so only production can bind routing to one key.
+				this.sharesOneNativeTransport() ? undefined : conversationKey,
+			),
+		);
+		try {
+			// Every native process is admitted on its own; a contained
+			// configuration on one process never vouches for another.
+			await rpc.request(
+				"initialize",
+				{
+					clientInfo: { name: "agent-infra-runtime", version: "1" },
+					capabilities: { experimentalApi: true },
+				},
+				(value) => {
+					if (!isPlainRecord(value)) protocolInvalid();
+				},
+			);
+			await this.assertContainedNativeConfiguration(rpc);
+		} catch (error) {
+			await rpc.close().catch(() => {});
+			if (error instanceof RuntimeHostError) throw error;
+			unavailable();
+		}
+		if (this.closed) {
+			await rpc.close().catch(() => {});
+			unavailable();
+		}
+		this.rpcsByTransport.set(bridge, { conversationKey, rpc });
+		this.conversationRpcs.set(conversationKey, rpc);
+		return rpc;
+	}
 
 	static async open(options: CodexRuntimeDriverOptions) {
 		// The deployment's Driver file and its sibling native storage share one
@@ -1459,10 +1601,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			reasoningEffort: defaultSelection.effort,
 			...(modelTransport ? { modelAccess: modelTransport.modelAccess } : {}),
 		};
-		let nativeBridge: CodexAppServerTransport;
-		try {
-			nativeBridge = await openBridge({
+		// Native storage stays a sibling of the Driver state on the Agent PVC; the
+		// bridge owns the per-Conversation layout beneath it.
+		const openConversationBridge = (conversationKey: string) =>
+			openBridge({
 				dataDirectory: `${options.path}.native`,
+				conversationKey,
 				...(options.launchPath === undefined
 					? {}
 					: { launchPath: options.launchPath }),
@@ -1473,36 +1617,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					? { modelAccess: containedConfiguration.modelAccess }
 					: {}),
 			});
-		} catch {
-			await modelTransport?.close();
-			unavailable();
-		}
-		let closePromise: Promise<void> | undefined;
-		const bridge: CodexAppServerTransport = modelTransport
-			? {
-					send: (frame) => nativeBridge.send(frame),
-					frames: () => nativeBridge.frames(),
-					close: () => {
-						closePromise ??= (async () => {
-							const results = await Promise.allSettled([
-								nativeBridge.close?.(),
-								modelTransport.close(),
-							]);
-							const rejected = results.find(
-								(result) => result.status === "rejected",
-							);
-							if (rejected?.status === "rejected") throw rejected.reason;
-						})();
-						return closePromise;
-					},
-				}
-			: nativeBridge;
-		const driver = new CodexRuntimeDriver(
+		const assertContainedNativeConfiguration = async (rpc: CodexRpc) => {
+			await rpc.request("config/read", { includeLayers: false }, (value) => {
+				assertContainedConfiguration(value, containedConfiguration);
+			});
+			if (modelTransport) {
+				await assertPinnedModelProfiles(rpc, modelOptions);
+			}
+		};
+		// `new this` keeps the transport-sharing policy in the class that needs it
+		// instead of carrying a test-only flag through production state.
+		return new this(
 			file,
-			bridge,
+			openConversationBridge,
+			assertContainedNativeConfiguration,
 			modelOptions,
 			defaultSelection,
 			options.configVersion,
+			modelTransport ? () => modelTransport.close() : undefined,
 			modelTransport?.beginTurnAdmission,
 			modelTransport?.recognizeTurn,
 			modelTransport?.registerTurn,
@@ -1510,33 +1642,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport?.cancelTurn,
 			modelTransport?.revokeTurn,
 		);
-		try {
-			await driver.rpc.request(
-				"initialize",
-				{
-					clientInfo: { name: "agent-infra-runtime", version: "1" },
-					capabilities: { experimentalApi: true },
-				},
-				(value) => {
-					if (!isPlainRecord(value)) protocolInvalid();
-				},
-			);
-			await driver.rpc.request(
-				"config/read",
-				{ includeLayers: false },
-				(value) => {
-					assertContainedConfiguration(value, containedConfiguration);
-				},
-			);
-			if (modelTransport) {
-				await assertPinnedModelProfiles(driver.rpc, modelOptions);
-			}
-			return driver;
-		} catch (error) {
-			await driver.close();
-			if (error instanceof RuntimeHostError) throw error;
-			unavailable();
-		}
 	}
 
 	private static async openState(path: string) {
@@ -1654,7 +1759,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let candidateModelTurn: CodexNativeTurn | undefined;
 		let modelTurnAdmitted = false;
 		try {
-			const turn = await this.rpc.request(
+			const turn = await (await this.rpc(session.nativeSessionRef)).request(
 				"turn/start",
 				{
 					threadId: session.threadId,
@@ -1826,9 +1931,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				command.executionId,
 			);
 			if (status === "running") {
-				await this.rpc.request("turn/interrupt", nativeTurn, (value) => {
-					if (!isEmptyRecord(value)) protocolInvalid();
-				});
+				await (await this.rpc(prepared.operation.nativeSessionRef)).request(
+					"turn/interrupt",
+					nativeTurn,
+					(value) => {
+						if (!isEmptyRecord(value)) protocolInvalid();
+					},
+				);
 			}
 		} finally {
 			await this.cancelModelTurn?.(nativeTurn);
@@ -1954,6 +2063,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				});
 				if (recoverEventHistory) {
 					const items = await this.readNativeAgentMessageItems(
+						nativeSessionRef,
 						session.threadId,
 						execution.nativeTurnId,
 					);
@@ -1975,6 +2085,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const status = await this.readNativeTurnStatus(session, execution);
 			if (recoverEventHistory) {
 				const items = await this.readNativeAgentMessageItems(
+					nativeSessionRef,
 					session.threadId,
 					execution.nativeTurnId,
 				);
@@ -2105,8 +2216,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		})();
 	}
 
+	// Concurrent or repeated shutdown joins the first one, so the model transport
+	// is closed exactly once and no caller returns before shutdown finished.
 	async close() {
-		await this.rpc.close();
+		this.closing ??= this.shutdown();
+		await this.closing;
+	}
+
+	private async shutdown() {
+		this.closed = true;
+		const opening = [...this.inFlightConversationRpcs.values()];
+		this.inFlightConversationRpcs.clear();
+		await Promise.allSettled(opening);
+		const rpcs = new Set([
+			...this.conversationRpcs.values(),
+			...[...this.rpcsByTransport.values()].map(({ rpc }) => rpc),
+		]);
+		this.conversationRpcs.clear();
+		this.rpcsByTransport.clear();
+		const results = await Promise.allSettled([
+			...[...rpcs].map((rpc) => rpc.close()),
+			...(this.closeModelTransport ? [this.closeModelTransport()] : []),
+		]);
+		const rejected = results.find((result) => result.status === "rejected");
+		if (rejected?.status === "rejected") throw rejected.reason;
 	}
 
 	private readState() {
@@ -2183,12 +2316,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
-	private async recordNotification(frame: CodexAppServerFrame) {
+	private async recordNotification(
+		frame: CodexAppServerFrame,
+		conversationKey: string | undefined,
+	) {
 		const started = turnStartedNotification(frame);
 		if (started) {
 			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
+					conversationKey,
 					started.threadId,
 					started.nativeTurnId,
 				);
@@ -2235,6 +2372,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
+					conversationKey,
 					completed.threadId,
 					completed.nativeTurnId,
 				);
@@ -2274,11 +2412,54 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return;
 		}
 
+		const message = agentMessageCompletedNotification(frame);
+		if (message) {
+			// The pinned native release only streams agent message deltas on some
+			// transports, so the completed item is the canonical replay source.
+			const messageStreamKey = await this.update((state) => {
+				const resolved = this.resolveNotificationJournal(
+					state,
+					conversationKey,
+					message.threadId,
+					message.nativeTurnId,
+				);
+				if (!resolved) return;
+				if (resolved.journal.events.some((event) => event.type === "completed"))
+					return;
+				const emitted = resolved.journal.events
+					.filter(
+						(event): event is CodexJournalTextEvent =>
+							event.type === "text" &&
+							event.nativeItemId === message.nativeItemId,
+					)
+					.map((event) => event.payload.delta)
+					.join("");
+				if (!message.text.startsWith(emitted)) protocolInvalid();
+				const delta = message.text.slice(emitted.length);
+				if (delta.length === 0) return;
+				this.appendTextEvent(
+					resolved.session,
+					resolved.journal,
+					message.nativeItemId,
+					delta,
+				);
+				return resolved.execution
+					? this.eventStreamKey(
+							resolved.nativeSessionRef,
+							resolved.execution.executionId,
+						)
+					: undefined;
+			});
+			if (messageStreamKey) this.notifyEventStream(messageStreamKey);
+			return;
+		}
+
 		const delta = agentMessageDeltaNotification(frame);
 		if (!delta || delta.delta.length === 0) return;
 		const streamKey = await this.update((state) => {
 			const resolved = this.resolveNotificationJournal(
 				state,
+				conversationKey,
 				delta.threadId,
 				delta.nativeTurnId,
 			);
@@ -2302,11 +2483,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private resolveNotificationJournal(
 		state: CodexDriverState,
+		conversationKey: string | undefined,
 		threadId: string,
 		nativeTurnId: string,
 	) {
+		// A native ID only means anything inside the process that issued it, so the
+		// owning Conversation is part of the match, not just the thread ID.
 		const matchingSessions = Object.entries(state.sessions).filter(
-			([, session]) => session.threadId === threadId,
+			([, session]) =>
+				session.threadId === threadId &&
+				(conversationKey === undefined ||
+					codexConversationKey({
+						agentId: session.agentId,
+						conversationId: session.conversationId,
+						sessionGeneration: session.sessionGeneration,
+					}) === conversationKey),
 		);
 		if (matchingSessions.length === 0) return undefined;
 		if (matchingSessions.length !== 1) stateInvalid();
@@ -2584,6 +2775,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
 		const items = await this.readNativeAgentMessageItems(
+			nativeSessionRef,
 			session.threadId,
 			execution.nativeTurnId,
 		);
@@ -2596,6 +2788,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async readNativeAgentMessageItems(
+		nativeSessionRef: string,
 		threadId: string,
 		nativeTurnId: string,
 	) {
@@ -2603,7 +2796,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let cursor: string | undefined;
 		const seenCursors = new Set<string>();
 		for (let page = 0; page < maximumItemsListPages; page += 1) {
-			const result = await this.rpc.request(
+			const result = await (await this.rpc(nativeSessionRef)).request(
 				"thread/items/list",
 				{
 					threadId,
@@ -2692,6 +2885,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!session.threadId) unavailable();
 		try {
 			return await this.readNativeTurnStatusPage(
+				session.nativeSessionRef,
 				session.threadId,
 				execution.nativeTurnId,
 			);
@@ -2725,6 +2919,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			try {
 				return await this.readNativeTurnStatusPage(
+					session.nativeSessionRef,
 					session.threadId,
 					execution.nativeTurnId,
 				);
@@ -2760,13 +2955,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async readNativeTurnStatusPage(
+		nativeSessionRef: string,
 		threadId: string,
 		nativeTurnId: string,
 	) {
 		let cursor: string | undefined;
 		const seenCursors = new Set<string>();
 		for (let page = 0; page < maximumTurnsListPages; page += 1) {
-			const result = await this.rpc.request(
+			const result = await (await this.rpc(nativeSessionRef)).request(
 				"thread/turns/list",
 				{
 					threadId,
@@ -3229,7 +3425,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
 		}
-		const threadId = await this.rpc.request(
+		const threadId = await (await this.rpc(nativeSessionRef)).request(
 			"thread/start",
 			{ historyMode: "paginated" },
 			(value) => {
@@ -3281,7 +3477,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async resumeSessionOnce(nativeSessionRef: string) {
 		const session = this.session(nativeSessionRef);
 		if (!session.threadId) unavailable();
-		await this.rpc.request(
+		await (await this.rpc(nativeSessionRef)).request(
 			"thread/resume",
 			{ threadId: session.threadId, excludeTurns: true },
 			(value) => {

@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+	RuntimeModelConfigurationV3Schema,
+	type RuntimeModelProtocolV1,
+} from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationModelOptionV1,
 	AgentConfigurationRecordV1,
+	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
 import { z } from "zod";
 import type { ModelAccessValidatorV1 } from "./access.js";
@@ -53,11 +58,34 @@ const credentialVariable = (optionId: string) =>
 export const runtimeModelConfigurationVariableV1 =
 	"AGENT_INFRA_RUNTIME_MODEL_CONFIG";
 
+export interface StandardTemplateModelBindingV1 {
+	readonly templateId: string;
+	readonly imageDigest: string;
+	readonly protocol: RuntimeModelProtocolV1;
+}
+
+/** Immutable image admission and the deployment's fixed Driver binding must agree. */
+export function standardTemplateModelProtocolV1(
+	source: AgentConfigurationSourceV1,
+	bindings: readonly StandardTemplateModelBindingV1[],
+) {
+	const matches = bindings.filter(
+		(binding) =>
+			source.kind === "standard" &&
+			binding.templateId === source.templateId &&
+			binding.imageDigest === source.imageDigest,
+	);
+	if (matches.length !== 1) throw new ModelConfigurationErrorV1();
+	return matches[0]!.protocol;
+}
+
 /** A Worker-owned, credential-free snapshot. Never append this to Workload desired annotations. */
 export async function projectRuntimeModelConfigurationV1(input: {
 	readonly configuration: AgentConfigurationRecordV1;
 	readonly catalog: ModelCatalogAdapterV1;
 	readonly access: ModelAccessValidatorV1;
+	/** Bound to the admitted template image by deployment assembly, never an Owner field. */
+	readonly protocol: RuntimeModelProtocolV1;
 	readonly signal: AbortSignal;
 	readonly credentialFor: (option: AgentConfigurationModelOptionV1) => Promise<{
 		readonly reference: z.infer<typeof secretReferenceSchema>;
@@ -91,7 +119,11 @@ export async function projectRuntimeModelConfigurationV1(input: {
 					{ signal: input.signal },
 				),
 			);
-			if (endpoint.endpointId !== option.endpointId || !endpoint.available)
+			if (
+				endpoint.endpointId !== option.endpointId ||
+				!endpoint.available ||
+				endpoint.protocol !== input.protocol
+			)
 				throw new ModelConfigurationErrorV1();
 			const credential = await input.credentialFor(option);
 			try {
@@ -236,19 +268,31 @@ export async function revalidateRuntimeModelCatalogV1(
 export function runtimeModelInjectionV1(value: RuntimeModelProjectionV1) {
 	const projection = validateRuntimeModelProjectionV1(value);
 	const secretName = `model-config-${projection.fingerprint.slice(0, 48)}`;
-	const configuration = JSON.stringify({
-		schemaVersion: 2,
+	const messages = projection.options.some(
+		(option) => option.endpoint.protocol === "anthropic-messages-v1",
+	);
+	const content = {
+		schemaVersion: messages ? 3 : 2,
 		configVersion: `configuration-${projection.configurationRevision}-${projection.fingerprint}`,
 		defaultModelOptionId: projection.defaultOptionId,
 		defaultReasoningLevel: projection.defaultReasoningLevel,
 		modelOptions: projection.options.map((option) => ({
 			modelOptionId: option.optionId,
+			...(messages
+				? {
+						protocol: option.endpoint.protocol,
+						authentication: option.endpoint.authentication ?? "bearer",
+					}
+				: {}),
 			endpoint: option.endpoint.baseUrl,
 			model: option.modelId,
 			reasoningLevels: option.reasoningLevels,
 			credentialEnvironmentVariable: credentialVariable(option.optionId),
 		})),
-	});
+	};
+	const configuration = JSON.stringify(
+		messages ? RuntimeModelConfigurationV3Schema.parse(content) : content,
+	);
 	return {
 		secretName,
 		configuration,

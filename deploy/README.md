@@ -85,6 +85,12 @@ Workload revision 和固定 Service origin；`platform-adapter` 的核心探测�
 [Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。
 Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 
+部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest 与模型协议
+绑定；支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起
+补齐此字段，缺失会在 Worker 打开 Store 前拒绝启动。仅支持自定义 Agent 的部署包传入空
+数组；标准 Agent 不会从模板名称或模型 ID 推断协议。绑定契约见
+[Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md)。
+
 迁移 `0012` 保存每个 Agent 的调谐进度、候选与已验证修订。Worker 在 Agent 行锁内
 执行一个可重入步骤；多个 Worker 使用 `SKIP LOCKED` 处理不同 Agent。停止和停用
 先关闭路由再缩容，升级先停止旧 Pod，再复用 PVC 启动候选。预检拒绝保留旧版本，
