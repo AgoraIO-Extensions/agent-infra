@@ -21,6 +21,7 @@ const requiredChecks = [
 	"stream-failures-redacted",
 	"cancellation-aborts-upstream",
 	"native-sandboxed-tool-execution",
+	"native-sibling-conversation-denied",
 	"recursive-native-storage-redacted",
 	"personal-configuration-isolated",
 ];

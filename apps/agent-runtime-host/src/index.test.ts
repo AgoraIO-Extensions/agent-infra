@@ -61,6 +61,43 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("assembles the fixed Claude Driver with per-option V3 configuration and closes it", async () => {
+		const runtime = await assembleRuntimeHost({
+			...(await environment()),
+			AGENT_INFRA_RUNTIME_DRIVER: "claude",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 3,
+				configVersion: "claude-active-17",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "anthropic-messages-v1",
+						authentication: "bearer",
+						model: "claude-opus-5",
+						endpoint: "https://models.example.test",
+						reasoningLevels: ["high"],
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			}),
+		});
+		try {
+			expect(runtime.configVersion).toBe("claude-active-17");
+			expect(
+				(await createRuntimeHostApp(runtime).request("/healthz")).status,
+			).toBe(200);
+			expect(
+				runtimeAssemblyMocks.openCodexRuntimeDriver,
+			).not.toHaveBeenCalled();
+		} finally {
+			await runtime.close();
+		}
+	});
 	it("reports the consumed configuration revision in readiness metadata", async () => {
 		const runtime = await assembleRuntimeHost(await environment());
 		const ready = Promise.withResolvers<string>();

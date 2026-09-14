@@ -747,6 +747,7 @@ describe("PostgreSQL Workload steps", () => {
 		async function advance(registry = workloadRegistryFixture()) {
 			for (let i = 0; i < 12; i++) {
 				const runtime = createWorkloadRuntimeV1({
+					templateModelBindings: [],
 					workerId: `worker-${i}`,
 					client: api.client,
 					policy: workloadTestPolicy,
@@ -848,6 +849,7 @@ describe("PostgreSQL Workload steps", () => {
 			createWorkloadReconciliationV1({
 				store: first,
 				runtime: createWorkloadRuntimeV1({
+					templateModelBindings: [],
 					workerId: "worker-r3-a",
 					client: api.client,
 					policy: workloadTestPolicy,
@@ -862,6 +864,7 @@ describe("PostgreSQL Workload steps", () => {
 			createWorkloadReconciliationV1({
 				store: second,
 				runtime: createWorkloadRuntimeV1({
+					templateModelBindings: [],
 					workerId: "worker-r3-b",
 					client: api.client,
 					policy: workloadTestPolicy,
@@ -1220,6 +1223,7 @@ describe("PostgreSQL Workload steps", () => {
 				client = api.client;
 			}
 			const runtime = createWorkloadRuntimeV1({
+				templateModelBindings: [],
 				workerId: "worker-cleanup",
 				client,
 				policy: workloadTestPolicy,
@@ -1475,6 +1479,13 @@ describe("PostgreSQL Workload steps", () => {
 			modelCatalog: createDeploymentModelCatalogAdapterV1({
 				load: async () => catalog,
 			}),
+			templateModelBindings: [
+				{
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					protocol: "openai-responses-v1" as const,
+				},
+			],
 			modelAccess: createFakeModelAccessValidatorV1(
 				modelOptions.map((option) => ({
 					endpointId: option.endpointId,
@@ -1621,6 +1632,7 @@ describe("PostgreSQL Workload steps", () => {
 		const registry = workloadRegistryFixture();
 		let reject = false;
 		const options = {
+			templateModelBindings: [],
 			workerId: "worker-a",
 			client: api.client,
 			policy: workloadTestPolicy,

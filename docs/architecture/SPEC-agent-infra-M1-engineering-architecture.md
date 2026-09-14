@@ -457,16 +457,28 @@ StatefulSet 的逐 Secret activation-fence 旁持久保存实际 Secret UID；�
 
 部署 Workload options 通过 `packages/model-catalog` 的
 `createDeploymentModelCatalogAdapterV1({ load })` 注入目录，通过
-`createResponsesModelAccessValidatorV1()` 注入访问验证。目录快照必须带
+按目录 profile 分派的访问验证器执行候选预检。目录快照必须带
 `schemaVersion: 1`、精确 `revision` 和毫秒时间戳 `validUntil`；每个端点带
-`endpointId`、精确 `baseUrl`/`origin`、`openai-responses-v1` profile、TLS 与禁止重定向策略、
+`endpointId`、精确 `baseUrl`/`origin`、protocol profile、TLS 与禁止重定向策略、
 streaming/tool/reasoning policy、可选 `allowedModels` 和可用状态。`allowedModels: null`
 表示目录不额外限制模型名单，仍须验证 Owner 指定的模型。未知字段、缺失、移除、过期、
 修订不匹配和不可用结果均返回 `MODEL_CONFIGURATION_UNAVAILABLE`，不回传原始异常。
 
-Worker 在 preflight 对每个 option 独立可信解密并审计，通过有截止时间的合成 Responses
-请求验证 credential、模型、每个 reasoning 档位、流式完成和 function call；探测不使用会话内容，
-不执行工具，设置 `store: false`，整个投影最多 60 秒，每次响应最多 1 MiB。
+目录的 `protocol` 是 profile 的唯一协议判别字段；当前实现范围为 `openai-responses-v1`
+与 `anthropic-messages-v1`。Messages 端点还必须由目录声明 `authentication` 为 `bearer`
+或 `api-key`，分别映射到 Authorization 或 x-api-key；Owner 只提供对应 credential，不能选择
+认证方式或提交任意 header。旧 Responses 端点继续使用固定 Bearer 认证，其缺省语义不扩展到
+Messages。预检先校验目录 profile 与可信标准模板 Driver 绑定兼容，未知或不兼容组合在模型
+请求与候选物化前拒绝；不能根据 URL、模型名或探测回退猜测协议。
+
+Worker 在 preflight 对每个 option 独立可信解密并审计，通过该 profile 的有界合成请求验证
+credential、模型、每个 reasoning 档位、流式完成和工具调用；探测不使用会话内容，不执行工具。
+Responses 保留 `createResponsesModelAccessValidatorV1()` 与 `store: false`；Messages 使用
+实际 `/v1/messages` 路径、选定认证方式和 pinned SDK 所需的版本/capability 参数，按该协议
+验证完整终态，不能以 Responses 成功替代。覆盖 `/v1/messages/count_tokens`：固定原生版本
+要求该能力时必须成功；版本明确支持缺失时的估算回退，须验证其真实行为，不能把可选接口
+误作必需能力，也不能将认证、协议或模型错误当作可选缺失忽略。
+整个投影最多 60 秒，每次响应最多 1 MiB。
 部署应计入这些配置验证请求的额度。Runtime Driver 继续负责 pinned native profile 验证。
 任何选项失败都不物化候选 Workload；临时解密 buffer 在验证后清零。
 Workload 部署使用 Worker-only `createWorkloadSecretKeyringDecryptorV1`，允许解密 Store
@@ -477,7 +489,7 @@ Secret ID、Agent ID、keyVersion、结果与 traceId 审计；不复制、重�
 独立 Secret 激活入口继续使用拒绝 active 记录的 `createSecretKeyringDecryptorV1`。
 
 通过验证的投影及 SHA-256 指纹与 candidate/verified 一起保存在 Worker 的持久调谐状态，
-不进入公开 desired contract。Runtime V2 JSON 写入独立 immutable 配置 Secret，每个 option
+不进入公开 desired contract。版本化 Runtime JSON 写入独立 immutable 配置 Secret，每个 option
 通过显式 `secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`，配置 JSON 同样通过
 `secretKeyRef` 注入 `AGENT_INFRA_RUNTIME_MODEL_CONFIG`；模型 credential 不再通过 `envFrom`
 导入。Owner 的普通模型环境变量不参与 Runtime V2 选择，平台保留键仍拒绝。
@@ -491,6 +503,19 @@ annotation 仅保存模型投影指纹；观察和路由提升从 Worker 持久�
 fence 后通过 UID/resourceVersion 前置条件删除。初次失败在资源清理后同样回收配置 Secret。
 清理未完成时保留 candidate 重试，不删除 verified 配置或其他 Agent 标记的 Secret；已验证
 版本化配置仍按回滚保留策略保留。
+
+新增 profile 使用 Runtime 配置 V3，每个 option 除既有字段外携带目录确认的 `protocol` 和
+`authentication`，二者纳入持久投影、指纹、重验和 Host 校验，不能在 Worker 到 Host 的装配中
+丢失。旧 V2 只按既有 Codex/Responses 语义读取；不能把 V2 当作 Claude 配置或为其推断新的
+协议。旧 verified 投影的读取和指纹保持兼容，不通过添加缺省字段改写历史快照。
+Host 在启动 Driver 前校验全部选项与部署固定绑定兼容；执行命令仍只传平台模型选项及
+reasoning，不携带 profile、endpoint 或 credential。共享 Schema 由 `packages/contracts`
+维护，ModelCatalog/Worker 与 Host 消费同一版本；后续 ACP/Pi 的真实 profile 在各自实现中
+扩展，不提前宣称兼容。取舍见 [ADR: 按目录协议绑定标准模板模型配置](../adr/0009-bind-model-profiles-to-runtime-configuration.md)。
+
+V3 JSON Schema 的具名定义提供结构校验；选项 ID 与选项内 reasoning 的唯一性、默认选项和
+reasoning 的关联由共享 `RuntimeModelConfigurationV3Schema` 执行语义校验，Worker 与 Host
+均必须执行，不能仅凭 JSON Schema 校验通过物化候选配置或准入 Runtime。
 
 ### 10.8 Codex 原生模型传输边界
 
@@ -561,6 +586,79 @@ RuntimeHost wire contract、Execution 模型选择、Platform/Connection 权威�
 持久数据保持；多用户隔离仍由独立验收证明。正式镜像验收必须包含成功 Turn，以及 HTTP 与
 流内失败、取消、异常流的合成负向场景，递归检查原生持久历史、日志与 HTTP/SSE 的脱敏结果。
 取舍见 [ADR: Codex 模型错误在原生持久化前脱敏](../adr/0007-sanitize-codex-model-errors-before-native-storage.md)。
+
+### 10.9 Codex 原生 Conversation 隔离边界
+
+Codex Driver 为每个 Conversation 代次维护一个独立的原生 `app-server` 进程。进程选择键由服务端
+从可信 `agentId`、`conversationId` 与 `sessionGeneration` 派生，不接受调用方提交的字段，也不由
+原生回包决定。每个进程独立完成 pinned provenance、`initialize` 与受限配置准入；一个进程的准入
+结果不为另一个进程担保。一个原生传输只允许一个请求多路复用器。
+
+原生持久存储位于该 Agent PVC 上 Driver 状态的同级目录，按 `conversations/<key>/{home,workspace}`
+分配；`CODEX_HOME` 与 cwd 按 Conversation 绑定，因此原生历史与 rollout 天然不共享目录。所有层级
+以 0700 创建并校验归属与权限位，持久目录中出现原生配置或凭证文件即拒绝启动。旧布局与丢失所属
+目录的 Session 保留原始文件与映射，相关原生操作 fail closed。
+
+文件边界按平台施加，两种方式都限定到本 Conversation 目录，且不落盘配置文件。任一平台无法施加
+边界时拒绝启动原生进程，不回退到无边界模式。
+
+Linux 由部署提供的可信 `setpriv` 对整个原生进程施加 Landlock 边界：pinned legacy Landlock 后端
+拒绝需要直接运行时强制的权限 profile，而它的替代后端需要该部署不具备的 namespace 权限。Landlock
+规则只能增加访问，深层规则无法收窄父规则，所以必须使用 allowlist。受管权限覆盖可触达常规文件与
+目录的文件系统权限，不含只作用于字符/块设备的 `ioctl-dev`；allowlist 只允许 pinned 发行版及其资源、
+系统程序与库目录只读，`/etc` 与 `/sys` 只读元数据，`/proc` 只可列举而不可读取（读取会让模型工具从
+原生进程环境中取出模型传输凭证），`/dev` 只可读写已有设备节点，以及本次临时 HOME/TMPDIR 与本
+Conversation 自己的 `home`、`workspace` 可读写；Conversation 根自身、兄弟 Conversation 目录与共享边界
+目录都不在 allowlist 内。规则路径必须是绝对且已规范化的目录：helper 在原生进程工作目录下解析它们，
+而 Landlock 把规则绑定到解析后的目录，因此路径中任意一段符号链接都会静默放宽边界。任何落在共享边界
+内、或反向包含该边界的外部条目都被拒绝，包括把 pinned 发行版装在系统根目录时推导出的程序目录。
+
+该平台边界在 Linux 是唯一的文件边界：pinned legacy Landlock 后端在执行工具前需要对 `/` 的递归
+`read-dir`，而 Landlock 只能增加访问，授予它会让全部兄弟 Conversation 目录重新可列举，本人
+`workspace` 写入同时失效。因此 Linux 关闭 pinned Codex 自身的文件 sandbox（`sandbox_mode`），保留
+legacy 后端选择只为避免残留代码路径落到需要 namespace 权限的后端。代价是同一 Conversation 内的
+模型工具与该 Conversation 自身权限相同，可写入本 Conversation 的原生 `home`；跨 Conversation 读取、
+列举、搜索与写入仍全部被拒绝，且必须由镜像验收的负向用例证明。Darwin 不受此影响。
+
+Darwin 由 pinned Codex 自身的权限 profile 施加，以 session flag 注入：Conversation 根 `deny`、
+本 Conversation `home` 只读、`workspace` 可写。Darwin 不在原生进程外再包一层平台沙箱：pinned 版本
+在 Darwin 用 `sandbox-exec` 执行工具，任何具有约束力的外层 profile 都会使内层 `sandbox_apply` 失败，
+从而让工具普遍不可用并伪造出“隔离通过”。
+
+两条路径在跨 Conversation 上的效果一致：模型工具不能读取、列举、搜索、修改或引用其他 Conversation
+的工作区与历史；路径别名、符号链接与父目录穿越同样被拒绝。本 Conversation 内的写入能力按平台记录：
+Darwin 的 profile 使本人 `workspace` 可写、`home` 只读，因此原生配置、skills 与 HOME 不允许模型
+工具写入；Linux 只有平台 Landlock 边界，本 Conversation 的 `home` 对模型工具可写，这是上述后端
+限制的已记录代价，不外推为跨 Conversation 结论。
+
+平台自有模型传输始终是 loopback 入口，原生进程必须拒绝为 loopback 走代理，避免宿主代理配置
+拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。
+
+Runtime Contract、部署单元、Grant 校验与 §10.8 的模型传输边界不变，也不引入平台统一 Sandbox。
+验收必须使用真实 pinned Codex 与正式 Host/Driver/Bridge，覆盖并发、进程重启与原 Session 恢复；
+本人访问必须成功，工具普遍不可用或平台能力关闭都不构成隔离通过。取舍见
+[ADR: 按 Conversation 隔离 Codex 原生进程与文件边界](../adr/0008-isolate-codex-native-processes-per-conversation.md)。
+
+### 10.10 Claude 原生模型传输边界
+
+Claude 原生进程会将模型 API 的错误正文写入会话记录；仅归一化 SDK 事件不能满足凭证与
+供应商错误正文不落盘的要求。固定 Claude Driver 在同一 Agent Pod 内为每次 Query 创建
+独立的 loopback 传输入口，绑定该 Query 已批准的唯一 endpoint、认证、模型和 reasoning。
+真实 credential 只保留在 Driver 传输层内存；原生进程只获得该入口的随机短期能力，不能
+通过模型名、请求 URL 或请求 header 选择其他选项。该入口不提供平台服务、协议转换、
+供应商发现、重试或故障切换。
+
+只允许固定 Messages profile 的 POST 路径；目录 base URL 表示供应商根路径，入口追加
+`/v1/messages` 或 `/v1/messages/count_tokens`，保留 pinned CLI 所需的固定查询参数与
+版本/capability header，拒绝重定向。每次发送前核对模型、reasoning、Query 与已持久提交
+操作的绑定；尚未持久接受、取消中、已退役或配置版本不匹配的 Query 不得向供应商发送。
+原生网络重试不能重投接受结果不确定的请求；模型请求已发送但完整响应未确认时，关闭
+该 Query 的转发能力并保持执行 unknown，禁止静默重试。
+
+非成功 HTTP、流内错误、非法帧和不完整终态在进入原生进程前替换为固定脱敏错误；不转发
+供应商错误正文或响应 header。合法文本和工具内容使用既有凭证泄漏检测原则，传输层不写
+请求、响应或诊断日志。停止和 Query 退役先撤销能力、取消并排空上游请求，再确认原生
+进程退出；能力不转移到下一个 Query。恢复保持原 Session，不能携带旧入口能力。
 
 ## 11. Agent Runtime 边界
 

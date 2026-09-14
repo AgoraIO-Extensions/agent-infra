@@ -63,6 +63,11 @@ Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Servi
 
 标准 Runtime 只接收 Platform 当前 active 的模型 endpoint、模型、reasoning 和注入到本 Agent 的运行凭证。获准 endpoint 与 Owner 配置、Secret 密文和候选修订的权威边界见工程 Spec 10.6 和 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
+标准模板的模型协议与原生 Driver 协议是不同边界。Codex Native 当前消费 Responses，Claude
+Native 消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
+版本化配置并校验它与部署固定 Driver 绑定一致；profile 的来源、认证、版本兼容和候选回滚
+统一遵循工程 Spec 的[标准模板模型配置](SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
+
 ### 3.2 自定义 Agent
 
 | `interactionMode` | 入口与数据归属 | M1 接入规则 |
@@ -115,6 +120,24 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，并在每次原生执行入口显式应用已配置的默认模型和 reasoning；新接受的 Execution 必须使用 V2。取舍见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)，V1 退役需要独立的 breaking-change 决策。
 
 固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
+
+Claude Native 使用固定版本的官方 Claude Agent SDK。每个 Conversation/generation 的 Query、
+工作区和原生持久目录保持独立；SDK 的用户配置、权限默认值及产品 Session 管理不能覆盖本仓
+身份和隔离要求。每次 submit 显式应用有效选项的模型和 reasoning，并绑定其 endpoint 与
+认证配置；只调用 `setModel()` 不构成 endpoint/credential 已切换的证明。需要重建 Query 时，
+在无活跃 Turn 的边界退役并排空旧 Query/进程，再携带新配置恢复原 native Session，保持原生
+Session ID、Host 映射和平台 Conversation 连续；退役失败时拒绝新 Turn。旧 Query 的迟到退出
+与事件不能改变新 Query 的状态。配置版本变化时按持久执行选择拒绝不匹配的恢复，不能用新
+配置重放尚未确定结果的旧操作。
+
+Claude 的真实凭证和供应商错误正文在原生持久化前处理，具体准入、传输与退役规则见
+[工程 Spec §10.10](SPEC-agent-infra-M1-engineering-architecture.md#1010-claude-原生模型传输边界)。
+
+Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–8；SDK 恢复原 Session 不等于
+证明某次提交未执行，缺少可靠原生证据时不得盲目重投。可选补充指令只在所选 SDK 的队列取消
+与本仓持久去重均通过 Conformance 后启用，不能依赖未验证的可选方法。核心 Driver 验收包含
+真实文本、模型切换、停止、原 Session 恢复和双用户隔离；文件及 Connection 的完整模板验收
+仍须分别完成，核心 Driver 通过不能提前开放尚未验收的产品能力。
 
 `platform-adapter` 自定义 Agent 的模型选择 capability 只表示 Generic ACP 可以读取 Runtime 当前提供的模型选项和默认项，并把使用者选择转交给 Runtime。选项内容、Base URL 和凭证属于自定义 Runtime；Owner 通过平台配置的相关 env/Secret 遵循工程 Spec 10.6 的通用规则，Adapter 不从 Runtime 的模型选项读取或保存凭证，也不把它们复制到标准模板模型配置。提交 Turn 前，Adapter 必须确认所选模型仍在 Runtime 当前返回的选项中；能力缺失或选项已失效时不展示或拒绝该选择，不能回退到其他模型后静默执行。
 
@@ -261,11 +284,15 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 ### 10.1 Codex Linux sandbox 启动准入
 
-Codex Native Bridge 在 Linux 使用固定 Codex 版本的 legacy Landlock 后端（`features.use_legacy_landlock=true`），保留原生权限策略。部署支持范围以工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)为准。
+Codex Native Bridge 在 Linux 由部署可信 `setpriv` 的 Landlock 边界承担全部文件约束，并把固定 Codex 版本的后端选择保持在 legacy Landlock（`features.use_legacy_landlock=true`），避免残留代码路径落到需要 namespace 权限的后端。原生自身的文件 sandbox 在 Linux 关闭，理由与代价见工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)。部署支持范围以工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)为准。
 
 每次启动 `app-server` 前，Bridge 必须以相同运行身份和容器安全约束，在不含模型凭证的独立探针子进程中，通过部署提供的可信 `setpriv` 实际创建并应用处理 `fs:ioctl-dev` 的 Landlock 规则集，然后执行固定无副作用命令。该权限自 ABI V5 引入；安装过程必须直接要求该权限，不得屏蔽内核不支持的权限位。部署必须从受维护发行版安装 `setpriv`，通过固定可信 PATH 提供它，并以镜像权限及只读根文件系统保证运行用户不能替换它；其版本和包来源随最终镜像记录并纳入扫描。可信 PATH 属于部署装配，不能由用户请求或 Grant 覆写。
 
 只有探针正常退出且退出码为 0，才允许启动 `app-server` 并向原生子进程注入受限模型传输凭证。工具缺失、无法安装或应用规则集、异常退出、非零退出和超时均拒绝启动，返回稳定且脱敏的错误；不回退到部分权限或 unrestricted 模式。该准入不新增 RuntimeHost 对外配置或改变 Agent Runtime Contract。
+
+### 10.2 Codex 原生 Conversation 隔离
+
+Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。文件边界在 Linux 由部署可信 `setpriv` 的 Landlock allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加，无法施加边界的平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
 
 ## 11. 验证
 
@@ -276,7 +303,8 @@ Codex Native Bridge 在 Linux 使用固定 Codex 版本的 legacy Landlock 后�
 - 四模板逐一用真实模型与受控工具操作验证开始/终态/耗时/实际选择/可得用量及原执行关联；摘要、自报 callId、缺失字段、零耗时推断不能冒充事实。Connection 直连与两侧独立鉴权按上位 Spec 验证；原生核心 conformance 通过不替代整装验收。
 - 意图提交前后、外部响应前后、事件/必要审计提交前后和游标确认前后注入故障；验证未开始操作被阻止、未知不盲重放、事件/审计不丢失、不重复计数，正文/凭证不进入元数据。单独关闭/故障化遥测 exporter 不得改变业务结果，必要审计失败不能返回虚假成功。
 - Eval 以获授权固定集执行回答及受控工具样本，基线/候选保留实际执行引用与版本，取消/恢复复用任务路径；数据撤权阻止后续投递/读取，评分器故障不重放业务任务。自定义未验证能力和 self-managed 声明不能开放任务/观测/Eval。
-- Codex Linux 启动准入覆盖可信工具缺失、权限能力不足、安装失败、异常退出和超时，验证拒绝发生在 `app-server` 启动及向子进程注入模型凭证之前。正式镜像在工程 Spec 规定的容器安全约束下，通过真实 Host/Driver/Bridge 验证工具执行的退出码、stdout 与受限写入结果；该兼容性检查不替代多用户隔离验收。
+- Codex Linux 启动准入覆盖可信工具缺失、权限能力不足、安装失败、异常退出和超时，验证拒绝发生在 `app-server` 启动及向子进程注入模型凭证之前。正式镜像在工程 Spec 规定的容器安全约束下，通过真实 Host/Driver/Bridge 验证工具执行的退出码、stdout 与受限写入结果，并以预先存在的兄弟 Conversation 目录验证读取、列举与写入被拒绝而本人 workspace 写入成功；该兼容性检查不替代多用户隔离验收。
+- Codex 多用户隔离验收使用真实 pinned Codex 与正式 Host/Driver/Bridge，为同一 Agent 的两个用户建立各自 Conversation，验证本人文件与运行上下文访问成功，而跨 Conversation 的读取、列举、搜索、修改、历史扫描与模型输入/结果均被该平台的文件边界拒绝；覆盖并发、进程重启与原 Session 恢复。工具普遍不可用或平台能力关闭都不构成通过。
 - Generic ACP 自定义样例镜像在不增加平台专用代码的前提下通过同一核心测试。
 - 负向测试覆盖未知协议、无交互入口、Manifest Label 缺失或超过 64 KiB、JSON 嵌套超过 8 层、未知或重复字段、非 `1` 的 Schema 版本、`self-managed` 声明 `protocol`、非法 capability 结构、Registry 从 capability 外重复声明 `supplementaryInstruction`、创建或升级时 Owner 选择与 Manifest 交互模式不匹配、升级 Manifest 的无效 Service/健康检查、`health.path` 使用 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、非允许字符、外部 URL、查询参数、片段、控制字符或凭证，以及健康探针返回 HTTP 重定向、调用方伪造或覆盖 `actorId`、使用另一发送者的 Conversation 查询消息、历史、SSE、附件或结果文件、群内公开事件暴露其他发送者的 Conversation 或 Runtime 上下文、不同发送者向活跃 Turn 追加指令或停止回复、缺失或非法 `Idempotency-Key`、同一 Key 跨命令类型复用时误命中其他操作、普通消息响应丢失后因活跃状态变化把重试误判为补充指令或繁忙、两个请求同时进入空闲 Conversation、初始 Turn 未投递时提交补充指令、初始 Turn 接受前失败或取消后的补充指令收敛、补充指令投递前发送者失去权限、补充指令使用过期或扩大范围的 Grant、补充指令提交后目标 Turn 先结束、补充指令重试或 Worker/Pod 重启后重复追加、补充指令 capability 缺失或为 `false`、声明后探测失败、不具备持久去重却声明补充指令 capability、重新生成重复创建 Message 或 Execution、活跃 Turn 上重新生成、旧 stop 请求改绑后续 Execution、使用者停止投递前失去权限后转换为平台撤权停止、没有使用者停止请求时平台主动中止撤权用户的活跃 Execution、身份依赖暂时不可用时不误判撤权或调用 Adapter、检查 stop 后到调用 Runtime 前的并发停止、Turn lease 到期后旧 Worker 迟到提交或回写、接管 Worker 未完成高 fence 取消标记、Turn outbox 原子迁移后 Worker 崩溃、stop outbox 丢失或重复停止、stop 认领后已接受 Turn 的在途事件或真实终态被拒绝、Session 恢复失败后旧代次调用、事件或终态迟到、generation tombstone 重试、繁忙拒绝后创建记录、重复消息、旧 fence 重放已保存事件时重复写入、旧 fence 产生未保存的新事件、双 Worker 并发保存同一 Conversation 事件、Runtime 事件已转发但事务未提交时断线、事务提交后上游确认前崩溃、Worker/Pod 重启后按已确认游标重放、跨 Execution 迟到事件和同会话并发 Turn。可选补充指令探测失败时，Agent 仍创建成功且有效 capability 为 `false`；活跃 Turn 上返回繁忙，不创建 Message、Execution 或 outbox。
 - generation fencing 故障注入覆盖隔离意图提交后 tombstone 尚未激活、Agent Service 激活后 Platform DB 尚未提升代次、两个阶段之间 Worker 重启、tombstone 重复投递和 Agent Service 暂时不可用；任何路径都不能接受新命令、丢弃已接受旧调用的可见结果、在 barrier 确认后产生旧代次副作用，或在确认前提升平台代次。
@@ -311,7 +339,7 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 - M1 不因为潜在抽取而改变 PRD、四个标准模板、Platform/Connection 授权、Kubernetes 部署、平台历史权威或现有验收范围。
 - 只有出现 Agent Infra 以外的真实 consumer、内部 Interface 经多个上游升级保持稳定，并完成独立安全、维护和供应链评审后，后续决策才能批准抽取。
 
-## 13. 参考与非目标
+## 13. 上游复用与非目标
 
 M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生命周期、事件归一化和 capability 分层：
 
@@ -319,7 +347,24 @@ M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生
 - [Paseo](https://github.com/getpaseo/paseo)
 - [Open Design](https://github.com/nexu-io/open-design)
 
-这些项目只作为结构和生命周期参考。M1 不直接复制其代码、产品权限、存储模型或完整协议集合。
+优先使用官方 SDK、协议客户端和成熟上游已实现的生命周期与事件处理。允许按所选版本的
+许可证直接引入或移植当前交付所需的叶子模块与回归场景；上游没有独立可安装库，不构成
+重新实现协议的理由。不得一并引入本仓未要求的产品功能、权限默认值、身份或存储权威，
+不复制完整 daemon、产品 Session 或无实际消费者的通用框架。
+
+每次采用前核验具体版本和文件的许可；实现说明记录 source SHA、文件/函数、采用方式、
+必要差异与对应回归，保留适用的版权、LICENSE、NOTICE 和修改标识。复用代码进入对应 Driver
+或已有模块，原生类型不越过内部 Seam；不依赖个人 HOME 或继承上游自动授权行为。依赖、
+镜像、脱敏、恢复与真实隔离仍按本仓契约验收，上游功能声明或上游测试不能代替本仓证据。
+
+Claude 的首个复用基线为 Paseo
+`d1b705a0cd91617a5707fae25d80cb0be3057950` 的
+[claudeQuery](https://github.com/getpaseo/paseo/blob/d1b705a0cd91617a5707fae25d80cb0be3057950/packages/server/src/server/agent/providers/claude/query.ts)
+与
+[ClaudeAgentSession](https://github.com/getpaseo/paseo/blob/d1b705a0cd91617a5707fae25d80cb0be3057950/packages/server/src/server/agent/providers/claude/agent.ts)：
+采用其 SDK 启动、create/resume、Query 退役和迟到退出处理，映射到既有 RuntimeDriver。
+共享配置由首个非 Responses 消费方扩展，后续 Driver 复用同一候选验证与投影链路；各自的
+原生模型表示、配置切换和恢复语义留在各自 Driver，不能通过平台 ID 的宽泛放行替代映射。
 
 以下内容不进入 M1：
 

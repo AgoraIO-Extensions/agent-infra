@@ -14,6 +14,8 @@ import {
 	ModelConfigurationErrorV1,
 	projectRuntimeModelConfigurationV1,
 	revalidateRuntimeModelCatalogV1,
+	type StandardTemplateModelBindingV1,
+	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
@@ -47,6 +49,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly decryptor: SecretActivationDecryptorPortV1;
 	readonly modelCatalog?: ModelCatalogAdapterV1;
 	readonly modelAccess?: ModelAccessValidatorV1;
+	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
+	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -243,6 +247,8 @@ function bindingsFor(
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 {
+	if (!Array.isArray(options.templateModelBindings))
+		throw new TypeError("Template model bindings are required");
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
@@ -373,11 +379,20 @@ export function createWorkloadRuntimeV1(
 		)
 			return;
 		if (!options.modelCatalog) throw new ModelConfigurationErrorV1();
+		const protocol = standardTemplateModelProtocolV1(
+			state.candidate.configuration.source,
+			options.templateModelBindings,
+		);
+		const projection = validateRuntimeModelProjectionV1(
+			state.candidate.modelProjection,
+			state.candidate.configuration,
+		);
+		if (
+			projection.options.some((option) => option.endpoint.protocol !== protocol)
+		)
+			throw new ModelConfigurationErrorV1();
 		await revalidateRuntimeModelCatalogV1(
-			validateRuntimeModelProjectionV1(
-				state.candidate.modelProjection,
-				state.candidate.configuration,
-			),
+			projection,
 			options.modelCatalog,
 			AbortSignal.timeout(60_000),
 		);
@@ -543,6 +558,10 @@ export function createWorkloadRuntimeV1(
 				try {
 					modelProjection = await projectRuntimeModelConfigurationV1({
 						configuration,
+						protocol: standardTemplateModelProtocolV1(
+							configuration.source,
+							options.templateModelBindings,
+						),
 						catalog: options.modelCatalog,
 						access: options.modelAccess,
 						signal: AbortSignal.timeout(60_000),

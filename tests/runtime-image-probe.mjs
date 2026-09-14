@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	readdir,
+	readFile,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -33,6 +40,14 @@ const processes = new Set();
 const toolCallId = "synthetic-runtime-tool";
 const toolDeniedPath = "/var/lib/agent-runtime/tool-probe-denied";
 const toolExistingPath = "/var/lib/agent-runtime/tool-probe-existing";
+// A synthetic sibling Conversation directory beneath the same boundary. The
+// platform Landlock domain is the whole Conversation boundary on Linux, so the
+// model tool must not read, list or modify it while its own workspace stays
+// writable.
+const toolBoundaryPath = "/var/lib/agent-runtime/tool-probe/conversations";
+const toolSiblingRoot = `${toolBoundaryPath}/${"b".repeat(64)}`;
+const toolSiblingFile = `${toolSiblingRoot}/workspace/sibling-control`;
+const toolSiblingContent = "sibling-conversation-control";
 let toolProbePending = false;
 let toolProbeOutput;
 let holdNextSelectedResponse = true;
@@ -110,7 +125,7 @@ function syntheticToolResponse(response, sequence) {
 		call_id: toolCallId,
 		name: "exec_command",
 		arguments: JSON.stringify({
-			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath}`,
+			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; printf 'runtime-sibling-denied\\n'`,
 			max_output_tokens: 100,
 			yield_time_ms: 1000,
 		}),
@@ -1092,6 +1107,20 @@ try {
 		});
 		assert.equal(await readFile(toolExistingPath, "utf8"), "");
 		await writeFile(toolExistingPath, "owner-truncate-control");
+		// The sibling Conversation directory exists before the owning process
+		// starts, so the boundary is the only reason the tool cannot reach it.
+		await mkdir(`${toolSiblingRoot}/workspace`, {
+			recursive: true,
+			mode: 0o700,
+		});
+		for (const directory of [
+			toolBoundaryPath,
+			toolSiblingRoot,
+			`${toolSiblingRoot}/workspace`,
+		]) {
+			await chmod(directory, 0o700);
+		}
+		await writeFile(toolSiblingFile, toolSiblingContent);
 		runtime = await launch(
 			deployment(origin, "/var/lib/agent-runtime/tool-probe"),
 		);
@@ -1105,6 +1134,15 @@ try {
 				toolProbeOutput.includes("runtime-truncate-denied") &&
 				toolProbeOutput.includes("Permission denied"),
 		);
+		// The same marker also covers the process environment channel: a readable
+		// `/proc` would let a model tool lift the model credential straight out of
+		// a native process's environment.
+		check(
+			"native-sibling-conversation-denied",
+			typeof toolProbeOutput === "string" &&
+				toolProbeOutput.includes("runtime-sibling-denied"),
+		);
+		assert.equal(await readFile(toolSiblingFile, "utf8"), toolSiblingContent);
 		await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
 		assert.equal(
 			await readFile(toolExistingPath, "utf8"),
