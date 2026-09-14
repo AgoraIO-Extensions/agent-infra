@@ -2,6 +2,7 @@ import type {
 	CredentialForExecution,
 	ProviderCredentialConnector,
 	ProviderExecutor,
+	ProviderReconciler,
 } from "@agent-infra/connection-core";
 
 import { jiraServerExecutorDigest } from "./jira-server-integrity.ts";
@@ -10,7 +11,7 @@ const sourceCommit = "5cd85feb1a19cb43a711fe305ea1b40f388792aa";
 const providerId = "jira";
 const apiOrigin = "https://jira.agoralab.co";
 const apiBasePath = "/rest/api/2";
-const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v5`;
+const providerReleaseId = `jira-server-7.11.0-${sourceCommit}-connection-v6`;
 const credentialScope = "jira.server.access";
 const maxResponseBytes = 10 * 1024 * 1024;
 const requestTimeoutMs = 12_000;
@@ -324,7 +325,7 @@ export const jiraServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v5`,
+		id: `${providerId}.${action.name}@v6`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -354,7 +355,7 @@ export const jiraServerConnectionCatalog = {
 } as const;
 
 export class JiraServerAdapter
-	implements ProviderCredentialConnector, ProviderExecutor
+	implements ProviderCredentialConnector, ProviderExecutor, ProviderReconciler
 {
 	readonly providerId = providerId;
 	readonly providerReleaseId = providerReleaseId;
@@ -547,6 +548,23 @@ export class JiraServerAdapter
 		}
 	}
 
+	async reconcile(input: Parameters<ProviderReconciler["reconcile"]>[0]) {
+		if (input.action !== `${providerId}.create_issue`) return undefined;
+		const credential = parseCredential(input.credential.accessToken);
+		const expected = createIssueFields(input.input);
+		const projectKey = stringValue(input.input, "projectKey");
+		const summary = stringValue(input.input, "summary");
+		const result = await this.searchIssues(credential, {
+			fields: Object.keys(expected),
+			jql: `project = ${jqlString(projectKey)} AND summary ~ ${jqlString(`"${summary}"`)}`,
+			limit: 100,
+		});
+		const matches = result.issues.filter((issue) =>
+			matchesExpected(objectValue(issue, "fields"), expected),
+		);
+		return matches.length === 1 ? { issue: matches[0] } : undefined;
+	}
+
 	private async searchIssues(credential: JiraCredential, value: JsonObject) {
 		const expand = stringArray(value, "expand");
 		const fields = stringArray(value, "fields");
@@ -569,20 +587,9 @@ export class JiraServerAdapter
 	}
 
 	private async createIssue(credential: JiraCredential, value: JsonObject) {
-		const fields = {
-			...objectValue(value, "extraFields"),
-			issuetype: compact({ id: value.issueTypeId, name: value.issueTypeName }),
-			project: compact({ id: value.projectId, key: value.projectKey }),
-			summary: stringValue(value, "summary"),
-			...(typeof value.descriptionText === "string"
-				? { description: value.descriptionText }
-				: typeof value.description === "string"
-					? { description: value.description }
-					: {}),
-		};
 		return {
 			issue: await this.requestJson(credential, "/issue", {
-				body: { fields },
+				body: { fields: createIssueFields(value) },
 				method: "POST",
 			}),
 		};
@@ -808,8 +815,52 @@ function compact(value: JsonObject) {
 	);
 }
 
-function providerError(message: string) {
-	return new Error(message);
+function createIssueFields(value: JsonObject): JsonObject {
+	return {
+		...objectValue(value, "extraFields"),
+		issuetype: compact({ id: value.issueTypeId, name: value.issueTypeName }),
+		project: compact({ id: value.projectId, key: value.projectKey }),
+		summary: stringValue(value, "summary"),
+		...(typeof value.descriptionText === "string"
+			? { description: value.descriptionText }
+			: typeof value.description === "string"
+				? { description: value.description }
+				: {}),
+	};
+}
+
+function matchesExpected(actual: unknown, expected: unknown): boolean {
+	if (Array.isArray(expected)) {
+		return (
+			Array.isArray(actual) &&
+			actual.length === expected.length &&
+			expected.every((entry, index) => matchesExpected(actual[index], entry))
+		);
+	}
+	if (isJsonObject(expected)) {
+		return (
+			isJsonObject(actual) &&
+			Object.entries(expected).every(([key, value]) =>
+				matchesExpected(actual[key], value),
+			)
+		);
+	}
+	return Object.is(actual, expected);
+}
+
+function jqlString(value: string) {
+	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function providerError(
+	message: string,
+	metadata: {
+		providerCode?: string;
+		providerStatus?: number;
+		submissionUncertain?: boolean;
+	} = {},
+) {
+	return Object.assign(new Error(message), metadata);
 }
 
 function invalidCredential(message: string) {
@@ -906,8 +957,22 @@ async function request(
 			(response.status === 401 || response.status === 403)
 		)
 			throw invalidCredential("Jira credential was rejected");
-		if (!response.ok)
-			throw providerError(`Jira Server request failed (${response.status})`);
+		if (!response.ok) {
+			const providerCode =
+				response.status === 401 || response.status === 403
+					? "authorization_failed"
+					: response.status === 429
+						? "rate_limited"
+						: response.status < 500
+							? "invalid_input"
+							: "provider_error";
+			throw providerError(`Jira Server request failed (${response.status})`, {
+				providerCode,
+				providerStatus: response.status,
+				submissionUncertain:
+					(options.method ?? "GET") !== "GET" && response.status >= 500,
+			});
+		}
 		return response;
 	} catch (error) {
 		if (
@@ -919,7 +984,10 @@ async function request(
 			throw error;
 		if (error instanceof Error && error.message.startsWith("Jira Server"))
 			throw error;
-		throw providerError("Jira Server request failed");
+		throw providerError("Jira Server request failed", {
+			providerCode: "provider_error",
+			submissionUncertain: (options.method ?? "GET") !== "GET",
+		});
 	} finally {
 		clearTimeout(timeout);
 	}

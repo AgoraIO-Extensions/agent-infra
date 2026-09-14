@@ -2056,6 +2056,48 @@ describe("Connection API", () => {
 		});
 	});
 
+	it("returns typed MCP evidence when a Provider resource is not found", async () => {
+		const app = createTestApp({
+			executor: {
+				execute: async () => {
+					throw Object.assign(new Error("sensitive Provider response"), {
+						providerCode: "provider_error",
+						providerStatus: 404,
+					});
+				},
+			},
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 5,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: {
+						actionId: "github.getRepository",
+						input: { repository: "acme/missing" },
+					},
+					name: "execute_action",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		expect(await response.json()).toEqual({
+			error: {
+				code: -32001,
+				data: { providerHttpStatus: 404 },
+				message: "Provider resource was not found",
+			},
+			id: 5,
+			jsonrpc: "2.0",
+		});
+	});
+
 	it("rejects selector fields outside the fixed MCP tool schemas", async () => {
 		const response = await createTestApp().request("/mcp", {
 			body: JSON.stringify({

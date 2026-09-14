@@ -1,2 +1,2 @@
 export const jiraServerExecutorDigest =
-	"sha256:7b1277c3413fc0b5c2587ac4e0df1ec825e1dc5ad849e16c7b5e627e7a1b9e9c";
+	"sha256:3e4abfbb66c6b8ce29b52755656dc191d0b43215e59f131586dca0b6e1026868";
