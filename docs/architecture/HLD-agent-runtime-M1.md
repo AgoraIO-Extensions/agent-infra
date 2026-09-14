@@ -222,7 +222,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 ### 8.3 SSE 补发
 
-- SSE 的 `id` 字段和 Web/API 重连时的 `Last-Event-ID` 都使用稳定 `eventId`。`platform-api` 必须先校验当前用户/应用主体、API 凭证及目标 Conversation/Execution 权限，再在获准范围内查询该 `eventId` 对应的 `conversationCursor`，再按游标补发其后的已保存事件；显式游标请求直接使用 `conversationCursor`，并执行相同的对象权限校验。任务订阅只返回目标 Execution 的事件；不可见目标按资源不存在拒绝，不因游标泄露其他任务。目标已获授权但游标未知、越界或超出补发窗口时统一返回“重新加载时间线”信号。
+- SSE 的 `id` 字段和 Web/API 重连时的 `Last-Event-ID` 都使用稳定 `eventId`。`platform-api` 必须先校验当前用户/应用主体、API 凭证及目标 Conversation/Execution 权限，再在获准范围内查询该 `eventId` 对应的 `conversationCursor`，再按游标补发其后的已保存事件；显式游标请求直接使用 `conversationCursor`，并执行相同的对象权限校验。任务订阅携带 `Last-Event-ID` 或显式 `conversationCursor` 时，必须先确认其定位的持久事件属于目标 Execution，再计算补发起点；即使同属已获授权的 Conversation，也不能用其他 Execution 的事件或游标推进任务订阅。任务订阅只返回目标 Execution 的事件；不可见目标按资源不存在拒绝，不因游标泄露其他任务。目标已获授权但游标属于其他 Execution、未知、越界或超出补发窗口时统一返回“重新加载时间线”信号。
 - 实时补发受服务端配置的数量和时间窗口限制，时间窗口按平台持久化事件的时间计算，不信任 Runtime 提供的事件发生时间，避免单次重连无限读取。
 - 游标超出补发窗口时，服务端返回明确的“重新加载时间线”信号；客户端先读取 Platform DB 中的持久化历史，再从新的游标继续 SSE。补发窗口不改变业务数据保留期限。
 
@@ -313,7 +313,7 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 - RuntimeHost Conformance 故障注入覆盖 Host Session Ref 泄露、跨 Conversation 重放或与 Grant 绑定不一致，Grant 签名、签发方、audience、有效期、附件引用或操作范围不匹配，缺失或非法模型选择、同一 Execution 选择重放与冲突、相邻 Execution 选择隔离、Driver 不支持的模型或 reasoning，两个 Worker 对同一 Session 和 operation scope 并发提交相同或不同 fence，以及请求记录提交前、提交后但 Driver 调用前、Driver 接受后但 Host 持久化或响应前崩溃。测试必须模拟 durable store 确认前掉电和不完整记录；恢复查询、重复请求和 fence 接管都不能创建第二个 Turn、重复补充指令或重复停止。无法确认时保持 `unknown`，损坏记录使对应 Session fail closed，不能把引用、请求字段、模型 endpoint/credential、原生协议帧或日志文本当作授权或恢复依据。
 - 控制用途 Grant 覆盖主体已撤权仍能停止并核实原执行，Worker 接管后按原 Execution/代次/fence/游标归档未确认事件且用户访问仍被拒绝；伪造撤权、过期或跨主体/Execution/代次的控制 Grant，以及用其提交/补充 Turn、调用模型/工具、读取附件或通过用户路径回放正文均须拒绝。平台状态事件验证同一转换重试不重复写入，而同一任务的受理、等待、取消和终态均能各自持久保存。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
-- SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。
+- SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。任务订阅还须验证：同一 Conversation 中目标 Execution 的事件可连续补发，误用另一已获授权 Execution 的 `Last-Event-ID` 或显式游标时返回重载信号，不能静默跳过目标任务事件。
 
 ## 12. RuntimeHost 未来抽取与维护标准
 
