@@ -55,8 +55,11 @@ export async function openPiRpc(
 	const close = () => {
 		closing ??= (async () => {
 			fail();
-			await owned.close();
-			await launch.close?.();
+			try {
+				await owned.close();
+			} finally {
+				await launch.close?.();
+			}
 		})();
 		return closing;
 	};
