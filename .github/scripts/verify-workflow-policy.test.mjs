@@ -162,6 +162,17 @@ test("keeps the Connection E2E token only in its fixed conformance step", async 
 	);
 });
 
+test("binds Connection E2E to the immutable connection dispatch commit", async () => {
+	const workflows = await actualWorkflows();
+	const checkout = workflows["connection-github-e2e.yml"].jobs.conformance.steps[0];
+	checkout.with.ref = "connection";
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("immutable connection dispatch commit"),
+		),
+	);
+});
+
 test("requires bounded deduplicated outcome and post-merge behavior", async () => {
   const sources = await actualTrustedScriptSources();
   assert.deepEqual(validateTrustedScriptSources(sources), []);
