@@ -26,12 +26,65 @@ export interface WorkloadIdentityV1 {
 	readonly generation: number;
 }
 
+/** Deployment-owned load evidence, private to reconciliation and Dispatch. */
+export interface WorkloadExecutionCapacityV1 {
+	readonly schemaVersion: 1;
+	readonly imageDigest: string;
+	readonly resourceProfileRef: string;
+	readonly resourceConfigurationHash: string;
+	readonly maximumConcurrentExecutions: number;
+	readonly conformanceEvidenceHash: string;
+}
+
+export function parseWorkloadExecutionCapacityV1(
+	input: unknown,
+): WorkloadExecutionCapacityV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new TypeError("Workload execution capacity is invalid");
+	const value = input as Record<string, unknown>;
+	const keys = [
+		"schemaVersion",
+		"imageDigest",
+		"resourceProfileRef",
+		"resourceConfigurationHash",
+		"maximumConcurrentExecutions",
+		"conformanceEvidenceHash",
+	];
+	if (
+		Object.keys(value).length !== keys.length ||
+		keys.some((key) => !Object.hasOwn(value, key)) ||
+		value.schemaVersion !== 1 ||
+		typeof value.imageDigest !== "string" ||
+		!/^sha256:[a-f0-9]{64}$/.test(value.imageDigest) ||
+		typeof value.resourceProfileRef !== "string" ||
+		!/^[\x21-\x7e]{1,256}$/.test(value.resourceProfileRef) ||
+		typeof value.resourceConfigurationHash !== "string" ||
+		!/^[a-f0-9]{64}$/.test(value.resourceConfigurationHash) ||
+		typeof value.conformanceEvidenceHash !== "string" ||
+		!/^[a-f0-9]{64}$/.test(value.conformanceEvidenceHash) ||
+		typeof value.maximumConcurrentExecutions !== "number" ||
+		!Number.isSafeInteger(value.maximumConcurrentExecutions) ||
+		value.maximumConcurrentExecutions < 1
+	)
+		throw new TypeError("Workload execution capacity is invalid");
+	return {
+		schemaVersion: 1,
+		imageDigest: value.imageDigest,
+		resourceProfileRef: value.resourceProfileRef,
+		resourceConfigurationHash: value.resourceConfigurationHash,
+		maximumConcurrentExecutions: value.maximumConcurrentExecutions,
+		conformanceEvidenceHash: value.conformanceEvidenceHash,
+	};
+}
+
 export interface WorkloadVersionV1 {
 	readonly configuration: AgentConfigurationRecordV2;
 	/** Validated, credential-free deployment contract; never a Kubernetes object. */
 	readonly deployment: unknown;
 	/** Private Worker projection, persisted with candidate/verified; never public desired state. */
 	readonly modelProjection?: unknown;
+	/** Absent on legacy or unverified deployments; never inferred from loop limits. */
+	readonly executionCapacity?: WorkloadExecutionCapacityV1;
 }
 
 export interface WorkloadReconciliationStateV1 {

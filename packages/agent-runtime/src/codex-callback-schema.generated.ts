@@ -1,0 +1,2596 @@
+// biome-ignore-all lint/suspicious/noThenProperty: JSON Schema conditionals are data, not thenable objects.
+// Generated from vendor/codex/callback-v2.schema.json. Do not edit.
+// Source SHA-256: be86c0ab39976be3f465dce1867b72a89443b0620256f734a0b2ef18cc6a263f
+// biome-ignore format: Keep the canonical JSON literal mechanically generated.
+export const codexCallbackSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-infra:codex-mandatory-callback:v2",
+  "description": "Private inherited socket callback for native attempts and source lifecycle; never an app-server public API.",
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "turnId",
+        "callId",
+        "attemptRef",
+        "toolName"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "callId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "attemptRef": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "toolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "parentAttemptRef": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "sourceOwner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootThreadId",
+        "rootTurnId"
+      ],
+      "properties": {
+        "rootThreadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "rootTurnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "nativeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "properties": {
+        "threadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "sourceReservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservationId",
+        "parent",
+        "parentPermitId",
+        "childThreadId",
+        "submissionId"
+      ],
+      "properties": {
+        "reservationId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "parent": {
+          "$ref": "#/$defs/identity"
+        },
+        "parentPermitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "childThreadId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+        }
+      }
+    },
+    "operationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "started",
+            "outcome"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "cancelled_before_dispatch",
+            "execution_failed",
+            "execution_cancelled",
+            "dispatch_unconfirmed",
+            "result_unconfirmed"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "started"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "permitId"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "outcome"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "outcome",
+              "permitId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "authorization_denied",
+                  "authorization_unavailable",
+                  "cancelled_before_dispatch",
+                  "execution_failed",
+                  "execution_cancelled"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "dispatch_unconfirmed",
+                  "result_unconfirmed"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "operationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "decision"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "enum": [
+            "intent",
+            "started",
+            "outcome"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "decision": {
+          "enum": [
+            "permit",
+            "deny",
+            "ack"
+          ]
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "persistence_unavailable"
+          ]
+        },
+        "sourceOwner": {
+          "$ref": "#/$defs/sourceOwner"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "permit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            },
+            "required": [
+              "permitId",
+              "expiresAt",
+              "sourceOwner"
+            ],
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "deny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "const": "intent"
+              }
+            },
+            "required": [
+              "reason"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "expiresAt"
+                  ]
+                }
+              ]
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "sourceOwner"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "ack"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "phase": {
+                "enum": [
+                  "started",
+                  "outcome"
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "permitId"
+                  ]
+                },
+                {
+                  "required": [
+                    "expiresAt"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "sourceOwner"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "sourceReserveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-reserve"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        }
+      }
+    },
+    "sourceBindRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sourceBindStartedRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceBindSteeredRequest"
+        }
+      ]
+    },
+    "sourceNotStartedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "stage",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-not-started"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "stage": {
+          "enum": [
+            "not_queued",
+            "not_routed",
+            "gate_rejected"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "queue_closed",
+            "routing_rejected",
+            "cancelled_before_start",
+            "binding_denied"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "gate_rejected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "source"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "source"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "not_queued"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "queue_closed",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "not_routed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "routing_rejected",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "stage": {
+                "const": "gate_rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "binding_denied",
+                  "cancelled_before_start"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sourceTerminalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "nativeStatus"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-terminal"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "nativeStatus": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    "sourceRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sourceReserveRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceBindRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceNotStartedRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceTerminalRequest"
+        }
+      ]
+    },
+    "sourceResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-reserve"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceReserveRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-reserve"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceReserveRequest"
+            },
+            "decision": {
+              "const": "deny"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "persistence_unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindStartedRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindSteeredRequest"
+            },
+            "decision": {
+              "const": "ack"
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-bind"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceBindStartedRequest"
+            },
+            "decision": {
+              "const": "deny"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "persistence_unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-not-started"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceNotStartedRequest"
+            },
+            "decision": {
+              "const": "ack"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "source-terminal"
+            },
+            "request": {
+              "$ref": "#/$defs/sourceTerminalRequest"
+            },
+            "decision": {
+              "const": "ack"
+            }
+          }
+        }
+      ]
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/operationRequest"
+        },
+        {
+          "$ref": "#/$defs/sourceRequest"
+        }
+      ]
+    },
+    "response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/operationResponse"
+        },
+        {
+          "$ref": "#/$defs/sourceResponse"
+        }
+      ]
+    },
+    "sourceBindStartedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "delivery"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-bind"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "delivery": {
+          "const": "started"
+        }
+      }
+    },
+    "sourceBindSteeredRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "occurredAt",
+        "reservation",
+        "source",
+        "delivery"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "source-bind"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation": {
+          "$ref": "#/$defs/sourceReservation"
+        },
+        "source": {
+          "$ref": "#/$defs/nativeSource"
+        },
+        "delivery": {
+          "const": "steered"
+        }
+      }
+    },
+    "boundedId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\uD800-\\uDFFF]+$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "httpsIdentifier": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 2048,
+      "pattern": "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[^\\s?#@\\\\]*)?$"
+    },
+    "requestDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "rpcRequestId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/boundedId"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      ]
+    },
+    "RuntimePrincipalV1": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "user",
+            "application"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "connectionExecutionScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executionId",
+        "agentId",
+        "conversationId",
+        "sessionGeneration"
+      ],
+      "properties": {
+        "executionId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "agentId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "conversationId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "sessionGeneration": {
+          "$ref": "#/$defs/positiveSafeInteger"
+        }
+      }
+    },
+    "connectionOriginalBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal",
+        "scope"
+      ],
+      "properties": {
+        "principal": {
+          "$ref": "#/$defs/RuntimePrincipalV1"
+        },
+        "scope": {
+          "$ref": "#/$defs/connectionExecutionScope"
+        }
+      }
+    },
+    "connectionPrincipal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "user",
+            "application"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal",
+        "actorId",
+        "consumerId",
+        "clientId"
+      ],
+      "properties": {
+        "principal": {
+          "$ref": "#/$defs/connectionPrincipal"
+        },
+        "actorId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "consumerId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "clientId": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "serviceRef",
+        "issuer",
+        "resource"
+      ],
+      "properties": {
+        "serviceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "issuer": {
+          "$ref": "#/$defs/httpsIdentifier"
+        },
+        "resource": {
+          "$ref": "#/$defs/httpsIdentifier"
+        }
+      }
+    },
+    "connectionProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileRef",
+        "serviceRef",
+        "issuer",
+        "resource"
+      ],
+      "properties": {
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "serviceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "issuer": {
+          "$ref": "#/$defs/httpsIdentifier"
+        },
+        "resource": {
+          "$ref": "#/$defs/httpsIdentifier"
+        }
+      }
+    },
+    "connectionCredential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "expiresAt",
+        "accessToken"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "accessToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^[A-Za-z0-9\\-._~+/]+=*$"
+        }
+      }
+    },
+    "connectionClientConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "originalBinding",
+        "service",
+        "connectionIdentity",
+        "credential"
+      ],
+      "properties": {
+        "originalBinding": {
+          "$ref": "#/$defs/connectionOriginalBinding"
+        },
+        "service": {
+          "$ref": "#/$defs/connectionService"
+        },
+        "connectionIdentity": {
+          "$ref": "#/$defs/connectionIdentity"
+        },
+        "credential": {
+          "$ref": "#/$defs/connectionCredential"
+        }
+      }
+    },
+    "connectionSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotId",
+        "originalBinding",
+        "service",
+        "connectionIdentity",
+        "credential"
+      ],
+      "properties": {
+        "slotId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "originalBinding": {
+          "$ref": "#/$defs/connectionOriginalBinding"
+        },
+        "service": {
+          "$ref": "#/$defs/connectionService"
+        },
+        "connectionIdentity": {
+          "$ref": "#/$defs/connectionIdentity"
+        },
+        "credential": {
+          "$ref": "#/$defs/connectionCredential"
+        }
+      }
+    },
+    "connectionBootstrapRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "profileRef",
+        "processNonce"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "phase": {
+          "const": "connection-bootstrap"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "processNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "nativeSessionRef": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionBootstrapResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "slot"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "phase": {
+              "const": "connection-bootstrap"
+            },
+            "request": {
+              "$ref": "#/$defs/connectionBootstrapRequest"
+            },
+            "decision": {
+              "const": "permit"
+            },
+            "slot": {
+              "$ref": "#/$defs/connectionSlot"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "phase": {
+              "const": "connection-bootstrap"
+            },
+            "request": {
+              "$ref": "#/$defs/connectionBootstrapRequest"
+            },
+            "decision": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "credential_unavailable",
+                "credential_expired",
+                "binding_mismatch",
+                "isolation_unavailable",
+                "profile_unavailable"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "connectionActionSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actionId"
+      ],
+      "properties": {
+        "actionId": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotId",
+        "profileRef",
+        "serviceRef",
+        "operationNonce",
+        "attemptNonce",
+        "idempotencyKey",
+        "rpcRequestId",
+        "requestDigestVersion",
+        "requestDigest",
+        "method",
+        "toolName"
+      ],
+      "properties": {
+        "slotId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "serviceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "operationNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "attemptNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "rpcRequestId": {
+          "$ref": "#/$defs/rpcRequestId"
+        },
+        "requestDigestVersion": {
+          "const": "connection-request-v1"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/requestDigest"
+        },
+        "method": {
+          "const": "tools/call"
+        },
+        "toolName": {
+          "enum": [
+            "list_apps",
+            "list_connections",
+            "search_actions",
+            "get_action_guide",
+            "execute_action"
+          ]
+        },
+        "actionSelector": {
+          "$ref": "#/$defs/connectionActionSelector"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "toolName"
+            ],
+            "properties": {
+              "toolName": {
+                "enum": [
+                  "get_action_guide",
+                  "execute_action"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "actionSelector"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "actionSelector"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "connectionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "callRef",
+        "operationNonce",
+        "attemptNonce",
+        "requestDigestVersion",
+        "requestDigest",
+        "principal",
+        "actorId",
+        "actionVersionId"
+      ],
+      "properties": {
+        "callRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "operationNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "attemptNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "requestDigestVersion": {
+          "const": "connection-request-v1"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/requestDigest"
+        },
+        "principal": {
+          "$ref": "#/$defs/connectionPrincipal"
+        },
+        "actorId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "actionVersionId": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionOriginalResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rpcRequestId",
+        "receivedAt",
+        "receipt"
+      ],
+      "properties": {
+        "rpcRequestId": {
+          "$ref": "#/$defs/rpcRequestId"
+        },
+        "receivedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "receipt": {
+          "$ref": "#/$defs/connectionReceipt"
+        }
+      }
+    },
+    "connectionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "callRef",
+        "operationNonce",
+        "requestDigestVersion",
+        "requestDigest",
+        "principal",
+        "actorId",
+        "actionVersionId",
+        "attemptNonces",
+        "consumerId",
+        "clientId"
+      ],
+      "properties": {
+        "callRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "operationNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "requestDigestVersion": {
+          "const": "connection-request-v1"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/requestDigest"
+        },
+        "principal": {
+          "$ref": "#/$defs/connectionPrincipal"
+        },
+        "actorId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "actionVersionId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "attemptNonces": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/canonicalUuid"
+          }
+        },
+        "consumerId": {
+          "$ref": "#/$defs/boundedId"
+        },
+        "clientId": {
+          "$ref": "#/$defs/boundedId"
+        }
+      }
+    },
+    "connectionRecordQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "queriedAt",
+        "credentialRevision",
+        "record"
+      ],
+      "properties": {
+        "queriedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "credentialRevision": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "record": {
+          "$ref": "#/$defs/connectionRecord"
+        }
+      }
+    },
+    "connectionEvidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verification",
+            "originalResponse",
+            "recordQuery",
+            "verifiedAt"
+          ],
+          "properties": {
+            "verification": {
+              "const": "verified"
+            },
+            "originalResponse": {
+              "$ref": "#/$defs/connectionOriginalResponse"
+            },
+            "recordQuery": {
+              "$ref": "#/$defs/connectionRecordQuery"
+            },
+            "verifiedAt": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verification",
+            "reason"
+          ],
+          "properties": {
+            "verification": {
+              "const": "unverified"
+            },
+            "originalResponse": {
+              "$ref": "#/$defs/connectionOriginalResponse"
+            },
+            "recordQuery": {
+              "$ref": "#/$defs/connectionRecordQuery"
+            },
+            "reason": {
+              "enum": [
+                "receipt_missing",
+                "record_unavailable",
+                "authorization_unavailable",
+                "binding_mismatch",
+                "response_unconfirmed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "connectionOperationRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/connectionOperationIntentRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationStartedRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationCompletedExecuteRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationCompletedDiscoveryRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationFailedExecuteRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationFailedDiscoveryRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationUnknownExecuteRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationUnknownDiscoveryRequest"
+        }
+      ]
+    },
+    "connectionOperationResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "identity",
+            "connectionRequest",
+            "decision",
+            "permitId",
+            "expiresAt",
+            "sourceOwner"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "intent"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "connectionRequest": {
+              "$ref": "#/$defs/connectionRequest"
+            },
+            "decision": {
+              "const": "permit"
+            },
+            "permitId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "sourceOwner": {
+              "$ref": "#/$defs/sourceOwner"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "identity",
+            "connectionRequest",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "const": "intent"
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "connectionRequest": {
+              "$ref": "#/$defs/connectionRequest"
+            },
+            "decision": {
+              "const": "deny"
+            },
+            "reason": {
+              "enum": [
+                "authorization_denied",
+                "authorization_unavailable",
+                "persistence_unavailable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "identity",
+            "connectionRequest",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "phase": {
+              "enum": [
+                "started",
+                "outcome"
+              ]
+            },
+            "identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "connectionRequest": {
+              "$ref": "#/$defs/connectionRequest"
+            },
+            "decision": {
+              "const": "ack"
+            }
+          }
+        }
+      ]
+    },
+    "connectionEvidenceUpdateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "permitId",
+        "occurredAt",
+        "connectionRequest",
+        "connectionEvidence"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "phase": {
+          "const": "connection-evidence"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "permitId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionExecuteRequest"
+        },
+        "connectionEvidence": {
+          "$ref": "#/$defs/connectionEvidence"
+        }
+      }
+    },
+    "connectionEvidenceUpdateResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "connectionRequest",
+        "decision"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "phase": {
+          "const": "connection-evidence"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionRequest"
+        },
+        "decision": {
+          "const": "ack"
+        }
+      }
+    },
+    "connectionExecuteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotId",
+        "profileRef",
+        "serviceRef",
+        "operationNonce",
+        "attemptNonce",
+        "idempotencyKey",
+        "rpcRequestId",
+        "requestDigestVersion",
+        "requestDigest",
+        "method",
+        "toolName",
+        "actionSelector"
+      ],
+      "properties": {
+        "slotId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "serviceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "operationNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "attemptNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "rpcRequestId": {
+          "$ref": "#/$defs/rpcRequestId"
+        },
+        "requestDigestVersion": {
+          "const": "connection-request-v1"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/requestDigest"
+        },
+        "method": {
+          "const": "tools/call"
+        },
+        "toolName": {
+          "const": "execute_action"
+        },
+        "actionSelector": {
+          "$ref": "#/$defs/connectionActionSelector"
+        }
+      }
+    },
+    "connectionDiscoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slotId",
+        "profileRef",
+        "serviceRef",
+        "operationNonce",
+        "attemptNonce",
+        "idempotencyKey",
+        "rpcRequestId",
+        "requestDigestVersion",
+        "requestDigest",
+        "method",
+        "toolName"
+      ],
+      "properties": {
+        "slotId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "serviceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "operationNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "attemptNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "rpcRequestId": {
+          "$ref": "#/$defs/rpcRequestId"
+        },
+        "requestDigestVersion": {
+          "const": "connection-request-v1"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/requestDigest"
+        },
+        "method": {
+          "const": "tools/call"
+        },
+        "toolName": {
+          "enum": [
+            "list_apps",
+            "list_connections",
+            "search_actions",
+            "get_action_guide"
+          ]
+        },
+        "actionSelector": {
+          "$ref": "#/$defs/connectionActionSelector"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "toolName"
+            ],
+            "properties": {
+              "toolName": {
+                "enum": [
+                  "get_action_guide",
+                  "execute_action"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "actionSelector"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "actionSelector"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "connectionOperationIntentRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "intent"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionRequest"
+        }
+      }
+    },
+    "connectionOperationStartedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "started"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "connectionOperationCompletedExecuteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome",
+        "connectionEvidence"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionExecuteRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "completed"
+        },
+        "connectionEvidence": {
+          "$ref": "#/$defs/connectionEvidence"
+        }
+      }
+    },
+    "connectionOperationCompletedDiscoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionDiscoveryRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "completed"
+        }
+      }
+    },
+    "connectionOperationFailedExecuteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome",
+        "reason",
+        "connectionEvidence"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionExecuteRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "failed"
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "cancelled_before_dispatch",
+            "execution_failed",
+            "execution_cancelled"
+          ]
+        },
+        "connectionEvidence": {
+          "$ref": "#/$defs/connectionEvidence"
+        }
+      }
+    },
+    "connectionOperationFailedDiscoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionDiscoveryRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "failed"
+        },
+        "reason": {
+          "enum": [
+            "authorization_denied",
+            "authorization_unavailable",
+            "cancelled_before_dispatch",
+            "execution_failed",
+            "execution_cancelled"
+          ]
+        }
+      }
+    },
+    "connectionOperationUnknownExecuteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome",
+        "reason",
+        "connectionEvidence"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionExecuteRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "unknown"
+        },
+        "reason": {
+          "enum": [
+            "dispatch_unconfirmed",
+            "result_unconfirmed"
+          ]
+        },
+        "connectionEvidence": {
+          "$ref": "#/$defs/connectionEvidence"
+        }
+      }
+    },
+    "connectionOperationUnknownDiscoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "identity",
+        "occurredAt",
+        "connectionRequest",
+        "permitId",
+        "outcome",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "const": "outcome"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "occurredAt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionDiscoveryRequest"
+        },
+        "permitId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "outcome": {
+          "const": "unknown"
+        },
+        "reason": {
+          "enum": [
+            "dispatch_unconfirmed",
+            "result_unconfirmed"
+          ]
+        }
+      }
+    },
+    "clientRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/request"
+        },
+        {
+          "$ref": "#/$defs/connectionBootstrapRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionEvidenceUpdateRequest"
+        }
+      ]
+    },
+    "clientResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/response"
+        },
+        {
+          "$ref": "#/$defs/connectionBootstrapResponse"
+        },
+        {
+          "$ref": "#/$defs/connectionOperationResponse"
+        },
+        {
+          "$ref": "#/$defs/connectionEvidenceUpdateResponse"
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/clientRequest"
+    },
+    {
+      "$ref": "#/$defs/clientResponse"
+    }
+  ],
+  "title": "Codex private callback V2 candidate: strict V1 plus credential and Connection lanes",
+  "$comment": "Candidate only. V1 $defs are copied unchanged. UTF-8 frame size, trusted socket ownership, current authorization and cross-message equality require semantic checks. Token frames must never enter callback persistence/fingerprint/logging."
+} as const;

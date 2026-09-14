@@ -25,7 +25,20 @@ import {
 	sep,
 } from "node:path";
 import { env, platform } from "node:process";
+import { Duplex } from "node:stream";
 import { TextDecoder } from "node:util";
+import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
+	type: "json",
+};
+import {
+	type CodexConnectionProfile,
+	validateCodexConnectionProfile,
+} from "./codex-connection-client.js";
+import {
+	type CodexNativeCallbackHandler,
+	type CodexNativeConnectionBootstrapHandler,
+	serveCodexNativeCallbacks,
+} from "./codex-native-callback.js";
 
 const defaultTimeoutMs = 5_000;
 const maximumTimeoutMs = 30_000;
@@ -136,6 +149,9 @@ export interface CodexAppServerBridgeOptions {
 	readonly model: string;
 	readonly reasoningEffort: string;
 	readonly modelAccess?: CodexModelAccess;
+	readonly nativeCallback?: CodexNativeCallbackHandler;
+	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
+	readonly connectionProfile?: CodexConnectionProfile;
 	readonly provenance: CodexAppServerProvenanceV2;
 	readonly startupTimeoutMs?: number;
 	readonly shutdownTimeoutMs?: number;
@@ -172,6 +188,9 @@ interface ValidatedOptions {
 	model: string;
 	reasoningEffort: string;
 	modelAccess?: CodexModelAccess;
+	nativeCallback?: CodexNativeCallbackHandler;
+	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
+	readonly connectionProfile?: CodexConnectionProfile;
 	startupTimeoutMs: number;
 	shutdownTimeoutMs: number;
 }
@@ -348,6 +367,9 @@ function validateOptions(input: unknown): ValidatedOptions {
 		"model",
 		"reasoningEffort",
 		"modelAccess",
+		"nativeCallback",
+		"nativeConnectionBootstrap",
+		"connectionProfile",
 		"provenance",
 		"startupTimeoutMs",
 		"shutdownTimeoutMs",
@@ -387,6 +409,28 @@ function validateOptions(input: unknown): ValidatedOptions {
 	)
 		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
+	if (
+		input.nativeCallback !== undefined &&
+		typeof input.nativeCallback !== "function"
+	)
+		configurationInvalid();
+	let connectionProfile: CodexConnectionProfile | undefined;
+	if (input.connectionProfile !== undefined) {
+		try {
+			connectionProfile = validateCodexConnectionProfile(
+				input.connectionProfile,
+			);
+		} catch {
+			configurationInvalid();
+		}
+	}
+	if (
+		(connectionProfile === undefined) !==
+			(input.nativeConnectionBootstrap === undefined) ||
+		(input.nativeConnectionBootstrap !== undefined &&
+			typeof input.nativeConnectionBootstrap !== "function")
+	)
+		configurationInvalid();
 	const modelAccess = validateModelAccess(input.modelAccess);
 	if (modelAccess && !namespacedModelPattern.test(input.model)) {
 		configurationInvalid();
@@ -398,6 +442,16 @@ function validateOptions(input: unknown): ValidatedOptions {
 		model: input.model,
 		reasoningEffort: input.reasoningEffort,
 		...(modelAccess ? { modelAccess } : {}),
+		...(input.nativeCallback
+			? { nativeCallback: input.nativeCallback as CodexNativeCallbackHandler }
+			: {}),
+		...(connectionProfile
+			? {
+					connectionProfile,
+					nativeConnectionBootstrap:
+						input.nativeConnectionBootstrap as CodexNativeConnectionBootstrapHandler,
+				}
+			: {}),
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
@@ -855,6 +909,34 @@ async function probeVersion(
 	}
 }
 
+async function verifyNativeBarrier(
+	executable: string,
+	timeoutMs: number,
+	launchPolicy: IsolatedLaunchPolicy,
+) {
+	const output = await runProbeCommand(
+		executable,
+		["--agent-infra-native-barrier-info"],
+		timeoutMs,
+		true,
+		launchPolicy,
+	);
+	try {
+		const value: unknown = JSON.parse(output.stdout);
+		if (
+			output.stdoutTooLarge ||
+			!isPlainRecord(value) ||
+			!exactKeys(value, Object.keys(nativeBarrier)) ||
+			Object.entries(nativeBarrier).some(
+				([key, expected]) => value[key] !== expected,
+			)
+		)
+			throw provenanceMismatchError();
+	} catch {
+		throw provenanceMismatchError();
+	}
+}
+
 async function verifySchema(
 	executable: string,
 	timeoutMs: number,
@@ -946,11 +1028,14 @@ export class CodexAppServerBridge {
 	#cleaning?: Promise<void>;
 	#process: ChildProcessWithoutNullStreams;
 	#shutdownTimeoutMs: number;
+	#callbacks?: ReturnType<typeof serveCodexNativeCallbacks>;
 
 	private constructor(
 		process: ChildProcessWithoutNullStreams,
 		shutdownTimeoutMs: number,
 		private readonly isolatedDirectory: string,
+		nativeCallback?: CodexNativeCallbackHandler,
+		nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler,
 	) {
 		this.#process = process;
 		this.#shutdownTimeoutMs = shutdownTimeoutMs;
@@ -962,12 +1047,30 @@ export class CodexAppServerBridge {
 		process.stdin.on("error", () => this.fail(exited()));
 		process.once("error", () => this.fail(unavailable()));
 		process.once("close", () => {
+			this.#callbacks?.close();
 			this.#isClosed = true;
 			this.#resolveExit();
 			if (this.#closing) this.#queue.finish();
 			else this.fail(exited());
 			void this.cleanIsolatedDirectory();
 		});
+		const callbackStream = process.stdio[3];
+		if (!(callbackStream instanceof Duplex)) {
+			this.fail(unavailable());
+			return;
+		}
+		this.#callbacks = serveCodexNativeCallbacks(
+			callbackStream,
+			nativeCallback ??
+				(async () => {
+					throw unavailable();
+				}),
+			nativeConnectionBootstrap,
+			() => {
+				// A poisoned mandatory channel terminates this owned native process.
+				if (!this.#closing) this.fail(exited());
+			},
+		);
 	}
 
 	static async open(options: CodexAppServerBridgeOptions) {
@@ -980,6 +1083,11 @@ export class CodexAppServerBridge {
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
+			await verifyNativeBarrier(
+				executable,
+				validated.startupTimeoutMs,
+				launchPolicy,
+			);
 			await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
 			nativeLaunchPolicy = await persistentLaunchPolicy(
 				validated.dataDirectory,
@@ -1019,6 +1127,12 @@ export class CodexAppServerBridge {
 				[
 					...boundaryArguments,
 					...(boundary.length > 0 ? [executable] : []),
+					...(validated.connectionProfile
+						? [
+								"--agent-infra-connection-profile",
+								JSON.stringify(validated.connectionProfile),
+							]
+						: []),
 					"app-server",
 					"--stdio",
 					"--strict-config",
@@ -1028,6 +1142,12 @@ export class CodexAppServerBridge {
 					`model_reasoning_effort=${JSON.stringify(validated.reasoningEffort)}`,
 					"--config",
 					"mcp_servers={}",
+					...(validated.connectionProfile
+						? [
+								"--config",
+								`mcp_servers.connection.url=${JSON.stringify(validated.connectionProfile.resource)}`,
+							]
+						: []),
 					"--config",
 					"features.plugins=false",
 					// On Linux the boundary above is the only filesystem boundary. The
@@ -1049,7 +1169,7 @@ export class CodexAppServerBridge {
 					...modelAccessArguments(validated.modelAccess),
 				],
 				{
-					stdio: ["pipe", "pipe", "pipe"],
+					stdio: ["pipe", "pipe", "pipe", "pipe"],
 					cwd: nativeLaunchPolicy.directory,
 					env: {
 						...nativeLaunchPolicy.environment,
@@ -1071,6 +1191,8 @@ export class CodexAppServerBridge {
 			process,
 			validated.shutdownTimeoutMs,
 			launchPolicy.directory,
+			validated.nativeCallback,
+			validated.nativeConnectionBootstrap,
 		);
 		try {
 			await bridge.waitForSpawn(validated.startupTimeoutMs);
@@ -1132,6 +1254,8 @@ export class CodexAppServerBridge {
 	}
 
 	async close() {
+		this.#callbacks?.close();
+		await this.#callbacks?.finished;
 		if (this.#isClosed) {
 			await this.cleanIsolatedDirectory();
 			return;
@@ -1243,6 +1367,7 @@ export class CodexAppServerBridge {
 	private fail(error: CodexAppServerBridgeError) {
 		if (this.#failure) return;
 		this.#failure = error;
+		this.#callbacks?.close();
 		this.#queue.fail(error);
 		void this.reapOwnedChild();
 	}

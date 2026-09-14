@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { types } from "node:util";
 import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
+import {
+	parseTaskAuthorizationBoundaryV1,
+	type TaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
 
@@ -13,6 +17,7 @@ export interface ConversationExecutionAuthorityV1 {
 	readonly channelId: string;
 	readonly authorizationRevision: string;
 	readonly supportsSupplementaryInstruction: boolean;
+	readonly taskBoundary?: TaskAuthorizationBoundaryV1;
 }
 
 export interface ConversationExecutionAuthorizationPortV1 {
@@ -101,6 +106,7 @@ export interface ConversationModelConfigurationV1 {
 }
 
 export interface ConversationExecutionConversationStateV1 {
+	readonly isolationPending?: true;
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
 	readonly agentId: string;
@@ -600,6 +606,7 @@ function unavailable(): never {
 function snapshotObject(
 	input: unknown,
 	keys: readonly string[],
+	optional: readonly string[] = [],
 ): Record<string, unknown> {
 	try {
 		if (
@@ -611,14 +618,18 @@ function snapshotObject(
 			invalidInput();
 		}
 		const descriptors = Object.getOwnPropertyDescriptors(input);
+		const actualKeys = [
+			...keys,
+			...optional.filter((key) => Object.hasOwn(descriptors, key)),
+		];
 		if (
-			Reflect.ownKeys(descriptors).length !== keys.length ||
-			keys.some((key) => !Object.hasOwn(descriptors, key))
+			Reflect.ownKeys(descriptors).length !== actualKeys.length ||
+			actualKeys.some((key) => !Object.hasOwn(descriptors, key))
 		) {
 			invalidInput();
 		}
 		const values: Record<string, unknown> = {};
-		for (const key of keys) {
+		for (const key of actualKeys) {
 			const descriptor = descriptors[key];
 			if (
 				descriptor?.enumerable !== true ||
@@ -837,6 +848,11 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		"channelId",
 		"authorizationRevision",
 		"supportsSupplementaryInstruction",
+		...(input !== null &&
+		typeof input === "object" &&
+		Object.hasOwn(input, "taskBoundary")
+			? ["taskBoundary"]
+			: []),
 	]);
 	if (
 		values.schemaVersion !== 1 ||
@@ -848,6 +864,19 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	) {
 		invalidInput();
 	}
+	const taskBoundary =
+		values.taskBoundary === undefined
+			? undefined
+			: parseTaskAuthorizationBoundaryV1(values.taskBoundary);
+	if (
+		taskBoundary &&
+		(taskBoundary.principal.kind !== "user" ||
+			taskBoundary.principal.id !== values.actorId ||
+			taskBoundary.agentId !== values.agentId ||
+			taskBoundary.channelId !== values.channelId ||
+			taskBoundary.agentAuthorizationRevision !== values.authorizationRevision)
+	)
+		invalidInput();
 	return {
 		schemaVersion: 1,
 		actorId: values.actorId,
@@ -855,6 +884,7 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		channelId: values.channelId,
 		authorizationRevision: values.authorizationRevision,
 		supportsSupplementaryInstruction: values.supportsSupplementaryInstruction,
+		...(taskBoundary ? { taskBoundary } : {}),
 	};
 }
 
@@ -949,26 +979,32 @@ function parseState(
 				activeExecution: undefined,
 			};
 		}
-		const conversation = snapshotObject(values.conversation, [
-			"schemaVersion",
-			"conversationId",
-			"agentId",
-			"actorId",
-			"channelId",
-			"status",
-			"sessionGeneration",
-			"hostSessionRef",
-			"authorizationRevision",
-			"lastConversationCursor",
-			"selectedModelOptionId",
-			"selectedReasoningLevel",
-			"createdAt",
-			"updatedAt",
-		]);
+		const conversation = snapshotObject(
+			values.conversation,
+			[
+				"schemaVersion",
+				"conversationId",
+				"agentId",
+				"actorId",
+				"channelId",
+				"status",
+				"sessionGeneration",
+				"hostSessionRef",
+				"authorizationRevision",
+				"lastConversationCursor",
+				"selectedModelOptionId",
+				"selectedReasoningLevel",
+				"createdAt",
+				"updatedAt",
+			],
+			["isolationPending"],
+		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
 		if (
 			conversation.schemaVersion !== 1 ||
+			(conversation.isolationPending !== undefined &&
+				conversation.isolationPending !== true) ||
 			!isText(conversation.conversationId) ||
 			!isText(conversation.agentId) ||
 			!isText(conversation.actorId) ||
@@ -1230,6 +1266,9 @@ function parseState(
 				actorId: conversation.actorId,
 				channelId: conversation.channelId,
 				status,
+				...(conversation.isolationPending === true
+					? { isolationPending: true as const }
+					: {}),
 				sessionGeneration,
 				hostSessionRef: conversation.hostSessionRef,
 				authorizationRevision: conversation.authorizationRevision,
@@ -1809,7 +1848,10 @@ export function createConversationExecutionUseCaseV1(
 							) {
 								return { outcome: "denied" };
 							}
-							if (conversation.status === "unavailable")
+							if (
+								conversation.status === "unavailable" ||
+								conversation.isolationPending
+							)
 								return { outcome: "denied" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
@@ -2044,6 +2086,7 @@ export function createConversationExecutionUseCaseV1(
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								conversation.status === "unavailable" ||
+								conversation.isolationPending ||
 								!selected?.reasoningLevels.includes(command.reasoningLevel)
 							) {
 								return { outcome: "denied" };
@@ -2127,7 +2170,10 @@ export function createConversationExecutionUseCaseV1(
 							) {
 								return { outcome: "denied" };
 							}
-							if (conversation.status === "unavailable")
+							if (
+								conversation.status === "unavailable" ||
+								conversation.isolationPending
+							)
 								return { outcome: "denied" };
 							if (state.activeExecution) return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(

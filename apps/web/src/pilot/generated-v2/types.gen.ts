@@ -251,6 +251,252 @@ export type ApprovalDecisionRequestV1 = {
     schemaVersion: 1;
 };
 
+export type AuthorizationRevokedSignalV1 = {
+    error: {
+        code: 'AUTHORIZATION_REVOKED';
+        message: string;
+        retryable: false;
+        schemaVersion: 1;
+        traceId: string;
+    };
+    kind: 'control';
+    schemaVersion: 1;
+    type: 'authorization.revoked';
+};
+
+export type ConversationDetailProjectionV2 = {
+    conversation: {
+        agentId: string;
+        conversationId: string;
+        createdAt: string;
+        lastConversationCursor: string | null;
+        schemaVersion: 1;
+        selectedModelOptionId: string | null;
+        selectedReasoningLevel: string | null;
+        status: 'ready' | 'active' | 'unavailable';
+        title: string | null;
+        updatedAt: string;
+    };
+    events: Array<PersistedConversationEventV2>;
+    messages: Array<{
+        answerVersion: number | null;
+        createdAt: string;
+        error: null;
+        executionId: string | null;
+        isCurrentAnswer: boolean | null;
+        messageId: string;
+        replyToMessageId: string | null;
+        role: 'user' | 'assistant';
+        status: 'submitted' | 'processing' | 'completed' | 'cancelled';
+        text: string;
+    } | {
+        answerVersion: number | null;
+        createdAt: string;
+        error: PilotProtocolErrorV1;
+        executionId: string | null;
+        isCurrentAnswer: boolean | null;
+        messageId: string;
+        replyToMessageId: string | null;
+        role: 'user' | 'assistant';
+        status: 'failed';
+        text: string;
+    }>;
+    schemaVersion: 2;
+};
+
+export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+
+export type ConversationSseMessageV2 = PersistedConversationEventV2 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+
+export type ExecutionDetailProjectionV2 = {
+    conversationId: string;
+    error: null;
+    events: Array<PersistedConversationEventV2>;
+    executionId: string;
+    finishedAt: string | null;
+    processSummary: Array<{
+        kind: 'status';
+        occurredAt: string;
+        status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+        summary: string;
+    } | {
+        kind: 'model_call';
+        modelId: string;
+        occurredAt: string;
+        reasoningLevel: string | null;
+        status: 'succeeded' | 'failed';
+        summary: string;
+    } | {
+        accountDisplay: string;
+        actionId: string;
+        actionVersion: string;
+        callId: string;
+        kind: 'connection_call';
+        occurredAt: string;
+        providerId: string;
+        status: 'succeeded' | 'failed';
+        summary: string;
+    } | {
+        callId?: string;
+        category: 'status' | 'model_call' | 'connection_call';
+        kind: 'agent_summary';
+        occurredAt: string;
+        summary: string;
+    }>;
+    schemaVersion: 2;
+    startedAt: string | null;
+    status: 'submitted' | 'processing' | 'completed' | 'cancelled' | 'unknown';
+} | {
+    conversationId: string;
+    error: PilotProtocolErrorV1;
+    events: Array<PersistedConversationEventV2>;
+    executionId: string;
+    finishedAt: string | null;
+    processSummary: Array<{
+        kind: 'status';
+        occurredAt: string;
+        status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+        summary: string;
+    } | {
+        kind: 'model_call';
+        modelId: string;
+        occurredAt: string;
+        reasoningLevel: string | null;
+        status: 'succeeded' | 'failed';
+        summary: string;
+    } | {
+        accountDisplay: string;
+        actionId: string;
+        actionVersion: string;
+        callId: string;
+        kind: 'connection_call';
+        occurredAt: string;
+        providerId: string;
+        status: 'succeeded' | 'failed';
+        summary: string;
+    } | {
+        callId?: string;
+        category: 'status' | 'model_call' | 'connection_call';
+        kind: 'agent_summary';
+        occurredAt: string;
+        summary: string;
+    }>;
+    schemaVersion: 2;
+    startedAt: string | null;
+    status: 'failed';
+};
+
+export type ExecutionOperationEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: RuntimeOperationFactV2;
+    schemaVersion: 2;
+    sequence: number;
+    type: 'execution.operation';
+};
+
+export type HeartbeatSignalV1 = {
+    kind: 'control';
+    occurredAt: string;
+    schemaVersion: 1;
+    type: 'heartbeat';
+};
+
+export type ModelSelectionFallbackEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'model.selection.fell_back';
+};
+
+export type PersistedConversationEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        text: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'text.delta';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'execution.status';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        callId?: string;
+        category: 'status' | 'model_call' | 'connection_call';
+        summary: string;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'execution.detail';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        fileId: string;
+        mediaType: string;
+        name: string;
+        sizeBytes: number;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'result.file';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        error: PilotProtocolErrorV1;
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'conversation.error';
+} | ModelSelectionFallbackEventV1;
+
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
+
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
     message: string;
@@ -291,6 +537,65 @@ export type PlatformAuditProjectionV2 = {
     subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant';
     summary: string;
     traceId: string;
+};
+
+export type RuntimeConnectionAssociationV1 = {
+    callRef: string;
+    serviceRef: string;
+    verification: 'verified';
+} | {
+    callRef?: string;
+    reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+    serviceRef: string;
+    verification: 'unverified';
+};
+
+export type RuntimeOperationFactV2 = {
+    attemptRef: string;
+    durationMs?: number;
+    failureCode?: RuntimeOperationFailureV2;
+    finishedAt?: string;
+    kind: 'model';
+    model: {
+        configVersion: string;
+        modelId: string;
+        modelOptionId: string;
+        reasoningLevel?: string;
+    };
+    operationRef: string;
+    parentOperationRef?: string;
+    phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+    startedAt?: string;
+    usage?: {
+        cachedInputTokens?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+    };
+} | {
+    attemptRef: string;
+    connection?: RuntimeConnectionAssociationV1;
+    durationMs?: number;
+    failureCode?: RuntimeOperationFailureV2;
+    finishedAt?: string;
+    kind: 'tool';
+    operationRef: string;
+    parentOperationRef?: string;
+    phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+    resultRef?: string;
+    startedAt?: string;
+    toolId: string;
+};
+
+export type RuntimeOperationFailureV2 = 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+
+export type SseEventIdV1 = string;
+
+export type TimelineReloadSignalV1 = {
+    kind: 'control';
+    reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cross_conversation_event_id' | 'cursor_expired';
+    resumeCursor: string;
+    schemaVersion: 1;
+    type: 'timeline.reload';
 };
 
 export type AgentApplicationCreateRequestV2Writable = {
@@ -1067,3 +1372,154 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type GetConversationV2Data = {
+    body?: never;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v2/conversations/{conversationId}';
+};
+
+export type GetConversationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetConversationV2Error = GetConversationV2Errors[keyof GetConversationV2Errors];
+
+export type GetConversationV2Responses = {
+    /**
+     * Conversation messages and complete mixed-version event history
+     */
+    200: ConversationDetailProjectionV2;
+};
+
+export type GetConversationV2Response = GetConversationV2Responses[keyof GetConversationV2Responses];
+
+export type StreamConversationEventsV2Data = {
+    body?: never;
+    headers?: {
+        'Last-Event-ID'?: SseEventIdV1;
+    };
+    path: {
+        conversationId: string;
+    };
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v2/conversations/{conversationId}/events';
+};
+
+export type StreamConversationEventsV2Errors = {
+    /**
+     * Invalid replay cursor
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Conversation access is unavailable
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Event stream is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type StreamConversationEventsV2Error = StreamConversationEventsV2Errors[keyof StreamConversationEventsV2Errors];
+
+export type StreamConversationEventsV2Responses = {
+    /**
+     * Original V1 events, V2 operation facts and bounded V1 controls
+     */
+    200: ConversationSseMessageV2;
+};
+
+export type StreamConversationEventsV2Response = StreamConversationEventsV2Responses[keyof StreamConversationEventsV2Responses];
+
+export type GetExecutionDetailV2Data = {
+    body?: never;
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: never;
+    url: '/api/v2/conversations/{conversationId}/executions/{executionId}';
+};
+
+export type GetExecutionDetailV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetExecutionDetailV2Error = GetExecutionDetailV2Errors[keyof GetExecutionDetailV2Errors];
+
+export type GetExecutionDetailV2Responses = {
+    /**
+     * Execution detail with original structured operation facts and event history
+     */
+    200: ExecutionDetailProjectionV2;
+};
+
+export type GetExecutionDetailV2Response = GetExecutionDetailV2Responses[keyof GetExecutionDetailV2Responses];

@@ -79,6 +79,18 @@ const sessionKeys: Record<User, string> = {
 	admin: "synthetic-session-admin",
 };
 const identity: IdentityAdapter = {
+	async resolveUser(userId) {
+		const user = Object.values(identities).find((u) => u.userId === userId);
+		return user
+			? {
+					schemaVersion: 1,
+					userId: user.userId,
+					accountStatus: user.accountStatus,
+					organizationIds: [...user.organizationIds],
+					authorizationRevision: user.authorizationRevision,
+				}
+			: null;
+	},
 	async resolve(request) {
 		return sessions.get(request.headers.get("authorization") ?? "") ?? null;
 	},

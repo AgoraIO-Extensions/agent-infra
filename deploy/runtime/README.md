@@ -3,7 +3,7 @@
 本入口消费部署已批准的 Agent active 配置，遵循
 [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)
 与[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
-它不读取 Platform DB、ModelCatalog、Connection credential 或部署解密 keyring。
+它不读取 Platform DB、ModelCatalog、Connection Provider Credential 或部署解密 keyring。
 
 ## 固定镜像
 
@@ -28,6 +28,7 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 | `AGENT_INFRA_RUNTIME_GRANT_KEY_ID` | 已批准的 Grant 签名公钥标识 |
 | `AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY` | Ed25519 PEM 公钥 |
 | `AGENT_INFRA_RUNTIME_GRANT_ISSUER` | 预期 Grant issuer |
+| `AGENT_INFRA_RUNTIME_CONNECTION_PROFILE` | 可选的独立 Connection 固定目标；只含下述非敏感字段 |
 | `PORT` | HTTP 监听端口，默认为 `3003` |
 
 模型配置结构示例，不包含凭证：
@@ -56,6 +57,40 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 `host.json` 与 `codex-driver.json` 位于该 Agent 数据目录；Driver 使用 #403 的
 `codex-driver.json.native` 持久目录装配。关闭进程不删除这些业务数据，损坏或丢失状态仍按
 [HLD §7.3](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复) 拒绝替代恢复。
+
+### 独立 Connection 客户端输入
+
+客户端授权、原主体映射、私有交付与核实规则见
+[Runtime HLD §9.1](../../docs/architecture/HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
+配置目标不代表独立授权已经完成；只有经过当前镜像的原生隔离验证并取得有效客户端输入后，才可执行真实调用。
+
+`AGENT_INFRA_RUNTIME_CONNECTION_PROFILE` 只接受以下 JSON，resource 固定为 HTTPS `/mcp`，不能含凭证、query 或 fragment：
+
+```json
+{
+  "profileRef": "connection-primary",
+  "serviceRef": "connection-primary",
+  "issuer": "https://connection.example.test",
+  "resource": "https://connection.example.test/mcp"
+}
+```
+
+独立授权交付方将短期客户端输入放入 Host 数据目录下的 `independent-client-input/`。
+该目录必须由 Host 进程用户拥有、权限 `0700`、路径无 symlink，并位于原生 Conversation 的文件 allowlist 之外。
+文件名为 `sha256(UTF-8(JSON.stringify([principal.kind, principal.id, agentId, profileRef]))) + ".json"`，
+使用当前已受理原执行的主体与 Agent 选择，不能按 Owner、责任人或 workload 选择。
+
+文件顶层只有 `principal`、`agentId` 和 `client`；`client` 只有 `service`、`connectionIdentity`、
+`credential`，内部字段由版本化私有 callback schema 校验。主体映射必须来自同一次独立授权交付。
+文件必须由 Host 进程用户拥有，权限为 `0400` 或 `0600`，最大 32 KiB；轮换使用同目录原子替换。
+原始 Provider 凭证、refresh token、任意 headers 和 Connection 管理浏览器会话均不属于该输入。
+启动或配置读取不加载这些文件；真实 bootstrap 在读取前后分别重验原任务授权。
+缺失、过期、绑定错误或不安全的文件权限均拒绝调用。不要将文件内容写入日志、Issue 或普通配置示例。
+
+RuntimeHost 使用 `pnpm --filter @agent-infra/agent-runtime-host start` 启动；镜像使用同一 shell launcher。
+launcher 在 Node 启动前拒绝 `NODE_OPTIONS`、`NODE_DEBUG`、`NODE_DEBUG_NATIVE` 和 `NODE_V8_COVERAGE`，
+设置不可提升的零 core dump 限制，并通过 `--disable-sigusr1` 关闭信号启用 inspector 的入口。
+程序化装配及每次凭据读取同样检查当前进程保护。实际原生内存读取、跨主体及后代进程隔离仍须由当前二进制验证。
 
 ## 镜像验证
 
@@ -126,7 +161,6 @@ node ../../deploy/runtime/messages-conformance.mjs \
 Digest、source label、non-root/只读根/可写挂载，以及同一镜像运行探针的结果；不能仅靠
 传入 `--image-digest`、`--source-commit` 声明完成验证。完整模板的文件和 Connection
 验收仍由其独立任务负责。
-
 
 ## Generic ACP 与 OpenCode 核心验证
 

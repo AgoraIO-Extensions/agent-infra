@@ -1,7 +1,10 @@
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV1Schema,
+	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -50,6 +53,32 @@ const persistedEvent = {
 	eventPayload: { type: "text.delta", text: "Hello" },
 	occurredAt: new Date("2026-09-06T00:00:02.000Z"),
 	traceId: "trace-1",
+};
+
+const operationEvent = {
+	...persistedEvent,
+	eventId: "operation-event-2",
+	sequence: 2,
+	conversationCursor: "cursor-2",
+	eventSchemaVersion: 2 as const,
+	eventType: "execution.operation",
+	eventPayload: {
+		schemaVersion: 2,
+		type: "execution.operation",
+		fact: {
+			kind: "model",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			phase: "unknown",
+			failureCode: "response_incomplete",
+			model: {
+				configVersion: "config-1",
+				modelOptionId: "model-primary",
+				modelId: "model-1",
+				reasoningLevel: "medium",
+			},
+		},
+	},
 };
 
 function dependencies(
@@ -202,12 +231,195 @@ function testApp(input = dependencies()) {
 	return { app, dependencies: input };
 }
 
+async function operationDependencies() {
+	const input = dependencies();
+	const detail = await input.query.get(
+		{ actorId: identity.userId, channelId: "web" },
+		conversation.conversationId,
+	);
+	const execution = await input.query.getExecution(
+		{ actorId: identity.userId, channelId: "web" },
+		conversation.conversationId,
+		"execution-1",
+	);
+	if (!detail || !execution) throw new Error("Missing controlled fixture");
+	vi.mocked(input.query.get)
+		.mockResolvedValue({ ...detail, events: [persistedEvent, operationEvent] })
+		.mockClear();
+	vi.mocked(input.query.getExecution)
+		.mockResolvedValue({
+			...execution,
+			execution: { ...execution.execution, status: "unknown" },
+			events: [persistedEvent, operationEvent],
+		})
+		.mockClear();
+	vi.mocked(input.query.replay)
+		.mockReset()
+		.mockResolvedValueOnce({
+			outcome: "events",
+			events: [persistedEvent, operationEvent],
+			resumeCursor: "cursor-2",
+		})
+		.mockResolvedValue({
+			outcome: "reload",
+			reason: "cursor_expired",
+			resumeCursor: "cursor-2",
+		});
+	return input;
+}
+
 const commandHeaders = {
 	"content-type": "application/json",
 	"Idempotency-Key": "Command.Aa-01",
 };
 
 describe("Conversation HTTP routes", () => {
+	it("returns complete V2 mixed history while preserving original V1 messages and events", async () => {
+		const input = await operationDependencies();
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1",
+		);
+		expect(response.status).toBe(200);
+		const detail = ConversationDetailProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(detail.schemaVersion).toBe(2);
+		expect(
+			detail.messages.find((message) => message.role === "assistant")?.text,
+		).toBe("Hello");
+		expect(
+			detail.events.map((event) => [
+				event.schemaVersion,
+				event.eventId,
+				event.sequence,
+			]),
+		).toEqual([
+			[1, "event-1", 1],
+			[2, "operation-event-2", 2],
+		]);
+		expect(detail.events[1]).toMatchObject({
+			type: "execution.operation",
+			payload: operationEvent.eventPayload.fact,
+		});
+		const legacyResponse = await testApp(
+			await operationDependencies(),
+		).app.request("/api/v1/conversations/conversation-1");
+		expect(
+			ConversationDetailProjectionV1Schema.safeParse(
+				await legacyResponse.json(),
+			).success,
+		).toBe(true);
+	});
+
+	it("shows actual unknown facts in V2 execution detail without inventing usage or model summaries", async () => {
+		const response = await testApp(await operationDependencies()).app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(response.status).toBe(200);
+		const detail = ExecutionDetailProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(detail.schemaVersion).toBe(2);
+		expect(detail.status).toBe("unknown");
+		expect(detail.events[1]).toMatchObject({
+			type: "execution.operation",
+			payload: {
+				phase: "unknown",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+			},
+		});
+		expect(detail.events[1]?.payload).not.toHaveProperty("usage");
+		expect(detail.events[1]?.payload).not.toHaveProperty("durationMs");
+		expect(detail.processSummary).toEqual([]);
+	});
+
+	it("streams V1 and V2 events in original order under V2 with unchanged Last-Event-ID replay", async () => {
+		const input = await operationDependencies();
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+			{ headers: { "Last-Event-ID": "before-mixed-history" } },
+		);
+		expect(response.status).toBe(200);
+		const frames = (await response.text())
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			);
+		expect(frames.map((frame) => [frame.schemaVersion, frame.type])).toEqual([
+			[1, "text.delta"],
+			[2, "execution.operation"],
+			[1, "timeline.reload"],
+		]);
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			1,
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			{ kind: "last-event-id", value: "before-mixed-history" },
+		);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
+	});
+
+	it("does not silently discard or relabel V2 operation facts on the V1 event stream", async () => {
+		const response = await testApp(await operationDependencies()).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+		});
+	});
+
+	it("rejects cross-conversation and cross-execution event substitution before V2 projection", async () => {
+		const streamInput = await operationDependencies();
+		vi.mocked(streamInput.query.replay)
+			.mockReset()
+			.mockResolvedValue({
+				outcome: "events",
+				events: [{ ...operationEvent, conversationId: "private-conversation" }],
+				resumeCursor: "cursor-2",
+			});
+		const stream = await testApp(streamInput).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		expect(stream.status).toBe(503);
+		expect(await stream.text()).not.toContain("private-conversation");
+		const detailInput = await operationDependencies();
+		const original = await detailInput.query.getExecution(
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			"execution-1",
+		);
+		if (!original) throw new Error("Missing execution fixture");
+		vi.mocked(detailInput.query.getExecution).mockResolvedValue({
+			...original,
+			events: [{ ...operationEvent, executionId: "private-execution" }],
+		});
+		const detail = await testApp(detailInput).app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(detail.status).toBe(503);
+		expect(await detail.text()).not.toContain("private-execution");
+	});
+
+	it("closes V2 delivery before a structured fact when current user authorization is revoked", async () => {
+		const input = await operationDependencies();
+		vi.mocked(input.authorization.authorize)
+			.mockReset()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValueOnce({ outcome: "denied" });
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+		expect(body).toContain("id: event-1");
+		expect(body).toContain('"type":"authorization.revoked"');
+		expect(body).not.toContain("operation-event-2");
+		expect(body).not.toContain('"operationRef"');
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {

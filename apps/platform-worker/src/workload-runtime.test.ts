@@ -47,6 +47,7 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
+import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
 	workloadRegistryFixture,
@@ -60,6 +61,7 @@ import {
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
+	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
 function configurationFixture(
@@ -308,6 +310,17 @@ function fixture(
 		failureCode: null,
 	};
 	const options: WorkloadRuntimeOptionsV1 = {
+		executionCapacityProfiles: [
+			{
+				schemaVersion: 1,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				resourceProfileRef: workloadTestPolicy.resourceProfileRef,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+				maximumConcurrentExecutions: 2,
+				conformanceEvidenceHash: "c".repeat(64),
+			},
+		],
 		templateModelBindings: [
 			{
 				templateId: "template-a",
@@ -467,6 +480,126 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("keeps legacy lifecycle readiness without inventing verified execution capacity", async () => {
+		const f = fixture({ executionCapacityProfiles: [] });
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.verified).not.toHaveProperty("executionCapacity");
+	});
+
+	it("resolves trusted Conversation routes through live Workload observation and rejects changed resources", async () => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "transport-a",
+			issuer: "platform",
+			keyId: "key-a",
+			privateKey: keys.privateKey,
+		};
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantKeyId: signing.keyId,
+					grantIssuer: signing.issuer,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "runtime-transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		assert(f.state?.phase === "ready");
+		const resolve = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport-token",
+		});
+		const input = {
+			agentId: "agent-a",
+			signal: new AbortController().signal,
+			workload: f.state,
+			purpose: "business" as const,
+			command: "turn.submit" as const,
+		};
+		const before = structuredClone(f.resources);
+		const service = workloadResourceNameV1("agent-a");
+		expect(await resolve(input)).toEqual({
+			baseUrl: `http://${service}.${f.options.policy.namespace}.svc:8080`,
+			workerId: "transport-a",
+			serviceToken: "synthetic-transport-token",
+		});
+		expect(await resolve({ ...input, purpose: "control" })).toMatchObject({
+			baseUrl: `http://${service}-probe.${f.options.policy.namespace}.svc:8080`,
+		});
+		expect(f.resources).toEqual(before);
+		expect(f.state.verified?.executionCapacity).toEqual(
+			f.options.executionCapacityProfiles?.[0],
+		);
+		const withdrawn = createProductionConversationRuntimeResolverV2({
+			workload: { ...f.options, executionCapacityProfiles: [] },
+			signing,
+			serviceToken: "synthetic-transport-token",
+		});
+		await expect(withdrawn(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		await expect(
+			withdrawn({ ...input, command: "session.status" }),
+		).resolves.toBeDefined();
+		await expect(
+			withdrawn({ ...input, command: "turn.supplement" }),
+		).resolves.toBeDefined();
+		await expect(
+			withdrawn({ ...input, purpose: "control" }),
+		).resolves.toMatchObject({
+			baseUrl: `http://${service}-probe.${f.options.policy.namespace}.svc:8080`,
+		});
+		await expect(
+			resolve({ ...input, agentId: "other-agent" }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		await expect(
+			resolve({ ...input, workload: { ...f.state, phase: "observing" } }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		const actual = await f.client.read<V1StatefulSet>("StatefulSet", service);
+		assert(actual?.metadata);
+		f.resources.set(`StatefulSet/${service}`, {
+			...actual,
+			metadata: { ...actual.metadata, uid: "replacement-workload" },
+		});
+		await expect(resolve(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		await expect(
+			resolve({ ...input, purpose: "control" }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		f.resources.set(`StatefulSet/${service}`, actual);
+		const liveService = await f.client.read<V1Service>("Service", service);
+		assert(liveService?.spec);
+		f.resources.set(`Service/${service}`, {
+			...liveService,
+			spec: {
+				...liveService.spec,
+				type: "ExternalName",
+				externalName: "foreign.invalid",
+			},
+		} as V1Service);
+		await expect(resolve(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		expect(() =>
+			createProductionConversationRuntimeResolverV2({
+				workload: f.options,
+				signing: {
+					...signing,
+					privateKey: generateKeyPairSync("ed25519").privateKey,
+				},
+				serviceToken: "synthetic-transport-token",
+			}),
+		).toThrow("Conversation Runtime deployment authorization is invalid");
+	});
+
 	it("rejects a Messages candidate bound to a Responses image before decrypting or probing", async () => {
 		const catalog = catalogFixture();
 		catalog.endpoints = catalog.endpoints.map((endpoint) => ({

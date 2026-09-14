@@ -13,7 +13,7 @@ const forbiddenImports = [
 ];
 
 describe("agent-runtime dependency direction", () => {
-	it("depends only on wire contracts, the official Claude and ACP SDKs and the SSE parser at runtime", async () => {
+	it("depends only on wire contracts, the official Claude and ACP SDKs, JSON Schema validation and the SSE parser at runtime", async () => {
 		const packageJson = JSON.parse(
 			await readFile(new URL("../package.json", import.meta.url), "utf8"),
 		) as { dependencies?: Record<string, string> };
@@ -22,6 +22,7 @@ describe("agent-runtime dependency direction", () => {
 			"@agent-infra/contracts",
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
+			"ajv",
 			"eventsource-parser",
 		]);
 	});
@@ -44,7 +45,11 @@ describe("agent-runtime dependency direction", () => {
 
 		for (const forbidden of forbiddenImports) {
 			expect(
-				imports.some((specifier) => specifier.includes(forbidden)),
+				imports.some((specifier) =>
+					forbidden === "connection"
+						? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
+						: specifier.includes(forbidden),
+				),
 				`forbidden runtime import: ${forbidden}`,
 			).toBe(false);
 		}

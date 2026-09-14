@@ -46,4 +46,4 @@ COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 VOLUME ["/var/lib/agent-runtime"]
 USER node
-CMD ["node", "dist/index.mjs"]
+CMD ["sh", "./start-runtime-host.sh"]

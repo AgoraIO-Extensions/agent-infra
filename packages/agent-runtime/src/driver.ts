@@ -4,7 +4,7 @@ import type {
 	RuntimeDriverOperationRecordV1,
 	RuntimeDriverSubmitTurnCommandV2,
 	RuntimeDriverSubmitTurnOperationRecordV2,
-	RuntimeEventV1,
+	RuntimeEvent,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 
@@ -18,6 +18,16 @@ export type RuntimeDriverLookup =
 	| { state: "found"; record: RuntimeDriverOperationRecord }
 	| { state: "missing" }
 	| { state: "unknown" };
+
+export interface RuntimeExternalActionAuthorization {
+	readonly nativeSessionRef: string;
+	readonly executionId: string;
+	/** The original Driver submit command, distinct from the actual action UUID. */
+	readonly runtimeOperationId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+	readonly kind: "model" | "tool";
+}
 
 export interface RuntimeDriver {
 	/** Bounded native protocol handshake only; no business Session/Turn or model call. */
@@ -33,11 +43,17 @@ export interface RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 		afterCursor?: string,
-	): Promise<RuntimeEventV1[]>;
+	): Promise<RuntimeEvent[]>;
+	/** Confirm only events committed by the platform transaction; retain until then. */
+	acknowledgeEvents?(
+		nativeSessionRef: string,
+		executionId: string,
+		throughCursor: string,
+	): Promise<void>;
 	subscribeEvents(
 		nativeSessionRef: string,
 		executionId: string,
 		afterCursor?: string,
 		signal?: AbortSignal,
-	): Promise<AsyncIterable<RuntimeEventV1>>;
+	): Promise<AsyncIterable<RuntimeEvent>>;
 }

@@ -106,4 +106,16 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export {
+	PostgresTaskAuthorizationStoreV1,
+	TaskAuthorizationStoreError,
+} from "./task-authorization.js";
+export {
+	type LegacyTaskMetadataV1,
+	LegacyTaskMigrationError,
+	type LegacyTaskProducerEvidenceV1,
+	type LegacyTaskProducerVerifierV1,
+	PostgresLegacyTaskAuthorizationMigrationV1,
+	PostgresLegacyTaskRecoveryReaderV1,
+} from "./task-authorization-migration.js";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";

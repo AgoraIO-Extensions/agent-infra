@@ -11,11 +11,13 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/kubernetes-workload.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-sse.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/pilot-sse.v2.schema.json",
 	"packages/contracts/artifacts/json-schema/registry-manifest.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/secret-lifecycle.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/worker-result.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime.v3.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
@@ -23,6 +25,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
@@ -818,6 +821,57 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #508 adds V2 operation history/SSE without altering published management/audit.
+function isConversationFactsV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/conversations/{conversationId}",
+		"/api/v2/conversations/{conversationId}/events",
+		"/api/v2/conversations/{conversationId}/executions/{executionId}",
+	];
+	const schemas = [
+		"AuthorizationRevokedSignalV1",
+		"ConversationDetailProjectionV2",
+		"ConversationSseMessageV1",
+		"ConversationSseMessageV2",
+		"ExecutionDetailProjectionV2",
+		"ExecutionOperationEventV2",
+		"HeartbeatSignalV1",
+		"ModelSelectionFallbackEventV1",
+		"PersistedConversationEventV1",
+		"PersistedConversationEventV2",
+		"RuntimeConnectionAssociationV1",
+		"RuntimeOperationFactV2",
+		"RuntimeOperationFailureV2",
+		"SseEventIdV1",
+		"TimelineReloadSignalV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"a46be79641a2c0a24ee28a2657d14179042e94e696cbc007c39fdedba1a52246"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return (
+		sameValue(previous, normalized) ||
+		isAgentLifecycleV2OpenApiAddition(previous, normalized)
+	);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -826,7 +880,8 @@ function findBreakingChanges(previous, current) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
-			!isAgentLifecycleV2OpenApiAddition(previous, current)
+			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
+			!isConversationFactsV2OpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

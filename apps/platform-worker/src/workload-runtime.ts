@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -22,8 +23,10 @@ import {
 	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
 	immutableSecretNameV1,
+	parseWorkloadExecutionCapacityV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
+	type WorkloadExecutionCapacityV1,
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
@@ -51,6 +54,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly modelAccess?: ModelAccessValidatorV1;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
+	/** Actual deployment load evidence for exact images and resource configuration. */
+	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -64,6 +69,71 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly core: "passed" | "failed";
 		readonly capabilities: unknown;
 	}>;
+}
+
+export function workloadResourceConfigurationHashV1(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				resourceProfileRef: policy.resourceProfileRef,
+				requests: {
+					cpu: policy.resources.requests.cpu,
+					memory: policy.resources.requests.memory,
+				},
+				limits: {
+					cpu: policy.resources.limits.cpu,
+					memory: policy.resources.limits.memory,
+				},
+			}),
+		)
+		.digest("hex");
+}
+
+export function resolveWorkloadExecutionCapacityV1(
+	options: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "executionCapacityProfiles"
+	>,
+	imageDigest: string,
+): WorkloadExecutionCapacityV1 | undefined {
+	const profiles = options.executionCapacityProfiles ?? [];
+	if (!Array.isArray(profiles))
+		throw new TypeError("Workload execution capacity is invalid");
+	const matches = profiles
+		.map(parseWorkloadExecutionCapacityV1)
+		.filter(
+			(profile) =>
+				profile.imageDigest === imageDigest &&
+				profile.resourceProfileRef === options.policy.resourceProfileRef &&
+				profile.resourceConfigurationHash ===
+					workloadResourceConfigurationHashV1(options.policy),
+		);
+	if (matches.length > 1)
+		throw new TypeError("Workload execution capacity is ambiguous");
+	return matches[0];
+}
+
+/** Capacity approval can be withdrawn without preventing the original execution's controls. */
+export function isWorkloadExecutionCapacityCurrentV1(
+	options: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "executionCapacityProfiles"
+	>,
+	state: WorkloadReconciliationStateV1,
+): boolean {
+	const persisted = state.verified?.executionCapacity;
+	return (
+		!!persisted &&
+		isDeepStrictEqual(
+			persisted,
+			resolveWorkloadExecutionCapacityV1(
+				options,
+				state.verified?.configuration.source.imageDigest ?? "",
+			),
+		)
+	);
 }
 
 function recordReference(
@@ -689,9 +759,14 @@ export function createWorkloadRuntimeV1(
 					desiredState: "running",
 					replicas: 1,
 				});
+				const executionCapacity = resolveWorkloadExecutionCapacityV1(
+					options,
+					configuration.source.imageDigest,
+				);
 				return {
 					configuration,
 					deployment,
+					...(executionCapacity ? { executionCapacity } : {}),
 					...(modelProjection ? { modelProjection } : {}),
 				};
 			} catch {

@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
-
 import type {
 	ConversationEventCommandV1,
 	ConversationEventDecisionV1,
@@ -8,6 +7,14 @@ import type {
 	ConversationEventUseCaseV1,
 	ConversationNormalizedEventV1,
 } from "./conversation-events.js";
+import {
+	type ConversationGenerationIsolationV1,
+	isConversationGenerationBarrierConfirmedV1,
+} from "./conversation-generation-isolation.js";
+import {
+	type ConversationOperationFactV2,
+	parseConversationOperationFactV2,
+} from "./conversation-operation-facts.js";
 
 export type ConversationDispatchOperationV1 =
 	| "conversation.turn.submit.v1"
@@ -84,7 +91,20 @@ export type ConversationRuntimeEventV1 = ConversationRuntimeEventBaseV1 &
 		  }
 	);
 
+export type ConversationRuntimeOperationEventV2 = Omit<
+	ConversationRuntimeEventBaseV1,
+	"schemaVersion"
+> & {
+	readonly schemaVersion: 2;
+	readonly type: "operation";
+	readonly payload: ConversationOperationFactV2;
+};
+export type ConversationRuntimeEvent =
+	| ConversationRuntimeEventV1
+	| ConversationRuntimeOperationEventV2;
+
 export interface ConversationDispatchClaimV1 {
+	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly schemaVersion: 1;
 	readonly itemId: string;
 	readonly leaseOwner: string;
@@ -108,6 +128,8 @@ export interface ConversationDispatchClaimV1 {
 	readonly reasoningLevel: string | null;
 	readonly hostSessionRef: string | null;
 	readonly runtimeCursor: string | null;
+	/** Derived by the Store from the original committed Runtime terminal event. */
+	readonly runtimeTerminalEventSeen?: true;
 	readonly input: {
 		readonly text: string;
 		readonly attachments: readonly string[];
@@ -126,6 +148,16 @@ export interface ConversationDispatchStateTransitionV1 {
 }
 
 export interface ConversationDispatchStorePortV1 {
+	beginGenerationIsolation?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";
+		readonly hostSessionRef: string;
+	}): Promise<boolean>;
+	confirmGenerationIsolation?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly operationId: string;
+		readonly hostSessionRef: string;
+	}): Promise<boolean>;
 	claim(input: {
 		readonly schemaVersion: 1;
 		readonly itemId: string;
@@ -139,7 +171,7 @@ export interface ConversationDispatchStorePortV1 {
 	prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean>;
+	}): Promise<boolean | "capacity_wait" | "capacity_unavailable">;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;
@@ -173,10 +205,13 @@ export interface ConversationDispatchAuthorityV1 {
 	readonly sessionGeneration: number;
 	readonly authorizationRevision: string;
 	readonly runtimeGrant: unknown;
+	/** Trusted historical principal evidence permits only recovery and system controls. */
+	readonly controlOnly?: true;
 }
 
 export interface ConversationDispatchAuthorizationPortV1 {
 	authorize(input: {
+		readonly claim: ConversationDispatchClaimV1;
 		readonly schemaVersion: 1;
 		readonly operation: ConversationDispatchOperationV1;
 		readonly agentId: string;
@@ -293,7 +328,7 @@ export type ConversationRuntimeStatusRequestV2 = Omit<
 
 export type ConversationRuntimeStatusResponseV2 = {
 	readonly schemaVersion: 2;
-	readonly hostSessionRef: string;
+	readonly hostSessionRef: string | null;
 	readonly executionId: string;
 } & (
 	| {
@@ -301,9 +336,41 @@ export type ConversationRuntimeStatusResponseV2 = {
 			readonly status: ConversationRuntimeStatusV1;
 	  }
 	| { readonly outcome: "not_found" }
+	| {
+			readonly outcome: "recovery_failed";
+			readonly hostSessionRef: string;
+			readonly code: "RUNTIME_SESSION_RECOVERY_FAILED";
+	  }
 );
 
 export interface ConversationRuntimeHostPortV1 {
+	cancelGeneration?(
+		request: ConversationRuntimeEventRequestV1,
+		signal?: AbortSignal,
+	): Promise<ConversationRuntimeOperationResponseV1>;
+	drainGenerationEvents?(
+		request: ConversationRuntimeEventRequestV1,
+		signal?: AbortSignal,
+	): AsyncIterable<ConversationRuntimeEvent>;
+	recoverOriginalStatus?(
+		request: Omit<
+			ConversationRuntimeStatusRequestV2,
+			"hostSessionRef" | "recovery"
+		> & { readonly hostSessionRef: string | null },
+		signal?: AbortSignal,
+	): Promise<ConversationRuntimeStatusResponseV2>;
+	/** Confirm only after the Platform event and necessary audit transaction commits. */
+	acknowledge?(
+		request: ConversationRuntimeEventRequestV1 & {
+			readonly confirmedCursor: string;
+		},
+		signal?: AbortSignal,
+	): Promise<void>;
+	/** Renew business authority from current user facts, never from an old Grant. */
+	renewAuthorization?(
+		request: ConversationRuntimeEventRequestV1,
+		signal?: AbortSignal,
+	): Promise<void>;
 	dispatch(
 		request: ConversationRuntimeDispatchRequestV1,
 		signal?: AbortSignal,
@@ -315,7 +382,7 @@ export interface ConversationRuntimeHostPortV1 {
 	events(
 		request: ConversationRuntimeEventRequestV1,
 		signal?: AbortSignal,
-	): AsyncIterable<ConversationRuntimeEventV1>;
+	): AsyncIterable<ConversationRuntimeEvent>;
 }
 
 export interface DispatchConversationCommandV1 {
@@ -493,35 +560,48 @@ function parseCommand(value: unknown): DispatchConversationCommandV1 {
 }
 
 function parseClaim(value: unknown): ConversationDispatchClaimV1 {
-	const input = exactObject(value, [
-		"schemaVersion",
-		"itemId",
-		"leaseOwner",
-		"operation",
-		"requestId",
-		"traceId",
-		"agentId",
-		"actorId",
-		"channelId",
-		"conversationId",
-		"executionId",
-		"turnId",
-		"messageId",
-		"stopRequestId",
-		"sessionGeneration",
-		"deliveryFence",
-		"executionDeliveryFence",
-		"authorizationRevision",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"hostSessionRef",
-		"runtimeCursor",
-		"input",
-		"executionStatus",
-		"stopPending",
-	]);
-	if (input.schemaVersion !== 1) return unavailable();
+	const input = exactObject(
+		value,
+		[
+			"schemaVersion",
+			"itemId",
+			"leaseOwner",
+			"operation",
+			"requestId",
+			"traceId",
+			"agentId",
+			"actorId",
+			"channelId",
+			"conversationId",
+			"executionId",
+			"turnId",
+			"messageId",
+			"stopRequestId",
+			"sessionGeneration",
+			"deliveryFence",
+			"executionDeliveryFence",
+			"authorizationRevision",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+			"hostSessionRef",
+			"runtimeCursor",
+			"input",
+			"executionStatus",
+			"stopPending",
+		],
+		["generationIsolation", "runtimeTerminalEventSeen"],
+	);
+	if (
+		input.schemaVersion !== 1 ||
+		(input.runtimeTerminalEventSeen !== undefined &&
+			(input.runtimeTerminalEventSeen !== true ||
+				!["completed", "failed", "cancelled"].includes(
+					String(input.executionStatus),
+				) ||
+				input.runtimeCursor === null))
+	)
+		return unavailable();
 	const parsedOperation = operation(input.operation);
 	const messageId = nullableText(input.messageId);
 	const stopRequestId = nullableText(input.stopRequestId);
@@ -540,6 +620,22 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			attachments: value.attachments.map((entry) => text(entry)),
 		};
 	})();
+	let generationIsolation: ConversationGenerationIsolationV1 | undefined;
+	if (input.generationIsolation !== undefined) {
+		const isolation = exactObject(input.generationIsolation, [
+			"operationId",
+			"controlRecordId",
+			"originalPrincipal",
+		]);
+		const principal = exactObject(isolation.originalPrincipal, ["kind", "id"]);
+		if (principal.kind !== "user" || principal.id !== input.actorId)
+			unavailable();
+		generationIsolation = {
+			operationId: text(isolation.operationId),
+			controlRecordId: text(isolation.controlRecordId),
+			originalPrincipal: { kind: "user", id: text(principal.id) },
+		};
+	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
 	if (
 		isStop !== (stopRequestId !== null) ||
@@ -558,6 +654,7 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		itemId: text(input.itemId),
 		leaseOwner: text(input.leaseOwner),
 		operation: parsedOperation,
+		...(generationIsolation ? { generationIsolation } : {}),
 		requestId: text(input.requestId),
 		traceId: text(input.traceId),
 		agentId: text(input.agentId),
@@ -577,6 +674,9 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		reasoningLevel,
 		hostSessionRef: nullableText(input.hostSessionRef),
 		runtimeCursor: nullableText(input.runtimeCursor),
+		...(input.runtimeTerminalEventSeen === true
+			? { runtimeTerminalEventSeen: true as const }
+			: {}),
 		input: runtimeInput,
 		executionStatus: executionStatus(input.executionStatus),
 		stopPending:
@@ -590,18 +690,22 @@ function parseAuthority(
 	value: unknown,
 	claim: ConversationDispatchClaimV1,
 ): ConversationDispatchAuthorityV1 {
-	const input = exactObject(value, [
-		"schemaVersion",
-		"agentId",
-		"actorId",
-		"channelId",
-		"conversationId",
-		"executionId",
-		"turnId",
-		"sessionGeneration",
-		"authorizationRevision",
-		"runtimeGrant",
-	]);
+	const input = exactObject(
+		value,
+		[
+			"schemaVersion",
+			"agentId",
+			"actorId",
+			"channelId",
+			"conversationId",
+			"executionId",
+			"turnId",
+			"sessionGeneration",
+			"authorizationRevision",
+			"runtimeGrant",
+		],
+		["controlOnly"],
+	);
 	if (
 		input.schemaVersion !== 1 ||
 		input.agentId !== claim.agentId ||
@@ -612,7 +716,8 @@ function parseAuthority(
 		input.turnId !== claim.turnId ||
 		input.sessionGeneration !== claim.sessionGeneration ||
 		input.authorizationRevision !== claim.authorizationRevision ||
-		input.runtimeGrant === undefined
+		input.runtimeGrant === undefined ||
+		(input.controlOnly !== undefined && input.controlOnly !== true)
 	) {
 		return unavailable();
 	}
@@ -627,6 +732,7 @@ function parseAuthority(
 		sessionGeneration: claim.sessionGeneration,
 		authorizationRevision: claim.authorizationRevision,
 		runtimeGrant: input.runtimeGrant,
+		...(input.controlOnly === true ? { controlOnly: true as const } : {}),
 	};
 }
 
@@ -825,19 +931,34 @@ function parseRuntimeStatusResponse(
 	const input = exactObject(
 		value,
 		["schemaVersion", "hostSessionRef", "executionId", "outcome"],
-		["status"],
+		["status", "code"],
 	);
 	if (
 		input.schemaVersion !== 2 ||
-		input.hostSessionRef !== claim.hostSessionRef ||
+		(claim.hostSessionRef !== null &&
+			input.hostSessionRef !== claim.hostSessionRef) ||
 		input.executionId !== claim.executionId
 	) {
 		return unavailable();
 	}
+	if (
+		input.outcome === "recovery_failed" &&
+		input.code === "RUNTIME_SESSION_RECOVERY_FAILED" &&
+		input.status === undefined
+	)
+		return {
+			schemaVersion: 2,
+			hostSessionRef: text(input.hostSessionRef),
+			executionId: claim.executionId,
+			outcome: "recovery_failed",
+			code: "RUNTIME_SESSION_RECOVERY_FAILED",
+		};
+	if (input.code !== undefined) return unavailable();
 	if (input.outcome === "not_found" && input.status === undefined) {
 		return {
 			schemaVersion: 2,
-			hostSessionRef: claim.hostSessionRef ?? unavailable(),
+			hostSessionRef:
+				input.hostSessionRef === null ? null : text(input.hostSessionRef),
 			executionId: claim.executionId,
 			outcome: "not_found",
 		};
@@ -847,7 +968,7 @@ function parseRuntimeStatusResponse(
 	}
 	return {
 		schemaVersion: 2,
-		hostSessionRef: claim.hostSessionRef ?? unavailable(),
+		hostSessionRef: text(input.hostSessionRef),
 		executionId: claim.executionId,
 		outcome: "found",
 		status: runtimeStatus(input.status),
@@ -857,7 +978,7 @@ function parseRuntimeStatusResponse(
 function parseRuntimeEvent(
 	value: unknown,
 	claim: ConversationDispatchClaimV1,
-): ConversationRuntimeEventV1 {
+): ConversationRuntimeEvent {
 	const input = exactObject(value, [
 		"schemaVersion",
 		"adapterEventKey",
@@ -867,7 +988,10 @@ function parseRuntimeEvent(
 		"type",
 		"payload",
 	]);
-	if (input.schemaVersion !== 1 || input.executionId !== claim.executionId) {
+	if (
+		(input.schemaVersion !== 1 && input.schemaVersion !== 2) ||
+		input.executionId !== claim.executionId
+	) {
 		return unavailable();
 	}
 	const base = {
@@ -877,6 +1001,15 @@ function parseRuntimeEvent(
 		cursor: text(input.cursor),
 		occurredAt: text(input.occurredAt, 128),
 	};
+	if (input.schemaVersion === 2) {
+		if (input.type !== "operation") return unavailable();
+		return {
+			...base,
+			schemaVersion: 2,
+			type: "operation",
+			payload: parseConversationOperationFactV2(input.payload),
+		};
+	}
 	if (input.type === "text") {
 		const payload = exactObject(input.payload, ["delta"]);
 		return {
@@ -980,8 +1113,14 @@ function parseRuntimeEvent(
 }
 
 function normalizedEvent(
-	event: ConversationRuntimeEventV1,
+	event: ConversationRuntimeEvent,
 ): ConversationNormalizedEventV1 {
+	if (event.type === "operation")
+		return {
+			schemaVersion: 2,
+			type: "execution.operation",
+			fact: parseConversationOperationFactV2(event.payload),
+		};
 	if (event.type === "text")
 		return { type: "text.delta", text: event.payload.delta };
 	if (event.type === "file") {
@@ -1083,7 +1222,14 @@ function terminalStatus(event: ConversationNormalizedEventV1) {
 		: undefined;
 }
 
+function executionTerminal(status: ConversationDispatchExecutionStatusV1) {
+	return (
+		status === "completed" || status === "failed" || status === "cancelled"
+	);
+}
+
 function retryTransition(claim: ConversationDispatchClaimV1) {
+	if (executionTerminal(claim.executionStatus)) return {};
 	return claim.operation === "conversation.turn.submit.v1" ||
 		claim.operation === "conversation.turn.regenerate.v1"
 		? transitionForStatus("unknown")
@@ -1107,6 +1253,7 @@ function heartbeat(
 	store: ConversationDispatchStorePortV1,
 	claim: ConversationDispatchClaimV1,
 	leaseDurationMs: number,
+	renewAuthorization?: (signal: AbortSignal) => Promise<void>,
 ) {
 	let current = true;
 	let pending = Promise.resolve();
@@ -1117,6 +1264,8 @@ function heartbeat(
 				if (!current) return;
 				try {
 					current = await store.renew({ claim, leaseDurationMs });
+					if (current && renewAuthorization)
+						await renewAuthorization(controller.signal);
 				} catch {
 					current = false;
 				}
@@ -1159,11 +1308,12 @@ async function reject(
 	store: ConversationDispatchStorePortV1,
 	claim: ConversationDispatchClaimV1,
 	errorCode: string,
+	transition = rejectedTransition(claim),
 ): Promise<ConversationDispatchDecisionV1> {
 	const finished = await store.finish({
 		claim,
 		status: "failed",
-		transition: rejectedTransition(claim),
+		transition,
 		errorCode,
 	});
 	return finished
@@ -1202,6 +1352,179 @@ export function createConversationDispatchUseCaseV1(
 		retryDelayMs > 86_400_000
 	) {
 		throw new ConversationDispatchError("invalid_input");
+	}
+	async function persistRuntimeEvents(
+		claim: ConversationDispatchClaimV1,
+		authority: ConversationDispatchAuthorityV1,
+		hostSessionRef: string,
+		responseStatus: ConversationRuntimeStatusV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		const responseFinalStatus =
+			responseStatus === "completed" ||
+			responseStatus === "failed" ||
+			responseStatus === "cancelled"
+				? responseStatus
+				: undefined;
+		let finalStatus = responseFinalStatus;
+		let terminalEventSeen = claim.runtimeTerminalEventSeen === true;
+		// A terminal event may have committed even if persistence lost its response.
+		let terminalCommitPossible =
+			executionTerminal(claim.executionStatus) ||
+			responseFinalStatus !== undefined;
+		const eventRequest: ConversationRuntimeEventRequestV1 = {
+			schemaVersion: 1,
+			requestId: claim.requestId,
+			traceId: claim.traceId,
+			agentId: claim.agentId,
+			actorId: claim.actorId,
+			channelId: claim.channelId,
+			conversationId: claim.conversationId,
+			executionId: claim.executionId,
+			turnId: claim.turnId,
+			sessionGeneration: claim.sessionGeneration,
+			deliveryFence: claim.executionDeliveryFence,
+			hostSessionRef: hostSessionRef,
+			...(claim.runtimeCursor ? { afterCursor: claim.runtimeCursor } : {}),
+			runtimeGrant: authority.runtimeGrant,
+		};
+		const eventHeartbeat = heartbeat(
+			dependencies.store,
+			claim,
+			leaseDurationMs,
+			!authority.controlOnly && dependencies.runtimeHost.renewAuthorization
+				? async (signal) => {
+						if (!terminalCommitPossible)
+							await dependencies.runtimeHost.renewAuthorization?.(
+								eventRequest,
+								signal,
+							);
+					}
+				: undefined,
+		);
+		try {
+			// Recover a committed event whose acknowledgement was lost, including
+			// the last metadata event when the remaining stream is empty.
+			if (claim.runtimeCursor)
+				await dependencies.runtimeHost.acknowledge?.(
+					{ ...eventRequest, confirmedCursor: claim.runtimeCursor },
+					eventHeartbeat.signal,
+				);
+			for await (const eventInput of dependencies.runtimeHost.events(
+				eventRequest,
+				eventHeartbeat.signal,
+			)) {
+				const runtimeEvent = parseRuntimeEvent(eventInput, claim);
+				const event = normalizedEvent(runtimeEvent);
+				const transition = transitionFromEvent(event);
+				const eventFinalStatus = terminalStatus(event);
+				const connectionMetadata =
+					event.type === "execution.operation" &&
+					event.fact.kind === "tool" &&
+					event.fact.connection !== undefined &&
+					["completed", "failed", "unknown"].includes(event.fact.phase);
+				if (
+					(terminalEventSeen && !connectionMetadata) ||
+					(finalStatus && eventFinalStatus && eventFinalStatus !== finalStatus)
+				) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "failed",
+						transition: {},
+						errorCode: "RUNTIME_EVENT_CONFLICT",
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				if (eventFinalStatus) terminalCommitPossible = true;
+				let persisted: ConversationEventDecisionV1;
+				try {
+					persisted = await dependencies.events.persist({
+						schemaVersion: 1,
+						conversationId: claim.conversationId,
+						executionId: claim.executionId,
+						sessionGeneration: claim.sessionGeneration,
+						deliveryFence: claim.executionDeliveryFence,
+						adapterEventKey: runtimeEvent.adapterEventKey,
+						runtimeCursor: runtimeEvent.cursor,
+						occurredAt: runtimeEvent.occurredAt,
+						event,
+						// The transaction checks the original persisted attempt and outcome.
+						...(terminalEventSeen ? { operationMetadataOnly: true } : {}),
+						...(transition &&
+						(!responseFinalStatus || terminalEventSeen || eventFinalStatus)
+							? { transition }
+							: {}),
+						dispatchLease: {
+							schemaVersion: 1,
+							itemId: claim.itemId,
+							leaseOwner: claim.leaseOwner,
+							deliveryFence: claim.deliveryFence,
+						},
+					});
+				} catch {
+					throw new ConversationRuntimeHostError(
+						"EVENT_PERSISTENCE_UNAVAILABLE",
+						true,
+					);
+				}
+				if (persisted.outcome === "stale") {
+					return { schemaVersion: 1, outcome: "stale" };
+				}
+				if (eventFinalStatus) {
+					terminalEventSeen = true;
+					finalStatus = eventFinalStatus;
+				}
+				if (dependencies.runtimeHost.acknowledge)
+					await dependencies.runtimeHost.acknowledge(
+						{ ...eventRequest, confirmedCursor: runtimeEvent.cursor },
+						eventHeartbeat.signal,
+					);
+			}
+		} catch (error) {
+			const current = await eventHeartbeat.stop();
+			if (!current) return { schemaVersion: 1, outcome: "stale" };
+			const failure = runtimeFailure(error);
+			return failure.retryable
+				? retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						failure.code,
+						"retry",
+						terminalCommitPossible ? {} : retryTransition(claim),
+					)
+				: reject(
+						dependencies.store,
+						claim,
+						failure.code,
+						terminalCommitPossible ? {} : rejectedTransition(claim),
+					);
+		} finally {
+			await eventHeartbeat.stop();
+		}
+		if (eventHeartbeat.signal.aborted) {
+			return { schemaVersion: 1, outcome: "stale" };
+		}
+		if (!finalStatus) {
+			return retry(
+				dependencies.store,
+				claim,
+				retryDelayMs,
+				"RUNTIME_STREAM_INCOMPLETE",
+				"retry",
+			);
+		}
+		const finished = await dependencies.store.finish({
+			claim,
+			status: "succeeded",
+			// The terminal response or event already committed the business state.
+			// A later Execution may now own the Conversation's active status.
+			transition: {},
+		});
+		return finished
+			? { schemaVersion: 1, outcome: "accepted" }
+			: { schemaVersion: 1, outcome: "stale" };
 	}
 	return {
 		async dispatch(commandInput) {
@@ -1246,6 +1569,7 @@ export function createConversationDispatchUseCaseV1(
 			>;
 			try {
 				authorityDecision = await dependencies.authorization.authorize({
+					claim,
 					schemaVersion: 1,
 					operation: claim.operation,
 					agentId: claim.agentId,
@@ -1286,6 +1610,19 @@ export function createConversationDispatchUseCaseV1(
 			}
 			if (authorization.outcome === "denied") {
 				if (authorization.authority !== undefined) return unavailable();
+				if (
+					claim.executionStatus === "processing" ||
+					claim.executionStatus === "unknown" ||
+					executionTerminal(claim.executionStatus)
+				)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"AUTHORIZATION_REVOKED",
+						"retry",
+						{},
+					);
 				return reject(dependencies.store, claim, "AUTHORIZATION_REVOKED");
 			}
 			if (
@@ -1295,6 +1632,132 @@ export function createConversationDispatchUseCaseV1(
 				return unavailable();
 			}
 			const authority = parseAuthority(authorization.authority, claim);
+			if (claim.generationIsolation) {
+				const isolation = claim.generationIsolation;
+				const hostSessionRef = claim.hostSessionRef;
+				if (
+					!hostSessionRef ||
+					!dependencies.runtimeHost.cancelGeneration ||
+					!dependencies.runtimeHost.drainGenerationEvents ||
+					!dependencies.store.confirmGenerationIsolation
+				)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"GENERATION_ISOLATION_UNAVAILABLE",
+						"retry",
+						{},
+					);
+				const request: ConversationRuntimeEventRequestV1 = {
+					schemaVersion: 1,
+					requestId: claim.requestId,
+					traceId: claim.traceId,
+					agentId: claim.agentId,
+					actorId: claim.actorId,
+					channelId: claim.channelId,
+					conversationId: claim.conversationId,
+					executionId: claim.executionId,
+					turnId: claim.turnId,
+					sessionGeneration: claim.sessionGeneration,
+					deliveryFence: claim.executionDeliveryFence,
+					hostSessionRef,
+					runtimeGrant: authority.runtimeGrant,
+				};
+				const isolationHeartbeat = heartbeat(
+					dependencies.store,
+					claim,
+					leaseDurationMs,
+				);
+				try {
+					const barrier = await dependencies.runtimeHost.cancelGeneration(
+						request,
+						isolationHeartbeat.signal,
+					);
+					if (
+						!isConversationGenerationBarrierConfirmedV1({
+							operationId: isolation.operationId,
+							hostSessionRef,
+							response: barrier,
+						})
+					)
+						throw new ConversationRuntimeHostError(
+							"GENERATION_BARRIER_UNCONFIRMED",
+							true,
+						);
+					// The barrier closes all producers; archive its remaining original events before fencing the DB generation.
+					for await (const raw of dependencies.runtimeHost.drainGenerationEvents(
+						request,
+						isolationHeartbeat.signal,
+					)) {
+						const runtimeEvent = parseRuntimeEvent(raw, claim);
+						const event = normalizedEvent(runtimeEvent);
+						const transition = transitionFromEvent(event);
+						const persisted = await dependencies.events.persist({
+							schemaVersion: 1,
+							conversationId: claim.conversationId,
+							executionId: claim.executionId,
+							sessionGeneration: claim.sessionGeneration,
+							deliveryFence: claim.executionDeliveryFence,
+							adapterEventKey: runtimeEvent.adapterEventKey,
+							runtimeCursor: runtimeEvent.cursor,
+							occurredAt: runtimeEvent.occurredAt,
+							event,
+							...(transition ? { transition } : {}),
+							dispatchLease: {
+								schemaVersion: 1,
+								itemId: claim.itemId,
+								leaseOwner: claim.leaseOwner,
+								deliveryFence: claim.deliveryFence,
+							},
+						});
+						if (persisted.outcome === "stale")
+							return { schemaVersion: 1, outcome: "stale" };
+						await dependencies.runtimeHost.acknowledge?.(
+							{ ...request, confirmedCursor: runtimeEvent.cursor },
+							isolationHeartbeat.signal,
+						);
+					}
+					if (!(await isolationHeartbeat.stop()))
+						return { schemaVersion: 1, outcome: "stale" };
+					return (await dependencies.store.confirmGenerationIsolation({
+						claim,
+						operationId: isolation.operationId,
+						hostSessionRef,
+					}))
+						? { schemaVersion: 1, outcome: "accepted" }
+						: { schemaVersion: 1, outcome: "stale" };
+				} catch {
+					if (!(await isolationHeartbeat.stop()))
+						return { schemaVersion: 1, outcome: "stale" };
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"GENERATION_BARRIER_UNCONFIRMED",
+						"retry",
+						{},
+					);
+				} finally {
+					await isolationHeartbeat.stop();
+				}
+			}
+			if (
+				authority.controlOnly &&
+				(claim.operation === "conversation.turn.supplement.v1" ||
+					claim.executionStatus === "submitted" ||
+					(!executionTerminal(claim.executionStatus) &&
+						!dependencies.runtimeHost.recoverOriginalStatus))
+			) {
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"AUTHORIZATION_UNAVAILABLE",
+					"retry",
+					{},
+				);
+			}
 			if (
 				claim.stopPending &&
 				claim.operation === "conversation.turn.supplement.v1"
@@ -1305,13 +1768,19 @@ export function createConversationDispatchUseCaseV1(
 					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 				);
 			}
-			const recoveringStoppedTurn =
-				claim.stopPending &&
+			const recoveringOriginalTurn =
+				(claim.stopPending ||
+					authority.controlOnly ||
+					((claim.executionStatus === "unknown" ||
+						claim.executionStatus === "processing") &&
+						dependencies.runtimeHost.recoverOriginalStatus !== undefined)) &&
 				(claim.operation === "conversation.turn.submit.v1" ||
 					claim.operation === "conversation.turn.regenerate.v1");
 			if (
-				recoveringStoppedTurn &&
-				(claim.executionStatus === "submitted" || claim.hostSessionRef === null)
+				recoveringOriginalTurn &&
+				(claim.executionStatus === "submitted" ||
+					(claim.hostSessionRef === null &&
+						!dependencies.runtimeHost.recoverOriginalStatus))
 			) {
 				return retry(
 					dependencies.store,
@@ -1322,10 +1791,7 @@ export function createConversationDispatchUseCaseV1(
 					claim.executionStatus === "submitted" ? {} : retryTransition(claim),
 				);
 			}
-			const executionFinished =
-				claim.executionStatus === "completed" ||
-				claim.executionStatus === "failed" ||
-				claim.executionStatus === "cancelled";
+			const executionFinished = executionTerminal(claim.executionStatus);
 			if (executionFinished) {
 				if (claim.operation === "conversation.turn.supplement.v1") {
 					return reject(
@@ -1334,10 +1800,18 @@ export function createConversationDispatchUseCaseV1(
 						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 					);
 				}
+				if (isTurnOperation(claim.operation) && claim.hostSessionRef) {
+					return persistRuntimeEvents(
+						claim,
+						authority,
+						claim.hostSessionRef,
+						claim.executionStatus,
+					);
+				}
 				const finished = await dependencies.store.finish({
 					claim,
 					status: "succeeded",
-					transition: transitionForStatus(claim.executionStatus),
+					transition: {},
 				});
 				return finished
 					? { schemaVersion: 1, outcome: "already_completed" }
@@ -1357,12 +1831,26 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			try {
+				const preparation = await dependencies.store.prepareRuntimeDispatch({
+					claim,
+					leaseDurationMs,
+				});
 				if (
-					!(await dependencies.store.prepareRuntimeDispatch({
-						claim,
-						leaseDurationMs,
-					}))
+					preparation === "capacity_wait" ||
+					preparation === "capacity_unavailable"
 				) {
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						preparation === "capacity_wait"
+							? "AGENT_CAPACITY_FULL"
+							: "AGENT_CAPACITY_UNVERIFIED",
+						"retry",
+						{},
+					);
+				}
+				if (preparation !== true) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}
 			} catch {
@@ -1375,45 +1863,98 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringStoppedTurn) {
+				if (recoveringOriginalTurn) {
 					const status = parseRuntimeStatusResponse(
-						await dependencies.runtimeHost.recoverStatus(
-							{
-								schemaVersion: 2,
-								requestId: claim.requestId,
-								traceId: claim.traceId,
-								agentId: claim.agentId,
-								actorId: claim.actorId,
-								channelId: claim.channelId,
-								conversationId: claim.conversationId,
-								executionId: claim.executionId,
-								turnId: claim.turnId,
-								sessionGeneration: claim.sessionGeneration,
-								deliveryFence: claim.executionDeliveryFence,
-								hostSessionRef: claim.hostSessionRef ?? unavailable(),
-								recovery: {
-									schemaVersion: 1,
-									input: claim.input ?? unavailable(),
-									...(claim.modelOptionId && claim.reasoningLevel
-										? {
-												selection: {
-													schemaVersion: 1 as const,
-													modelOptionId: claim.modelOptionId,
-													reasoningLevel: claim.reasoningLevel,
-												},
-											}
-										: {}),
-								},
-								runtimeGrant: authority.runtimeGrant,
-							},
-							dispatchHeartbeat.signal,
-						),
+						dependencies.runtimeHost.recoverOriginalStatus
+							? await dependencies.runtimeHost.recoverOriginalStatus(
+									{
+										schemaVersion: 2,
+										requestId: claim.requestId,
+										traceId: claim.traceId,
+										agentId: claim.agentId,
+										actorId: claim.actorId,
+										channelId: claim.channelId,
+										conversationId: claim.conversationId,
+										executionId: claim.executionId,
+										turnId: claim.turnId,
+										sessionGeneration: claim.sessionGeneration,
+										deliveryFence: claim.executionDeliveryFence,
+										hostSessionRef: claim.hostSessionRef,
+										runtimeGrant: authority.runtimeGrant,
+									},
+									dispatchHeartbeat.signal,
+								)
+							: await dependencies.runtimeHost.recoverStatus(
+									{
+										schemaVersion: 2,
+										requestId: claim.requestId,
+										traceId: claim.traceId,
+										agentId: claim.agentId,
+										actorId: claim.actorId,
+										channelId: claim.channelId,
+										conversationId: claim.conversationId,
+										executionId: claim.executionId,
+										turnId: claim.turnId,
+										sessionGeneration: claim.sessionGeneration,
+										deliveryFence: claim.executionDeliveryFence,
+										hostSessionRef: claim.hostSessionRef ?? unavailable(),
+										recovery: {
+											schemaVersion: 1,
+											input: claim.input ?? unavailable(),
+											...(claim.modelOptionId && claim.reasoningLevel
+												? {
+														selection: {
+															schemaVersion: 1 as const,
+															modelOptionId: claim.modelOptionId,
+															reasoningLevel: claim.reasoningLevel,
+														},
+													}
+												: {}),
+										},
+										runtimeGrant: authority.runtimeGrant,
+									},
+									dispatchHeartbeat.signal,
+								),
 						claim,
 					);
+					if (status.outcome === "recovery_failed") {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						const started = await dependencies.store.beginGenerationIsolation?.(
+							{
+								claim,
+								hostSessionRef: status.hostSessionRef,
+								failureCode: status.code,
+							},
+						);
+						if (!started)
+							return {
+								schemaVersion: 1,
+								outcome: "retry",
+								retryScheduled: false,
+							};
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"GENERATION_ISOLATION_PENDING",
+							"retry",
+							{},
+						);
+					}
 					if (status.outcome === "not_found") {
 						if (!(await dispatchHeartbeat.stop())) {
 							return { schemaVersion: 1, outcome: "stale" };
 						}
+						if (!claim.stopPending)
+							return retry(
+								dependencies.store,
+								claim,
+								retryDelayMs,
+								"RUNTIME_ACCEPTANCE_UNKNOWN",
+								"unknown",
+								retryTransition(claim),
+							);
 						const cancelled = await dependencies.store.cancelUnaccepted({
 							claim,
 						});
@@ -1429,7 +1970,7 @@ export function createConversationDispatchUseCaseV1(
 							isTurnOperation(claim.operation) && claim.modelOptionId !== null
 								? 2
 								: 1,
-						hostSessionRef: status.hostSessionRef,
+						hostSessionRef: status.hostSessionRef ?? unavailable(),
 						operationId: operationId(claim),
 						result: { outcome: "accepted", status: status.status },
 					};
@@ -1445,6 +1986,50 @@ export function createConversationDispatchUseCaseV1(
 			} catch (error) {
 				const current = await dispatchHeartbeat.stop();
 				if (!current) return { schemaVersion: 1, outcome: "stale" };
+				if (
+					recoveringOriginalTurn &&
+					error instanceof ConversationRuntimeHostError &&
+					error.code === "RUNTIME_SESSION_RECOVERY_FAILED"
+				) {
+					if (!claim.hostSessionRef)
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"retry",
+							{},
+						);
+					try {
+						const started = await dependencies.store.beginGenerationIsolation?.(
+							{
+								claim,
+								hostSessionRef: claim.hostSessionRef,
+								failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+							},
+						);
+						if (!started)
+							return {
+								schemaVersion: 1,
+								outcome: "retry",
+								retryScheduled: false,
+							};
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"GENERATION_ISOLATION_PENDING",
+							"retry",
+							{},
+						);
+					} catch {
+						return {
+							schemaVersion: 1,
+							outcome: "retry",
+							retryScheduled: false,
+						};
+					}
+				}
 				const failure = runtimeFailure(error);
 				return failure.retryable
 					? retry(
@@ -1543,134 +2128,12 @@ export function createConversationDispatchUseCaseV1(
 					: { schemaVersion: 1, outcome: "stale" };
 			}
 
-			const responseFinalStatus =
-				response.result.status === "completed" ||
-				response.result.status === "failed" ||
-				response.result.status === "cancelled"
-					? response.result.status
-					: undefined;
-			let finalStatus = responseFinalStatus;
-			let terminalEventSeen = false;
-			const eventHeartbeat = heartbeat(
-				dependencies.store,
+			return persistRuntimeEvents(
 				claim,
-				leaseDurationMs,
+				authority,
+				response.hostSessionRef,
+				response.result.status,
 			);
-			try {
-				for await (const eventInput of dependencies.runtimeHost.events(
-					{
-						schemaVersion: 1,
-						requestId: claim.requestId,
-						traceId: claim.traceId,
-						agentId: claim.agentId,
-						actorId: claim.actorId,
-						channelId: claim.channelId,
-						conversationId: claim.conversationId,
-						executionId: claim.executionId,
-						turnId: claim.turnId,
-						sessionGeneration: claim.sessionGeneration,
-						deliveryFence: claim.executionDeliveryFence,
-						hostSessionRef: response.hostSessionRef,
-						...(claim.runtimeCursor
-							? { afterCursor: claim.runtimeCursor }
-							: {}),
-						runtimeGrant: authority.runtimeGrant,
-					},
-					eventHeartbeat.signal,
-				)) {
-					const runtimeEvent = parseRuntimeEvent(eventInput, claim);
-					const event = normalizedEvent(runtimeEvent);
-					const transition = transitionFromEvent(event);
-					const eventFinalStatus = terminalStatus(event);
-					if (
-						terminalEventSeen ||
-						(finalStatus &&
-							eventFinalStatus &&
-							eventFinalStatus !== finalStatus)
-					) {
-						const finished = await dependencies.store.finish({
-							claim,
-							status: "failed",
-							transition: {},
-							errorCode: "RUNTIME_EVENT_CONFLICT",
-						});
-						return finished
-							? { schemaVersion: 1, outcome: "rejected" }
-							: { schemaVersion: 1, outcome: "stale" };
-					}
-					let persisted: ConversationEventDecisionV1;
-					try {
-						persisted = await dependencies.events.persist({
-							schemaVersion: 1,
-							conversationId: claim.conversationId,
-							executionId: claim.executionId,
-							sessionGeneration: claim.sessionGeneration,
-							deliveryFence: claim.executionDeliveryFence,
-							adapterEventKey: runtimeEvent.adapterEventKey,
-							runtimeCursor: runtimeEvent.cursor,
-							occurredAt: runtimeEvent.occurredAt,
-							event,
-							...(transition &&
-							(!responseFinalStatus || terminalEventSeen || eventFinalStatus)
-								? { transition }
-								: {}),
-							dispatchLease: {
-								schemaVersion: 1,
-								itemId: claim.itemId,
-								leaseOwner: claim.leaseOwner,
-								deliveryFence: claim.deliveryFence,
-							},
-						});
-					} catch {
-						throw new ConversationRuntimeHostError(
-							"EVENT_PERSISTENCE_UNAVAILABLE",
-							true,
-						);
-					}
-					if (persisted.outcome === "stale") {
-						return { schemaVersion: 1, outcome: "stale" };
-					}
-					if (eventFinalStatus) {
-						terminalEventSeen = true;
-						finalStatus = eventFinalStatus;
-					}
-				}
-			} catch (error) {
-				const current = await eventHeartbeat.stop();
-				if (!current) return { schemaVersion: 1, outcome: "stale" };
-				const failure = runtimeFailure(error);
-				return failure.retryable
-					? retry(
-							dependencies.store,
-							claim,
-							retryDelayMs,
-							failure.code,
-							"retry",
-						)
-					: reject(dependencies.store, claim, failure.code);
-			} finally {
-				await eventHeartbeat.stop();
-			}
-			if (eventHeartbeat.signal.aborted) {
-				return { schemaVersion: 1, outcome: "stale" };
-			}
-			if (!finalStatus) {
-				return retry(
-					dependencies.store,
-					claim,
-					retryDelayMs,
-					"RUNTIME_STREAM_INCOMPLETE",
-					"retry",
-				);
-			}
-			const finished = await dependencies.store.finish({
-				claim,
-				status: "succeeded",
-				transition: transitionForStatus(finalStatus),
-			});
-			return finished
-				? { schemaVersion: 1, outcome: "accepted" }
-				: { schemaVersion: 1, outcome: "stale" };
 		},
 	};
 }

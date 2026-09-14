@@ -1,20 +1,71 @@
 import { Buffer } from "node:buffer";
+import { createHash, randomUUID } from "node:crypto";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 
-import type {
-	ConversationDispatchClaimDecisionV1,
-	ConversationDispatchClaimV1,
-	ConversationDispatchExecutionStatusV1,
-	ConversationDispatchOperationV1,
-	ConversationDispatchStateTransitionV1,
-	ConversationDispatchStorePortV1,
+import {
+	type ConversationDispatchClaimDecisionV1,
+	type ConversationDispatchClaimV1,
+	type ConversationDispatchExecutionStatusV1,
+	type ConversationDispatchOperationV1,
+	type ConversationDispatchStateTransitionV1,
+	type ConversationDispatchStorePortV1,
+	type ConversationGenerationIsolationV1,
+	decideConversationDispatchCapacityV1,
+	parseTaskAuthorizationBoundaryV1,
+	planConversationGenerationConfirmationV1,
+	planConversationGenerationIsolationV1,
+	planTaskSystemControlV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import { matchesPostgresErrorCode } from "./postgres-error.ts";
+import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 type Client = ReturnType<typeof postgres>;
 type Transaction = postgres.TransactionSql;
+
+interface GenerationTombstoneRow {
+	operation_id: string;
+	conversation_id: string;
+	session_generation: string | number;
+	execution_id: string;
+	item_id: string;
+	control_record_id: string;
+	control_source_id: string;
+	original_principal: { kind: "user"; id: string };
+	host_session_ref: string;
+	status: "pending" | "confirmed";
+}
+async function readGenerationIsolation(
+	transaction: Transaction,
+	conversationId: string,
+	generation: number,
+) {
+	const [row] = await transaction<GenerationTombstoneRow[]>`
+    select * from platform.conversation_generation_tombstones
+    where conversation_id = ${conversationId} and session_generation = ${generation} and status = 'pending'
+  `;
+	if (!row) return undefined;
+	if (
+		row.operation_id !== `generation:${conversationId}:${generation}` ||
+		!row.control_record_id ||
+		row.original_principal?.kind !== "user" ||
+		!row.original_principal.id ||
+		!row.host_session_ref
+	)
+		throw new TypeError("Stored generation isolation is invalid");
+	return row;
+}
+function isolationProjection(
+	row: GenerationTombstoneRow,
+): ConversationGenerationIsolationV1 {
+	return {
+		operationId: row.operation_id,
+		controlRecordId: row.control_record_id,
+		originalPrincipal: row.original_principal,
+	};
+}
 
 interface OutboxRow {
 	id: string;
@@ -112,6 +163,11 @@ export class ConversationDispatchStoreError extends Error {
 }
 
 class StaleDispatchLease extends Error {}
+class DispatchCapacityUnavailable extends Error {
+	constructor(readonly outcome: "capacity_wait" | "capacity_unavailable") {
+		super(outcome);
+	}
+}
 
 const operations = new Set<ConversationDispatchOperationV1>([
 	"conversation.turn.submit.v1",
@@ -156,7 +212,11 @@ async function databaseOperation<T>(work: () => Promise<T>): Promise<T> {
 	try {
 		return await work();
 	} catch (error) {
-		if (error instanceof StaleDispatchLease) throw error;
+		if (
+			error instanceof StaleDispatchLease ||
+			error instanceof DispatchCapacityUnavailable
+		)
+			throw error;
 		throw new ConversationDispatchStoreError(retryableDatabaseError(error));
 	}
 }
@@ -179,6 +239,12 @@ function safeCounter(value: unknown, minimum = 0): number | undefined {
 		normalized <= maximumSafeCounter
 		? normalized
 		: undefined;
+}
+
+function requireSafeCounter(value: unknown, minimum = 0): number {
+	const counter = safeCounter(value, minimum);
+	if (counter === undefined) throw new TypeError("Stored counter is invalid");
+	return counter;
 }
 
 function plainObject(value: unknown): Record<string, unknown> | undefined {
@@ -618,10 +684,24 @@ async function claimWork(
 		readonly leaseDurationMs: number;
 	},
 ): Promise<ConversationDispatchClaimDecisionV1> {
+	const [hint] = await transaction<
+		{ scope_id: string }[]
+	>`select scope_id from platform.outbox_items where id = ${input.itemId} and scope_type = 'conversation'`;
+	if (!hint) return { outcome: "stale" };
+	const conversation = await lockConversation(transaction, hint.scope_id);
+	if (!conversation) return { outcome: "stale" };
+	const isolation = await readGenerationIsolation(
+		transaction,
+		conversation.id,
+		requireSafeCounter(conversation.session_generation, 1),
+	);
+	const isolationWork = isolation?.item_id === input.itemId;
 	const outbox = await lockOutbox(transaction, input.itemId);
 	if (!outbox) return { outcome: "stale" };
-	if (outbox.status === "succeeded") return { outcome: "succeeded" };
-	if (outbox.status === "failed") return { outcome: "failed" };
+	if (!isolationWork && outbox.status === "succeeded")
+		return { outcome: "succeeded" };
+	if (!isolationWork && outbox.status === "failed")
+		return { outcome: "failed" };
 	const decisionAt = outbox.decision_at.getTime();
 	if (
 		(outbox.status === "processing" &&
@@ -636,10 +716,6 @@ async function claimWork(
 	if (!selectedOperation) return { outcome: "stale" };
 	const payload = exactPayload(outbox.payload, selectedOperation);
 	if (!payload) return { outcome: "stale" };
-	const conversation = await lockConversation(
-		transaction,
-		payload.conversationId,
-	);
 	const execution = await lockExecution(
 		transaction,
 		payload.conversationId,
@@ -652,6 +728,18 @@ async function claimWork(
 	) {
 		return { outcome: "stale" };
 	}
+	if (
+		isolation &&
+		!isolationWork &&
+		selectedOperation !== "conversation.turn.stop.v1"
+	)
+		return { outcome: "busy" };
+	if (
+		isolationWork &&
+		(isolation?.execution_id !== execution.execution_id ||
+			isolation.original_principal.id !== execution.actor_id)
+	)
+		return { outcome: "stale" };
 	const message = payload.messageId
 		? await readMessage(transaction, payload.conversationId, payload.messageId)
 		: undefined;
@@ -693,7 +781,12 @@ async function claimWork(
 		previousFence === undefined ||
 		executionFence === undefined ||
 		previousFence >= maximumSafeCounter ||
-		(isTurn(selectedOperation) && executionFence !== previousFence)
+		(isolationWork && executionFence > previousFence) ||
+		(isTurn(selectedOperation) &&
+			!isolationWork &&
+			(terminal(execution.status)
+				? executionFence > previousFence
+				: executionFence !== previousFence))
 	) {
 		return { outcome: "stale" };
 	}
@@ -711,7 +804,10 @@ async function claimWork(
 	if (claimedRows.length !== 1) throw new StaleDispatchLease();
 	let currentExecutionFence = executionFence;
 	const currentExecutionStatus = execution.status;
-	if (isTurn(selectedOperation) && !terminal(execution.status)) {
+	if (
+		isTurn(selectedOperation) &&
+		(!terminal(execution.status) || isolationWork)
+	) {
 		const updated = await transaction<{ execution_id: string }[]>`
 			update platform.conversation_executions
 			set delivery_fence = ${nextFence}, updated_at = clock_timestamp()
@@ -725,6 +821,17 @@ async function claimWork(
 		if (updated.length !== 1) throw new StaleDispatchLease();
 		currentExecutionFence = nextFence;
 	}
+	const [terminalEvent] =
+		terminal(execution.status) && execution.last_runtime_cursor
+			? await transaction<{ seen: boolean }[]>`
+			select exists (
+				select 1 from platform.conversation_events
+				where conversation_id = ${conversation.id} and execution_id = ${execution.execution_id}
+					and source = 'runtime' and event_type = 'execution.status'
+					and event_payload->>'status' = ${execution.status} and runtime_cursor is not null
+			) as seen
+		`
+			: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		itemId: outbox.id,
@@ -752,9 +859,13 @@ async function claimWork(
 		reasoningLevel: execution.reasoning_level,
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
+		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),
 		input: message ? { text: message.text, attachments: [] } : null,
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
+		...(isolationWork && isolation
+			? { generationIsolation: isolationProjection(isolation) }
+			: {}),
 	};
 	return { outcome: "claimed", claim };
 }
@@ -808,13 +919,14 @@ function claimMatchesState(
 async function ownedState(
 	transaction: Transaction,
 	claim: ConversationDispatchClaimV1,
+	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
-	const outbox = await lockOutbox(transaction, claim.itemId);
-	if (!outbox) return undefined;
 	const conversation = await lockConversation(
 		transaction,
 		claim.conversationId,
 	);
+	const outbox = await lockOutbox(transaction, claim.itemId);
+	if (!outbox) return undefined;
 	const execution = await lockExecution(
 		transaction,
 		claim.conversationId,
@@ -824,7 +936,7 @@ async function ownedState(
 	const state = { outbox, conversation, execution };
 	if (!claimMatchesState(claim, state)) return undefined;
 	const stop = await readStop(transaction, claim.executionId);
-	return (stop?.status === "submitted") === claim.stopPending
+	return allowStopChange || (stop?.status === "submitted") === claim.stopPending
 		? state
 		: undefined;
 }
@@ -833,6 +945,16 @@ function transitionAllowed(
 	state: DispatchState,
 	transition: ConversationDispatchStateTransitionV1,
 ) {
+	// Only prepareRuntimeDispatch can reserve new Agent capacity. A later event
+	// or retry must never turn an occupied execution back into unreserved waiting.
+	if (
+		(state.execution.status === "submitted" &&
+			(transition.executionStatus === "unknown" ||
+				transition.executionStatus === "processing")) ||
+		(state.execution.status !== "submitted" &&
+			transition.executionStatus === "submitted")
+	)
+		return false;
 	if (
 		terminal(state.execution.status) &&
 		transition.executionStatus !== undefined &&
@@ -1007,6 +1129,161 @@ export class PostgresConversationDispatchStoreV1
 		);
 	}
 
+	/** Recheck the live lease and derive recovery metadata from the original accepted task. */
+	async readRuntimeState(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}) {
+		requireClaim(input.claim);
+		const claim = input.claim;
+		return databaseOperation(() =>
+			this.#client.begin(async (transaction) => {
+				await transaction`select set_config('lock_timeout', '5s', true)`;
+				const state = await ownedState(transaction, claim, true);
+				if (!state) return null;
+				const payload = exactPayload(state.outbox.payload, claim.operation);
+				if (!payload) return null;
+				const stop = await readStop(transaction, claim.executionId);
+				const base = {
+					agentId: state.execution.agent_id,
+					conversationId: state.execution.conversation_id,
+					executionId: state.execution.execution_id,
+					turnId: state.execution.turn_id,
+					sessionGeneration: safeCounter(state.execution.session_generation),
+				};
+				const origins = await transaction<OutboxRow[]>`
+				select * from platform.outbox_items where scope_type = 'conversation'
+				and scope_id = ${claim.conversationId}
+				and id in (${`conversation:turn:${claim.executionId}`}, ${`conversation:regenerate:${claim.executionId}`})
+				and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+			`;
+				const [origin] = origins;
+				if (
+					origins.length !== 1 ||
+					!origin ||
+					(isTurn(claim.operation) && origin.id !== state.outbox.id)
+				)
+					return null;
+				const originOperation = operation(origin.operation);
+				if (!originOperation || !isTurn(originOperation)) return null;
+				const originalPayload = exactPayload(origin.payload, originOperation);
+				if (
+					!originalPayload?.messageId ||
+					originalPayload.executionId !== claim.executionId ||
+					originalPayload.conversationId !== claim.conversationId ||
+					originalPayload.turnId !== claim.turnId ||
+					originalPayload.sessionGeneration !== claim.sessionGeneration ||
+					originalPayload.modelOptionId !== state.execution.model_option_id ||
+					originalPayload.reasoningLevel !== state.execution.reasoning_level
+				)
+					return null;
+				const message = await readMessage(
+					transaction,
+					claim.conversationId,
+					originalPayload.messageId,
+				);
+				if (
+					!message ||
+					message.actor_id !== state.execution.actor_id ||
+					message.role !== "user"
+				)
+					return null;
+				const original = {
+					...base,
+					kind: "submit-turn",
+					input: { text: message.text, attachments: [] },
+					...(state.execution.model_option_id && state.execution.reasoning_level
+						? {
+								selection: {
+									schemaVersion: 1,
+									modelOptionId: state.execution.model_option_id,
+									reasoningLevel: state.execution.reasoning_level,
+								},
+							}
+						: {}),
+				};
+				// Preserve the published Host operation digest, including its base64url
+				// encoding; it is independent of the V2 Grant's hex request signature.
+				function canonical(value: unknown): unknown {
+					if (Array.isArray(value)) return value.map(canonical);
+					if (!value || typeof value !== "object") return value;
+					return Object.fromEntries(
+						Object.entries(value)
+							.sort(([a], [b]) => a.localeCompare(b))
+							.map(([key, entry]) => [key, canonical(entry)]),
+					);
+				}
+				const isolation = await readGenerationIsolation(
+					transaction,
+					claim.conversationId,
+					claim.sessionGeneration,
+				);
+				if (
+					isolation &&
+					(isolation.execution_id !== claim.executionId ||
+						isolation.original_principal.id !== claim.actorId)
+				)
+					return null;
+				return {
+					hostSessionRef: state.conversation.host_session_ref,
+					...(isolation
+						? { generationIsolation: isolationProjection(isolation) }
+						: {}),
+					runtimeCursor: state.execution.last_runtime_cursor,
+					originalOperationDigest: createHash("sha256")
+						.update(JSON.stringify(canonical(original)))
+						.digest("base64url"),
+					executionStatus: state.execution.status,
+					stopPending: stop?.status === "submitted",
+				};
+			}),
+		);
+	}
+
+	/** Discovery grants no lease; claim rechecks eligibility under database locks. */
+	async findDispatchable(input: {
+		readonly limit: number;
+		readonly afterItemId?: string;
+	}): Promise<
+		readonly {
+			readonly itemId: string;
+			readonly operation: ConversationDispatchOperationV1;
+		}[]
+	> {
+		if (
+			!Number.isSafeInteger(input.limit) ||
+			input.limit < 1 ||
+			input.limit > 256 ||
+			(input.afterItemId !== undefined && !validText(input.afterItemId))
+		) {
+			throw new TypeError("Conversation dispatch discovery is invalid");
+		}
+		return databaseOperation(async () => {
+			const rows = await this.#client<
+				{ id: string; operation: ConversationDispatchOperationV1 }[]
+			>`
+				select id, operation from platform.outbox_items
+				where scope_type = 'conversation'
+					and operation in (
+						'conversation.turn.submit.v1', 'conversation.turn.regenerate.v1',
+						'conversation.turn.supplement.v1', 'conversation.turn.stop.v1'
+					)
+					and (
+						(status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
+						or (status = 'processing' and lease_expires_at <= clock_timestamp())
+            or (status in ('succeeded', 'failed') and exists (
+              select 1 from platform.conversation_generation_tombstones t where t.item_id = outbox_items.id and t.status = 'pending'
+            ))
+					)
+				order by
+					case when ${input.afterItemId ?? null}::text is null
+						or id > ${input.afterItemId ?? null} then 0 else 1 end,
+					id
+				limit ${input.limit}
+			`;
+			return rows.map((row) => ({ itemId: row.id, operation: row.operation }));
+		});
+	}
+
 	async claim(input: {
 		readonly schemaVersion: 1;
 		readonly itemId: string;
@@ -1027,6 +1304,197 @@ export class PostgresConversationDispatchStoreV1
 		}
 	}
 
+	async beginGenerationIsolation(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";
+		readonly hostSessionRef: string;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		return transactionResult(this.#client, async (transaction) => {
+			const claim = input.claim;
+			const state = await ownedState(transaction, claim, true);
+			if (!state) throw new StaleDispatchLease();
+			if (
+				!validText(input.hostSessionRef) ||
+				(state.conversation.host_session_ref !== null &&
+					state.conversation.host_session_ref !== input.hostSessionRef)
+			)
+				throw new StaleDispatchLease();
+			const existing = await readGenerationIsolation(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+			);
+			if (existing) {
+				if (
+					existing.item_id !== claim.itemId ||
+					existing.execution_id !== claim.executionId
+				)
+					throw new StaleDispatchLease();
+				return;
+			}
+			const [authorization] = await transaction<
+				{ id: string; boundary: unknown }[]
+			>`
+        select id, boundary from platform.task_authorization_records where execution_id = ${claim.executionId} for update
+      `;
+			let originalPrincipal: { kind: "user"; id: string };
+			let controlSourceId: string;
+			if (authorization) {
+				const boundary = parseTaskAuthorizationBoundaryV1(
+					authorization.boundary,
+				);
+				planTaskSystemControlV1({
+					reason: "generation_isolation",
+					workerId: claim.leaseOwner,
+					boundary,
+					execution: {
+						actorId: claim.actorId,
+						agentId: claim.agentId,
+						channelId: claim.channelId,
+						authorizationRevision: claim.authorizationRevision,
+						status: state.execution.status,
+					},
+				});
+				originalPrincipal = { kind: "user", id: boundary.principal.id };
+				controlSourceId = authorization.id;
+			} else {
+				const historical = await readLegacyControlRecoveryInTransaction(
+					transaction,
+					claim.executionId,
+				);
+				if (
+					historical?.originalPrincipal.kind !== "user" ||
+					historical.originalPrincipal.id !== claim.actorId ||
+					historical.conversationId !== claim.conversationId ||
+					historical.sessionGeneration !== claim.sessionGeneration ||
+					historical.hostSessionRef !== input.hostSessionRef
+				)
+					throw new StaleDispatchLease();
+				originalPrincipal = {
+					kind: "user",
+					id: historical.originalPrincipal.id,
+				};
+				controlSourceId = historical.migrationRecordId;
+			}
+			const plan = planConversationGenerationIsolationV1({
+				claim: { ...claim, hostSessionRef: input.hostSessionRef },
+				originalPrincipal,
+				controlSourceId,
+				failureCode: input.failureCode,
+			});
+			const controlRecordId = randomUUID();
+			await transaction`
+        insert into platform.conversation_generation_tombstones
+          (operation_id, conversation_id, session_generation, execution_id, item_id, control_record_id, control_source_id, original_principal, host_session_ref, failure_code)
+        values (${plan.operationId}, ${claim.conversationId}, ${claim.sessionGeneration}, ${claim.executionId}, ${claim.itemId}, ${controlRecordId},
+          ${plan.controlSourceId}, ${transaction.json(plan.originalPrincipal)}, ${input.hostSessionRef}, ${plan.failureCode})
+      `;
+			await transaction`
+        insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+        values (${controlRecordId}, ${claim.traceId}, 'system', ${claim.leaseOwner}, ${plan.auditAction}, 'conversation', ${claim.conversationId}, 'succeeded',
+          ${claim.requestId}, ${claim.agentId}, ${transaction.json({
+						originalPrincipal: plan.originalPrincipal,
+						controlSourceId,
+						operationId: plan.operationId,
+						reason: plan.reason,
+						failureCode: plan.failureCode,
+						executionId: claim.executionId,
+						sessionGeneration: claim.sessionGeneration,
+					})})
+      `;
+			await transaction`update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp() where id = ${claim.conversationId}`;
+		});
+	}
+
+	async confirmGenerationIsolation(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly operationId: string;
+		readonly hostSessionRef: string;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		return transactionResult(this.#client, async (transaction) => {
+			const claim = input.claim;
+			const state = await ownedState(transaction, claim, true);
+			if (!state) throw new StaleDispatchLease();
+			const isolation = await readGenerationIsolation(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+			);
+			if (
+				!isolation ||
+				isolation.operation_id !== input.operationId ||
+				isolation.item_id !== claim.itemId ||
+				isolation.execution_id !== claim.executionId ||
+				isolation.original_principal.id !== claim.actorId ||
+				isolation.host_session_ref !== input.hostSessionRef ||
+				state.conversation.host_session_ref !== input.hostSessionRef ||
+				claim.generationIsolation?.controlRecordId !==
+					isolation.control_record_id
+			)
+				throw new StaleDispatchLease();
+			const plan = planConversationGenerationConfirmationV1({
+				...claim,
+				executionStatus: state.execution.status,
+			});
+			const failed = await transaction<{ execution_id: string }[]>`
+        update platform.conversation_executions set status = 'failed', updated_at = clock_timestamp()
+        where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
+          and status::text = any(${plan.executionStatusesToFail}) returning execution_id
+      `;
+			await transaction`
+        update platform.outbox_items set status = 'failed', lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
+        where scope_type = 'conversation' and scope_id = ${claim.conversationId} and id <> ${claim.itemId}
+          and operation = any(${plan.businessOperations})
+          and payload->>'sessionGeneration' = ${String(claim.sessionGeneration)} and status in ('pending', 'retry_scheduled', 'processing')
+      `;
+			await transaction`
+        update platform.conversation_messages set status = 'failed', failure_code = ${plan.failureCode}, updated_at = clock_timestamp()
+        where conversation_id = ${claim.conversationId} and status = 'submitted' and message_id in (select payload->>'messageId' from platform.outbox_items where scope_type = 'conversation' and scope_id = ${claim.conversationId} and operation = 'conversation.turn.supplement.v1' and payload->>'sessionGeneration' = ${String(claim.sessionGeneration)})
+          and execution_id in (select execution_id from platform.conversation_executions where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration})
+      `;
+			await transaction`
+        update platform.conversation_stops set status = 'completed', updated_at = clock_timestamp()
+        where execution_id in (select execution_id from platform.conversation_executions where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration})
+          and status = 'submitted'
+      `;
+			for (const execution of failed)
+				await transaction`
+        insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+        values (${randomUUID()}, ${claim.traceId}, 'system', ${claim.leaseOwner}, ${plan.executionAuditAction}, 'execution', ${execution.execution_id}, 'succeeded',
+          ${claim.requestId}, ${claim.agentId}, ${transaction.json({
+						operationId: isolation.operation_id,
+						originalPrincipal: isolation.original_principal,
+						reason: plan.failureCode,
+						sessionGeneration: claim.sessionGeneration,
+					})})
+      `;
+			await closeOutbox(
+				transaction,
+				state,
+				claim,
+				plan.originalOutboxStatus,
+				plan.failureCode,
+			);
+			await transaction`
+        update platform.conversations set session_generation = ${plan.nextGeneration}, status = ${plan.conversationStatus}, updated_at = clock_timestamp()
+        where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
+      `;
+			await transaction`update platform.conversation_generation_tombstones set status = 'confirmed', confirmed_at = clock_timestamp() where operation_id = ${isolation.operation_id}`;
+			await transaction`
+        insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+        values (${randomUUID()}, ${claim.traceId}, 'system', ${claim.leaseOwner}, ${plan.confirmationAuditAction}, 'conversation', ${claim.conversationId}, 'succeeded',
+          ${claim.requestId}, ${claim.agentId}, ${transaction.json({
+						operationId: isolation.operation_id,
+						originalPrincipal: isolation.original_principal,
+						previousGeneration: claim.sessionGeneration,
+						sessionGeneration: plan.nextGeneration,
+					})})
+      `;
+		});
+	}
+
 	async renew(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
@@ -1043,17 +1511,104 @@ export class PostgresConversationDispatchStoreV1
 	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean> {
+	}): Promise<boolean | "capacity_wait" | "capacity_unavailable"> {
 		requireClaim(input.claim);
 		requireLeaseDuration(input.leaseDurationMs);
-		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
-			if (!state) throw new StaleDispatchLease();
-			if (
-				isTurn(input.claim.operation) &&
-				input.claim.executionStatus === "submitted"
-			) {
-				const rows = await transaction<{ execution_id: string }[]>`
+		try {
+			return await transactionResult(this.#client, async (transaction) => {
+				// Agent first: management/configuration/reconciliation use this same row.
+				// Never hold another Conversation's execution lock while waiting for it.
+				await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
+				// Read only after acquiring the lock: a join evaluated while waiting could
+				// retain a pre-lock snapshot of application or reconciliation state.
+				const [agent] = await transaction<
+					{
+						current_configuration_revision: string;
+						status: string | null;
+						desired_state: string | null;
+						service_availability: string | null;
+						workload_revision: string | null;
+						fence: string | null;
+						state: unknown;
+					}[]
+				>`
+				select a.current_configuration_revision::text, ap.status, ap.desired_state,
+					ap.service_availability, ap.workload_revision::text, ap.fence::text, w.state
+				from platform.agents a
+				left join platform.agent_applications ap on ap.agent_id = a.id
+				left join platform.workload_reconciliations w on w.agent_id = a.id
+				where a.id = ${input.claim.agentId}
+			`;
+				const state = await ownedState(transaction, input.claim);
+				if (!state) throw new StaleDispatchLease();
+				const pendingIsolation = await readGenerationIsolation(
+					transaction,
+					input.claim.conversationId,
+					input.claim.sessionGeneration,
+				);
+				if (
+					pendingIsolation &&
+					input.claim.operation !== "conversation.turn.stop.v1"
+				)
+					throw new StaleDispatchLease();
+				if (
+					isTurn(input.claim.operation) &&
+					state.execution.status === "submitted"
+				) {
+					let capacityDecision: ReturnType<
+						typeof decideConversationDispatchCapacityV1
+					>;
+					try {
+						const decoded = decodePersistedWorkloadStateV1(
+							agent?.state,
+							input.claim.agentId,
+						);
+						if (!agent || !decoded || decoded.legacy) throw new Error();
+						const workload = decoded.state;
+						const desired = validateAgentWorkloadDesiredV1(
+							workload.verified?.deployment,
+						);
+						const [occupancy] = await transaction<
+							{ processing: string; unknown: string }[]
+						>`
+							select count(*) filter (where status = 'processing')::text as processing,
+								count(*) filter (where status <> 'processing')::text as unknown
+							from platform.conversation_executions where agent_id = ${input.claim.agentId}
+								and (status in ('processing', 'unknown') or exists (select 1 from platform.conversation_generation_tombstones t where t.execution_id = conversation_executions.execution_id and t.status = 'pending'))
+						`;
+						// The Core decision consumes this locked snapshot, before any occupied state is written.
+						capacityDecision = decideConversationDispatchCapacityV1({
+							agentId: input.claim.agentId,
+							modelConfigurationRevision:
+								input.claim.modelConfigurationRevision,
+							configurationRevision: requireSafeCounter(
+								agent.current_configuration_revision,
+								1,
+							),
+							status: agent.status,
+							desiredState: agent.desired_state,
+							serviceAvailability: agent.service_availability,
+							workloadRevision: requireSafeCounter(agent.workload_revision, 1),
+							fence: requireSafeCounter(agent.fence, 1),
+							workload,
+							deployment: {
+								agentId: desired.agentId,
+								configurationRevision: desired.configRevision,
+								interactionMode: desired.runtimeManifest.interactionMode,
+								imageDigest: desired.imageDigest,
+								resourceProfileRef: desired.resourceProfileRef,
+							},
+							occupancy: {
+								processing: requireSafeCounter(occupancy?.processing),
+								unknown: requireSafeCounter(occupancy?.unknown),
+							},
+						});
+					} catch {
+						throw new DispatchCapacityUnavailable("capacity_unavailable");
+					}
+					if (capacityDecision !== "admit")
+						throw new DispatchCapacityUnavailable(capacityDecision);
+					const rows = await transaction<{ execution_id: string }[]>`
 					update platform.conversation_executions
 					set status = 'unknown', updated_at = clock_timestamp()
 					where execution_id = ${input.claim.executionId}
@@ -1063,10 +1618,14 @@ export class PostgresConversationDispatchStoreV1
 						and status = 'submitted'
 					returning execution_id
 				`;
-				if (rows.length !== 1) throw new StaleDispatchLease();
-			}
-			await renewLease(transaction, input.claim, input.leaseDurationMs);
-		});
+					if (rows.length !== 1) throw new StaleDispatchLease();
+				}
+				await renewLease(transaction, input.claim, input.leaseDurationMs);
+			});
+		} catch (error) {
+			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
+			throw error;
+		}
 	}
 
 	async cancelUnaccepted(input: {
