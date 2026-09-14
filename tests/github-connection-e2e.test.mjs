@@ -48,6 +48,7 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 	assert.equal(actions.length, 77);
 	assert.equal(actions[0], "github.get_repository");
 	assert.equal(evidence.calls.length, 77);
+	assert.deepEqual(evidence.failures, []);
 	assert.deepEqual(evidence.skipped, [
 		{
 			actionVersionId: "github.get_pull_request_review@v7",
@@ -65,6 +66,57 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 	assert.doesNotMatch(
 		JSON.stringify(evidence),
 		/test-token|provider response body/,
+	);
+});
+
+test("GitHub read conformance reports all reads after a fixture mismatch", async () => {
+	const actions = [];
+	const fetch = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		const { arguments: args, name: tool } = request.params;
+		if (tool === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		if (tool === "get_action_guide")
+			return actionGuide(request.id, args.actionId);
+		actions.push(args.actionId);
+		return mcpResponse(request.id, {
+			action: args.actionId,
+			callId: `read-call-${actions.length}`,
+			result:
+				args.actionId === "github.get_repository"
+					? testRepository()
+					: args.actionId === "github.list_commit_comments"
+						? { comments: [] }
+						: fakeReadResult(args.actionId),
+			status: "SUCCEEDED",
+		});
+	};
+
+	await assert.rejects(
+		runGitHubReadConformance({
+			environment: enabledEnvironment(),
+			fetch,
+			runId: "read-failure-run",
+		}),
+		(error) => {
+			assert.deepEqual(error.evidence.failures, [
+				{
+					actionVersionId: "github.list_commit_comments@v7",
+					error: "github.list_commit_comments fixture does not match",
+				},
+			]);
+			assert.equal(actions.at(-1), "github.list_my_starred_repositories");
+			return true;
+		},
 	);
 });
 

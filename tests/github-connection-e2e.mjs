@@ -86,54 +86,68 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 		...runnable.filter((scenario) => scenario !== repositoryScenario),
 	];
 	const calls = [];
+	const failures = [];
+	const skipped = githubV7ReadScenarios
+		.filter((scenario) => scenario.execution !== "LIVE")
+		.map((scenario) => ({
+			actionVersionId: scenario.actionVersionId,
+			reason: scenario.execution,
+		}));
 	for (const scenario of ordered) {
 		const actionId = scenario.actionVersionId.slice(0, -3);
-		const guide = await call("get_action_guide", { actionId });
-		if (
-			guide?.action?.actionId !== actionId ||
-			guide.action.actionVersionId !== scenario.actionVersionId ||
-			guide.action.effect !== "READ"
-		) {
-			throw new Error(`${actionId} contract does not match`);
+		try {
+			const guide = await call("get_action_guide", { actionId });
+			if (
+				guide?.action?.actionId !== actionId ||
+				guide.action.actionVersionId !== scenario.actionVersionId ||
+				guide.action.effect !== "READ"
+			) {
+				throw new Error(`${actionId} contract does not match`);
+			}
+			const projection = await call("execute_action", {
+				actionId,
+				input: scenario.input,
+			});
+			if (
+				projection?.action !== actionId ||
+				typeof projection.callId !== "string" ||
+				!projection.callId ||
+				projection.status !== "SUCCEEDED"
+			) {
+				throw new Error(`${actionId} did not succeed`);
+			}
+			assertReadResult(actionId, projection.result);
+			calls.push({
+				actionVersionId: scenario.actionVersionId,
+				callId: projection.callId,
+				inputHash: createHash("sha256")
+					.update(
+						JSON.stringify(
+							Object.fromEntries(Object.entries(scenario.input).sort()),
+						),
+					)
+					.digest("hex"),
+				status: projection.status,
+				target: scenario.target,
+			});
+		} catch (error) {
+			failures.push({
+				actionVersionId: scenario.actionVersionId,
+				error: errorMessage(error),
+			});
+			if (scenario === repositoryScenario) break;
 		}
-		const projection = await call("execute_action", {
-			actionId,
-			input: scenario.input,
-		});
-		if (
-			projection?.action !== actionId ||
-			typeof projection.callId !== "string" ||
-			!projection.callId ||
-			projection.status !== "SUCCEEDED"
-		) {
-			throw new Error(`${actionId} did not succeed`);
-		}
-		assertReadResult(actionId, projection.result);
-		calls.push({
-			actionVersionId: scenario.actionVersionId,
-			callId: projection.callId,
-			inputHash: createHash("sha256")
-				.update(
-					JSON.stringify(
-						Object.fromEntries(Object.entries(scenario.input).sort()),
-					),
-				)
-				.digest("hex"),
-			status: projection.status,
-			target: scenario.target,
-		});
 	}
-	return {
+	const evidence = {
 		calls,
+		failures,
 		providerReleaseId: githubV7VerificationEvidence.providerReleaseId,
 		runId,
-		skipped: githubV7ReadScenarios
-			.filter((scenario) => scenario.execution !== "LIVE")
-			.map((scenario) => ({
-				actionVersionId: scenario.actionVersionId,
-				reason: scenario.execution,
-			})),
+		skipped,
 	};
+	if (failures.length > 0)
+		throw new ConformanceError("GitHub read conformance failed", evidence);
+	return evidence;
 }
 
 function assertReadResult(actionId, result) {

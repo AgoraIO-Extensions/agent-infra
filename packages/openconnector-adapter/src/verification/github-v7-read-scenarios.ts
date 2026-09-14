@@ -28,6 +28,7 @@ const repositoryInput = {
 const fixture = {
 	assetId: 563149878,
 	commentId: 5662497553,
+	commentedCommit: "ae65bd52d0088edef95338328476394fdfe04d11",
 	initialCommit: "7c63d061e74eaccb99dcccdc9b633511197c3406",
 	issueNumber: 1,
 	mainCommit: "410b111ccf673ab03ecb7239391442e226ad48fd",
@@ -242,7 +243,8 @@ function scenarioInput(name: string): Readonly<Record<string, unknown>> {
 		input.pullNumber = fixture.pullNumber;
 	if (name === "list_pull_requests_associated_with_commit")
 		input.commitSha = fixture.pullCommit;
-	if (name === "list_commit_comments") input.commitSha = fixture.mainCommit;
+	if (name === "list_commit_comments")
+		input.commitSha = fixture.commentedCommit;
 	if (name === "get_issue_comment") input.commentId = fixture.commentId;
 	if (name === "get_label") input.name = "connection-e2e-fixture";
 	if (name === "get_repository_permission_for_user")
