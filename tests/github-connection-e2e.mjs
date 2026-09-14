@@ -53,9 +53,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 			throw new Error(`Connection returned HTTP ${response.status}`);
 		const payload = await response.json();
 		if (payload.error) {
-			throw new Error(
-				`Connection MCP error ${payload.error.code ?? "unknown"}`,
-			);
+			throw new McpCallError(payload.error.code, payload.error.data);
 		}
 		return payload.result?.structuredContent;
 	};
@@ -63,11 +61,17 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	const connectionResult = await call("list_connections", {
 		service: "github",
 	});
-	const connection = connectionResult?.connections?.find(
-		(item) => item.externalAccount === target.externalAccount,
+	const activeGitHubConnections = connectionResult?.connections?.filter(
+		(item) => item.providerId === "github" && item.status === "ACTIVE",
 	);
-	if (connection?.providerId !== "github" || connection.status !== "ACTIVE") {
-		throw new Error("expected GitHub test Provider Connection is not ACTIVE");
+	if (
+		!Array.isArray(activeGitHubConnections) ||
+		activeGitHubConnections.length !== 1 ||
+		activeGitHubConnections[0]?.externalAccount !== target.externalAccount
+	) {
+		throw new Error(
+			"Connection E2E consumer must expose exactly the approved GitHub account",
+		);
 	}
 
 	const repositoryCall = await call("execute_action", {
@@ -127,7 +131,13 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		try {
 			await call("execute_action", { actionId, input });
 		} catch (error) {
-			if (errorMessage(error) === "Connection MCP error -32001") return;
+			if (
+				error instanceof McpCallError &&
+				error.code === -32001 &&
+				error.data?.providerHttpStatus === 404
+			) {
+				return;
+			}
 			throw error;
 		}
 		throw new Error(`${actionId} remained readable after deletion`);
@@ -399,6 +409,14 @@ class ConformanceError extends Error {
 	constructor(message, evidence) {
 		super(message);
 		this.evidence = evidence;
+	}
+}
+
+class McpCallError extends Error {
+	constructor(code, data) {
+		super(`Connection MCP error ${code ?? "unknown"}`);
+		this.code = code;
+		this.data = data;
 	}
 }
 
