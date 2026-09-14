@@ -2,7 +2,9 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
+  "@google/genai": false
   esbuild: true
+  protobufjs: false
   sharp: true
 overrides:
   "@hey-api/json-schema-ref-parser@1.4.4>js-yaml": 4.3.2

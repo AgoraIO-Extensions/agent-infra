@@ -23,6 +23,7 @@ const driverNames = [
 	"Fake",
 	"Codex",
 	"Claude",
+	"Pi",
 	...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode" as const] : []),
 ] as const;
 
@@ -56,11 +57,11 @@ async function openConformanceDriver(
 	path: string,
 	loseTurnStartResponse = false,
 ): Promise<ConformanceDriverFixture> {
-	if (name === "Claude" || name === "OpenCode") {
+	if (name === "Claude" || name === "OpenCode" || name === "Pi") {
 		const fixture = await openMessagesRuntimeDriverConformanceFixture(
 			path,
 			loseTurnStartResponse,
-			name === "OpenCode" ? "opencode" : "claude",
+			name === "OpenCode" ? "opencode" : name === "Pi" ? "pi" : "claude",
 		);
 		driverClosers.push(() => fixture.close());
 		return fixture;

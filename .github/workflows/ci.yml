@@ -77,7 +77,7 @@ jobs:
             src/claude-native.test.ts src/claude-runtime-driver.test.ts \
             src/runtime-driver-conformance.test.ts --cache=false
 
-      - name: Verify Generic ACP and OpenCode conformance in the pinned Linux image
+      - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
         run: |
           docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -86,6 +86,7 @@ jobs:
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \
+            src/pi-native.test.ts src/pi-runtime-driver.test.ts \
             src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
       - name: Build applications

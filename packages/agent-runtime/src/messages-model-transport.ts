@@ -4,7 +4,7 @@ import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
 export interface RuntimeMessagesTransportOptions {
-	readonly client?: "claude" | "opencode";
+	readonly client?: "claude" | "opencode" | "pi";
 	readonly endpoint: string;
 	readonly credential: string;
 	readonly authentication: "api-key" | "bearer";
@@ -66,7 +66,7 @@ export async function openRuntimeMessagesTransport(
 				closed ||
 				failure ||
 				request.method !== "POST" ||
-				(options.client === "opencode"
+				(options.client === "opencode" || options.client === "pi"
 					? request.headers["x-api-key"] !== token
 					: request.headers.authorization !== `Bearer ${token}`) ||
 				![
@@ -125,7 +125,7 @@ export async function openRuntimeMessagesTransport(
 					new Set(requestedBetas).size !== requestedBetas.length
 				)
 					throw new Error();
-				if (!admitted) {
+				if (!admitted || options.client === "pi") {
 					await options.admit();
 					admitted = true;
 				}
@@ -134,9 +134,11 @@ export async function openRuntimeMessagesTransport(
 					"content-type": "application/json",
 					"anthropic-version": "2023-06-01",
 					"user-agent":
-						options.client === "opencode"
-							? "agent-infra-opencode/1.18.30"
-							: "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
+						options.client === "pi"
+							? "agent-infra-pi/0.85.1"
+							: options.client === "opencode"
+								? "agent-infra-opencode/1.18.30"
+								: "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
 					"x-app": "cli",
 				};
 				if (typeof beta === "string") headers["anthropic-beta"] = beta;

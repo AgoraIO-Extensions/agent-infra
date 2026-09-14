@@ -14,7 +14,6 @@ Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 官方 Claude Agent SDK 固定为 `0.3.246`，随包原生 CLI 为 `2.1.246`；其 Anthropic 许可证
 随依赖分发，与上述 Paseo 源码许可证分别保留。
 
-
 Generic ACP 采用以下固定上游叶子实现与协议库：
 
 - 官方 `@agentclientprotocol/sdk@1.4.0`，源码
@@ -40,3 +39,22 @@ OpenCode 使用未修改的官方 `1.18.30` 二进制，源码对应
 验证使用同版本 release 二进制。来源和校验值在
 [src/opencode-release.json](src/opencode-release.json) 中维护，MIT 许可证保留于
 [opencode-LICENSE](third-party/opencode-LICENSE)。不维护 OpenCode fork 或协议扩展。
+
+
+Pi RPC 使用未修改的官方 `@earendil-works/pi-coding-agent@0.85.1`，源码对应
+`earendil-works/pi@d981de1229ef899957bbe968bc8dcda02a21f477`。包通过 lockfile integrity
+固定；构建和启动时核对全部 CLI bundle 的 SHA-256，校验值统一保存在
+[src/pi-release.json](src/pi-release.json)。MIT，Copyright (c) 2025 Mario Zechner；
+完整许可证见 [pi-LICENSE](third-party/pi-LICENSE)。
+
+- Paseo 上述固定版本的 `providers/pi/cli-runtime.ts` 中 `PiCliRuntimeSession`、
+  `providers/pi/runtime.ts` 中 `buildPiLaunch` 和 `providers/jsonl-rpc-process.ts`：
+  `src/pi-rpc.ts` 与 `src/pi-session.ts` 采用持续 JSONL RPC、请求关联、精确 session file
+  恢复及进程清理方式；去除 stderr 原文、继承环境、自动确认和产品默认值。Apache-2.0，
+  版权及许可证见上方 Paseo 条目。
+- Open Design 上述固定版本的 `apps/daemon/src/agent-protocol/pi-rpc/events.ts` 中
+  `mapPiRpcEvent`：采用文本 delta 与工具阶段的分派方式，输出本仓既有规范化 Schema；
+  原生 ID、帧和工具正文留在 Driver 内。Apache-2.0，许可证见上方 Open Design 条目。
+- 官方 `RpcClient` 隐式继承进程环境并收集 stderr，因此本仓只依赖未修改的官方 CLI，
+  采用上述受限客户端叶子逻辑。持久操作、游标、屏障和进程所有权复用 ACP 已有实现；
+  Pi 特有 ACK/终态核实、原生历史 checkpoint、可信工具策略留在 Pi 模块。
