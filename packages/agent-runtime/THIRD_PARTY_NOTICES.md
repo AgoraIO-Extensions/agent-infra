@@ -40,7 +40,6 @@ OpenCode 使用未修改的官方 `1.18.30` 二进制，源码对应
 [src/opencode-release.json](src/opencode-release.json) 中维护，MIT 许可证保留于
 [opencode-LICENSE](third-party/opencode-LICENSE)。不维护 OpenCode fork 或协议扩展。
 
-
 Pi RPC 使用未修改的官方 `@earendil-works/pi-coding-agent@0.85.1`，源码对应
 `earendil-works/pi@d981de1229ef899957bbe968bc8dcda02a21f477`。包通过 lockfile integrity
 固定；构建和启动时核对全部 CLI bundle 的 SHA-256，校验值统一保存在

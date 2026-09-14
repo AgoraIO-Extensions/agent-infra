@@ -127,7 +127,6 @@ Digest、source label、non-root/只读根/可写挂载，以及同一镜像运�
 传入 `--image-digest`、`--source-commit` 声明完成验证。完整模板的文件和 Connection
 验收仍由其独立任务负责。
 
-
 ## Generic ACP 与 OpenCode 核心验证
 
 OpenCode 静态绑定 `AGENT_INFRA_RUNTIME_DRIVER=acp`，由同一个 Generic ACP Driver 消费
@@ -170,7 +169,6 @@ OpenCode 真实模型验收须分别运行 `--negative-target workspace` 和
 `--negative-target memory`，保存两份通过报告。每份都从独立测试状态完成双用户
 正向读写、原 Session 重启恢复、上下文检查及指定目标的双向负向调用。分开运行可避免
 前一次工具拒绝影响模型对另一测试目标的调用选择；缺少任一报告均不能声明隔离验收通过。
-
 
 ## Pi RPC 核心 Driver
 
