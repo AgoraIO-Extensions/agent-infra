@@ -432,8 +432,8 @@ describe("Runtime Driver shared conformance", () => {
 				).toMatchObject({ status: restarted.recoveryStatus ?? "running" });
 				expect(await restarted.createdTurnCount()).toBe(1);
 			},
-			// OpenCode recovery starts both the original and restored native processes.
-			name === "OpenCode" ? 30_000 : undefined,
+			// OpenCode and Pi recovery start original and restored native processes.
+			name === "OpenCode" || name === "Pi" ? 30_000 : undefined,
 		);
 
 	it.each(driverNames)(
@@ -560,8 +560,10 @@ describe("Runtime Driver shared conformance", () => {
 				});
 				expect(fixture.turnSelections()).toHaveLength(2);
 			},
-			// Claude starts and retires real Native processes for both model options.
-			name === "Claude" || name === "OpenCode" ? 30_000 : undefined,
+			// These Drivers start and retire real Native processes for both options.
+			name === "Claude" || name === "OpenCode" || name === "Pi"
+				? 30_000
+				: undefined,
 		);
 
 	it.each(driverNames)(
@@ -685,8 +687,8 @@ describe("Runtime Driver shared conformance", () => {
 				});
 				expect(await restarted.createdTurnCount()).toBe(1);
 			},
-			// OpenCode recovery starts both the original and restored native processes.
-			name === "OpenCode" ? 30_000 : undefined,
+			// OpenCode and Pi recovery start original and restored native processes.
+			name === "OpenCode" || name === "Pi" ? 30_000 : undefined,
 		);
 
 	for (const name of driverNames)
@@ -727,8 +729,8 @@ describe("Runtime Driver shared conformance", () => {
 				});
 				expect(await restarted.createdTurnCount()).toBe(1);
 			},
-			// OpenCode recovery starts both the original and restored native processes.
-			name === "OpenCode" ? 30_000 : undefined,
+			// OpenCode and Pi recovery start original and restored native processes.
+			name === "OpenCode" || name === "Pi" ? 30_000 : undefined,
 		);
 
 	it.each(driverNames)(
