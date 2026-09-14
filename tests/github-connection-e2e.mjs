@@ -200,13 +200,17 @@ function assertReadResult(actionId, result) {
 		throw new Error(`${actionId} returned an invalid result`);
 	}
 	const contains = {
+		"github.list_assignees": ["id", 328682695],
 		"github.list_branches": ["name", "main"],
 		"github.list_check_runs_for_ref": ["id", 103940918709],
 		"github.list_commit_comments": ["id", 200307541],
 		"github.list_commits": ["sha", "410b111ccf673ab03ecb7239391442e226ad48fd"],
 		"github.list_directory_contents": ["path", "README.md"],
 		"github.list_issue_comments": ["id", 5662497553],
+		"github.list_issue_events": ["actor.id", 328682695],
 		"github.list_issue_labels": ["name", "connection-e2e-fixture"],
+		"github.list_issue_timeline_events": ["actor.id", 328682695],
+		"github.list_matching_refs": ["ref", "refs/heads/main"],
 		"github.list_milestones": ["number", 1],
 		"github.list_my_repositories": ["id", 1369705971],
 		"github.list_my_starred_repositories": ["id", 1369705971],
@@ -221,6 +225,9 @@ function assertReadResult(actionId, result) {
 		"github.list_release_assets": ["id", 563149878],
 		"github.list_releases": ["id", 388309497],
 		"github.list_repository_contributors": ["id", 328682695],
+		"github.list_repository_collaborators": ["id", 328682695],
+		"github.list_repository_events": ["repo.id", 1369705971],
+		"github.list_repository_issue_events": ["actor.id", 328682695],
 		"github.list_repository_issues": ["number", 1],
 		"github.list_repository_labels": ["name", "connection-e2e-fixture"],
 		"github.list_repository_stargazers": ["id", 328682695],
@@ -243,10 +250,34 @@ function assertReadResult(actionId, result) {
 	const member = contains[actionId];
 	if (
 		member &&
-		!result[envelope].some((item) => item?.[member[0]] === member[1])
+		!result[envelope].some((item) => valueAt(item, member[0]) === member[1])
 	) {
 		throw new Error(`${actionId} fixture does not match`);
 	}
+	const expectedEmpty = new Set([
+		"github.get_commit_statuses",
+		"github.list_authenticated_user_events",
+		"github.list_authenticated_user_received_events",
+		"github.list_pull_request_requested_reviewers",
+		"github.list_pull_request_review_comments",
+		"github.list_pull_request_reviews",
+		"github.list_repository_forks",
+		"github.list_repository_topics",
+		"github.list_repository_watchers",
+		"github.list_user_public_events",
+		"github.list_user_received_public_events",
+		"github.search_topics",
+	]);
+	if (!member && expectedEmpty.has(actionId) && result[envelope].length !== 0) {
+		throw new Error(`${actionId} expected an empty fixture result`);
+	}
+	if (!member && !expectedEmpty.has(actionId)) {
+		throw new Error(`${actionId} has no fixture assertion`);
+	}
+}
+
+function valueAt(value, path) {
+	return path.split(".").reduce((current, key) => current?.[key], value);
 }
 
 function readArrayEnvelope(actionId) {

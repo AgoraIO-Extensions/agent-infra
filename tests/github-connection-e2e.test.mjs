@@ -45,13 +45,17 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 		runId: "read-run",
 	});
 
-	assert.equal(actions.length, 77);
+	assert.equal(actions.length, 76);
 	assert.equal(actions[0], "github.get_repository");
-	assert.equal(evidence.calls.length, 77);
+	assert.equal(evidence.calls.length, 76);
 	assert.deepEqual(evidence.skipped, [
 		{
 			actionVersionId: "github.get_pull_request_review@v7",
 			reason: "SKIPPED_MISSING_SECOND_ACTOR",
+		},
+		{
+			actionVersionId: "github.list_public_events@v7",
+			reason: "SKIPPED_UNBOUNDED_READ",
 		},
 	]);
 	assert.ok(
@@ -643,13 +647,17 @@ function fakeReadResult(actionId) {
 	};
 	if (exact[actionId]) return exact[actionId];
 	const members = {
+		"github.list_assignees": { id: 328682695 },
 		"github.list_branches": { name: "main" },
 		"github.list_check_runs_for_ref": { id: 103940918709 },
 		"github.list_commit_comments": { id: 200307541 },
 		"github.list_commits": { sha: "410b111ccf673ab03ecb7239391442e226ad48fd" },
 		"github.list_directory_contents": { path: "README.md" },
 		"github.list_issue_comments": { id: 5662497553 },
+		"github.list_issue_events": { actor: { id: 328682695 } },
 		"github.list_issue_labels": { name: "connection-e2e-fixture" },
+		"github.list_issue_timeline_events": { actor: { id: 328682695 } },
+		"github.list_matching_refs": { ref: "refs/heads/main" },
 		"github.list_milestones": { number: 1 },
 		"github.list_my_repositories": { id: 1369705971 },
 		"github.list_my_starred_repositories": { id: 1369705971 },
@@ -663,6 +671,9 @@ function fakeReadResult(actionId) {
 		"github.list_release_assets": { id: 563149878 },
 		"github.list_releases": { id: 388309497 },
 		"github.list_repository_contributors": { id: 328682695 },
+		"github.list_repository_collaborators": { id: 328682695 },
+		"github.list_repository_events": { repo: { id: 1369705971 } },
+		"github.list_repository_issue_events": { actor: { id: 328682695 } },
 		"github.list_repository_issues": { number: 1 },
 		"github.list_repository_labels": { name: "connection-e2e-fixture" },
 		"github.list_repository_stargazers": { id: 328682695 },
