@@ -11,6 +11,7 @@ const REQUIRED_WORKFLOWS = [
   "claude-issue-review.yml",
   "claude-pr-review.yml",
   "codex-worker.yml",
+  "connection-github-e2e.yml",
   "gh-aw-issue-to-pr-pilot.lock.yml",
   "pr-agent-review.yml",
   "pr-gates.yml",
@@ -58,6 +59,10 @@ const RUN_NAME_CONTRACTS = {
       "github.event.workflow_run.pull_requests[0].number",
       "github.event_name",
     ],
+  },
+  "connection-github-e2e.yml": {
+    operation: "connection-github-e2e",
+    references: ["github.event_name", "github.run_id"],
   },
   "ci.yml": {
     operation: "ci",
@@ -116,6 +121,10 @@ const SOURCE_OUTCOME_CONTRACTS = {
   "ci.yml": {
     needs: ["ci", "workload-kind"],
     operation: "ci",
+  },
+  "connection-github-e2e.yml": {
+    needs: ["conformance"],
+    operation: "connection-github-e2e",
   },
   "pr-agent-review.yml": {
     needs: ["analyze", "publish", "suggestions"],
@@ -638,6 +647,23 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       ) {
         errors.push(
           `${workflowName}/${jobName}: CODEX_API_KEY is allowed only in the pinned official Codex Action`,
+        );
+      }
+      continue;
+    }
+    if (secret === "CONNECTION_E2E_TOKEN") {
+      if (
+        workflowName !== "connection-github-e2e.yml" ||
+        jobName !== "conformance" ||
+        step.name !== "Run deterministic Connection GitHub conformance" ||
+        step.run !==
+          'set -o pipefail\nnode tests/github-connection-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json\n' ||
+        step.env?.CONNECTION_E2E_TOKEN !==
+          "${{ secrets.CONNECTION_E2E_TOKEN }}" ||
+        occurrences !== 1
+      ) {
+        errors.push(
+          `${workflowName}/${jobName}: CONNECTION_E2E_TOKEN is allowed only in the fixed GitHub conformance step`,
         );
       }
       continue;
