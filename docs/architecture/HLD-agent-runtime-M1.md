@@ -274,7 +274,7 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 - 每个 Turn 和每条补充指令只接受投递前按当前权限签发的短期 Execution Grant，绑定用户/应用类型及稳定主体、Agent、Conversation、Execution、渠道、命令与附件范围。固定 env、API/浏览器身份字段和 Runtime 返回值不能替代当前身份或扩大原受理范围；应用任务不能映射为自然人责任人的任务。
 - API 凭证只在平台入口校验，不送入 Runtime。单个凭证过期/撤销时平台关闭该凭证的访问与订阅，已受理任务继续；同主体另一有效凭证可以按当前权限查询/取消，其他主体不能接管。任务详情、SSE、附件及自身审计匹配提交主体，Owner/责任人无额外内容访问权。
 - 主体禁用或 Agent 使用权撤销时，平台取消等待任务并为活跃执行持久发出系统 stop；RuntimeHost 执行已确认撤权控制后阻止该执行的后续受控命令和模型/工具操作，直到按 8.1/7.3 确认停止或隔离。控制操作独立于调用方权限，已发生效果保留；短期 Grant 不能被用于绕过已接收的停止/屏障。
-- Agent/客户端使用 Connection 自己的客户端访问凭据直连 MCP/API；Runtime Execution Grant 不用于 Connection 授权。平台不代理、签发 assertion、校验 Owner Action policy 或复制 Connection 目录/状态/审计，外部账号原始凭证始终留在 Connection。
+- Agent/客户端使用原执行用户或应用在 Connection 独立取得的客户端访问凭据直连 MCP/API；后台执行同样遵守，Pod/workload、Runtime Execution Grant 和平台服务身份均不用于替代 Connection 授权。凭据缺失/失效时拒绝调用，不能回退到 Owner 或应用责任人的身份。平台不代理、签发 assertion、校验 Owner Action policy 或复制 Connection 目录/状态/审计，外部账号原始凭证始终留在 Connection。
 - 关联遵循工程 Spec §13.2：受信工具采集在调用前绑定原 Execution/操作/尝试，只从同一次经认证的 Connection 请求/响应取得 Connection 服务端生成的原调用引用，并在 Connection 自身授权下核实主体、操作及原记录与本次请求一致。采集证据随 8.5 的事实可靠保存，平台只接收关联引用和核实状态，不接收 Connection 客户端凭据或调用记录副本。Runtime 摘要、自报 callId、模型转交的真实引用、签名或任意相同字符串都不能独立建立绑定；同主体/Agent 的其他 Execution 调用也不得被重绑。响应丢失时仅沿原操作查询核实，不重发工具操作；缺失/未知如实展示。两侧分别在受控 API/页面查询，关联不授予权限；Connection 的引用返回/核实接口及 OAuth/LDAP/Grant 协议由其 HLD 维护。
 - `self-managed` 使用平台身份入口时，自定义 Agent 服务端只信任 Auth Gateway 传递的短期签名上下文并负责校验；浏览器身份字段不能改变最终身份。该上下文不创建 Platform Conversation、Execution 或 Execution Grant。
 
