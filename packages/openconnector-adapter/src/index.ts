@@ -48,7 +48,7 @@ export const githubConnectionCatalog = {
 	},
 	executorDigest: githubExecutorDigest,
 	provider: "github",
-	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v6`,
+	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v7`,
 	sourceCommit: githubSourceCommit,
 	actions: githubActions.map((action) => ({
 		description: action.description,
