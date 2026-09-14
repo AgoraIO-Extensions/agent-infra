@@ -7,6 +7,29 @@ type Catalog = {
 	}[];
 };
 
+type VerifiableCatalog = Catalog & { providerReleaseId: string };
+
+export type LiveVerificationEvidence = {
+	actionVersionIds: readonly string[];
+	cleanup: "FAILED" | "SUCCEEDED";
+	containerId: string;
+	externalAccount: string;
+	provider: string;
+	providerReleaseId: string;
+	runId: string;
+};
+
+export type CapabilityVerification = CapabilityCoverage & {
+	actionVersionId: string;
+	evidence?: LiveVerificationEvidence;
+	requirements: {
+		contract: "REQUIRED";
+		liveProvider: "REQUIRED";
+		unit: "REQUIRED";
+	};
+	status: "LIVE_VERIFIED" | "UNVERIFIED";
+};
+
 export type CapabilityCoverage = {
 	actionId: string;
 	actionName: string;
@@ -37,6 +60,56 @@ export function capabilityCoverage(
 			};
 		}),
 	);
+}
+
+export function capabilityVerificationMatrix(
+	catalog: VerifiableCatalog,
+	evidence: LiveVerificationEvidence,
+): CapabilityVerification[] {
+	const catalogActionVersionIds = new Set(
+		catalog.actions.map((action) => action.id),
+	);
+	const actionVersionIds = new Set(evidence.actionVersionIds);
+	if (actionVersionIds.size !== evidence.actionVersionIds.length) {
+		throw new Error("verification evidence contains duplicate ActionVersions");
+	}
+	if (
+		evidence.actionVersionIds.some(
+			(actionVersionId) => !catalogActionVersionIds.has(actionVersionId),
+		)
+	) {
+		throw new Error("verification evidence contains unknown ActionVersions");
+	}
+	if (
+		evidence.cleanup !== "SUCCEEDED" ||
+		evidence.provider !== catalog.provider ||
+		evidence.providerReleaseId !== catalog.providerReleaseId
+	) {
+		throw new Error("verification evidence does not match the catalog");
+	}
+	for (const [name, value] of Object.entries(evidence)) {
+		if (name !== "actionVersionIds" && name !== "cleanup") {
+			requireValue(`verification evidence ${name}`, value);
+		}
+	}
+	const validatedEvidence = Object.freeze({
+		...evidence,
+		actionVersionIds: Object.freeze([...evidence.actionVersionIds]),
+	});
+	return capabilityCoverage([catalog]).map((coverage) => {
+		const verified = actionVersionIds.has(coverage.actionId);
+		return {
+			...coverage,
+			actionVersionId: coverage.actionId,
+			...(verified ? { evidence: validatedEvidence } : {}),
+			requirements: {
+				contract: "REQUIRED",
+				liveProvider: "REQUIRED",
+				unit: "REQUIRED",
+			},
+			status: verified ? "LIVE_VERIFIED" : "UNVERIFIED",
+		};
+	});
 }
 
 export type TestProject = {

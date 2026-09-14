@@ -7,10 +7,13 @@ import { jiraServerConnectionCatalog } from "./jira-server.ts";
 import {
 	assertTestProjectMutation,
 	capabilityCoverage,
+	capabilityVerificationMatrix,
+	type LiveVerificationEvidence,
 	runTestProjectMutation,
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
+import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -39,6 +42,94 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 			item.effect === "READ" ? "read-smoke" : "isolated-mutation",
 		);
 	}
+});
+
+test("GitHub verification matrix binds exact live evidence to 9 of 145 actions", () => {
+	const matrix = capabilityVerificationMatrix(
+		githubConnectionCatalog,
+		githubV7VerificationEvidence,
+	);
+	assert.equal(matrix.length, 145);
+	assert.equal(
+		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
+		9,
+	);
+	assert.equal(
+		matrix.filter((item) => item.status === "UNVERIFIED").length,
+		136,
+	);
+	assert.deepEqual(
+		matrix
+			.filter((item) => item.status === "LIVE_VERIFIED")
+			.map((item) => item.actionVersionId)
+			.sort(),
+		[
+			"github.create_issue@v7",
+			"github.create_issue_comment@v7",
+			"github.delete_issue_comment@v7",
+			"github.get_issue@v7",
+			"github.get_issue_comment@v7",
+			"github.get_repository@v7",
+			"github.list_issue_comments@v7",
+			"github.update_issue@v7",
+			"github.update_issue_comment@v7",
+		],
+	);
+	assert.ok(
+		matrix
+			.filter((item) => item.status === "LIVE_VERIFIED")
+			.every(
+				(item) =>
+					item.actionVersionId.endsWith("@v7") &&
+					item.evidence?.cleanup === "SUCCEEDED" &&
+					item.evidence.runId === "34821150745-1",
+			),
+	);
+
+	const bumpedCatalog = {
+		...githubConnectionCatalog,
+		actions: githubConnectionCatalog.actions.map((action) =>
+			action.name === "github.get_repository"
+				? { ...action, id: "github.get_repository@v8" }
+				: action,
+		),
+	};
+	assert.throws(
+		() =>
+			capabilityVerificationMatrix(bumpedCatalog, githubV7VerificationEvidence),
+		/unknown ActionVersions/,
+	);
+	for (const evidence of [
+		{ ...githubV7VerificationEvidence, cleanup: "FAILED" as const },
+		{ ...githubV7VerificationEvidence, provider: "foreign" },
+		{ ...githubV7VerificationEvidence, providerReleaseId: "github-stale" },
+	]) {
+		assert.throws(
+			() => capabilityVerificationMatrix(githubConnectionCatalog, evidence),
+			/verification evidence does not match the catalog/,
+		);
+	}
+
+	const mutableActionVersionIds = [
+		...githubV7VerificationEvidence.actionVersionIds,
+	];
+	const mutableEvidence: LiveVerificationEvidence = {
+		...githubV7VerificationEvidence,
+		actionVersionIds: mutableActionVersionIds,
+	};
+	const immutableMatrix = capabilityVerificationMatrix(
+		githubConnectionCatalog,
+		mutableEvidence,
+	);
+	mutableEvidence.cleanup = "FAILED";
+	mutableActionVersionIds.length = 0;
+	const retainedEvidence = immutableMatrix.find(
+		(item) => item.status === "LIVE_VERIFIED",
+	)?.evidence;
+	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
+	assert.equal(retainedEvidence?.actionVersionIds.length, 9);
+	assert.ok(Object.isFrozen(retainedEvidence));
+	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
 
 test("capability coverage rejects duplicate IDs and unknown effects", () => {

@@ -67,6 +67,11 @@ repository 删除、协作者变更、fork、workflow、merge 或 release mutati
 九个 lifecycle Action 固定使用已批准的 `@v7` ActionVersion；catalog 升级必须先更新测试基线并评审，
 不能由 nightly 自动接受新版本。
 
+当前 GitHub v7 catalog 共 145 项，其中 9 项具有 run `34821150745-1` 的真实 Provider 证据，136 项
+保持 `UNVERIFIED`，版本升级后旧证据不继承。本阶段只建立验证矩阵，不改变 production discovery、
+Grant、declaration 或 execution eligibility；对外门禁在更多 Action 完成 E2E 后另行启用。Bitbucket、
+Jira 和 Confluence 必须分别完成验证，不能把 GitHub 证据外推到其他 Provider。
+
 ## 测试层级与门禁
 
 - 每个 PR：UT、Adapter contract、PostgreSQL integration；不访问第三方站点。

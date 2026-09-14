@@ -23,3 +23,11 @@ _Avoid_: Provider 授权、账号连接
 **Provider Connection**:
 Principal 在 Connection 中建立的、对应一个稳定外部账号的连接。
 _Avoid_: PAT、ConsumerInstance
+
+**Verification Evidence**:
+绑定 exact ProviderRelease、ActionVersion、隔离测试边界和终态结果的脱敏验证证明。
+_Avoid_: 测试计划、Mock 成功、其他 ActionVersion 的历史结果
+
+**Verified ActionVersion**:
+具备当前 Verification Evidence、可以进入对外发现和执行集合的不可变 ActionVersion。
+_Avoid_: 已实现 Action、已有测试策略、曾通过旧版本测试
