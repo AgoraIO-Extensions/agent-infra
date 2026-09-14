@@ -2,6 +2,7 @@ import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	type ConversationDispatchClaimV1,
 	type ConversationDispatchExecutionStatusV1,
+	type ConversationMetadataRecoveryV1,
 	ConversationRuntimeHostError,
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
@@ -16,6 +17,7 @@ import {
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 export interface TaskRuntimeRecoveryStateV1 {
+	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly hostSessionRef: string | null;
 	readonly runtimeCursor: string | null;
@@ -121,6 +123,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 	async function stateFor(context: Context, signal: AbortSignal) {
 		const state = await options.readRuntimeState(context.claim, signal);
 		if (!state) unavailable("RUNTIME_FENCE_STALE");
+		if (
+			JSON.stringify(state.metadataRecovery) !==
+			JSON.stringify(context.claim.metadataRecovery)
+		)
+			unavailable("RUNTIME_FENCE_STALE");
 		if (!/^[A-Za-z0-9_-]{43}$/.test(state.originalOperationDigest))
 			unavailable("RUNTIME_RECOVERY_PROVENANCE_UNAVAILABLE");
 		return state;
@@ -241,7 +248,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				claim.operation === "conversation.turn.regenerate.v1") &&
 			["completed", "failed", "cancelled"].includes(state.executionStatus) &&
 			state.hostSessionRef !== null &&
-			!state.stopPending &&
+			(!state.stopPending || claim.metadataRecovery !== undefined) &&
 			!state.generationIsolation
 		);
 	}
@@ -252,6 +259,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		command: Command,
 		signal: AbortSignal,
 	) {
+		if (
+			context.claim.metadataRecovery &&
+			!["session.status", "events.persist", "events.ack"].includes(command)
+		)
+			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 		if (context.kind === "legacy-control") {
 			if (
 				![

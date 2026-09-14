@@ -321,6 +321,9 @@ export class RuntimeHost {
 	private trustedHost() {
 		return this.v3 ?? runtimeAuthorizationDenied();
 	}
+	async close() {
+		await this.v3?.close();
+	}
 	private requireLegacyHost() {
 		if (this.v3) runtimeAuthorizationDenied();
 	}
@@ -334,8 +337,12 @@ export class RuntimeHost {
 	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
 		return this.trustedHost().stop(value, verification);
 	}
-	recoverStatusV3(value: RuntimeStatusRequestV3, verification: unknown) {
-		return this.trustedHost().recoverStatus(value, verification);
+	recoverStatusV3(
+		value: RuntimeStatusRequestV3,
+		verification: unknown,
+		signal?: AbortSignal,
+	) {
+		return this.trustedHost().recoverStatus(value, verification, signal);
 	}
 	cancelGenerationV3(
 		value: RuntimeGenerationCancelRequestV3,

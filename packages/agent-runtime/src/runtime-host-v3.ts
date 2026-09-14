@@ -22,12 +22,16 @@ import {
 	RuntimeSupplementRequestV3Schema,
 } from "@agent-infra/contracts/runtime";
 
-import type { RuntimeDriver } from "./driver.js";
+import type {
+	RuntimeDriver,
+	RuntimeOriginalEvidenceReadContext,
+} from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	type FileRuntimeStore,
 	requestDigest,
 	type StoredOperation,
+	type StoredSession,
 } from "./file-runtime-store.js";
 import {
 	type RuntimeGrantValidationOptionsV2,
@@ -83,6 +87,10 @@ async function abortable<T>(
 	signal: AbortSignal,
 ): Promise<T> {
 	let listener: (() => void) | undefined;
+	if (signal.aborted) {
+		void promise.catch(() => undefined);
+		signal.throwIfAborted();
+	}
 	try {
 		signal.throwIfAborted();
 		return await Promise.race([
@@ -98,7 +106,133 @@ async function abortable<T>(
 }
 
 export class RuntimeHostV3 {
+	private readonly recoveryGuards = new Map<
+		string,
+		Set<{ controller: AbortController; done: Promise<void> }>
+	>();
+	private readonly closedRecoveryGenerations = new Set<string>();
+	private readonly lifetime = new AbortController();
 	constructor(private readonly options: Options) {}
+
+	async close() {
+		const keys = [...this.recoveryGuards.keys()];
+		this.lifetime.abort();
+		await Promise.allSettled(
+			[...this.recoveryGuards.values()].flatMap((guards) =>
+				[...guards].map((guard) => guard.done),
+			),
+		);
+		await Promise.allSettled(
+			keys.map((key) => this.options.serialize(key, async () => undefined)),
+		);
+	}
+
+	private async abortRecovery(key: string) {
+		const guards = [...(this.recoveryGuards.get(key) ?? [])];
+		for (const guard of guards) guard.controller.abort();
+		await Promise.allSettled(guards.map((guard) => guard.done));
+	}
+
+	private async recoverEvidence(
+		request: RuntimeStatusRequestV3 | RuntimeEventPersistRequestV3,
+		claims: RuntimeExecutionGrantClaimsV2,
+		verification: unknown,
+		session: StoredSession,
+		signal?: AbortSignal,
+	) {
+		const recover = this.options.driver.recoverOriginalEvidence;
+		const nativeSessionRef = session.nativeSessionRef;
+		const key = this.options.store.sessionQueueKey(request);
+		if (
+			!recover ||
+			!nativeSessionRef ||
+			session.generationBarrier ||
+			this.closedRecoveryGenerations.has(key) ||
+			(claims.purpose === "control" && claims.reason === "generation_isolation")
+		)
+			return;
+		const originalOperationDigest =
+			session.operations[request.executionId]?.requestDigest;
+		if (!originalOperationDigest) invalidDriver();
+		const queryClaims = { ...claims, hostSessionRef: session.hostSessionRef };
+		const controller = new AbortController();
+		const active = AbortSignal.any([
+			controller.signal,
+			this.lifetime.signal,
+			...(signal ? [signal] : []),
+		]);
+		const now = this.options.grantValidation.now ?? Date.now;
+		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
+		const timer = setTimeout(
+			() => controller.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		timer.unref();
+		const assertCurrent = () => {
+			active.throwIfAborted();
+			if (this.closedRecoveryGenerations.has(key) || now() >= expiresAt)
+				nativeRequired();
+			this.validate(request, claims.allowedCommands[0], verification);
+			return this.options.store.assertOriginalEvidenceBinding(
+				queryClaims,
+				request.requestId,
+				nativeSessionRef,
+				originalOperationDigest,
+			);
+		};
+		const read: RuntimeOriginalEvidenceReadContext = {
+			signal: active,
+			expiresAt,
+			assertCurrent,
+			commit: async <T>(write: () => Promise<T>) =>
+				abortable(
+					this.options.serialize(key, async () => {
+						assertCurrent();
+						// Keep Host ordering until the Driver's durable write actually settles.
+						return await write();
+					}),
+					active,
+				),
+		};
+		const work = async () => {
+			await abortable(
+				this.options.serialize(key, async () => {
+					active.throwIfAborted();
+					this.validate(request, claims.allowedCommands[0], verification);
+					if (this.closedRecoveryGenerations.has(key)) nativeRequired();
+					await this.options.store.latchOriginalEvidenceQuery(
+						queryClaims,
+						request.requestId,
+					);
+				}),
+				active,
+			);
+			assertCurrent();
+			await recover.call(
+				this.options.driver,
+				{
+					nativeSessionRef,
+					executionId: request.executionId,
+					recoveryRequestId: request.requestId,
+				},
+				read,
+			);
+		};
+		const guard = { controller, done: Promise.resolve() };
+		const guards = this.recoveryGuards.get(key) ?? new Set();
+		this.recoveryGuards.set(key, guards);
+		guards.add(guard);
+		guard.done = work().finally(() => {
+			clearTimeout(timer);
+			guards.delete(guard);
+			if (guards.size === 0) this.recoveryGuards.delete(key);
+		});
+		try {
+			await abortable(guard.done, active);
+		} finally {
+			controller.abort();
+		}
+	}
 
 	private validate(
 		request:
@@ -229,8 +363,12 @@ export class RuntimeHostV3 {
 	async stop(value: RuntimeStopRequestV3, verification: unknown) {
 		const request = parseRequest(RuntimeStopRequestV3Schema, value);
 		const claims = this.validate(request, "turn.stop", verification);
-		// Persist cancellation before entering a possibly occupied business operation queue.
-		await this.options.store.authorizeRequestV3(claims);
+		const key = this.options.store.sessionQueueKey(request);
+		await this.abortRecovery(key);
+		await this.options.serialize(key, () => {
+			this.validate(request, "turn.stop", verification);
+			return this.options.store.authorizeRequestV3(claims);
+		});
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
@@ -279,12 +417,19 @@ export class RuntimeHostV3 {
 	async recoverStatus(
 		value: RuntimeStatusRequestV3,
 		verification: unknown,
+		signal?: AbortSignal,
 	): Promise<RuntimeStatusResponseV3> {
 		const request = parseRequest(RuntimeStatusRequestV3Schema, value);
 		const claims = this.validate(request, "session.status", verification);
-		const { session, found } = await this.options.store.recoverOperationV3(
-			claims,
-			request.originalOperationDigest,
+		const { session, found } = await this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.validate(request, "session.status", verification);
+				return this.options.store.recoverOperationV3(
+					claims,
+					request.originalOperationDigest,
+				);
+			},
 		);
 		if (!found)
 			return {
@@ -324,6 +469,16 @@ export class RuntimeHostV3 {
 			response.result.outcome === "accepted"
 				? response.result.status
 				: "unknown";
+		await this.recoverEvidence(
+			request,
+			claims,
+			verification,
+			this.options.store.checkRequestV3({
+				...claims,
+				hostSessionRef: session.hostSessionRef,
+			}),
+			signal,
+		);
 		return {
 			schemaVersion: 3,
 			hostSessionRef: session.hostSessionRef,
@@ -339,7 +494,13 @@ export class RuntimeHostV3 {
 	) {
 		const request = parseRequest(RuntimeGenerationCancelRequestV3Schema, value);
 		const claims = this.validate(request, "generation.cancel", verification);
-		await this.options.store.authorizeRequestV3(claims);
+		const recoveryKey = this.options.store.sessionQueueKey(request);
+		await this.options.serialize(recoveryKey, async () => {
+			this.validate(request, "generation.cancel", verification);
+			await this.options.store.authorizeRequestV3(claims);
+			this.closedRecoveryGenerations.add(recoveryKey);
+		});
+		await this.abortRecovery(recoveryKey);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
@@ -405,9 +566,12 @@ export class RuntimeHostV3 {
 			value,
 		);
 		const claims = this.validate(request, "execution.renew", verification);
-		const { authority } = await this.options.store.authorizeRequestV3(
-			claims,
-			"renew",
+		const { authority } = await this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.validate(request, "execution.renew", verification);
+				return this.options.store.authorizeRequestV3(claims, "renew");
+			},
 		);
 		return {
 			schemaVersion: 3 as const,
@@ -422,22 +586,31 @@ export class RuntimeHostV3 {
 	) {
 		const request = parseRequest(RuntimeEventAckRequestV3Schema, value);
 		const claims = this.validate(request, "events.ack", verification);
-		await this.options.store.authorizeRequestV3(claims);
-		const session = this.options.store.checkAcknowledgableCursor(
-			claims,
-			request.confirmedCursor,
+		return this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.validate(request, "events.ack", verification);
+				await this.options.store.authorizeRequestV3(claims);
+				const session = this.options.store.checkAcknowledgableCursor(
+					claims,
+					request.confirmedCursor,
+				);
+				await this.options.driver.acknowledgeEvents?.(
+					session.nativeSessionRef ?? nativeRequired(),
+					request.executionId,
+					request.confirmedCursor,
+				);
+				await this.options.store.acknowledgeCursor(
+					claims,
+					request.confirmedCursor,
+				);
+				return {
+					schemaVersion: 3 as const,
+					executionId: request.executionId,
+					confirmedCursor: request.confirmedCursor,
+				};
+			},
 		);
-		await this.options.driver.acknowledgeEvents?.(
-			session.nativeSessionRef ?? nativeRequired(),
-			request.executionId,
-			request.confirmedCursor,
-		);
-		await this.options.store.acknowledgeCursor(claims, request.confirmedCursor);
-		return {
-			schemaVersion: 3 as const,
-			executionId: request.executionId,
-			confirmedCursor: request.confirmedCursor,
-		};
 	}
 
 	async streamEvents(
@@ -447,7 +620,13 @@ export class RuntimeHostV3 {
 	) {
 		const request = parseRequest(RuntimeEventPersistRequestV3Schema, value);
 		const claims = this.validate(request, "events.persist", verification);
-		const { session } = await this.options.store.authorizeRequestV3(claims);
+		const { session } = await this.options.serialize(
+			this.options.store.sessionQueueKey(request),
+			async () => {
+				this.validate(request, "events.persist", verification);
+				return this.options.store.authorizeRequestV3(claims);
+			},
+		);
 		const controller = new AbortController();
 		const bounded = signal
 			? AbortSignal.any([controller.signal, signal])
@@ -471,6 +650,13 @@ export class RuntimeHostV3 {
 		let events: AsyncIterable<unknown>;
 		try {
 			bounded.throwIfAborted();
+			await this.recoverEvidence(
+				request,
+				claims,
+				verification,
+				session,
+				bounded,
+			);
 			events = await abortable(
 				this.options.driver.subscribeEvents(
 					session.nativeSessionRef ?? nativeRequired(),

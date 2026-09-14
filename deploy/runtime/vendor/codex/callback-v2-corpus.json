@@ -19355,6 +19355,1176 @@
         "rule": "MONOTONIC_VERIFICATION",
         "effect": "keep_verified_reference_do_not_grant_future_query_access"
       }
+    },
+    {
+      "id": "recovery-request-valid",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": "connection-fixture-v1",
+        "processNonce": "00000000-0000-4000-8000-000000000042"
+      },
+      "schemaValid": true
+    },
+    {
+      "id": "recovery-verify-valid",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": true
+    },
+    {
+      "id": "recovery-next-valid",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": "connection-fixture-v1",
+        "processNonce": "00000000-0000-4000-8000-000000000042",
+        "previousRecoveryId": "00000000-0000-4000-8000-000000000043"
+      },
+      "schemaValid": true
+    },
+    {
+      "id": "recovery-done-valid",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "done"
+      },
+      "schemaValid": true
+    },
+    {
+      "id": "recovery-unavailable-valid",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "unavailable",
+        "reason": "credential_unavailable"
+      },
+      "schemaValid": true
+    },
+    {
+      "id": "recovery-verify-missing-request",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-verify-missing-recoveryId",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-verify-missing-expiresAt",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-verify-missing-original",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-verify-missing-currentClient",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-request-null-previousRecoveryId",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": "connection-fixture-v1",
+        "processNonce": "00000000-0000-4000-8000-000000000042",
+        "previousRecoveryId": null
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-request-null-processNonce",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": "connection-fixture-v1",
+        "processNonce": null
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-request-null-profileRef",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": null,
+        "processNonce": "00000000-0000-4000-8000-000000000042"
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-origin-token-forbidden",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            },
+            "credential": {
+              "revision": "credential-fixture-r1",
+              "expiresAt": 1800000030000,
+              "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-missing-original-response",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "execute_action",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-discovery-descriptor-forbidden",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "verify",
+        "recoveryId": "00000000-0000-4000-8000-000000000043",
+        "expiresAt": 1800000003000,
+        "original": {
+          "identity": {
+            "sessionId": "thread-fixture-a",
+            "turnId": "turn-fixture-a",
+            "callId": "call-fixture-a",
+            "attemptRef": "00000000-0000-4000-8000-000000000004",
+            "toolName": "connection/execute_action"
+          },
+          "permitId": "00000000-0000-4000-8000-000000000008",
+          "connectionRequest": {
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "profileRef": "connection-fixture-v1",
+            "serviceRef": "connection-fixture",
+            "operationNonce": "00000000-0000-4000-8000-000000000005",
+            "attemptNonce": "00000000-0000-4000-8000-000000000006",
+            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
+            "rpcRequestId": 7,
+            "requestDigestVersion": "connection-request-v1",
+            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+            "method": "tools/call",
+            "toolName": "list_actions",
+            "actionSelector": {
+              "actionId": "github.get_issue"
+            }
+          },
+          "connectionOrigin": {
+            "schemaVersion": 1,
+            "slotId": "00000000-0000-4000-8000-000000000003",
+            "originalBinding": {
+              "principal": {
+                "kind": "user",
+                "id": "platform-user-fixture-a"
+              },
+              "scope": {
+                "executionId": "execution-fixture-a",
+                "agentId": "agent-fixture-a",
+                "conversationId": "conversation-fixture-a",
+                "sessionGeneration": 1
+              }
+            },
+            "service": {
+              "serviceRef": "connection-fixture",
+              "issuer": "https://connection.example.test",
+              "resource": "https://connection.example.test/mcp"
+            },
+            "connectionIdentity": {
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "consumerId": "consumer-codex-fixture",
+              "clientId": "oauth-client-fixture"
+            }
+          },
+          "originalResponse": {
+            "rpcRequestId": 7,
+            "receivedAt": 1800000000100,
+            "receipt": {
+              "callRef": "callref-fixture-a",
+              "operationNonce": "00000000-0000-4000-8000-000000000005",
+              "attemptNonce": "00000000-0000-4000-8000-000000000006",
+              "requestDigestVersion": "connection-request-v1",
+              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
+              "principal": {
+                "type": "user",
+                "key": "connection-user-fixture-a"
+              },
+              "actorId": "connection-actor-fixture-a",
+              "actionVersionId": "action-version-fixture-a"
+            }
+          }
+        },
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-done-token-forbidden",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "request": {
+          "schemaVersion": 2,
+          "requestId": "00000000-0000-4000-8000-000000000041",
+          "phase": "connection-recovery",
+          "profileRef": "connection-fixture-v1",
+          "processNonce": "00000000-0000-4000-8000-000000000042"
+        },
+        "decision": "done",
+        "currentClient": {
+          "originalBinding": {
+            "principal": {
+              "kind": "user",
+              "id": "platform-user-fixture-a"
+            },
+            "scope": {
+              "executionId": "execution-fixture-a",
+              "agentId": "agent-fixture-a",
+              "conversationId": "conversation-fixture-a",
+              "sessionGeneration": 1
+            }
+          },
+          "service": {
+            "serviceRef": "connection-fixture",
+            "issuer": "https://connection.example.test",
+            "resource": "https://connection.example.test/mcp"
+          },
+          "connectionIdentity": {
+            "principal": {
+              "type": "user",
+              "key": "connection-user-fixture-a"
+            },
+            "actorId": "connection-actor-fixture-a",
+            "consumerId": "consumer-codex-fixture",
+            "clientId": "oauth-client-fixture"
+          },
+          "credential": {
+            "revision": "credential-fixture-r1",
+            "expiresAt": 1800000030000,
+            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
+          }
+        }
+      },
+      "schemaValid": false
+    },
+    {
+      "id": "recovery-caller-execution-forbidden",
+      "layer": "schema",
+      "frame": {
+        "schemaVersion": 2,
+        "requestId": "00000000-0000-4000-8000-000000000041",
+        "phase": "connection-recovery",
+        "profileRef": "connection-fixture-v1",
+        "processNonce": "00000000-0000-4000-8000-000000000042",
+        "executionId": "caller-select"
+      },
+      "schemaValid": false
     }
   ],
   "framingCases": [

@@ -628,6 +628,7 @@ class TestCodexBridge {
 	private turnStatus: CodexTurnStatus = "inProgress";
 	private holdTurnStartResponses = false;
 	private holdTurnsListResponses = false;
+	private turnsListHeld?: () => void;
 	private holdTurnsListSend = false;
 	private turnsListResult?: unknown;
 	private turnsListError?: { code: number; message: string };
@@ -743,6 +744,8 @@ class TestCodexBridge {
 			if (this.holdTurnsListSend) return new Promise<void>(() => {});
 			if (this.holdTurnsListResponses) {
 				this.heldTurnsListRequestIds.push(id);
+				this.turnsListHeld?.();
+				this.turnsListHeld = undefined;
 				return;
 			}
 			this.respondTurnsList(id);
@@ -868,6 +871,9 @@ class TestCodexBridge {
 
 	holdTurnsList() {
 		this.holdTurnsListResponses = true;
+		return new Promise<void>((resolve) => {
+			this.turnsListHeld = resolve;
+		});
 	}
 
 	holdTurnStart() {
@@ -3665,17 +3671,30 @@ describe("Codex Runtime Driver", () => {
 			outcome: "accepted",
 			status: "running",
 		});
-		bridge.holdTurnsList();
-		const retry = runtimeHost.cancelGeneration({
-			...cancellation,
-			requestId: "request-codex-generation-cancel-retry-failure",
-			deliveryFence: 2,
-		});
-		await vi.waitFor(() => expect(bridge.pendingTurnsListCount()).toBe(1));
+		const heldTurnsList = bridge.holdTurnsList();
+		// Observe rejection from the start, and synchronize on the actual request
+		// after the Host's durable writes rather than a one-second polling window.
+		const retry = runtimeHost
+			.cancelGeneration({
+				...cancellation,
+				requestId: "request-codex-generation-cancel-retry-failure",
+				deliveryFence: 2,
+			})
+			.then(
+				(result) => ({ result }),
+				(error: unknown) => ({ error }),
+			);
+		await Promise.race([
+			heldTurnsList,
+			retry.then(() => {
+				throw new Error("Cancellation retry completed before its held query");
+			}),
+		]);
+		expect(bridge.pendingTurnsListCount()).toBe(1);
 		bridge.respondToHeldTurnsList("error");
 
-		await expect(retry).rejects.toMatchObject({
-			code: "RUNTIME_DRIVER_INVALID",
+		expect(await retry).toMatchObject({
+			error: { code: "RUNTIME_DRIVER_INVALID" },
 		});
 		const state = JSON.parse(await readFile(hostPath, "utf8")) as {
 			sessions: Record<string, { generationBarrier?: { state: string } }>;

@@ -106,4 +106,47 @@ describe("Worker Runtime grant signer", () => {
 		expect(claims).not.toHaveProperty("authorizationRecordId");
 		expect(() => signer(body, authority, "execution.renew")).toThrow();
 	});
+	it.each(["session.status", "events.persist", "events.ack"] as const)(
+		"binds the original recovery pass ID in a %s grant",
+		(command) => {
+			const body = {
+				...request,
+				hostSessionRef: "original-host",
+				...(command === "session.status"
+					? { originalOperationDigest: "a".repeat(43) }
+					: {
+							consumer: "platform_worker_persistence" as const,
+							...(command === "events.persist"
+								? { afterCursor: null }
+								: { confirmedCursor: "original-cursor" }),
+						}),
+			};
+			const grant = signer(
+				body,
+				{
+					purpose: "control",
+					controlRecordId: "original-control",
+					reason: "recovery",
+				},
+				command,
+			);
+			const verified = verify(grant);
+			expect(() =>
+				validateRuntimeExecutionGrantV2(
+					{ ...body, grant },
+					command,
+					verified,
+					validation,
+				),
+			).not.toThrow();
+			expect(() =>
+				validateRuntimeExecutionGrantV2(
+					{ ...body, grant, requestId: "substituted-pass" },
+					command,
+					verified,
+					validation,
+				),
+			).toThrow();
+		},
+	);
 });

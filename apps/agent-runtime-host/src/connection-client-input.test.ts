@@ -241,3 +241,56 @@ describe("independent Connection credential delivery", () => {
 		expect(env.resolveOriginalBinding).not.toHaveBeenCalled();
 	});
 });
+
+describe("query-only independent Connection input", () => {
+	it("uses original query provenance after business expiry, checks scope and cancellation, and observes rotation", async () => {
+		const env = await fixture();
+		env.resolveOriginalBinding.mockRejectedValue(
+			new Error("expired business grant"),
+		);
+		const reference = { ...binding.scope, nativeSessionRef: "native-original" };
+		const controller = new AbortController();
+		const read = {
+			signal: controller.signal,
+			expiresAt: 1_900_000_000_000,
+			assertCurrent: () => {
+				controller.signal.throwIfAborted();
+				return binding;
+			},
+			commit: async <T>(write: () => Promise<T>) => write(),
+		};
+		expect(
+			await env.input.resolveReadOnlyClient?.(
+				reference,
+				read,
+				controller.signal,
+			),
+		).toEqual({ originalBinding: binding, ...client });
+		expect(env.resolveOriginalBinding).not.toHaveBeenCalled();
+		expect(
+			await env.input.resolveReadOnlyClient?.(
+				{ ...reference, executionId: "other-execution" },
+				read,
+				controller.signal,
+			),
+		).toBeUndefined();
+		await env.write({
+			...delivered,
+			client: {
+				...client,
+				credential: { ...client.credential, revision: "rotated" },
+			},
+		});
+		expect(
+			await env.input.resolveReadOnlyClient?.(
+				reference,
+				read,
+				controller.signal,
+			),
+		).toMatchObject({ credential: { revision: "rotated" } });
+		controller.abort();
+		await expect(
+			env.input.resolveReadOnlyClient?.(reference, read, controller.signal),
+		).rejects.toThrow();
+	});
+});

@@ -325,3 +325,60 @@ describe("terminal task event recovery authority", () => {
 		},
 	);
 });
+
+describe("explicit historical metadata recovery authority", () => {
+	it("archives a stopped, revoked terminal task without its old user or business permissions", async () => {
+		const h = harness();
+		const marker = {
+			id: "history-pass",
+			requestedAt: 1_800_000_000_000,
+			originalStatus: "failed" as const,
+		};
+		const claim = {
+			...h.claim,
+			executionStatus: "failed" as const,
+			runtimeCursor: "terminal",
+			stopPending: true,
+			metadataRecovery: marker,
+		};
+		Object.assign(h.state, {
+			executionStatus: "failed",
+			runtimeCursor: "terminal",
+			stopPending: true,
+			metadataRecovery: marker,
+		});
+		h.setUser(null);
+		Object.assign(h.record, { revokedAt: new Date() });
+		Object.assign(h.agent, { desiredState: "stopped" });
+		const decision = await h.useCase.authorizeClaim(claim, signal());
+		expect(decision.outcome).toBe("allowed");
+		if (decision.outcome !== "allowed")
+			throw new Error("metadata claim denied");
+		for (const command of [
+			"session.status",
+			"events.persist",
+			"events.ack",
+		] as const) {
+			expect(
+				(await h.useCase.current(decision.context, h.state, command, signal()))
+					.authority,
+			).toMatchObject({ purpose: "control", reason: "recovery" });
+		}
+		for (const command of [
+			"turn.submit",
+			"turn.supplement",
+			"turn.stop",
+			"execution.renew",
+			"generation.cancel",
+		] as const) {
+			await expect(
+				h.useCase.current(decision.context, h.state, command, signal()),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+		}
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+		Object.assign(h.state, { metadataRecovery: { ...marker, id: "new-pass" } });
+		await expect(
+			h.useCase.readRuntimeState(decision.context, signal()),
+		).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+	});
+});

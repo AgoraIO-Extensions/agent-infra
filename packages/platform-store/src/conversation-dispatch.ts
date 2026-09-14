@@ -10,7 +10,9 @@ import {
 	type ConversationDispatchStateTransitionV1,
 	type ConversationDispatchStorePortV1,
 	type ConversationGenerationIsolationV1,
+	type ConversationMetadataRecoveryV1,
 	decideConversationDispatchCapacityV1,
+	parseConversationMetadataRecoveryV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
@@ -135,6 +137,7 @@ interface DispatchState {
 }
 
 interface ConversationPayload {
+	metadataRecovery?: ConversationMetadataRecoveryV1;
 	schemaVersion: 1;
 	conversationId: string;
 	executionId: string;
@@ -278,6 +281,17 @@ function exactPayload(
 	) {
 		return undefined;
 	}
+	let metadataRecovery: ConversationMetadataRecoveryV1 | undefined;
+	if (Object.hasOwn(input, "metadataRecovery")) {
+		if (!isTurn(operation)) return undefined;
+		try {
+			metadataRecovery = parseConversationMetadataRecoveryV1(
+				input.metadataRecovery,
+			);
+		} catch {
+			return undefined;
+		}
+	}
 	const expected = new Set(
 		isStop
 			? [
@@ -295,6 +309,7 @@ function exactPayload(
 					"turnId",
 					"sessionGeneration",
 					...(hasSelection ? selectionKeys : []),
+					...(metadataRecovery ? ["metadataRecovery"] : []),
 				],
 	);
 	if (
@@ -342,6 +357,7 @@ function exactPayload(
 		modelConfigurationRevision,
 		modelOptionId: modelOptionId as string | null,
 		reasoningLevel: reasoningLevel as string | null,
+		...(metadataRecovery ? { metadataRecovery } : {}),
 	};
 }
 
@@ -394,6 +410,16 @@ function requireCommand(input: {
 }
 
 function requireClaim(claim: ConversationDispatchClaimV1) {
+	if (claim?.metadataRecovery !== undefined) {
+		parseConversationMetadataRecoveryV1(claim.metadataRecovery);
+		if (
+			!isTurn(claim.operation) ||
+			!terminal(claim.executionStatus) ||
+			!claim.hostSessionRef ||
+			!claim.runtimeCursor
+		)
+			throw new TypeError("Invalid metadata recovery claim");
+	}
 	if (
 		!claim ||
 		typeof claim !== "object" ||
@@ -661,10 +687,13 @@ function bindingMatches(
 		conversation.agent_id === execution.agent_id &&
 		conversation.actor_id === execution.actor_id &&
 		conversation.channel_id === execution.channel_id &&
-		conversation.authorization_revision === execution.authorization_revision &&
+		(payload.metadataRecovery !== undefined ||
+			conversation.authorization_revision ===
+				execution.authorization_revision) &&
 		generation === payload.sessionGeneration &&
 		executionGeneration === payload.sessionGeneration &&
-		conversation.status !== "unavailable" &&
+		(payload.metadataRecovery !== undefined ||
+			conversation.status !== "unavailable") &&
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
 		executionSelectionValid &&
@@ -731,13 +760,23 @@ async function claimWork(
 	if (
 		isolation &&
 		!isolationWork &&
-		selectedOperation !== "conversation.turn.stop.v1"
+		selectedOperation !== "conversation.turn.stop.v1" &&
+		!payload.metadataRecovery
 	)
 		return { outcome: "busy" };
 	if (
 		isolationWork &&
 		(isolation?.execution_id !== execution.execution_id ||
 			isolation.original_principal.id !== execution.actor_id)
+	)
+		return { outcome: "stale" };
+	if (
+		payload.metadataRecovery &&
+		(!isTurn(selectedOperation) ||
+			!terminal(execution.status) ||
+			!execution.last_runtime_cursor ||
+			!conversation.host_session_ref ||
+			(isolation && isolation.original_principal.id !== execution.actor_id))
 	)
 		return { outcome: "stale" };
 	const message = payload.messageId
@@ -860,6 +899,9 @@ async function claimWork(
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),
+		...(payload.metadataRecovery
+			? { metadataRecovery: payload.metadataRecovery }
+			: {}),
 		input: message ? { text: message.text, attachments: [] } : null,
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
@@ -874,6 +916,16 @@ function claimMatchesState(
 	claim: ConversationDispatchClaimV1,
 	state: DispatchState,
 ) {
+	const payload = exactPayload(state.outbox.payload, claim.operation);
+	if (
+		!payload ||
+		JSON.stringify(payload.metadataRecovery) !==
+			JSON.stringify(claim.metadataRecovery) ||
+		(claim.metadataRecovery &&
+			(!terminal(state.execution.status) ||
+				!state.execution.last_runtime_cursor))
+	)
+		return false;
 	const outboxFence = safeCounter(state.outbox.delivery_fence, 1);
 	const generation = safeCounter(state.conversation.session_generation, 1);
 	const executionGeneration = safeCounter(
@@ -899,7 +951,9 @@ function claimMatchesState(
 		state.conversation.agent_id === claim.agentId &&
 		state.conversation.actor_id === claim.actorId &&
 		state.conversation.channel_id === claim.channelId &&
-		state.conversation.authorization_revision === claim.authorizationRevision &&
+		(claim.metadataRecovery !== undefined ||
+			state.conversation.authorization_revision ===
+				claim.authorizationRevision) &&
 		state.execution.execution_id === claim.executionId &&
 		state.execution.conversation_id === claim.conversationId &&
 		state.execution.agent_id === claim.agentId &&
@@ -936,7 +990,9 @@ async function ownedState(
 	const state = { outbox, conversation, execution };
 	if (!claimMatchesState(claim, state)) return undefined;
 	const stop = await readStop(transaction, claim.executionId);
-	return allowStopChange || (stop?.status === "submitted") === claim.stopPending
+	return allowStopChange ||
+		claim.metadataRecovery !== undefined ||
+		(stop?.status === "submitted") === claim.stopPending
 		? state
 		: undefined;
 }
@@ -1219,7 +1275,8 @@ export class PostgresConversationDispatchStoreV1
 				);
 				if (
 					isolation &&
-					(isolation.execution_id !== claim.executionId ||
+					((isolation.execution_id !== claim.executionId &&
+						!claim.metadataRecovery) ||
 						isolation.original_principal.id !== claim.actorId)
 				)
 					return null;
@@ -1229,6 +1286,9 @@ export class PostgresConversationDispatchStoreV1
 						? { generationIsolation: isolationProjection(isolation) }
 						: {}),
 					runtimeCursor: state.execution.last_runtime_cursor,
+					...(payload.metadataRecovery
+						? { metadataRecovery: payload.metadataRecovery }
+						: {}),
 					originalOperationDigest: createHash("sha256")
 						.update(JSON.stringify(canonical(original)))
 						.digest("base64url"),
@@ -1434,6 +1494,11 @@ export class PostgresConversationDispatchStoreV1
 					isolation.control_record_id
 			)
 				throw new StaleDispatchLease();
+			const [pendingMetadata] =
+				await transaction`select 1 from platform.outbox_items where scope_type = 'conversation' and scope_id = ${claim.conversationId}
+				and id <> ${claim.itemId} and payload->>'sessionGeneration' = ${String(claim.sessionGeneration)} and payload ? 'metadataRecovery'
+				and status in ('pending', 'retry_scheduled', 'processing') limit 1`;
+			if (pendingMetadata) throw new StaleDispatchLease();
 			const plan = planConversationGenerationConfirmationV1({
 				...claim,
 				executionStatus: state.execution.status,
@@ -1513,6 +1578,8 @@ export class PostgresConversationDispatchStoreV1
 		readonly leaseDurationMs: number;
 	}): Promise<boolean | "capacity_wait" | "capacity_unavailable"> {
 		requireClaim(input.claim);
+		if (input.claim.metadataRecovery)
+			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		try {
 			return await transactionResult(this.#client, async (transaction) => {
@@ -1667,6 +1734,10 @@ export class PostgresConversationDispatchStoreV1
 	}): Promise<boolean> {
 		requireClaim(input.claim);
 		requireTransition(input.transition);
+		if (input.claim.metadataRecovery)
+			throw new TypeError(
+				"Metadata recovery cannot record a business response",
+			);
 		if (!validText(input.hostSessionRef)) {
 			throw new TypeError("RuntimeHost Session reference is invalid");
 		}
@@ -1701,6 +1772,11 @@ export class PostgresConversationDispatchStoreV1
 	}): Promise<boolean> {
 		requireClaim(input.claim);
 		requireTransition(input.transition);
+		if (
+			input.claim.metadataRecovery &&
+			Object.keys(input.transition).length !== 0
+		)
+			throw new TypeError("Metadata recovery cannot transition business state");
 		if (
 			(input.status === "failed") !== (input.errorCode !== undefined) ||
 			(input.errorCode !== undefined && !symbolicCode.test(input.errorCode))
@@ -1750,7 +1826,7 @@ export class PostgresConversationDispatchStoreV1
 				transaction,
 				state,
 				input.claim,
-				input.status,
+				input.claim.metadataRecovery?.originalStatus ?? input.status,
 				input.errorCode,
 			);
 		});
@@ -1764,6 +1840,11 @@ export class PostgresConversationDispatchStoreV1
 	}): Promise<boolean> {
 		requireClaim(input.claim);
 		requireTransition(input.transition);
+		if (
+			input.claim.metadataRecovery &&
+			Object.keys(input.transition).length !== 0
+		)
+			throw new TypeError("Metadata recovery cannot transition business state");
 		if (
 			!Number.isSafeInteger(input.retryDelayMs) ||
 			input.retryDelayMs < 0 ||

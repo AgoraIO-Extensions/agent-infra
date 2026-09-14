@@ -183,6 +183,8 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		{ newId: () => `runtime_event_fixture_${nextRuntimeEventId++}` },
 	);
 	const transaction: ConversationExecutionTransactionPortV1 = {
+		requestMetadataRecovery: (request, decide) =>
+			adapter.requestMetadataRecovery(request, decide),
 		readConversation: (request, project) =>
 			adapter.readConversation(request, project),
 		createConversation: (request, decide) =>
@@ -240,6 +242,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		},
 	);
 	const useCase: ConversationExecutionUseCaseV1 = {
+		requestMetadataRecovery: (query) => inner.requestMetadataRecovery(query),
 		readConversation: (query) => inner.readConversation(query),
 		createConversation: (command) => inner.createConversation(command),
 		async accept(command) {

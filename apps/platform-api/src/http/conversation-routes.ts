@@ -116,6 +116,7 @@ export interface ConversationRoutesDependencies {
 		| "accept"
 		| "createConversation"
 		| "readConversation"
+		| "requestMetadataRecovery"
 		| "regenerate"
 		| "selectModel"
 		| "stop"
@@ -721,6 +722,9 @@ export function registerConversationRoutes(
 						metadata.traceId,
 					);
 					if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+					await dependencies
+						.commands(identity)
+						.requestMetadataRecovery({ schemaVersion: 1, conversationId });
 					return context.json(
 						project(() => {
 							const legacy = ConversationDetailProjectionV1Schema.parse({
@@ -931,6 +935,11 @@ export function registerConversationRoutes(
 						metadata.traceId,
 					);
 					if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+					await dependencies.commands(identity).requestMetadataRecovery({
+						schemaVersion: 1,
+						conversationId,
+						executionId: context.req.param("executionId"),
+					});
 					return context.json(
 						project(
 							() =>
@@ -986,6 +995,9 @@ export function registerConversationRoutes(
 							return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 						}
 					}
+					await dependencies
+						.commands(identity)
+						.requestMetadataRecovery({ schemaVersion: 1, conversationId });
 					const request = context.req.raw;
 					return streamSSE(
 						context,

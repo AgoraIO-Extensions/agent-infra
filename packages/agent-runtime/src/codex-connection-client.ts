@@ -29,6 +29,24 @@ export type CodexConnectionEvidenceUpdateRequest =
 	SchemaType<"connectionEvidenceUpdateRequest">;
 export type CodexConnectionEvidenceUpdateResponse =
 	SchemaType<"connectionEvidenceUpdateResponse">;
+export type CodexConnectionOrigin = SchemaType<"connectionOrigin">;
+export type CodexConnectionRecoveryRequest =
+	SchemaType<"connectionRecoveryRequest">;
+export type CodexConnectionRecoveryResponse =
+	SchemaType<"connectionRecoveryResponse">;
+export type CodexConnectionRecoveryOriginal =
+	SchemaType<"connectionRecoveryOriginal">;
+export type CodexConnectionClientConfiguration =
+	SchemaType<"connectionClientConfiguration">;
+export type CodexConnectionQueryMetadata = Omit<
+	CodexConnectionClientConfiguration,
+	"credential"
+> & {
+	credential: Pick<
+		CodexConnectionClientConfiguration["credential"],
+		"revision" | "expiresAt"
+	>;
+};
 type Slot = SchemaType<"connectionSlot">;
 type SlotMetadata = Omit<Slot, "credential"> & {
 	credential: Pick<Slot["credential"], "revision" | "expiresAt">;
@@ -49,10 +67,14 @@ export const isCodexConnectionEvidence =
 export const isCodexConnectionOriginalBinding = validator<
 	SchemaType<"connectionOriginalBinding">
 >("connectionOriginalBinding");
+export const isCodexConnectionRecoveryOriginal =
+	validator<CodexConnectionRecoveryOriginal>("connectionRecoveryOriginal");
+export const isCodexConnectionOrigin =
+	validator<CodexConnectionOrigin>("connectionOrigin");
 const isProfile = validator<CodexConnectionProfile>("connectionProfile");
-const isConfiguration = validator<SchemaType<"connectionClientConfiguration">>(
-	"connectionClientConfiguration",
-);
+export const isCodexConnectionClientConfiguration = validator<
+	SchemaType<"connectionClientConfiguration">
+>("connectionClientConfiguration");
 const isBootstrapRequest = validator<CodexConnectionBootstrapRequest>(
 	"connectionBootstrapRequest",
 );
@@ -173,7 +195,8 @@ export function createCodexConnectionClient(options: {
 		}
 		signal.throwIfAborted();
 		if (closed) throw unavailable();
-		if (!isConfiguration(configuration)) return deny("credential_unavailable");
+		if (!isCodexConnectionClientConfiguration(configuration))
+			return deny("credential_unavailable");
 		if (
 			!isDeepStrictEqual(configuration.service, {
 				serviceRef: profile.serviceRef,
@@ -226,6 +249,8 @@ export function createCodexConnectionClient(options: {
 		previousEvidence?: CodexConnectionEvidence;
 		metadataOnly: boolean;
 		occurredAt: number;
+		origin?: CodexConnectionOrigin;
+		queryClient?: CodexConnectionQueryMetadata;
 	}): RuntimeConnectionAssociationV1 | undefined => {
 		const {
 			requestDescriptor: descriptor,
@@ -235,9 +260,12 @@ export function createCodexConnectionClient(options: {
 			occurredAt,
 		} = input;
 		// Historical slots contain no token and cannot reopen dispatch.
-		const evidenceSlot = slots.get(descriptor.slotId);
+		const evidenceSlot = input.origin ?? slots.get(descriptor.slotId);
 		if (
 			!evidenceSlot ||
+			(input.origin !== undefined &&
+				(!isCodexConnectionOrigin(input.origin) ||
+					input.origin.slotId !== descriptor.slotId)) ||
 			closed ||
 			!isCodexConnectionRequest(descriptor) ||
 			descriptor.profileRef !== profile.profileRef ||
@@ -299,8 +327,14 @@ export function createCodexConnectionClient(options: {
 		const record = query?.record;
 		const queryCredentialKnown =
 			query !== undefined &&
-			[...slots.values()].some(
+			(input.queryClient ? [input.queryClient] : [...slots.values()]).some(
 				(known) =>
+					isDeepStrictEqual(known.service, evidenceSlot.service) &&
+					(input.queryClient === undefined ||
+						isDeepStrictEqual(
+							known.originalBinding,
+							evidenceSlot.originalBinding,
+						)) &&
 					known.credential.revision === query.credentialRevision &&
 					known.credential.expiresAt > query.queriedAt &&
 					isDeepStrictEqual(
@@ -341,6 +375,20 @@ export function createCodexConnectionClient(options: {
 	};
 
 	return {
+		snapshotOriginal(
+			descriptor: CodexConnectionRequest,
+		): CodexConnectionOrigin {
+			assertRequest(descriptor);
+			const original = slots.get(descriptor.slotId);
+			if (!original) throw unavailable();
+			return structuredClone({
+				schemaVersion: 1,
+				slotId: original.slotId,
+				originalBinding: original.originalBinding,
+				service: original.service,
+				connectionIdentity: original.connectionIdentity,
+			});
+		},
 		bootstrap,
 		assertRequest,
 		associate,

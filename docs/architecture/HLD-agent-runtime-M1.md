@@ -369,6 +369,8 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 核实恢复复用原执行的查询/恢复入口，只查询原记录，不建立第二调度循环或 Platform Connection 代理。完整丢失原调用回执时保持 unknown/unverified；模型转交、相同参数或查询到另一真实引用不能补齐原响应证据。关联状态更新保留原 operation/attempt、工具终态与计数，不能触发工具重发。
 
+原业务 native 进程退出后，受保护的原 journal 可将调用前保存的非秘密主体/Agent/Execution/generation/客户端绑定、原实际请求以及同次认证响应证据，经私有 FD3 交给同一派生 binary 的原执行只读恢复进程。该进程适用相同的进程内存、FD 与文件隔离，只使用原主体当前独立凭据访问固定 identity 与原调用记录，不创建业务 Session/Turn、MCP session 或工具调用。恢复由已有授权的原执行查询/恢复工作触发，公共关联仍沿原 outbox、事件游标、持久事务和 ACK 交付；受第 7.3 节代次屏障确认限制。缺失调用前绑定或原响应不得以当前身份或其他真实引用补造。
+
 ## 10. Runtime 安全约束
 
 Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、部署解密私钥、Kubernetes 或原始凭证权限作为运行前提。

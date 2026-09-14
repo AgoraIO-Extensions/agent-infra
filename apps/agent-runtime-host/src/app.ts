@@ -277,11 +277,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		invoke: (
 			request: T,
 			verification: VerifiedRuntimeExecutionGrantV2,
+			signal: AbortSignal,
 		) => Promise<{ schemaVersion: 3 }>,
 	) {
 		app.post(`/internal/runtime/v3/${path}`, async (context) => {
 			const request = await parseBody(context.req.raw, parser);
-			return context.json(await invoke(request, await verifyV2(request.grant)));
+			return context.json(
+				await invoke(
+					request,
+					await verifyV2(request.grant),
+					context.req.raw.signal,
+				),
+			);
 		});
 	}
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
@@ -295,8 +302,11 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	v3Route("stops", RuntimeStopRequestV3Schema, (request, verification) =>
 		options.host.stopV3(request, verification),
 	);
-	v3Route("status", RuntimeStatusRequestV3Schema, (request, verification) =>
-		options.host.recoverStatusV3(request, verification),
+	v3Route(
+		"status",
+		RuntimeStatusRequestV3Schema,
+		(request, verification, signal) =>
+			options.host.recoverStatusV3(request, verification, signal),
 	);
 	v3Route(
 		"generations/cancel",

@@ -17,6 +17,7 @@ import {
 	type ConversationExecutionUseCaseOptionsV1,
 	type ConversationExecutionUseCaseV1,
 	type ConversationMessageWritePlanV1,
+	type ConversationMetadataRecoveryStateV1,
 	type ConversationModelConfigurationV1,
 	type ConversationModelSelectionDecisionV1,
 	type ConversationModelSelectionFallbackWriteV1,
@@ -70,6 +71,8 @@ interface StoredExecution {
 }
 
 interface StoredOutbox {
+	status?: "pending" | "succeeded" | "failed";
+	metadataRecovery?: import("./conversation-dispatch.js").ConversationMetadataRecoveryV1;
 	readonly operation: string;
 	readonly executionId: string;
 	readonly sessionGeneration: number;
@@ -200,6 +203,10 @@ export class FakeConversationExecutionV1
 	readonly #executions: StoredExecution[] = [];
 	readonly #stops: StoredStop[] = [];
 	readonly #outbox: StoredOutbox[] = [];
+	readonly #acceptedAuthorities = new Map<
+		string,
+		ConversationExecutionAuthorityV1
+	>();
 	readonly #audit: StoredAudit[] = [];
 	readonly #events: StoredTimelineEvent[] = [];
 	readonly #currentAuthorizationRevision: string | undefined;
@@ -231,6 +238,95 @@ export class FakeConversationExecutionV1
 			options.authority?.authorizationRevision;
 		this.#modelConfiguration = structuredClone(options.modelConfiguration);
 		const transaction: ConversationExecutionTransactionPortV1 = {
+			requestMetadataRecovery: async (request, decide) => {
+				const candidates: ConversationMetadataRecoveryStateV1["candidates"][number][] =
+					[];
+				const outboxes = new Map<string, StoredOutbox>();
+				for (const execution of this.#executions.filter(
+					(execution) =>
+						execution.conversationId === request.query.conversationId,
+				)) {
+					const original = this.#acceptedAuthorities.get(execution.executionId);
+					const originals = this.#outbox
+						.filter(
+							(outbox) =>
+								outbox.executionId === execution.executionId &&
+								[
+									"conversation.turn.submit.v1",
+									"conversation.turn.regenerate.v1",
+								].includes(outbox.operation),
+						)
+						.map((outbox) => {
+							const itemId = `${outbox.operation === "conversation.turn.submit.v1" ? "conversation:turn" : "conversation:regenerate"}:${outbox.executionId}`;
+							outboxes.set(itemId, outbox);
+							return {
+								itemId,
+								operation: outbox.operation,
+								status: outbox.status ?? "pending",
+								payload: {
+									schemaVersion: 1,
+									conversationId: execution.conversationId,
+									executionId: outbox.executionId,
+									messageId: outbox.messageId,
+									turnId: execution.turnId,
+									sessionGeneration: outbox.sessionGeneration,
+									...(outbox.metadataRecovery
+										? { metadataRecovery: outbox.metadataRecovery }
+										: {}),
+								},
+							};
+						});
+					const history = this.#events.filter(
+						(event) =>
+							event.source === "runtime" &&
+							event.event.executionId === execution.executionId,
+					);
+					const facts = new Map<
+						string,
+						import("./conversation-operation-facts.js").ConversationOperationFactV2
+					>();
+					for (const record of history) {
+						const event = record.event.event;
+						if (
+							event.type === "execution.operation" &&
+							event.fact.kind === "tool"
+						)
+							facts.set(
+								key([event.fact.operationRef, event.fact.attemptRef]),
+								event.fact,
+							);
+					}
+					candidates.push({
+						execution: {
+							...execution,
+							agentId: original?.agentId ?? "",
+							channelId: original?.channelId ?? "",
+							authorizationRevision: original?.authorizationRevision ?? "",
+							runtimeCursor: history.at(-1)?.runtimeCursor ?? null,
+						},
+						originalOutboxes: originals,
+						boundary: original?.taskBoundary ?? null,
+						latestToolFacts: [...facts.values()],
+					});
+				}
+				const plan = decide({
+					conversation: structuredClone(
+						this.#conversations.get(request.query.conversationId),
+					),
+					candidates,
+				});
+				if (this.#failNextCommit && plan.updates.length > 0) {
+					this.#failNextCommit = false;
+					throw new Error("Injected Fake Conversation commit failure");
+				}
+				for (const update of plan.updates) {
+					const outbox = outboxes.get(update.itemId);
+					if (!outbox) throw new Error("Invalid Fake recovery plan");
+					outbox.status = "pending";
+					outbox.metadataRecovery = structuredClone(update.metadataRecovery);
+				}
+				return plan.result;
+			},
 			readConversation: async (request, project) => {
 				if (
 					!isCurrentConversationBinding(
@@ -339,6 +435,10 @@ export class FakeConversationExecutionV1
 					text: plan.message.text,
 				});
 				if (plan.execution) {
+					this.#acceptedAuthorities.set(
+						plan.execution.executionId,
+						structuredClone(request.authority),
+					);
 					this.#executions.push({
 						executionId: plan.execution.executionId,
 						conversationId: plan.execution.conversationId,
@@ -499,6 +599,10 @@ export class FakeConversationExecutionV1
 					plan.conversation.conversationId,
 					structuredClone(plan.conversation),
 				);
+				this.#acceptedAuthorities.set(
+					plan.execution.executionId,
+					structuredClone(request.authority),
+				);
 				this.#executions.push({
 					executionId: plan.execution.executionId,
 					conversationId: plan.execution.conversationId,
@@ -629,6 +733,13 @@ export class FakeConversationExecutionV1
 						candidate.adapterEventKey === request.command.adapterEventKey,
 				);
 				const decision = decide({
+					operationHistory: this.#events.flatMap((record) =>
+						record.source === "runtime" &&
+						record.event.executionId === request.command.executionId &&
+						record.event.event.type === "execution.operation"
+							? [record.event.event.fact]
+							: [],
+					),
 					conversation: conversation
 						? {
 								conversationId: conversation.conversationId,
@@ -696,6 +807,9 @@ export class FakeConversationExecutionV1
 		command,
 	) => this.#interface.createConversation(command);
 
+	requestMetadataRecovery: ConversationExecutionUseCaseV1["requestMetadataRecovery"] =
+		(query) => this.#interface.requestMetadataRecovery(query);
+
 	readConversation: ConversationExecutionUseCaseV1["readConversation"] = (
 		query,
 	) => this.#interface.readConversation(query);
@@ -726,7 +840,14 @@ export class FakeConversationExecutionV1
 		this.#modelConfiguration = structuredClone(configuration);
 	}
 
-	completeExecution(executionId: string) {
+	completeExecution(
+		executionId: string,
+		delivery?: {
+			readonly hostSessionRef: string;
+			readonly deliveryFence: number;
+			readonly outboxStatus: "succeeded" | "failed";
+		},
+	) {
 		const execution = this.#executions.find(
 			(candidate) => candidate.executionId === executionId,
 		);
@@ -734,6 +855,28 @@ export class FakeConversationExecutionV1
 			throw new Error("Execution is not active");
 		}
 		execution.status = "completed";
+		if (delivery) {
+			const conversation = this.#conversations.get(execution.conversationId);
+			const outbox = this.#outbox.find(
+				(outbox) =>
+					outbox.executionId === executionId &&
+					[
+						"conversation.turn.submit.v1",
+						"conversation.turn.regenerate.v1",
+					].includes(outbox.operation),
+			);
+			if (!conversation || !outbox)
+				throw new Error("Missing Fake runtime delivery");
+			this.#executions[this.#executions.indexOf(execution)] = {
+				...execution,
+				deliveryFence: delivery.deliveryFence,
+			};
+			this.#conversations.set(execution.conversationId, {
+				...conversation,
+				hostSessionRef: delivery.hostSessionRef,
+			});
+			outbox.status = delivery.outboxStatus;
+		}
 	}
 
 	snapshot() {

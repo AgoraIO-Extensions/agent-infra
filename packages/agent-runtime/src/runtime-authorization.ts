@@ -39,6 +39,7 @@ export interface RuntimeExecutionAuthority {
 	confirmedCursor?: string;
 	deliveredCursors: string[];
 	acknowledgedCursors?: string[];
+	evidenceQuery?: { requestId: string; issuedAt: number };
 }
 
 export function runtimeAuthorizationDenied(): never {
@@ -99,6 +100,7 @@ export function validStoredExecutionAuthority(
 				"confirmedCursor",
 				"deliveredCursors",
 				"acknowledgedCursors",
+				"evidenceQuery",
 			].includes(key),
 		) &&
 		typeof authority.workerId === "string" &&
@@ -125,6 +127,15 @@ export function validStoredExecutionAuthority(
 				authority.acknowledgedCursors.every(
 					(cursor) => typeof cursor === "string" && cursor.length > 0,
 				))) &&
+		(authority.evidenceQuery === undefined ||
+			(!!authority.evidenceQuery &&
+				typeof authority.evidenceQuery === "object" &&
+				Object.keys(authority.evidenceQuery).sort().join(",") ===
+					"issuedAt,requestId" &&
+				typeof authority.evidenceQuery.requestId === "string" &&
+				authority.evidenceQuery.requestId.length > 0 &&
+				Number.isSafeInteger(authority.evidenceQuery.issuedAt) &&
+				authority.evidenceQuery.issuedAt >= 0)) &&
 		(authority.control === undefined ||
 			(!!authority.control &&
 				typeof authority.control === "object" &&

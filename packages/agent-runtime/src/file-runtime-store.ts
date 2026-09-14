@@ -12,7 +12,7 @@ import {
 	RuntimeOperationResultV2Schema,
 	type RuntimePrincipalV1,
 } from "@agent-infra/contracts/runtime";
-
+import type { RuntimeOriginalEvidenceBinding } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -969,6 +969,80 @@ export class FileRuntimeStore {
 		)
 			runtimeAuthorizationDenied();
 		return session;
+	}
+
+	/** Query high-water mark is independent of business authorization expiry. */
+	latchOriginalEvidenceQuery(
+		claims: RuntimeExecutionGrantClaimsV2,
+		requestId: string,
+	) {
+		if (
+			typeof requestId !== "string" ||
+			requestId.length === 0 ||
+			requestId.length > 1024
+		)
+			runtimeAuthorizationDenied();
+		return this.file.update((state) => {
+			const checked = this.checkRequestV3(claims);
+			if (
+				checked.generationBarrier ||
+				!checked.nativeSessionRef ||
+				!["session.status", "events.persist"].includes(
+					claims.allowedCommands[0],
+				) ||
+				(claims.purpose === "control" &&
+					claims.reason === "generation_isolation")
+			)
+				runtimeAuthorizationDenied();
+			const session = state.sessions[checked.hostSessionRef];
+			const authority = session?.executionAuthorities?.[claims.executionId];
+			if (!authority) runtimeAuthorizationDenied();
+			const previous = authority.evidenceQuery;
+			if (
+				previous &&
+				previous.requestId !== requestId &&
+				claims.issuedAt <= previous.issuedAt
+			)
+				runtimeAuthorizationDenied();
+			authority.evidenceQuery = {
+				requestId,
+				issuedAt: Math.max(previous?.issuedAt ?? 0, claims.issuedAt),
+			};
+		});
+	}
+
+	/** Read only the original accepted submit; never consult its old business lease. */
+	assertOriginalEvidenceBinding(
+		claims: RuntimeExecutionGrantClaimsV2,
+		requestId: string,
+		nativeSessionRef: string,
+		originalOperationDigest: string,
+	): RuntimeOriginalEvidenceBinding {
+		const session = this.checkRequestV3(claims);
+		const original = session.operations[claims.executionId];
+		if (
+			session.generationBarrier ||
+			session.nativeSessionRef !== nativeSessionRef ||
+			session.executionAuthorities?.[claims.executionId]?.evidenceQuery
+				?.requestId !== requestId ||
+			original?.kind !== "submit-turn" ||
+			original.turnId !== claims.turnId ||
+			original.requestDigest !== originalOperationDigest ||
+			original.command.executionId !== claims.executionId ||
+			original.command.agentId !== claims.agentId ||
+			original.command.conversationId !== claims.conversationId ||
+			original.command.sessionGeneration !== claims.sessionGeneration
+		)
+			runtimeAuthorizationDenied();
+		return {
+			principal: { ...claims.principal },
+			scope: {
+				agentId: claims.agentId,
+				conversationId: claims.conversationId,
+				executionId: claims.executionId,
+				sessionGeneration: claims.sessionGeneration,
+			},
+		};
 	}
 
 	recordDeliveredCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {

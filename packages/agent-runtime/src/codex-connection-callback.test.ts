@@ -188,3 +188,77 @@ describe("private V2 credential lane", () => {
 		native.destroy();
 	});
 });
+
+describe("private recovery process channel", () => {
+	it("routes a verify response only through the read-only handler", async () => {
+		vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+		const { server, native } = pair();
+		const failure = vi.fn();
+		const operation = vi.fn<CodexNativeCallbackHandler>();
+		const bootstrap = vi.fn<CodexNativeConnectionBootstrapHandler>();
+		const response = frame(
+			"recovery-verify-valid",
+		) as import("./codex-connection-client.js").CodexConnectionRecoveryResponse;
+		const recover = vi.fn(async () => response);
+		const channel = serveCodexNativeCallbacks(
+			server,
+			operation,
+			bootstrap,
+			failure,
+			recover,
+		);
+		const replied = once(native, "data");
+		native.write(`${JSON.stringify(response.request)}\n`);
+		const [bytes] = await replied;
+		expect(JSON.parse(bytes.toString())).toEqual(response);
+		expect(recover).toHaveBeenCalledOnce();
+		expect(operation).not.toHaveBeenCalled();
+		expect(bootstrap).not.toHaveBeenCalled();
+		channel.close();
+		await channel.finished;
+		native.destroy();
+		expect(failure).not.toHaveBeenCalled();
+	});
+
+	it.each(["done", "unavailable", "sixteen", "premature", "trailing"] as const)(
+		"enforces %s EOF completion without accepting partial frames",
+		async (mode) => {
+			vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+			const { server, native } = pair();
+			const failure = vi.fn();
+			const response = frame(
+				mode === "done" || mode === "trailing"
+					? "recovery-done-valid"
+					: mode === "unavailable"
+						? "recovery-unavailable-valid"
+						: "recovery-verify-valid",
+			) as import("./codex-connection-client.js").CodexConnectionRecoveryResponse;
+			let issued = 0;
+			let terminal = false;
+			const channel = serveCodexNativeCallbacks(
+				server,
+				vi.fn<CodexNativeCallbackHandler>(),
+				undefined,
+				failure,
+				async (request) => {
+					if (response.decision === "verify") issued++;
+					else terminal = true;
+					return { ...response, requestId: request.requestId, request };
+				},
+				() => terminal || issued >= 16,
+			);
+			for (let index = 0; index < (mode === "sixteen" ? 16 : 1); index++) {
+				const replied = once(native, "data");
+				native.write(`${JSON.stringify(response.request)}\n`);
+				await replied;
+			}
+			if (mode === "trailing") native.write("{");
+			native.end();
+			await channel.finished;
+			expect(failure).toHaveBeenCalledTimes(
+				mode === "premature" || mode === "trailing" ? 1 : 0,
+			);
+			native.destroy();
+		},
+	);
+});

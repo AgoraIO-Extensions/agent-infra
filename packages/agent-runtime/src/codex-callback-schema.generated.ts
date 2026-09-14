@@ -1,6 +1,6 @@
 // biome-ignore-all lint/suspicious/noThenProperty: JSON Schema conditionals are data, not thenable objects.
 // Generated from vendor/codex/callback-v2.schema.json. Do not edit.
-// Source SHA-256: be86c0ab39976be3f465dce1867b72a89443b0620256f734a0b2ef18cc6a263f
+// Source SHA-256: 62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c
 // biome-ignore format: Keep the canonical JSON literal mechanically generated.
 export const codexCallbackSchema = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2550,6 +2550,208 @@ export const codexCallbackSchema = {
         }
       }
     },
+    "connectionOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "slotId",
+        "originalBinding",
+        "service",
+        "connectionIdentity"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "slotId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "originalBinding": {
+          "$ref": "#/$defs/connectionOriginalBinding"
+        },
+        "service": {
+          "$ref": "#/$defs/connectionService"
+        },
+        "connectionIdentity": {
+          "$ref": "#/$defs/connectionIdentity"
+        }
+      }
+    },
+    "connectionRecoveryOriginal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "permitId",
+        "connectionRequest",
+        "connectionOrigin",
+        "originalResponse"
+      ],
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "permitId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "connectionRequest": {
+          "$ref": "#/$defs/connectionExecuteRequest"
+        },
+        "connectionOrigin": {
+          "$ref": "#/$defs/connectionOrigin"
+        },
+        "originalResponse": {
+          "$ref": "#/$defs/connectionOriginalResponse"
+        }
+      }
+    },
+    "connectionRecoveryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "phase",
+        "profileRef",
+        "processNonce"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 2
+        },
+        "requestId": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "phase": {
+          "const": "connection-recovery"
+        },
+        "profileRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "processNonce": {
+          "$ref": "#/$defs/canonicalUuid"
+        },
+        "previousRecoveryId": {
+          "$ref": "#/$defs/canonicalUuid"
+        }
+      }
+    },
+    "connectionRecoveryResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "recoveryId",
+            "expiresAt",
+            "original",
+            "currentClient"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "phase": {
+              "const": "connection-recovery"
+            },
+            "request": {
+              "$ref": "#/$defs/connectionRecoveryRequest"
+            },
+            "decision": {
+              "const": "verify"
+            },
+            "recoveryId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "expiresAt": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "original": {
+              "$ref": "#/$defs/connectionRecoveryOriginal"
+            },
+            "currentClient": {
+              "$ref": "#/$defs/connectionClientConfiguration"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "phase": {
+              "const": "connection-recovery"
+            },
+            "request": {
+              "$ref": "#/$defs/connectionRecoveryRequest"
+            },
+            "decision": {
+              "const": "done"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "requestId",
+            "phase",
+            "request",
+            "decision",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": 2
+            },
+            "requestId": {
+              "$ref": "#/$defs/canonicalUuid"
+            },
+            "phase": {
+              "const": "connection-recovery"
+            },
+            "request": {
+              "$ref": "#/$defs/connectionRecoveryRequest"
+            },
+            "decision": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "authorization_unavailable",
+                "credential_unavailable",
+                "credential_expired",
+                "binding_mismatch",
+                "isolation_unavailable",
+                "profile_unavailable"
+              ]
+            }
+          }
+        }
+      ]
+    },
     "clientRequest": {
       "oneOf": [
         {
@@ -2563,6 +2765,9 @@ export const codexCallbackSchema = {
         },
         {
           "$ref": "#/$defs/connectionEvidenceUpdateRequest"
+        },
+        {
+          "$ref": "#/$defs/connectionRecoveryRequest"
         }
       ]
     },
@@ -2579,6 +2784,9 @@ export const codexCallbackSchema = {
         },
         {
           "$ref": "#/$defs/connectionEvidenceUpdateResponse"
+        },
+        {
+          "$ref": "#/$defs/connectionRecoveryResponse"
         }
       ]
     }

@@ -31,6 +31,7 @@ describe("Runtime V2 grant trust boundary", () => {
 			{ ...request, operation: { ...request.operation, deliveryFence: 2 } },
 			{ ...request, hostSessionRef: "another-host" },
 			{ ...request, channelId: "application" },
+			{ ...request, requestId: "retry-request" },
 		])
 			expect(() =>
 				validateRuntimeExecutionGrantV2(
@@ -40,11 +41,15 @@ describe("Runtime V2 grant trust boundary", () => {
 					options,
 				),
 			).toThrow();
+		const retry = signV3Fixture(
+			{ ...submitV3Fixture(), requestId: "retry-request" },
+			"turn.submit",
+		);
 		expect(() =>
 			validateRuntimeExecutionGrantV2(
-				{ ...request, requestId: "retry-request" },
+				retry,
 				"turn.submit",
-				verified,
+				verifyRuntimeV2Fixture(retry.grant),
 				options,
 			),
 		).not.toThrow();

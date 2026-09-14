@@ -9,6 +9,7 @@ import {
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationMessageWritePlanV1,
+	type ConversationMetadataRecoveryStateV1,
 	type ConversationModelConfigurationV1,
 	type ConversationModelSelectionDecisionV1,
 	type ConversationModelSelectionFallbackWriteV1,
@@ -19,6 +20,7 @@ import {
 	type ConversationStopWritePlanV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	parseConversationOperationEventV2,
 	parseTaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -2020,6 +2022,131 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async requestMetadataRecovery(
+		request: Parameters<
+			ConversationExecutionTransactionPortV1["requestMetadataRecovery"]
+		>[0],
+		decide: Parameters<
+			ConversationExecutionTransactionPortV1["requestMetadataRecovery"]
+		>[1],
+	) {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			const conversation = await lockConversation(
+				transaction,
+				text(request.query.conversationId),
+			);
+			if (!conversation) return decide({ conversation, candidates: [] }).result;
+			// Lock order matches dispatch: Conversation, original outbox, Execution.
+			const candidates = await transaction<
+				{
+					id: string;
+					payload: Record<string, unknown>;
+					status: string;
+					execution_id: string;
+					authorization_revision: string;
+				}[]
+			>`
+				select o.id, o.payload, o.status, e.execution_id, e.authorization_revision
+				from platform.outbox_items o join platform.conversation_executions e on e.execution_id = o.payload->>'executionId'
+				where o.scope_type = 'conversation' and o.scope_id = ${conversation.conversationId}
+					and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+					and o.id in ('conversation:turn:' || e.execution_id, 'conversation:regenerate:' || e.execution_id)
+					and e.conversation_id = ${conversation.conversationId} and e.agent_id = ${authority.agentId}
+					and e.actor_id = ${authority.actorId} and e.channel_id = ${authority.channelId}
+					and e.session_generation = ${conversation.sessionGeneration}
+					and o.payload->>'sessionGeneration' = ${String(conversation.sessionGeneration)}
+					and o.payload->>'turnId' = e.turn_id and e.delivery_fence > 0 and e.last_runtime_cursor is not null
+					and e.status in ('completed', 'failed', 'cancelled')
+					and (o.status in ('succeeded', 'failed') or o.payload ? 'metadataRecovery')
+					and (${request.query.executionId ?? null}::text is null or e.execution_id = ${request.query.executionId ?? null})
+					and exists (select 1 from platform.conversation_events ev where ev.execution_id = e.execution_id
+						and ev.source = 'runtime' and ev.event_type = 'execution.operation'
+						and ev.event_payload->'fact'->>'kind' = 'tool'
+						and coalesce(ev.event_payload->'fact'->'connection'->>'verification', '') <> 'verified'
+						and not exists (select 1 from platform.conversation_events newer where newer.execution_id = e.execution_id
+							and newer.event_type = 'execution.operation' and newer.sequence > ev.sequence
+							and newer.event_payload->'fact'->>'operationRef' = ev.event_payload->'fact'->>'operationRef'
+							and newer.event_payload->'fact'->>'attemptRef' = ev.event_payload->'fact'->>'attemptRef'))
+				order by (o.payload->'metadataRecovery'->>'requestedAt')::bigint nulls first, o.id limit 16
+				for update of o
+			`;
+			const recoveryCandidates: ConversationMetadataRecoveryStateV1["candidates"][number][] =
+				[];
+			const originalPayloads = new Map<string, unknown>();
+			for (const candidate of candidates) {
+				const [execution] = await transaction<
+					{
+						execution_id: string;
+						conversation_id: string;
+						agent_id: string;
+						actor_id: string;
+						channel_id: string;
+						turn_id: string;
+						session_generation: number | string;
+						delivery_fence: number | string;
+						last_runtime_cursor: string | null;
+						authorization_revision: string;
+						status: string;
+					}[]
+				>`select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, session_generation,
+					delivery_fence, last_runtime_cursor, authorization_revision, status from platform.conversation_executions
+					where execution_id = ${candidate.execution_id} for update`;
+				if (!execution) continue;
+				const origins = await transaction<
+					{ id: string; operation: string; status: string; payload: unknown }[]
+				>`
+					select id, operation, status, payload from platform.outbox_items
+					where id in (${`conversation:turn:${candidate.execution_id}`}, ${`conversation:regenerate:${candidate.execution_id}`})`;
+				for (const origin of origins)
+					originalPayloads.set(origin.id, origin.payload);
+				const [record] = await transaction<
+					{ boundary: unknown }[]
+				>`select boundary from platform.task_authorization_records where execution_id = ${candidate.execution_id}`;
+				const facts = await transaction<{ event_payload: unknown }[]>`
+					select distinct on (event_payload->'fact'->>'operationRef', event_payload->'fact'->>'attemptRef') event_payload
+					from platform.conversation_events where execution_id = ${candidate.execution_id} and source = 'runtime'
+						and event_type = 'execution.operation' and event_payload->'fact'->>'kind' = 'tool'
+					order by event_payload->'fact'->>'operationRef', event_payload->'fact'->>'attemptRef', sequence desc`;
+				recoveryCandidates.push({
+					execution: {
+						executionId: execution.execution_id,
+						conversationId: execution.conversation_id,
+						agentId: execution.agent_id,
+						actorId: execution.actor_id,
+						channelId: execution.channel_id,
+						turnId: execution.turn_id,
+						sessionGeneration: safeInteger(execution.session_generation, 1),
+						deliveryFence: safeInteger(execution.delivery_fence, 0),
+						runtimeCursor: execution.last_runtime_cursor,
+						authorizationRevision: execution.authorization_revision,
+						status: execution.status,
+					},
+					originalOutboxes: origins.map((origin) => ({
+						itemId: origin.id,
+						operation: origin.operation,
+						status: origin.status,
+						payload: origin.payload,
+					})),
+					boundary: record?.boundary ?? null,
+					latestToolFacts: facts.map(
+						(row) => parseConversationOperationEventV2(row.event_payload).fact,
+					),
+				});
+			}
+			const plan = decide({ conversation, candidates: recoveryCandidates });
+			for (const update of plan.updates) {
+				const payload = originalPayloads.get(update.itemId);
+				if (!payload || typeof payload !== "object" || Array.isArray(payload))
+					unavailable();
+				await transaction`update platform.outbox_items set status = 'pending', available_at = clock_timestamp(), lease_owner = null,
+					lease_expires_at = null, payload = ${transaction.json({ ...payload, metadataRecovery: { ...update.metadataRecovery } })}, updated_at = clock_timestamp()
+					where id = ${update.itemId}`;
+			}
+			return plan.result;
+		});
 	}
 
 	async readConversation(

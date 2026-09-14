@@ -12,6 +12,8 @@ import type {
 	CodexConnectionEvidenceUpdateResponse,
 	CodexConnectionOperationRequest,
 	CodexConnectionOperationResponse,
+	CodexConnectionRecoveryRequest,
+	CodexConnectionRecoveryResponse,
 } from "./codex-connection-client.js";
 
 const maximumFrameBytes = 16_384;
@@ -243,12 +245,18 @@ export type CodexNativeConnectionBootstrapHandler = (
 	request: CodexConnectionBootstrapRequest,
 	signal: AbortSignal,
 ) => Promise<CodexConnectionBootstrapResponse>;
+export type CodexNativeConnectionRecoveryHandler = (
+	request: CodexConnectionRecoveryRequest,
+	signal: AbortSignal,
+) => Promise<CodexConnectionRecoveryResponse>;
 type NativeClientRequest =
 	| CodexNativeCallbackRequest
-	| CodexConnectionBootstrapRequest;
+	| CodexConnectionBootstrapRequest
+	| CodexConnectionRecoveryRequest;
 type NativeClientResponse =
 	| CodexNativeCallbackResponse
-	| CodexConnectionBootstrapResponse;
+	| CodexConnectionBootstrapResponse
+	| CodexConnectionRecoveryResponse;
 
 function sameBinding(
 	request: NativeClientRequest,
@@ -265,9 +273,13 @@ function sameBinding(
 			response.schemaVersion === 1 &&
 			sameCodexNativeCallbackBindingV1(request, response)
 		);
-	if (request.phase === "connection-bootstrap")
+	if (
+		request.phase === "connection-bootstrap" ||
+		request.phase === "connection-recovery"
+	)
 		return (
-			response.phase === "connection-bootstrap" &&
+			response.phase === request.phase &&
+			"request" in response &&
 			isDeepStrictEqual(request, response.request)
 		);
 	return (
@@ -338,6 +350,8 @@ export function serveCodexNativeCallbacks(
 	handle: CodexNativeCallbackHandler,
 	bootstrap: CodexNativeConnectionBootstrapHandler | undefined,
 	onFailure: () => void,
+	recovery?: CodexNativeConnectionRecoveryHandler,
+	allowEof?: () => boolean,
 ) {
 	const lifetime = new AbortController();
 	let closed = false;
@@ -383,12 +397,21 @@ export function serveCodexNativeCallbacks(
 							? bootstrap
 								? bootstrap(request, signal)
 								: Promise.reject(unavailable())
-							: handle(request, signal);
+							: request.phase === "connection-recovery"
+								? recovery
+									? recovery(request, signal)
+									: Promise.reject(unavailable())
+								: handle(request, signal);
 					const response = await Promise.race([pendingResponse, interrupted]);
 					signal.throwIfAborted();
 					if (
 						!validResponse(response) ||
 						!sameBinding(request, response) ||
+						(response.phase === "connection-recovery" &&
+							response.decision === "verify" &&
+							(response.expiresAt <= Date.now() ||
+								response.currentClient.credential.expiresAt <
+									response.expiresAt)) ||
 						(response.decision === "permit" &&
 							(response.phase === "connection-bootstrap"
 								? response.slot.credential.expiresAt <= Date.now()
@@ -410,7 +433,8 @@ export function serveCodexNativeCallbacks(
 					waiting.abort();
 				}
 			}
-			if (!closed) throw unavailable();
+			if (!closed && (pending.length !== 0 || !allowEof?.()))
+				throw unavailable();
 		} catch {
 			if (!closed) {
 				close();

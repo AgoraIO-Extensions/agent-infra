@@ -59,6 +59,7 @@ interface EventRow {
 }
 
 interface DispatchLeaseRow {
+	readonly metadata_recovery: boolean;
 	readonly id: string;
 	readonly scope_type: string;
 	readonly scope_id: string;
@@ -693,7 +694,7 @@ async function currentDispatchLease(
 ): Promise<boolean> {
 	if (!command.dispatchLease) return true;
 	const rows = await transaction<DispatchLeaseRow[]>`
-		select id, scope_type, scope_id, status, lease_owner,
+		select id, scope_type, scope_id, status, lease_owner, payload ? 'metadataRecovery' as metadata_recovery,
 			delivery_fence::text,
 			lease_expires_at > clock_timestamp() as lease_active
 		from platform.outbox_items
@@ -706,6 +707,10 @@ async function currentDispatchLease(
 		row?.scope_type === "conversation" &&
 		row.scope_id === command.conversationId &&
 		row.status === "processing" &&
+		(!row.metadata_recovery ||
+			(command.operationMetadataOnly === true &&
+				command.event.type === "execution.operation" &&
+				command.transition === undefined)) &&
 		row.lease_owner === command.dispatchLease.leaseOwner &&
 		safeInteger(row.delivery_fence, 1) ===
 			command.dispatchLease.deliveryFence &&

@@ -136,7 +136,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
      if std::env::args_os().len() == 2
          && std::env::args_os()
              .nth(1)
-@@ -1045,6 +1047,25 @@
+@@ -1045,6 +1047,28 @@
          print!("{}", codex_core::native_operation_barrier_info());
          return Ok(());
      }
@@ -159,10 +159,13 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +        anyhow::bail!("Private native process protection is unsupported");
 +    }
 +    codex_core::initialize_native_connection_from_args()?;
++    if codex_core::run_native_connection_recovery_from_args()? {
++        return Ok(());
++    }
      let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
      arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
          cli_main(arg0_paths, remote_control_disabled).await?;
-@@ -1057,6 +1078,7 @@
+@@ -1057,6 +1081,7 @@
      remote_control_disabled: bool,
  ) -> anyhow::Result<()> {
      let MultitoolCli {
@@ -170,7 +173,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
          config_overrides: mut root_config_overrides,
          feature_toggles,
          remote,
-@@ -3028,6 +3050,7 @@
+@@ -3028,6 +3053,7 @@
              subcommand,
              feature_toggles: _,
              remote: _,
@@ -178,7 +181,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
          } = cli;
          interactive
              .shared
-@@ -3065,6 +3088,7 @@
+@@ -3065,6 +3091,7 @@
              subcommand,
              feature_toggles: _,
              remote: _,
@@ -186,7 +189,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
          } = cli;
          interactive
              .shared
-@@ -3109,6 +3133,7 @@
+@@ -3109,6 +3136,7 @@
              subcommand,
              feature_toggles: _,
              remote: _,
@@ -228,18 +231,19 @@ diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
  mod image_preparation;
  mod installation_id;
  pub(crate) mod mcp;
-@@ -218,3 +222,6 @@
+@@ -218,3 +222,7 @@
  pub mod compact;
  mod memory_usage;
  pub mod otel_init;
 +
 +mod native_connection_bootstrap;
 +pub use native_connection_bootstrap::initialize_native_connection_from_args;
++pub use native_connection_bootstrap::run_native_connection_recovery_from_args;
 diff --git a/codex-rs/core/src/native_connection_bootstrap.rs b/codex-rs/core/src/native_connection_bootstrap.rs
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/core/src/native_connection_bootstrap.rs
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,130 @@
 +//! CLI-only trusted profile and anonymous FD3 Connection bootstrap.
 +use codex_rmcp_client::NativeConnectionBootstrap;
 +use codex_rmcp_client::NativeConnectionExchange;
@@ -257,9 +261,20 @@ new file mode 100644
 +                request,
 +                |response: &Value, request, _now| {
 +                    if response.get("schemaVersion") != Some(&Value::from(2))
-+                        || response.get("phase") != Some(&Value::from("connection-bootstrap"))
++                        || response.get("phase") != request.get("phase")
 +                        || response.get("requestId") != request.get("requestId")
-+                        || response.get("request") != Some(request)
++                        || !match request.get("phase").and_then(Value::as_str) {
++                            Some("connection-bootstrap" | "connection-recovery") => {
++                                response.get("request") == Some(request)
++                            }
++                            Some("connection-evidence") => {
++                                response.get("decision") == Some(&Value::from("ack"))
++                                    && response.get("identity") == request.get("identity")
++                                    && response.get("connectionRequest")
++                                        == request.get("connectionRequest")
++                            }
++                            _ => false,
++                        }
 +                    {
 +                        return Err(crate::native_operation_barrier::BarrierError);
 +                    }
@@ -306,6 +321,110 @@ new file mode 100644
 +        )?;
 +    }
 +    Ok(())
++}
++
++/// The private recovery command is a separate process mode, before arg0/helper
++/// dispatch. It cannot be combined with a Session, Turn or app-server command.
++pub fn run_native_connection_recovery_from_args() -> io::Result<bool> {
++    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
++    if !recovery_arguments(&arguments)? {
++        return Ok(false);
++    }
++    if crate::native_process_protection()
++        != Some(crate::NativeProcessProtection::LinuxAarch64MemoryFilter)
++        || !crate::native_operation_barrier::private_socket_initialized()
++    {
++        return Err(io::Error::other("NATIVE_CONNECTION_ISOLATION_UNAVAILABLE"));
++    }
++    tokio::runtime::Builder::new_current_thread()
++        .enable_all()
++        .build()?
++        .block_on(codex_rmcp_client::run_native_connection_recovery())?;
++    Ok(true)
++}
++fn recovery_arguments(arguments: &[std::ffi::OsString]) -> io::Result<bool> {
++    const MODE: &str = "--agent-infra-connection-recovery";
++    if !arguments.iter().any(|value| value == MODE) {
++        return Ok(false);
++    }
++    let mut mode = false;
++    let mut profile = false;
++    let mut arguments = arguments.iter();
++    while let Some(argument) = arguments.next() {
++        match argument.to_str() {
++            Some(MODE) if !mode => mode = true,
++            Some("--agent-infra-connection-profile") if !profile => {
++                if arguments.next().and_then(|value| value.to_str()).is_none() {
++                    return Err(io::Error::other("NATIVE_CONNECTION_UNAVAILABLE"));
++                }
++                profile = true;
++            }
++            Some(value) if !profile && value.starts_with("--agent-infra-connection-profile=") => {
++                profile = true
++            }
++            _ => return Err(io::Error::other("NATIVE_CONNECTION_UNAVAILABLE")),
++        }
++    }
++    if !mode || !profile {
++        return Err(io::Error::other("NATIVE_CONNECTION_UNAVAILABLE"));
++    }
++    Ok(true)
++}
++
++#[cfg(test)]
++#[path = "native_connection_bootstrap_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/native_connection_bootstrap_tests.rs b/codex-rs/core/src/native_connection_bootstrap_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/core/src/native_connection_bootstrap_tests.rs
+@@ -0,0 +1,47 @@
++use super::recovery_arguments;
++use std::ffi::OsString;
++
++#[test]
++fn recovery_mode_cannot_enter_a_business_command() {
++    let arguments = |values: &[&str]| {
++        values
++            .iter()
++            .copied()
++            .map(OsString::from)
++            .collect::<Vec<_>>()
++    };
++    assert!(!recovery_arguments(&arguments(&["app-server"])).unwrap());
++    assert!(
++        recovery_arguments(&arguments(&[
++            "--agent-infra-connection-recovery",
++            "--agent-infra-connection-profile",
++            "{}",
++        ]))
++        .unwrap()
++    );
++    for values in [
++        vec!["--agent-infra-connection-recovery"],
++        vec![
++            "--agent-infra-connection-recovery",
++            "--agent-infra-connection-profile",
++        ],
++        vec![
++            "--agent-infra-connection-recovery",
++            "--agent-infra-connection-profile={}",
++            "app-server",
++        ],
++        vec![
++            "--agent-infra-connection-recovery",
++            "--agent-infra-connection-profile={}",
++            "exec",
++            "prompt",
++        ],
++        vec![
++            "--agent-infra-connection-recovery",
++            "--agent-infra-connection-profile={}",
++            "--agent-infra-connection-recovery",
++        ],
++    ] {
++        assert!(recovery_arguments(&arguments(&values)).is_err());
++    }
 +}
 diff --git a/codex-rs/core/src/native_mcp_dispatch.rs b/codex-rs/core/src/native_mcp_dispatch.rs
 new file mode 100644
@@ -893,7 +1012,7 @@ diff --git a/codex-rs/core/src/native_operation_barrier_manifest.json b/codex-rs
 +++ b/codex-rs/core/src/native_operation_barrier_manifest.json
 @@ -1 +1 @@
 -{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2","coverageSha256":"sha256:cd35715fc049562eeceb9326d2b15a140700e74ce1a60f63bf49400a2302eebe"}
-+{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:be86c0ab39976be3f465dce1867b72a89443b0620256f734a0b2ef18cc6a263f","coverageSha256":"sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c","callbackCorpusSha256":"sha256:85a63513ca3dcc0c49c2b418e838cb07cb3d9b7ea04fc3db5e6ff60809c9c361"}
++{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c","coverageSha256":"sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c","callbackCorpusSha256":"sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a"}
 diff --git a/codex-rs/core/src/native_operation_barrier_tests.rs b/codex-rs/core/src/native_operation_barrier_tests.rs
 --- a/codex-rs/core/src/native_operation_barrier_tests.rs
 +++ b/codex-rs/core/src/native_operation_barrier_tests.rs
@@ -2757,7 +2876,7 @@ diff --git a/codex-rs/rmcp-client/src/http_client_redirect.rs b/codex-rs/rmcp-cl
 diff --git a/codex-rs/rmcp-client/src/lib.rs b/codex-rs/rmcp-client/src/lib.rs
 --- a/codex-rs/rmcp-client/src/lib.rs
 +++ b/codex-rs/rmcp-client/src/lib.rs
-@@ -88,3 +88,16 @@
+@@ -88,3 +88,17 @@
  pub use stdio_server_launcher::ExecutorStdioServerLauncher;
  pub use stdio_server_launcher::LocalStdioServerLauncher;
  pub use stdio_server_launcher::StdioServerLauncher;
@@ -2769,6 +2888,7 @@ diff --git a/codex-rs/rmcp-client/src/lib.rs b/codex-rs/rmcp-client/src/lib.rs
 +#[doc(hidden)]
 +pub use native_connection::parse_native_private_json;
 +pub use native_connection::refresh_native_connection_slot;
++pub use native_connection::run_native_connection_recovery;
 +#[doc(hidden)]
 +pub use native_connection::validate_native_connection_descriptor;
 +
@@ -2778,7 +2898,7 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/callback-v2-corpus.json 
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/callback-v2-corpus.json
-@@ -0,0 +1,19682 @@
+@@ -0,0 +1,20852 @@
 +{
 +  "corpusVersion": 1,
 +  "schemaId": "urn:agent-infra:codex-mandatory-callback:v2",
@@ -22136,6 +22256,1176 @@ new file mode 100644
 +        "rule": "MONOTONIC_VERIFICATION",
 +        "effect": "keep_verified_reference_do_not_grant_future_query_access"
 +      }
++    },
++    {
++      "id": "recovery-request-valid",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": "connection-fixture-v1",
++        "processNonce": "00000000-0000-4000-8000-000000000042"
++      },
++      "schemaValid": true
++    },
++    {
++      "id": "recovery-verify-valid",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": true
++    },
++    {
++      "id": "recovery-next-valid",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": "connection-fixture-v1",
++        "processNonce": "00000000-0000-4000-8000-000000000042",
++        "previousRecoveryId": "00000000-0000-4000-8000-000000000043"
++      },
++      "schemaValid": true
++    },
++    {
++      "id": "recovery-done-valid",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "done"
++      },
++      "schemaValid": true
++    },
++    {
++      "id": "recovery-unavailable-valid",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "unavailable",
++        "reason": "credential_unavailable"
++      },
++      "schemaValid": true
++    },
++    {
++      "id": "recovery-verify-missing-request",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-verify-missing-recoveryId",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-verify-missing-expiresAt",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-verify-missing-original",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-verify-missing-currentClient",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-request-null-previousRecoveryId",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": "connection-fixture-v1",
++        "processNonce": "00000000-0000-4000-8000-000000000042",
++        "previousRecoveryId": null
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-request-null-processNonce",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": "connection-fixture-v1",
++        "processNonce": null
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-request-null-profileRef",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": null,
++        "processNonce": "00000000-0000-4000-8000-000000000042"
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-origin-token-forbidden",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            },
++            "credential": {
++              "revision": "credential-fixture-r1",
++              "expiresAt": 1800000030000,
++              "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-missing-original-response",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "execute_action",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-discovery-descriptor-forbidden",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "verify",
++        "recoveryId": "00000000-0000-4000-8000-000000000043",
++        "expiresAt": 1800000003000,
++        "original": {
++          "identity": {
++            "sessionId": "thread-fixture-a",
++            "turnId": "turn-fixture-a",
++            "callId": "call-fixture-a",
++            "attemptRef": "00000000-0000-4000-8000-000000000004",
++            "toolName": "connection/execute_action"
++          },
++          "permitId": "00000000-0000-4000-8000-000000000008",
++          "connectionRequest": {
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "profileRef": "connection-fixture-v1",
++            "serviceRef": "connection-fixture",
++            "operationNonce": "00000000-0000-4000-8000-000000000005",
++            "attemptNonce": "00000000-0000-4000-8000-000000000006",
++            "idempotencyKey": "00000000-0000-4000-8000-000000000005",
++            "rpcRequestId": 7,
++            "requestDigestVersion": "connection-request-v1",
++            "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++            "method": "tools/call",
++            "toolName": "list_actions",
++            "actionSelector": {
++              "actionId": "github.get_issue"
++            }
++          },
++          "connectionOrigin": {
++            "schemaVersion": 1,
++            "slotId": "00000000-0000-4000-8000-000000000003",
++            "originalBinding": {
++              "principal": {
++                "kind": "user",
++                "id": "platform-user-fixture-a"
++              },
++              "scope": {
++                "executionId": "execution-fixture-a",
++                "agentId": "agent-fixture-a",
++                "conversationId": "conversation-fixture-a",
++                "sessionGeneration": 1
++              }
++            },
++            "service": {
++              "serviceRef": "connection-fixture",
++              "issuer": "https://connection.example.test",
++              "resource": "https://connection.example.test/mcp"
++            },
++            "connectionIdentity": {
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "consumerId": "consumer-codex-fixture",
++              "clientId": "oauth-client-fixture"
++            }
++          },
++          "originalResponse": {
++            "rpcRequestId": 7,
++            "receivedAt": 1800000000100,
++            "receipt": {
++              "callRef": "callref-fixture-a",
++              "operationNonce": "00000000-0000-4000-8000-000000000005",
++              "attemptNonce": "00000000-0000-4000-8000-000000000006",
++              "requestDigestVersion": "connection-request-v1",
++              "requestDigest": "cbf410928ef1c83e86bb13b4f0a03aa32258d6f48944ebc85d6ea3e93d92a673",
++              "principal": {
++                "type": "user",
++                "key": "connection-user-fixture-a"
++              },
++              "actorId": "connection-actor-fixture-a",
++              "actionVersionId": "action-version-fixture-a"
++            }
++          }
++        },
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-done-token-forbidden",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "request": {
++          "schemaVersion": 2,
++          "requestId": "00000000-0000-4000-8000-000000000041",
++          "phase": "connection-recovery",
++          "profileRef": "connection-fixture-v1",
++          "processNonce": "00000000-0000-4000-8000-000000000042"
++        },
++        "decision": "done",
++        "currentClient": {
++          "originalBinding": {
++            "principal": {
++              "kind": "user",
++              "id": "platform-user-fixture-a"
++            },
++            "scope": {
++              "executionId": "execution-fixture-a",
++              "agentId": "agent-fixture-a",
++              "conversationId": "conversation-fixture-a",
++              "sessionGeneration": 1
++            }
++          },
++          "service": {
++            "serviceRef": "connection-fixture",
++            "issuer": "https://connection.example.test",
++            "resource": "https://connection.example.test/mcp"
++          },
++          "connectionIdentity": {
++            "principal": {
++              "type": "user",
++              "key": "connection-user-fixture-a"
++            },
++            "actorId": "connection-actor-fixture-a",
++            "consumerId": "consumer-codex-fixture",
++            "clientId": "oauth-client-fixture"
++          },
++          "credential": {
++            "revision": "credential-fixture-r1",
++            "expiresAt": 1800000030000,
++            "accessToken": "FAKE-TEST-ONLY-NOT-A-CREDENTIAL"
++          }
++        }
++      },
++      "schemaValid": false
++    },
++    {
++      "id": "recovery-caller-execution-forbidden",
++      "layer": "schema",
++      "frame": {
++        "schemaVersion": 2,
++        "requestId": "00000000-0000-4000-8000-000000000041",
++        "phase": "connection-recovery",
++        "profileRef": "connection-fixture-v1",
++        "processNonce": "00000000-0000-4000-8000-000000000042",
++        "executionId": "caller-select"
++      },
++      "schemaValid": false
 +    }
 +  ],
 +  "framingCases": [
@@ -22465,25 +23755,30 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/callback.rs b/codex-rs/r
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/callback.rs
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,185 @@
 +//! Strict typed V2 callback branches. Core continues to own unchanged V1 types.
 +use super::wire::*;
 +use serde::Deserialize;
++use serde::Serialize;
 +use serde_json::Value;
 +
-+#[derive(Deserialize)]
++#[derive(Clone, Deserialize, Serialize)]
 +#[serde(rename_all = "camelCase", deny_unknown_fields)]
-+struct Identity {
++pub(super) struct Identity {
 +    session_id: String,
 +    turn_id: String,
 +    call_id: String,
 +    attempt_ref: String,
-+    tool_name: String,
-+    #[serde(default, deserialize_with = "optional")]
++    pub(super) tool_name: String,
++    #[serde(
++        default,
++        deserialize_with = "optional",
++        skip_serializing_if = "Option::is_none"
++    )]
 +    parent_attempt_ref: Option<String>,
 +}
 +impl Identity {
-+    fn valid(&self) -> bool {
++    pub(super) fn valid(&self) -> bool {
 +        bounded(&self.session_id)
 +            && bounded(&self.turn_id)
 +            && bounded(&self.call_id)
@@ -22640,6 +23935,8 @@ new file mode 100644
 +        } else {
 +            serde_json::from_value::<BootstrapRequest>(value.clone()).is_ok_and(|v| v.valid_shape())
 +        }
++    } else if value.get("phase") == Some(&Value::from("connection-recovery")) {
++        super::recovery_wire::valid(value)
 +    } else {
 +        serde_json::from_value::<Operation>(value.clone()).is_ok_and(|v| v.valid())
 +    }
@@ -23084,12 +24381,14 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/mod.rs b/codex-rs/rmcp-c
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/mod.rs
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,352 @@
 +//! Independent Connection client inside the protected native process.
 +//! Only the anonymous callback obtains credentials; no OAuth/keyring fallback.
 +mod callback;
 +mod evidence;
 +mod http;
++mod recovery;
++mod recovery_wire;
 +mod strict_json;
 +mod wire;
 +
@@ -23107,6 +24406,7 @@ new file mode 100644
 +
 +pub(crate) use evidence::collect_evidence;
 +pub(crate) use evidence::complete_evidence_update;
++pub use recovery::run_native_connection_recovery;
 +pub(crate) use strict_json::parse_strict_json;
 +
 +pub type PrivateExchange<'a> = Pin<Box<dyn Future<Output = io::Result<Value>> + Send + 'a>>;
@@ -23434,6 +24734,476 @@ new file mode 100644
 +        .get()
 +        .is_some_and(|config| config.profile.resource == resource)
 +}
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery.rs b/codex-rs/rmcp-client/src/native_connection/recovery.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery.rs
+@@ -0,0 +1,134 @@
++//! A separate native mode verifies original receipts without task admission.
++use super::CONFIGURATION;
++use super::http::Entry;
++use super::now_ms;
++use super::recovery_wire::Request;
++use super::recovery_wire::Response;
++use super::unavailable;
++use super::wire::Evidence;
++use super::wire::RecordQuery;
++use serde_json::Value;
++use serde_json::json;
++use std::collections::HashSet;
++use std::io;
++use std::time::Duration;
++use uuid::Uuid;
++
++/// Called only from the protected private CLI mode. It never creates or updates
++/// CURRENT, ORIGINAL or SLOTS and never opens a Runtime Session or MCP transport.
++pub async fn run_native_connection_recovery() -> io::Result<()> {
++    let config = CONFIGURATION.get().ok_or_else(unavailable)?;
++    let deadline = now_ms()?.checked_add(30_000).ok_or_else(unavailable)?;
++    tokio::time::timeout(Duration::from_secs(30), async {
++        let mut previous_recovery_id = None;
++        let mut seen = HashSet::new();
++        for _ in 0..16 {
++            let request = Request {
++                schema_version: 2,
++                request_id: Uuid::new_v4().to_string(),
++                phase: "connection-recovery".into(),
++                profile_ref: config.profile.profile_ref.clone(),
++                process_nonce: config.process_nonce.clone(),
++                previous_recovery_id,
++            };
++            let request_value = serde_json::to_value(&request).map_err(|_| unavailable())?;
++            let response = tokio::time::timeout(
++                remaining(deadline, /*maximum*/ 4_500)?,
++                config.bootstrap.exchange(&request_value),
++            )
++            .await
++            .map_err(|_| unavailable())??;
++            let response: Response = serde_json::from_value(response).map_err(|_| unavailable())?;
++            if !response.matches(&request) {
++                return Err(unavailable());
++            }
++            if matches!(response.decision.as_str(), "done" | "unavailable") {
++                return Ok(());
++            }
++            let recovery_id = response.recovery_id.ok_or_else(unavailable)?;
++            if !seen.insert(recovery_id.clone()) {
++                return Err(unavailable());
++            }
++            previous_recovery_id = Some(recovery_id);
++            let item_deadline = response.expires_at.ok_or_else(unavailable)?.min(deadline);
++            let original = response.original.ok_or_else(unavailable)?;
++            let current = response.current_client.ok_or_else(unavailable)?;
++            let Ok(slot) = current.into_slot(&original, &config.profile, now_ms()?) else {
++                continue;
++            };
++            let item_deadline = item_deadline.min(slot.credential.expires_at);
++            let Ok(budget) = remaining(item_deadline, /*maximum*/ 30_000) else {
++                continue;
++            };
++            // Entry is local to this item. Only its two fixed read methods are
++            // reachable here; no shared slot or business send path is installed.
++            let verified = tokio::time::timeout(budget, async {
++                let entry = Entry::new(slot)?;
++                entry.verify_identity().await?;
++                let queried_at = now_ms()?;
++                let record = entry
++                    .read_record(&original.original_response.receipt.call_ref)
++                    .await?;
++                if !record.matches(
++                    &original.original_response.receipt,
++                    &original.connection_origin.connection_identity,
++                ) {
++                    return Err(unavailable());
++                }
++                Ok::<_, io::Error>(Evidence {
++                    verification: "verified".into(),
++                    original_response: Some(original.original_response.clone()),
++                    record_query: Some(RecordQuery {
++                        queried_at,
++                        credential_revision: entry.revision.clone(),
++                        record,
++                    }),
++                    verified_at: Some(now_ms()?),
++                    reason: None,
++                })
++            })
++            .await;
++            let Ok(Ok(evidence)) = verified else {
++                continue;
++            };
++            let Ok(budget) = remaining(item_deadline, /*maximum*/ 4_500) else {
++                continue;
++            };
++            let update = json!({
++                "schemaVersion": 2, "requestId": Uuid::new_v4().to_string(),
++                "phase": "connection-evidence", "identity": original.identity,
++                "permitId": original.permit_id, "occurredAt": now_ms()?,
++                "connectionRequest": original.connection_request, "connectionEvidence": evidence,
++            });
++            let ack = tokio::time::timeout(budget, config.bootstrap.exchange(&update))
++                .await
++                .map_err(|_| unavailable())??;
++            if !ack_matches(&update, &ack) {
++                return Err(unavailable());
++            }
++        }
++        Ok(())
++    })
++    .await
++    .map_err(|_| unavailable())?
++}
++fn remaining(deadline: u64, maximum: u64) -> io::Result<Duration> {
++    let millis = deadline
++        .checked_sub(now_ms()?)
++        .filter(|value| *value > 0)
++        .ok_or_else(unavailable)?;
++    Ok(Duration::from_millis(millis.min(maximum)))
++}
++fn ack_matches(request: &Value, response: &Value) -> bool {
++    super::validate_native_callback_v2(response)
++        && response["schemaVersion"] == 2
++        && response["phase"] == "connection-evidence"
++        && response["decision"] == "ack"
++        && response["requestId"] == request["requestId"]
++        && response["identity"] == request["identity"]
++        && response["connectionRequest"] == request["connectionRequest"]
++}
++
++#[cfg(test)]
++#[path = "recovery_tests.rs"]
++mod tests;
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs b/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery_tests.rs
+@@ -0,0 +1,122 @@
++use super::super::recovery_wire::CurrentClient;
++use super::super::recovery_wire::Original;
++use super::super::wire::Profile;
++use super::*;
++
++fn response_frame() -> Value {
++    let corpus: Value = serde_json::from_str(include_str!("callback-v2-corpus.json")).unwrap();
++    corpus["cases"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|case| case["id"] == "recovery-verify-valid")
++        .expect("shared recovery fixture")["frame"]
++        .clone()
++}
++fn fixture() -> (Value, Value, Profile) {
++    let original = response_frame();
++    let profile: Profile = serde_json::from_value(json!({
++        "profileRef": original["request"]["profileRef"],
++        "serviceRef": original["original"]["connectionOrigin"]["service"]["serviceRef"],
++        "issuer": original["original"]["connectionOrigin"]["service"]["issuer"],
++        "resource": original["original"]["connectionOrigin"]["service"]["resource"],
++    }))
++    .unwrap();
++    (
++        original["original"].clone(),
++        original["currentClient"].clone(),
++        profile,
++    )
++}
++#[test]
++fn recovery_reply_must_echo_the_exact_process_and_cursor_request() {
++    let frame = response_frame();
++    let request: Request = serde_json::from_value(frame["request"].clone()).unwrap();
++    let response: Response = serde_json::from_value(frame.clone()).unwrap();
++    assert!(response.matches(&request));
++    for (pointer, replacement) in [
++        ("/request/profileRef", json!("other-profile")),
++        ("/request/processNonce", json!(Uuid::new_v4().to_string())),
++        ("/request/requestId", json!(Uuid::new_v4().to_string())),
++        ("/requestId", json!(Uuid::new_v4().to_string())),
++    ] {
++        let mut changed = frame.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let response: Response = serde_json::from_value(changed).unwrap();
++        assert!(!response.matches(&request), "{pointer}");
++    }
++    let mut changed = frame;
++    changed["request"]["previousRecoveryId"] = json!(Uuid::new_v4().to_string());
++    let response: Response = serde_json::from_value(changed).unwrap();
++    assert!(!response.matches(&request));
++}
++#[test]
++fn recovery_requires_original_full_execution_binding_and_response() {
++    let (original, client, profile) = fixture();
++    let now = original["originalResponse"]["receivedAt"].as_u64().unwrap() + 1;
++    let parsed: Original = serde_json::from_value(original.clone()).unwrap();
++    let current: CurrentClient = serde_json::from_value(client.clone()).unwrap();
++    assert!(current.into_slot(&parsed, &profile, now).is_ok());
++    for (pointer, replacement) in [
++        (
++            "/originalBinding/scope/executionId",
++            json!("foreign-execution"),
++        ),
++        ("/originalBinding/scope/agentId", json!("foreign-agent")),
++        (
++            "/originalBinding/scope/conversationId",
++            json!("foreign-conversation"),
++        ),
++        ("/originalBinding/scope/sessionGeneration", json!(99)),
++        ("/connectionIdentity/consumerId", json!("foreign-consumer")),
++        ("/connectionIdentity/clientId", json!("foreign-client")),
++        (
++            "/connectionIdentity/principal/key",
++            json!("foreign-principal"),
++        ),
++        ("/connectionIdentity/actorId", json!("foreign-actor")),
++        ("/credential/expiresAt", json!(now)),
++    ] {
++        let mut changed = client.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let current: CurrentClient = serde_json::from_value(changed).unwrap();
++        assert!(
++            current.into_slot(&parsed, &profile, now).is_err(),
++            "{pointer}"
++        );
++    }
++    for (pointer, replacement) in [
++        ("/identity/toolName", json!("connection/search_actions")),
++        (
++            "/connectionOrigin/slotId",
++            json!(Uuid::new_v4().to_string()),
++        ),
++        ("/originalResponse/rpcRequestId", json!("different-rpc")),
++        ("/originalResponse/receivedAt", json!(now + 1)),
++        ("/originalResponse/receipt/callRef", json!("")),
++        (
++            "/originalResponse/receipt/attemptNonce",
++            json!(Uuid::new_v4().to_string()),
++        ),
++    ] {
++        let mut changed = original.clone();
++        *changed.pointer_mut(pointer).unwrap() = replacement;
++        let changed: Original = serde_json::from_value(changed).unwrap();
++        assert!(!changed.matches(&profile, now), "{pointer}");
++    }
++}
++#[test]
++fn recovery_ack_cannot_change_original_identity_or_descriptor() {
++    let (original, _, _) = fixture();
++    let request = json!({"requestId": Uuid::new_v4().to_string(),
++        "identity": original["identity"], "connectionRequest": original["connectionRequest"]});
++    let mut ack = json!({"schemaVersion": 2, "phase": "connection-evidence", "decision": "ack",
++        "requestId": request["requestId"], "identity": request["identity"], "connectionRequest": request["connectionRequest"]});
++    assert!(ack_matches(&request, &ack));
++    ack["identity"]["callId"] = json!("another-call");
++    assert!(!ack_matches(&request, &ack));
++    ack["identity"] = request["identity"].clone();
++    ack["connectionRequest"]["requestDigest"] = json!("0".repeat(64));
++    assert!(!ack_matches(&request, &ack));
++    assert!(remaining(/*deadline*/ 0, /*maximum*/ 4_500).is_err());
++}
+diff --git a/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs b/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_connection/recovery_wire.rs
+@@ -0,0 +1,199 @@
++//! Private recovery frames contain no task prompt and are never persisted here.
++use super::callback::Identity;
++use super::unavailable;
++use super::wire::*;
++use serde::Deserialize;
++use serde::Serialize;
++use serde_json::Value;
++use std::io;
++
++#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Request {
++    pub schema_version: u8,
++    pub request_id: String,
++    pub phase: String,
++    pub profile_ref: String,
++    pub process_nonce: String,
++    #[serde(
++        default,
++        deserialize_with = "optional",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub previous_recovery_id: Option<String>,
++}
++impl Request {
++    fn valid(&self) -> bool {
++        self.schema_version == 2
++            && self.phase == "connection-recovery"
++            && uuid(&self.request_id)
++            && opaque(&self.profile_ref)
++            && uuid(&self.process_nonce)
++            && self.previous_recovery_id.as_deref().is_none_or(uuid)
++    }
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Origin {
++    pub schema_version: u8,
++    pub slot_id: String,
++    pub original_binding: OriginalBinding,
++    pub service: Service,
++    pub connection_identity: ConnectionIdentity,
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Original {
++    pub identity: Identity,
++    pub permit_id: String,
++    pub connection_request: Descriptor,
++    pub connection_origin: Origin,
++    pub original_response: OriginalResponse,
++}
++impl Original {
++    fn valid_shape(&self) -> bool {
++        let origin = &self.connection_origin;
++        self.identity.valid()
++            && uuid(&self.permit_id)
++            && self.connection_request.valid()
++            && self.connection_request.tool_name == "execute_action"
++            && origin.schema_version == 1
++            && uuid(&origin.slot_id)
++            && origin.original_binding.valid()
++            && origin.connection_identity.valid()
++            && origin.service.valid_shape()
++            && Evidence::unverified("record_unavailable", Some(self.original_response.clone()))
++                .valid_shape()
++    }
++    pub(super) fn matches(&self, profile: &Profile, now: u64) -> bool {
++        let origin = &self.connection_origin;
++        let descriptor = &self.connection_request;
++        self.valid_shape()
++            && self.identity.tool_name == "connection/execute_action"
++            && descriptor.profile_ref == profile.profile_ref
++            && descriptor.service_ref == profile.service_ref
++            && descriptor.slot_id == origin.slot_id
++            && origin.service.service_ref == profile.service_ref
++            && origin.service.issuer == profile.issuer
++            && origin.service.resource == profile.resource
++            && self.original_response.rpc_request_id == descriptor.rpc_request_id
++            && self.original_response.received_at <= now
++            && self
++                .original_response
++                .receipt
++                .matches(descriptor, &origin.connection_identity)
++    }
++}
++// This credential has no Debug/Serialize and is consumed into one local Entry.
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct CurrentClient {
++    original_binding: OriginalBinding,
++    service: Service,
++    connection_identity: ConnectionIdentity,
++    credential: Credential,
++}
++impl CurrentClient {
++    fn valid_shape(&self) -> bool {
++        self.original_binding.valid()
++            && self.connection_identity.valid()
++            && self.service.valid_shape()
++            && self.credential.valid_shape()
++    }
++    pub(super) fn into_slot(
++        self,
++        original: &Original,
++        profile: &Profile,
++        now: u64,
++    ) -> io::Result<Slot> {
++        if !original.matches(profile, now)
++            || self.original_binding != original.connection_origin.original_binding
++            || self.service != original.connection_origin.service
++            || self.connection_identity != original.connection_origin.connection_identity
++        {
++            return Err(unavailable());
++        }
++        let slot = Slot {
++            slot_id: original.connection_origin.slot_id.clone(),
++            original_binding: self.original_binding,
++            service: self.service,
++            connection_identity: self.connection_identity,
++            credential: self.credential,
++        };
++        if !slot.valid(profile, now) {
++            return Err(unavailable());
++        }
++        Ok(slot)
++    }
++}
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Response {
++    schema_version: u8,
++    request_id: String,
++    phase: String,
++    request: Request,
++    pub decision: String,
++    #[serde(default, deserialize_with = "optional")]
++    pub recovery_id: Option<String>,
++    #[serde(default, deserialize_with = "optional")]
++    pub expires_at: Option<u64>,
++    #[serde(default, deserialize_with = "optional")]
++    pub original: Option<Original>,
++    #[serde(default, deserialize_with = "optional")]
++    pub current_client: Option<CurrentClient>,
++    #[serde(default, deserialize_with = "optional")]
++    reason: Option<String>,
++}
++impl Response {
++    fn valid_shape(&self) -> bool {
++        self.schema_version == 2
++            && self.phase == "connection-recovery"
++            && uuid(&self.request_id)
++            && self.request.valid()
++            && match self.decision.as_str() {
++                "verify" => {
++                    self.recovery_id.as_deref().is_some_and(uuid)
++                        && self.expires_at.is_some_and(timestamp)
++                        && self.original.as_ref().is_some_and(Original::valid_shape)
++                        && self
++                            .current_client
++                            .as_ref()
++                            .is_some_and(CurrentClient::valid_shape)
++                        && self.reason.is_none()
++                }
++                "done" | "unavailable" => {
++                    self.recovery_id.is_none()
++                        && self.expires_at.is_none()
++                        && self.original.is_none()
++                        && self.current_client.is_none()
++                        && if self.decision == "done" {
++                            self.reason.is_none()
++                        } else {
++                            matches!(
++                                self.reason.as_deref(),
++                                Some(
++                                    "authorization_unavailable"
++                                        | "credential_unavailable"
++                                        | "credential_expired"
++                                        | "binding_mismatch"
++                                        | "isolation_unavailable"
++                                        | "profile_unavailable"
++                                )
++                            )
++                        }
++                }
++                _ => false,
++            }
++    }
++    pub(super) fn matches(&self, request: &Request) -> bool {
++        self.valid_shape() && self.request == *request && self.request_id == request.request_id
++    }
++}
++pub(super) fn valid(value: &Value) -> bool {
++    if value.get("decision").is_some() {
++        serde_json::from_value::<Response>(value.clone()).is_ok_and(|value| value.valid_shape())
++    } else {
++        serde_json::from_value::<Request>(value.clone()).is_ok_and(|value| value.valid())
++    }
++}
 diff --git a/codex-rs/rmcp-client/src/native_connection/strict_json.rs b/codex-rs/rmcp-client/src/native_connection/strict_json.rs
 new file mode 100644
 --- /dev/null
@@ -23512,7 +25282,7 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/tests.rs b/codex-rs/rmcp
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/tests.rs
-@@ -0,0 +1,299 @@
+@@ -0,0 +1,302 @@
 +use super::*;
 +use pretty_assertions::assert_eq;
 +
@@ -23538,7 +25308,7 @@ new file mode 100644
 +        );
 +        count += 1;
 +    }
-+    assert_eq!(count, 135);
++    assert_eq!(count, 153);
 +}
 +#[test]
 +fn canonical_shared_framing_corpus_rejects_before_value_conversion() {
@@ -23633,6 +25403,9 @@ new file mode 100644
 +    assert!(!other_record.matches(receipt, &identity));
 +    other_record = record.clone();
 +    other_record.attempt_nonces.clear();
++    assert!(!other_record.matches(receipt, &identity));
++    other_record = record.clone();
++    other_record.action_version_id = "other-action-version".into();
 +    assert!(!other_record.matches(receipt, &identity));
 +}
 +
@@ -24261,7 +26034,7 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/wire_validation.rs b/cod
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/wire_validation.rs
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,158 @@
 +//! Structural validation for the canonical V2 bootstrap and evidence branches.
 +use super::*;
 +
@@ -24306,17 +26079,27 @@ new file mode 100644
 +}
 +impl Slot {
 +    fn valid_shape(&self) -> bool {
-+        let token = self.credential.access_token.trim_end_matches('=');
 +        uuid(&self.slot_id)
 +            && self.original_binding.valid()
 +            && self.connection_identity.valid()
-+            && opaque(&self.service.service_ref)
-+            && https_identifier(&self.service.issuer)
-+            && https_identifier(&self.service.resource)
-+            && opaque(&self.credential.revision)
-+            && timestamp(self.credential.expires_at)
++            && self.service.valid_shape()
++            && self.credential.valid_shape()
++    }
++}
++impl Service {
++    pub(in crate::native_connection) fn valid_shape(&self) -> bool {
++        opaque(&self.service_ref)
++            && https_identifier(&self.issuer)
++            && https_identifier(&self.resource)
++    }
++}
++impl Credential {
++    pub(in crate::native_connection) fn valid_shape(&self) -> bool {
++        let token = self.access_token.trim_end_matches('=');
++        opaque(&self.revision)
++            && timestamp(self.expires_at)
 +            && !token.is_empty()
-+            && self.credential.access_token.len() <= 8192
++            && self.access_token.len() <= 8192
 +            && token
 +                .bytes()
 +                .all(|c| c.is_ascii_alphanumeric() || b"-._~+/".contains(&c))

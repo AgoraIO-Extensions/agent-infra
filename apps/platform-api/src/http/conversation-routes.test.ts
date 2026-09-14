@@ -85,6 +85,9 @@ function dependencies(
 	overrides: Partial<ConversationRoutesDependencies> = {},
 ): ConversationRoutesDependencies {
 	const commands = {
+		requestMetadataRecovery: vi
+			.fn()
+			.mockResolvedValue({ outcome: "not_applicable" }),
 		createConversation: vi.fn().mockResolvedValue({
 			outcome: "accepted",
 			result: {
@@ -972,5 +975,71 @@ describe("Conversation persisted SSE", () => {
 				payload: { text: "Hello" },
 			}),
 		).toBeDefined();
+	});
+});
+
+describe("historical metadata recovery admission", () => {
+	it("registers only successful Conversation and Execution history reads", async () => {
+		const h = testApp();
+		const command = h.dependencies.commands(identity);
+		expect(
+			(await h.app.request("/api/v2/conversations/conversation-1")).status,
+		).toBe(200);
+		expect(command.requestMetadataRecovery).toHaveBeenCalledWith({
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+		});
+		vi.mocked(command.requestMetadataRecovery).mockClear();
+		expect(
+			(
+				await h.app.request(
+					"/api/v2/conversations/conversation-1/executions/execution-1",
+				)
+			).status,
+		).toBe(200);
+		expect(command.requestMetadataRecovery).toHaveBeenCalledWith({
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		});
+		vi.mocked(command.requestMetadataRecovery).mockClear();
+		vi.mocked(h.dependencies.query.getExecution).mockResolvedValue(undefined);
+		expect(
+			(
+				await h.app.request(
+					"/api/v2/conversations/conversation-1/executions/missing",
+				)
+			).status,
+		).not.toBe(200);
+		expect(command.requestMetadataRecovery).not.toHaveBeenCalled();
+		vi.mocked(command.readConversation).mockResolvedValue({
+			outcome: "denied",
+		});
+		expect(
+			(await h.app.request("/api/v2/conversations/conversation-1")).status,
+		).not.toBe(200);
+		expect(command.requestMetadataRecovery).not.toHaveBeenCalled();
+	});
+
+	it("registers once on initial SSE subscription while ordinary polls remain read-only", async () => {
+		const h = testApp(dependencies({ streamPollIntervalMs: 1 }));
+		const command = h.dependencies.commands(identity);
+		const controller = new AbortController();
+		const response = await h.app.request(
+			"/api/v2/conversations/conversation-1/events",
+			{ signal: controller.signal },
+		);
+		expect(response.status).toBe(200);
+		if (!response.body) throw new Error("missing SSE body");
+		const reader = response.body.getReader();
+		await reader.read();
+		await vi.waitFor(() =>
+			expect(
+				vi.mocked(h.dependencies.query.replay).mock.calls.length,
+			).toBeGreaterThan(1),
+		);
+		controller.abort();
+		await reader.cancel();
+		expect(command.requestMetadataRecovery).toHaveBeenCalledTimes(1);
 	});
 });

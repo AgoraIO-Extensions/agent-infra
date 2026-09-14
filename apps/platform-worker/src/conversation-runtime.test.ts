@@ -1016,3 +1016,102 @@ describe("durable generation isolation Worker wiring", () => {
 		}
 	});
 });
+
+describe("explicit historical metadata delivery", () => {
+	it.each([false, true])(
+		"signs one marker for query, replay and ACK with archive-only authority (isolation=%s)",
+		async (isolating) => {
+			const h = harness();
+			const marker = {
+				id: "history-pass",
+				requestedAt: now,
+				originalStatus: "failed" as const,
+			};
+			Object.assign(h.claim, {
+				metadataRecovery: marker,
+				executionStatus: "completed",
+				runtimeCursor: "committed",
+				deliveryFence: 9,
+				stopPending: true,
+			});
+			Object.assign(h.state, {
+				metadataRecovery: marker,
+				executionStatus: "completed",
+				runtimeCursor: "committed",
+				stopPending: true,
+				...(isolating
+					? {
+							generationIsolation: {
+								operationId: "generation:conversation:1",
+								controlRecordId: "other-execution-isolation",
+								originalPrincipal: { kind: "user", id: "user" },
+							},
+						}
+					: {}),
+			});
+			h.directory.resolveUser.mockRejectedValue(new Error("unavailable"));
+			const context = await h.authorize();
+			h.fetcher.mockImplementation(async (url) =>
+				String(url).endsWith("/events/ack")
+					? new Response(
+							JSON.stringify({
+								schemaVersion: 3,
+								executionId: "execution",
+								confirmedCursor: "committed",
+							}),
+						)
+					: String(url).endsWith("/status")
+						? new Response(
+								JSON.stringify({
+									schemaVersion: 3,
+									executionId: "execution",
+									hostSessionRef: "host",
+									outcome: "found",
+									status: "completed",
+								}),
+							)
+						: new Response("", {
+								headers: { "content-type": "text/event-stream" },
+							}),
+			);
+			await h.runtime.runtimeHost.recoverOriginalStatus?.({
+				...h.events(context),
+				schemaVersion: 2,
+			});
+			for await (const _event of h.runtime.runtimeHost.events(
+				h.events(context),
+			)) {
+				throw new Error("unexpected event");
+			}
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(context),
+				confirmedCursor: "committed",
+			});
+			for (const [, init] of h.fetcher.mock.calls) {
+				const body = JSON.parse(init?.body as string);
+				expect(body.requestId).toBe("history-pass");
+				expect(body).not.toHaveProperty("input");
+				expect(verify(body.grant).claims).toMatchObject({
+					purpose: "control",
+					reason: isolating ? "generation_isolation" : "recovery",
+					operation: { deliveryFence: 2, executionDeliveryFence: 2 },
+				});
+			}
+			expect(h.fetcher).toHaveBeenCalledTimes(3);
+			expect(h.directory.resolveUser).not.toHaveBeenCalled();
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(context)),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			Object.assign(h.state, {
+				metadataRecovery: { ...marker, id: "next-pass" },
+			});
+			await expect(
+				h.runtime.runtimeHost.acknowledge?.({
+					...h.events(context),
+					confirmedCursor: "committed",
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
+			h.runtime.close();
+		},
+	);
+});

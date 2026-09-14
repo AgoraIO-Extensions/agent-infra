@@ -103,7 +103,27 @@ export type ConversationRuntimeEvent =
 	| ConversationRuntimeEventV1
 	| ConversationRuntimeOperationEventV2;
 
+export interface ConversationMetadataRecoveryV1 {
+	readonly id: string;
+	readonly requestedAt: number;
+	readonly originalStatus: "succeeded" | "failed";
+}
+
+export function parseConversationMetadataRecoveryV1(
+	value: unknown,
+): ConversationMetadataRecoveryV1 {
+	const input = exactObject(value, ["id", "requestedAt", "originalStatus"]);
+	if (input.originalStatus !== "succeeded" && input.originalStatus !== "failed")
+		unavailable();
+	return {
+		id: text(input.id),
+		requestedAt: positiveInteger(input.requestedAt),
+		originalStatus: input.originalStatus,
+	};
+}
+
 export interface ConversationDispatchClaimV1 {
+	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly schemaVersion: 1;
 	readonly itemId: string;
@@ -590,7 +610,7 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionStatus",
 			"stopPending",
 		],
-		["generationIsolation", "runtimeTerminalEventSeen"],
+		["generationIsolation", "runtimeTerminalEventSeen", "metadataRecovery"],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -603,6 +623,20 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	)
 		return unavailable();
 	const parsedOperation = operation(input.operation);
+	const metadataRecovery =
+		input.metadataRecovery === undefined
+			? undefined
+			: parseConversationMetadataRecoveryV1(input.metadataRecovery);
+	if (
+		metadataRecovery &&
+		(!isTurnOperation(parsedOperation) ||
+			!["completed", "failed", "cancelled"].includes(
+				String(input.executionStatus),
+			) ||
+			!input.hostSessionRef ||
+			!input.runtimeCursor)
+	)
+		unavailable();
 	const messageId = nullableText(input.messageId);
 	const stopRequestId = nullableText(input.stopRequestId);
 	const modelConfigurationRevision =
@@ -677,6 +711,7 @@ function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(input.runtimeTerminalEventSeen === true
 			? { runtimeTerminalEventSeen: true as const }
 			: {}),
+		...(metadataRecovery ? { metadataRecovery } : {}),
 		input: runtimeInput,
 		executionStatus: executionStatus(input.executionStatus),
 		stopPending:
@@ -1366,14 +1401,16 @@ export function createConversationDispatchUseCaseV1(
 				? responseStatus
 				: undefined;
 		let finalStatus = responseFinalStatus;
-		let terminalEventSeen = claim.runtimeTerminalEventSeen === true;
+		let terminalEventSeen =
+			claim.runtimeTerminalEventSeen === true ||
+			claim.metadataRecovery !== undefined;
 		// A terminal event may have committed even if persistence lost its response.
 		let terminalCommitPossible =
 			executionTerminal(claim.executionStatus) ||
 			responseFinalStatus !== undefined;
 		const eventRequest: ConversationRuntimeEventRequestV1 = {
 			schemaVersion: 1,
-			requestId: claim.requestId,
+			requestId: claim.metadataRecovery?.id ?? claim.requestId,
 			traceId: claim.traceId,
 			agentId: claim.agentId,
 			actorId: claim.actorId,
@@ -1391,7 +1428,9 @@ export function createConversationDispatchUseCaseV1(
 			dependencies.store,
 			claim,
 			leaseDurationMs,
-			!authority.controlOnly && dependencies.runtimeHost.renewAuthorization
+			!claim.metadataRecovery &&
+				!authority.controlOnly &&
+				dependencies.runtimeHost.renewAuthorization
 				? async (signal) => {
 						if (!terminalCommitPossible)
 							await dependencies.runtimeHost.renewAuthorization?.(
@@ -1726,7 +1765,14 @@ export function createConversationDispatchUseCaseV1(
 						hostSessionRef,
 					}))
 						? { schemaVersion: 1, outcome: "accepted" }
-						: { schemaVersion: 1, outcome: "stale" };
+						: await retry(
+								dependencies.store,
+								claim,
+								retryDelayMs,
+								"GENERATION_BARRIER_UNCONFIRMED",
+								"retry",
+								{},
+							);
 				} catch {
 					if (!(await isolationHeartbeat.stop()))
 						return { schemaVersion: 1, outcome: "stale" };
@@ -1789,6 +1835,74 @@ export function createConversationDispatchUseCaseV1(
 					"RUNTIME_ACCEPTANCE_UNKNOWN",
 					"unknown",
 					claim.executionStatus === "submitted" ? {} : retryTransition(claim),
+				);
+			}
+			if (claim.metadataRecovery) {
+				const recover = dependencies.runtimeHost.recoverOriginalStatus;
+				if (!recover || !claim.hostSessionRef)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						"retry",
+						{},
+					);
+				const recoveryHeartbeat = heartbeat(
+					dependencies.store,
+					claim,
+					leaseDurationMs,
+				);
+				try {
+					const result = parseRuntimeStatusResponse(
+						await recover(
+							{
+								schemaVersion: 2,
+								requestId: claim.metadataRecovery.id,
+								traceId: claim.traceId,
+								agentId: claim.agentId,
+								actorId: claim.actorId,
+								channelId: claim.channelId,
+								conversationId: claim.conversationId,
+								executionId: claim.executionId,
+								turnId: claim.turnId,
+								sessionGeneration: claim.sessionGeneration,
+								deliveryFence: claim.executionDeliveryFence,
+								hostSessionRef: claim.hostSessionRef,
+								runtimeGrant: authority.runtimeGrant,
+							},
+							recoveryHeartbeat.signal,
+						),
+						claim,
+					);
+					if (result.outcome !== "found")
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							true,
+						);
+					if (!(await recoveryHeartbeat.stop()))
+						return { schemaVersion: 1, outcome: "stale" };
+				} catch {
+					if (!(await recoveryHeartbeat.stop()))
+						return { schemaVersion: 1, outcome: "stale" };
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_STATUS_UNAVAILABLE",
+						"retry",
+						{},
+					);
+				} finally {
+					await recoveryHeartbeat.stop();
+				}
+				return persistRuntimeEvents(
+					claim,
+					authority,
+					claim.hostSessionRef,
+					executionTerminal(claim.executionStatus)
+						? claim.executionStatus
+						: unavailable(),
 				);
 			}
 			const executionFinished = executionTerminal(claim.executionStatus);

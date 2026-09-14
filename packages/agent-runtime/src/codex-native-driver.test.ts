@@ -22,6 +22,7 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	codexConversationKey,
+	type runCodexConnectionRecovery,
 } from "./codex-app-server-bridge.js";
 import { codexCallbackSchema } from "./codex-callback-schema.generated.js";
 import type {
@@ -32,7 +33,10 @@ import type {
 	CodexConnectionEvidenceUpdateResponse,
 	CodexConnectionOperationRequest,
 	CodexConnectionOperationResponse,
+	CodexConnectionOrigin,
+	CodexConnectionRecoveryRequest,
 } from "./codex-connection-client.js";
+import { isCodexConnectionClientConfiguration } from "./codex-connection-client.js";
 import type {
 	CodexNativeAttemptIdentityV1,
 	CodexNativeCallbackRequestV1,
@@ -44,6 +48,7 @@ import {
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
+import type { RuntimeOriginalEvidenceReadContext } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 
@@ -349,6 +354,11 @@ class ScriptedTransport {
 }
 
 class BoundDriver extends CodexRuntimeDriver {
+	override launchConnectionRecovery(
+		options: Parameters<typeof runCodexConnectionRecovery>[0],
+	) {
+		return super.launchConnectionRecovery(options);
+	}
 	static openBound(
 		options: CodexRuntimeDriverOptions,
 		factory: (
@@ -369,6 +379,7 @@ interface Journal {
 		string,
 		{
 			identity: CodexNativeAttemptIdentityV1;
+			connectionOrigin?: CodexConnectionOrigin;
 			connectionRequest?: CodexConnectionOperationRequest["connectionRequest"];
 			connectionEvidence?: CodexConnectionEvidence;
 			connectionEvidenceUpdates?: { requestId: string; fingerprint: string }[];
@@ -2861,4 +2872,532 @@ describe("Codex Driver Connection leaf negative boundaries", () => {
 		expect(options.resolveOriginalClient).toHaveBeenCalledTimes(1);
 		expect(execution.bridge.native.turnStarts).toBe(1);
 	});
+});
+
+function recoveryRead(execution: Execution, origin: CodexConnectionOrigin) {
+	const abort = new AbortController();
+	const read: RuntimeOriginalEvidenceReadContext = {
+		signal: abort.signal,
+		expiresAt: Date.now() + 30_000,
+		assertCurrent() {
+			abort.signal.throwIfAborted();
+			return structuredClone(origin.originalBinding);
+		},
+		async commit(write) {
+			this.assertCurrent();
+			return write();
+		},
+	};
+	return {
+		abort,
+		read,
+		reference: {
+			nativeSessionRef: execution.nativeSessionRef,
+			executionId: execution.command.executionId,
+			recoveryRequestId: randomUUID(),
+		},
+	};
+}
+
+function recoveryPull(
+	profileRef: string,
+	previousRecoveryId?: string,
+	processNonce: string = randomUUID(),
+): CodexConnectionRecoveryRequest {
+	return {
+		schemaVersion: 2,
+		phase: "connection-recovery",
+		requestId: randomUUID(),
+		profileRef,
+		processNonce,
+		...(previousRecoveryId ? { previousRecoveryId } : {}),
+	};
+}
+
+async function recoveryFixture() {
+	const { options, configuration } = connectionOptions();
+	const resolveReadOnlyClient = vi.fn<
+		NonNullable<
+			NonNullable<
+				CodexRuntimeDriverOptions["connectionClient"]
+			>["resolveReadOnlyClient"]
+		>
+	>(async (_reference, read) => ({
+		...structuredClone(configuration),
+		originalBinding: read.assertCurrent(),
+		credential: {
+			...configuration.credential,
+			accessToken: "synthetic-recovery-only-token",
+			revision: "synthetic-recovery-revision",
+		},
+	}));
+	const env = await setup(undefined, undefined, {
+		...options,
+		resolveReadOnlyClient,
+	});
+	const execution = await env.start();
+	const { request } = await connectionIntent(execution);
+	const start = await connectionStarted(execution, request);
+	const verified = verifiedConnectionEvidence(start);
+	await execution.bridge.connectionCallback(
+		connectionOutcome(start, {
+			verification: "unverified",
+			reason: "record_unavailable",
+			originalResponse: verified.originalResponse,
+		}),
+	);
+	await execution.bridge.completeInferenceTurn();
+	const origin = journal(await env.saved(), execution).nativeToolAttempts?.[
+		request.identity.attemptRef
+	]?.connectionOrigin;
+	assert(origin);
+	return {
+		env,
+		execution,
+		start,
+		verified,
+		origin,
+		resolveReadOnlyClient,
+		options,
+	};
+}
+
+describe("private cross-process Connection evidence recovery", () => {
+	it("reopens the original journal, uses only the current read credential, commits before ACK, and replays identical bytes", async () => {
+		const { env, execution, start, verified, origin, resolveReadOnlyClient } =
+			await recoveryFixture();
+		const before = facts(await env.saved(), execution).at(-1);
+		assert(before?.kind === "tool");
+		const methods = [...execution.bridge.methods];
+		await env.driver.close();
+		const reopened = await env.reopen();
+		const context = recoveryRead(execution, origin);
+		const launch = vi
+			.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
+			.mockImplementation(async (process) => {
+				const request = recoveryPull(process.profile.profileRef);
+				const response = await process.recovery(request, process.signal);
+				assert(response.decision === "verify");
+				expect(response.original.connectionOrigin).toEqual(origin);
+				expect(response.currentClient.credential.accessToken).toBe(
+					"synthetic-recovery-only-token",
+				);
+				verified.recordQuery.credentialRevision =
+					response.currentClient.credential.revision;
+				verified.recordQuery.queriedAt = Date.now();
+				verified.verifiedAt = Date.now();
+				const update = connectionUpdate(start, verified);
+				const ack = await process.evidence(update, process.signal);
+				expect(ack.decision).toBe("ack");
+				const recovered = facts(await env.saved(), execution).at(-1);
+				expect(
+					recovered?.kind === "tool" && recovered.connection?.verification,
+				).toBe("verified");
+				await expect(process.evidence(update, process.signal)).resolves.toEqual(
+					ack,
+				);
+				expect(
+					await process.recovery(
+						recoveryPull(
+							process.profile.profileRef,
+							response.recoveryId,
+							request.processNonce,
+						),
+						process.signal,
+					),
+				).toMatchObject({ decision: "done" });
+			});
+		await reopened.recoverOriginalEvidence(context.reference, context.read);
+		const saved = await env.saved();
+		const after = facts(saved, execution).at(-1);
+		assert(after?.kind === "tool");
+		const { connection: _beforeConnection, ...originalFields } = before;
+		const { connection: _afterConnection, ...recoveredFields } = after;
+		expect(recoveredFields).toEqual(originalFields);
+		expect(
+			saved.sessions[execution.nativeSessionRef]?.executions[
+				execution.command.executionId
+			]?.status,
+		).toBe("completed");
+		const replay = await reopened.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		await reopened.recoverOriginalEvidence(context.reference, context.read);
+		expect(
+			await reopened.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			),
+		).toEqual(replay);
+		expect(launch).toHaveBeenCalledTimes(1);
+		expect(resolveReadOnlyClient).toHaveBeenCalledTimes(1);
+		expect(execution.bridge.methods).toEqual(methods);
+		expect(JSON.stringify(saved)).not.toContain(
+			"synthetic-recovery-only-token",
+		);
+	});
+
+	it.each(["origin", "receipt"] as const)(
+		"keeps legacy journals without original %s unverified and never requests a credential",
+		async (missing) => {
+			const { env, execution, origin, resolveReadOnlyClient } =
+				await recoveryFixture();
+			await env.driver.close();
+			const saved = await env.saved();
+			const attempt = Object.values(
+				journal(saved, execution).nativeToolAttempts ?? {},
+			)[0];
+			assert(attempt?.connectionEvidence);
+			if (missing === "origin") delete attempt.connectionOrigin;
+			else delete attempt.connectionEvidence.originalResponse;
+			await writeFile(env.path, JSON.stringify(saved));
+			const reopened = await env.reopen();
+			const context = recoveryRead(execution, origin);
+			vi.spyOn(
+				BoundDriver.prototype,
+				"launchConnectionRecovery",
+			).mockImplementation(async (process) => {
+				expect(
+					await process.recovery(
+						recoveryPull(process.profile.profileRef),
+						process.signal,
+					),
+				).toMatchObject({ decision: "done" });
+			});
+			await reopened.recoverOriginalEvidence(context.reference, context.read);
+			expect(resolveReadOnlyClient).not.toHaveBeenCalled();
+			const retained = facts(await env.saved(), execution).at(-1);
+			expect(
+				retained?.kind === "tool" && retained.connection?.verification,
+			).toBe("unverified");
+		},
+	);
+
+	it.each(["execution", "identity", "service", "expired"] as const)(
+		"refuses current credential %s mismatch without altering the original outcome",
+		async (mismatch) => {
+			const { env, execution, origin, resolveReadOnlyClient } =
+				await recoveryFixture();
+			const implementation = resolveReadOnlyClient.getMockImplementation();
+			assert(implementation);
+			resolveReadOnlyClient.mockImplementation(async (...args) => {
+				const value = await implementation(...args);
+				assert(isCodexConnectionClientConfiguration(value));
+				if (mismatch === "execution")
+					value.originalBinding.scope.executionId = "another-execution";
+				if (mismatch === "identity")
+					value.connectionIdentity.actorId = "another-actor";
+				if (mismatch === "service")
+					value.service.serviceRef = "another-service";
+				if (mismatch === "expired") value.credential.expiresAt = Date.now() - 1;
+				return value;
+			});
+			const before = facts(await env.saved(), execution);
+			const context = recoveryRead(execution, origin);
+			vi.spyOn(
+				BoundDriver.prototype,
+				"launchConnectionRecovery",
+			).mockImplementation(async (process) => {
+				expect(
+					await process.recovery(
+						recoveryPull(process.profile.profileRef),
+						process.signal,
+					),
+				).toMatchObject({
+					decision: "unavailable",
+					reason:
+						mismatch === "expired" ? "credential_expired" : "binding_mismatch",
+				});
+			});
+			await env.driver.recoverOriginalEvidence(context.reference, context.read);
+			expect(facts(await env.saved(), execution)).toEqual(before);
+		},
+	);
+
+	it("persists a 16-item budget across reopen and advances the original attempt ring on a new authorized pass", async () => {
+		const { options, configuration } = connectionOptions();
+		const env = await setup(undefined, undefined, {
+			...options,
+			resolveReadOnlyClient: async (_reference, read) => ({
+				...configuration,
+				originalBinding: read.assertCurrent(),
+			}),
+		});
+		const execution = await env.start();
+		for (let index = 0; index < 17; index++) {
+			const { request } = await connectionIntent(execution);
+			const start = await connectionStarted(execution, request);
+			await execution.bridge.connectionCallback(
+				connectionOutcome(start, {
+					verification: "unverified",
+					reason: "record_unavailable",
+					originalResponse: verifiedConnectionEvidence(start).originalResponse,
+				}),
+			);
+		}
+		await execution.bridge.completeInferenceTurn();
+		const origin = Object.values(
+			journal(await env.saved(), execution).nativeToolAttempts ?? {},
+		)[0]?.connectionOrigin;
+		assert(origin);
+		const context = recoveryRead(execution, origin);
+		const passes: string[][] = [];
+		const launch = vi
+			.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
+			.mockImplementation(async (process) => {
+				const selected: string[] = [];
+				passes.push(selected);
+				let request = recoveryPull(process.profile.profileRef);
+				for (let index = 0; index < 16; index++) {
+					const response = await process.recovery(request, process.signal);
+					assert(response.decision === "verify");
+					selected.push(response.original.identity.attemptRef);
+					request = recoveryPull(
+						process.profile.profileRef,
+						response.recoveryId,
+						request.processNonce,
+					);
+				}
+			});
+		await env.driver.recoverOriginalEvidence(context.reference, context.read);
+		expect(new Set(passes[0]).size).toBe(16);
+		await env.driver.close();
+		const reopened = await env.reopen();
+		await reopened.recoverOriginalEvidence(context.reference, context.read);
+		expect(launch).toHaveBeenCalledTimes(1);
+		await reopened.recoverOriginalEvidence(
+			{ ...context.reference, recoveryRequestId: randomUUID() },
+			context.read,
+		);
+		expect(new Set(passes[1]).size).toBe(16);
+		expect(passes[0]).not.toContain(passes[1]?.[0]);
+	});
+
+	it("aborts and reaps recovery before generation confirmation and admits no new pass afterward", async () => {
+		const { env, execution, origin, resolveReadOnlyClient } =
+			await recoveryFixture();
+		const context = recoveryRead(execution, origin);
+		let entered = false;
+		let reaped = false;
+		const launch = vi
+			.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
+			.mockImplementation(async (process) => {
+				const response = await process.recovery(
+					recoveryPull(process.profile.profileRef),
+					process.signal,
+				);
+				assert(response.decision === "verify");
+				entered = true;
+				await new Promise<void>((resolve) =>
+					process.signal.addEventListener(
+						"abort",
+						() => {
+							reaped = true;
+							resolve();
+						},
+						{ once: true },
+					),
+				);
+				process.signal.throwIfAborted();
+			});
+		const pending = env.driver
+			.recoverOriginalEvidence(context.reference, context.read)
+			.catch(() => {});
+		await vi.waitFor(() => expect(entered).toBe(true));
+		const { input: _input, ...binding } = execution.command;
+		const result = await env.driver.execute({
+			...binding,
+			kind: "generation-cancel",
+			operationId: randomUUID(),
+			nativeSessionRef: execution.nativeSessionRef,
+		});
+		await pending;
+		expect(reaped).toBe(true);
+		expect(result.result).toMatchObject({
+			outcome: "accepted",
+			status: "completed",
+		});
+		const saved = await env.saved();
+		await expect(
+			env.driver.recoverOriginalEvidence(
+				{ ...context.reference, recoveryRequestId: randomUUID() },
+				context.read,
+			),
+		).rejects.toThrow();
+		expect(await env.saved()).toEqual(saved);
+		expect(launch).toHaveBeenCalledTimes(1);
+		expect(resolveReadOnlyClient).toHaveBeenCalledTimes(1);
+	});
+});
+
+it("linearizes a durable evidence commit before cancellation and rejects every new metadata update after the barrier", async () => {
+	const { env, execution, start, verified, origin } = await recoveryFixture();
+	const context = recoveryRead(execution, origin);
+	const committing =
+		Promise.withResolvers<Awaited<ReturnType<typeof holdDirectorySync>>>();
+	let acknowledged = false;
+	vi.spyOn(
+		BoundDriver.prototype,
+		"launchConnectionRecovery",
+	).mockImplementation(async (process) => {
+		const response = await process.recovery(
+			recoveryPull(process.profile.profileRef),
+			process.signal,
+		);
+		assert(response.decision === "verify");
+		verified.recordQuery.credentialRevision =
+			response.currentClient.credential.revision;
+		verified.recordQuery.queriedAt = Date.now();
+		verified.verifiedAt = Date.now();
+		const sync = await holdDirectorySync(env.directory);
+		const pending = process.evidence(
+			connectionUpdate(start, verified),
+			process.signal,
+		);
+		await sync.entered;
+		committing.resolve(sync);
+		await pending;
+		acknowledged = true;
+	});
+	const recovery = env.driver
+		.recoverOriginalEvidence(context.reference, context.read)
+		.catch(() => {});
+	const sync = await committing.promise;
+	const { input: _input, ...binding } = execution.command;
+	let confirmed = false;
+	const cancel = env.driver
+		.execute({
+			...binding,
+			kind: "generation-cancel",
+			operationId: randomUUID(),
+			nativeSessionRef: execution.nativeSessionRef,
+		})
+		.then((value) => {
+			confirmed = true;
+			return value;
+		});
+	try {
+		expect(acknowledged).toBe(false);
+		expect(confirmed).toBe(false);
+	} finally {
+		sync.release();
+	}
+	await recovery;
+	expect(await cancel).toMatchObject({
+		result: { outcome: "accepted", status: "completed" },
+	});
+	sync.restore();
+	expect(acknowledged).toBe(true);
+	const saved = await env.saved();
+	const last = facts(saved, execution).at(-1);
+	expect(last?.kind === "tool" && last.connection?.verification).toBe(
+		"verified",
+	);
+	await expect(
+		execution.bridge.connectionCallback(connectionUpdate(start, verified)),
+	).rejects.toThrow();
+	expect(await env.saved()).toEqual(saved);
+});
+
+it.each([
+	"credential-revision",
+	"original-receipt",
+	"attempt",
+	"process",
+	"previous",
+	"reused-request",
+] as const)(
+	"rejects recovery %s substitution before committing evidence",
+	async (mismatch) => {
+		const { env, execution, start, verified, origin } = await recoveryFixture();
+		const context = recoveryRead(execution, origin);
+		const before = facts(await env.saved(), execution);
+		vi.spyOn(
+			BoundDriver.prototype,
+			"launchConnectionRecovery",
+		).mockImplementation(async (process) => {
+			const request = recoveryPull(process.profile.profileRef);
+			const response = await process.recovery(request, process.signal);
+			assert(response.decision === "verify");
+			if (
+				mismatch === "process" ||
+				mismatch === "previous" ||
+				mismatch === "reused-request"
+			) {
+				const next = recoveryPull(
+					process.profile.profileRef,
+					response.recoveryId,
+					request.processNonce,
+				);
+				if (mismatch === "process") next.processNonce = randomUUID();
+				if (mismatch === "previous") next.previousRecoveryId = randomUUID();
+				if (mismatch === "reused-request") next.requestId = request.requestId;
+				await expect(process.recovery(next, process.signal)).rejects.toThrow();
+			} else {
+				verified.recordQuery.credentialRevision =
+					mismatch === "credential-revision"
+						? "another-credential"
+						: response.currentClient.credential.revision;
+				verified.recordQuery.queriedAt = Date.now();
+				verified.verifiedAt = Date.now();
+				const update = connectionUpdate(start, verified);
+				if (mismatch === "original-receipt")
+					update.connectionEvidence.originalResponse = {
+						...verified.originalResponse,
+						receipt: {
+							...verified.originalResponse.receipt,
+							callRef: "another-real-call",
+						},
+					};
+				if (mismatch === "attempt") update.identity.attemptRef = randomUUID();
+				await expect(
+					process.evidence(update, process.signal),
+				).rejects.toThrow();
+			}
+		});
+		await env.driver.recoverOriginalEvidence(context.reference, context.read);
+		expect(facts(await env.saved(), execution)).toEqual(before);
+	},
+);
+
+it("cancels a blocked credential resolver without waiting for it or admitting its late value", async () => {
+	const { env, execution, origin, resolveReadOnlyClient } =
+		await recoveryFixture();
+	const context = recoveryRead(execution, origin);
+	const credential = Promise.withResolvers<unknown>();
+	const resolving = Promise.withResolvers<void>();
+	resolveReadOnlyClient.mockImplementation(() => {
+		resolving.resolve();
+		return credential.promise;
+	});
+	vi.spyOn(
+		BoundDriver.prototype,
+		"launchConnectionRecovery",
+	).mockImplementation(async (process) => {
+		await process.recovery(
+			recoveryPull(process.profile.profileRef),
+			process.signal,
+		);
+	});
+	const pending = env.driver
+		.recoverOriginalEvidence(context.reference, context.read)
+		.catch(() => {});
+	await resolving.promise;
+	const { input: _input, ...binding } = execution.command;
+	const cancel = await env.driver.execute({
+		...binding,
+		kind: "generation-cancel",
+		operationId: randomUUID(),
+		nativeSessionRef: execution.nativeSessionRef,
+	});
+	expect(cancel.result).toMatchObject({
+		outcome: "accepted",
+		status: "completed",
+	});
+	await pending;
+	const saved = await env.saved();
+	credential.resolve({ credential: { accessToken: "synthetic-late-secret" } });
+	await Promise.resolve();
+	expect(await env.saved()).toEqual(saved);
 });

@@ -2204,3 +2204,445 @@ describe("PostgreSQL terminal outbox event recovery", () => {
 		},
 	);
 });
+
+describe("authorized historical metadata rearm", () => {
+	async function terminalHistory(
+		originalStatus: "succeeded" | "failed" = "succeeded",
+	) {
+		const work = await seed();
+		const authorizationRecordId = `authorization-${work.executionId}`;
+		await client`insert into platform.task_authorization_records (id, execution_id, boundary) values (${authorizationRecordId}, ${work.executionId}, ${client.json(
+			{
+				schemaVersion: 1,
+				principal: { kind: "user", id: "actor-dispatch" },
+				agentId: "agent-dispatch",
+				channelId: "web",
+				identityRevision: "identity-1",
+				agentAuthorizationRevision: "authorization-dispatch",
+				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+			},
+		)})`;
+		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({
+			transaction: eventTransaction,
+		});
+		const store = open();
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as ConversationRuntimeHostPortV1;
+		const outcome = {
+			kind: "tool",
+			toolId: "connection.create_pr",
+			operationRef: "tool",
+			attemptRef: "attempt",
+			phase: "unknown",
+			startedAt: new Date(1_800_000_000_002).toISOString(),
+			finishedAt: new Date(1_800_000_000_003).toISOString(),
+			durationMs: 1,
+		} as const;
+		const operation = (
+			n: number,
+			payload: ConversationRuntimeOperationEventV2["payload"],
+		): ConversationRuntimeOperationEventV2 => ({
+			schemaVersion: 2,
+			type: "operation",
+			adapterEventKey: `event-${n}`,
+			cursor: `cursor-${n}`,
+			executionId: work.executionId,
+			occurredAt: new Date(1_800_000_000_000 + n).toISOString(),
+			payload,
+		});
+		const stream: ConversationRuntimeEvent[] = [
+			operation(1, {
+				kind: "tool",
+				toolId: outcome.toolId,
+				operationRef: "tool",
+				attemptRef: "attempt",
+				phase: "intent",
+			}),
+			operation(2, {
+				kind: "tool",
+				toolId: outcome.toolId,
+				operationRef: "tool",
+				attemptRef: "attempt",
+				phase: "started",
+				startedAt: outcome.startedAt,
+			}),
+			operation(3, outcome),
+			{
+				schemaVersion: 1,
+				type: "completed",
+				adapterEventKey: "event-4",
+				cursor: "cursor-4",
+				executionId: work.executionId,
+				occurredAt: new Date(1_800_000_000_004).toISOString(),
+				payload: { status: "completed" },
+			},
+		];
+		const requests: { requestId: string; kind: string }[] = [];
+		runtimeHost.events = async function* (request) {
+			requests.push({ requestId: request.requestId, kind: "events" });
+			const index = request.afterCursor
+				? stream.findIndex((event) => event.cursor === request.afterCursor) + 1
+				: 0;
+			for (const event of stream.slice(index)) yield event;
+		};
+		let loseMetadataAck = false;
+		runtimeHost.acknowledge = async (request) => {
+			requests.push({ requestId: request.requestId, kind: "ack" });
+			if (loseMetadataAck && request.confirmedCursor === "cursor-5") {
+				loseMetadataAck = false;
+				throw new Error("metadata ACK response lost");
+			}
+		};
+		runtimeHost.recoverOriginalStatus = async (request) => {
+			requests.push({ requestId: request.requestId, kind: "status" });
+			return {
+				schemaVersion: 2,
+				hostSessionRef: request.hostSessionRef,
+				executionId: request.executionId,
+				outcome: "found",
+				status: "completed",
+			};
+		};
+		const dispatch = createConversationDispatchUseCaseV1(
+			{ store, events, runtimeHost, authorization: isolationAuthorization },
+			{ retryDelayMs: 0 },
+		);
+		const run = () =>
+			dispatch.dispatch({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "worker",
+			});
+		expect(await run()).toMatchObject({ outcome: "accepted" });
+		await client`update platform.outbox_items set status = ${originalStatus} where id = ${work.itemId}`;
+		const authority = {
+			schemaVersion: 1 as const,
+			actorId: "actor-dispatch",
+			agentId: "agent-dispatch",
+			channelId: "web",
+			authorizationRevision: "authorization-dispatch",
+			supportsSupplementaryInstruction: true,
+		};
+		let pass = 0;
+		const rearm = (patch: Partial<typeof authority> = {}) =>
+			createConversationExecutionUseCaseV1(
+				{
+					transaction,
+					authorization: {
+						async authorize() {
+							return {
+								outcome: "allowed",
+								authority: { ...authority, ...patch },
+							};
+						},
+					},
+				},
+				{
+					now: () => new Date(1_800_000_000_100 + pass),
+					newId: () => `pass-${++pass}`,
+				},
+			).requestMetadataRecovery({
+				schemaVersion: 1,
+				conversationId: work.conversationId,
+				executionId: work.executionId,
+			});
+		return {
+			work,
+			store,
+			loseMetadataAck: () => {
+				loseMetadataAck = true;
+			},
+			run,
+			rearm,
+			transaction,
+			requests,
+			stream,
+			verified: operation(5, {
+				...outcome,
+				connection: {
+					serviceRef: "connection",
+					verification: "verified",
+					callRef: "call",
+				},
+			}),
+			close: async () => {
+				await store.close();
+				await transaction.close();
+				await eventTransaction.close();
+			},
+		};
+	}
+
+	it.each(["succeeded", "failed"] as const)(
+		"rearms an ended %s outbox once, retains the original task fence and active Conversation, and drains after restart",
+		async (originalStatus) => {
+			const h = await terminalHistory(originalStatus);
+			try {
+				await client`update platform.conversations set status = 'active', authorization_revision = 'new-business-revision' where id = ${h.work.conversationId}`;
+				const before = await dispatchState(h.work);
+				const [one, two] = await Promise.all([h.rearm(), h.rearm()]);
+				expect([one.outcome, two.outcome].sort()).toEqual([
+					"coalesced",
+					"scheduled",
+				]);
+				const current = await claim(h.work.itemId);
+				await current.store.close();
+				expect(current.decision.outcome).toBe("claimed");
+				if (current.decision.outcome !== "claimed")
+					throw new Error("claim failed");
+				const recoveryClaim = current.decision.claim;
+				if (!recoveryClaim.metadataRecovery)
+					throw new Error("missing metadata marker");
+				expect(recoveryClaim.metadataRecovery).toEqual({
+					id: "pass-1",
+					requestedAt: 1_800_000_000_100,
+					originalStatus,
+				});
+				expect(recoveryClaim.executionDeliveryFence).toBe(
+					before?.execution_fence,
+				);
+				expect(recoveryClaim.deliveryFence).toBe(
+					Number(before?.outbox_fence) + 1,
+				);
+				await expect(
+					h.store.prepareRuntimeDispatch({
+						claim: recoveryClaim,
+						leaseDurationMs: 30_000,
+					}),
+				).rejects.toThrow();
+				await expect(
+					h.store.recordRuntimeResponse({
+						claim: recoveryClaim,
+						hostSessionRef: recoveryClaim.hostSessionRef ?? "missing",
+						transition: {},
+					}),
+				).rejects.toThrow();
+				await expect(
+					h.store.finish({
+						claim: recoveryClaim,
+						status: "succeeded",
+						transition: { conversationStatus: "ready" },
+					}),
+				).rejects.toThrow();
+				expect(
+					await h.store.readRuntimeState({
+						claim: {
+							...recoveryClaim,
+							metadataRecovery: {
+								...recoveryClaim.metadataRecovery,
+								id: "old-pass",
+							},
+						},
+					}),
+				).toBeNull();
+				expect(
+					await h.store.retry({
+						claim: recoveryClaim,
+						retryDelayMs: 0,
+						errorCode: "TRANSPORT_LOST",
+						transition: {},
+					}),
+				).toBe(true);
+				h.stream.push(h.verified);
+				h.requests.length = 0;
+				expect(await h.run()).toMatchObject({ outcome: "accepted" });
+				expect(h.requests.map((request) => request.kind)).toEqual([
+					"status",
+					"ack",
+					"events",
+					"ack",
+				]);
+				expect(
+					h.requests.every((request) => request.requestId === "pass-1"),
+				).toBe(true);
+				expect(await dispatchState(h.work)).toMatchObject({
+					status: originalStatus,
+					execution_status: "completed",
+					execution_fence: before?.execution_fence,
+				});
+				const [conversation] =
+					await client`select status, authorization_revision from platform.conversations where id = ${h.work.conversationId}`;
+				expect(conversation).toMatchObject({
+					status: "active",
+					authorization_revision: "new-business-revision",
+				});
+				expect(await h.rearm()).toEqual({ outcome: "not_applicable" });
+				expect(await h.rearm({ actorId: "other-user" })).toEqual({
+					outcome: "denied",
+				});
+				expect(await h.rearm({ agentId: "other-agent" })).toEqual({
+					outcome: "denied",
+				});
+				expect(await h.rearm({ channelId: "other-channel" })).toEqual({
+					outcome: "denied",
+				});
+			} finally {
+				await h.close();
+			}
+		},
+	);
+	it("keeps current business capacity independent and refuses generation confirmation until another Execution metadata outbox drains", async () => {
+		const h = await terminalHistory();
+		try {
+			expect(await h.rearm()).toEqual({ outcome: "scheduled" });
+			const original = await claim(h.work.itemId);
+			await original.store.close();
+			if (original.decision.outcome !== "claimed")
+				throw new Error("metadata not claimed");
+			const oldClaim = original.decision.claim;
+			const hostSessionRef = oldClaim.hostSessionRef;
+			if (!hostSessionRef) throw new Error("missing original Host");
+			const executionId = "new-execution";
+			const itemId = `conversation:turn:${executionId}`;
+			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
+				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
+			await client`insert into platform.conversation_messages (message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
+				values ('new-message', ${h.work.conversationId}, 'actor-dispatch', 'user', 'new task', ${executionId}, 'submitted', now(), now())`;
+			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
+				select ${itemId}, scope_type, scope_id, operation, (payload - 'metadataRecovery') || ${client.json({ executionId, messageId: "new-message", turnId: "new-turn" })}, 'new-trace', 'new-request' from platform.outbox_items where id = ${h.work.itemId}`;
+			await client`insert into platform.task_authorization_records (id, execution_id, boundary) select 'new-authorization', ${executionId}, boundary from platform.task_authorization_records where execution_id = ${h.work.executionId}`;
+			await client`update platform.conversations set status = 'active' where id = ${h.work.conversationId}`;
+			const business = await claim(itemId);
+			await business.store.close();
+			if (business.decision.outcome !== "claimed")
+				throw new Error("business not claimed");
+			const businessClaim = business.decision.claim;
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: businessClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const [capacity] =
+				await client`select count(*) filter (where status in ('processing', 'unknown'))::int as active from platform.conversation_executions where conversation_id = ${h.work.conversationId}`;
+			expect(capacity?.active).toBe(1);
+			expect(
+				await h.store.beginGenerationIsolation({
+					claim: { ...businessClaim, executionStatus: "unknown" },
+					hostSessionRef: hostSessionRef,
+					failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+				}),
+			).toBe(true);
+			expect(await h.rearm()).toEqual({ outcome: "not_applicable" });
+			expect(await h.store.readRuntimeState({ claim: oldClaim })).toMatchObject(
+				{
+					metadataRecovery: oldClaim.metadataRecovery,
+					generationIsolation: {
+						operationId: `generation:${h.work.conversationId}:1`,
+					},
+				},
+			);
+			expect(
+				await h.store.retry({
+					claim: businessClaim,
+					retryDelayMs: 0,
+					errorCode: "GENERATION_BARRIER_UNCONFIRMED",
+					transition: {},
+				}),
+			).toBe(true);
+			const barrier = await claim(itemId);
+			await barrier.store.close();
+			if (barrier.decision.outcome !== "claimed")
+				throw new Error("barrier not claimed");
+			const barrierClaim = barrier.decision.claim;
+			const isolation = barrierClaim.generationIsolation;
+			if (!isolation) throw new Error("missing isolation");
+			const confirm = () =>
+				h.store.confirmGenerationIsolation({
+					claim: barrierClaim,
+					operationId: isolation.operationId,
+					hostSessionRef: hostSessionRef,
+				});
+			expect(await confirm()).toBe(false);
+			expect(
+				await h.store.retry({
+					claim: oldClaim,
+					retryDelayMs: 0,
+					errorCode: "ACK_LOST",
+					transition: {},
+				}),
+			).toBe(true);
+			const draining = await claim(h.work.itemId);
+			await draining.store.close();
+			if (draining.decision.outcome !== "claimed")
+				throw new Error("metadata cannot drain during isolation");
+			expect(draining.decision.claim.generationIsolation).toBeUndefined();
+			expect(
+				await h.store.readRuntimeState({ claim: draining.decision.claim }),
+			).toMatchObject({
+				generationIsolation: {
+					operationId: isolation.operationId,
+				},
+			});
+			expect(
+				await h.store.retry({
+					claim: draining.decision.claim,
+					retryDelayMs: 0,
+					errorCode: "REPLAY",
+					transition: {},
+				}),
+			).toBe(true);
+			h.stream.push(h.verified);
+			expect(await h.run()).toMatchObject({ outcome: "accepted" });
+			expect(await confirm()).toBe(true);
+			expect(await h.store.readRuntimeState({ claim: oldClaim })).toBeNull();
+			expect(await h.rearm()).toEqual({ outcome: "not_applicable" });
+		} finally {
+			await h.close();
+		}
+	});
+	it("keeps the same pass through a committed metadata ACK loss and refuses stale business transitions", async () => {
+		const h = await terminalHistory();
+		try {
+			await h.rearm();
+			h.stream.push(h.verified);
+			h.requests.length = 0;
+			h.loseMetadataAck();
+			expect(await h.run()).toMatchObject({
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			const [before] =
+				await client`select payload, status from platform.outbox_items where id = ${h.work.itemId}`;
+			expect(before?.status).toBe("retry_scheduled");
+			expect(await h.run()).toMatchObject({ outcome: "accepted" });
+			expect(
+				h.requests.every((request) => request.requestId === "pass-1"),
+			).toBe(true);
+			const [after] =
+				await client`select payload from platform.outbox_items where id = ${h.work.itemId}`;
+			expect(after?.payload).toEqual(before?.payload);
+			const [count] =
+				await client`select count(*)::int as value from platform.conversation_events where execution_id = ${h.work.executionId} and runtime_cursor = 'cursor-5'`;
+			expect(count?.value).toBe(1);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("ends a pass without new evidence, permits a later query, and rejects malformed persisted recovery metadata", async () => {
+		const h = await terminalHistory();
+		try {
+			await h.rearm();
+			expect(await h.run()).toMatchObject({ outcome: "accepted" });
+			expect(await h.rearm()).toEqual({ outcome: "scheduled" });
+			const [current] =
+				await client`select payload from platform.outbox_items where id = ${h.work.itemId}`;
+			expect(current?.payload.metadataRecovery.id).toBe("pass-2");
+			await client`update platform.outbox_items set payload = jsonb_set(payload, '{metadataRecovery,unexpected}', 'true'::jsonb) where id = ${h.work.itemId}`;
+			const invalid = await claim(h.work.itemId);
+			await invalid.store.close();
+			expect(invalid.decision).toEqual({ outcome: "stale" });
+		} finally {
+			await h.close();
+		}
+	});
+});

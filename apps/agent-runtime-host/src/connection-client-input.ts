@@ -161,6 +161,26 @@ export function createIndependentConnectionClientInput(options: {
 }): ClientOptions {
 	return {
 		profile: options.profile,
+		resolveReadOnlyClient: async (reference, read, signal) => {
+			assertRuntimeProcessProtection();
+			signal.throwIfAborted();
+			const binding = read.assertCurrent();
+			if (
+				binding.scope.agentId !== reference.agentId ||
+				binding.scope.conversationId !== reference.conversationId ||
+				binding.scope.executionId !== reference.executionId ||
+				binding.scope.sessionGeneration !== reference.sessionGeneration
+			)
+				return undefined;
+			const input = await readIndependentInput(
+				options.dataDirectory,
+				options.profile.profileRef,
+				binding,
+			);
+			signal.throwIfAborted();
+			const current = read.assertCurrent();
+			return isDeepStrictEqual(binding, current) ? input : undefined;
+		},
 		resolveOriginalClient: async (reference, signal) => {
 			assertRuntimeProcessProtection();
 			signal.throwIfAborted();

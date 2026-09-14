@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 UPSTREAM = "41e22fee981a63b3698df7ed36bad393cda24715"
@@ -37,6 +38,9 @@ UPSTREAM_TOOLS = (
     ".github/actions/setup-rusty-v8/action.yml",
     ".github/scripts/rusty_v8_bazel.py",
     "codex-rs/rust-toolchain.toml",
+    "justfile",
+    "scripts/just-shell.py",
+    "codex-rs/.config/nextest.toml",
 )
 
 
@@ -106,6 +110,26 @@ def verify_inputs(vendor, source):
     return hashes
 
 
+def native_source_tree(vendor, source):
+    """Record the patched tree without changing the checkout's HEAD or index."""
+    manifest = json.loads((vendor / "build-input-v1.json").read_text())
+    paths = sorted(entry["path"] for entry in manifest["sourceFiles"])
+    require(paths and len(paths) == len(set(paths)), "Invalid native source file inventory")
+    for name in paths:
+        relative_file(source, name)
+    with tempfile.TemporaryDirectory(prefix="codex-candidate-index-") as directory:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(Path(directory) / "index")
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "--literal-pathspecs", *args], cwd=source, env=env, timeout=30).decode().strip()
+        git("read-tree", UPSTREAM)
+        git("add", "--force", "--", *paths)
+        tree = git("write-tree")
+    require(re.fullmatch(r"[a-f0-9]{40}", tree), "Invalid native source tree")
+    return tree
+
+
 def check_elf(path):
     require(path.is_file() and not path.is_symlink(), "Missing native binary/helper")
     require(path.stat().st_mode & stat.S_IXUSR, "Native binary is not executable")
@@ -127,6 +151,21 @@ def verify_bundle(bundle, expected_bwrap, expected_hashes=None):
     if expected_hashes is not None:
         require(hashes == expected_hashes, "Candidate binary digest mismatch")
     return hashes
+
+
+def verify_archive(archive, expected_files, expected_modes):
+    with tarfile.open(archive, "r:gz") as stream:
+        seen = set()
+        for member in stream:
+            require(member.isfile() and member.name in expected_files
+                    and member.name not in seen, "Unexpected candidate archive entry")
+            require(stat.S_IMODE(member.mode) == expected_modes[member.name],
+                    "Candidate archive mode mismatch")
+            with stream.extractfile(member) as contents:
+                actual = "sha256:" + hashlib.file_digest(contents, "sha256").hexdigest()
+            require(actual == expected_files[member.name], "Candidate archive digest mismatch")
+            seen.add(member.name)
+        require(seen == set(expected_files), "Candidate archive is incomplete")
 
 
 def write_github_env(path, values):
@@ -313,6 +352,7 @@ class Builder:
                 shutil.copy2(path, self.diag / path.name)
         save(self.diag / "build.json", {
             "head": self.head, "upstream": UPSTREAM, "target": TARGET, "profile": "release",
+            "sourceTree": native_source_tree(self.vendor, self.source),
             "jobs": 2, "incremental": False, "inputSha256": inputs, "tools": tools,
             "commands": [command + ["--bin", "bwrap"], command + ["--bin", "codex", "--bin",
                          "codex-code-mode-host", "--bin", "codex-responses-api-proxy"]],
@@ -325,6 +365,8 @@ class Builder:
         record = json.loads((self.diag / "build.json").read_text())
         require(record["head"] == self.head and record["upstream"] == UPSTREAM
                 and record["inputSha256"] == inputs, "Candidate provenance mismatch")
+        require(record["sourceTree"] == native_source_tree(self.vendor, self.source),
+                "Native source tree changed before sealing")
         verify_bundle(self.candidate / "bundle", record["bwrapSha256"], record["binaries"])
         scanner = self.target.parent / "codex-native-trivy"
         self.run("install-scanner", ["node", str(self.repo / ".github/scripts/install-trivy.mjs"), str(scanner)],
@@ -343,6 +385,7 @@ class Builder:
                           "binaryNativeDependenciesComplete": False,
                           "scanner": json.loads((scanner / "installation.json").read_text())}
         record["run"] = {"id": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+        shutil.copy2(self.diag / "runner.json", self.candidate / "builder-environment.json")
         record["status"] = "candidate; not installed, published or accepted"
         record["files"] = {str(path.relative_to(self.candidate)): digest(path)
                            for path in sorted(self.candidate.rglob("*")) if path.is_file()}
@@ -352,17 +395,28 @@ class Builder:
             self.vendor / "apply-source.py", self.repo / ".github/scripts/install-trivy.mjs",
             self.repo / ".github/scripts/vulnerability-policy.mjs")}
         require(self.inputs() == inputs, "Inputs changed before sealing")
+        require(native_source_tree(self.vendor, self.source) == record["sourceTree"],
+                "Native source tree changed before sealing")
+        verify_bundle(self.candidate / "bundle", record["bwrapSha256"], record["binaries"])
         save(self.candidate / "candidate.json", record)
         # Artifact services do not preserve executable modes. A tar archive does.
         artifact = self.output / "artifact"
         artifact.mkdir()
         files = sorted(path for path in self.candidate.rglob("*") if path.is_file())
+        expected_files = {**record["files"], "candidate.json": digest(self.candidate / "candidate.json")}
+        expected_modes = {str(path.relative_to(self.candidate)): stat.S_IMODE(path.stat().st_mode)
+                          for path in files}
         self.guard(sum(path.stat().st_size for path in files) + 1024**2)
         archive = artifact / "codex-candidate.tar.gz"
         with tarfile.open(archive, "w:gz") as stream:
             for path in files:
                 self.guard()
                 stream.add(path, arcname=str(path.relative_to(self.candidate)), recursive=False)
+        verify_archive(archive, expected_files, expected_modes)
+        require(self.inputs() == inputs
+                and native_source_tree(self.vendor, self.source) == record["sourceTree"],
+                "Native source changed while sealing archive")
+        verify_bundle(self.candidate / "bundle", record["bwrapSha256"], record["binaries"])
         save(artifact / "archive.json", {
             "head": self.head, "upstream": UPSTREAM, "target": TARGET,
             "archive": archive.name, "archiveSha256": digest(archive),
@@ -370,10 +424,42 @@ class Builder:
             "nativeAcceptance": False})
         self.guard()
 
+    def tests(self):
+        inputs = self.inputs()
+        record = json.loads((self.candidate / "candidate.json").read_text())
+        require(record["head"] == self.head and record["inputSha256"] == inputs
+                and record["sourceTree"] == native_source_tree(self.vendor, self.source),
+                "Native test inputs differ from candidate")
+        verify_bundle(self.candidate / "bundle", record["bwrapSha256"], record["binaries"])
+        tools = {"just": capture(["just", "--version"], self.source),
+                 "nextest": capture(["cargo", "nextest", "--version"], self.source)}
+        require(tools["just"] == "just 1.51.0"
+                and tools["nextest"].split()[:2] == ["cargo-nextest", "0.9.103"],
+                "Native test tool version mismatch")
+        env = os.environ.copy()
+        env["CODEX_BWRAP_SHA256"] = record["bwrapSha256"].removeprefix("sha256:")
+        commands = []
+        for name, crate, selection in (
+            ("connection", "codex-rmcp-client", "test(native_connection)"),
+            ("barrier", "codex-core", "test(native_connection_bootstrap) | test(native_operation_barrier)"),
+        ):
+            command = ["just", "test", "-p", crate, "--locked", "--lib", "--target", TARGET,
+                       "--release", "--test-threads", "2", "--no-tests=fail", "-E", selection]
+            commands.append(command)
+            self.run(f"native-tests-{name}", command, cwd=self.source, env=env)
+        require(self.inputs() == inputs
+                and native_source_tree(self.vendor, self.source) == record["sourceTree"],
+                "Native test source changed")
+        verify_bundle(self.candidate / "bundle", record["bwrapSha256"], record["binaries"])
+        save(self.diag / "native-tests.json", {
+            "head": self.head, "sourceTree": record["sourceTree"], "inputSha256": inputs,
+            "tools": tools, "commands": commands, "status": "focused native tests passed",
+            "binaries": record["binaries"], "nativeAcceptance": False})
+
 
 def main():
-    require(len(sys.argv) == 2 and sys.argv[1] in ("paths", "prepare", "musl", "v8", "build", "seal"),
-            "usage: build-linux-aarch64.sh <paths|prepare|musl|v8|build|seal>")
+    require(len(sys.argv) == 2 and sys.argv[1] in ("paths", "prepare", "musl", "v8", "build", "seal", "tests"),
+            "usage: build-linux-aarch64.sh <paths|prepare|musl|v8|build|seal|tests>")
     if sys.argv[1] == "paths":
         temp = Path(os.environ["RUNNER_TEMP"]).resolve()
         write_github_env(Path(os.environ["GITHUB_ENV"]), {

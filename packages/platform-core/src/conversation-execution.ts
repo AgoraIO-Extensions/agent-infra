@@ -1,7 +1,12 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
+import {
+	type ConversationMetadataRecoveryV1,
+	parseConversationMetadataRecoveryV1,
+} from "./conversation-dispatch.js";
 import type { PersistedConversationEventV1 } from "./conversation-events.js";
+import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
 	parseTaskAuthorizationBoundaryV1,
@@ -93,6 +98,48 @@ export interface ConversationModelSelectionCommandV1 {
 export interface ConversationStateQueryV1 {
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
+}
+
+export interface ConversationMetadataRecoveryQueryV1
+	extends ConversationStateQueryV1 {
+	readonly executionId?: string;
+}
+export interface ConversationMetadataRecoveryResultV1 {
+	readonly outcome: "scheduled" | "coalesced" | "not_applicable" | "denied";
+}
+
+export interface ConversationMetadataRecoveryStateV1 {
+	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
+	readonly candidates: readonly {
+		readonly execution: {
+			readonly executionId: string;
+			readonly conversationId: string;
+			readonly agentId: string;
+			readonly actorId: string;
+			readonly channelId: string;
+			readonly turnId: string;
+			readonly sessionGeneration: number;
+			readonly deliveryFence: number;
+			readonly runtimeCursor: string | null;
+			readonly authorizationRevision: string;
+			readonly status: string;
+		};
+		readonly originalOutboxes: readonly {
+			readonly itemId: string;
+			readonly operation: string;
+			readonly status: string;
+			readonly payload: unknown;
+		}[];
+		readonly boundary: unknown;
+		readonly latestToolFacts: readonly ConversationOperationFactV2[];
+	}[];
+}
+export interface ConversationMetadataRecoveryWritePlanV1 {
+	readonly result: ConversationMetadataRecoveryResultV1;
+	readonly updates: readonly {
+		readonly itemId: string;
+		readonly metadataRecovery: ConversationMetadataRecoveryV1;
+	}[];
 }
 
 export interface ConversationModelConfigurationV1 {
@@ -480,6 +527,15 @@ export interface ConversationModelSelectionFallbackWriteV1
 }
 
 export interface ConversationExecutionTransactionPortV1 {
+	requestMetadataRecovery(
+		request: {
+			readonly query: ConversationMetadataRecoveryQueryV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+		},
+		decide: (
+			state: ConversationMetadataRecoveryStateV1,
+		) => ConversationMetadataRecoveryWritePlanV1,
+	): Promise<ConversationMetadataRecoveryResultV1>;
 	/**
 	 * Existing Conversation commands validate the persisted authority binding
 	 * before replay, then inspect active execution only after a replay miss.
@@ -553,6 +609,9 @@ export interface ConversationExecutionTransactionPortV1 {
 }
 
 export interface ConversationExecutionUseCaseV1 {
+	requestMetadataRecovery(
+		query: ConversationMetadataRecoveryQueryV1,
+	): Promise<ConversationMetadataRecoveryResultV1>;
 	readConversation(
 		query: ConversationStateQueryV1,
 	): Promise<ConversationStateDecisionV1>;
@@ -1698,6 +1757,151 @@ function normalizeConversationStateDecision(
 	return unavailable();
 }
 
+/** Original-history recovery is a domain decision shared by persistent and Fake adapters. */
+function planMetadataRecovery(
+	query: ConversationMetadataRecoveryQueryV1,
+	authority: ConversationExecutionAuthorityV1,
+	state: ConversationMetadataRecoveryStateV1,
+	requestedAt: Date,
+	newId: () => string,
+): ConversationMetadataRecoveryWritePlanV1 {
+	const conversation = state.conversation;
+	if (
+		!conversation ||
+		conversation.conversationId !== query.conversationId ||
+		conversation.agentId !== authority.agentId ||
+		conversation.actorId !== authority.actorId ||
+		conversation.channelId !== authority.channelId
+	)
+		return { result: { outcome: "denied" }, updates: [] };
+	if (!conversation.hostSessionRef || conversation.isolationPending)
+		return { result: { outcome: "not_applicable" }, updates: [] };
+	const eligible: {
+		itemId: string;
+		status: string;
+		metadataRecovery?: ConversationMetadataRecoveryV1;
+	}[] = [];
+	for (const candidate of state.candidates) {
+		const execution = candidate.execution;
+		const [outbox] = candidate.originalOutboxes;
+		if (
+			candidate.originalOutboxes.length !== 1 ||
+			!outbox ||
+			execution.conversationId !== conversation.conversationId ||
+			execution.agentId !== conversation.agentId ||
+			execution.actorId !== conversation.actorId ||
+			execution.channelId !== conversation.channelId ||
+			execution.sessionGeneration !== conversation.sessionGeneration ||
+			(query.executionId !== undefined &&
+				execution.executionId !== query.executionId) ||
+			!["completed", "failed", "cancelled"].includes(execution.status) ||
+			!Number.isSafeInteger(execution.deliveryFence) ||
+			execution.deliveryFence < 1 ||
+			!execution.runtimeCursor ||
+			!candidate.latestToolFacts.some(
+				(fact) =>
+					fact.kind === "tool" && fact.connection?.verification !== "verified",
+			) ||
+			candidate.boundary === null ||
+			candidate.boundary === undefined
+		)
+			continue;
+		const originalId =
+			outbox.operation === "conversation.turn.submit.v1"
+				? `conversation:turn:${execution.executionId}`
+				: outbox.operation === "conversation.turn.regenerate.v1"
+					? `conversation:regenerate:${execution.executionId}`
+					: undefined;
+		if (outbox.itemId !== originalId) continue;
+		const payload = snapshotObject(
+			outbox.payload,
+			[
+				"schemaVersion",
+				"conversationId",
+				"executionId",
+				"messageId",
+				"turnId",
+				"sessionGeneration",
+			],
+			[
+				"modelConfigurationRevision",
+				"modelOptionId",
+				"reasoningLevel",
+				"metadataRecovery",
+			],
+		);
+		if (
+			payload.schemaVersion !== 1 ||
+			payload.conversationId !== execution.conversationId ||
+			payload.executionId !== execution.executionId ||
+			payload.turnId !== execution.turnId ||
+			payload.sessionGeneration !== execution.sessionGeneration ||
+			!isText(payload.messageId, 1024)
+		)
+			continue;
+		const boundary = parseTaskAuthorizationBoundaryV1(candidate.boundary);
+		if (
+			boundary.principal.kind !== "user" ||
+			boundary.principal.id !== execution.actorId ||
+			boundary.agentId !== execution.agentId ||
+			boundary.channelId !== execution.channelId ||
+			boundary.agentAuthorizationRevision !== execution.authorizationRevision
+		)
+			continue;
+		const metadataRecovery =
+			payload.metadataRecovery === undefined
+				? undefined
+				: parseConversationMetadataRecoveryV1(payload.metadataRecovery);
+		if (
+			!["succeeded", "failed"].includes(outbox.status) &&
+			(!metadataRecovery ||
+				!["pending", "processing", "retry_scheduled"].includes(outbox.status))
+		)
+			continue;
+		eligible.push({
+			itemId: outbox.itemId,
+			status: outbox.status,
+			...(metadataRecovery ? { metadataRecovery } : {}),
+		});
+	}
+	eligible.sort(
+		(a, b) =>
+			(a.metadataRecovery?.requestedAt ?? 0) -
+				(b.metadataRecovery?.requestedAt ?? 0) ||
+			a.itemId.localeCompare(b.itemId),
+	);
+	const updates: {
+		itemId: string;
+		metadataRecovery: ConversationMetadataRecoveryV1;
+	}[] = [];
+	let coalesced = false;
+	for (const candidate of eligible.slice(0, 16)) {
+		if (candidate.status !== "succeeded" && candidate.status !== "failed") {
+			coalesced = true;
+			continue;
+		}
+		updates.push({
+			itemId: candidate.itemId,
+			metadataRecovery: parseConversationMetadataRecoveryV1({
+				id: newId(),
+				requestedAt: requestedAt.getTime(),
+				originalStatus: candidate.status,
+			}),
+		});
+	}
+	return {
+		result: {
+			outcome:
+				updates.length > 0
+					? "scheduled"
+					: coalesced
+						? "coalesced"
+						: "not_applicable",
+		},
+		updates,
+	};
+}
+
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
 	options: ConversationExecutionUseCaseOptionsV1 = {},
@@ -1705,6 +1909,41 @@ export function createConversationExecutionUseCaseV1(
 	const now = options.now ?? (() => new Date());
 	const newId = options.newId ?? randomUUID;
 	return {
+		async requestMetadataRecovery(queryInput) {
+			const input = snapshotObject(
+				queryInput,
+				["schemaVersion", "conversationId"],
+				["executionId"],
+			);
+			const query = {
+				...parseConversationStateQuery({
+					schemaVersion: input.schemaVersion,
+					conversationId: input.conversationId,
+				}),
+				...(input.executionId !== undefined
+					? {
+							executionId: isText(input.executionId, 1024)
+								? input.executionId
+								: invalidInput(),
+						}
+					: {}),
+			};
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "conversation.read",
+				conversationId: query.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			try {
+				return await dependencies.transaction.requestMetadataRecovery(
+					{ query, authority },
+					(state) =>
+						planMetadataRecovery(query, authority, state, now(), newId),
+				);
+			} catch {
+				return unavailable();
+			}
+		},
 		async readConversation(queryInput) {
 			const query = parseConversationStateQuery(queryInput);
 			const authority = await authorize(dependencies.authorization, {

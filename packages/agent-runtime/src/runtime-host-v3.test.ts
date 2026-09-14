@@ -893,3 +893,302 @@ describe("Runtime V3 durable authorization", () => {
 		},
 	);
 });
+
+describe("Runtime V3 original evidence read contexts", () => {
+	it("reads terminal history under fresh system authority and rejects older query passes without extending business expiry", async () => {
+		const env = await setup();
+		const accepted = await submit(env.host);
+		await env.driver.setOperationStatus("execution-fixture", "completed");
+		env.clock.now += 60_000;
+		const observed: string[] = [];
+		Object.assign(env.driver, {
+			recoverOriginalEvidence: async (
+				reference: { recoveryRequestId: string },
+				read: import("./driver.js").RuntimeOriginalEvidenceReadContext,
+			) => {
+				expect(read.assertCurrent().principal).toEqual({
+					kind: "user",
+					id: "user-fixture",
+				});
+				await read.commit(async () => {
+					read.assertCurrent();
+					observed.push(reference.recoveryRequestId);
+				});
+			},
+		});
+		const query = (id: string, now = env.clock.now) =>
+			signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					requestId: id,
+					originalOperationDigest: originalDigest(),
+				},
+				"session.status",
+				{ purpose: "control", reason: "recovery", now },
+			);
+		const first = query("pass-1");
+		expect(
+			await env.host.recoverStatusV3(
+				first,
+				verifyRuntimeV2Fixture(first.grant),
+			),
+		).toMatchObject({ outcome: "found", status: "completed" });
+		const sameTime = query("pass-2");
+		await expect(
+			env.host.recoverStatusV3(
+				sameTime,
+				verifyRuntimeV2Fixture(sameTime.grant),
+			),
+		).rejects.toThrow();
+		env.clock.now += 1;
+		const second = query("pass-2");
+		await env.host.recoverStatusV3(
+			second,
+			verifyRuntimeV2Fixture(second.grant),
+		);
+		await env.host.close();
+		const reopened = await RuntimeHost.open({
+			...env.hostOptions,
+			store: await FileRuntimeStore.open(env.storePath),
+		});
+		await expect(
+			reopened.recoverStatusV3(first, verifyRuntimeV2Fixture(first.grant)),
+		).rejects.toThrow();
+		await reopened.close();
+		expect(observed).toEqual(["pass-1", "pass-2"]);
+		await expect(
+			env.host.authorizeExternalAction(
+				guard(accepted.hostSessionRef, env.store),
+			),
+		).rejects.toThrow();
+		await env.host.close();
+	});
+
+	it("rejects a substituted recovery pass ID before any admission or durable write", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			await env.driver.setOperationStatus("execution-fixture", "completed");
+			const observed: string[] = [];
+			Object.assign(env.driver, {
+				recoverOriginalEvidence: async (
+					reference: { recoveryRequestId: string },
+					read: import("./driver.js").RuntimeOriginalEvidenceReadContext,
+				) => {
+					await read.commit(async () => {
+						observed.push(reference.recoveryRequestId);
+					});
+				},
+			});
+			const query = () =>
+				signV3Fixture(
+					{
+						...base(accepted.hostSessionRef),
+						requestId: "authorized-pass",
+						originalOperationDigest: originalDigest(),
+					},
+					"session.status",
+					{ purpose: "control", reason: "recovery", now: env.clock.now },
+				);
+			const first = query();
+			await env.host.recoverStatusV3(
+				first,
+				verifyRuntimeV2Fixture(first.grant),
+			);
+			const before = await readFile(env.storePath, "utf8");
+			env.clock.now += 1;
+			const retry = query();
+			await expect(
+				env.host.recoverStatusV3(
+					{ ...retry, requestId: "unauthorized-new-pass" },
+					verifyRuntimeV2Fixture(retry.grant),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			expect(observed).toEqual(["authorized-pass"]);
+			expect(await readFile(env.storePath, "utf8")).toBe(before);
+			await expect(
+				env.host.recoverStatusV3(retry, verifyRuntimeV2Fixture(retry.grant)),
+			).resolves.toMatchObject({ outcome: "found", status: "completed" });
+			expect(observed).toEqual(["authorized-pass", "authorized-pass"]);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("drains an entered durable commit before generation confirmation and drains an entered durable commit before confirmation", async () => {
+		const env = await setup();
+		const accepted = await submit(env.host);
+		let entered!: () => void;
+		const enteredPromise = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let writes = 0;
+		let latestRead:
+			| import("./driver.js").RuntimeOriginalEvidenceReadContext
+			| undefined;
+		Object.assign(env.driver, {
+			recoverOriginalEvidence: async (
+				_reference: unknown,
+				read: import("./driver.js").RuntimeOriginalEvidenceReadContext,
+			) => {
+				latestRead = read;
+				await read.commit(async () => {
+					entered();
+					await released;
+					writes++;
+				});
+			},
+		});
+		const query = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				requestId: "pass-1",
+				originalOperationDigest: originalDigest(),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		const querying = env.host.recoverStatusV3(
+			query,
+			verifyRuntimeV2Fixture(query.grant),
+		);
+		await enteredPromise;
+		const cancel = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				requestId: "cancel",
+				operation: {
+					kind: "generation" as const,
+					id: "generation:conversation-fixture:1",
+					deliveryFence: 2,
+					executionDeliveryFence: 1,
+				},
+			},
+			"generation.cancel",
+			{
+				purpose: "control",
+				reason: "generation_isolation",
+				claims: { controlRecordId: "isolation-control" },
+			},
+		);
+		let confirmed = false;
+		const cancelling = env.host
+			.cancelGenerationV3(cancel, verifyRuntimeV2Fixture(cancel.grant))
+			.then((value) => {
+				confirmed = true;
+				return value;
+			});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(confirmed).toBe(false);
+		release();
+		await Promise.allSettled([querying]);
+		expect(await cancelling).toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(writes).toBe(1);
+		if (!latestRead) throw new Error("missing read context");
+		await expect(
+			latestRead.commit(async () => {
+				writes++;
+			}),
+		).rejects.toThrow();
+		const replay = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				requestId: "archive",
+				originalOperationDigest: originalDigest(),
+			},
+			"session.status",
+			{
+				purpose: "control",
+				reason: "generation_isolation",
+				claims: { controlRecordId: "isolation-control" },
+			},
+		);
+		await env.host.recoverStatusV3(
+			replay,
+			verifyRuntimeV2Fixture(replay.grant),
+		);
+		expect(writes).toBe(1);
+		await env.host.close();
+	});
+	it("aborts a commit waiting behind the Host queue and never executes its write after release", async () => {
+		const env = await setup();
+		const accepted = await submit(env.host);
+		let recovered!: () => void;
+		const recoveryStarted = new Promise<void>((resolve) => {
+			recovered = resolve;
+		});
+		let commitNow!: () => void;
+		const commitReady = new Promise<void>((resolve) => {
+			commitNow = resolve;
+		});
+		let writes = 0;
+		Object.assign(env.driver, {
+			recoverOriginalEvidence: async (
+				_reference: unknown,
+				read: import("./driver.js").RuntimeOriginalEvidenceReadContext,
+			) => {
+				recovered();
+				await commitReady;
+				await read.commit(async () => {
+					writes++;
+				});
+			},
+		});
+		const request = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				requestId: "queued-pass",
+				originalOperationDigest: originalDigest(),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		const controller = new AbortController();
+		const querying = env.host.recoverStatusV3(
+			request,
+			verifyRuntimeV2Fixture(request.grant),
+			controller.signal,
+		);
+		const settled = Promise.allSettled([querying]);
+		await recoveryStarted;
+		let occupied!: () => void;
+		const queueOccupied = new Promise<void>((resolve) => {
+			occupied = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const authorize = env.store.authorizeRequestV3.bind(env.store);
+		vi.spyOn(env.store, "authorizeRequestV3").mockImplementationOnce(
+			async (...args) => {
+				occupied();
+				await released;
+				return authorize(...args);
+			},
+		);
+		const renewal = signV3Fixture(
+			base(accepted.hostSessionRef),
+			"execution.renew",
+		);
+		const renewing = env.host.renewAuthorizationV3(
+			renewal,
+			verifyRuntimeV2Fixture(renewal.grant),
+		);
+		await queueOccupied;
+		commitNow();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		controller.abort();
+		expect((await settled)[0]?.status).toBe("rejected");
+		release();
+		await renewing;
+		await env.host.close();
+		expect(writes).toBe(0);
+	});
+});

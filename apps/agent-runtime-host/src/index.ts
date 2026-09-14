@@ -207,6 +207,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 					})
 			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 	const close = async () => {
+		await assembledHost?.close();
 		if (
 			driver instanceof CodexRuntimeDriver ||
 			driver instanceof ClaudeRuntimeDriver ||

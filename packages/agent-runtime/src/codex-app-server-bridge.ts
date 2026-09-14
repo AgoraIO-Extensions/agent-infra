@@ -37,6 +37,7 @@ import {
 import {
 	type CodexNativeCallbackHandler,
 	type CodexNativeConnectionBootstrapHandler,
+	type CodexNativeConnectionRecoveryHandler,
 	serveCodexNativeCallbacks,
 } from "./codex-native-callback.js";
 
@@ -166,6 +167,112 @@ type CodexAppServerBridgeErrorCode =
 	| "CODEX_APP_SERVER_EXITED"
 	| "CODEX_APP_SERVER_FRAME_INVALID"
 	| "CODEX_APP_SERVER_CLOSED";
+
+/** @internal A bounded private process; it never starts an app-server or model transport. */
+export async function runCodexConnectionRecovery(options: {
+	launchPath?: string;
+	dataDirectory: string;
+	conversationKey: string;
+	profile: CodexConnectionProfile;
+	signal: AbortSignal;
+	recovery: CodexNativeConnectionRecoveryHandler;
+	evidence: CodexNativeCallbackHandler;
+}) {
+	options.signal.throwIfAborted();
+	if (platform !== "linux") throw unavailable();
+	const profile = validateCodexConnectionProfile(options.profile);
+	const launchPath = options.launchPath ?? env.PATH;
+	const executable = await resolveExecutable(launchPath, "codex");
+	const policy = await createIsolatedLaunchPolicy(launchPath);
+	let child: ChildProcess | undefined;
+	let callbacks: ReturnType<typeof serveCodexNativeCallbacks> | undefined;
+	let exited: Promise<void> | undefined;
+	const abort = () => {
+		child?.kill("SIGKILL");
+	};
+	try {
+		await probeVersion(executable, defaultTimeoutMs, policy, options.signal);
+		await verifyNativeBarrier(
+			executable,
+			defaultTimeoutMs,
+			policy,
+			options.signal,
+		);
+		await verifyLinuxSandbox(policy, defaultTimeoutMs, options.signal);
+		const nativePolicy = await persistentLaunchPolicy(
+			options.dataDirectory,
+			options.conversationKey,
+			policy,
+		);
+		const helper = await resolveExecutable(launchPath, "setpriv");
+		const boundary = await conversationLandlockArguments(
+			executable,
+			launchPath,
+			nativePolicy,
+		);
+		options.signal.throwIfAborted();
+		child = spawn(
+			helper,
+			[
+				...boundary,
+				"--",
+				executable,
+				"--agent-infra-connection-profile",
+				JSON.stringify(profile),
+				"--agent-infra-connection-recovery",
+			],
+			{
+				stdio: ["ignore", "ignore", "ignore", "pipe"],
+				cwd: nativePolicy.directory,
+				env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
+			},
+		);
+		const process = child;
+		let failed = false;
+		let terminal = false;
+		let issued = 0;
+		const complete = () => terminal || issued >= 16;
+		process.on("error", () => {
+			failed = true;
+		});
+		exited = new Promise<void>((resolve) =>
+			process.once("close", () => resolve()),
+		);
+		const stream = process.stdio[3];
+		if (!(stream instanceof Duplex)) throw unavailable();
+		callbacks = serveCodexNativeCallbacks(
+			stream,
+			options.evidence,
+			undefined,
+			() => {
+				failed = true;
+				abort();
+			},
+			async (request, signal) => {
+				if (terminal || issued >= 16) throw unavailable();
+				const response = await options.recovery(request, signal);
+				if (response.decision === "verify") issued++;
+				else terminal = true;
+				return response;
+			},
+			complete,
+		);
+		options.signal.addEventListener("abort", abort, { once: true });
+		if (options.signal.aborted) abort();
+		await exited;
+		callbacks.close();
+		await callbacks.finished;
+		options.signal.throwIfAborted();
+		if (failed || !complete() || process.exitCode !== 0) throw unavailable();
+	} finally {
+		options.signal.removeEventListener("abort", abort);
+		callbacks?.close();
+		abort();
+		await exited;
+		await callbacks?.finished;
+		await removeIsolatedDirectory(policy.directory);
+	}
+}
 
 export class CodexAppServerBridgeError extends Error {
 	readonly retryable: boolean;
@@ -840,7 +947,9 @@ async function runProbeCommand(
 	timeoutMs: number,
 	captureStdout: boolean,
 	launchPolicy: IsolatedLaunchPolicy,
+	signal?: AbortSignal,
 ): Promise<CommandOutput> {
+	signal?.throwIfAborted();
 	let process: ChildProcess;
 	try {
 		process = spawn(executable, args, {
@@ -854,6 +963,12 @@ async function runProbeCommand(
 	const closed = new Promise<true>((resolve) => {
 		process.once("close", () => resolve(true));
 	});
+	const abort = () => {
+		process.kill("SIGKILL");
+	};
+	signal?.addEventListener("abort", abort, { once: true });
+	if (signal?.aborted) abort();
+	void closed.then(() => signal?.removeEventListener("abort", abort));
 	const outcome = new Promise<CommandOutcome>((resolve) => {
 		process.once("error", () => resolve({ kind: "error" }));
 		process.once("close", (code) => resolve({ kind: "close", code }));
@@ -892,6 +1007,7 @@ async function probeVersion(
 	executable: string,
 	timeoutMs: number,
 	launchPolicy: IsolatedLaunchPolicy,
+	signal?: AbortSignal,
 ) {
 	const output = await runProbeCommand(
 		executable,
@@ -899,6 +1015,7 @@ async function probeVersion(
 		timeoutMs,
 		true,
 		launchPolicy,
+		signal,
 	);
 	if (
 		output.stdoutTooLarge ||
@@ -913,6 +1030,7 @@ async function verifyNativeBarrier(
 	executable: string,
 	timeoutMs: number,
 	launchPolicy: IsolatedLaunchPolicy,
+	signal?: AbortSignal,
 ) {
 	const output = await runProbeCommand(
 		executable,
@@ -920,6 +1038,7 @@ async function verifyNativeBarrier(
 		timeoutMs,
 		true,
 		launchPolicy,
+		signal,
 	);
 	try {
 		const value: unknown = JSON.parse(output.stdout);
@@ -979,6 +1098,7 @@ async function verifySchema(
 async function verifyLinuxSandbox(
 	launchPolicy: IsolatedLaunchPolicy,
 	timeoutMs: number,
+	signal?: AbortSignal,
 ) {
 	if (platform !== "linux") return;
 	try {
@@ -1000,6 +1120,7 @@ async function verifyLinuxSandbox(
 			timeoutMs,
 			false,
 			launchPolicy,
+			signal,
 		);
 	} catch {
 		throw new CodexAppServerBridgeError(

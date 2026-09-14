@@ -24,6 +24,7 @@ import {
 	type CodexAppServerFrame,
 	type CodexModelAccess,
 	codexConversationKey,
+	runCodexConnectionRecovery,
 	validateModelAccess,
 } from "./codex-app-server-bridge.js";
 import {
@@ -32,10 +33,18 @@ import {
 	type CodexConnectionEvidenceUpdateResponse,
 	type CodexConnectionOperationRequest,
 	type CodexConnectionOperationResponse,
+	type CodexConnectionOrigin,
+	type CodexConnectionQueryMetadata,
+	type CodexConnectionRecoveryOriginal,
+	type CodexConnectionRecoveryRequest,
+	type CodexConnectionRecoveryResponse,
 	type CodexConnectionRequest,
 	createCodexConnectionClient,
+	isCodexConnectionClientConfiguration,
 	isCodexConnectionEvidence,
+	isCodexConnectionOrigin,
 	isCodexConnectionOriginalBinding,
+	isCodexConnectionRecoveryOriginal,
 	isCodexConnectionRequest,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
@@ -70,6 +79,8 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
+	RuntimeOriginalEvidenceReadContext,
+	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
@@ -104,6 +115,11 @@ export interface CodexRuntimeDriverOptions {
 			readonly issuer: string;
 			readonly resource: string;
 		};
+		readonly resolveReadOnlyClient?: (
+			reference: RuntimeOriginalExecutionRef,
+			read: RuntimeOriginalEvidenceReadContext,
+			signal: AbortSignal,
+		) => Promise<unknown>;
 		readonly resolveOriginalClient: (
 			reference: RuntimeOriginalExecutionRef,
 			signal: AbortSignal,
@@ -185,6 +201,7 @@ interface CodexNativeToolAttempt {
 	startedFingerprint?: string;
 	outcomeRequestId?: string;
 	outcomeFingerprint?: string;
+	connectionOrigin?: CodexConnectionOrigin;
 	connectionRequest?: CodexConnectionRequest;
 	connectionEvidence?: CodexConnectionEvidence;
 	connectionEvidenceUpdates?: CodexNativeSourceReceipt[];
@@ -243,8 +260,17 @@ interface CodexNativeSourceRecord {
 	nativeStatus?: "completed" | "failed" | "cancelled";
 }
 
+interface CodexConnectionRecoveryPass {
+	recoveryRequestId: string;
+	deadlineAt: number;
+	scannedAttemptRefs: string[];
+	completed: boolean;
+}
+
 interface CodexEventJournal {
 	nativeTurnId: string;
+	connectionRecovery?: CodexConnectionRecoveryPass;
+	connectionRecoveryCursor?: string;
 	pendingOperationKey?: string;
 	acknowledgedCursor?: string;
 	externalActionsBlocked?: true;
@@ -612,6 +638,8 @@ function isCodexEventJournal(
 		isPlainRecord(value) &&
 		hasOnlyKeys(value, [
 			"nativeTurnId",
+			"connectionRecovery",
+			"connectionRecoveryCursor",
 			"pendingOperationKey",
 			"acknowledgedCursor",
 			"externalActionsBlocked",
@@ -621,6 +649,26 @@ function isCodexEventJournal(
 			"events",
 		]) &&
 		value.nativeTurnId === nativeTurnId &&
+		(value.connectionRecoveryCursor === undefined ||
+			nonEmptyString(value.connectionRecoveryCursor)) &&
+		(value.connectionRecovery === undefined ||
+			(isPlainRecord(value.connectionRecovery) &&
+				hasOnlyKeys(value.connectionRecovery, [
+					"recoveryRequestId",
+					"deadlineAt",
+					"scannedAttemptRefs",
+					"completed",
+				]) &&
+				nonEmptyString(value.connectionRecovery.recoveryRequestId) &&
+				typeof value.connectionRecovery.deadlineAt === "number" &&
+				Number.isSafeInteger(value.connectionRecovery.deadlineAt) &&
+				value.connectionRecovery.deadlineAt > 0 &&
+				typeof value.connectionRecovery.completed === "boolean" &&
+				Array.isArray(value.connectionRecovery.scannedAttemptRefs) &&
+				value.connectionRecovery.scannedAttemptRefs.length <= 16 &&
+				value.connectionRecovery.scannedAttemptRefs.every(nonEmptyString) &&
+				new Set(value.connectionRecovery.scannedAttemptRefs).size ===
+					value.connectionRecovery.scannedAttemptRefs.length)) &&
 		(value.nativeSources === undefined ||
 			(isPlainRecord(value.nativeSources) &&
 				Object.entries(value.nativeSources).every(([id, source]) =>
@@ -841,6 +889,7 @@ function isNativeToolAttempt(
 			"startedFingerprint",
 			"outcomeRequestId",
 			"outcomeFingerprint",
+			"connectionOrigin",
 			"connectionRequest",
 			"connectionEvidence",
 			"connectionEvidenceUpdates",
@@ -921,6 +970,15 @@ function isNativeToolAttempt(
 		(!isCodexConnectionRequest(value.connectionRequest) ||
 			value.identity.toolName !==
 				`connection/${value.connectionRequest.toolName}`)
+	)
+		return false;
+	if (
+		value.connectionOrigin !== undefined &&
+		(!isCodexConnectionOrigin(value.connectionOrigin) ||
+			!value.connectionRequest ||
+			value.connectionOrigin.slotId !== value.connectionRequest.slotId ||
+			value.connectionOrigin.service.serviceRef !==
+				value.connectionRequest.serviceRef)
 	)
 		return false;
 	if (
@@ -2188,7 +2246,405 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			action: RuntimeExternalActionAuthorization,
 		) => Promise<void>,
 		private readonly connectionClientOptions?: CodexRuntimeDriverOptions["connectionClient"],
+		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
+		private readonly recoveryDirectory?: string,
+		private readonly recoveryLaunchPath?: string,
 	) {}
+
+	private readonly connectionRecoveries = new Map<
+		string,
+		{
+			nativeSessionRef: string;
+			executionId: string;
+			abort: AbortController;
+			finished: Promise<void>;
+		}
+	>();
+
+	private connectionRecoveryClosed(
+		state: CodexDriverState,
+		nativeSessionRef: string,
+	) {
+		return Object.entries(state.operations).some(
+			([key, operation]) =>
+				operation.nativeSessionRef === nativeSessionRef &&
+				(JSON.parse(key) as unknown[])[3] === "generation-cancel",
+		);
+	}
+
+	private abortConnectionRecoveries(
+		nativeSessionRef?: string,
+		executionId?: string,
+	) {
+		for (const guard of this.connectionRecoveries.values()) {
+			if (
+				(nativeSessionRef === undefined ||
+					guard.nativeSessionRef === nativeSessionRef) &&
+				(executionId === undefined || guard.executionId === executionId)
+			)
+				guard.abort.abort();
+		}
+	}
+
+	private async drainConnectionRecoveries(
+		nativeSessionRef?: string,
+		executionId?: string,
+	) {
+		this.abortConnectionRecoveries(nativeSessionRef, executionId);
+		await Promise.allSettled(
+			[...this.connectionRecoveries.values()]
+				.filter(
+					(guard) =>
+						(nativeSessionRef === undefined ||
+							guard.nativeSessionRef === nativeSessionRef) &&
+						(executionId === undefined || guard.executionId === executionId),
+				)
+				.map((guard) => guard.finished),
+		);
+	}
+
+	/** @internal Keep the private process separate from the app-server transport. */
+	protected launchConnectionRecovery(
+		options: Parameters<typeof runCodexConnectionRecovery>[0],
+	) {
+		if (!this.recoveryLaunch) unavailable();
+		return this.recoveryLaunch(options);
+	}
+
+	recoverOriginalEvidence(
+		reference: RuntimeOriginalEvidenceRecoveryRef,
+		read: RuntimeOriginalEvidenceReadContext,
+	): Promise<void> {
+		if (this.closed) return Promise.reject(unavailableError());
+		const key = JSON.stringify([
+			reference.nativeSessionRef,
+			reference.executionId,
+		]);
+		const existing = this.connectionRecoveries.get(key);
+		if (existing) return existing.finished;
+		const abort = new AbortController();
+		const guard = {
+			nativeSessionRef: reference.nativeSessionRef,
+			executionId: reference.executionId,
+			abort,
+			finished: Promise.resolve().then(() =>
+				this.performConnectionRecovery(reference, read, abort.signal),
+			),
+		};
+		this.connectionRecoveries.set(key, guard);
+		return guard.finished.finally(() => {
+			if (this.connectionRecoveries.get(key) === guard)
+				this.connectionRecoveries.delete(key);
+		});
+	}
+
+	private async performConnectionRecovery(
+		reference: RuntimeOriginalEvidenceRecoveryRef,
+		read: RuntimeOriginalEvidenceReadContext,
+		abort: AbortSignal,
+	) {
+		const options = this.connectionClientOptions;
+		if (!options?.resolveReadOnlyClient || !this.recoveryDirectory) return;
+		const binding = structuredClone(read.assertCurrent());
+		const signal = AbortSignal.any([
+			read.signal,
+			abort,
+			AbortSignal.timeout(
+				Math.max(1, Math.min(30_000, read.expiresAt - Date.now())),
+			),
+		]);
+		const locate = (state: CodexDriverState) => {
+			signal.throwIfAborted();
+			if (
+				this.closed ||
+				Date.now() >= read.expiresAt ||
+				!isDeepStrictEqual(read.assertCurrent(), binding) ||
+				this.connectionRecoveryClosed(state, reference.nativeSessionRef)
+			)
+				unavailable();
+			const session = ownRecordValue(
+				state.sessions,
+				reference.nativeSessionRef,
+			);
+			const execution =
+				session && ownRecordValue(session.executions, reference.executionId);
+			const journal = execution && session?.journals?.[execution.nativeTurnId];
+			if (
+				!session ||
+				!execution ||
+				!journal ||
+				!isDeepStrictEqual(binding.scope, {
+					agentId: session.agentId,
+					conversationId: session.conversationId,
+					sessionGeneration: session.sessionGeneration,
+					executionId: execution.executionId,
+				})
+			)
+				unavailable();
+			return { session, execution, journal };
+		};
+		// Host ordering precedes the Driver file queue for every recovery mutation.
+		const change = <T>(write: (value: ReturnType<typeof locate>) => T) =>
+			read.commit(() => this.update((state) => write(locate(state))));
+		const initial = await change(({ session, journal }) => {
+			if (
+				journal.connectionRecovery?.recoveryRequestId !==
+				reference.recoveryRequestId
+			) {
+				journal.connectionRecovery = {
+					recoveryRequestId: reference.recoveryRequestId,
+					deadlineAt: Math.min(Date.now() + 30_000, read.expiresAt),
+					scannedAttemptRefs: [],
+					completed: false,
+				};
+			}
+			return {
+				pass: structuredClone(journal.connectionRecovery),
+				conversationKey: codexConversationKey(session),
+			};
+		});
+		if (initial.pass.completed || initial.pass.deadlineAt <= Date.now()) return;
+		const processSignal = AbortSignal.any([
+			signal,
+			AbortSignal.timeout(Math.max(1, initial.pass.deadlineAt - Date.now())),
+		]);
+		let processNonce: string | undefined;
+		let previousRecoveryId: string | undefined;
+		const requests = new Set<string>();
+		let current:
+			| {
+					original: CodexConnectionRecoveryOriginal;
+					queryClient: CodexConnectionQueryMetadata;
+			  }
+			| undefined;
+		const recovery = async (
+			request: CodexConnectionRecoveryRequest,
+			callbackSignal: AbortSignal,
+		): Promise<CodexConnectionRecoveryResponse> => {
+			const itemSignal = AbortSignal.any([processSignal, callbackSignal]);
+			itemSignal.throwIfAborted();
+			if (
+				request.profileRef !== options.profile.profileRef ||
+				requests.has(request.requestId) ||
+				(processNonce !== undefined && processNonce !== request.processNonce) ||
+				request.previousRecoveryId !== previousRecoveryId
+			)
+				protocolInvalid();
+			processNonce = request.processNonce;
+			requests.add(request.requestId);
+			current = undefined;
+			const original = await change(({ journal }) => {
+				itemSignal.throwIfAborted();
+				const pass = journal.connectionRecovery;
+				if (!pass || pass.recoveryRequestId !== reference.recoveryRequestId)
+					unavailable();
+				if (
+					pass.completed ||
+					pass.deadlineAt <= Date.now() ||
+					pass.scannedAttemptRefs.length >= 16
+				) {
+					pass.completed = true;
+					return undefined;
+				}
+				const attempts = Object.values(journal.nativeToolAttempts ?? {}).sort(
+					(a, b) => a.attemptRef.localeCompare(b.attemptRef),
+				);
+				const cursor = attempts.findIndex(
+					(attempt) => attempt.attemptRef === journal.connectionRecoveryCursor,
+				);
+				const ordered = [
+					...attempts.slice(cursor + 1),
+					...attempts.slice(0, cursor + 1),
+				];
+				const facts = latestOperationFacts(journal.events);
+				for (const attempt of ordered) {
+					const descriptor = attempt.connectionRequest;
+					const origin = attempt.connectionOrigin;
+					const evidence = attempt.connectionEvidence;
+					const originalResponse = evidence?.originalResponse;
+					const fact = facts.find(
+						(fact) => fact.operationRef === attempt.operationRef,
+					);
+					if (
+						pass.scannedAttemptRefs.includes(attempt.attemptRef) ||
+						!attempt.permitId ||
+						!attempt.outcomeRequestId ||
+						attempt.denied ||
+						descriptor?.toolName !== "execute_action" ||
+						!origin ||
+						!originalResponse ||
+						evidence?.verification !== "unverified" ||
+						!isDeepStrictEqual(origin.originalBinding, binding) ||
+						fact?.kind !== "tool" ||
+						!["completed", "failed", "unknown"].includes(fact.phase) ||
+						fact.connection?.verification === "verified"
+					)
+						continue;
+					const association = this.connectionClient(
+						initial.conversationKey,
+					).associate({
+						requestDescriptor: descriptor,
+						evidence,
+						previousEvidence: evidence,
+						metadataOnly: true,
+						occurredAt: Date.now(),
+						origin,
+					});
+					if (!association?.callRef) continue;
+					const original = structuredClone({
+						identity: attempt.identity,
+						permitId: attempt.permitId,
+						connectionRequest: descriptor,
+						connectionOrigin: origin,
+						originalResponse,
+					});
+					if (!isCodexConnectionRecoveryOriginal(original)) continue;
+					pass.scannedAttemptRefs.push(attempt.attemptRef);
+					journal.connectionRecoveryCursor = attempt.attemptRef;
+					return original;
+				}
+				pass.completed = true;
+				return undefined;
+			});
+			const base = {
+				schemaVersion: 2 as const,
+				phase: "connection-recovery" as const,
+				requestId: request.requestId,
+				request,
+			};
+			if (!original) return { ...base, decision: "done" };
+			let value: unknown;
+			const waiting = new AbortController();
+			try {
+				value = await Promise.race([
+					options.resolveReadOnlyClient?.(
+						{ ...binding.scope, nativeSessionRef: reference.nativeSessionRef },
+						read,
+						itemSignal,
+					),
+					once(itemSignal, "abort", { signal: waiting.signal }).then(() =>
+						unavailable(),
+					),
+				]);
+			} catch {
+				itemSignal.throwIfAborted();
+				read.assertCurrent();
+				return {
+					...base,
+					decision: "unavailable",
+					reason: "credential_unavailable",
+				};
+			} finally {
+				waiting.abort();
+			}
+			itemSignal.throwIfAborted();
+			locate(this.readState());
+			if (!isCodexConnectionClientConfiguration(value))
+				return {
+					...base,
+					decision: "unavailable",
+					reason: "credential_unavailable",
+				};
+			if (
+				!isDeepStrictEqual(
+					value.originalBinding,
+					original.connectionOrigin.originalBinding,
+				) ||
+				!isDeepStrictEqual(value.service, original.connectionOrigin.service) ||
+				!isDeepStrictEqual(
+					value.connectionIdentity,
+					original.connectionOrigin.connectionIdentity,
+				)
+			)
+				return { ...base, decision: "unavailable", reason: "binding_mismatch" };
+			const expiresAt = Math.min(
+				initial.pass.deadlineAt,
+				read.expiresAt,
+				value.credential.expiresAt,
+			);
+			if (expiresAt <= Date.now())
+				return {
+					...base,
+					decision: "unavailable",
+					reason: "credential_expired",
+				};
+			previousRecoveryId = randomUUID();
+			current = {
+				original,
+				queryClient: structuredClone({
+					originalBinding: value.originalBinding,
+					service: value.service,
+					connectionIdentity: value.connectionIdentity,
+					credential: {
+						revision: value.credential.revision,
+						expiresAt: value.credential.expiresAt,
+					},
+				}),
+			};
+			return {
+				...base,
+				decision: "verify",
+				recoveryId: previousRecoveryId,
+				expiresAt,
+				original,
+				currentClient: value,
+			};
+		};
+		try {
+			await this.launchConnectionRecovery({
+				...(this.recoveryLaunchPath
+					? { launchPath: this.recoveryLaunchPath }
+					: {}),
+				dataDirectory: this.recoveryDirectory,
+				conversationKey: initial.conversationKey,
+				profile: options.profile,
+				signal: processSignal,
+				recovery,
+				evidence: async (request, callbackSignal) => {
+					const item = current;
+					if (
+						request.schemaVersion !== 2 ||
+						request.phase !== "connection-evidence" ||
+						request.connectionEvidence.verification !== "verified" ||
+						!item ||
+						!sameCodexNativeAttemptV1(
+							request.identity,
+							item.original.identity,
+						) ||
+						request.permitId !== item.original.permitId ||
+						!isDeepStrictEqual(
+							request.connectionRequest,
+							item.original.connectionRequest,
+						) ||
+						!isDeepStrictEqual(
+							request.connectionEvidence.originalResponse,
+							item.original.originalResponse,
+						)
+					)
+						protocolInvalid();
+					return this.performNativeConnectionEvidence(
+						initial.conversationKey,
+						request,
+						AbortSignal.any([processSignal, callbackSignal]),
+						{ read, ...item },
+					);
+				},
+			});
+		} catch {
+			// Native or Connection unavailability cannot create a new Tool outcome.
+			signal.throwIfAborted();
+			read.assertCurrent();
+		} finally {
+			current = undefined;
+		}
+		await change(({ journal }) => {
+			if (
+				journal.connectionRecovery?.recoveryRequestId ===
+				reference.recoveryRequestId
+			)
+				journal.connectionRecovery.completed = true;
+		});
+	}
 
 	private readonly connectionClients = new Map<
 		string,
@@ -2503,8 +2959,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				!hasOnlyKeys(options.connectionClient, [
 					"profile",
 					"resolveOriginalClient",
+					"resolveReadOnlyClient",
 				]) ||
-				typeof options.connectionClient.resolveOriginalClient !== "function"
+				typeof options.connectionClient.resolveOriginalClient !== "function" ||
+				(options.connectionClient.resolveReadOnlyClient !== undefined &&
+					typeof options.connectionClient.resolveReadOnlyClient !== "function")
 			)
 				configurationInvalid();
 			try {
@@ -2513,6 +2972,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						options.connectionClient.profile,
 					),
 					resolveOriginalClient: options.connectionClient.resolveOriginalClient,
+					...(options.connectionClient.resolveReadOnlyClient
+						? {
+								resolveReadOnlyClient:
+									options.connectionClient.resolveReadOnlyClient,
+							}
+						: {}),
 				};
 			} catch {
 				configurationInvalid();
@@ -2693,6 +3158,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			probeNative,
 			options.authorizeExternalAction,
 			connectionClient,
+			runCodexConnectionRecovery,
+			`${options.path}.native`,
+			options.launchPath,
 		);
 		try {
 			await driver.recoverUnconfirmedModelOperations();
@@ -2976,6 +3444,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async executeInterruption(command: CodexInterruptionCommand) {
 		const prepared = await this.prepareInterruption(command);
+		await this.drainConnectionRecoveries(
+			command.nativeSessionRef,
+			command.kind === "stop" ? command.executionId : undefined,
+		);
 		if (prepared.operation.record) return prepared.operation.record;
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
@@ -3570,6 +4042,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async shutdown() {
 		this.closed = true;
+		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
 		this.connectionClients.clear();
 		await this.drainNativeCallbacks();
@@ -3756,6 +4229,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		conversationKey: string,
 		request: CodexConnectionEvidenceUpdateRequest,
 		signal: AbortSignal,
+		recovery?: {
+			read: RuntimeOriginalEvidenceReadContext;
+			original: CodexConnectionRecoveryOriginal;
+			queryClient: CodexConnectionQueryMetadata;
+		},
 	): Promise<CodexConnectionEvidenceUpdateResponse> {
 		if (
 			!isCodexConnectionRequest(request.connectionRequest) ||
@@ -3778,71 +4256,104 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				),
 			)
 			.digest("hex");
-		const saved = await this.update((state) => {
-			signal.throwIfAborted();
-			if (this.closed) unavailable();
-			const resolved = this.resolveNativeSourceJournal(
-				state,
-				conversationKey,
-				request.identity.sessionId,
-				request.identity.turnId,
-			);
-			if (!resolved?.execution) unavailable();
-			const { session, journal, execution, nativeSessionRef } = resolved;
-			const attempt = ownRecordValue(
-				journal.nativeToolAttempts ?? {},
-				request.identity.attemptRef,
-			);
-			if (
-				!attempt?.permitId ||
-				attempt.permitId !== request.permitId ||
-				!attempt.outcomeRequestId ||
-				attempt.denied ||
-				!sameCodexNativeAttemptV1(attempt.identity, request.identity) ||
-				!isDeepStrictEqual(attempt.connectionRequest, request.connectionRequest)
-			)
-				protocolInvalid();
-			const receipts = attempt.connectionEvidenceUpdates ?? [];
-			const replay = receipts.find(
-				(receipt) => receipt.requestId === request.requestId,
-			);
-			if (replay) {
-				if (replay.fingerprint !== fingerprint) protocolInvalid();
-				return { nativeSessionRef, executionId: execution.executionId };
-			}
-			const fact = latestOperationFacts(journal.events).find(
-				(fact) => fact.operationRef === attempt.operationRef,
-			);
-			if (
-				fact?.kind !== "tool" ||
-				(fact.phase !== "completed" &&
-					fact.phase !== "failed" &&
-					fact.phase !== "unknown")
-			)
-				protocolInvalid();
-			const association = this.connectionClient(conversationKey).associate({
-				requestDescriptor: request.connectionRequest,
-				evidence: request.connectionEvidence,
-				previousEvidence: attempt.connectionEvidence,
-				metadataOnly: true,
-				occurredAt: request.occurredAt,
-			});
-			if (!association) protocolInvalid();
-			if (!isDeepStrictEqual(fact.connection, association))
-				this.appendOperationFact(
-					session,
-					journal,
-					{ ...fact, connection: association },
-					true,
+		const write = () =>
+			this.update((state) => {
+				signal.throwIfAborted();
+				if (this.closed) unavailable();
+				const resolved = this.resolveNativeSourceJournal(
+					state,
+					conversationKey,
+					request.identity.sessionId,
+					request.identity.turnId,
 				);
-			attempt.connectionEvidence = structuredClone(request.connectionEvidence);
-			attempt.connectionEvidenceUpdates ??= [];
-			attempt.connectionEvidenceUpdates.push({
-				requestId: request.requestId,
-				fingerprint,
+				if (!resolved?.execution) unavailable();
+				const { session, journal, execution, nativeSessionRef } = resolved;
+				const attempt = ownRecordValue(
+					journal.nativeToolAttempts ?? {},
+					request.identity.attemptRef,
+				);
+				if (
+					!attempt?.permitId ||
+					attempt.permitId !== request.permitId ||
+					!attempt.outcomeRequestId ||
+					attempt.denied ||
+					!sameCodexNativeAttemptV1(attempt.identity, request.identity) ||
+					!isDeepStrictEqual(
+						attempt.connectionRequest,
+						request.connectionRequest,
+					)
+				)
+					protocolInvalid();
+				const receipts = attempt.connectionEvidenceUpdates ?? [];
+				const replay = receipts.find(
+					(receipt) => receipt.requestId === request.requestId,
+				);
+				if (replay) {
+					if (replay.fingerprint !== fingerprint) protocolInvalid();
+					return { nativeSessionRef, executionId: execution.executionId };
+				}
+				if (this.connectionRecoveryClosed(state, nativeSessionRef))
+					unavailable();
+				if (recovery) {
+					const binding = recovery.read.assertCurrent();
+					if (
+						!isDeepStrictEqual(
+							binding,
+							recovery.original.connectionOrigin.originalBinding,
+						) ||
+						!isDeepStrictEqual(
+							attempt.connectionOrigin,
+							recovery.original.connectionOrigin,
+						) ||
+						!isDeepStrictEqual(
+							attempt.connectionEvidence?.originalResponse,
+							recovery.original.originalResponse,
+						)
+					)
+						protocolInvalid();
+				}
+				const fact = latestOperationFacts(journal.events).find(
+					(fact) => fact.operationRef === attempt.operationRef,
+				);
+				if (
+					fact?.kind !== "tool" ||
+					(fact.phase !== "completed" &&
+						fact.phase !== "failed" &&
+						fact.phase !== "unknown")
+				)
+					protocolInvalid();
+				const association = this.connectionClient(conversationKey).associate({
+					requestDescriptor: request.connectionRequest,
+					evidence: request.connectionEvidence,
+					previousEvidence: attempt.connectionEvidence,
+					metadataOnly: true,
+					occurredAt: request.occurredAt,
+					...(recovery
+						? {
+								origin: recovery.original.connectionOrigin,
+								queryClient: recovery.queryClient,
+							}
+						: {}),
+				});
+				if (!association) protocolInvalid();
+				if (!isDeepStrictEqual(fact.connection, association))
+					this.appendOperationFact(
+						session,
+						journal,
+						{ ...fact, connection: association },
+						true,
+					);
+				attempt.connectionEvidence = structuredClone(
+					request.connectionEvidence,
+				);
+				attempt.connectionEvidenceUpdates ??= [];
+				attempt.connectionEvidenceUpdates.push({
+					requestId: request.requestId,
+					fingerprint,
+				});
+				return { nativeSessionRef, executionId: execution.executionId };
 			});
-			return { nativeSessionRef, executionId: execution.executionId };
-		});
+		const saved = await (recovery ? recovery.read.commit(write) : write());
 		this.notifyEventStream(
 			this.eventStreamKey(saved.nativeSessionRef, saved.executionId),
 		);
@@ -4040,7 +4551,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					intentRequestId: request.requestId,
 					intentFingerprint: fingerprint,
 					...(descriptor
-						? { connectionRequest: structuredClone(descriptor) }
+						? {
+								connectionRequest: structuredClone(descriptor),
+								connectionOrigin:
+									this.connectionClient(conversationKey).snapshotOriginal(
+										descriptor,
+									),
+							}
 						: {}),
 				};
 				const toolName = request.identity.toolName;
@@ -6139,6 +6656,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				turnId: command.turnId,
 			};
 			state.operations[key] = operation;
+			this.abortConnectionRecoveries(
+				command.nativeSessionRef,
+				command.kind === "stop" ? command.executionId : undefined,
+			);
 			return { operation, created: true };
 		});
 	}
@@ -6463,6 +6984,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		status: PersistedTurnStatus,
 	) {
+		if (command.kind === "generation-cancel")
+			await this.drainConnectionRecoveries(nativeSessionRef);
 		const record: RuntimeDriverOperationRecordV1 = {
 			schemaVersion: 1,
 			agentId: command.agentId,

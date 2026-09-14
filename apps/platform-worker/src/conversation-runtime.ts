@@ -247,7 +247,7 @@ export function createConversationRuntimeV2(
 		});
 		const base = {
 			schemaVersion: 3 as const,
-			requestId: request.requestId,
+			requestId: context.claim.metadataRecovery?.id ?? request.requestId,
 			traceId: context.claim.traceId,
 			principal: context.principal,
 			agentId: context.claim.agentId,
@@ -336,7 +336,7 @@ export function createConversationRuntimeV2(
 						sessionGeneration: claim.sessionGeneration,
 						authorizationRevision: claim.authorizationRevision,
 						runtimeGrant: reference,
-						...(context.kind === "legacy-control"
+						...(context.kind === "legacy-control" || claim.metadataRecovery
 							? { controlOnly: true as const }
 							: {}),
 					},

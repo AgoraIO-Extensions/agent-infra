@@ -98,6 +98,14 @@ jobs:
           retention-days: 1
           compression-level: 0
 
+      - name: Install fixed upstream test tools
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0,nextest@0.9.103
+
+      - name: Run focused native Connection and barrier tests
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh tests
+
       - name: Upload bounded build diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

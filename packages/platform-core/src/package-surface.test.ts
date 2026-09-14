@@ -68,6 +68,7 @@ describe("platform-core package surface", () => {
 			"isConversationGenerationBarrierConfirmedV1",
 			"isTaskAuthorizationCurrentV1",
 			"parseAgentConfigurationChangesV1",
+			"parseConversationMetadataRecoveryV1",
 			"parseConversationOperationEventV2",
 			"parseConversationOperationFactV2",
 			"parseConversationOperationHistoryV2",

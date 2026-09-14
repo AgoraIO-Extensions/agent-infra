@@ -145,13 +145,13 @@ export type RuntimeEventAckResponseV3 = z.infer<
 	typeof RuntimeEventAckResponseV3Schema
 >;
 
-// Bind every semantic request field, while allowing a retry to use a new request ID/token.
+// Request identity controls recovery admission; a different ID requires a fresh grant.
 export function runtimeRequestSigningPayloadV3(request: {
 	requestId: string;
 	grant: unknown;
 	[key: string]: unknown;
 }): string {
-	const { requestId: _requestId, grant: _grant, ...payload } = request;
+	const { grant: _grant, ...payload } = request;
 	function canonical(value: unknown): unknown {
 		if (Array.isArray(value)) return value.map(canonical);
 		if (value !== null && typeof value === "object") {
