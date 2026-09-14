@@ -8,6 +8,13 @@ import type { NativeProcessLaunch } from "./native-process.js";
 import { openPiRpc, piRecord } from "./pi-rpc.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
+function historyCheckpoint(messages: unknown[]) {
+	return JSON.stringify({
+		count: messages.length,
+		digest: createHash("sha256").update(JSON.stringify(messages)).digest("hex"),
+	});
+}
+
 export async function openPiSession(
 	options: NativeSessionOptions & { launch: NativeProcessLaunch },
 ) {
@@ -21,26 +28,13 @@ export async function openPiSession(
 		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	}
 	const sessionFile = join(directory, "session.jsonl");
-	try {
-		if (!options.nativeId) {
-			try {
-				const file = await open(sessionFile, "wx", 0o600);
-				try {
-					await file.sync();
-				} finally {
-					await file.close();
-				}
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			}
-		}
+	async function readHistory(nativeId: string | undefined) {
 		if (!(await lstat(sessionFile)).isFile())
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 		const raw = (await readFile(sessionFile, "utf8")).trim();
 		const lines = raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
 		if (!lines.length) {
-			if (options.nativeId)
-				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			if (nativeId) throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 		} else {
 			const header = piRecord(lines[0]);
 			if (
@@ -48,7 +42,7 @@ export async function openPiSession(
 				header.version !== 3 ||
 				typeof header.id !== "string" ||
 				!header.id ||
-				(options.nativeId && header.id !== options.nativeId) ||
+				(nativeId && header.id !== nativeId) ||
 				header.cwd !== options.cwd
 			)
 				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
@@ -69,22 +63,37 @@ export async function openPiSession(
 					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 				ids.add(entry.id);
 			}
-			if (options.history) {
-				const expected = piRecord(JSON.parse(options.history.checkpoint));
-				const count = Number(expected?.count);
-				const messages = buildSessionContext(lines.slice(1)).messages;
-				if (
-					!expected ||
-					!Number.isSafeInteger(count) ||
-					count < 0 ||
-					messages.length < count ||
-					(options.history.complete && messages.length !== count) ||
-					createHash("sha256")
-						.update(JSON.stringify(messages.slice(0, count)))
-						.digest("hex") !== expected.digest
-				)
-					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+		}
+		return buildSessionContext(lines.slice(1)).messages;
+	}
+	try {
+		if (!options.nativeId) {
+			try {
+				const file = await open(sessionFile, "wx", 0o600);
+				try {
+					await file.sync();
+				} finally {
+					await file.close();
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			}
+		}
+		const messages = await readHistory(options.nativeId);
+		if (options.history) {
+			const expected = piRecord(JSON.parse(options.history.checkpoint));
+			const count = Number(expected?.count);
+			if (
+				!expected ||
+				!Number.isSafeInteger(count) ||
+				count < 0 ||
+				messages.length < count ||
+				(options.history.complete && messages.length !== count) ||
+				createHash("sha256")
+					.update(JSON.stringify(messages.slice(0, count)))
+					.digest("hex") !== expected.digest
+			)
+				throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 		}
 	} catch {
 		await options.launch.close?.();
@@ -194,6 +203,13 @@ export async function openPiSession(
 						} finally {
 							await persisted.close();
 						}
+						// Pi can retain an in-memory message after a native append fails.
+						// Confirm the durable tree before publishing a recoverable terminal.
+						if (
+							historyCheckpoint(await readHistory(confirmed.nativeId)) !==
+							checkpoint
+						)
+							throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const completion = active;
 						active = undefined;
 						completion.resolve({ stopReason, checkpoint });
@@ -262,13 +278,9 @@ export async function openPiSession(
 		)
 			return;
 		return {
+			nativeId: String(state.sessionId),
 			stopReason: String(last.stopReason),
-			checkpoint: JSON.stringify({
-				count: messages.length,
-				digest: createHash("sha256")
-					.update(JSON.stringify(messages))
-					.digest("hex"),
-			}),
+			checkpoint: historyCheckpoint(messages),
 			text: current
 				.filter((message) => message?.role === "assistant")
 				.flatMap((message) =>
@@ -307,12 +319,7 @@ export async function openPiSession(
 				const response = piRecord(await rpc.request("get_messages"));
 				if (!Array.isArray(response?.messages))
 					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
-				currentCheckpoint = JSON.stringify({
-					count: response.messages.length,
-					digest: createHash("sha256")
-						.update(JSON.stringify(response.messages))
-						.digest("hex"),
-				});
+				currentCheckpoint = historyCheckpoint(response.messages);
 				return currentCheckpoint;
 			},
 			recover: confirmedTerminal,

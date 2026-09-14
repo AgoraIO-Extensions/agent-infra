@@ -40,11 +40,15 @@ const finish = async (stopReason) => {
 		content: [{ type: "text", text: "synthetic result" }],
 		stopReason,
 	});
+	const persistedMessages = structuredClone(messages);
+	if (mode === "missing-history") persistedMessages.pop();
+	if (mode === "changed-history")
+		persistedMessages.at(-1).content = [{ type: "text", text: "other result" }];
 	await writeFile(
 		sessionFile,
 		`${[
 			header,
-			...messages.map((message, index) => ({
+			...persistedMessages.map((message, index) => ({
 				type: "message",
 				id: String(index),
 				parentId: index ? String(index - 1) : null,

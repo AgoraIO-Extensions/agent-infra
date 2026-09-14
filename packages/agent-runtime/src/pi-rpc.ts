@@ -84,8 +84,12 @@ export async function openPiRpc(
 					if (request) {
 						clearTimeout(request.timer);
 						pending.delete(String(frame.id));
-						if (frame.command !== request.command || frame.success !== true)
+						if (frame.command !== request.command) {
 							request.reject(unavailable());
+							void close().catch(() => {});
+							return;
+						}
+						if (frame.success !== true) request.reject(unavailable());
 						else request.resolve(frame.data);
 					}
 				} else onEvent(frame);

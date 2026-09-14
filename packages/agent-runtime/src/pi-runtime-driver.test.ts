@@ -164,32 +164,33 @@ it.each(["normal", "cancel", "abort-only"])(
 	},
 );
 
-it.each(["exit", "malformed", "wrong-response", "stale-terminal"])(
-	"keeps uncertain execution unknown and sanitizes %s",
-	async (mode) => {
-		const f = await fixture(mode);
-		try {
-			const result = await f.driver.execute(command);
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(
-						result.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("unknown"),
-			);
-			const events = await f.driver.replayEvents(
-				result.nativeSessionRef,
-				command.executionId,
-			);
-			expect(events.some((event) => event.type === "completed")).toBe(false);
-			expect(JSON.stringify(events)).not.toContain("sensitive-vendor-canary");
-			expect(await f.driver.execute(command)).toEqual(result);
-		} finally {
-			await f.close();
-		}
-	},
-);
+it.each([
+	"exit",
+	"malformed",
+	"wrong-response",
+	"stale-terminal",
+	"missing-history",
+	"changed-history",
+])("keeps uncertain execution unknown and sanitizes %s", async (mode) => {
+	const f = await fixture(mode);
+	try {
+		const result = await f.driver.execute(command);
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("unknown"),
+		);
+		const events = await f.driver.replayEvents(
+			result.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.some((event) => event.type === "completed")).toBe(false);
+		expect(JSON.stringify(events)).not.toContain("sensitive-vendor-canary");
+		expect(await f.driver.execute(command)).toEqual(result);
+	} finally {
+		await f.close();
+	}
+});
 
 it("fails closed without the workspace policy and retires the process", async () => {
 	const f = await fixture("missing-policy");
