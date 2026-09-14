@@ -793,6 +793,7 @@ export class ConnectionError extends Error {
 			| "INVALID_REQUEST"
 			| "PROVIDER_FAILED"
 			| "PROVIDER_REAUTHORIZATION_REQUIRED"
+			| "PROVIDER_RESOURCE_NOT_FOUND"
 			| "PROVIDER_UNCERTAIN"
 			| "PROVIDER_UNAVAILABLE"
 			| "RESOURCE_NOT_FOUND"
@@ -1481,6 +1482,16 @@ export class ConnectionApplicationService {
 			}
 			if (error instanceof ConnectionError) {
 				throw error;
+			}
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				(error as { providerStatus?: number }).providerStatus === 404
+			) {
+				throw new ConnectionError(
+					"PROVIDER_RESOURCE_NOT_FOUND",
+					"Provider resource was not found",
+				);
 			}
 			if (
 				typeof error === "object" &&
