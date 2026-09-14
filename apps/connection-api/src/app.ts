@@ -86,6 +86,7 @@ function errorStatus(error: ConnectionError) {
 	if (error.code === "RESOURCE_NOT_FOUND") return 404;
 	if (error.code === "PROVIDER_UNCERTAIN") return 202;
 	if (error.code === "PROVIDER_FAILED") return 502;
+	if (error.code === "PROVIDER_RESOURCE_NOT_FOUND") return 404;
 	if (error.code === "PROVIDER_UNAVAILABLE") return 503;
 	return 403;
 }
@@ -685,7 +686,9 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 										nextAction: { type: "REAUTHORIZE_PROVIDER" },
 										reasonCode: error.code,
 									}
-								: undefined,
+								: error.code === "PROVIDER_RESOURCE_NOT_FOUND"
+									? { providerHttpStatus: 404 }
+									: undefined,
 						),
 					);
 				throw error;
