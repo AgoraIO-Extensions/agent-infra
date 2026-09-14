@@ -12,7 +12,10 @@ import {
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
-import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
+import {
+	githubV7VerificationEvidence,
+	verifiedGithubV7ActionVersionIds,
+} from "./verification/github-v7.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -81,6 +84,7 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 			capabilityVerificationMatrix(bumpedCatalog, githubV7VerificationEvidence),
 		/unknown ActionVersions/,
 	);
+	assert.deepEqual(verifiedGithubV7ActionVersionIds(bumpedCatalog), []);
 });
 
 test("capability coverage rejects duplicate IDs and unknown effects", () => {

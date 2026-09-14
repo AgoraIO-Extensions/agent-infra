@@ -31,7 +31,11 @@ export function verifiedGithubV7ActionVersionIds(catalog: {
 	provider: string;
 	providerReleaseId: string;
 }) {
-	return capabilityVerificationMatrix(catalog, githubV7VerificationEvidence)
-		.filter((item) => item.status === "LIVE_VERIFIED")
-		.map((item) => item.actionVersionId);
+	try {
+		return capabilityVerificationMatrix(catalog, githubV7VerificationEvidence)
+			.filter((item) => item.status === "LIVE_VERIFIED")
+			.map((item) => item.actionVersionId);
+	} catch {
+		return [];
+	}
 }
