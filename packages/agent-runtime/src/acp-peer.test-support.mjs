@@ -137,3 +137,6 @@ const connection = new AgentSideConnection(
 	}),
 	ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
 );
+
+// Exercise native peers that remain alive after their Host closes stdin.
+if (process.env.NATIVE_PEER_KEEP_ALIVE === "true") setInterval(() => {}, 1000);

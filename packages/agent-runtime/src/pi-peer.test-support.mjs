@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
+// Exercise native peers that remain alive after their Host closes stdin.
+if (process.env.NATIVE_PEER_KEEP_ALIVE === "true") setInterval(() => {}, 1000);
+
 const mode = process.env.PI_PEER_MODE;
 const sessionFile = process.argv[process.argv.indexOf("--session") + 1];
 let header;
