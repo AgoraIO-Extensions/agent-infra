@@ -218,6 +218,58 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("accepts only the exact file addition and rejects altered authorization, limits and old operations", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths))
+			if (path.includes("/files")) delete previous.paths[path];
+		for (const name of Object.keys(previous.components.schemas))
+			if (name.startsWith("File")) delete previous.components.schemas[name];
+		delete previous.components.schemas.MessageCommandRequestV1.properties
+			.attachments;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-files-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changedPath = structuredClone(current);
+			delete changedPath.paths[
+				"/api/v1/conversations/{conversationId}/files/{fileId}/content"
+			].get.parameters;
+			const changedScope = structuredClone(current);
+			delete changedScope.components.schemas.FileAccessClaimsV1.properties
+				.actorId;
+			const changedLimit = structuredClone(current);
+			changedLimit.components.schemas.MessageCommandRequestV1.properties.attachments.maxItems = 64;
+			const required = structuredClone(current);
+			required.components.schemas.MessageCommandRequestV1.required.push(
+				"attachments",
+			);
+			const oldOperation = structuredClone(current);
+			delete oldOperation.paths[
+				"/api/v1/conversations/{conversationId}/messages"
+			].post;
+			for (const changed of [
+				changedPath,
+				changedScope,
+				changedLimit,
+				required,
+				oldOperation,
+			]) {
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		["removed", "removed"],
 		["narrowed", "narrowed"],
