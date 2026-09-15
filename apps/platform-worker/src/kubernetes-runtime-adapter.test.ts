@@ -859,6 +859,264 @@ describe("GA Kubernetes Workload adapter", () => {
 			}),
 		);
 	});
+	it("provides bounded writable runtime scratch while keeping the root filesystem read-only", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const spec = workload?.spec?.template.spec;
+		expect(spec?.volumes).toEqual([
+			{
+				name: "data",
+				persistentVolumeClaim: { claimName: desired.persistentVolume.name },
+			},
+			{
+				name: "runtime-tmp",
+				emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
+			},
+		]);
+		expect(spec?.containers[0]?.volumeMounts).toEqual([
+			{ name: "data", mountPath: desired.persistentVolume.mountPath },
+			{ name: "runtime-tmp", mountPath: "/tmp" },
+		]);
+		expect(spec?.containers[0]?.securityContext).toMatchObject({
+			readOnlyRootFilesystem: true,
+			allowPrivilegeEscalation: false,
+			capabilities: { drop: ["ALL"] },
+			runAsUser: 1000,
+		});
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		await adapter.promote(desired, identity);
+		expect(
+			(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("1");
+	});
+	it.each(["128Mi", "134217728", "131072Ki", "0.125Gi"])(
+		"accepts runtime scratch defaults and the equivalent capacity %s without adding a PVC source",
+		async (sizeLimit) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!workload?.spec?.template.spec || !pod?.spec) throw new Error();
+			for (const spec of [workload.spec.template.spec, pod.spec]) {
+				for (const container of spec.containers)
+					container.volumeMounts = container.volumeMounts?.map((mount) => ({
+						...mount,
+						readOnly: false,
+						subPath: "",
+						subPathExpr: "",
+						mountPropagation: "None",
+					}));
+				spec.volumes = spec.volumes?.map((volume) =>
+					volume.name === "runtime-tmp"
+						? { ...volume, emptyDir: { medium: "Memory", sizeLimit } }
+						: {
+								...volume,
+								persistentVolumeClaim: {
+									...volume.persistentVolumeClaim,
+									claimName: desired.persistentVolume.name,
+									readOnly: false,
+								},
+							},
+				);
+			}
+			f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+			f.resources.set(`Pod/${desired.service.name}-0`, pod);
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			await adapter.promote(desired, identity);
+			expect(
+				(
+					await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`)
+				)?.spec?.volumes?.find((volume) => volume.name === "runtime-tmp"),
+			).toEqual({
+				name: "runtime-tmp",
+				emptyDir: { medium: "Memory", sizeLimit },
+			});
+		},
+	);
+	it.each([
+		"missing volume",
+		"renamed volume",
+		"missing mount",
+		"wrong mount path",
+		"read-only mount",
+		"subPath",
+		"subPathExpr",
+		"mount propagation",
+		"extra mount",
+		"unknown mount field",
+		"hostPath source",
+		"additional PVC source",
+		"extra volume",
+		"unknown volume field",
+		"missing emptyDir",
+		"wrong medium",
+		"missing limit",
+		"larger limit",
+		"smaller limit",
+		"fractional excess",
+		"invalid limit",
+		"unknown emptyDir field",
+	])(
+		"repairs controller runtime scratch drift and refuses live Pod routing for %s",
+		async (mutation) => {
+			const f = fixture();
+			const desired = workloadDesiredFixture();
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			if (!workload?.spec?.template.spec) throw new Error();
+			const change = (source: V1PodSpec): V1PodSpec => {
+				const spec = structuredClone(source);
+				const volume = spec.volumes?.find(
+					(item) => item.name === "runtime-tmp",
+				);
+				const container = spec.containers.find((item) => item.name === "agent");
+				const mount = container?.volumeMounts?.find(
+					(item) => item.name === "runtime-tmp",
+				);
+				if (!volume?.emptyDir || !container || !mount) throw new Error();
+				switch (mutation) {
+					case "missing volume":
+						spec.volumes = spec.volumes?.filter((item) => item !== volume);
+						break;
+					case "renamed volume":
+						volume.name = "foreign";
+						break;
+					case "missing mount":
+						container.volumeMounts = container.volumeMounts?.filter(
+							(item) => item !== mount,
+						);
+						break;
+					case "wrong mount path":
+						mount.mountPath = "/workspace";
+						break;
+					case "read-only mount":
+						mount.readOnly = true;
+						break;
+					case "subPath":
+						mount.subPath = "foreign";
+						break;
+					case "subPathExpr":
+						mount.subPathExpr = "$(FOREIGN)";
+						break;
+					case "mount propagation":
+						mount.mountPropagation = "Bidirectional";
+						break;
+					case "extra mount":
+						container.volumeMounts?.push({ ...mount, mountPath: "/extra" });
+						break;
+					case "unknown mount field":
+						Object.assign(mount, { unexpected: true });
+						break;
+					case "hostPath source":
+						delete volume.emptyDir;
+						volume.hostPath = { path: "/host" };
+						break;
+					case "additional PVC source":
+						volume.persistentVolumeClaim = {
+							claimName: desired.persistentVolume.name,
+						};
+						break;
+					case "extra volume":
+						spec.volumes?.push({ name: "extra", emptyDir: {} });
+						break;
+					case "unknown volume field":
+						Object.assign(volume, { unexpected: true });
+						break;
+					case "missing emptyDir":
+						delete volume.emptyDir;
+						break;
+					case "wrong medium":
+						volume.emptyDir.medium = "";
+						break;
+					case "missing limit":
+						delete volume.emptyDir.sizeLimit;
+						break;
+					case "larger limit":
+						volume.emptyDir.sizeLimit = "256Mi";
+						break;
+					case "smaller limit":
+						volume.emptyDir.sizeLimit = "64Mi";
+						break;
+					case "fractional excess":
+						volume.emptyDir.sizeLimit = "134217728.000000001";
+						break;
+					case "invalid limit":
+						volume.emptyDir.sizeLimit = "128MiB";
+						break;
+					case "unknown emptyDir field":
+						Object.assign(volume.emptyDir, { unexpected: true });
+						break;
+				}
+				return spec;
+			};
+			const changedWorkload: V1StatefulSet = {
+				...workload,
+				spec: {
+					...workload.spec,
+					template: {
+						...workload.spec.template,
+						spec: change(workload.spec.template.spec),
+					},
+				},
+			};
+			f.resources.set(`StatefulSet/${desired.service.name}`, changedWorkload);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			const repaired = await adapter.apply(desired);
+			if (!repaired || repaired === "pending") throw new Error();
+			expect(await adapter.observe(desired, repaired)).toBe("healthy");
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			if (!pod?.spec) throw new Error();
+			const changedPod: V1Pod = { ...pod, spec: change(pod.spec) };
+			f.resources.set(`Pod/${desired.service.name}-0`, changedPod);
+			expect(await adapter.observe(desired, repaired)).toBe("drifted");
+			const result = await adapter.switchRoute({
+				schemaVersion: 1,
+				requestId: `${desired.requestId}-scratch-route`,
+				traceId: desired.traceId,
+				agentId: desired.agentId,
+				fence: desired.fence,
+				action: "promote",
+				candidateValidated: true,
+				candidateRoute: {
+					routeRef: desired.route.name,
+					workloadUid: repaired.uid,
+					workloadGeneration: repaired.generation,
+					workloadRevision: desired.workloadRevision,
+				},
+			});
+			expect(result).toMatchObject({ status: "failed", routedWorkloads: [] });
+			expect(
+				(await f.client.read<V1Service>("Service", desired.service.name))?.spec
+					?.selector?.["agent-infra.agora.io/revision"],
+			).toBe("closed");
+			expect(await f.client.read("Ingress", desired.route.name)).toBeNull();
+		},
+	);
 	it("closes an opened candidate selector but keeps the verified route stable", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();
@@ -3965,11 +4223,15 @@ describe("GA Kubernetes Workload adapter", () => {
 				})),
 				volumes: source.volumes?.map((volume) => ({
 					...volume,
-					persistentVolumeClaim: {
-						...volume.persistentVolumeClaim,
-						claimName: desired.persistentVolume.name,
-						readOnly: mutation === "claimReadOnly",
-					},
+					...(volume.name === "data"
+						? {
+								persistentVolumeClaim: {
+									...volume.persistentVolumeClaim,
+									claimName: desired.persistentVolume.name,
+									readOnly: mutation === "claimReadOnly",
+								},
+							}
+						: {}),
 					...(mutation === "hostPath" ? { hostPath: { path: "/host" } } : {}),
 				})),
 			});

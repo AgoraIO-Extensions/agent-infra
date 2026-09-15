@@ -375,6 +375,8 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、部署解密私钥、Kubernetes 或原始凭证权限作为运行前提。
 
+只读根文件系统下的可写临时卷与生产、探针装配一致性遵循工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)。临时卷可写不替代原生 readiness 和 Conversation 隔离验证。
+
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
 ### 10.1 Codex Linux sandbox 启动准入

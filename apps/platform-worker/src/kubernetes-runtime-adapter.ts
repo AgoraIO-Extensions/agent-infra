@@ -1154,17 +1154,40 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
+					{
+						name: "runtime-tmp",
+						mountPath: "/tmp",
+						readOnly: false,
+						subPath: "",
+						subPathExpr: "",
+						mountPropagation: "None",
+					},
 				],
 			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
 			!hasSameStructure(
-				pod?.volumes?.map((volume) => ({
-					...volume,
-					persistentVolumeClaim: {
-						...volume.persistentVolumeClaim,
-						readOnly: volume.persistentVolumeClaim?.readOnly ?? false,
-					},
-				})),
+				pod?.volumes?.map((volume) => {
+					const size = volume.emptyDir?.sizeLimit;
+					const observed =
+						typeof size === "string" ? quantityRatio(size) : undefined;
+					const expected = quantityRatio("128Mi");
+					return {
+						...volume,
+						...(observed &&
+						expected &&
+						observed[0] * expected[1] === expected[0] * observed[1]
+							? { emptyDir: { ...volume.emptyDir, sizeLimit: "128Mi" } }
+							: {}),
+						...(volume.persistentVolumeClaim
+							? {
+									persistentVolumeClaim: {
+										...volume.persistentVolumeClaim,
+										readOnly: volume.persistentVolumeClaim.readOnly ?? false,
+									},
+								}
+							: {}),
+					};
+				}),
 				[
 					{
 						name: "data",
@@ -1172,6 +1195,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							claimName: value.persistentVolume.name,
 							readOnly: false,
 						},
+					},
+					{
+						name: "runtime-tmp",
+						emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 					},
 				],
 			)
@@ -2482,6 +2509,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
 										},
+										{ name: "runtime-tmp", mountPath: "/tmp" },
 									],
 								},
 							],
@@ -2491,6 +2519,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									persistentVolumeClaim: {
 										claimName: value.persistentVolume.name,
 									},
+								},
+								{
+									name: "runtime-tmp",
+									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
 							],
 						},
