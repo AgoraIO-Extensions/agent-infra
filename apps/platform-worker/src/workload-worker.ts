@@ -72,9 +72,11 @@ export function createPlatformWorkloadWorkerV1(
 	}
 	function enqueueTick() {
 		const result = tickTail.then(async () => {
-			const workload = await reconciliation.tick(workerId);
-			await files?.runOnce();
-			return workload;
+			try {
+				return await reconciliation.tick(workerId);
+			} finally {
+				await files?.runOnce();
+			}
 		});
 		tickTail = result.then(
 			() => undefined,
