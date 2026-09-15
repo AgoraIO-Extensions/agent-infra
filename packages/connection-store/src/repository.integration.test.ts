@@ -56,7 +56,10 @@ describe("PostgreSQL Connection business authority", () => {
 			const principalId = `principal-github-profile-${randomUUID()}`;
 			try {
 				await repository.publishProviderCatalog(githubConnectionCatalog);
-				await repository.ensurePrincipal({ principalId });
+				await sql`
+					INSERT INTO connection_principals (id, display_name)
+					VALUES (${principalId}, 'GitHub Profile Test')
+				`;
 				const stored = await repository.storeGithubOAuthCredential({
 					accessToken: "github-profile-test-secret",
 					displayName: "Shared Profile Name",
