@@ -1179,6 +1179,87 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("completed");
 	});
 
+	it("keeps stop pending until original recovery confirms running, then uses the existing stop path", async () => {
+		const original = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				stopPending: true,
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const stopped = () =>
+			new MemoryDispatchStore({
+				...original.current,
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-original",
+				input: null,
+			});
+		let stops = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch(request) {
+				expect(request.operation).toBe("turn.stop");
+				expect(request.stopRequestId).toBe("stop-original");
+				stops += 1;
+				return {
+					schemaVersion: 1,
+					hostSessionRef: "host-session-conversation-1",
+					operationId: "stop-original",
+					result: { outcome: "accepted", status: "cancelled" },
+				};
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-session-conversation-1",
+					executionId: request.executionId,
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				expect(original.current.executionStatus).toBe("processing");
+				const control = setup({
+					store: stopped(),
+					runtimeHost,
+					authorization: authorization({ controlOnly: true }),
+				});
+				expect(
+					await dispatch(control.useCase, "conversation:stop:stop-original"),
+				).toMatchObject({ outcome: "accepted" });
+				expect(control.store.current.executionStatus).toBe("cancelled");
+				yield {
+					...runtimeEvent(1),
+					type: "completed",
+					payload: { status: "cancelled" },
+				};
+			},
+		};
+		const pending = setup({
+			store: stopped(),
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(
+			await dispatch(pending.useCase, "conversation:stop:stop-original"),
+		).toMatchObject({ outcome: "retry" });
+		expect(pending.store.errorCode).toBe("ORIGINAL_RESPONSE_NOT_STARTED");
+		expect(stops).toBe(0);
+		const recovery = setup({
+			store: original,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(recovery.useCase)).toMatchObject({
+			outcome: "accepted",
+		});
+		expect(original.current.executionStatus).toBe("cancelled");
+		expect(stops).toBe(1);
+	});
+
 	it("locally cancels after RuntimeHost fences a never-accepted Turn", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		const store = new MemoryDispatchStore(

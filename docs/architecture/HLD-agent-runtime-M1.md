@@ -220,6 +220,16 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - 初始 Turn 调用 Runtime 前，`platform-worker` 必须在 Conversation 锁内重验同一 Execution 没有 stop outbox，并在同一事务中取得 Turn durable lease、提升 Execution fence，再把 Turn outbox 从待投递原子迁移为“投递中、接受结果不确定”；事务提交并释放锁后才能携带当前 Execution fence 调用 Adapter。若迁移前已有 stop 且 Runtime 明确未接受初始 Turn，Worker 在同一事务中取消待投递的 Turn outbox、把 Execution 置为“已取消”、把 stop outbox 置为成功终态，并按前述规则结束全部待处理补充指令，不调用 Adapter，初始 Turn 后续不得再投递。Turn outbox 已进入“投递中、接受结果不确定”时，stop outbox 保持待处理且不提升 Execution fence；当前 Turn Worker 先按原 `executionId` 和 Execution fence 恢复查询。Turn 租约过期或释放后，接管 Worker 必须提升 Execution fence 并以新 fence 恢复事件管道；只有 Runtime 明确未接受且 Agent Service 已持久化新 fence 的 cancellation barrier、阻止旧 Worker 迟到提交时才能本地取消，无法确认时继续保持接受结果不确定。
 - `executionId` 是 Adapter 提交 Turn 的稳定幂等标识。协议不能确认是否已接受 Turn 时，Adapter 将 Execution 标记为状态不确定并恢复查询，不能盲目重复提交。
 
+Codex 配置变化后的原执行核实与控制遵循工程 Spec 的
+[10.8](SPEC-agent-infra-M1-engineering-architecture.md#108-codex-原生模型传输边界)。Host 已保存
+unknown 受理回执时，后续查询须按原 operationId 再次只读查询 Driver；缺失或仍未知时
+继续 unknown，不调用 execute 补造受理。旧 accepted/running 回执不代表当前仍活跃。
+Worker 先沿原执行核实状态；确认原 Turn 已接受且当前仍 running 后，才按既有投递事务
+恢复 processing 并派发原 stop。受理未明时保持 stop 待处理；取得可靠终态后沿原事务
+保存实际结果并收敛 stop，不重建 Session/Turn，也不以停止 ACK 释放占用。原 journal
+已持久化的事件可沿原游标先行恢复，不以新的业务模型准入或当前配置匹配为前置；事件、
+必要审计、游标及 ACK 继续遵循 8.2 和工程 Spec 9.3。
+
 历史主体迁移保留原 Session、操作标识、输入与模型选择、请求摘要和已保存结果。平台按
 可信原 producer 证据持久化迁移来源及必要审计；已提交的系统迁移审计是工程 Spec 9.3
 允许的独立恢复控制来源。Host 只消费绑定当前部署和完整旧 submit 集合的签名映射，任一

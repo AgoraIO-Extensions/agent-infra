@@ -3653,11 +3653,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return { state: "unknown" };
 		if (operation.admissionPending || operation.admissionRecoveryPending)
 			return { state: "unknown" };
-		if (
-			command.kind === "submit-turn" &&
-			!this.canReplaySubmitOperation(operation)
-		)
-			return { state: "unknown" };
+		// Reading a durable acceptance receipt does not readmit its model route.
+		// execute() and native recovery retain their own configuration checks.
 		if (operation.record) {
 			if (
 				command.kind === "generation-cancel" &&
@@ -3772,7 +3769,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 			return execution.status;
 		}
-		this.assertExecutionConfiguration(initialState, session, execution);
+		this.assertOriginalRecoveryConfiguration(initialState, session, execution);
 		const nativeTurn = {
 			conversationKey: this.modelConversationKey(codexConversationKey(session)),
 			threadId: session.threadId,
@@ -3918,7 +3915,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (!existingExecution) unavailable();
 		this.assertModelAdmissionConfirmed(existingSession, existingExecution);
-		await this.recoverEventHistory(nativeSessionRef, executionId);
+		// Committed facts remain readable without reopening the old native route.
+		// Sealed executions replay their journal before independent status recovery.
+		if (
+			!existingSession.journals?.[existingExecution.nativeTurnId]
+				?.externalActionsBlocked &&
+			!this.hasInterruption(nativeSessionRef, executionId) &&
+			this.executionConfigurationMatches(
+				this.readState(),
+				existingSession,
+				existingExecution,
+			)
+		)
+			await this.recoverEventHistory(nativeSessionRef, executionId);
 		const session = this.session(nativeSessionRef);
 		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution) unavailable();
@@ -4127,6 +4136,34 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!this.executionConfigurationMatches(state, session, execution)) {
 			unavailable();
 		}
+	}
+
+	private assertOriginalRecoveryConfiguration(
+		state: CodexDriverState,
+		session: CodexSession,
+		execution: CodexExecution,
+	) {
+		if (this.executionConfigurationMatches(state, session, execution)) return;
+		const operation = this.executionOperation(state, session, execution);
+		const journal = session.journals?.[execution.nativeTurnId];
+		// A durable source barrier permits only original status/control RPCs.
+		// restoreExecutionStatus never registers admission for this sealed Turn.
+		if (
+			!operation.configVersion ||
+			!operation.internalModel ||
+			!operation.reasoningLevel ||
+			operation.admissionPending ||
+			operation.admissionRecoveryPending ||
+			operation.record?.result.outcome !== "accepted" ||
+			!journal ||
+			(!journal.externalActionsBlocked &&
+				!this.hasInterruption(
+					session.nativeSessionRef,
+					execution.executionId,
+					state,
+				))
+		)
+			unavailable();
 	}
 
 	private update<R>(change: (state: CodexDriverState) => R) {
@@ -6647,7 +6684,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			const execution = ownRecordValue(session.executions, command.executionId);
 			if (!execution || execution.turnId !== command.turnId) unavailable();
-			this.assertExecutionConfiguration(state, session, execution);
+			this.assertOriginalRecoveryConfiguration(state, session, execution);
 			const operation: CodexOperation = {
 				schemaVersion: 1,
 				state: "prepared",
@@ -6679,7 +6716,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) {
 			unavailable();
 		}
-		this.assertExecutionConfiguration(state, session, execution);
+		this.assertOriginalRecoveryConfiguration(state, session, execution);
 		return {
 			conversationKey: this.modelConversationKey(codexConversationKey(session)),
 			threadId: session.threadId,
