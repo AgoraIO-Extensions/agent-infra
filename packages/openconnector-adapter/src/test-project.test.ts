@@ -14,6 +14,7 @@ import {
 	testResourceMarker,
 } from "./test-project.ts";
 import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
+import { githubV7LowRiskWriteScenarios } from "./verification/github-v7-low-risk-write-scenarios.ts";
 import { githubV7ReadScenarios } from "./verification/github-v7-read-scenarios.ts";
 
 const catalogs = [
@@ -22,6 +23,25 @@ const catalogs = [
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
 ] as const;
+
+test("GitHub v7 low-risk writes have an exact isolated cleanup scenario", () => {
+	const actionVersionIds = githubV7LowRiskWriteScenarios.map(
+		(scenario) => scenario.actionVersionId,
+	);
+	assert.equal(actionVersionIds.length, 27);
+	assert.equal(new Set(actionVersionIds).size, actionVersionIds.length);
+	for (const scenario of githubV7LowRiskWriteScenarios) {
+		const action = githubConnectionCatalog.actions.find(
+			(item) => item.id === scenario.actionVersionId,
+		);
+		assert.equal(action?.effect, "WRITE");
+		assert.equal(scenario.target.externalAccount, "328682695");
+		assert.equal(scenario.target.organizationId, "329053903");
+		assert.equal(scenario.target.repositoryId, "1369705971");
+		assert.match(scenario.marker, /^connection-e2e:<runId>/);
+		assert.ok(["DELETE", "RESTORE"].includes(scenario.cleanup));
+	}
+});
 
 test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
 	const catalogReads = githubConnectionCatalog.actions
