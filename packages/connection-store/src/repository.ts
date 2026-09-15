@@ -2447,6 +2447,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						),
 						actionVersionId: row.action_version_id,
 						connectionId: row.connection_id,
+						credentialVersionId: row.id,
 						externalAccount: row.external_account,
 						providerReleaseId: row.provider_release_id,
 					},
@@ -2459,6 +2460,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 
 	async storeGitHubProfileLabel(input: {
 		connectionId: string;
+		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
 	}) {
@@ -2470,6 +2472,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND provider_id = ${githubProvider}
 				AND external_account = ${input.externalAccount}
 				AND status = 'ACTIVE'
+				AND profile_label_source IS NULL
+				AND EXISTS (
+					SELECT 1 FROM connection_credential_versions credential
+					WHERE credential.id = ${input.credentialVersionId}
+						AND credential.connection_id = connection_accounts.id
+						AND credential.status = 'ACTIVE'
+				)
 		`;
 	}
 

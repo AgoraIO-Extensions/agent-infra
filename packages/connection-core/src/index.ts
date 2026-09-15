@@ -389,6 +389,7 @@ export type CredentialForExecution = { accessToken: string };
 export type GitHubProfileRefreshCandidate = CredentialForExecution & {
 	actionVersionId: string;
 	connectionId: string;
+	credentialVersionId: string;
 	externalAccount: string;
 	providerReleaseId: string;
 };
@@ -658,6 +659,7 @@ export interface ConnectionRepository {
 	): Promise<GitHubProfileRefreshCandidate[]>;
 	storeGitHubProfileLabel?(input: {
 		connectionId: string;
+		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
 	}): Promise<void>;
@@ -938,6 +940,7 @@ export class ConnectionApplicationService {
 					return;
 				await store.call(this.repository, {
 					connectionId: candidate.connectionId,
+					credentialVersionId: candidate.credentialVersionId,
 					displayName: login,
 					externalAccount: candidate.externalAccount,
 				});

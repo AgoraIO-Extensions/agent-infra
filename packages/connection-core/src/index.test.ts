@@ -117,11 +117,13 @@ class MemoryRepository implements ConnectionRepository {
 		accessToken: string;
 		actionVersionId: string;
 		connectionId: string;
+		credentialVersionId: string;
 		externalAccount: string;
 		providerReleaseId: string;
 	}> = [];
 	githubProfileLabel?: {
 		connectionId: string;
+		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
 	};
@@ -326,6 +328,7 @@ class MemoryRepository implements ConnectionRepository {
 	}
 	async storeGitHubProfileLabel(input: {
 		connectionId: string;
+		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
 	}) {
@@ -429,6 +432,7 @@ describe("Connection application service", () => {
 				accessToken: "provider-secret",
 				actionVersionId: "github.get_current_user@v7",
 				connectionId: "connection-github",
+				credentialVersionId: "credential-github",
 				externalAccount: "42",
 				providerReleaseId: "github-release-v7",
 			},
@@ -444,6 +448,7 @@ describe("Connection application service", () => {
 
 		expect(repository.githubProfileLabel).toEqual({
 			connectionId: "connection-github",
+			credentialVersionId: "credential-github",
 			displayName: "octocat",
 			externalAccount: "42",
 		});
@@ -456,6 +461,7 @@ describe("Connection application service", () => {
 				accessToken: "provider-secret",
 				actionVersionId: "github.get_current_user@v7",
 				connectionId: "connection-github",
+				credentialVersionId: "credential-github",
 				externalAccount: "legacy-id",
 				providerReleaseId: "github-release-v7",
 			},

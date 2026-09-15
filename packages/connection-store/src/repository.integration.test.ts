@@ -74,6 +74,7 @@ describe("PostgreSQL Connection business authority", () => {
 					expect.objectContaining({
 						accessToken: "github-profile-test-secret",
 						connectionId: stored.connectionId,
+						credentialVersionId: expect.any(String),
 						externalAccount: "42",
 						providerReleaseId: githubConnectionCatalog.providerReleaseId,
 					}),
@@ -81,6 +82,7 @@ describe("PostgreSQL Connection business authority", () => {
 
 				await repository.storeGitHubProfileLabel({
 					connectionId: stored.connectionId,
+					credentialVersionId: candidates[0]?.credentialVersionId ?? "",
 					displayName: "octocat",
 					externalAccount: "42",
 				});
