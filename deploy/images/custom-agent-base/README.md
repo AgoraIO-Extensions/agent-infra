@@ -35,6 +35,10 @@ High/Critical 或不合格例外都会阻止发布，例外仍由仓库既有政
 漏洞库版本与摘要、子镜像 Digest 和运行结果；原始扫描证据位于相邻的 `.scan` 目录。
 输出 JSON 仅在全部步骤通过后生成，不供 Platform Helm 的 release validator 使用。
 
+本地 CI 继承检查可能使用只返回 config ID 的 Docker 存储后端，此时 `childDigest` 为 `null`，
+仅证明本地构建、运行及 config 字节校验。正式发布验收需要支持 OCI manifest Digest 的 Docker
+存储后端；`--published` 在无法取得真实子镜像 Digest 时失败，本地 CI 报告不能替代发布验收。
+
 ## 继承样例
 
 [最小 Dockerfile](../../../tests/fixtures/custom-base-image/Dockerfile) 使用 `ARG BASE_IMAGE` 将已发布

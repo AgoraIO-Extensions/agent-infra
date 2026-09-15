@@ -113,16 +113,19 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		], "Custom Base Image downstream build", 5 * 60_000);
 		childLoaded = true;
 		const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
-		const childDigest = metadata["containerimage.digest"];
+		const exportedDigest = metadata["containerimage.digest"];
 		const childConfigDigest = metadata["containerimage.config.digest"];
 		const child = inspect(childReference);
 		assert.equal(`${child.Os}/${child.Architecture}`, platform, "child platform differs from Base Image");
 		const childImageId = child.Id;
-		assert.match(childDigest, digestPattern);
+		assert.match(exportedDigest, digestPattern);
 		assert.match(childConfigDigest, digestPattern);
 		assert.match(childImageId, digestPattern);
-		if (child.Descriptor) assert.equal(child.Descriptor.digest, childDigest);
+		if (child.Descriptor) assert.equal(child.Descriptor.digest, exportedDigest);
 		assert.equal(await configDigest(childReference), childConfigDigest);
+		// Classic Docker's load exporter reports the config ID instead of a manifest Digest.
+		const childDigest = exportedDigest === childConfigDigest ? null : exportedDigest;
+		assert.ok(!published || childDigest, "published acceptance requires a child manifest Digest; use OCI-capable Docker storage");
 		const childProbe = JSON.parse(docker([...options, childReference], "Custom Base Image downstream run"));
 		assert.equal(childProbe.status, "passed");
 		assert.equal(inspect(image).Id, actual.Id, "Base Image changed during verification");
