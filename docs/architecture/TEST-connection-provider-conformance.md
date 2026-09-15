@@ -46,9 +46,10 @@ GitHub 的第一条真实闭环由 `Connection GitHub E2E` workflow 执行。它
 MCP endpoint 和确定性 Action 序列，不运行 Codex 或其他模型。执行边界固定为：
 
 - Provider Connection external account ID：`328682695`
-- owner：`AGORAconnectionE2E`
+- organization：`AgoraConnectionE2EORG`（ID `329053903`）
+- owner：`AgoraConnectionE2EORG`
 - repository：`connector-conformance`
-- repository ID：`1368335067`
+- repository ID：`1369705971`
 - visibility：`private`
 - default branch：`main`
 
@@ -67,10 +68,12 @@ repository 删除、协作者变更、fork、workflow、merge 或 release mutati
 九个 lifecycle Action 固定使用已批准的 `@v7` ActionVersion；catalog 升级必须先更新测试基线并评审，
 不能由 nightly 自动接受新版本。
 
-当前 GitHub v7 catalog 共 145 项，其中 9 项具有 run `34821150745-1` 的真实 Provider 证据，136 项
-保持 `UNVERIFIED`，版本升级后旧证据不继承。本阶段只建立验证矩阵，不改变 production discovery、
-Grant、declaration 或 execution eligibility；对外门禁在更多 Action 完成 E2E 后另行启用。Bitbucket、
-Jira 和 Confluence 必须分别完成验证，不能把 GitHub 证据外推到其他 Provider。
+当前 GitHub v7 catalog 共 145 项，其中 82 项具有 run `34863028751-1` 的真实 Provider 证据：77 个
+`READ` 和 5 个 lifecycle `WRITE`。`github.get_pull_request_review@v7` 因缺少第二测试账号保持
+`UNVERIFIED`，其余 62 个 `WRITE` 也保持 `UNVERIFIED`。版本升级后旧证据不继承。本阶段只更新验证
+矩阵，不改变 production discovery、Grant、declaration 或 execution eligibility；对外门禁在更多
+Action 完成 E2E 后另行启用。Bitbucket、Jira 和 Confluence 必须分别完成验证，不能把 GitHub 证据
+外推到其他 Provider。
 
 ## 测试层级与门禁
 
