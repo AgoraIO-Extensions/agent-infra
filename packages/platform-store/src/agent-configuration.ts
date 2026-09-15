@@ -459,6 +459,72 @@ export class PostgresAgentConfigurationQueryV1 {
 		this.#database = drizzle(this.#client);
 	}
 
+	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
+	async readStandardTemplateReleaseAuthority(input: {
+		readonly agentId: string;
+		readonly templateId: string;
+	}): Promise<
+		| {
+				readonly outcome: "found";
+				readonly authorizationRevision: string;
+				readonly configurationRevision: number;
+				readonly source: Extract<
+					AgentConfigurationRecordV2["source"],
+					{ kind: "standard" }
+				>;
+		  }
+		| { readonly outcome: "unavailable" }
+	> {
+		try {
+			if (!validateText(input.agentId) || !validateText(input.templateId))
+				throw new AgentConfigurationStoreError();
+			const [current] = await this.#database
+				.select({
+					configuration: agentConfigurationRevisions.configuration,
+					revision: agents.currentConfigurationRevision,
+					sourceReference: agentConfigurationRevisions.sourceReference,
+					authorizationRevision: agents.authorizationRevision,
+				})
+				.from(agents)
+				.innerJoin(
+					agentConfigurationRevisions,
+					and(
+						eq(agentConfigurationRevisions.agentId, agents.id),
+						eq(
+							agentConfigurationRevisions.revision,
+							agents.currentConfigurationRevision,
+						),
+					),
+				)
+				.where(eq(agents.id, input.agentId))
+				.limit(1);
+			if (!current?.configuration) return { outcome: "unavailable" };
+			const configuration = decodeAgentConfigurationRecord(
+				current.configuration,
+			);
+			if (
+				configuration.agentId !== input.agentId ||
+				configuration.revision !== current.revision ||
+				canonicalSourceReference(configuration) !== current.sourceReference ||
+				!validateText(current.authorizationRevision)
+			)
+				throw new AgentConfigurationStoreError();
+			if (
+				configuration.source.kind !== "standard" ||
+				configuration.source.templateId !== input.templateId
+			)
+				return { outcome: "unavailable" };
+			return {
+				outcome: "found",
+				authorizationRevision: current.authorizationRevision,
+				configurationRevision: current.revision,
+				source: configuration.source,
+			};
+		} catch {
+			throw new AgentConfigurationStoreError();
+		}
+	}
+
 	/** Internal admission material; an administrator role never grants Owner authority. */
 	async readAuthority(
 		input: AgentConfigurationAuthorityQueryInputV1,

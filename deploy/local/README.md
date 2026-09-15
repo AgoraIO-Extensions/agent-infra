@@ -112,3 +112,44 @@ PVC；最终任务、真实模型、独立 Connection 授权与 GitHub Draft PR 
 旧 `/api/v1` Agent 管理与配置入口明确返回版本退役错误；当前 Web 使用 `/api/v2`，现有
 Conversation 与会话接口仍遵循各自版本。历史 V1 命令只支持 Core 的只读原结果 replay，
 不伪造已退役的 Action 投影。
+
+## 单 Agent 标准模板发布
+
+已登记发布通过独立工厂
+[`createProductionSingleAgentTemplateReleaseAppV1`](../../apps/platform-api/src/template-release.ts)
+提供受限 HTTP 入口；不挂入普通 Web API。部署模块提供既有生产身份、Registry 和模板
+配置，以及经过部署校验的 `target` 与每次重读的 `loadReleaseBinding`。后者返回
+`{ schemaVersion: 1, revision, target, operatorIds }`；撤销运维资格时须更新其当前结果。
+`target` 包含 `schemaVersion: 1`、`releaseId`、`agentId`、`templateId`、
+`expectedConfigurationRevision`、`expectedImageDigest` 与 `targetImageDigest`。
+它固定到一个 Agent 的同模板 OLD→NEW 发布，不能从 HTTP 载荷派生。
+
+以下示例在 API 部署目录运行，`approved-release.mjs` 属于部署配置，提供当前身份和
+当前发布绑定，不在源码或镜像中保存凭证。HTTPS 入口须原样传递真实认证请求；内部监听
+地址不替代认证，IdentityAdapter 必须支持此受限路径，不能把请求伪装成普通配置操作。
+
+```javascript
+import { serve } from "@hono/node-server";
+import { createProductionSingleAgentTemplateReleaseAppV1 } from "../dist/index.mjs";
+import { loadApprovedReleaseInput } from "./approved-release.mjs";
+
+const release = createProductionSingleAgentTemplateReleaseAppV1(
+  await loadApprovedReleaseInput(),
+);
+const server = serve({ fetch: release.app.fetch, hostname: "127.0.0.1", port: 3510 });
+process.once("SIGINT", () => {
+  server.close(() => void release.close());
+});
+```
+
+通过实际身份认证后，发送
+`POST /internal/ops/standard-template-releases/{releaseId}/apply`，请求体严格为
+`{ "schemaVersion": 1 }`，并提供稳定的 `Idempotency-Key`。完整请求与固定发布内容相同
+才可重放；重放仍要求当前身份及部署运维资格。契约见
+[发布 OpenAPI](../../packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json)。
+
+`202` 只表示配置新修订已保存；还须由唯一 Worker 正常准入、验证和提升。部署者需准备
+OLD/NEW 的实际 Registry 政策与 Worker 模板配置；不能直接改 Kubernetes、配置表或
+原任务终态来完成发布。模型、Secret 引用、Owner、可用范围、env、渠道和原 PVC 的保留
+遵循[工程 Spec 第 10.4 节](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)。
+此入口的通过不等于所有关联 Agent 自动升级或真实账号首通已验收。
