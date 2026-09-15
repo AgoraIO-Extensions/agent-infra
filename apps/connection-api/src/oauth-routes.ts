@@ -1202,6 +1202,7 @@ export function createConnectionOAuthApp(
 					typeof body.providerReleaseId !== "string" ||
 					!Array.isArray(body.actionVersionIds) ||
 					body.actionVersionIds.length === 0 ||
+					body.actionVersionIds.length > 500 ||
 					body.actionVersionIds.some((value) => typeof value !== "string") ||
 					new Set(body.actionVersionIds).size !== body.actionVersionIds.length
 				) {
