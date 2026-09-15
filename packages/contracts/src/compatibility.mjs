@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
 const artifactRelativePaths = [
+	"packages/contracts/artifacts/json-schema/files.v1.schema.json",
+	"packages/contracts/artifacts/openapi/files.v1.openapi.json",
 	"packages/contracts/artifacts/json-schema/common.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/kubernetes-workload.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
@@ -768,6 +770,57 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// Only the reviewed #442 additive file surface may differ; every old contract remains exact.
+function isFileAuthorityOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/conversations/{conversationId}/files",
+		"/api/v1/conversations/{conversationId}/files/limits",
+		"/api/v1/conversations/{conversationId}/files/{fileId}/access",
+		"/api/v1/conversations/{conversationId}/files/{fileId}/complete",
+		"/api/v1/conversations/{conversationId}/files/{fileId}/content",
+	];
+	const names = [
+		"FileAccessClaimsV1",
+		"FileAccessGrantV1",
+		"FileAccessRequestV1",
+		"FileAccessResponseV1",
+		"FileCompleteRequestV1",
+		"FileDescriptorV1",
+		"FileExchangeRequestV1",
+		"FileIntentRequestV1",
+		"FileLimitsV1",
+		"FileProjectionV1",
+	];
+	const schemas = current.components?.schemas;
+	const message = schemas?.MessageCommandRequestV1;
+	if (
+		!message ||
+		previous.components?.schemas?.MessageCommandRequestV1?.properties
+			?.attachments !== undefined ||
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		names.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(names.map((name) => [name, schemas[name]])),
+		attachments: message.properties?.attachments,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"95fd628301e1454552aeb6e42dbe7e0fb2bde941f781707025147af7b758f724"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of names) delete normalized.components.schemas[name];
+	delete normalized.components.schemas.MessageCommandRequestV1.properties
+		.attachments;
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -775,7 +828,8 @@ function findBreakingChanges(previous, current) {
 			!sameValue(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
-			!isRuntimeStatusRecoveryOpenApiAddition(previous, current)
+			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

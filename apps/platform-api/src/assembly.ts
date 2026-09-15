@@ -17,8 +17,11 @@ import {
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
 } from "@agent-infra/platform-store";
-
 import type { PlatformAppDependencies } from "./app.js";
+import {
+	assemblePlatformFilesV1,
+	type PlatformFileDeploymentV1,
+} from "./file-assembly.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
@@ -31,6 +34,7 @@ import {
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
 export interface PlatformApiAssemblyInput {
+	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
@@ -169,7 +173,56 @@ export function assemblePlatformApi(
 			};
 		},
 	};
+	const files = input.files
+		? assemblePlatformFilesV1({
+				databaseUrl: input.databaseUrl,
+				deployment: input.files,
+				identity: input.identity,
+				conversationAuthorization,
+				async readCurrentLimits(identity, scope, kind) {
+					const configuration = await configurationQuery.read({
+						agentId: scope.agentId,
+						actorId: identity.userId,
+						organizationIds: identity.organizationIds,
+						isAdministrator: identity.roles.includes("system_admin"),
+						intent: "discover",
+					});
+					if (configuration.outcome !== "found") return null;
+					const agent = await managementQuery.getAgent(
+						{
+							kind: "user",
+							userId: identity.userId,
+							organizationIds: identity.organizationIds,
+						},
+						scope.agentId,
+					);
+					if (!agent) return null;
+					const projection = await input.presentAgent({
+						agentId: scope.agentId,
+						configuration: configuration.configuration,
+						management: agent.management,
+					});
+					if (
+						!(kind === "attachment"
+							? projection.capabilities.attachments
+							: projection.capabilities.resultFiles)
+					)
+						return null;
+					const revision = configuration.configuration.revision;
+					const declared = await input.files?.readLimits({
+						agentId: scope.agentId,
+						channelId: scope.channelId,
+						configurationRevision: revision,
+						kind,
+					});
+					return declared?.configurationRevision === revision
+						? declared.declarations
+						: null;
+				},
+			})
+		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: input.identity,
 			foundation,
@@ -212,6 +265,7 @@ export function assemblePlatformApi(
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
+		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,

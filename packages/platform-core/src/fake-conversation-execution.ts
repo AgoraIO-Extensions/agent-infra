@@ -27,6 +27,11 @@ import {
 	type CreateConversationDecisionV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
+import {
+	bindInputFileV1,
+	type FileRecordV1,
+	isConfirmedResultFileV1,
+} from "./file-authority.js";
 
 export interface FakeConversationExecutionOptionsV1
 	extends ConversationExecutionUseCaseOptionsV1 {
@@ -197,6 +202,11 @@ export class FakeConversationExecutionV1
 		ConversationExecutionStateV1["conversation"]
 	>();
 	readonly #messages: StoredMessage[] = [];
+	private readonly files = new Map<string, FileRecordV1>();
+	seedFile(file: FileRecordV1) {
+		this.files.set(file.fileId, structuredClone(file));
+	}
+
 	readonly #executions: StoredExecution[] = [];
 	readonly #stops: StoredStop[] = [];
 	readonly #outbox: StoredOutbox[] = [];
@@ -322,6 +332,19 @@ export class FakeConversationExecutionV1
 					return decision;
 				}
 				const plan: ConversationMessageWritePlanV1 = decision;
+				const boundFiles = (request.command.attachments ?? []).map((fileId) =>
+					bindInputFileV1(
+						this.files.get(fileId) ?? null,
+						plan.conversation,
+						{
+							messageId: plan.message.messageId,
+							executionId: plan.message.executionId,
+							sessionGeneration: plan.conversation.sessionGeneration,
+						},
+						plan.message.createdAt,
+					),
+				);
+
 				if (this.#failNextCommit) {
 					this.#failNextCommit = false;
 					throw new Error("Injected Fake Conversation commit failure");
@@ -330,6 +353,7 @@ export class FakeConversationExecutionV1
 					plan.conversation.conversationId,
 					structuredClone(plan.conversation),
 				);
+				for (const file of boundFiles) this.files.set(file.fileId, file);
 				this.#messages.push({
 					messageId: plan.message.messageId,
 					conversationId: plan.message.conversationId,
@@ -657,6 +681,19 @@ export class FakeConversationExecutionV1
 				if (!conversation || !execution || existing) {
 					throw new Error("Invalid Fake Conversation event plan");
 				}
+				if (
+					decision.event.event.type === "result.file" &&
+					!isConfirmedResultFileV1(
+						this.files.get(decision.event.event.fileId) ?? null,
+						{
+							...conversation,
+							executionId: execution.executionId,
+							sessionGeneration: execution.sessionGeneration,
+						},
+						decision.event.event,
+					)
+				)
+					throw new Error("Unconfirmed result file");
 				this.#events.push({
 					source: "runtime",
 					adapterEventKey: decision.adapterEventKey,

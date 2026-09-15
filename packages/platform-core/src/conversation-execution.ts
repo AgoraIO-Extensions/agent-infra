@@ -49,6 +49,7 @@ export interface ConversationMessageCommandV1 {
 	readonly command: "message";
 	readonly conversationId: string;
 	readonly text: string;
+	readonly attachments?: readonly string[];
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -600,6 +601,7 @@ function unavailable(): never {
 function snapshotObject(
 	input: unknown,
 	keys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ): Record<string, unknown> {
 	try {
 		if (
@@ -612,14 +614,18 @@ function snapshotObject(
 		}
 		const descriptors = Object.getOwnPropertyDescriptors(input);
 		if (
-			Reflect.ownKeys(descriptors).length !== keys.length ||
+			Reflect.ownKeys(descriptors).some(
+				(key) =>
+					typeof key !== "string" || ![...keys, ...optionalKeys].includes(key),
+			) ||
 			keys.some((key) => !Object.hasOwn(descriptors, key))
 		) {
 			invalidInput();
 		}
 		const values: Record<string, unknown> = {};
-		for (const key of keys) {
+		for (const key of [...keys, ...optionalKeys]) {
 			const descriptor = descriptors[key];
+			if (descriptor === undefined && optionalKeys.includes(key)) continue;
 			if (
 				descriptor?.enumerable !== true ||
 				!Object.hasOwn(descriptor, "value") ||
@@ -683,15 +689,19 @@ function parseCreateCommand(input: unknown): CreateConversationCommandV1 {
 }
 
 function parseMessageCommand(input: unknown): ConversationMessageCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"command",
-		"conversationId",
-		"text",
-		"idempotencyKey",
-		"requestId",
-		"traceId",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"text",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["attachments"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		values.command !== "message" ||
@@ -704,11 +714,23 @@ function parseMessageCommand(input: unknown): ConversationMessageCommandV1 {
 	) {
 		invalidInput();
 	}
+	if (
+		values.attachments !== undefined &&
+		(!Array.isArray(values.attachments) ||
+			values.attachments.length > 32 ||
+			values.attachments.some((value) => !isText(value)) ||
+			new Set(values.attachments).size !== values.attachments.length)
+	)
+		invalidInput();
+
 	return {
 		schemaVersion: 1,
 		command: "message",
 		conversationId: values.conversationId,
 		text: values.text,
+		...(values.attachments === undefined
+			? {}
+			: { attachments: [...(values.attachments as string[])] }),
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
@@ -1792,6 +1814,9 @@ export function createConversationExecutionUseCaseV1(
 				command: command.command,
 				conversationId: command.conversationId,
 				text: command.text,
+				...(command.attachments?.length
+					? { attachments: command.attachments }
+					: {}),
 			});
 			try {
 				return normalizeCommandDecision(
