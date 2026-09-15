@@ -74,23 +74,23 @@ async function retire(
 			environment = "";
 		}
 		if (
-			!new RegExp(`(?:^|\\s)${ownerVariable}=${owner.token}(?:\\s|$)`).test(
+			new RegExp(`(?:^|\\s)${ownerVariable}=${owner.token}(?:\\s|$)`).test(
 				environment,
 			)
 		) {
-			// The original process may exit while its ownership is being read.
-			if (groupExists(owner.pid)) throw unavailable();
-		} else {
 			try {
 				process.kill(-owner.pid, "SIGKILL");
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ESRCH")
 					throw unavailable();
 			}
-			for (let attempt = 0; attempt < 80 && groupExists(owner.pid); attempt++)
-				await delay(25);
-			if (groupExists(owner.pid)) throw unavailable();
 		}
+		// An exited process loses its environment before its parent reaps it.
+		// Allow that group to disappear within the same retirement bound, without
+		// signaling an unverified owner or treating a zombie leader as an empty group.
+		for (let attempt = 0; attempt < 80 && groupExists(owner.pid); attempt++)
+			await delay(25);
+		if (groupExists(owner.pid)) throw unavailable();
 	}
 	await file.update((state) => {
 		delete state.owner;

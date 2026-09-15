@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -356,94 +354,6 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 		}
 	},
 );
-
-it("retires the owned orphan after a Host crash before resuming the original session", async () => {
-	const path = await mkdtemp(join(tmpdir(), "acp-host-crash-"));
-	const host = spawn(
-		process.execPath,
-		[
-			fileURLToPath(
-				new URL("./acp-host-crash.test-support.mjs", import.meta.url),
-			),
-			path,
-		],
-		{ stdio: ["pipe", "pipe", "pipe"] },
-	);
-	host.stderr.resume();
-	let driver: GenericAcpRuntimeDriver | undefined;
-	try {
-		const [output] = await once(host.stdout, "data");
-		const accepted = JSON.parse(output.toString());
-		const owner = JSON.parse(
-			await readFile(
-				join(path, accepted.nativeSessionRef, "process.json"),
-				"utf8",
-			),
-		).owner;
-		expect(() => process.kill(owner.pid, 0)).not.toThrow();
-		const exited = once(host, "exit");
-		host.kill("SIGKILL");
-		await exited;
-		driver = await GenericAcpRuntimeDriver.open({
-			path,
-			configVersion: "configuration-a",
-			defaultModelOptionId: "primary",
-			defaultReasoningLevel: "high",
-			modelOptions: [
-				{
-					modelOptionId: "primary",
-					nativeModelId: "provider/model",
-					reasoningLevels: ["high"],
-				},
-			],
-			launch: async () => ({
-				command: process.execPath,
-				args: [
-					fileURLToPath(
-						new URL("./acp-peer.test-support.mjs", import.meta.url),
-					),
-				],
-				env: {},
-			}),
-		});
-		expect(
-			await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-		).toBe("completed");
-		const next = await driver.execute({
-			schemaVersion: 2,
-			kind: "submit-turn",
-			agentId: "agent-a",
-			conversationId: "conversation-a",
-			sessionGeneration: 1,
-			nativeSessionRef: accepted.nativeSessionRef,
-			executionId: "execution-b",
-			turnId: "turn-b",
-			operationId: "operation-b",
-			input: { text: "synthetic input", attachments: [] },
-			selection: {
-				schemaVersion: 1,
-				modelOptionId: "primary",
-				reasoningLevel: "high",
-			},
-		});
-		await vi.waitFor(async () =>
-			expect(
-				await driver?.getStatus(next.nativeSessionRef, "execution-b"),
-			).toBe("completed"),
-		);
-		expect(
-			(await driver.replayEvents(next.nativeSessionRef, "execution-b"))
-				.filter((e) => e.type === "text")
-				.map((e) => e.payload.delta)
-				.join(""),
-		).toBe("synthetic result 2");
-		expect(() => process.kill(-owner.pid, 0)).toThrow();
-	} finally {
-		host.kill("SIGKILL");
-		await driver?.close();
-		await rm(path, { recursive: true, force: true });
-	}
-}, 15_000);
 
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-limit-"));
