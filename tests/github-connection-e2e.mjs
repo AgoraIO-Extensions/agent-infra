@@ -510,7 +510,11 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	};
 	const expectProviderNotFound = async (actionId, input) => {
 		try {
-			await call("execute_action", { actionId, input }, true);
+			await call(
+				"execute_action",
+				{ actionId, input },
+				actionEffects[actionId] === "READ",
+			);
 		} catch (error) {
 			if (
 				error instanceof McpCallError &&
