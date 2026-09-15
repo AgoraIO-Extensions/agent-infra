@@ -35,7 +35,7 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 	let requestId = 0;
 	const call = async (name, args) => {
 		requestId += 1;
-		const response = await fetch(connectionEndpoint, {
+		const request = {
 			body: JSON.stringify({
 				id: requestId,
 				jsonrpc: "2.0",
@@ -47,8 +47,20 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 				"content-type": "application/json",
 			},
 			method: "POST",
-			signal: AbortSignal.timeout(requestTimeoutMs),
-		});
+		};
+		let response;
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			try {
+				response = await fetch(connectionEndpoint, {
+					...request,
+					signal: AbortSignal.timeout(requestTimeoutMs),
+				});
+			} catch (error) {
+				if (attempt === 0) continue;
+				throw error;
+			}
+			if (response.status < 500 || attempt === 1) break;
+		}
 		if (!response.ok)
 			throw new Error(`Connection returned HTTP ${response.status}`);
 		const payload = await response.json();
