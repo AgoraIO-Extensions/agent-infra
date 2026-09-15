@@ -1024,11 +1024,32 @@ function isNativeToolAttempt(
 	return new Set(requests).size === requests.length;
 }
 
-function latestOperationFacts(events: readonly CodexJournalEvent[]) {
+function operationAttemptKey(value: {
+	operationRef: string;
+	attemptRef: string;
+}) {
+	return JSON.stringify([value.operationRef, value.attemptRef]);
+}
+
+function sameNativeToolOperation(
+	left: Pick<CodexNativeToolAttempt, "identity" | "connectionRequest">,
+	right: Pick<CodexNativeToolAttempt, "identity" | "connectionRequest">,
+) {
+	return (
+		left.identity.sessionId === right.identity.sessionId &&
+		left.identity.turnId === right.identity.turnId &&
+		left.identity.callId === right.identity.callId &&
+		left.identity.toolName === right.identity.toolName &&
+		left.identity.parentAttemptRef === right.identity.parentAttemptRef &&
+		isDeepStrictEqual(left.connectionRequest, right.connectionRequest)
+	);
+}
+
+function latestOperationAttemptFacts(events: readonly CodexJournalEvent[]) {
 	const latest = new Map<string, RuntimeOperationFactV2>();
 	for (const event of events) {
 		if (event.type === "operation")
-			latest.set(event.payload.operationRef, event.payload);
+			latest.set(operationAttemptKey(event.payload), event.payload);
 	}
 	return [...latest.values()];
 }
@@ -1036,8 +1057,8 @@ function latestOperationFacts(events: readonly CodexJournalEvent[]) {
 function pendingNativeToolAttempts(journal: CodexEventJournal | undefined) {
 	if (!journal) return [];
 	const latest = new Map(
-		latestOperationFacts(journal.events).map((fact) => [
-			fact.operationRef,
+		latestOperationAttemptFacts(journal.events).map((fact) => [
+			operationAttemptKey(fact),
 			fact,
 		]),
 	);
@@ -1045,12 +1066,14 @@ function pendingNativeToolAttempts(journal: CodexEventJournal | undefined) {
 		(attempt) =>
 			!attempt.denied &&
 			(!attempt.outcomeRequestId ||
-				latest.get(attempt.operationRef)?.phase === "unknown"),
+				latest.get(operationAttemptKey(attempt))?.phase === "unknown"),
 	);
 }
 
 function consistentOperationFacts(events: readonly CodexJournalEvent[]) {
 	const latest = new Map<string, RuntimeOperationFactV2>();
+	const operations = new Map<string, RuntimeOperationFactV2>();
+	const attempts = new Map<string, string>();
 	let completed = false;
 	for (const event of events) {
 		if (event.type !== "operation") {
@@ -1059,14 +1082,36 @@ function consistentOperationFacts(events: readonly CodexJournalEvent[]) {
 			continue;
 		}
 		const fact = event.payload;
-		const previous = latest.get(fact.operationRef);
+		const key = operationAttemptKey(fact);
+		const previous = latest.get(key);
+		const operation = operations.get(fact.operationRef);
+		if (
+			(attempts.has(fact.attemptRef) &&
+				attempts.get(fact.attemptRef) !== fact.operationRef) ||
+			(operation &&
+				(operation.kind !== fact.kind ||
+					operation.parentOperationRef !== fact.parentOperationRef ||
+					(operation.kind === "model" &&
+						fact.kind === "model" &&
+						JSON.stringify(operation.model) !== JSON.stringify(fact.model)) ||
+					(operation.kind === "tool" &&
+						fact.kind === "tool" &&
+						operation.toolId !== fact.toolId)))
+		)
+			return false;
 		if (
 			completed &&
 			(!previous || !isConnectionMetadataSuccessor(previous, fact))
 		)
 			return false;
 		if (!previous) {
-			if (fact.phase !== "intent") return false;
+			if (
+				fact.phase !== "intent" ||
+				(operation &&
+					operation.phase !== "completed" &&
+					operation.phase !== "failed")
+			)
+				return false;
 		} else if (!isConnectionMetadataSuccessor(previous, fact)) {
 			if (
 				previous.attemptRef !== fact.attemptRef ||
@@ -1090,7 +1135,9 @@ function consistentOperationFacts(events: readonly CodexJournalEvent[]) {
 			)
 				return false;
 		}
-		latest.set(fact.operationRef, fact);
+		latest.set(key, fact);
+		operations.set(fact.operationRef, fact);
+		attempts.set(fact.attemptRef, fact.operationRef);
 	}
 	return (
 		!events.some((event) => event.type === "completed") ||
@@ -1158,7 +1205,8 @@ function isCodexSession(
 	const sourceReservations = new Set<string>();
 	let eventCount = 0;
 	for (const journal of Object.values(journals)) {
-		const operationRefs = new Set<string>();
+		const operations = new Map<string, CodexNativeToolAttempt>();
+		const attemptRefs = new Set<string>();
 		const belongsToRoot = (
 			threadId: string,
 			turnId: string,
@@ -1243,12 +1291,15 @@ function isCodexSession(
 		)
 			return false;
 		for (const attempt of Object.values(journal.nativeToolAttempts ?? {})) {
+			const operation = operations.get(attempt.operationRef);
 			if (
 				!belongsToRoot(attempt.identity.sessionId, attempt.identity.turnId) ||
-				operationRefs.has(attempt.operationRef)
+				attemptRefs.has(attempt.attemptRef) ||
+				(operation && !sameNativeToolOperation(operation, attempt))
 			)
 				return false;
-			operationRefs.add(attempt.operationRef);
+			operations.set(attempt.operationRef, attempt);
+			attemptRefs.add(attempt.attemptRef);
 			for (const id of [
 				attempt.intentRequestId,
 				attempt.startedRequestId,
@@ -2456,14 +2507,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...attempts.slice(cursor + 1),
 					...attempts.slice(0, cursor + 1),
 				];
-				const facts = latestOperationFacts(journal.events);
+				const facts = latestOperationAttemptFacts(journal.events);
 				for (const attempt of ordered) {
 					const descriptor = attempt.connectionRequest;
 					const origin = attempt.connectionOrigin;
 					const evidence = attempt.connectionEvidence;
 					const originalResponse = evidence?.originalResponse;
 					const fact = facts.find(
-						(fact) => fact.operationRef === attempt.operationRef,
+						(fact) =>
+							operationAttemptKey(fact) === operationAttemptKey(attempt),
 					);
 					if (
 						pass.scannedAttemptRefs.includes(attempt.attemptRef) ||
@@ -4349,8 +4401,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					)
 						protocolInvalid();
 				}
-				const fact = latestOperationFacts(journal.events).find(
-					(fact) => fact.operationRef === attempt.operationRef,
+				const fact = latestOperationAttemptFacts(journal.events).find(
+					(fact) => operationAttemptKey(fact) === operationAttemptKey(attempt),
 				);
 				if (
 					fact?.kind !== "tool" ||
@@ -4557,8 +4609,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						resolved.attempt.intentFingerprint !== fingerprint
 					)
 						protocolInvalid();
-					const fact = latestOperationFacts(journal.events).find(
-						(fact) => fact.operationRef === resolved.attempt?.operationRef,
+					const fact = latestOperationAttemptFacts(journal.events).find(
+						(fact) =>
+							fact.operationRef === resolved.attempt?.operationRef &&
+							fact.attemptRef === resolved.attempt?.attemptRef,
 					);
 					if (
 						resolved.attempt.startedRequestId ||
@@ -4581,9 +4635,35 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						parent.outcomeRequestId)
 				)
 					protocolInvalid();
+				const previousAttempts = Object.values(
+					journal.nativeToolAttempts ?? {},
+				).filter((attempt) =>
+					sameNativeToolOperation(attempt, {
+						identity: request.identity,
+						connectionRequest: descriptor,
+					}),
+				);
+				const operationRefs = new Set(
+					previousAttempts.map((attempt) => attempt.operationRef),
+				);
+				// Older journals can contain split references for one call. Keep their
+				// receipts readable, but never guess which operation a new retry owns.
+				if (operationRefs.size > 1) unavailable();
+				const latest = latestOperationAttemptFacts(journal.events);
+				for (const previous of previousAttempts) {
+					const fact = latest.find(
+						(fact) =>
+							operationAttemptKey(fact) === operationAttemptKey(previous),
+					);
+					if (
+						!previous.outcomeRequestId ||
+						(fact?.phase !== "completed" && fact?.phase !== "failed")
+					)
+						unavailable();
+				}
 				const attempt: CodexNativeToolAttempt = {
 					identity: structuredClone(request.identity),
-					operationRef: randomUUID(),
+					operationRef: previousAttempts[0]?.operationRef ?? randomUUID(),
 					attemptRef: randomUUID(),
 					intentRequestId: request.requestId,
 					intentFingerprint: fingerprint,
@@ -4713,8 +4793,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				}
 				if (prepared.existing && denied) unavailable();
 				this.assertJournalOpen(journal);
-				const fact = latestOperationFacts(journal.events).find(
-					(fact) => fact.operationRef === attempt.operationRef,
+				const fact = latestOperationAttemptFacts(journal.events).find(
+					(fact) => operationAttemptKey(fact) === operationAttemptKey(attempt),
 				);
 				if (fact?.kind !== "tool" || fact.phase !== "intent") unavailable();
 				if (
@@ -4793,8 +4873,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				protocolInvalid();
 			this.assertJournalOpen(journal);
-			const fact = latestOperationFacts(journal.events).find(
-				(fact) => fact.operationRef === attempt.operationRef,
+			const fact = latestOperationAttemptFacts(journal.events).find(
+				(fact) => operationAttemptKey(fact) === operationAttemptKey(attempt),
 			);
 			if (
 				fact?.kind !== "tool" ||
@@ -5404,8 +5484,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					session &&
 					ownRecordValue(session.journals ?? {}, prepared.journalTurnId);
 				if (!session || !journal) stateInvalid();
-				const previous = latestOperationFacts(journal.events).find(
-					(fact) => fact.operationRef === prepared.fact.operationRef,
+				const previous = latestOperationAttemptFacts(journal.events).find(
+					(fact) =>
+						operationAttemptKey(fact) === operationAttemptKey(prepared.fact),
 				);
 				if (
 					previous?.kind !== "model" ||
@@ -5515,7 +5596,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			Object.values(session.journals ?? {}).some(
 				(journal) =>
 					pendingNativeSources(journal).length > 0 ||
-					latestOperationFacts(journal.events).some(
+					latestOperationAttemptFacts(journal.events).some(
 						(fact) => fact.phase === "intent" || fact.phase === "started",
 					),
 			),
@@ -5528,7 +5609,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					// its live task/queue survived. Keep occupancy and seal new actions.
 					if (pendingNativeSources(journal).length > 0)
 						journal.externalActionsBlocked = true;
-					for (const fact of latestOperationFacts(journal.events)) {
+					for (const fact of latestOperationAttemptFacts(journal.events)) {
 						if (fact.phase !== "intent" && fact.phase !== "started") continue;
 						// The process may have died on either side of dispatch. Preserve the
 						// original attempt and close new actions; never manufacture a retry.
@@ -5551,8 +5632,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		connectionMetadataOnly = false,
 	) {
 		if (connectionMetadataOnly) {
-			const previous = latestOperationFacts(journal.events).find(
-				(previous) => previous.operationRef === fact.operationRef,
+			const previous = latestOperationAttemptFacts(journal.events).find(
+				(previous) =>
+					operationAttemptKey(previous) === operationAttemptKey(fact),
 			);
 			if (!previous || !isConnectionMetadataSuccessor(previous, fact))
 				protocolInvalid();
@@ -5969,7 +6051,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return false;
 		// Provider transport has drained before this native terminal is consumed.
 		// Preserve its unknown external result before closing the fact journal.
-		for (const fact of latestOperationFacts(journal.events)) {
+		for (const fact of latestOperationAttemptFacts(journal.events)) {
 			if (fact.phase !== "intent" && fact.phase !== "started") continue;
 			this.appendOperationFact(session, journal, {
 				...fact,

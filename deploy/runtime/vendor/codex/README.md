@@ -1,6 +1,8 @@
 # Codex 原生执行屏障补丁
 
-这是 #508 的可复现 WIP 源码快照，**尚未通过当前原生代码编译与完整验收，不能更新 release pin**。
+本目录保存 #508 原生执行屏障的可复现源码补丁和构建输入。
+当前消费的派生产物由 [release pin](../../../../packages/agent-runtime/src/codex-release.json)
+固定；pin 与候选构建成功均不表示完整原生验收已完成。
 权威边界见 [ADR 0011](../../../../docs/adr/0011-require-codex-native-operation-barrier.md)。
 协议入口为 [V1](callback-v1.md) 与 [Connection V2](callback-v2.md)。
 原生 probe 的 `schemaVersion: 1` 表示 probe 自身格式；其 `callbackSchemaSha256`
@@ -43,42 +45,26 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 切换 pin 或操作集群。补丁已包含对应 probe manifest；修改 Schema/coverage/corpus
 必须重新生成 manifest、捕获补丁并核对全部源码哈希。
 
-## 验证证据
+## 验证与验收边界
 
-前两个冻结补丁的既有证据包括 core 与 app-server-transport 库检查、core 23 项、hook
-11 项、MCP 6 项和实际 PTY 写入 1 项聚焦测试，以及相关 lint。
-这些证据不覆盖第三、第四个补丁。两项 core 队列检查曾重复执行，不增加独立测试数量。
+必须按序应用全部五份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
+lock、Schema、corpus 和 coverage。manifest/lock 可解析、格式化通过或静态 probe
+声明均不能代替原生类型检查、聚焦测试和实际进程保护验证。
 
-第三个补丁的既有记录：
-
-- `just fmt`、`cargo metadata --no-deps --locked --offline` 和 `git diff --check` 通过。
-  metadata 只验证 manifest/lock 可解析，不是 Rust 类型检查。
-- `just bazel-lock-update` 通过，`MODULE.bazel.lock` 增加两个新 registry crate 条目。
-- 174 个共同 frame case、3 个 framing case、34 个 RFC 8785 vector 已写入 native 测试。
-  实际聚焦测试尝试在依赖编译阶段触及 2 GiB 资源保护而停止；新增 native 模块尚未编译，
-  不能把 corpus 数据或 TypeScript 验证写成 native 测试通过。
-- 第三个补丁的源码和按序应用前三份补丁的结果必须通过逐文件 SHA 核对。
-
-第四个补丁的限定验证结果记录于 `build-input-v1.json`；当前源码须按序应用全部五份补丁，
-并核对逐文件 SHA。Darwin 的相关模块检查不替代 Linux 原生产物、测试和漏洞扫描。
-第五个补丁的 HTTP 客户端测试在自定义 CA 与默认环境中各通过 85 项；聚焦 lint、格式化
-与 Bazel 锁刷新通过，Cargo/Bazel 锁文件字节未变。完整 Linux 五组测试仍须验证新源码。
-
-## 尚未验收
-
-当前 native 类型检查、聚焦 lint/测试和完整上游门禁仍待执行。还需最终 Linux aarch64
-binary/image、真实 FD3 和同 UID 内存观察负例（包括 `perf_event_open`）、派生 CLI probe、
-binary SHA、SBOM，以及 Connection 独立身份/OAuth、原响应/记录和 Provider 实际流程。
+候选包、类型检查、lint 和测试证据必须绑定相同的源码与构建输入。最终 Linux aarch64
+binary/image 还须验证真实 FD3、同 UID 内存观察负例（包括 `perf_event_open`）、
+派生 CLI probe、binary SHA 和 SBOM。Connection 独立身份/OAuth、原响应/记录和
+Provider 实际流程按适用的联合验收要求完成。
 Darwin hardening-only 不启用 Connection；Linux 非 aarch64 也不允许此凭据 profile。
 
-Connection-backed MCP hook 当前缺少固定 `connection/<tool>` 原调用 identity 映射，
-会在 dispatch 前拒绝。普通原 MCP hook 路径保持原有实现。跨进程只读恢复已包含原
-receipt/descriptor 的私有输入源码，仍待实际原生编译、隔离与原 outbox 恢复验证。
-缺少原 journal 证据时，不能通过模型历史、nonce 查询、Provider 重发或 TS 代发 GET 补造。
+Connection-backed MCP hook 必须具备固定 `connection/<tool>` 原调用 identity 映射，
+缺少映射时在 dispatch 前拒绝。跨进程只读恢复使用原 receipt/descriptor 的私有输入，
+并验证原记录、隔离和原 outbox 恢复；缺少原 journal 证据时，不能通过模型历史、nonce
+查询、Provider 重发或 TypeScript 代发 GET 补造。
 
-剩余 native catalog、hosted MCP upload、exec-server 非空 stdin 的真实写入/重连、
-Collab V1 的组合流程及完整取消/终态顺序仍以 [coverage](coverage-v1.json) 所列实际证据为准。
-TurnComplete 不证明后台进程已退出；现有 list/terminate 和原 attempt outcome ACK
+native catalog、hosted MCP upload、exec-server 非空 stdin 的真实写入/重连、
+Collab V1 的组合流程及取消/终态顺序按 [coverage](coverage-v1.json) 核对实际证据。
+TurnComplete 不证明后台进程已退出；list/terminate 和原 attempt outcome ACK
 共同决定执行占用，不能单靠 RPC 返回的 `terminated`。
 
 ## Linux aarch64 候选构建
@@ -118,8 +104,8 @@ CLI version 和静态 native probe 也必须与固定输入匹配；这不证明
 测试复用同一 release target 和 bwrap SHA，两个执行线程，保留 2 GiB 资源保护；
 测试前后复核源码和候选 binary，失败会使 workflow 失败。
 已上传包仍明确为未验收候选；聚焦测试记录随 diagnostics 保存，不替代完整原生矩阵。
-测试依赖与 `cfg(test)` 可能增加构建空间，实际运行证据仍待 CI。
+测试依赖与 `cfg(test)` 可能增加构建空间；实际测试结果按同一 run/attempt 的 diagnostics 回读。
 
 artifact 只保留一天；失败也保存限定构建日志、阶段状态、资源采样和 timing，
-不上传 Cargo target、registry、全部 symbols 或环境变量。标准 runner 的磁盘是否足够、
-冷构建能否在 180 分钟内完成仍待实际 CI 测量。
+不上传 Cargo target、registry、全部 symbols 或环境变量。构建空间和时长以对应
+run/attempt 的资源采样及 timing 为准。
