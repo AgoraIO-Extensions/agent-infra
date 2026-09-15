@@ -7,11 +7,35 @@
 
 ## 固定镜像
 
-`apps/agent-runtime-host/Dockerfile` 在构建时安装 Codex `0.153.0`，支持
-`linux/amd64` 与 `linux/arm64`。固定资产、SHA-256 与 LICENSE/NOTICE 的来源记录在
-[`codex-release.json`](../../packages/agent-runtime/src/codex-release.json)。安装程序验证压缩包、
-解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
-正式入口在启动原生进程前复验文件，Bridge 再验证版本与协议 Schema。启动不下载依赖。
+`apps/agent-runtime-host/Dockerfile` 在构建时安装
+[`codex-release.json`](../../packages/agent-runtime/src/codex-release.json) 固定的 Codex 产物。
+上游 `0.153.0` 表示协议兼容来源；派生产物另用 `distribution.buildId` 标识，绑定源码
+tree、构建输入与各 target 的归档、manifest 和四个 binary 摘要。只有声明中具备派生产物的
+target 可以安装；本地 ARM 首通不代表其他 target 已交付。
+
+构建输入目录包含完整 `codex-candidate.tar.gz`，通过只读 named build context 交给安装器：
+
+```bash
+AGENT_INFRA_CODEX_BUILD_CONTEXT=/path/to/verified-candidate pnpm docker:build
+```
+
+CI 从同一 release 条目的 `transport` 读取固定 GitHub Actions run、attempt、artifact
+与源码 head，通过标准 artifact 下载入口获取完整归档，再由安装器核对固定摘要。
+当前 CI 原生检查在 Linux ARM64 runner 执行；发布脚本选择 ARM 时需显式设置
+`PLATFORM=linux/arm64`。这不代表 amd64 派生产物已交付。
+
+Actions 候选只在其保留期内可重新下载。已取得的完整归档可以保存在本地，后续构建仍
+逐次验证摘要；归档过期且本地没有副本时构建会失败。候选缓存不替代长期发行来源，
+没有匹配的派生产物时不会安装旧官方包。
+
+该变量只选择归档位置，校验值由源码中的 release 声明固定。安装器验证整个归档、原始
+candidate manifest、完整文件集合、模式、ELF 架构、来源及法律文件，再整体安装到
+`/opt/codex`。最终 binary 为 `0555`，其他文件为 `0444`；源码依赖 SBOM、构建环境、
+原 manifest、LICENSE/NOTICE 与 release 声明保留在 `/opt/codex/share/`。
+
+正式入口在启动原生进程前复验安装文件与来源，Bridge 再验证版本、app-server Schema
+与原生屏障 probe。启动不下载依赖。源码 SBOM 的覆盖范围仍以 candidate 声明为准，
+不作为全部静态链接依赖的完整清单。
 
 ## 部署输入
 
