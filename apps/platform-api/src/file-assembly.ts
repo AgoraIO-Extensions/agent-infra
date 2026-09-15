@@ -40,7 +40,6 @@ export interface PlatformFileDeploymentV1 {
 	readonly services: readonly {
 		readonly token: string;
 		readonly agentIds: readonly string[];
-		readonly component: "worker" | "runtime_host";
 	}[];
 	resolveActor(actorId: string): Promise<unknown | null>;
 	readLimits(input: {

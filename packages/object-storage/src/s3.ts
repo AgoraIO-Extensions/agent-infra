@@ -318,6 +318,8 @@ export function createS3ObjectStorageV1(
 					object.VersionId !== request.version ||
 					object.ETag !== request.etag ||
 					object.ContentLength === undefined ||
+					!Number.isSafeInteger(object.ContentLength) ||
+					object.ContentLength < 0 ||
 					object.ContentLength > options.maxObjectBytes
 				) {
 					await object.Body?.transformToWebStream()
@@ -325,14 +327,19 @@ export function createS3ObjectStorageV1(
 						.catch(() => undefined);
 					throw new ObjectStorageError("missing");
 				}
+				const expectedBytes = object.ContentLength;
 				let count = 0;
 				return object.Body.transformToWebStream().pipeThrough(
 					new TransformStream<Uint8Array, Uint8Array>({
 						transform(chunk, controller) {
 							count += chunk.byteLength;
-							if (abortSignal.aborted || count > options.maxObjectBytes)
+							if (abortSignal.aborted || count > expectedBytes)
 								throw new ObjectStorageError("unavailable");
 							controller.enqueue(chunk);
+						},
+						flush() {
+							if (count !== expectedBytes)
+								throw new ObjectStorageError("unavailable");
 						},
 					}),
 					{ signal: abortSignal },

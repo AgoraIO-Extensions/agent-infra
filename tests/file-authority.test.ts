@@ -80,9 +80,7 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 				intentTtlMs: 60000,
 				accessTtlMs: 2000,
 				maxConcurrentTransfers: 2,
-				services: [
-					{ token: serviceToken, agentIds: ["agent"], component: "worker" },
-				],
+				services: [{ token: serviceToken, agentIds: ["agent"] }],
 				resolveActor: async (id) => actor(id),
 				readLimits: async () => ({
 					configurationRevision: 1,

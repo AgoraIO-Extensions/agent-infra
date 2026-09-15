@@ -109,3 +109,49 @@ it("cancels rejected S3 response bodies before reporting an unavailable object",
 		storage.close();
 	}
 });
+
+it.each([4, 6])(
+	"rejects a download of %i bytes when S3 declares five",
+	async (length) => {
+		const { vi } = await import("vitest");
+		const { S3Client } = await import("@aws-sdk/client-s3");
+		const { createS3ObjectStorageV1 } = await import("./s3.ts");
+		const spy = vi
+			.spyOn(S3Client.prototype, "send")
+			.mockImplementation(async () => ({
+				VersionId: "expected",
+				ETag: '"etag"',
+				ContentLength: 5,
+				Body: {
+					transformToWebStream: () =>
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(new Uint8Array(length));
+								controller.close();
+							},
+						}),
+				},
+			}));
+		const storage = createS3ObjectStorageV1({
+			region: "test",
+			bucket: "test",
+			prefix: "files/",
+			maxObjectBytes: 10,
+			timeoutMs: 1000,
+		});
+		try {
+			const stream = await storage.download({
+				objectRef: "00000000-0000-4000-8000-000000000001",
+				version: "expected",
+				etag: '"etag"',
+				expiresAt: new Date(Date.now() + 1000).toISOString(),
+			});
+			await expect(new Response(stream).arrayBuffer()).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		} finally {
+			spy.mockRestore();
+			storage.close();
+		}
+	},
+);

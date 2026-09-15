@@ -24,7 +24,6 @@ it("requires both a signed execution delegation and a mapped service, then reche
 	let channelId = "web";
 	const mapping = {
 		token: "synthetic-service-token-442-123456789",
-		component: "worker" as const,
 		agentIds: ["agent"],
 	};
 	const assembled = assemblePlatformFilesV1({
