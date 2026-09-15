@@ -108,7 +108,7 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds exact live evidence to 9 of 145 actions", () => {
+test("GitHub verification matrix binds run 34863028751 to 77 of 78 reads", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
 		githubV7VerificationEvidence,
@@ -116,28 +116,23 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 	assert.equal(matrix.length, 145);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		9,
+		82,
 	);
 	assert.equal(
 		matrix.filter((item) => item.status === "UNVERIFIED").length,
-		136,
+		63,
+	);
+	assert.equal(
+		matrix.filter(
+			(item) => item.effect === "READ" && item.status === "LIVE_VERIFIED",
+		).length,
+		77,
 	);
 	assert.deepEqual(
 		matrix
-			.filter((item) => item.status === "LIVE_VERIFIED")
-			.map((item) => item.actionVersionId)
-			.sort(),
-		[
-			"github.create_issue@v7",
-			"github.create_issue_comment@v7",
-			"github.delete_issue_comment@v7",
-			"github.get_issue@v7",
-			"github.get_issue_comment@v7",
-			"github.get_repository@v7",
-			"github.list_issue_comments@v7",
-			"github.update_issue@v7",
-			"github.update_issue_comment@v7",
-		],
+			.filter((item) => item.effect === "READ" && item.status === "UNVERIFIED")
+			.map((item) => item.actionVersionId),
+		["github.get_pull_request_review@v7"],
 	);
 	assert.ok(
 		matrix
@@ -146,7 +141,7 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 				(item) =>
 					item.actionVersionId.endsWith("@v7") &&
 					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "34821150745-1",
+					item.evidence.runId === "34863028751-1",
 			),
 	);
 
@@ -191,7 +186,7 @@ test("GitHub verification matrix binds exact live evidence to 9 of 145 actions",
 		(item) => item.status === "LIVE_VERIFIED",
 	)?.evidence;
 	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
-	assert.equal(retainedEvidence?.actionVersionIds.length, 9);
+	assert.equal(retainedEvidence?.actionVersionIds.length, 82);
 	assert.ok(Object.isFrozen(retainedEvidence));
 	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
