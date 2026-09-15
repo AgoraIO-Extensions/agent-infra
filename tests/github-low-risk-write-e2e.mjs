@@ -93,7 +93,8 @@ export async function runGitHubLowRiskWriteConformance({
 	});
 	if (
 		preflight?.status !== "SUCCEEDED" ||
-		preflight.result?.id !== Number(target.repositoryId)
+		preflight.result?.id !== Number(target.repositoryId) ||
+		preflight.result?.owner?.id !== Number(target.organizationId)
 	)
 		throw new Error("repository boundary does not match");
 	for (const name of writeActions) {
@@ -121,8 +122,10 @@ export async function runGitHubLowRiskWriteConformance({
 			uncertain = true;
 			throw error;
 		}
-		if (result?.status !== "SUCCEEDED" || !result.callId)
+		if (result?.status !== "SUCCEEDED" || !result.callId) {
+			uncertain = true;
 			throw new Error(`${actionId} did not succeed`);
+		}
 		if (record)
 			calls.push({
 				actionVersionId: `${actionId}@v7`,
@@ -252,9 +255,9 @@ export async function runGitHubLowRiskWriteConformance({
 			"issue-assignee-add",
 		);
 		issueAssigneesChanged = true;
-		assertNames(
+		assertIncludes(
 			result?.assignees,
-			["AGORAconnectionE2E"],
+			"AGORAconnectionE2E",
 			"added issue assignees",
 			"login",
 		);
@@ -263,7 +266,12 @@ export async function runGitHubLowRiskWriteConformance({
 			{ ...issueInput, assignees: ["AGORAconnectionE2E"] },
 			"issue-assignee-remove",
 		);
-		assertNames(result?.assignees, [], "removed issue assignees", "login");
+		assertNames(
+			result?.assignees,
+			originalAssignees,
+			"removed issue assignees",
+			"login",
+		);
 		if (originalAssignees.length > 0)
 			await execute(
 				"github.add_issue_assignees",

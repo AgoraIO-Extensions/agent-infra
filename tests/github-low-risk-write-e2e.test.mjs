@@ -42,6 +42,7 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 				default_branch: "main",
 				full_name: "AgoraConnectionE2EORG/connector-conformance",
 				id: 1369705971,
+				owner: { id: 329053903 },
 				private: true,
 			});
 		if (actionId === "github.create_ref") ref = input.ref;
