@@ -386,6 +386,13 @@ function projectCall(call: StoredCall): CallProjection {
 
 export type CredentialForExecution = { accessToken: string };
 
+export type GitHubProfileRefreshCandidate = CredentialForExecution & {
+	actionVersionId: string;
+	connectionId: string;
+	externalAccount: string;
+	providerReleaseId: string;
+};
+
 export type GitHubOAuthAuthorization = {
 	codeChallenge: string;
 	state: string;
@@ -646,6 +653,14 @@ export interface ConnectionRepository {
 		invocation: InvocationContext;
 	}): Promise<StoredCall | undefined>;
 	getCredential(invocation: InvocationContext): Promise<CredentialForExecution>;
+	listGitHubProfileRefreshCandidates?(
+		principalId: string,
+	): Promise<GitHubProfileRefreshCandidate[]>;
+	storeGitHubProfileLabel?(input: {
+		connectionId: string;
+		displayName: string;
+		externalAccount: string;
+	}): Promise<void>;
 	getOverview(principalId: string): Promise<ConnectionOverview>;
 	listAuthorizedConnections(
 		invocation: InvocationContext,
@@ -887,7 +902,36 @@ export class ConnectionApplicationService {
 	) {}
 
 	async overview(principalId: string) {
+		await this.refreshGitHubProfileLabels(principalId);
 		return this.repository.getOverview(principalId);
+	}
+
+	private async refreshGitHubProfileLabels(principalId: string) {
+		const list = this.repository.listGitHubProfileRefreshCandidates;
+		const store = this.repository.storeGitHubProfileLabel;
+		if (!list || !store) return;
+		const candidates = await list.call(this.repository, principalId);
+		await Promise.allSettled(
+			candidates.map(async (candidate) => {
+				const profile = await this.executor.execute({
+					action: "github.get_current_user",
+					actionVersionId: candidate.actionVersionId,
+					credential: { accessToken: candidate.accessToken },
+					input: {},
+					providerId: "github",
+					providerReleaseId: candidate.providerReleaseId,
+				});
+				const profileId = profile.id == null ? "" : String(profile.id);
+				const login =
+					typeof profile.login === "string" ? profile.login.trim() : "";
+				if (profileId !== candidate.externalAccount || !login) return;
+				await store.call(this.repository, {
+					connectionId: candidate.connectionId,
+					displayName: login,
+					externalAccount: candidate.externalAccount,
+				});
+			}),
+		);
 	}
 
 	async connectProviderCredential(

@@ -113,6 +113,18 @@ class MemoryRepository implements ConnectionRepository {
 	readonly calls: StoredCall[] = [];
 	readonly reconciliationJobs: ReconciliationJob[] = [];
 	readonly rescheduledCallIds: string[] = [];
+	githubProfileRefreshCandidates: Array<{
+		accessToken: string;
+		actionVersionId: string;
+		connectionId: string;
+		externalAccount: string;
+		providerReleaseId: string;
+	}> = [];
+	githubProfileLabel?: {
+		connectionId: string;
+		displayName: string;
+		externalAccount: string;
+	};
 	private readonly activeReconciliationJobs = new Map<
 		string,
 		ReconciliationJob
@@ -309,6 +321,16 @@ class MemoryRepository implements ConnectionRepository {
 	): Promise<CredentialForExecution> {
 		return { accessToken: "test-secret" };
 	}
+	async listGitHubProfileRefreshCandidates() {
+		return this.githubProfileRefreshCandidates;
+	}
+	async storeGitHubProfileLabel(input: {
+		connectionId: string;
+		displayName: string;
+		externalAccount: string;
+	}) {
+		this.githubProfileLabel = input;
+	}
 	async getOverview() {
 		return {
 			actions,
@@ -400,6 +422,52 @@ class MemoryRepository implements ConnectionRepository {
 }
 
 describe("Connection application service", () => {
+	it("refreshes a GitHub display label only after the numeric account matches", async () => {
+		const repository = new MemoryRepository();
+		repository.githubProfileRefreshCandidates = [
+			{
+				accessToken: "provider-secret",
+				actionVersionId: "github.get_current_user@v7",
+				connectionId: "connection-github",
+				externalAccount: "42",
+				providerReleaseId: "github-release-v7",
+			},
+		];
+		const service = new ConnectionApplicationService(repository, {
+			execute: async ({ credential }) => {
+				expect(credential.accessToken).toBe("provider-secret");
+				return { id: 42, login: "octocat", name: "The Octocat" };
+			},
+		});
+
+		await service.overview("alice");
+
+		expect(repository.githubProfileLabel).toEqual({
+			connectionId: "connection-github",
+			displayName: "octocat",
+			externalAccount: "42",
+		});
+	});
+
+	it("keeps the stored label when the GitHub profile identity does not match", async () => {
+		const repository = new MemoryRepository();
+		repository.githubProfileRefreshCandidates = [
+			{
+				accessToken: "provider-secret",
+				actionVersionId: "github.get_current_user@v7",
+				connectionId: "connection-github",
+				externalAccount: "42",
+				providerReleaseId: "github-release-v7",
+			},
+		];
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => ({ id: 7, login: "wrong-account" }),
+		});
+
+		await service.overview("alice");
+
+		expect(repository.githubProfileLabel).toBeUndefined();
+	});
 	it("requires reconfirmation unless reconnect authorization proof matches exactly", () => {
 		const current = {
 			actionVersionIds: actions.map((action) => action.id),
