@@ -334,8 +334,6 @@ test("candidate uses an isolated read-only exact PR checkout and fixed standard 
 	);
 	for (const step of job.steps) {
 		if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/);
-		if (step.uses?.startsWith("dtolnay/rust-toolchain@"))
-			assert.equal(step.with.toolchain, "1.96.0");
 		if (step.uses?.startsWith("actions/checkout@"))
 			assert.equal(step.with["persist-credentials"], false);
 		if (step.uses?.startsWith("actions/upload-artifact@")) {
@@ -346,6 +344,19 @@ test("candidate uses an isolated read-only exact PR checkout and fixed standard 
 			);
 		}
 	}
+	// This immutable action hardcodes Rust 1.96.0 and accepts only target/components inputs.
+	// Its version-specific ref ignores with.toolchain; the installer pin must match the build version.
+	const rustInstallers = job.steps.filter((step) =>
+		step.uses?.startsWith("dtolnay/rust-toolchain@"),
+	);
+	assert.equal(rustInstallers.length, 1);
+	assert.equal(
+		rustInstallers[0].uses,
+		"dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d",
+	);
+	assert.deepEqual(rustInstallers[0].with, {
+		targets: job.env.TARGET,
+	});
 	const upload = job.steps.findIndex(
 		(step) => step.name === "Upload candidate bundle",
 	);
