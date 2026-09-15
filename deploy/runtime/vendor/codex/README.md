@@ -23,6 +23,9 @@ probe 静态声明不能替代当前进程保护安装或最终镜像的负向�
 4. `patches/0004-native-dependency-security-updates.patch`：升级 gix、OpenSSL、quinn-proto
    与 Rama/Hickory，适配网络代理调用端，并同步 Rust 1.96.0 和 Cargo/Bazel lock。
    保留逐地址私网检查、TLS、代理与 Connection/执行屏障边界。
+5. `patches/0005-tls-error-chain-and-test-backend.patch`：修复嵌套 `io::Error` 中的 TLS
+   证书错误分类；回退测试显式选择 native TLS 起始客户端，避免自定义 CA 改变测试前提。
+   生产 TLS 后端选择和证书校验保持不变，新增 reqwest feature 仅用于测试。
 
 上游 Apache-2.0 的 [LICENSE](UPSTREAM-LICENSE) 与 [NOTICE](UPSTREAM-NOTICE) 保持不变。
 没有修改共享 Cargo registry 或外部 `rmcp 3.1.3` 源码。
@@ -56,8 +59,10 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
   不能把 corpus 数据或 TypeScript 验证写成 native 测试通过。
 - 第三个补丁的源码和按序应用前三份补丁的结果必须通过逐文件 SHA 核对。
 
-第四个补丁的限定验证结果记录于 `build-input-v1.json`；当前源码须按序应用全部四份补丁，
+第四个补丁的限定验证结果记录于 `build-input-v1.json`；当前源码须按序应用全部五份补丁，
 并核对逐文件 SHA。Darwin 的相关模块检查不替代 Linux 原生产物、测试和漏洞扫描。
+第五个补丁的 HTTP 客户端测试在自定义 CA 与默认环境中各通过 85 项；聚焦 lint、格式化
+与 Bazel 锁刷新通过，Cargo/Bazel 锁文件字节未变。完整 Linux 五组测试仍须验证新源码。
 
 ## 尚未验收
 
