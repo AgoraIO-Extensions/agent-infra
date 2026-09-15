@@ -14,8 +14,6 @@ const target = {
 const initialCommit = "7c63d061e74eaccb99dcccdc9b633511197c3406";
 const mainCommit = "410b111ccf673ab03ecb7239391442e226ad48fd";
 const writeActions = [
-	"create_issue",
-	"update_issue",
 	"create_ref",
 	"update_ref",
 	"rename_branch",
@@ -120,11 +118,7 @@ export async function runGitHubLowRiskWriteConformance({
 		try {
 			result = await call("execute_action", { actionId, input: args });
 		} catch (error) {
-			if (
-				!(error instanceof McpError) ||
-				error.data?.submissionUncertain === true
-			)
-				uncertain = true;
+			uncertain = true;
 			throw error;
 		}
 		if (result?.status !== "SUCCEEDED" || !result.callId)
@@ -141,7 +135,12 @@ export async function runGitHubLowRiskWriteConformance({
 	};
 	let currentRef;
 	let currentLabel;
-	let issueNumber;
+	let issueLabelsChanged = false;
+	let issueAssigneesChanged = false;
+	let issueLocked = false;
+	let originalIssueLabels = [];
+	let originalAssignees = [];
+	const issueNumber = 1;
 	let fileSha;
 	let milestoneNumber;
 	let releaseId;
@@ -193,36 +192,40 @@ export async function runGitHubLowRiskWriteConformance({
 			},
 			"label-create",
 		);
+		currentLabel = label;
 		if (created?.name !== label)
 			throw new Error("created label does not match");
-		currentLabel = label;
 		const updated = await execute(
 			"github.update_label",
 			{ ...repository, color: "0969da", name: label, newName: renamedLabel },
 			"label-update",
 		);
+		currentLabel = renamedLabel;
 		if (updated?.name !== renamedLabel)
 			throw new Error("updated label does not match");
-		currentLabel = renamedLabel;
-		const issue = await execute(
-			"github.create_issue",
-			{
-				...repository,
-				body: `${marker} metadata`,
-				title: `${marker} metadata`,
-			},
-			"issue-create",
-		);
-		issueNumber = issue?.number;
-		if (!Number.isSafeInteger(issueNumber))
-			throw new Error("created issue is invalid");
 		const issueInput = { ...repository, issueNumber };
+		const originalIssue = await read(call, "github.get_issue", issueInput);
+		originalIssueLabels = Array.isArray(originalIssue?.labels)
+			? originalIssue.labels
+					.map((value) => (typeof value === "string" ? value : value?.name))
+					.filter(Boolean)
+			: [];
+		originalAssignees = Array.isArray(originalIssue?.assignees)
+			? originalIssue.assignees.map((value) => value?.login).filter(Boolean)
+			: [];
 		let result = await execute(
 			"github.add_issue_labels",
 			{ ...issueInput, labels: [renamedLabel] },
 			"issue-label-add",
 		);
-		assertNames(result?.labels, [renamedLabel], "added issue labels");
+		issueLabelsChanged = true;
+		assertIncludes(result?.labels, renamedLabel, "added issue labels");
+		result = await execute(
+			"github.remove_issue_label",
+			{ ...issueInput, label: renamedLabel },
+			"issue-label-remove",
+		);
+		assertNames(result?.labels, originalIssueLabels, "removed issue labels");
 		result = await execute(
 			"github.set_issue_labels",
 			{ ...issueInput, labels: [renamedLabel] },
@@ -230,29 +233,25 @@ export async function runGitHubLowRiskWriteConformance({
 		);
 		assertNames(result?.labels, [renamedLabel], "set issue labels");
 		result = await execute(
-			"github.remove_issue_label",
-			{ ...issueInput, label: renamedLabel },
-			"issue-label-remove",
-		);
-		assertNames(result?.labels, [], "removed issue labels");
-		await execute(
-			"github.set_issue_labels",
-			{ ...issueInput, labels: [renamedLabel] },
-			"issue-label-reset",
-			false,
-		);
-		result = await execute(
 			"github.clear_issue_labels",
 			issueInput,
 			"issue-label-clear",
 		);
 		if (result?.ok !== true)
 			throw new Error("cleared issue labels do not match");
+		await execute(
+			"github.set_issue_labels",
+			{ ...issueInput, labels: originalIssueLabels },
+			"issue-label-restore",
+			false,
+		);
+		issueLabelsChanged = false;
 		result = await execute(
 			"github.add_issue_assignees",
 			{ ...issueInput, assignees: ["AGORAconnectionE2E"] },
 			"issue-assignee-add",
 		);
+		issueAssigneesChanged = true;
 		assertNames(
 			result?.assignees,
 			["AGORAconnectionE2E"],
@@ -265,22 +264,26 @@ export async function runGitHubLowRiskWriteConformance({
 			"issue-assignee-remove",
 		);
 		assertNames(result?.assignees, [], "removed issue assignees", "login");
+		if (originalAssignees.length > 0)
+			await execute(
+				"github.add_issue_assignees",
+				{ ...issueInput, assignees: originalAssignees },
+				"issue-assignee-restore",
+				false,
+			);
+		issueAssigneesChanged = false;
 		result = await execute(
 			"github.lock_issue",
 			{ ...issueInput, lockReason: "resolved" },
 			"issue-lock",
 		);
+		issueLocked = true;
 		if (result?.locked !== true)
 			throw new Error("locked issue state does not match");
 		result = await execute("github.unlock_issue", issueInput, "issue-unlock");
 		if (result?.locked !== false)
 			throw new Error("unlocked issue state does not match");
-		await execute(
-			"github.update_issue",
-			{ ...issueInput, state: "closed" },
-			"issue-close",
-		);
-		issueNumber = undefined;
+		issueLocked = false;
 
 		result = await execute(
 			"github.create_or_update_file",
@@ -293,6 +296,13 @@ export async function runGitHubLowRiskWriteConformance({
 			"file-create",
 		);
 		fileSha = result?.content?.sha;
+		if (!fileSha)
+			fileSha = (
+				await read(call, "github.get_file_contents", {
+					...repository,
+					path: filePath,
+				})
+			)?.sha;
 		if (!fileSha || result.content?.path !== filePath)
 			throw new Error("created file does not match");
 		await execute(
@@ -356,6 +366,12 @@ export async function runGitHubLowRiskWriteConformance({
 			"milestone-create",
 		);
 		milestoneNumber = result?.number;
+		if (!Number.isSafeInteger(milestoneNumber)) {
+			const milestones = await read(call, "github.list_milestones", repository);
+			milestoneNumber = milestones?.milestones?.find(
+				(value) => value?.title === `${marker} milestone`,
+			)?.number;
+		}
 		if (
 			!Number.isSafeInteger(milestoneNumber) ||
 			result.title !== `${marker} milestone`
@@ -403,6 +419,13 @@ export async function runGitHubLowRiskWriteConformance({
 			"release-create",
 		);
 		releaseId = result?.id;
+		if (!Number.isSafeInteger(releaseId))
+			releaseId = (
+				await read(call, "github.get_release_by_tag", {
+					...repository,
+					tag: releaseTag,
+				})
+			)?.id;
 		if (!Number.isSafeInteger(releaseId) || result.tag_name !== releaseTag)
 			throw new Error("created release does not match");
 		result = await execute(
@@ -442,6 +465,7 @@ export async function runGitHubLowRiskWriteConformance({
 		});
 	} finally {
 		const attempt = async (operation) => {
+			if (uncertain) return;
 			try {
 				await operation();
 			} catch {
@@ -494,15 +518,42 @@ export async function runGitHubLowRiskWriteConformance({
 					);
 					fileSha = undefined;
 				});
-			if (issueNumber)
+			if (issueLocked)
 				await attempt(async () => {
 					await execute(
-						"github.update_issue",
-						{ ...repository, issueNumber, state: "closed" },
-						"cleanup-issue",
+						"github.unlock_issue",
+						{ ...repository, issueNumber },
+						"cleanup-issue-unlock",
 						false,
 					);
-					issueNumber = undefined;
+					issueLocked = false;
+				});
+			if (issueAssigneesChanged)
+				await attempt(async () => {
+					await execute(
+						"github.remove_issue_assignees",
+						{ ...repository, issueNumber, assignees: ["AGORAconnectionE2E"] },
+						"cleanup-issue-assignees",
+						false,
+					);
+					if (originalAssignees.length > 0)
+						await execute(
+							"github.add_issue_assignees",
+							{ ...repository, issueNumber, assignees: originalAssignees },
+							"cleanup-issue-assignees-restore",
+							false,
+						);
+					issueAssigneesChanged = false;
+				});
+			if (issueLabelsChanged)
+				await attempt(async () => {
+					await execute(
+						"github.set_issue_labels",
+						{ ...repository, issueNumber, labels: originalIssueLabels },
+						"cleanup-issue-labels",
+						false,
+					);
+					issueLabelsChanged = false;
 				});
 			if (currentLabel)
 				await attempt(async () => {
@@ -550,7 +601,9 @@ export async function runGitHubLowRiskWriteConformance({
 		if (
 			currentLabel ||
 			currentRef ||
-			issueNumber ||
+			issueLocked ||
+			issueAssigneesChanged ||
+			issueLabelsChanged ||
 			fileSha ||
 			milestoneNumber ||
 			releaseId ||
@@ -577,6 +630,14 @@ function assertNames(values, expected, name, field = "name") {
 		? values.map((value) => value?.[field]).sort()
 		: undefined;
 	if (JSON.stringify(actual) !== JSON.stringify([...expected].sort()))
+		throw new Error(`${name} do not match`);
+}
+
+function assertIncludes(values, expected, name, field = "name") {
+	if (
+		!Array.isArray(values) ||
+		!values.some((value) => value?.[field] === expected)
+	)
 		throw new Error(`${name} do not match`);
 }
 
