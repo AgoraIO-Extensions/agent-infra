@@ -335,6 +335,7 @@ export const ConversationDetailProjectionV1Schema = z.strictObject({
 export const MessageCommandRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	text: nonEmptyString(),
+	attachments: z.array(OpaqueIdV1Schema).max(32).optional(),
 });
 export const RegenerateCommandRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,

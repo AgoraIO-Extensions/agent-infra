@@ -24,11 +24,43 @@ const event = {
 conversationEventConformanceV1("Fake", async () => {
 	let nextEventId = 1;
 	const fake = new FakeConversationEventsV1({
+		fileScope: {
+			actorId: "actor",
+			agentId: "agent",
+			channelId: "web",
+			conversationId: "conversation_event_fixture",
+		},
 		conversationId: "conversation_event_fixture",
 		executionId: "execution_event_fixture",
 		sessionGeneration: 3,
 		deliveryFence: 5,
 		newId: () => `event_fixture_${nextEventId++}`,
+	});
+	fake.seedFile({
+		fileId: "file_fixture",
+		objectRef: "00000000-0000-4000-8000-000000000001",
+		kind: "result",
+		idempotencyKey: "result_fixture",
+		actorId: "actor",
+		agentId: "agent",
+		channelId: "web",
+		conversationId: "conversation_event_fixture",
+		executionId: "execution_event_fixture",
+		messageId: null,
+		sessionGeneration: 3,
+		status: "available",
+		descriptor: {
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: 16,
+			sha256: "0".repeat(64),
+		},
+		objectVersion: "version",
+		etag: "etag",
+		createdAt: "2026-09-04T00:00:00Z",
+		updatedAt: "2026-09-04T00:00:00Z",
+		expiresAt: "2026-09-04T01:00:00Z",
+		revision: 1,
 	});
 	let loseNextResponse = false;
 	const events: ConversationEventUseCaseV1 = {

@@ -37,6 +37,10 @@
 		"./workload": {
 			"types": "./dist/workload/index.d.mts",
 			"import": "./dist/workload/index.mjs"
+		},
+		"./files": {
+			"types": "./dist/files.d.mts",
+			"import": "./dist/files.mjs"
 		}
 	},
 	"files": [

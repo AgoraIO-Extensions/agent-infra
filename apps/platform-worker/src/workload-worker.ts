@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createWorkloadReconciliationV1 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
@@ -9,6 +10,10 @@ import {
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly files?: Omit<
+		Parameters<typeof createPlatformFileReconciliationWorkerV1>[0],
+		"databaseUrl"
+	>;
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
@@ -33,15 +38,23 @@ export function createPlatformWorkloadWorkerV1(
 		databaseUrl: options.databaseUrl,
 		retryDelayMs: pollIntervalMs,
 	});
+	let files:
+		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
+		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	try {
+		if (options.files)
+			files = createPlatformFileReconciliationWorkerV1({
+				...options.files,
+				databaseUrl: options.databaseUrl,
+			});
 		reconciliation = createWorkloadReconciliationV1({
 			store,
 			runtime,
 			maximumAttempts: options.maximumAttempts,
 		});
 	} catch (error) {
-		void store.close().catch(() => undefined);
+		void Promise.allSettled([store.close(), files?.close()]);
 		throw error;
 	}
 	let stopped = false;
@@ -58,7 +71,11 @@ export function createPlatformWorkloadWorkerV1(
 		}
 	}
 	function enqueueTick() {
-		const result = tickTail.then(() => reconciliation.tick(workerId));
+		const result = tickTail.then(async () => {
+			const workload = await reconciliation.tick(workerId);
+			await files?.runOnce();
+			return workload;
+		});
 		tickTail = result.then(
 			() => undefined,
 			() => undefined,
@@ -104,7 +121,7 @@ export function createPlatformWorkloadWorkerV1(
 					await running;
 				} finally {
 					await tickTail;
-					await store.close();
+					await Promise.all([store.close(), files?.close()]);
 				}
 			})();
 			return closing;

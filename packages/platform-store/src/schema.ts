@@ -1267,3 +1267,79 @@ export const platformInfrastructureTables = [
 	idempotencyRecords,
 	persistedEvents,
 ] as const;
+
+export const platformFiles = platformSchema.table(
+	"files",
+	{
+		fileId: text("file_id").primaryKey(),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id),
+		actorId: text("actor_id").notNull(),
+		idempotencyKey: text("idempotency_key").notNull(),
+		record: jsonb("record")
+			.$type<import("@agent-infra/platform-core").FileRecordV1>()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		uniqueIndex("file_actor_idempotency_unique").on(
+			table.actorId,
+			table.idempotencyKey,
+		),
+		index("file_conversation_idx").on(table.conversationId),
+		uniqueIndex("file_object_ref_unique").on(
+			sql`(${table.record}->>'objectRef')`,
+		),
+		index("file_pending_reconciliation_idx")
+			.on(table.updatedAt)
+			.where(sql`${table.record}->>'status' = 'pending'`),
+		index("file_message_idx").on(
+			table.conversationId,
+			sql`(${table.record}->>'messageId')`,
+		),
+		check(
+			"file_record_binding",
+			sql`${table.record}->>'fileId' = ${table.fileId} AND ${table.record}->>'conversationId' = ${table.conversationId} AND ${table.record}->>'actorId' = ${table.actorId} AND ${table.record}->>'idempotencyKey' = ${table.idempotencyKey}`,
+		),
+		check(
+			"file_state_valid",
+			sql`${table.record}->>'status' IN ('pending','available','failed','expired','deleting','deleted')`,
+		),
+	],
+);
+export const platformFileAccesses = platformSchema.table(
+	"file_accesses",
+	{
+		accessId: text("access_id").primaryKey(),
+		operation: text("operation").notNull(),
+		idempotencyKey: text("idempotency_key").notNull(),
+		fileId: text("file_id")
+			.notNull()
+			.references(() => platformFiles.fileId),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id),
+		record: jsonb("record")
+			.$type<import("@agent-infra/platform-core").FileAccessRecordV1>()
+			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		index("file_access_expiry_idx").on(table.expiresAt),
+		uniqueIndex("file_access_idempotency_unique").on(
+			table.fileId,
+			table.operation,
+			table.idempotencyKey,
+		),
+		check(
+			"file_access_record_binding",
+			sql`${table.record}->>'accessId' = ${table.accessId} AND ${table.record}->>'fileId' = ${table.fileId} AND ${table.record}->>'conversationId' = ${table.conversationId}`,
+		),
+	],
+);
+
+export const fileReconciliation = platformSchema.table("file_reconciliation", {
+	id: integer("id").primaryKey(),
+	cursor: text("cursor"),
+});

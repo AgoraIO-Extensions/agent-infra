@@ -45,6 +45,30 @@ export * from "./conversation-dispatch.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
 export * from "./conversation-read-projection.js";
+export {
+	bindInputFileV1,
+	createFileAuthorityV1,
+	type FileAccessRecordV1,
+	FileAuthorityError,
+	type FileAuthorityV1,
+	type FileAuthorizationPortV1,
+	type FileDescriptorV1,
+	type FileExecutionStateV1,
+	type FileExecutionV1,
+	type FileLimitsV1,
+	type FileRecordV1,
+	type FileScopeV1,
+	type FileStoreV1,
+	type FileTransactionV1,
+	isConfirmedResultFileV1,
+	type ObjectStoragePortV1,
+	type StoredFileObjectV1,
+} from "./file-authority.js";
+export {
+	type FileLimitDeclarationsV1,
+	resolveFileLimitsV1,
+} from "./file-limits.js";
+export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
 export * from "./secret-activation.js";
 export * from "./secret-key-rotation.js";

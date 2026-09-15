@@ -6,6 +6,7 @@ export * from "./fake-application-revision.js";
 export * from "./fake-conversation-events.js";
 export * from "./fake-conversation-execution.js";
 export * from "./fake-conversation-runtime-host.js";
+export { FakeFileStoreV1 } from "./fake-file-store.js";
 export * from "./fake-idempotency.js";
 export * from "./fake-secret-activation.js";
 export * from "./fake-secret-decryptor.js";

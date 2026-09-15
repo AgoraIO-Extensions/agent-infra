@@ -249,3 +249,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		process.exitCode = 1;
 	});
 }
+
+export { createWorkerFileClientV1 } from "./file-client.js";
+export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";

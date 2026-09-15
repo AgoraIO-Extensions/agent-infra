@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
+import {
+	fileExchangeOpenApiPathsV1,
+	fileOpenApiPathsV1,
+	fileSchemasV1,
+} from "./files.ts";
 
 import {
 	IdempotencyKeyV1Schema,
@@ -67,6 +72,8 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	fileJsonSchema: resolve(artifactRoot, "json-schema/files.v1.schema.json"),
+	fileOpenapi: resolve(artifactRoot, "openapi/files.v1.openapi.json"),
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
 	openapi: resolve(artifactRoot, "openapi/common.v1.openapi.json"),
 	pilotBrowserOpenapi: resolve(
@@ -386,10 +393,15 @@ function buildArtifacts() {
 		},
 		paths: {
 			...pilotBrowserOpenApiPathsV1,
+			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
 		},
 		components: {
-			schemas: { ...pilotBrowserSchemasV1, ...pilotSseSchemasV1 },
+			schemas: {
+				...pilotBrowserSchemasV1,
+				...pilotSseSchemasV1,
+				...fileSchemasV1,
+			},
 		},
 	});
 	const pilotBrowserOpenapiV2 = createDocument({
@@ -445,6 +457,17 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		fileJsonSchema: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/files.v1.schema.json",
+			title: "Platform File Contracts V1",
+			definitions: fileSchemasV1,
+		}),
+		fileOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Platform Authenticated Files API", version: "1.0.0" },
+			paths: { ...fileOpenApiPathsV1, ...fileExchangeOpenApiPathsV1 },
+			components: { schemas: fileSchemasV1 },
+		}),
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,

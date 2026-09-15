@@ -67,6 +67,7 @@ export {
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
 } from "./conversation-query.ts";
+export { PostgresFileStoreV1 } from "./files.js";
 export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
