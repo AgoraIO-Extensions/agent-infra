@@ -20,10 +20,15 @@ probe 静态声明不能替代当前进程保护安装或最终镜像的负向�
    私有 Connection bootstrap、独立本地 HTTP、真实 leaf descriptor、原响应回执、
    原记录核实、有时限的 metadata-only 补核实、原进程退出后的私有只读恢复，
    以及 canonical corpus 测试源码。
+4. `patches/0004-native-dependency-security-updates.patch`：升级 gix、OpenSSL、quinn-proto
+   与 Rama/Hickory，适配网络代理调用端，并同步 Rust 1.96.0 和 Cargo/Bazel lock。
+   保留逐地址私网检查、TLS、代理与 Connection/执行屏障边界。
 
 上游 Apache-2.0 的 [LICENSE](UPSTREAM-LICENSE) 与 [NOTICE](UPSTREAM-NOTICE) 保持不变。
 没有修改共享 Cargo registry 或外部 `rmcp 3.1.3` 源码。
 新增锁定的 JCS 依赖和许可证见 [JCS-NOTICE](JCS-NOTICE) 与 `licenses/`。
+第四个补丁的依赖许可证及逐项来源见
+[dependency-updates-NOTICE](licenses/dependency-updates-NOTICE.txt)。
 
 准备独立、干净、HEAD 精确为 manifest 所列 commit 的上游 checkout 后运行：
 
@@ -39,9 +44,9 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 
 前两个冻结补丁的既有证据包括 core 与 app-server-transport 库检查、core 23 项、hook
 11 项、MCP 6 项和实际 PTY 写入 1 项聚焦测试，以及相关 lint。
-这些证据不覆盖第三个补丁。两项 core 队列检查曾重复执行，不增加独立测试数量。
+这些证据不覆盖第三、第四个补丁。两项 core 队列检查曾重复执行，不增加独立测试数量。
 
-当前第三个补丁：
+第三个补丁的既有记录：
 
 - `just fmt`、`cargo metadata --no-deps --locked --offline` 和 `git diff --check` 通过。
   metadata 只验证 manifest/lock 可解析，不是 Rust 类型检查。
@@ -49,7 +54,10 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 - 174 个共同 frame case、3 个 framing case、34 个 RFC 8785 vector 已写入 native 测试。
   实际聚焦测试尝试在依赖编译阶段触及 2 GiB 资源保护而停止；新增 native 模块尚未编译，
   不能把 corpus 数据或 TypeScript 验证写成 native 测试通过。
-- 当前源码和按序应用三份补丁的结果必须通过逐文件 SHA 核对。
+- 第三个补丁的源码和按序应用前三份补丁的结果必须通过逐文件 SHA 核对。
+
+第四个补丁的限定验证结果记录于 `build-input-v1.json`；当前源码须按序应用全部四份补丁，
+并核对逐文件 SHA。Darwin 的相关模块检查不替代 Linux 原生产物、测试和漏洞扫描。
 
 ## 尚未验收
 
@@ -78,7 +86,7 @@ TurnComplete 不证明后台进程已退出；现有 list/terminate 和原 attem
 `prepare`、`musl`、`v8`、`build`、`seal`、`tests` 分步运行；
 参数和专属目录由 workflow 固定。musl 和 V8 输出的 `GITHUB_ENV` 必须在后续 step 生效，
 不通过 shell source 解析；V8 脚本明确使用原生 checkout，避免 workspace 根目录歧义。
-构建保留 runner 默认 Cargo home，使用独立 target 目录、Rust 1.95.0、Zig 0.14.0、
+构建保留 runner 默认 Cargo home，使用独立 target 目录、Rust 1.96.0、Zig 0.14.0、
 单一 musl release target、两个并发任务和关闭 incremental。每个外部构建阶段周期检查
 磁盘，低于 2 GiB 时终止该进程组；不清理其他目录，不自动改用付费 runner。
 
@@ -100,7 +108,8 @@ SBOM 使用仓库固定 Trivy 安装器，只描述 Cargo.lock 源码依赖，
 CLI version 和静态 native probe 也必须与固定输入匹配；这不证明进程隔离已安装。
 
 封包上传后，固定 just 1.51.0 与 nextest 0.9.103 通过上游 `just test` 运行
-`codex-rmcp-client` 的 Connection，以及 `codex-core` 的 bootstrap/barrier 库测试。
+`codex-rmcp-client` 的 Connection、`codex-core` 的 bootstrap/barrier，以及
+`codex-network-proxy`、`codex-git-utils`、`codex-http-client` 的库测试。
 测试复用同一 release target 和 bwrap SHA，两个执行线程，保留 2 GiB 资源保护；
 测试前后复核源码和候选 binary，失败会使 workflow 失败。
 已上传包仍明确为未验收候选；聚焦测试记录随 diagnostics 保存，不替代完整原生矩阵。

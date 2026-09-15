@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "work-in-progress; current protected Connection source not compiled or accepted; no release binary",
+  "status": "work-in-progress; dependency migration checked on Darwin; exact Linux build, focused native gates and vulnerability scans pending; no release binary",
   "upstream": {
     "repository": "https://github.com/openai/codex.git",
     "commit": "41e22fee981a63b3698df7ed36bad393cda24715",
@@ -10,7 +10,7 @@
     "repairedCargoLockSha256": "sha256:6795110c4b3b43ceed92b7eee420658c187ebeecdf515a36321ae99c4eb0451f"
   },
   "toolchain": {
-    "rust": "1.95.0",
+    "rust": "1.96.0",
     "targets": [
       "aarch64-apple-darwin",
       "aarch64-unknown-linux-musl"
@@ -33,7 +33,7 @@
       "nativeHooksTests": "just test -p codex-hooks --locked --lib native_barrier_tests; 11 passed, 175 skipped; includes real command spawn/terminal and queued async hook drain/cancellation",
       "nativeCoreLint": "just fix -p codex-core --locked --lib, then just clippy -p codex-core --locked --lib; final check passed including upstream recipe --tests",
       "nativeHooksLint": "just fix -p codex-hooks --locked --lib; passed including upstream recipe --tests",
-      "scope": "historical evidence for patches 0001 and 0002 only; excludes current patch 0003"
+      "scope": "historical Rust 1.95.0 evidence for patches 0001 and 0002 only; excludes current patches 0003 and 0004"
     }
   },
   "releaseLockRepair": {
@@ -197,9 +197,2011 @@
   "dependencyPatchPolicy": {
     "sharedCargoRegistryModified": false,
     "externalCratePatches": [],
-    "note": "MCP changes are in upstream codex-rmcp-client call sites and adapters; published rmcp 3.1.3 bytes are unchanged."
+    "note": "MCP changes are in upstream codex-rmcp-client call sites and adapters; published rmcp 3.1.3 bytes are unchanged. Patch 0004 updates published crates and Codex network-proxy call sites; no shared registry edits, forks, external crate patches or scanner exceptions."
   },
   "relevantLockedDependencies": [
+    {
+      "name": "aws-lc-fips-sys",
+      "version": "0.13.17",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "00ccb9bd2963c4dbcded8052b5666f329a7ccc75d04dea723eece6077ad5e6dc",
+      "license": "ISC AND (Apache-2.0 OR ISC) AND OpenSSL",
+      "repository": "https://github.com/aws/aws-lc-rs",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/aws-lc-fips-sys/aws-lc-fips-sys-0.13.17.crate",
+      "cargoManifestSha256": "1240bfaf2a2955be00243c352f238eb1ac5b8f13d2e2e99d0c726af8f57fcf1e",
+      "vcs": {
+        "git": {
+          "sha1": "bb5d236ff4e7239dbe0bbd5652f511d8117ebce0",
+          "dirty": true
+        },
+        "path_in_vcs": "aws-lc-fips-sys"
+      },
+      "licenseSources": [
+        {
+          "path": "aws-lc-fips-sys-0.13.17/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-fips-sys/aws-lc-fips-sys-0.13.17.crate",
+          "sha256": "5df09a98cac8843239a4d8f48a85089de6b68ed106612afcd2aa37a6453c2e3f"
+        },
+        {
+          "path": "aws-lc-fips-sys-0.13.17/aws-lc/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-fips-sys/aws-lc-fips-sys-0.13.17.crate",
+          "sha256": "82ab898f12d8bdc18d0c3892e6b89a35f4862fdcb301952ff56c47c6acdd6826"
+        },
+        {
+          "path": "aws-lc-fips-sys-0.13.17/aws-lc/third_party/fiat/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-fips-sys/aws-lc-fips-sys-0.13.17.crate",
+          "sha256": "43e358d7b6eb109d0f51f7b3a090fd82607965767c25fadee39e922475de2061"
+        }
+      ]
+    },
+    {
+      "name": "aws-lc-rs",
+      "version": "1.17.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "932661a1d72328fe06ca79371bede83206f953544cf376d4a1c70b7cbd7b4cc2",
+      "license": "ISC AND (Apache-2.0 OR ISC)",
+      "repository": "https://github.com/aws/aws-lc-rs",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/aws-lc-rs/aws-lc-rs-1.17.4.crate",
+      "cargoManifestSha256": "c550263938e2fcc8755bbd95a1a8381c97b84d871a9f9e4450a55eccdcdf67f5",
+      "vcs": {
+        "git": {
+          "sha1": "67d92f9d4e95a417e7f84a857130979baa0622ad"
+        },
+        "path_in_vcs": "aws-lc-rs"
+      },
+      "licenseSources": [
+        {
+          "path": "aws-lc-rs-1.17.4/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-rs/aws-lc-rs-1.17.4.crate",
+          "sha256": "b50b376e7d24a0598488b730c3034ffcd0b58dd36c0913a24b9903a3cfd04bf7"
+        }
+      ]
+    },
+    {
+      "name": "aws-lc-sys",
+      "version": "0.45.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27",
+      "license": "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)",
+      "repository": "https://github.com/aws/aws-lc-rs",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/aws-lc-sys/aws-lc-sys-0.45.0.crate",
+      "cargoManifestSha256": "836bac6390070d88f3c804f4212e16ca6e142f6c111795094d925470d07d6866",
+      "vcs": {
+        "git": {
+          "sha1": "7943223c99d909bc399bdf1b856821bb04f1f3c5"
+        },
+        "path_in_vcs": "aws-lc-sys"
+      },
+      "licenseSources": [
+        {
+          "path": "aws-lc-sys-0.45.0/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-sys/aws-lc-sys-0.45.0.crate",
+          "sha256": "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
+        },
+        {
+          "path": "aws-lc-sys-0.45.0/aws-lc/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-sys/aws-lc-sys-0.45.0.crate",
+          "sha256": "977c541bd25ffe36975dde25c028c0cd15ddf3d08243983b58e8a6a3d9447523"
+        },
+        {
+          "path": "aws-lc-sys-0.45.0/aws-lc/third_party/fiat/LICENSE",
+          "source": "https://static.crates.io/crates/aws-lc-sys/aws-lc-sys-0.45.0.crate",
+          "sha256": "43e358d7b6eb109d0f51f7b3a090fd82607965767c25fadee39e922475de2061"
+        }
+      ]
+    },
+    {
+      "name": "const-oid",
+      "version": "0.10.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/formats",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/const-oid/const-oid-0.10.2.crate",
+      "cargoManifestSha256": "591ac78fc8cd99d8a31110e8cb572534bb9d04af23bc48db855a34d4a6c78569",
+      "vcs": {
+        "git": {
+          "sha1": "385ef739bcec785472c7c971c57f26f87caca3b8"
+        },
+        "path_in_vcs": "const-oid"
+      },
+      "licenseSources": [
+        {
+          "path": "const-oid-0.10.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/const-oid/const-oid-0.10.2.crate",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "path": "const-oid-0.10.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/const-oid/const-oid-0.10.2.crate",
+          "sha256": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa"
+        }
+      ]
+    },
+    {
+      "name": "defmt",
+      "version": "1.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/knurling-rs/defmt",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/defmt/defmt-1.1.1.crate",
+      "cargoManifestSha256": "2b10d838d0501a2a2b6fe2cf4f92331db14a884fbaa508df17ab5c35ac767307",
+      "vcs": {
+        "git": {
+          "sha1": "9087a689a32aaae57c7ec2058d15d9c98c12bc81"
+        },
+        "path_in_vcs": "defmt"
+      },
+      "licenseSources": [
+        {
+          "path": "defmt-1.1.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/defmt/defmt-1.1.1.crate",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "path": "defmt-1.1.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/defmt/defmt-1.1.1.crate",
+          "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50"
+        }
+      ]
+    },
+    {
+      "name": "defmt-macros",
+      "version": "1.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/knurling-rs/defmt",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/defmt-macros/defmt-macros-1.1.1.crate",
+      "cargoManifestSha256": "76cfa8794026d9f8a67563de3ba71a13de1be77209b168f800c1afe899b6de08",
+      "vcs": {
+        "git": {
+          "sha1": "9087a689a32aaae57c7ec2058d15d9c98c12bc81"
+        },
+        "path_in_vcs": "macros"
+      },
+      "licenseSources": [
+        {
+          "path": "defmt-macros-1.1.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/defmt-macros/defmt-macros-1.1.1.crate",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "path": "defmt-macros-1.1.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/defmt-macros/defmt-macros-1.1.1.crate",
+          "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50"
+        }
+      ]
+    },
+    {
+      "name": "defmt-parser",
+      "version": "1.0.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/knurling-rs/defmt",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/defmt-parser/defmt-parser-1.0.0.crate",
+      "cargoManifestSha256": "c4c4df5b09e53450267eacadf1f7f6a0d3d5fc463bc450e199f0d06eba8e6ab3",
+      "vcs": {
+        "git": {
+          "sha1": "4a8cdb44891ed57b8ff5a023b6bec7137c48708f"
+        },
+        "path_in_vcs": "parser"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT",
+          "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50"
+        }
+      ]
+    },
+    {
+      "name": "gix",
+      "version": "0.83.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6ce52001b946a6249d5d0d3011df0a042ac3f8a4d013460db6476577b0b9c567",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix/gix-0.83.0.crate",
+      "cargoManifestSha256": "1c30e28520d5e3f5c47b53bd65e0448d3094eebf1e7ceb69c97a56d2910c0916",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-0.83.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix/gix-0.83.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-0.83.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix/gix-0.83.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-actor",
+      "version": "0.41.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "33f9308ad6fd35b2a865cbe4117ac61b2be59e4a9ef1621c7a9794f7c8e52c5b",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-actor/gix-actor-0.41.2.crate",
+      "cargoManifestSha256": "181479036252607dd6f98e956cf36b48c46ee17d4f633e66a423269affc8af2b",
+      "vcs": {
+        "git": {
+          "sha1": "842bc447e3aeacf5d9d36f7f8a01068eda4b7999"
+        },
+        "path_in_vcs": "gix-actor"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-actor-0.41.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-actor/gix-actor-0.41.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-actor-0.41.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-actor/gix-actor-0.41.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-archive",
+      "version": "0.32.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9a20ec244b733338d4cb60e5e05eac700dab7fcc689647b1d1daa9396b119342",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-archive/gix-archive-0.32.0.crate",
+      "cargoManifestSha256": "7f18f556ab04ae239a1b415b90feaf1be397f08f36de77db29affea0ec7cdbac",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-archive"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-archive-0.32.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-archive/gix-archive-0.32.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-archive-0.32.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-archive/gix-archive-0.32.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-attributes",
+      "version": "0.33.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "39b40888d0ed415c0744a6cdc61eebf0304c9d26ab726725b718443c322e5ba4",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-attributes/gix-attributes-0.33.2.crate",
+      "cargoManifestSha256": "008bd066503c65177ac3743d191ea027182a0ad6407e5e93b4454eb952e9c651",
+      "vcs": {
+        "git": {
+          "sha1": "6428edc82fc8a16d5ef34ca2d49aa6fdff3645fe"
+        },
+        "path_in_vcs": "gix-attributes"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-attributes-0.33.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-attributes/gix-attributes-0.33.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-attributes-0.33.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-attributes/gix-attributes-0.33.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-bitmap",
+      "version": "0.3.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7cd1d118d0f5d88b96e6f6e13b566475fef4797ead4a02c26fed36c1375066f7",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-bitmap/gix-bitmap-0.3.3.crate",
+      "cargoManifestSha256": "3bc64b9dcfe83dfbe08d14d027a16105b2d285977865b9fb2bb99e469cccd7c9",
+      "vcs": {
+        "git": {
+          "sha1": "842bc447e3aeacf5d9d36f7f8a01068eda4b7999"
+        },
+        "path_in_vcs": "gix-bitmap"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-bitmap-0.3.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-bitmap/gix-bitmap-0.3.3.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-bitmap-0.3.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-bitmap/gix-bitmap-0.3.3.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-blame",
+      "version": "0.13.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "14dab9a942ab54a9661ded7397c3bf927274e7afa94494db0d75cfcbde02ca0a",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-blame/gix-blame-0.13.0.crate",
+      "cargoManifestSha256": "c6f5653f707c48c40dec584572544d866d9f0d19f8b95550ec26f7e624b6296a",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-blame"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-blame-0.13.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-blame/gix-blame-0.13.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-blame-0.13.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-blame/gix-blame-0.13.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-chunk",
+      "version": "0.7.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b2a871e5cab12ba568845714473505deefffb3c04eb47f4708ce344cd459c1cc",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-chunk/gix-chunk-0.7.3.crate",
+      "cargoManifestSha256": "e571e434c693dbaabf696f8c22e627ddfe63e615bafd7b684ec8a537552d24b5",
+      "vcs": {
+        "git": {
+          "sha1": "842bc447e3aeacf5d9d36f7f8a01068eda4b7999"
+        },
+        "path_in_vcs": "gix-chunk"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-chunk-0.7.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-chunk/gix-chunk-0.7.3.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-chunk-0.7.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-chunk/gix-chunk-0.7.3.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-command",
+      "version": "0.9.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "cf4363accdf6ef7ba861871d2d521ab7418a04aaaed919fadb022af71d379b12",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-command/gix-command-0.9.2.crate",
+      "cargoManifestSha256": "ae4d0e67e06f6dc7468b7082baf3680a409f078678e4166275ac0a34e829db9d",
+      "vcs": {
+        "git": {
+          "sha1": "ab4fcb0364ec4d01115595198f383b1ad9c29808"
+        },
+        "path_in_vcs": "gix-command"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-command-0.9.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-command/gix-command-0.9.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-command-0.9.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-command/gix-command-0.9.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-commitgraph",
+      "version": "0.37.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7f675d0df484a7f6a47e64bd6f311af489d947c0323b0564f36d14f3d7762abb",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-commitgraph/gix-commitgraph-0.37.1.crate",
+      "cargoManifestSha256": "1af4c2cc7a12e3e1e03a1a66cc7a50e5285f4b6cc44b25f36d9c5f404d379933",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-commitgraph"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-commitgraph-0.37.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-commitgraph/gix-commitgraph-0.37.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-commitgraph-0.37.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-commitgraph/gix-commitgraph-0.37.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-config",
+      "version": "0.56.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8c01848aebd21c67f6ba41f1de8efd46ae96df21f001954a3c9e1517e514d410",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-config/gix-config-0.56.0.crate",
+      "cargoManifestSha256": "5ad27f68762287daba39c2712fd6714ed28609f9a451b2832e916997ba7f0388",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-config"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-config-0.56.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-config/gix-config-0.56.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-config-0.56.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-config/gix-config-0.56.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-config-value",
+      "version": "0.18.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "ed42168329552f6c2e5df09665c104199d45d84bedb53683738a49b57fe1baab",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-config-value/gix-config-value-0.18.1.crate",
+      "cargoManifestSha256": "2d828de25c07b90f06287813e7fc6dc21089131797aba6d6d6682193c2c7ab1b",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-config-value"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-config-value-0.18.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-config-value/gix-config-value-0.18.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-config-value-0.18.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-config-value/gix-config-value-0.18.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-date",
+      "version": "0.15.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7e47b9e8cdc688296609b706428de570f88b1e0eed7156dde7b4a89d26fa4567",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-date/gix-date-0.15.6.crate",
+      "cargoManifestSha256": "04e47a166a4bbfc7091326ad4c524777f2a6e9279deb63f9600506c181e8df2b",
+      "vcs": {
+        "git": {
+          "sha1": "27aec474c113cc885d44631b329454dc1ad0fed2"
+        },
+        "path_in_vcs": "gix-date"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-date-0.15.6/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-date/gix-date-0.15.6.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-date-0.15.6/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-date/gix-date-0.15.6.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-diff",
+      "version": "0.63.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "dc08e0fa1a91ff5f24affeab052f198056645e1de004910bde7b82b50ea5982a",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-diff/gix-diff-0.63.0.crate",
+      "cargoManifestSha256": "ac915c042c0fdb47a8c719c124dbc0442b38f45b147b9771b56205c4f9e729ca",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-diff"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-diff-0.63.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-diff/gix-diff-0.63.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-diff-0.63.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-diff/gix-diff-0.63.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-dir",
+      "version": "0.25.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "32a0fc06e9e1e430cbf0a313666976d90f822f461a6525320427aa9b8af5236c",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-dir/gix-dir-0.25.0.crate",
+      "cargoManifestSha256": "e133fe677f6e39f093fd58439ff75aeb4166d40af4cc4f6f7e4d01db28fff5da",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-dir"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-dir-0.25.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-dir/gix-dir-0.25.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-dir-0.25.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-dir/gix-dir-0.25.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-discover",
+      "version": "0.51.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "17852e6a501e688a1702b24ebe5b3761d4719455bc869fd29f38b0b859bcad34",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-discover/gix-discover-0.51.0.crate",
+      "cargoManifestSha256": "3705c5de8ce46ddc15762e0e6d38a4e4d47f7750278638d9d163ef79abee5aa8",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-discover"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-discover-0.51.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-discover/gix-discover-0.51.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-discover-0.51.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-discover/gix-discover-0.51.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-error",
+      "version": "0.2.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "4a9292309fd944e71b2a3c96d3c03a6feb8852db646febdde7cbb9f79cb5f329",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-error/gix-error-0.2.5.crate",
+      "cargoManifestSha256": "5cf336c16dce8553b49eea8c2375cf0e66b3e760010f51400932f439912c4ef2",
+      "vcs": {
+        "git": {
+          "sha1": "27aec474c113cc885d44631b329454dc1ad0fed2"
+        },
+        "path_in_vcs": "gix-error"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-error-0.2.5/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-error/gix-error-0.2.5.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-error-0.2.5/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-error/gix-error-0.2.5.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-features",
+      "version": "0.48.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1849ae154d38bc403185be14fa871e38e3c93ee606875d94e207fdb9fba52dbc",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-features/gix-features-0.48.1.crate",
+      "cargoManifestSha256": "c0e1fab4dca7ba8c398ec7ceb63492036a42ab5822071ce1c284467ad79d392d",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-features"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-features-0.48.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-features/gix-features-0.48.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-features-0.48.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-features/gix-features-0.48.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-filter",
+      "version": "0.30.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "dac917dbe9653c9b615d248db91907a365bd779750c9e1b457a9d9fdeece3a08",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-filter/gix-filter-0.30.0.crate",
+      "cargoManifestSha256": "e39a2ba6a21c6f2b6d84843d44be0774bfa73249a2a871360b18bdc098713595",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-filter"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-filter-0.30.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-filter/gix-filter-0.30.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-filter-0.30.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-filter/gix-filter-0.30.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-fs",
+      "version": "0.21.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6cdff46db8798e47e2f727d84b9379aac5add3dd3d9d0b07bb4d7d5d640771fe",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-fs/gix-fs-0.21.2.crate",
+      "cargoManifestSha256": "023e1b8ec6c3710975da7797d3d3d4e1c6763f0eccc6ba00d7b5a93c2597b4b6",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-fs"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-fs-0.21.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-fs/gix-fs-0.21.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-fs-0.21.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-fs/gix-fs-0.21.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-glob",
+      "version": "0.26.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d1fcb8ef5b16bcf874abe9b68d8abb3c0493c876d367ab824151f30a0f3f3756",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-glob/gix-glob-0.26.1.crate",
+      "cargoManifestSha256": "8626e98d37fc66d829e781969611a7c1f1ed4372c664e7530792716c99861f4d",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-glob"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-glob-0.26.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-glob/gix-glob-0.26.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-glob-0.26.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-glob/gix-glob-0.26.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-hash",
+      "version": "0.25.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "cb0926d3819c837750b4e03c7754901e73f68b8c9b690753a6372a1bed4eedce",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-hash/gix-hash-0.25.1.crate",
+      "cargoManifestSha256": "bc44f526dbca1604c6d3791e6929a7d5349c4c6e98997be11aa2a7a47f64ebb4",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-hash"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-hash-0.25.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-hash/gix-hash-0.25.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-hash-0.25.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-hash/gix-hash-0.25.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-hashtable",
+      "version": "0.15.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7e261d54091f0d1c729bc83f54548c071bdec60a697de1e58e88bdfd7a99d24e",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-hashtable/gix-hashtable-0.15.2.crate",
+      "cargoManifestSha256": "6d93b861804bc87276446663b76b7bd8f8ba4c3585beb84062ada34126035758",
+      "vcs": {
+        "git": {
+          "sha1": "6428edc82fc8a16d5ef34ca2d49aa6fdff3645fe"
+        },
+        "path_in_vcs": "gix-hashtable"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-hashtable-0.15.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-hashtable/gix-hashtable-0.15.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-hashtable-0.15.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-hashtable/gix-hashtable-0.15.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-ignore",
+      "version": "0.21.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d491bab9bf2c9f341dc754f425c31d5d3f63aca615312167b82e1deeaca97d8d",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-ignore/gix-ignore-0.21.1.crate",
+      "cargoManifestSha256": "ff7b0bc746534494ad6991bd3dd26e70d149ebe9cfb476834be9608ec3f0129d",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-ignore"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-ignore-0.21.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-ignore/gix-ignore-0.21.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-ignore-0.21.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-ignore/gix-ignore-0.21.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-imara-diff",
+      "version": "0.2.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1c91d8cffac8849493a82233811bd02b2b183b8cf39bf704de0fa0841b737595",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-imara-diff/gix-imara-diff-0.2.5.crate",
+      "cargoManifestSha256": "da88dc51232b4ccd6937ec3ffaace6068083a3a3e5fb35a74cb1cd3fe3ce711b",
+      "vcs": {
+        "git": {
+          "sha1": "d2af4ed5532ea660fbd643e48d8925cd88de5ee0"
+        },
+        "path_in_vcs": "gix-imara-diff"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-imara-diff-0.2.5/LICENSE",
+          "source": "https://static.crates.io/crates/gix-imara-diff/gix-imara-diff-0.2.5.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    },
+    {
+      "name": "gix-index",
+      "version": "0.51.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "54c3ef97ad08121e4327a6226bd63fed6b9e3c6b976d48bddd4356d9d41191db",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-index/gix-index-0.51.0.crate",
+      "cargoManifestSha256": "3afe32868b18039f060aacdba971fbdcf50d6e75270ed86817efb85ec179868b",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-index"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-index-0.51.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-index/gix-index-0.51.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-index-0.51.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-index/gix-index-0.51.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-lock",
+      "version": "23.0.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "65c9dedd9e90b0d47624d2ed241d394e09294118364e87b9b7e5f1fe755f3c2c",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-lock/gix-lock-23.0.1.crate",
+      "cargoManifestSha256": "3916a7377a07fe4281bde504237ac01cd154179a1019c25df1465c2b9709a29b",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-lock"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-lock-23.0.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-lock/gix-lock-23.0.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-lock-23.0.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-lock/gix-lock-23.0.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-merge",
+      "version": "0.16.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "74bbcdcc52b70a32f0a151b024dff9d0fcf56ee48f00d9503e735af9d99ea881",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-merge/gix-merge-0.16.0.crate",
+      "cargoManifestSha256": "cb88083430ca7b6f57c7b371fa625d82773b841ef061aa9e52e42caff22121cb",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-merge"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-merge-0.16.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-merge/gix-merge-0.16.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-merge-0.16.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-merge/gix-merge-0.16.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-negotiate",
+      "version": "0.31.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "103d42bfade1b8a96ca5005933127bdad461ce588d92422b2c2daa3ff20d780c",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-negotiate/gix-negotiate-0.31.0.crate",
+      "cargoManifestSha256": "30cf0d01653fb334db69446145578580d984cd12bc7a076bc4777d8aa3a6b335",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-negotiate"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-negotiate-0.31.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-negotiate/gix-negotiate-0.31.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-negotiate-0.31.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-negotiate/gix-negotiate-0.31.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-object",
+      "version": "0.60.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a38075a95d7cc5df8afd38e72c617026c1456952207a4120a7f55a3fbf93b4d7",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-object/gix-object-0.60.0.crate",
+      "cargoManifestSha256": "bcaa7df30fb10c061f298e0a7fe8811070054b80aeb17504e885f2bbd4348f2b",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-object"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-object-0.60.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-object/gix-object-0.60.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-object-0.60.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-object/gix-object-0.60.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-odb",
+      "version": "0.80.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "aeeda12a9663120418735ecdc1250d06eeab0be75700e47b3402a981331716ba",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-odb/gix-odb-0.80.0.crate",
+      "cargoManifestSha256": "7a36b70e1bf31774cde07983f71c6565e59358e7d5ed5cdff61f2c6f3b1cd157",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-odb"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-odb-0.80.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-odb/gix-odb-0.80.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-odb-0.80.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-odb/gix-odb-0.80.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-pack",
+      "version": "0.70.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "daf02e6f5c8f07a069c9ea5245f40d9b14856ada4086091dc99941b49002b4fa",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-pack/gix-pack-0.70.0.crate",
+      "cargoManifestSha256": "5bc9735bcdb15a2de2fd553c05fe509bde91f8c330d0b91c1495afc56d0555e0",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-pack"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-pack-0.70.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-pack/gix-pack-0.70.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-pack-0.70.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-pack/gix-pack-0.70.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-packetline",
+      "version": "0.21.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b217dd0ee0c4021ecf169a4a519b1b4f80d15e3f3765f3dc466223dc0ac891d7",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-packetline/gix-packetline-0.21.5.crate",
+      "cargoManifestSha256": "21981a02a05bd4374b18b9aa174f9154105fc0e9e7c560b5c3c8efd46228f4bf",
+      "vcs": {
+        "git": {
+          "sha1": "98d24338eec68080e463d6622ea0fe5798d460c3"
+        },
+        "path_in_vcs": "gix-packetline"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-packetline-0.21.5/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-packetline/gix-packetline-0.21.5.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-packetline-0.21.5/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-packetline/gix-packetline-0.21.5.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-path",
+      "version": "0.12.6",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "38fc6f029ea67de83cbcbd33fd98c05a48360d2932b39d9fdacbc6eae802d475",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-path/gix-path-0.12.6.crate",
+      "cargoManifestSha256": "2a07b956cc99dbf7cbe2002e10aa0c7b0de2b2b9dbe0327b488db98d42692ae5",
+      "vcs": {
+        "git": {
+          "sha1": "888677ad2d63a2e3930a02add2de0b4b667a5581"
+        },
+        "path_in_vcs": "gix-path"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-path-0.12.6/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-path/gix-path-0.12.6.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-path-0.12.6/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-path/gix-path-0.12.6.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-pathspec",
+      "version": "0.18.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "3050783b41ee11511e1e8fb35623df81806194f4030395f14f48ea37c2798c9f",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-pathspec/gix-pathspec-0.18.1.crate",
+      "cargoManifestSha256": "51e3538c29e25184e137baf665909a7df52ccf36a172bada362eac14daae1e79",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-pathspec"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-pathspec-0.18.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-pathspec/gix-pathspec-0.18.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-pathspec-0.18.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-pathspec/gix-pathspec-0.18.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-protocol",
+      "version": "0.61.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "aa4bee82db63ec635996b96efae71cf467c155fa3f34a556184373224a26c4fd",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-protocol/gix-protocol-0.61.0.crate",
+      "cargoManifestSha256": "447dcb1826f497a511ee05be9a64d29cf742e821d43303ff76f4a96b69124461",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-protocol"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-protocol-0.61.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-protocol/gix-protocol-0.61.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-protocol-0.61.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-protocol/gix-protocol-0.61.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-quote",
+      "version": "0.7.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a6e541fc33cc2b783b7979040d445a0c86a2eca747c8faea4ca84230d06ae6ef",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-quote/gix-quote-0.7.2.crate",
+      "cargoManifestSha256": "c234db43390fd5ce854dd6221635c60969de0778e0fa6eee4bc0f7384e348a4f",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-quote"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-quote-0.7.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-quote/gix-quote-0.7.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-quote-0.7.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-quote/gix-quote-0.7.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-ref",
+      "version": "0.63.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d8ba9cc15f558b274c99349b83130f5ec83459660828fde9718bbbb43a726167",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-ref/gix-ref-0.63.0.crate",
+      "cargoManifestSha256": "a9923752bd494fe0baa90d7a36436de8722f1bb26b7cde0b91d75c596ebc7ed7",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-ref"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-ref-0.63.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-ref/gix-ref-0.63.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-ref-0.63.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-ref/gix-ref-0.63.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-refspec",
+      "version": "0.41.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "61755b27d57edc8940a1b1593c8c61548ca8e4c02da1ed8d5bfeda9eb2a6b761",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-refspec/gix-refspec-0.41.0.crate",
+      "cargoManifestSha256": "5afeabfeda04c341893910a84cf30a05dc99cb98e2bfa942d5e7ebf551f469db",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-refspec"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-refspec-0.41.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-refspec/gix-refspec-0.41.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-refspec-0.41.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-refspec/gix-refspec-0.41.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-revision",
+      "version": "0.45.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1fb5288fac706d3ea3e4e2ba9ec38b78743b8c02f422e18cb342299cfd6ab7e8",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-revision/gix-revision-0.45.0.crate",
+      "cargoManifestSha256": "fbd4cb8f39828a745ca79b084833bac040e25276d3bd858081fade42c7e22ac9",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-revision"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-revision-0.45.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-revision/gix-revision-0.45.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-revision-0.45.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-revision/gix-revision-0.45.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-revwalk",
+      "version": "0.31.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "313813706b073a12ff7f9b2896bf3e6504cdac7cfbc97b1920114724705069f0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-revwalk/gix-revwalk-0.31.0.crate",
+      "cargoManifestSha256": "9890ebde9b89b6eccb249aa2ae91922831439a30496a1a94fba4fcd92428c1dc",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-revwalk"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-revwalk-0.31.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-revwalk/gix-revwalk-0.31.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-revwalk-0.31.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-revwalk/gix-revwalk-0.31.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-sec",
+      "version": "0.14.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "af4fe6c152c1d50aea36f299825702cd37e303307832fec1d0fdd5844e47ce2f",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-sec/gix-sec-0.14.2.crate",
+      "cargoManifestSha256": "0dbcd1c6d5beb77cdeaaacf7b7c0a1c5c0cf8ababbc6430f8aa4ce4c8c2244ff",
+      "vcs": {
+        "git": {
+          "sha1": "f0ec71076aa1cef3181b77946ee556a89c651b8e"
+        },
+        "path_in_vcs": "gix-sec"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-sec-0.14.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-sec/gix-sec-0.14.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-sec-0.14.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-sec/gix-sec-0.14.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-shallow",
+      "version": "0.12.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a292fc2fe548c5dfa575479d16b445b0ddf1dd2f56f1fec6aed386f82553cd97",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-shallow/gix-shallow-0.12.1.crate",
+      "cargoManifestSha256": "ac27feec484dc613f49c7347f88a75a881d83f893f443cd20f9ea0fe6a163417",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-shallow"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-shallow-0.12.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-shallow/gix-shallow-0.12.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-shallow-0.12.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-shallow/gix-shallow-0.12.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-status",
+      "version": "0.30.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "68c6d2a8c521ffa205fe7e268c82e6d1378ba37cd826ca10ab6129fdc29a4b65",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-status/gix-status-0.30.0.crate",
+      "cargoManifestSha256": "5d73df20e2e55fa5e6bea3e5c4faa85bb979bed966447771f9b6ec792fa4a5a2",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-status"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-status-0.30.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-status/gix-status-0.30.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-status-0.30.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-status/gix-status-0.30.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-submodule",
+      "version": "0.30.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9fd5fc8692890bd71a596e540fd4c364f8460eaa82c4eaaedebde6e1e3eb4d91",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-submodule/gix-submodule-0.30.0.crate",
+      "cargoManifestSha256": "6c3bb3423772046c74fa02bccf7c7d71570cb74260956665f0a82958f4ac489a",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-submodule"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-submodule-0.30.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-submodule/gix-submodule-0.30.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-submodule-0.30.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-submodule/gix-submodule-0.30.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-tempfile",
+      "version": "23.0.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "27850097e1ff9515f46a0dad0f5f9c9d020e972727772dabab9450690c4adb22",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-tempfile/gix-tempfile-23.0.1.crate",
+      "cargoManifestSha256": "e0022b34d8fd3b18b6fe30e034bdf9a4380c6fe8220369b41bc59b2bb26ec2af",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-tempfile"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-tempfile-23.0.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-tempfile/gix-tempfile-23.0.1.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-tempfile-23.0.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-tempfile/gix-tempfile-23.0.1.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-trace",
+      "version": "0.1.21",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "be3eb81d9dc914335923e50d52829c551feefd6a72d176c4130c546b67a60814",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-trace/gix-trace-0.1.21.crate",
+      "cargoManifestSha256": "db58ecdbe0eaac6c7ee020cfcc02e1eff22903a6783e50be7f6d24b29e96a950",
+      "vcs": {
+        "git": {
+          "sha1": "f0ec71076aa1cef3181b77946ee556a89c651b8e"
+        },
+        "path_in_vcs": "gix-trace"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-trace-0.1.21/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-trace/gix-trace-0.1.21.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-trace-0.1.21/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-trace/gix-trace-0.1.21.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-transport",
+      "version": "0.57.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "186874f7ad1fb2f9a2f2aa9c2dabc7f9dd087bef74c1a0eee2b4a9cf0248fcb3",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-transport/gix-transport-0.57.2.crate",
+      "cargoManifestSha256": "3a36a200c0dc5c4c4eb778cfc8ee228c42b7e4264174df11bb51ea4b553cbbfb",
+      "vcs": {
+        "git": {
+          "sha1": "6428edc82fc8a16d5ef34ca2d49aa6fdff3645fe"
+        },
+        "path_in_vcs": "gix-transport"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-transport-0.57.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-transport/gix-transport-0.57.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-transport-0.57.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-transport/gix-transport-0.57.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-traverse",
+      "version": "0.57.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a14b7052c0786676c03e71fcfde7d7f0f8e8316e642b5cec6bb3998719b2ce5c",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-traverse/gix-traverse-0.57.0.crate",
+      "cargoManifestSha256": "957807cd1081989ac110fdd9d34b417d4ded490351f4576fac7515d7ea011b95",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-traverse"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-traverse-0.57.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-traverse/gix-traverse-0.57.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-traverse-0.57.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-traverse/gix-traverse-0.57.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-url",
+      "version": "0.36.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "57d68e70e96da0e5f9c871f1566349e0fd0e1a20bb483c7f54af1dd0b85b4b29",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-url/gix-url-0.36.2.crate",
+      "cargoManifestSha256": "121244e5a8cb5cdda6761ad69f2eef4dd06eb4be66205a2c04bbdb194173d8eb",
+      "vcs": {
+        "git": {
+          "sha1": "27aec474c113cc885d44631b329454dc1ad0fed2"
+        },
+        "path_in_vcs": "gix-url"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-url-0.36.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-url/gix-url-0.36.2.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-url-0.36.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-url/gix-url-0.36.2.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-utils",
+      "version": "0.3.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "66c50966184123caf580ffa64e28031a878597f1c7fceb8fe19566c38eb1b771",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-utils/gix-utils-0.3.3.crate",
+      "cargoManifestSha256": "bba360a7b5237a320f6b4f8872450cfbd6dce58924206b7d2370d0133b734df9",
+      "vcs": {
+        "git": {
+          "sha1": "10c58bb56597d9335611da121aac21f9b09b6e5b"
+        },
+        "path_in_vcs": "gix-utils"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-utils-0.3.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-utils/gix-utils-0.3.3.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-utils-0.3.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-utils/gix-utils-0.3.3.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-validate",
+      "version": "0.11.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "4dae8780f63ed8a803b8bdabbd7aa5f5c5d74592c8b50eed875c1bb4f6545a6a",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-validate/gix-validate-0.11.4.crate",
+      "cargoManifestSha256": "4f43d5c16ac1856241b5a428c073d19d386c0689a4d5e63baa7ac094c3ab88c9",
+      "vcs": {
+        "git": {
+          "sha1": "d2af4ed5532ea660fbd643e48d8925cd88de5ee0"
+        },
+        "path_in_vcs": "gix-validate"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-validate-0.11.4/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-validate/gix-validate-0.11.4.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-validate-0.11.4/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-validate/gix-validate-0.11.4.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-worktree",
+      "version": "0.52.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d69955eb5e2910832f88d041964b809eee01dadd579237e0b55efec58fd406fd",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-worktree/gix-worktree-0.52.0.crate",
+      "cargoManifestSha256": "f80f82035158f35e0f4dd43b351190d8dca0fb468c01cc991bfa40312e4d7e29",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-worktree"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-worktree-0.52.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-worktree/gix-worktree-0.52.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-worktree-0.52.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-worktree/gix-worktree-0.52.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-worktree-state",
+      "version": "0.30.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8a96dccbcf9e8fe0291c55f06e08da93ebb2e691c1311276f541eefcc6d70800",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-worktree-state/gix-worktree-state-0.30.0.crate",
+      "cargoManifestSha256": "c6000354642803932388adbd52c44ccfc439f63a2bb9b48c91a6c148ab1d032a",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-worktree-state"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-worktree-state-0.30.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-worktree-state/gix-worktree-state-0.30.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-worktree-state-0.30.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-worktree-state/gix-worktree-state-0.30.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "gix-worktree-stream",
+      "version": "0.32.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9a8444b8ed4662e1a0c97f3eceda29630001a1bbb2632201e50312623e594213",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/GitoxideLabs/gitoxide",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/gix-worktree-stream/gix-worktree-stream-0.32.0.crate",
+      "cargoManifestSha256": "cb45a5426bb5da26e17e4df1e368827e8d7e72f52a50fff5819c78e6e6056f4c",
+      "vcs": {
+        "git": {
+          "sha1": "53f880c7604232c367870088176e42efd8a5b783"
+        },
+        "path_in_vcs": "gix-worktree-stream"
+      },
+      "licenseSources": [
+        {
+          "path": "gix-worktree-stream-0.32.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/gix-worktree-stream/gix-worktree-stream-0.32.0.crate",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "path": "gix-worktree-stream-0.32.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/gix-worktree-stream/gix-worktree-stream-0.32.0.crate",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d"
+        }
+      ]
+    },
+    {
+      "name": "hickory-net",
+      "version": "0.26.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "c480823ed7c2c5d0f09c41020cb6b7c28029ce60ec42dc942158dcf22f8e0a4d",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/hickory-dns/hickory-dns",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/hickory-net/hickory-net-0.26.3.crate",
+      "cargoManifestSha256": "390a0dafd0da12355592b6a6028d76817156886048ae1ca7ec647abfe3b1c529",
+      "vcs": {
+        "git": {
+          "sha1": "bd37cafbdd86112a6da32878f8c9bab22e14377e"
+        },
+        "path_in_vcs": "crates/net"
+      },
+      "licenseSources": [
+        {
+          "path": "hickory-net-0.26.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/hickory-net/hickory-net-0.26.3.crate",
+          "sha256": "6b9522191b8cb7126b2d214edd7f782d2ccd83c467e9c03b8af9e0bf903b49b4"
+        },
+        {
+          "path": "hickory-net-0.26.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/hickory-net/hickory-net-0.26.3.crate",
+          "sha256": "dc470946f0a127507a9e577a20da1eb19eae0abc383b2be1f786f6427944f06c"
+        }
+      ]
+    },
+    {
+      "name": "hickory-proto",
+      "version": "0.26.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "12b92608f679a6fa515dd1d15c1ff89443026e391200a2c840c7afcba482893d",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/hickory-dns/hickory-dns",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/hickory-proto/hickory-proto-0.26.3.crate",
+      "cargoManifestSha256": "c0989aa8d9176d0822def5a5742cee40ee366eaad7fe005df7d87037b95f8ed0",
+      "vcs": {
+        "git": {
+          "sha1": "bd37cafbdd86112a6da32878f8c9bab22e14377e"
+        },
+        "path_in_vcs": "crates/proto"
+      },
+      "licenseSources": [
+        {
+          "path": "hickory-proto-0.26.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/hickory-proto/hickory-proto-0.26.3.crate",
+          "sha256": "6b9522191b8cb7126b2d214edd7f782d2ccd83c467e9c03b8af9e0bf903b49b4"
+        },
+        {
+          "path": "hickory-proto-0.26.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/hickory-proto/hickory-proto-0.26.3.crate",
+          "sha256": "dc470946f0a127507a9e577a20da1eb19eae0abc383b2be1f786f6427944f06c"
+        }
+      ]
+    },
+    {
+      "name": "hickory-resolver",
+      "version": "0.26.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "3f3da5255c95d5a716857d54b5b8f4e8d67c3484d3beaaaae2ce25063b3ba981",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/hickory-dns/hickory-dns",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/hickory-resolver/hickory-resolver-0.26.3.crate",
+      "cargoManifestSha256": "77f8bbd4fee5d6b9e5ae9930fe4df68c775858413d9743b112ce31f218e11e99",
+      "vcs": {
+        "git": {
+          "sha1": "bd37cafbdd86112a6da32878f8c9bab22e14377e"
+        },
+        "path_in_vcs": "crates/resolver"
+      },
+      "licenseSources": [
+        {
+          "path": "hickory-resolver-0.26.3/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/hickory-resolver/hickory-resolver-0.26.3.crate",
+          "sha256": "6b9522191b8cb7126b2d214edd7f782d2ccd83c467e9c03b8af9e0bf903b49b4"
+        },
+        {
+          "path": "hickory-resolver-0.26.3/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/hickory-resolver/hickory-resolver-0.26.3.crate",
+          "sha256": "dc470946f0a127507a9e577a20da1eb19eae0abc383b2be1f786f6427944f06c"
+        }
+      ]
+    },
+    {
+      "name": "ipnet",
+      "version": "2.12.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/krisprice/ipnet",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/ipnet/ipnet-2.12.2.crate",
+      "cargoManifestSha256": "bdea4abbfc8d54f3b1ef43530abb5facd0bba113eee702a6a45439ad2cb23a07",
+      "vcs": {
+        "git": {
+          "sha1": "13c5c5873c02127679b1e8e64b538e4e36942640"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "ipnet-2.12.2/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/ipnet/ipnet-2.12.2.crate",
+          "sha256": "87d9feb9238c6bd8e0024fc4733b06cff036f89f36d93b7df1c8a0549bbb7a5b"
+        },
+        {
+          "path": "ipnet-2.12.2/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/ipnet/ipnet-2.12.2.crate",
+          "sha256": "47dc9ff29128ddfb4d6a0435383c9f89120bc374dbcc1dd00b933a0b28aa7865"
+        }
+      ]
+    },
+    {
+      "name": "itertools",
+      "version": "0.15.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-itertools/itertools",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/itertools/itertools-0.15.0.crate",
+      "cargoManifestSha256": "62dea4c41dff0c454c3198715885ca13ae6cdf1a5d3b5a5ec68ef42750ccbaf2",
+      "vcs": {
+        "git": {
+          "sha1": "37bd72aa6d58e594711d127b52418ca5e58b6091"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "itertools-0.15.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/itertools/itertools-0.15.0.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "itertools-0.15.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/itertools/itertools-0.15.0.crate",
+          "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
+        }
+      ]
+    },
+    {
+      "name": "jiff",
+      "version": "0.2.37",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "0ab1baf72f08796de0260609515130699b890ac25f30e610ad894bc5856cafdb",
+      "license": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/jiff",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/jiff/jiff-0.2.37.crate",
+      "cargoManifestSha256": "a886d647164964e8dad30c09d4cb2ade3ceab8ed42152acbf0e76b7d9fc452bb",
+      "vcs": {
+        "git": {
+          "sha1": "4100a7c71125b9523029566d1d18f8b227ecd18c"
+        },
+        "path_in_vcs": "crates/jiff"
+      },
+      "licenseSources": [
+        {
+          "path": "jiff-0.2.37/COPYING",
+          "source": "https://static.crates.io/crates/jiff/jiff-0.2.37.crate",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "path": "jiff-0.2.37/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/jiff/jiff-0.2.37.crate",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        }
+      ]
+    },
+    {
+      "name": "jiff-core",
+      "version": "0.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "5e52fe76043ccecc9005d2305ebaadf7d7fc0cc89ca6baa10a94d6bc68c7128c",
+      "license": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/jiff",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/jiff-core/jiff-core-0.1.1.crate",
+      "cargoManifestSha256": "c0c8bba5a483cffd6847202977d0f7fd228e0360e01a0788782a77c7faacdb83",
+      "vcs": {
+        "git": {
+          "sha1": "7e8133168382ab8d65a795126c2c9624f61e9e89"
+        },
+        "path_in_vcs": "crates/jiff-core"
+      },
+      "licenseSources": [
+        {
+          "path": "jiff-core-0.1.1/COPYING",
+          "source": "https://static.crates.io/crates/jiff-core/jiff-core-0.1.1.crate",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "path": "jiff-core-0.1.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/jiff-core/jiff-core-0.1.1.crate",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        }
+      ]
+    },
+    {
+      "name": "jiff-static",
+      "version": "0.2.37",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "378268a1116ad67ae6228701118ac9f491d78fda38a40a1f1a9e1348de6f7212",
+      "license": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/jiff",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/jiff-static/jiff-static-0.2.37.crate",
+      "cargoManifestSha256": "8cf55c020b3ccf88fc8b11b28fdf59fb0e73f84009c9fbc9838db74a7ed39002",
+      "vcs": {
+        "git": {
+          "sha1": "4100a7c71125b9523029566d1d18f8b227ecd18c"
+        },
+        "path_in_vcs": "crates/jiff-static"
+      },
+      "licenseSources": [
+        {
+          "path": "jiff-static-0.2.37/COPYING",
+          "source": "https://static.crates.io/crates/jiff-static/jiff-static-0.2.37.crate",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "path": "jiff-static-0.2.37/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/jiff-static/jiff-static-0.2.37.crate",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        }
+      ]
+    },
     {
       "name": "libc",
       "version": "0.2.186",
@@ -207,6 +2209,59 @@
       "checksum": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
       "license": "MIT OR Apache-2.0",
       "licenseFile": null
+    },
+    {
+      "name": "openssl",
+      "version": "0.10.79",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/rust-openssl/rust-openssl",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/openssl/openssl-0.10.79.crate",
+      "cargoManifestSha256": "66095b021bf89b45e7027ed8664491a458029b0c1b07b430f2e745a336262588",
+      "vcs": {
+        "git": {
+          "sha1": "649f2d9e37f3aa701e20bd8ab5cd7eb5afa0a90f"
+        },
+        "path_in_vcs": "openssl"
+      },
+      "licenseSources": [
+        {
+          "path": "openssl-0.10.79/LICENSE",
+          "source": "https://static.crates.io/crates/openssl/openssl-0.10.79.crate",
+          "sha256": "f3d4287b4a21c5176fea2f9bd4ae800696004e2fb8e05cbc818be513f188a941"
+        },
+        {
+          "path": "openssl-0.10.79/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/openssl/openssl-0.10.79.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        }
+      ]
+    },
+    {
+      "name": "openssl-sys",
+      "version": "0.9.117",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695",
+      "license": "MIT",
+      "repository": "https://github.com/rust-openssl/rust-openssl",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/openssl-sys/openssl-sys-0.9.117.crate",
+      "cargoManifestSha256": "0398fda9f72001a6d7f9dad48cf7c04a8e84161aa8a2342fc183247f90190085",
+      "vcs": {
+        "git": {
+          "sha1": "db9c9e2f5db2ad7b45fd894e8d297ee15bfd0c7c"
+        },
+        "path_in_vcs": "openssl-sys"
+      },
+      "licenseSources": [
+        {
+          "path": "openssl-sys-0.9.117/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/openssl-sys/openssl-sys-0.9.117.crate",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
     },
     {
       "name": "portable-pty",
@@ -217,12 +2272,674 @@
       "licenseFile": null
     },
     {
+      "name": "prefix-trie",
+      "version": "0.8.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "4cf6e3177f0684016a5c209b00882e15f8bdd3f3bb48f0491df10cd102d0c6e7",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/tiborschneider/prefix-trie",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/prefix-trie/prefix-trie-0.8.4.crate",
+      "cargoManifestSha256": "f553372c6b0c9d4a6ac092bcdd5729273ddd8c681cbb3893d85f03e04ffa5737",
+      "vcs": {
+        "git": {
+          "sha1": "c989e815360c2403a821ec4f51dd25c18a01448a"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "prefix-trie-0.8.4/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/prefix-trie/prefix-trie-0.8.4.crate",
+          "sha256": "87d9feb9238c6bd8e0024fc4733b06cff036f89f36d93b7df1c8a0549bbb7a5b"
+        },
+        {
+          "path": "prefix-trie-0.8.4/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/prefix-trie/prefix-trie-0.8.4.crate",
+          "sha256": "f646f5108c9cd6740f1fe0d8e27a49c7bac35f970f02c40bda298f9771168e5c"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro-crate",
+      "version": "3.5.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/bkchr/proc-macro-crate",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/proc-macro-crate/proc-macro-crate-3.5.0.crate",
+      "cargoManifestSha256": "e67f9a551770d5e0eea15db9977f257f390ae893068b1cc6425a0a87ac314bb3",
+      "vcs": {
+        "git": {
+          "sha1": "8f3d8b04539f732e09c07907f138a248c8d0eed9"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "proc-macro-crate-3.5.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/proc-macro-crate/proc-macro-crate-3.5.0.crate",
+          "sha256": "8ada45cd9f843acf64e4722ae262c622a2b3b3007c7310ef36ac1061a30f6adb"
+        },
+        {
+          "path": "proc-macro-crate-3.5.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/proc-macro-crate/proc-macro-crate-3.5.0.crate",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "quinn-proto",
+      "version": "0.11.15",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/quinn-rs/quinn",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/quinn-proto/quinn-proto-0.11.15.crate",
+      "cargoManifestSha256": "dc73d926817ab2d5fd05f94f5dcf9f03615f08fda70050c1af94bd471621958b",
+      "vcs": {
+        "git": {
+          "sha1": "a7499b8439e393a6299330111d9c8564cd96c464"
+        },
+        "path_in_vcs": "quinn-proto"
+      },
+      "licenseSources": [
+        {
+          "path": "quinn-proto-0.11.15/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/quinn-proto/quinn-proto-0.11.15.crate",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "path": "quinn-proto-0.11.15/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/quinn-proto/quinn-proto-0.11.15.crate",
+          "sha256": "4b2d0aca6789fa39e03d6738e869ea0988cceba210ca34ebb59c15c463e93a04"
+        }
+      ]
+    },
+    {
+      "name": "rama-core",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "26ae18e80939a80d176ec2726cf7bf7beae02a2dc9c79d16819b3af89fa2b2ba",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-core/rama-core-0.3.0.crate",
+      "cargoManifestSha256": "057856d943d1b776c7d2469259919fb013f5846b801eb46b9ea295f5e2cb859d",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-core"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-crypto",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "bdbb5a0371fe925e240d925ed5feecfc7ba5ef6843c66f66420ec6b77aa37bae",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-crypto/rama-crypto-0.3.0.crate",
+      "cargoManifestSha256": "ce6dce0e52814c4194168ad690b01086997ccf9d69c40828b70e04288a2fe6fc",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-crypto"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-dns",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "966b184189928bdd62d9b9e910dc0f3a334ec74486b7e3db09925335f308269a",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-dns/rama-dns-0.3.0.crate",
+      "cargoManifestSha256": "678a5649ba2044f60c5e26f6aa47e18ea04b2c9241818d4fb5bdc5a6c1a8da1f",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-dns"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-error",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f33187d746dc897b7cdbae9628b0c1c783f98f25206b2b5eeac442128c0b745e",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-error/rama-error-0.3.0.crate",
+      "cargoManifestSha256": "597796240ff906236c9286e1cddfde1fd966f0207c7c0b170c666c46dc23fc3d",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-error"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-http",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "93b913a35449ba4697107dfb6f739849dfd0fa14fdf5c3da55b18ae5a56c82fd",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-http/rama-http-0.3.0.crate",
+      "cargoManifestSha256": "fe9ab8b25f8c0079a730934557d1e91a7c1b4feec61ffa7d3d3dc13323156f29",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-http"
+      },
+      "licenseSources": [
+        {
+          "path": "rama-http-0.3.0/tests/html5lib-tokenizer/LICENSE",
+          "source": "https://static.crates.io/crates/rama-http/rama-http-0.3.0.crate",
+          "sha256": "ff512aac9ef231d504be5afaf4429005024e4b2aaf257be39524f37b8402aaf2"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-http-backend",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1faf89e79d54d1eef16855bb5956cac70c4da1f5f46439f51570c3de59737a82",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-http-backend/rama-http-backend-0.3.0.crate",
+      "cargoManifestSha256": "32df80bc15e0fc9569ab206e61c4cc135e6800f57785967f4357ab1d60683974",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-http-backend"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-http-core",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8e510db721107cd94be989aa05b166c129b9c0bd49a7fc8e447a8371e63fa65b",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-http-core/rama-http-core-0.3.0.crate",
+      "cargoManifestSha256": "251ca5e7fe3c5bbe603205ecab4af963866fccd894c84bc2d00e302f046b6da9",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-http-core"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-http-headers",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "9ef54cc53e45dbd0b63caf14be1bdf1c22663a07955239e307c25e6e1e5c95d8",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-http-headers/rama-http-headers-0.3.0.crate",
+      "cargoManifestSha256": "301faab415ae3151fec4fd0be7ac6a4cf7181c41b15a27879045fface4dcf461",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-http-headers"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-http-types",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "dac27a7c1f4b4a49d667d6da5cd0144fbdf9bd2d8a5ae5c6234eb4a844d7b0da",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-http-types/rama-http-types-0.3.0.crate",
+      "cargoManifestSha256": "ec5eb09b095fc964c5e3f6e628c975ba2cc64e8ca3cc0feb8a480c2042f78cf2",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-http-types"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-json",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f3af0ab09d9af82ea3f739deb13ba9836977e4ebb7559010fa36aed556e45b15",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-json/rama-json-0.3.0.crate",
+      "cargoManifestSha256": "000557b29aef12c2158b203bc960ae9906900ccf211571a4f26b969502de9adf",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-json"
+      },
+      "licenseSources": [
+        {
+          "path": "rama-json-0.3.0/tests/jsonpath-compliance/LICENSE",
+          "source": "https://static.crates.io/crates/rama-json/rama-json-0.3.0.crate",
+          "sha256": "0a76d5e15eeff92346a8783de64d5164c4d527a163f8599733e4e0ab941b59c0"
+        },
+        {
+          "path": "rama-json-0.3.0/tests/jsonpath-compliance/NOTICE",
+          "source": "https://static.crates.io/crates/rama-json/rama-json-0.3.0.crate",
+          "sha256": "e34cdb81d4ace9bfc808641845e63aa63fbc17ec4433256e6b887cb1eeb5fb70"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-macros",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "d90ecfc0103cccc2beefe84dac28cccafea616c0243cef021c5fc6a7e92ce624",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-macros/rama-macros-0.3.0.crate",
+      "cargoManifestSha256": "fbc68d217935e0521dfb255035ceb8244c96cd0f38f40961dde6818d9af071e3",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-macros"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-net",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "dd1be71af9cbdf61572e125c46a0e62e13471dd307e7d354c7c123c8997aa1f0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-net/rama-net-0.3.0.crate",
+      "cargoManifestSha256": "5c6be38dd0040797105ceaede49d242e60b3fdf6217d68169d73caa3954e7766",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-net"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-socks5",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6e881a43f1081a7ec6ee654a603e349805047b5b51eb85668b7717cfd076147f",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-socks5/rama-socks5-0.3.0.crate",
+      "cargoManifestSha256": "904e06186e0a6ac754bc1e4a764bc7541acd313712df4855b2f270903af87de5",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-socks5"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-tcp",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "737bb8b7c621956bc450f312b6973eb9483aebb52762510a4b4f9f1b06ada712",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-tcp/rama-tcp-0.3.0.crate",
+      "cargoManifestSha256": "95522090586925668478800d8a59ecdee3cdca71802473ab0b02ffc93e7df741",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-tcp"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-tls",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "7a31cce94550925ca7db7a27abf95ec60d060bea7f89c33f250145521ea72585",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-tls/rama-tls-0.3.0.crate",
+      "cargoManifestSha256": "934c51b791a24dc60e13d1fd4a66e74cfebec2c82e62704d945a82bf94ea0759",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-tls"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-tls-rustls",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6a79f8161a1e0afa7988f724146e80d6e99f4fcd098ce6bfb16e4a2d7cc4cd9a",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-tls-rustls/rama-tls-rustls-0.3.0.crate",
+      "cargoManifestSha256": "56c1853a9f7bc30fe23d11a969f68f060cfb6f1c6517ef3e4307415b9448574b",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-tls-rustls"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-udp",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "19cce096d7dd92f074272f5cd05f6a6ca4f634db32531d22aa5fec90cdb065e0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-udp/rama-udp-0.3.0.crate",
+      "cargoManifestSha256": "e9fe4ecabaeb53e2d5803afc624f034281183a53056d14a49497cb4cd75af662",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-udp"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-unix",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6b0e82f2fba049b88b8e403f27fd648962dfed55827c7a0286aa303e4dac8464",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-unix/rama-unix-0.3.0.crate",
+      "cargoManifestSha256": "9f3dce4d910114b4f6916e23c724a11bf65cf97e77b8f2b74e4bf2b83fd29fe0",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-unix"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
+      "name": "rama-utils",
+      "version": "0.3.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8c651f73d8cec6a44f9717725640490bbdd43813f337d10c7c72877e316d1471",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/plabayo/rama",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/rama-utils/rama-utils-0.3.0.crate",
+      "cargoManifestSha256": "7bfc8c8be4a2c88a0ae4c6a166e1be22509f937bbbecd22f549cbf37740ab4ee",
+      "vcs": {
+        "git": {
+          "sha1": "1e094e455b9fa29d7ad4bc5d597139934cb73978"
+        },
+        "path_in_vcs": "rama-utils"
+      },
+      "licenseSources": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-APACHE",
+          "sha256": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://raw.githubusercontent.com/plabayo/rama/1e094e455b9fa29d7ad4bc5d597139934cb73978/LICENSE-MIT",
+          "sha256": "1fa7e078de3f9165a1c6742359307711e91652f035dc37a32376ca0023483e63"
+        }
+      ]
+    },
+    {
       "name": "rmcp",
       "version": "3.1.3",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "5f17072af977b0f86f714dbd64b3d37d0715bb63064f9d13483f0a1775813374",
       "license": "Apache-2.0",
       "licenseFile": null
+    },
+    {
+      "name": "ryu-js",
+      "version": "1.0.3",
+      "license": "Apache-2.0 OR BSL-1.0",
+      "repository": "https://github.com/boa-dev/ryu-js",
+      "checksum": "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "licenseFile": "JCS-NOTICE"
     },
     {
       "name": "serde",
@@ -233,27 +2950,35 @@
       "licenseFile": null
     },
     {
+      "name": "serde_html_form",
+      "version": "0.4.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "8f0346d7a342ab90f405cfc08f25d15075f944f42fcabbc5eac923829fa6d228",
+      "license": "MIT",
+      "repository": "https://codeberg.org/jplatte/serde_html_form",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/serde_html_form/serde_html_form-0.4.1.crate",
+      "cargoManifestSha256": "7e00e8e9de05ae1473ce65fa8a4e8a25541effcf002e3de2c42d28d555d8a8cb",
+      "vcs": {
+        "git": {
+          "sha1": "e34eef213422f108fef26e8a1c59b72b873f0b01"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "serde_html_form-0.4.1/LICENSE",
+          "source": "https://static.crates.io/crates/serde_html_form/serde_html_form-0.4.1.crate",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
       "name": "serde_json",
       "version": "1.0.149",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
       "checksum": "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86",
       "license": "MIT OR Apache-2.0",
-      "licenseFile": null
-    },
-    {
-      "name": "tokio",
-      "version": "1.52.3",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe",
-      "license": "MIT",
-      "licenseFile": null
-    },
-    {
-      "name": "uuid",
-      "version": "1.20.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "checksum": "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f",
-      "license": "Apache-2.0 OR MIT",
       "licenseFile": null
     },
     {
@@ -266,13 +2991,181 @@
       "licenseFile": "JCS-NOTICE"
     },
     {
-      "name": "ryu-js",
-      "version": "1.0.3",
-      "license": "Apache-2.0 OR BSL-1.0",
-      "repository": "https://github.com/boa-dev/ryu-js",
-      "checksum": "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714",
+      "name": "tokio",
+      "version": "1.52.3",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "licenseFile": "JCS-NOTICE"
+      "checksum": "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe",
+      "license": "MIT",
+      "licenseFile": null
+    },
+    {
+      "name": "toml_datetime",
+      "version": "1.1.1+spec-1.1.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/toml-rs/toml",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate",
+      "cargoManifestSha256": "97287a69ce6e80e64f90577d254185694042c91903c908001e8c3073e00bea3d",
+      "vcs": {
+        "git": {
+          "sha1": "9db8aad6eafbc62f6b9d1950117649cc41eaf695"
+        },
+        "path_in_vcs": "crates/toml_datetime"
+      },
+      "licenseSources": [
+        {
+          "path": "toml_datetime-1.1.1+spec-1.1.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "toml_datetime-1.1.1+spec-1.1.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/toml_datetime/toml_datetime-1.1.1+spec-1.1.0.crate",
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        }
+      ]
+    },
+    {
+      "name": "toml_edit",
+      "version": "0.25.15+spec-1.1.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/toml-rs/toml",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+      "cargoManifestSha256": "fd6863ad69982e15e92b3f3ccde0a27589f56f7d5d543f69dc7f3d32e964b15f",
+      "vcs": {
+        "git": {
+          "sha1": "8e1d5a85c361ac012957441bb4788ae82f5dc9c8"
+        },
+        "path_in_vcs": "crates/toml_edit"
+      },
+      "licenseSources": [
+        {
+          "path": "toml_edit-0.25.15+spec-1.1.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "toml_edit-0.25.15+spec-1.1.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        }
+      ]
+    },
+    {
+      "name": "toml_parser",
+      "version": "1.1.3+spec-1.1.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/toml-rs/toml",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+      "cargoManifestSha256": "23bf7bc66a7090d0048555ec05a81216a5d335e5648952d7fb266c7529a7ad90",
+      "vcs": {
+        "git": {
+          "sha1": "4ec099fed591a172f82007cb2f9d605985bbecee"
+        },
+        "path_in_vcs": "crates/toml_parser"
+      },
+      "licenseSources": [
+        {
+          "path": "toml_parser-1.1.3+spec-1.1.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "toml_parser-1.1.3+spec-1.1.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        }
+      ]
+    },
+    {
+      "name": "uuid",
+      "version": "1.26.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/uuid-rs/uuid",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+      "cargoManifestSha256": "98c0820aa1874f216ac95cca9423c1890335013221343ad6a2b1e1bb06018808",
+      "vcs": {
+        "git": {
+          "sha1": "9f927126c89892ddfed6cd2f92df16852f3f9aa6"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "uuid-1.26.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "uuid-1.26.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+          "sha256": "436bc5a105d8e57dcd8778730f3754f7bf39c14d2f530e4cde4bd2d17a83ec3d"
+        }
+      ]
+    },
+    {
+      "name": "winnow",
+      "version": "1.0.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81",
+      "license": "MIT",
+      "repository": "https://github.com/winnow-rs/winnow",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate",
+      "cargoManifestSha256": "cff392f2e5af8a662aed09551f50bbe74eafa5a53dc051c62add73ea82a3cab0",
+      "vcs": {
+        "git": {
+          "sha1": "7539ec0fc27144bfdcf9a68b0dbbec48bd0d5bae"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "winnow-1.0.4/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate",
+          "sha256": "cb5aedb296c5246d1f22e9099f925a65146f9f0d6b4eebba97fd27a6cdbbab2d"
+        }
+      ]
+    },
+    {
+      "name": "yasna",
+      "version": "0.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/qnighy/yasna.rs",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+      "cargoManifestSha256": "95d1cf9bfdefd6f2f096d49bd0e5f99c2ba36f996bfc36b71b81385a559b84b2",
+      "vcs": {
+        "git": {
+          "sha1": "3c7f2ba61cfb59c478137051a7e79ad8af0e2247"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "yasna-0.6.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "yasna-0.6.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+          "sha256": "2a7df90e60fd5512b8bca35d3ce90e068f21c52d962855053fd1d9e2e7ca0f16"
+        }
+      ]
     }
   ],
   "patches": [
@@ -287,20 +3180,28 @@
     {
       "path": "patches/0003-protected-connection-client.patch",
       "sha256": "sha256:472ea19f98d6840055c4c5a4ce35cf7e58bcf2d4da3633f592dbd6fbf81b07b1"
+    },
+    {
+      "path": "patches/0004-native-dependency-security-updates.patch",
+      "sha256": "sha256:0ae72d58882e863a663f9b4c181bf13a4c68131b9b96e458baacff08fab39252"
     }
   ],
   "sourceFiles": [
     {
+      "path": "MODULE.bazel",
+      "sha256": "sha256:1f99a2dc755b9a64c90ccd686b4aa19c5764c95d3f20db3f94a172b8d1e4cef8"
+    },
+    {
       "path": "MODULE.bazel.lock",
-      "sha256": "sha256:e4747ef7fbce7489a581d75ecf1a7dbb7c422f029162b2bda16af9cc48351b17"
+      "sha256": "sha256:ea079d3a10ad5bd664e1f674978f9196be8272e18915600436e33cc83b24fc4f"
     },
     {
       "path": "codex-rs/Cargo.lock",
-      "sha256": "sha256:aca08121432d92b7a164ccfc09b55b42a83da89d6c1afa9995d7d2e2f839fa59"
+      "sha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff"
     },
     {
       "path": "codex-rs/Cargo.toml",
-      "sha256": "sha256:a62a6d2f5ece64539bcf9960e093f922485c0d6e6f93c7d68b47e3bd96c37f40"
+      "sha256": "sha256:c3d3dfcaf7ba6ae1b5ce5caf8fe743464dea8ae9fe8bd6d1bbd9e03be5e95667"
     },
     {
       "path": "codex-rs/app-server-transport/src/outgoing_message.rs",
@@ -527,6 +3428,70 @@
       "sha256": "sha256:0eb01312f41ac7d10272cc90a67f7587140d1dedcfb214f8388f5e1e19e36d07"
     },
     {
+      "path": "codex-rs/network-proxy/Cargo.toml",
+      "sha256": "sha256:bb821f352046dbf40448e12532418b6b255b9146f90dd4425e0a1d31f725cad9"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/attribution.rs",
+      "sha256": "sha256:bafd443f05c43cda9a405f9e529b75f3effaa8b277e752040e87e11cfeb2e97d"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/attribution_tests.rs",
+      "sha256": "sha256:4960ef9934481520efd6f55fca73b77cb5c02c9af5a0bfedd917cfa999cc4f64"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/certs.rs",
+      "sha256": "sha256:9649aacb2dc75a33c049581d6e909c4b5a9308dd7f25ae4d1d1c7f046e3f3603"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/config.rs",
+      "sha256": "sha256:b5c64bbae5ec4afb0fe66aa856ced5585d7644412ddb87adb05474708ae5592f"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/connect_policy.rs",
+      "sha256": "sha256:6c3f76305ba7b948bd27844f4bbd5a43941e972eb17e381de8acda249af6faa5"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/http_proxy.rs",
+      "sha256": "sha256:7dd736d45590198ea2b4fa0a0041daf4fa79405ea4b75fc65dafbe4c3b5a53cc"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm.rs",
+      "sha256": "sha256:8d4df4c12ef4a19d2643d83c98f5bc8330be7de890740b0d12898268eabed88e"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm_hook.rs",
+      "sha256": "sha256:0b2e009ad5fee6c2d40788793965e7614c993a01b0d8e9a5d2bd4a2c575b2c2e"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm_tests.rs",
+      "sha256": "sha256:91d799177e11383e146530291f270e243823ca5f5177af07e83b6f982ab02b44"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/native_certs.rs",
+      "sha256": "sha256:1ace680d53bcdea58d3db9d6ed84fef6dd5c28fc945a0b9f1408bf04c4f51530"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/runtime.rs",
+      "sha256": "sha256:3104e1ea3c8392f984882619408d3855e4e00cc2c7109d2f792c3d359a2f086d"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/socks5.rs",
+      "sha256": "sha256:2fbb670b49d89f8b0e79cfb2e4fe652a9a8de0aebab2c8528d4b79e304ebc0ee"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/upstream.rs",
+      "sha256": "sha256:ae1dfbe6bd3a8ba297a90739720deed07716e18a497f20360d6ecffb540fa902"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/upstream_tests.rs",
+      "sha256": "sha256:8ecb9c2c12fa8f640efc1ece5266c1274ce580ab5086e58afa4022633092e826"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/windows_proxy_ingress.rs",
+      "sha256": "sha256:7ba169661f20b6560607076623d0e56e56a49d15f17386094bf0a8994a86a8ba"
+    },
+    {
       "path": "codex-rs/rmcp-client/BUILD.bazel",
       "sha256": "sha256:205450fad3d57051db6f1e870ccbb5d39dad84284fa1e20b10553924546990aa"
     },
@@ -607,6 +3572,10 @@
       "sha256": "sha256:2b3d438b242ef54f2321c8534b66103498f24b9aa6404d4585d9f123a5ae5e44"
     },
     {
+      "path": "codex-rs/rust-toolchain.toml",
+      "sha256": "sha256:e8b379eaa492bf59d35187de269afd1c4f55d85e0322f6fea32803a3fec1a380"
+    },
+    {
       "path": "codex-rs/utils/pty/src/lib.rs",
       "sha256": "sha256:0d470d48ee2e08faf2a5b69af06808bb2303c58639c1132730897e25bfada0c7"
     },
@@ -639,12 +3608,14 @@
     "real Linux aarch64 syscall and cross-process random-sentinel memory isolation including perf_event_open",
     "real independent OAuth identities, Connection receipts/original calls records and Provider PR workflow",
     "Connection MCP hooks currently fail closed because original hook identity does not match fixed Connection operation identity",
-    "cross-process original evidence recovery source is implemented; native binary/isolation/GET-only/restart and full original-outbox PG/ACK proof not yet completed"
+    "cross-process original evidence recovery source is implemented; native binary/isolation/GET-only/restart and full original-outbox PG/ACK proof not yet completed",
+    "exact Linux aarch64 build and owning-crate network-proxy/git-utils/http-client tests on real DNS, preserving the existing Connection and native barrier gates",
+    "fresh exact Linux artifact/source SBOM and installed Cargo.lock Trivy scans with zero blockers, zero scanner errors and zero exceptions; full native C/C++ coverage remains separate"
   ],
   "currentLocks": {
-    "cargoSha256": "sha256:aca08121432d92b7a164ccfc09b55b42a83da89d6c1afa9995d7d2e2f839fa59",
-    "bazelSha256": "sha256:e4747ef7fbce7489a581d75ecf1a7dbb7c422f029162b2bda16af9cc48351b17",
-    "bazelValidation": "just bazel-lock-update passed; new JCS crate metadata entries included"
+    "cargoSha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff",
+    "bazelSha256": "sha256:ea079d3a10ad5bd664e1f674978f9196be8272e18915600436e33cc83b24fc4f",
+    "bazelValidation": "just bazel-lock-update passed after the final dependency manifest change"
   },
   "callbackInputs": {
     "callback-v1.schema.json": "sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2",
@@ -654,13 +3625,28 @@
     "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
   },
   "currentValidation": {
-    "format": "changed strict JSON and Connection test source rustfmt 1.95.0 check passed",
+    "format": "just fmt on Rust 1.96.0 passed for candidate source",
     "metadata": "current offline locked no-deps metadata passed; parsing only",
-    "bazelLock": "prior just bazel-lock-update passed; Cargo and Bazel lock bytes unchanged; raw_value already enabled by the upstream dependency closure",
-    "sourceExport": "patch 0003 applied to exact frozen V1 bytes; all current source files matched",
-    "nativeCompilation": "current canonical JSON correction awaits a new exact hosted build; prior producer compiled and failed two focused tests",
-    "nativeTests": "locked standalone exact Connection source seam: 10 passed, zero skipped across four arbitrary_precision/preserve_order combinations; shared corpus bytes and 16 KiB bound unchanged; full native Connection/core tests pending",
-    "nativeLint": "not run for current patch",
+    "bazelLock": "just bazel-lock-update passed with the final Cargo manifests",
+    "sourceExport": "patches 0001 through 0003 unchanged; patch 0004 exported against the byte-verified e4ac4b7 baseline; all 102 recorded source files and lock digests verified after applying to a clean exact upstream checkout",
+    "nativeCompilation": "Darwin network-proxy, git-utils and http-client compiled for focused tests; exact Linux native producer pending",
+    "nativeTests": "see dependencyUpdate.validation for affected owning-crate checks; full native Connection/core and Linux dependency gates pending",
+    "nativeLint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
     "releaseAcceptance": false
+  },
+  "dependencyUpdate": {
+    "baselineOwnerCommit": "e4ac4b77de5b1cf715ae38cfea5f25103ce90b9f",
+    "baselineCargoLockSha256": "sha256:aca08121432d92b7a164ccfc09b55b42a83da89d6c1afa9995d7d2e2f839fa59",
+    "updatedPackageCount": 100,
+    "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+    "licenseSha256": "sha256:e0f5978ae399d3addbb8b44bb83d15363681b3e2a52287bb87ed449d61e4e3c2",
+    "scope": "Cargo.lock source dependency delta, including optional and target-specific crates; does not prove complete binary or C/C++ dependency coverage",
+    "validation": {
+      "darwinAffectedTests": "363 run: 360 passed including one retry-flaky HTTP test, 3 failed; two github.com DNS Fake-IP failures also reproduce on the exact old baseline; the added private-answer test fixture was corrected and its focused rerun passed",
+      "privateAnswerNegative": "1 passed: native DNS connector with deterministic resolver denies both IPv4 private and IPv4-mapped IPv6 answers for an allowlisted hostname; listener accepts no connection",
+      "lint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
+      "format": "just fmt passed",
+      "releaseAcceptance": false
+    }
   }
 }

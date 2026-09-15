@@ -25,6 +25,7 @@ FILES = frozenset((*BINARIES.values(), 'bundle/codex-package.json', 'Cargo.lock'
                    'legal/UPSTREAM-LICENSE', 'legal/UPSTREAM-NOTICE', 'legal/JCS-NOTICE',
                    'legal/licenses/ryu-js-1.0.3-APACHE.txt',
                    'legal/licenses/ryu-js-1.0.3-BOOST.txt',
+                   'legal/licenses/dependency-updates-NOTICE.txt',
                    'legal/licenses/serde_json_canonicalizer-0.3.2-MIT.txt'))
 CHUNK = 1024 * 1024
 MAX_ARCHIVE = 512 * CHUNK

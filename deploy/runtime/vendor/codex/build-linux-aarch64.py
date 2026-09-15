@@ -14,9 +14,12 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 
 UPSTREAM = "41e22fee981a63b3698df7ed36bad393cda24715"
 TARGET = "aarch64-unknown-linux-musl"
+RUST_VERSION = "1.96.0"
+RUST_TOOLCHAIN = "codex-rs/rust-toolchain.toml"
 MIN_FREE = 2 * 1024**3
 MAX_LOG = 16 * 1024**2
 BINARIES = {
@@ -37,7 +40,6 @@ UPSTREAM_TOOLS = (
     ".github/scripts/install-musl-build-tools.sh",
     ".github/actions/setup-rusty-v8/action.yml",
     ".github/scripts/rusty_v8_bazel.py",
-    "codex-rs/rust-toolchain.toml",
     "justfile",
     "scripts/just-shell.py",
     "codex-rs/.config/nextest.toml",
@@ -103,6 +105,12 @@ def verify_inputs(vendor, source):
     changed.update(capture(["git", "ls-files", "--others", "--exclude-standard"], source).splitlines())
     require(changed <= {entry["path"] for entry in manifest["sourceFiles"]},
             "Unrecorded native source change")
+    require(RUST_TOOLCHAIN in {entry["path"] for entry in manifest["sourceFiles"]},
+            "Rust toolchain is missing from frozen source inputs")
+    toolchain = tomllib.loads((source / RUST_TOOLCHAIN).read_text())
+    require(toolchain["toolchain"]["channel"] == RUST_VERSION
+            and manifest["toolchain"]["rust"] == RUST_VERSION, "Rust toolchain version mismatch")
+    hashes[RUST_TOOLCHAIN] = digest(source / RUST_TOOLCHAIN)
     for name in UPSTREAM_TOOLS:
         original = subprocess.check_output(["git", "show", f"{UPSTREAM}:{name}"], cwd=source)
         require((source / name).read_bytes() == original, "Upstream build tool changed")
@@ -306,7 +314,7 @@ class Builder:
             "zig": ["zig", "version"], "strip": ["strip", "--version"],
             "linker": [os.environ["CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"], "--version"],
         }.items()}
-        require(tools["rustc"].startswith("rustc 1.95.0 ") and tools["zig"] == "0.14.0",
+        require(tools["rustc"].startswith(f"rustc {RUST_VERSION} ") and tools["zig"] == "0.14.0",
                 "Build tool version mismatch")
         save(self.diag / "tools.json", tools)
         command = ["cargo", "build", "--locked", "--target", TARGET, "--release", "--timings"]
@@ -444,8 +452,12 @@ class Builder:
         for name, crate, selection in (
             ("connection", "codex-rmcp-client", "test(native_connection)"),
             ("barrier", "codex-core", "test(native_connection_bootstrap) | test(native_operation_barrier)"),
+            ("network-proxy", "codex-network-proxy", "all()"),
+            ("git-utils", "codex-git-utils", "all()"),
+            ("http-client", "codex-http-client", "all()"),
         ):
             command = ["just", "test", "-p", "codex-rmcp-client", "-p", "codex-core",
+                       "-p", "codex-network-proxy", "-p", "codex-git-utils", "-p", "codex-http-client",
                        "--locked", "--lib", "--target", TARGET, "--release", "--test-threads", "2",
                        "--no-tests=fail", "-E", f"package(={crate}) & ({selection})"]
             commands.append(command)

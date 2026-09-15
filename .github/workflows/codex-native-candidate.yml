@@ -32,7 +32,7 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      RUSTUP_TOOLCHAIN: 1.95.0
+      RUSTUP_TOOLCHAIN: 1.96.0
       TARGET: aarch64-unknown-linux-musl
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
       AWS_LC_SYS_NO_JITTER_ENTROPY_aarch64_unknown_linux_musl: "1"
@@ -59,9 +59,9 @@ jobs:
         run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh prepare
 
       - name: Install fixed Rust toolchain
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # upstream Rust 1.95.0 action
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # pinned toolchain installer
         with:
-          toolchain: 1.95.0
+          toolchain: 1.96.0
           targets: aarch64-unknown-linux-musl
 
       - name: Install fixed Zig toolchain

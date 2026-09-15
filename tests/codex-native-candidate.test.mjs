@@ -40,10 +40,11 @@ class CandidateGates(unittest.TestCase):
         git('init')
         git('config', 'user.name', 'Candidate test')
         git('config', 'user.email', 'candidate@example.invalid')
-        for name in (*candidate.UPSTREAM_TOOLS, 'codex-rs/Cargo.lock', 'MODULE.bazel.lock', 'changed.rs'):
+        for name in (*candidate.UPSTREAM_TOOLS, candidate.RUST_TOOLCHAIN, 'codex-rs/Cargo.lock', 'MODULE.bazel.lock', 'changed.rs'):
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('original\n')
+        (self.source / candidate.RUST_TOOLCHAIN).write_text('[toolchain]\nchannel = \"1.96.0\"\n')
         git('add', '.')
         git('-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fixture')
         candidate.UPSTREAM = git('rev-parse', 'HEAD')
@@ -53,9 +54,11 @@ class CandidateGates(unittest.TestCase):
         (self.source / 'changed.rs').write_text('patched\n')
         manifest = {
             'upstream': {'commit': self.head},
+            'toolchain': {'rust': candidate.RUST_VERSION},
             'patches': [{'path': 'patch', 'sha256': candidate.digest(self.vendor / 'patch')}],
             'callbackInputs': {'callback': candidate.digest(self.vendor / 'callback')},
-            'sourceFiles': [{'path': 'changed.rs', 'sha256': candidate.digest(self.source / 'changed.rs')}],
+            'sourceFiles': [{'path': 'changed.rs', 'sha256': candidate.digest(self.source / 'changed.rs')},
+                            {'path': candidate.RUST_TOOLCHAIN, 'sha256': candidate.digest(self.source / candidate.RUST_TOOLCHAIN)}],
             'currentLocks': {'cargoSha256': candidate.digest(self.source / 'codex-rs/Cargo.lock'),
                              'bazelSha256': candidate.digest(self.source / 'MODULE.bazel.lock')},
         }
@@ -65,7 +68,8 @@ class CandidateGates(unittest.TestCase):
         expected = candidate.verify_inputs(self.vendor, self.source)
         self.assertIn('build-input-v1.json', expected)
         for path in (self.vendor / 'patch', self.vendor / 'callback', self.source / 'changed.rs',
-                     self.source / 'codex-rs/Cargo.lock', self.source / candidate.UPSTREAM_TOOLS[0]):
+                     self.source / 'codex-rs/Cargo.lock', self.source / candidate.RUST_TOOLCHAIN,
+                     self.source / candidate.UPSTREAM_TOOLS[0]):
             original = path.read_bytes()
             path.write_bytes(original + b'drift')
             with self.assertRaises(RuntimeError):
@@ -73,6 +77,21 @@ class CandidateGates(unittest.TestCase):
             path.write_bytes(original)
         (self.source / 'unrecorded.rs').write_text('unapproved')
         with self.assertRaisesRegex(RuntimeError, 'Unrecorded'):
+            candidate.verify_inputs(self.vendor, self.source)
+
+    def test_toolchain_requires_both_recorded_source_and_fixed_version(self):
+        path = self.vendor / 'build-input-v1.json'
+        manifest = json.loads(path.read_text())
+        manifest['sourceFiles'] = [entry for entry in manifest['sourceFiles']
+                                   if entry['path'] != candidate.RUST_TOOLCHAIN]
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, 'missing from frozen'):
+            candidate.verify_inputs(self.vendor, self.source)
+        toolchain = self.source / candidate.RUST_TOOLCHAIN
+        toolchain.write_text('[toolchain]\nchannel = "1.95.0"\n')
+        manifest['sourceFiles'].append({'path': candidate.RUST_TOOLCHAIN, 'sha256': candidate.digest(toolchain)})
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, 'version mismatch'):
             candidate.verify_inputs(self.vendor, self.source)
 
     def test_wrong_head_and_dirty_pr_are_rejected(self):
@@ -247,17 +266,21 @@ class CandidateGates(unittest.TestCase):
             commands.append(command)
             self.assertEqual(cwd, self.source)
             self.assertEqual(env['CODEX_BWRAP_SHA256'], 'a' * 64)
-            # Both focused runs need Core's target-specific vendored OpenSSL feature.
+            # Focused runs need Core's target-specific vendored OpenSSL feature.
             self.assertEqual([command[index + 1] for index, value in enumerate(command) if value == '-p'],
-                             ['codex-rmcp-client', 'codex-core'])
+                             ['codex-rmcp-client', 'codex-core', 'codex-network-proxy',
+                              'codex-git-utils', 'codex-http-client'])
             self.assertIn('--no-tests=fail', command)
             self.assertEqual(command[command.index('--target') + 1], candidate.TARGET)
             expected_selection = {
                 'native-tests-connection': 'package(=codex-rmcp-client) & (test(native_connection))',
                 'native-tests-barrier': 'package(=codex-core) & (test(native_connection_bootstrap) | test(native_operation_barrier))',
+                'native-tests-network-proxy': 'package(=codex-network-proxy) & (all())',
+                'native-tests-git-utils': 'package(=codex-git-utils) & (all())',
+                'native-tests-http-client': 'package(=codex-http-client) & (all())',
             }
             self.assertEqual(command[command.index('-E') + 1], expected_selection[name])
-            if name == 'native-tests-barrier':
+            if name == 'native-tests-http-client':
                 raise RuntimeError('native test failed')
         builder.run = run
         def version(command, cwd):
@@ -265,7 +288,7 @@ class CandidateGates(unittest.TestCase):
         with patch.object(candidate, 'capture', side_effect=version), patch.object(candidate, 'verify_bundle'):
             with self.assertRaisesRegex(RuntimeError, 'native test failed'):
                 builder.tests()
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 5)
         self.assertFalse((builder.diag / 'native-tests.json').exists())
         record['head'] = '0' * 40
         candidate.save(builder.candidate / 'candidate.json', record)
@@ -298,6 +321,7 @@ test("candidate uses an isolated read-only exact PR checkout and fixed standard 
 	assert.equal(job.env.CARGO_BUILD_JOBS, "2");
 	assert.equal(job.env.CARGO_INCREMENTAL, "0");
 	assert.equal(job.env.TARGET, "aarch64-unknown-linux-musl");
+	assert.equal(job.env.RUSTUP_TOOLCHAIN, "1.96.0");
 	for (const name of ["HOME", "CODEX_HOME", "CARGO_HOME"])
 		assert.equal(job.env[name], undefined);
 	assert.equal(
@@ -310,6 +334,8 @@ test("candidate uses an isolated read-only exact PR checkout and fixed standard 
 	);
 	for (const step of job.steps) {
 		if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/);
+		if (step.uses?.startsWith("dtolnay/rust-toolchain@"))
+			assert.equal(step.with.toolchain, "1.96.0");
 		if (step.uses?.startsWith("actions/checkout@"))
 			assert.equal(step.with["persist-credentials"], false);
 		if (step.uses?.startsWith("actions/upload-artifact@")) {
