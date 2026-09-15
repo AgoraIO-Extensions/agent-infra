@@ -20,6 +20,7 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 
+import { createWecomChannelAdmissionV1 } from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
@@ -32,11 +33,16 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
+import {
+	assembleWecomApiV1,
+	type WecomApiDeploymentV1,
+} from "./wecom-assembly.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
 export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
+	readonly wecom?: WecomApiDeploymentV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
@@ -66,6 +72,9 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	const wecom = input.wecom
+		? assembleWecomApiV1(input.databaseUrl, input.wecom)
+		: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -111,18 +120,28 @@ export function assemblePlatformApi(
 		typeof input.presentAgent === "function"
 			? input.presentAgent
 			: input.presentAgent.create({ configurationQuery });
+	const channelAdmission = input.wecom
+		? {
+				channelAdmission: createWecomChannelAdmissionV1(
+					input.wecom.resolveBinding,
+				),
+			}
+		: {};
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const management = createAgentManagementV1(managementTransaction);
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...admissions,
+		...channelAdmission,
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,
@@ -214,6 +233,9 @@ export function assemblePlatformApi(
 		...(input.requestScope === undefined
 			? {}
 			: { requestScope: input.requestScope }),
+		...(wecom
+			? { wecom: { ...wecom.dependencies, identity: input.identity } }
+			: {}),
 		management: {
 			identity: input.identity,
 			foundation,
@@ -256,6 +278,7 @@ export function assemblePlatformApi(
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
+		...(wecom ? [wecom] : []),
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,

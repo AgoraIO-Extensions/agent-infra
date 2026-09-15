@@ -1568,6 +1568,15 @@ function effectiveModelSelection(
 			fallback: null,
 		};
 	}
+	// Managed WeCom has no user model selection; each new Turn uses current Owner defaults.
+	if (/^wecom_(bot|app):/.test(conversation.channelId)) {
+		return {
+			modelConfigurationRevision: configuration.configurationRevision,
+			modelOptionId: configuration.defaultOptionId,
+			reasoningLevel: configuration.defaultReasoningLevel,
+			fallback: null,
+		};
+	}
 	const selected = configuration.options.find(
 		({ optionId, reasoningLevels }) =>
 			optionId === conversation.selectedModelOptionId &&

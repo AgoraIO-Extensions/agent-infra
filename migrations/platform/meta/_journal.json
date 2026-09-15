@@ -113,6 +113,13 @@
       "when": 1789406175385,
       "tag": "0015_conversation_generation_tombstones",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789489645379,
+      "tag": "0016_wecom_text",
+      "breakpoints": true
     }
   ]
 }

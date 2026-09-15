@@ -118,4 +118,5 @@ export {
 	PostgresLegacyTaskAuthorizationMigrationV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 } from "./task-authorization-migration.js";
+export * from "./wecom-channel.js";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";

@@ -41,6 +41,9 @@ const requiredOperations = [
 	"updateConversationModelSelection",
 	"getExecutionDetail",
 	"listPlatformAudit",
+	"listWecomReceipts",
+	"getWecomReceipt",
+	"abandonUnknownWecomDelivery",
 ];
 
 const validApplication = {

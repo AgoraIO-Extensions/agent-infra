@@ -58,6 +58,10 @@ describe("platform-core package surface", () => {
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
 			"createTaskRuntimeAuthorizationUseCaseV1",
+			"createWecomAuthorizationV1",
+			"createWecomChannelV1",
+			"createWecomDeliveryV1",
+			"createWecomReceiptAccessV1",
 			"createWorkloadReconciliationV1",
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
@@ -89,6 +93,7 @@ describe("platform-core package surface", () => {
 			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
+			"wecomChannelIdV1",
 			"workloadManagementObservationV1",
 		]);
 		const testingSurface = await import(

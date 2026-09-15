@@ -380,6 +380,9 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		"type",
 		"password",
 	);
+	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
+	await page.getByRole("checkbox", { name: "修改智能机器人绑定" }).check();
+	await page.getByLabel("智能机器人配置标识").fill("approved-bot-fixture");
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
 	await page.getByRole("button", { name: "Save configuration" }).click();
@@ -397,6 +400,13 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
 		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
+		channels: [
+			{
+				kind: "wecom_bot",
+				enabled: true,
+				bindingReference: "approved-bot-fixture",
+			},
+		],
 	});
 	await page.goto("/agents/agent-pilot-1");
 	await capture(page, info, "lifecycle");

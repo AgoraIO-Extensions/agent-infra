@@ -71,4 +71,5 @@ export type {
 	TaskRuntimeRecoveryStateV1,
 } from "./task-runtime-authorization.js";
 export { createTaskRuntimeAuthorizationUseCaseV1 } from "./task-runtime-authorization.js";
+export * from "./wecom-channel.js";
 export * from "./workload-reconciliation.js";

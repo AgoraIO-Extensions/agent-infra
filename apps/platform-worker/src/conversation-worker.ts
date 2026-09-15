@@ -12,6 +12,10 @@ import {
 	type ConversationRuntimeOptionsV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import {
+	createPlatformWecomWorkerV1,
+	type WecomWorkerDeploymentV1,
+} from "./wecom-worker.js";
 
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
@@ -19,6 +23,7 @@ export interface PlatformConversationWorkerOptionsV2
 		"dispatchStore" | "taskAuthorizationStore" | "legacyControlStore"
 	> {
 	readonly databaseUrl: string;
+	readonly wecom?: WecomWorkerDeploymentV1;
 	readonly pollIntervalMs?: number;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
@@ -56,11 +61,27 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	const wecom = options.wecom
+		? createPlatformWecomWorkerV1({
+				...options.wecom,
+				databaseUrl: options.databaseUrl,
+			})
+		: undefined;
 	let runtime: ReturnType<typeof createConversationRuntimeV2>;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
 		runtime = createConversationRuntimeV2({
 			...options,
+			channelAuthorizationCurrent: async (record, signal) => {
+				if (
+					options.channelAuthorizationCurrent &&
+					!(await options.channelAuthorizationCurrent(record, signal))
+				)
+					return false;
+				return wecom
+					? wecom.channelAuthorizationCurrent(record)
+					: !/^wecom_(bot|app):/.test(record.boundary.channelId);
+			},
 			signal,
 			dispatchStore: store,
 			taskAuthorizationStore,
@@ -81,6 +102,7 @@ export function createPlatformConversationWorkerV2(
 	} catch (error) {
 		controller.abort();
 		void Promise.allSettled([
+			...(wecom ? [wecom.close()] : []),
 			transaction.close(),
 			store.close(),
 			taskAuthorizationStore.close(),
@@ -157,6 +179,7 @@ export function createPlatformConversationWorkerV2(
 	async function poll() {
 		try {
 			await tick();
+			await wecom?.dispatch();
 		} catch {
 			log("CONVERSATION_DISCOVERY_UNAVAILABLE");
 		}
@@ -184,6 +207,7 @@ export function createPlatformConversationWorkerV2(
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const results = await Promise.allSettled([
+					...(wecom ? [wecom.close()] : []),
 					transaction.close(),
 					store.close(),
 					taskAuthorizationStore.close(),
