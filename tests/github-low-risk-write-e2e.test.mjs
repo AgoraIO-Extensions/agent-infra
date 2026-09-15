@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runGitHubRefAndLabelConformance } from "./github-low-risk-write-e2e.mjs";
+import { runGitHubLowRiskWriteConformance } from "./github-low-risk-write-e2e.mjs";
 
 test("GitHub ref and label conformance creates, updates, and deletes owned resources", async () => {
 	const actions = [];
@@ -9,6 +9,11 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 	let label;
 	let issueLabels = [];
 	let assignees = [];
+	let topics = [];
+	let starred = true;
+	let file;
+	let milestone;
+	let release;
 	const fetch = async (_url, init) => {
 		const request = JSON.parse(init.body);
 		const { arguments: args, name: tool } = request.params;
@@ -78,6 +83,46 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 			return call(request.id, actionId, { locked: true });
 		if (actionId === "github.unlock_issue")
 			return call(request.id, actionId, { locked: false });
+		if (actionId === "github.create_or_update_file") {
+			file = { path: input.path, sha: "file-sha" };
+			return call(request.id, actionId, { content: file });
+		}
+		if (actionId === "github.delete_file") {
+			file = undefined;
+			return call(request.id, actionId, { content: null, commit: {} });
+		}
+		if (actionId === "github.get_file_contents" && !file)
+			return provider404(request.id);
+		if (actionId === "github.list_repository_topics")
+			return call(request.id, actionId, { names: topics });
+		if (actionId === "github.replace_repository_topics") {
+			topics = [...input.names];
+			return call(request.id, actionId, { names: topics });
+		}
+		if (actionId === "github.check_repository_starred")
+			return call(request.id, actionId, { starred });
+		if (actionId === "github.star_repository") starred = true;
+		if (actionId === "github.unstar_repository") starred = false;
+		if (actionId === "github.create_milestone") {
+			milestone = { number: 31, title: input.title };
+			return call(request.id, actionId, milestone);
+		}
+		if (actionId === "github.update_milestone") {
+			milestone = { number: input.milestoneNumber, title: input.title };
+			return call(request.id, actionId, milestone);
+		}
+		if (actionId === "github.delete_milestone") milestone = undefined;
+		if (actionId === "github.generate_release_notes")
+			return call(request.id, actionId, { body: "notes", name: "notes" });
+		if (actionId === "github.create_release") {
+			release = { id: 41, name: input.name, tag_name: input.tagName };
+			return call(request.id, actionId, release);
+		}
+		if (actionId === "github.update_release") {
+			release = { ...release, name: input.name };
+			return call(request.id, actionId, release);
+		}
+		if (actionId === "github.delete_release") release = undefined;
 		const result =
 			actionId === "github.get_ref"
 				? { ref }
@@ -91,7 +136,7 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 		return call(request.id, actionId, result);
 	};
 
-	const evidence = await runGitHubRefAndLabelConformance({
+	const evidence = await runGitHubLowRiskWriteConformance({
 		environment: {
 			CONNECTION_E2E_TOKEN: "test-token",
 			CONNECTION_GITHUB_E2E_ENABLED: "true",
@@ -101,10 +146,15 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 	});
 
 	assert.equal(evidence.cleanup, "SUCCEEDED");
-	assert.equal(evidence.calls.length, 15);
+	assert.equal(evidence.calls.length, 27);
+	assert.deepEqual(topics, []);
+	assert.equal(starred, true);
+	assert.equal(file, undefined);
+	assert.equal(milestone, undefined);
+	assert.equal(release, undefined);
 	assert.ok(
 		actions
-			.filter(({ actionId }) => !actionId.startsWith("github.get_"))
+			.filter(({ input }) => input.idempotencyKey !== undefined)
 			.every(({ input }) => input.idempotencyKey?.startsWith("write-run:")),
 	);
 	assert.doesNotMatch(JSON.stringify(evidence), /test-token|provider response/);

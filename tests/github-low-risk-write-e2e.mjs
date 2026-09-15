@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const endpoint = "https://agent-connector.la3.agoralab.co/mcp";
 const repository = {
@@ -28,9 +29,21 @@ const writeActions = [
 	"remove_issue_assignees",
 	"lock_issue",
 	"unlock_issue",
+	"create_or_update_file",
+	"delete_file",
+	"replace_repository_topics",
+	"star_repository",
+	"unstar_repository",
+	"create_milestone",
+	"update_milestone",
+	"delete_milestone",
+	"generate_release_notes",
+	"create_release",
+	"update_release",
+	"delete_release",
 ];
 
-export async function runGitHubRefAndLabelConformance({
+export async function runGitHubLowRiskWriteConformance({
 	environment,
 	fetch,
 	runId,
@@ -39,7 +52,8 @@ export async function runGitHubRefAndLabelConformance({
 		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
 	const token = environment.CONNECTION_E2E_TOKEN?.trim();
 	if (!token) throw new Error("CONNECTION_E2E_TOKEN is required");
-	if (!runId?.trim()) throw new Error("runId is required");
+	if (!/^[A-Za-z0-9._-]+$/.test(runId ?? ""))
+		throw new Error("runId is invalid");
 	let requestId = 0;
 	const call = async (name, args) => {
 		requestId += 1;
@@ -115,6 +129,12 @@ export async function runGitHubRefAndLabelConformance({
 	let currentRef;
 	let currentLabel;
 	let issueNumber;
+	let fileSha;
+	let milestoneNumber;
+	let releaseId;
+	let releaseTag;
+	let topicsRestored = false;
+	let starRestored = false;
 	let cleanup = "SUCCEEDED";
 	try {
 		await execute(
@@ -247,6 +267,153 @@ export async function runGitHubRefAndLabelConformance({
 			false,
 		);
 		issueNumber = undefined;
+
+		const filePath = `connection-e2e/${runId}.txt`;
+		result = await execute(
+			"github.create_or_update_file",
+			{
+				...repository,
+				content: marker,
+				message: `${marker} create file`,
+				path: filePath,
+			},
+			"file-create",
+		);
+		fileSha = result?.content?.sha;
+		if (!fileSha || result.content?.path !== filePath)
+			throw new Error("created file does not match");
+		await execute(
+			"github.delete_file",
+			{
+				...repository,
+				message: `${marker} delete file`,
+				path: filePath,
+				sha: fileSha,
+			},
+			"file-delete",
+		);
+		fileSha = undefined;
+		await expect404(call, "github.get_file_contents", {
+			...repository,
+			path: filePath,
+		});
+
+		const originalTopics = await read(
+			call,
+			"github.list_repository_topics",
+			repository,
+		);
+		const topic = branch.slice(0, 50);
+		result = await execute(
+			"github.replace_repository_topics",
+			{ ...repository, names: [topic] },
+			"topics-replace",
+		);
+		assertNames(
+			result?.names?.map((name) => ({ name })),
+			[topic],
+			"replaced topics",
+		);
+		await execute(
+			"github.replace_repository_topics",
+			{ ...repository, names: originalTopics?.names ?? [] },
+			"topics-restore",
+			false,
+		);
+		topicsRestored = true;
+
+		const originalStar =
+			(await read(call, "github.check_repository_starred", repository))
+				?.starred === true;
+		if (originalStar) {
+			await execute("github.unstar_repository", repository, "star-remove");
+			await execute("github.star_repository", repository, "star-restore");
+		} else {
+			await execute("github.star_repository", repository, "star-add");
+			await execute("github.unstar_repository", repository, "star-restore");
+		}
+		starRestored = true;
+
+		result = await execute(
+			"github.create_milestone",
+			{ ...repository, description: marker, title: `${marker} milestone` },
+			"milestone-create",
+		);
+		milestoneNumber = result?.number;
+		if (
+			!Number.isSafeInteger(milestoneNumber) ||
+			result.title !== `${marker} milestone`
+		)
+			throw new Error("created milestone does not match");
+		result = await execute(
+			"github.update_milestone",
+			{
+				...repository,
+				description: `${marker} updated`,
+				milestoneNumber,
+				title: `${marker} milestone updated`,
+			},
+			"milestone-update",
+		);
+		if (
+			result?.number !== milestoneNumber ||
+			result.title !== `${marker} milestone updated`
+		)
+			throw new Error("updated milestone does not match");
+		await execute(
+			"github.delete_milestone",
+			{ ...repository, milestoneNumber },
+			"milestone-delete",
+		);
+		milestoneNumber = undefined;
+
+		releaseTag = `${branch}-release`;
+		result = await execute(
+			"github.generate_release_notes",
+			{ ...repository, tagName: releaseTag, targetCommitish: "main" },
+			"release-notes",
+		);
+		if (typeof result?.name !== "string" || typeof result.body !== "string")
+			throw new Error("generated release notes do not match");
+		result = await execute(
+			"github.create_release",
+			{
+				...repository,
+				body: marker,
+				name: `${marker} release`,
+				tagName: releaseTag,
+				targetCommitish: "main",
+			},
+			"release-create",
+		);
+		releaseId = result?.id;
+		if (!Number.isSafeInteger(releaseId) || result.tag_name !== releaseTag)
+			throw new Error("created release does not match");
+		result = await execute(
+			"github.update_release",
+			{
+				...repository,
+				body: `${marker} updated`,
+				name: `${marker} release updated`,
+				releaseId,
+			},
+			"release-update",
+		);
+		if (result?.id !== releaseId || result.name !== `${marker} release updated`)
+			throw new Error("updated release does not match");
+		await execute(
+			"github.delete_release",
+			{ ...repository, releaseId },
+			"release-delete",
+		);
+		releaseId = undefined;
+		await execute(
+			"github.delete_ref",
+			{ ...repository, ref: `tags/${releaseTag}` },
+			"release-tag-delete",
+			false,
+		);
+		releaseTag = undefined;
 		await execute(
 			"github.delete_label",
 			{ ...repository, name: currentLabel },
@@ -258,10 +425,28 @@ export async function runGitHubRefAndLabelConformance({
 			name: renamedLabel,
 		});
 	} finally {
-		if (currentLabel || currentRef || issueNumber) cleanup = "FAILED";
+		if (
+			currentLabel ||
+			currentRef ||
+			issueNumber ||
+			fileSha ||
+			milestoneNumber ||
+			releaseId ||
+			releaseTag ||
+			!topicsRestored ||
+			!starRestored
+		)
+			cleanup = "FAILED";
 	}
 	if (cleanup !== "SUCCEEDED") throw new Error("GitHub write cleanup failed");
 	return { calls, cleanup, runId };
+}
+
+async function read(call, actionId, input) {
+	const result = await call("execute_action", { actionId, input });
+	if (result?.status !== "SUCCEEDED")
+		throw new Error(`${actionId} did not succeed`);
+	return result.result;
 }
 
 function assertNames(values, expected, name, field = "name") {
@@ -298,5 +483,33 @@ class McpError extends Error {
 		super(`Connection MCP error ${code}`);
 		this.code = code;
 		this.data = data;
+	}
+}
+
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	const runId = process.argv[2]?.trim() || randomUUID();
+	try {
+		console.log(
+			JSON.stringify(
+				await runGitHubLowRiskWriteConformance({
+					environment: process.env,
+					fetch: globalThis.fetch,
+					runId,
+				}),
+			),
+		);
+	} catch (error) {
+		console.error(
+			JSON.stringify({
+				error:
+					error instanceof Error ? error.message : "GitHub write E2E failed",
+				outcome: "FAILED",
+				runId,
+			}),
+		);
+		process.exitCode = 1;
 	}
 }
