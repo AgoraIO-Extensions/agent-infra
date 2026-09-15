@@ -77,6 +77,7 @@ describe("platform-core package surface", () => {
 			"parseConversationOperationHistoryV2",
 			"parseConversationPersistedEventPayloadV1",
 			"parseCurrentTaskUserV1",
+			"parseStandardTemplateReleaseTargetV1",
 			"parseTaskAuthorizationBoundaryV1",
 			"parseWorkloadExecutionCapacityV1",
 			"parseWorkloadSecretRecoveriesV1",

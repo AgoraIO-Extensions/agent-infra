@@ -439,6 +439,27 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；API 任务在同�
 
 调谐状态分别持久化管理 fence 与 Workload revision；新状态绑定管理 fence，本地漂移和重试只推进 Workload revision，所有 Kubernetes 操作使用所绑定的 fence。历史 V1 状态缺失 fence 时，Store 在既有 Agent 行锁事务内以 `max(management.fence, state.revision) + 1` 执行一次技术 epoch 接管，经安全整数校验及 application id、旧 fence、管理与 Workload 修订 CAS 后，原子更新管理 fence 和状态 fence，保留 Workload revision。该兼容接管不表示产品生命周期变化，不生成虚构的生命周期历史；事务失败可重试，出现更高 Kubernetes fence 时仍拒绝，不以 Kubernetes 反推产品期望。
 
+将既定标准模板发布应用到单个 Agent，使用独立的部署运维操作。部署绑定允许发布的
+当前主体与精确发布目标；主体须经真实身份入口解析为 active 系统管理员，且仍有该部署
+运维资格。系统管理员身份本身不授予任意发布权限，Owner 身份也不替代此资格。
+普通配置操作继续只接受其既有 Owner 授权，不能消费运维 authority 或请求字段指定的 intent。
+取舍见 [ADR: 隔离标准模板发布权限](../adr/0013-isolate-standard-template-release-authority.md)。
+
+部署目标绑定 release ID、Agent、template、预期配置修订与旧 Digest、目标 Digest；
+受限内部 HTTP 操作按 Zod/OpenAPI 契约仅接受该既定发布，不接受调用者自报的主体、
+角色或任意配置。实际 Request 贯穿身份解析与 request scope。Core 在当前配置读取后
+校验旧基线、同一 standard template 和生产 Registry 重新准入的目标 Digest，保持模板的
+env/Secret 开放键、平台保留键及 Connection 声明策略不变；只更新 source 的镜像与
+准入证据，保留模型、Secret 完整引用、Owner、可用范围、env 和渠道。该操作不授予
+Owner 配置权限，不替换 PVC，也不恢复已停止或停用 Agent 的运行资格。
+
+发布使用独立、用途绑定的授权事实；Registry 准入之后、提交之前再次校验当前主体和
+部署发布资格。身份修订与 Agent 授权修订分别校验，后者参与现有配置事务的 CAS。
+完整发布目标与操作种类进入 canonical 幂等摘要；授权先于 replay，匹配的原持久结果
+先于旧基线校验返回，不因重试新增修订。复用原配置事务，原子提交配置、幂等、真实
+操作者审计和 outbox；受理只表示新期望已保存，后续验证与回滚仍由唯一 Worker 执行。
+此单 Agent 步骤不替代模板目录对所有关联 Agent 的自动升级义务。
+
 ### 10.5 自定义 Agent Runtime Manifest
 
 Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#4-runtime-manifest) 中维护。
