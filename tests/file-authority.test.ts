@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { expect, it } from "vitest";
 import { createPlatformHealthApp } from "../apps/platform-api/src/app.ts";
 import { assemblePlatformFilesV1 } from "../apps/platform-api/src/file-assembly.ts";
+import { registerConversationRoutes } from "../apps/platform-api/src/http/conversation-routes.ts";
 import { registerFileRoutesV1 } from "../apps/platform-api/src/http/file-routes.ts";
 import { createWorkerFileClientV1 } from "../apps/platform-worker/src/file-client.ts";
 import { createPlatformFileReconciliationWorkerV1 } from "../apps/platform-worker/src/file-worker.ts";
@@ -12,6 +13,8 @@ import {
 	FileProjectionV1Schema,
 } from "../packages/contracts/src/files.ts";
 import { startMinioFileFixtureV1 } from "../packages/object-storage/src/minio.test-support.ts";
+import { createConversationExecutionUseCaseV1 } from "../packages/platform-core/src/conversation-execution.ts";
+import { PostgresConversationExecutionTransactionV1 } from "../packages/platform-store/src/conversation-execution.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.ts";
 
@@ -34,6 +37,9 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 	const sql = postgres(db.databaseUrl);
 	let assembled: ReturnType<typeof assemblePlatformFilesV1> | undefined;
 	let server: ReturnType<typeof serve> | undefined;
+	const transaction = new PostgresConversationExecutionTransactionV1({
+		databaseUrl: db.databaseUrl,
+	});
 	try {
 		await migratePlatformDatabase(db);
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','alice','web','active',1,'auth')`;
@@ -107,6 +113,38 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		});
 		const app = createPlatformHealthApp();
 		registerFileRoutesV1(app, assembled.dependencies);
+		const authority = {
+			schemaVersion: 1 as const,
+			actorId: "alice",
+			agentId: "agent",
+			channelId: "web",
+			authorizationRevision: "auth",
+			supportsSupplementaryInstruction: false,
+		};
+		const authorization = {
+			authorize: async () => ({ outcome: "allowed" as const, authority }),
+		};
+		const commands = createConversationExecutionUseCaseV1({
+			authorization,
+			transaction,
+		});
+		registerConversationRoutes(app, {
+			identity: {
+				resolve: async () => actor("alice"),
+				hydrateUsers: async () => [],
+			},
+			authorization,
+			commands: () => commands,
+			files: assembled.dependencies,
+			query: {
+				list: async () => {
+					throw new Error("Unexpected query");
+				},
+				get: async () => undefined,
+				getExecution: async () => undefined,
+				replay: async () => undefined,
+			},
+		});
 		server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
 		if (!server.listening) await once(server, "listening");
 		const address = server.address();
@@ -264,10 +302,36 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		await expect(
 			worker.readInput(grant, file.fileId, "undeclared-input"),
 		).rejects.toThrow("File read unavailable");
-		await sql`insert into platform.conversation_messages (message_id,conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at) values ('message','conversation','alice','user','bounded fixture','execution','submitted',now(),now())`;
-		await sql`update platform.files set record = record || ${sql.json({ messageId: "message", executionId: "execution", sessionGeneration: 1 })}::jsonb where file_id = ${file.fileId}`;
+		await sql`update platform.conversation_executions set status = 'completed' where execution_id = 'execution'`;
+		const messageBody = {
+			schemaVersion: 1,
+			text: "bounded fixture",
+			attachments: [file.fileId],
+		};
+		const messagePath = "/api/v1/conversations/conversation/messages";
+		const first = await post(messagePath, messageBody, {
+			"Idempotency-Key": "message-input",
+		});
+		expect(first.status).toBe(202);
+		const accepted = await first.json();
+		const retry = await post(messagePath, messageBody, {
+			"Idempotency-Key": "message-input",
+		});
+		expect(retry.status).toBe(202);
+		expect(await retry.json()).toEqual(accepted);
+		expect(
+			await sql`select message_id from platform.conversation_messages where role = 'user'`,
+		).toHaveLength(1);
+		const [bound] =
+			await sql`select record from platform.files where file_id = ${file.fileId}`;
+		expect(bound?.record.messageId).toBe(accepted.messageId);
+		expect(bound?.record.executionId).toBe(accepted.executionId);
+		const [inputExecution] =
+			await sql`select turn_id from platform.conversation_executions where execution_id = ${accepted.executionId}`;
 		const inputClaims = {
 			...claims,
+			executionId: accepted.executionId,
+			turnId: inputExecution?.turn_id,
 			grantId: "input-grant",
 			attachments: [{ attachmentId: file.fileId, operations: ["read"] }],
 		};
@@ -295,7 +359,16 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 			body: body(),
 			expiresAt: new Date(Date.now() + 10000).toISOString(),
 		});
-		await new Promise((resolve) => setTimeout(resolve, 5));
+		const orphanMetadata = (await fixture.storage.scan(null, 100)).objects.find(
+			(object) => object.objectRef === orphan,
+		);
+		expect(orphanMetadata).toBeDefined();
+		const graceWaitMs = Math.max(
+			0,
+			Date.parse(orphanMetadata!.createdAt) + 10 - Date.now(),
+		);
+		expect(graceWaitMs).toBeLessThan(5000);
+		await new Promise((resolve) => setTimeout(resolve, graceWaitMs));
 		const cleanup = createPlatformFileReconciliationWorkerV1({
 			databaseUrl: db.databaseUrl,
 			storage: fixture.storage,
@@ -317,6 +390,7 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 				running.close((error) => (error ? reject(error) : resolve())),
 			);
 		}
+		await transaction.close();
 		await assembled?.close();
 		await sql.end();
 		await fixture.close();

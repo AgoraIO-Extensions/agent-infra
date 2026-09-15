@@ -407,7 +407,10 @@ export function createFileAuthorityV1(options: {
 				)
 					denied();
 				for (const fileId of fileIds) {
-					const file = requireUnboundInput(await tx.getFile(fileId), authority);
+					const file = requireAvailableInput(
+						await tx.getFile(fileId),
+						authority,
+					);
 					checkLimits(file.descriptor, authority.limits, now());
 				}
 			});
@@ -631,7 +634,7 @@ export function isConfirmedResultFileV1(
 	);
 }
 
-function requireUnboundInput(
+function requireAvailableInput(
 	file: FileRecordV1 | null,
 	scope: FileScopeV1,
 ): FileRecordV1 {
@@ -641,7 +644,18 @@ function requireUnboundInput(
 		file.kind !== "attachment" ||
 		file.status !== "available" ||
 		!file.objectVersion ||
-		!file.etag ||
+		!file.etag
+	)
+		denied();
+	return file;
+}
+
+function requireUnboundInput(
+	file: FileRecordV1 | null,
+	scope: FileScopeV1,
+): FileRecordV1 {
+	file = requireAvailableInput(file, scope);
+	if (
 		file.messageId !== null ||
 		file.executionId !== null ||
 		file.sessionGeneration !== null
