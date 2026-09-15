@@ -17,6 +17,8 @@ const manifest = JSON.stringify({ config: { digest: configDigest } });
 const manifestDigest = `sha256:${createHash("sha256").update(manifest).digest("hex")}`;
 
 async function verify({ published = false, mode = "classic" } = {}) {
+	const rawManifest = mode === "whitespace" ? ` \n${manifest}\n` : manifest;
+	const manifestDigest = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-base-metadata-"));
 	try {
 		const docker = join(directory, "docker.mjs");
@@ -34,7 +36,7 @@ const args = process.argv.slice(2);
 const configDigest = ${JSON.stringify(configDigest)};
 const manifestDigest = ${JSON.stringify(manifestDigest)};
 const mode = ${JSON.stringify(mode)};
-if (args[0] === "buildx" && args[1] === "imagetools") console.log(${JSON.stringify(manifest)});
+if (args[0] === "buildx" && args[1] === "imagetools") process.stdout.write(${JSON.stringify(rawManifest)});
 else if (args[0] === "buildx" && args[1] === "build") {
   writeFileSync(args[args.indexOf("--metadata-file") + 1], JSON.stringify({
     "containerimage.digest": mode === "classic" ? configDigest : manifestDigest,
@@ -102,6 +104,12 @@ test("published acceptance records a distinct child manifest and verified config
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.report.childDigest, manifestDigest);
 	assert.equal(result.report.childConfigDigest, configDigest);
+});
+
+test("published acceptance hashes the exact manifest bytes including surrounding whitespace", async () => {
+	const result = await verify({ published: true, mode: "whitespace" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.notEqual(result.report.baseDigest, manifestDigest);
 });
 
 for (const mode of ["bad-config", "bad-descriptor"]) {

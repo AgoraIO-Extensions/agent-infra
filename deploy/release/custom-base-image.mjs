@@ -12,7 +12,7 @@ const digestPattern = /^sha256:[a-f0-9]{64}$/;
 
 function docker(args, name, timeoutMs = 60_000) {
 	return runCommand(process.env.DOCKER_BIN ?? "docker", args, {
-		cwd: root, name, timeoutMs,
+		cwd: root, name, timeoutMs, trimOutput: false,
 	});
 }
 
@@ -70,7 +70,6 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		const digest = image.split("@")[1];
 		assert.match(digest, digestPattern, "published Base Image must use an immutable Digest");
 		const bytes = docker(["buildx", "imagetools", "inspect", "--raw", image], "Published Base Image manifest readback");
-		// runCommand trims its output; OCI manifests contain no surrounding whitespace.
 		assert.equal(`sha256:${sha256(bytes)}`, digest, "published manifest content differs from Digest");
 		remote = JSON.parse(bytes);
 		assert.match(remote.config?.digest, digestPattern);
