@@ -47,9 +47,14 @@ jobs:
           node tests/github-connection-e2e.mjs read \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-read-e2e-result.json
           read_status=${PIPESTATUS[0]}
-          node tests/github-low-risk-write-e2e.mjs \
-            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-write-e2e-result.json
-          write_status=${PIPESTATUS[0]}
+          if [ "$read_status" -eq 0 ]; then
+            node tests/github-low-risk-write-e2e.mjs \
+              "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-write-e2e-result.json
+            write_status=${PIPESTATUS[0]}
+          else
+            write_status=1
+            echo '{"outcome":"SKIPPED","reason":"read conformance failed"}' > connection-github-write-e2e-result.json
+          fi
           node tests/github-connection-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json
           issue_status=${PIPESTATUS[0]}
