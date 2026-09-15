@@ -58,6 +58,30 @@ export async function objectStorageConformanceV1(storage: ObjectStorageDataV1) {
 		}),
 	).rejects.toMatchObject({ code: "conflict" });
 	expect(await storage.inspect(request.objectRef)).toEqual(stored);
+	// A cancelled input is retryable/expired, never an immutable-content conflict.
+	const abort = new AbortController();
+	const cancelledRef = randomUUID();
+	const cancelledBody = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				controller.enqueue(bytes.slice(0, 1));
+				abort.abort();
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	await expect(
+		storage.upload({
+			...request,
+			objectRef: cancelledRef,
+			body: cancelledBody,
+			signal: abort.signal,
+		}),
+	).rejects.toMatchObject({
+		code: expect.stringMatching(/^(expired|unavailable)$/),
+	});
+	expect(await storage.inspect(cancelledRef)).toBeNull();
+
 	const concurrent = { ...request, objectRef: randomUUID() };
 	const outcomes = await Promise.allSettled([
 		storage.upload({ ...concurrent, body: body() }),

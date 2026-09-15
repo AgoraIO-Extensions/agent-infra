@@ -103,11 +103,16 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 				},
 			)) {
 				requireActive(request.expiresAt, request.signal);
-				probe.write(chunk);
+				try {
+					probe.write(chunk);
+				} catch {
+					throw new ObjectStorageError("conflict");
+				}
 				chunks.push(chunk.slice());
 			}
-		} catch {
-			throw new ObjectStorageError("conflict");
+		} catch (error) {
+			if (error instanceof ObjectStorageError) throw error;
+			throw new ObjectStorageError("unavailable");
 		}
 		let measured: Awaited<ReturnType<typeof probe.finish>>;
 		try {

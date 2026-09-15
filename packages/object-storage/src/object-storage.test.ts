@@ -155,3 +155,27 @@ it.each([4, 6])(
 		}
 	},
 );
+
+it("keeps deterministic Fake size overflow a conflict without persisting bytes", async () => {
+	const storage = new FakeObjectStorageV1();
+	const objectRef = "00000000-0000-4000-8000-000000000001";
+	await expect(
+		storage.upload({
+			objectRef,
+			expiresAt: new Date(Date.now() + 1000).toISOString(),
+			descriptor: {
+				name: "fixture.txt",
+				mediaType: "text/plain",
+				sizeBytes: 1,
+				sha256: "0".repeat(64),
+			},
+			body: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new Uint8Array([65, 66]));
+					controller.close();
+				},
+			}),
+		}),
+	).rejects.toMatchObject({ code: "conflict" });
+	expect(await storage.inspect(objectRef)).toBeNull();
+});
