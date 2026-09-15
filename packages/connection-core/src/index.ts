@@ -386,6 +386,14 @@ function projectCall(call: StoredCall): CallProjection {
 
 export type CredentialForExecution = { accessToken: string };
 
+export type GitHubProfileRefreshCandidate = CredentialForExecution & {
+	actionVersionId: string;
+	connectionId: string;
+	credentialVersionId: string;
+	externalAccount: string;
+	providerReleaseId: string;
+};
+
 export type GitHubOAuthAuthorization = {
 	codeChallenge: string;
 	state: string;
@@ -646,6 +654,16 @@ export interface ConnectionRepository {
 		invocation: InvocationContext;
 	}): Promise<StoredCall | undefined>;
 	getCredential(invocation: InvocationContext): Promise<CredentialForExecution>;
+	listGitHubProfileRefreshCandidates?(
+		principalId: string,
+	): Promise<GitHubProfileRefreshCandidate[]>;
+	storeGitHubProfileLabel?(input: {
+		connectionId: string;
+		credentialVersionId: string;
+		displayName: string;
+		externalAccount: string;
+		principalId: string;
+	}): Promise<void>;
 	getOverview(principalId: string): Promise<ConnectionOverview>;
 	listAuthorizedConnections(
 		invocation: InvocationContext,
@@ -887,7 +905,52 @@ export class ConnectionApplicationService {
 	) {}
 
 	async overview(principalId: string) {
-		return this.repository.getOverview(principalId);
+		const overview = await this.repository.getOverview(principalId);
+		void this.refreshGitHubProfileLabels(principalId);
+		return overview;
+	}
+
+	private async refreshGitHubProfileLabels(principalId: string) {
+		const list = this.repository.listGitHubProfileRefreshCandidates;
+		const store = this.repository.storeGitHubProfileLabel;
+		if (!list || !store) return;
+		let candidates: GitHubProfileRefreshCandidate[];
+		try {
+			candidates = await list.call(this.repository, principalId);
+		} catch {
+			return;
+		}
+		for (const candidate of candidates) {
+			try {
+				const profile = await this.executor.execute({
+					action: "github.get_current_user",
+					actionVersionId: candidate.actionVersionId,
+					credential: { accessToken: candidate.accessToken },
+					input: {},
+					providerId: "github",
+					providerReleaseId: candidate.providerReleaseId,
+				});
+				const profileId = profile.id == null ? "" : String(profile.id);
+				const login =
+					typeof profile.login === "string" ? profile.login.trim() : "";
+				if (
+					!/^\d+$/.test(profileId) ||
+					BigInt(profileId) <= 0n ||
+					profileId !== candidate.externalAccount ||
+					!login
+				)
+					continue;
+				await store.call(this.repository, {
+					connectionId: candidate.connectionId,
+					credentialVersionId: candidate.credentialVersionId,
+					displayName: login,
+					externalAccount: candidate.externalAccount,
+					principalId,
+				});
+			} catch {
+				// Profile projection is best effort and must not block the overview.
+			}
+		}
 	}
 
 	async connectProviderCredential(

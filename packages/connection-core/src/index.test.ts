@@ -113,6 +113,21 @@ class MemoryRepository implements ConnectionRepository {
 	readonly calls: StoredCall[] = [];
 	readonly reconciliationJobs: ReconciliationJob[] = [];
 	readonly rescheduledCallIds: string[] = [];
+	githubProfileRefreshCandidates: Array<{
+		accessToken: string;
+		actionVersionId: string;
+		connectionId: string;
+		credentialVersionId: string;
+		externalAccount: string;
+		providerReleaseId: string;
+	}> = [];
+	githubProfileLabel?: {
+		connectionId: string;
+		credentialVersionId: string;
+		displayName: string;
+		externalAccount: string;
+		principalId: string;
+	};
 	private readonly activeReconciliationJobs = new Map<
 		string,
 		ReconciliationJob
@@ -309,6 +324,18 @@ class MemoryRepository implements ConnectionRepository {
 	): Promise<CredentialForExecution> {
 		return { accessToken: "test-secret" };
 	}
+	async listGitHubProfileRefreshCandidates() {
+		return this.githubProfileRefreshCandidates;
+	}
+	async storeGitHubProfileLabel(input: {
+		connectionId: string;
+		credentialVersionId: string;
+		displayName: string;
+		externalAccount: string;
+		principalId: string;
+	}) {
+		this.githubProfileLabel = input;
+	}
 	async getOverview() {
 		return {
 			actions,
@@ -400,6 +427,73 @@ class MemoryRepository implements ConnectionRepository {
 }
 
 describe("Connection application service", () => {
+	it("refreshes a GitHub display label only after the numeric account matches", async () => {
+		const repository = new MemoryRepository();
+		repository.githubProfileRefreshCandidates = [
+			{
+				accessToken: "provider-secret",
+				actionVersionId: "github.get_current_user@v7",
+				connectionId: "connection-github",
+				credentialVersionId: "credential-github",
+				externalAccount: "42",
+				providerReleaseId: "github-release-v7",
+			},
+		];
+		const service = new ConnectionApplicationService(repository, {
+			execute: async ({ credential }) => {
+				expect(credential.accessToken).toBe("provider-secret");
+				return { id: 42, login: "octocat", name: "The Octocat" };
+			},
+		});
+
+		await service.overview("alice");
+		await new Promise((resolveRefresh) => setTimeout(resolveRefresh, 0));
+
+		expect(repository.githubProfileLabel).toEqual({
+			connectionId: "connection-github",
+			credentialVersionId: "credential-github",
+			displayName: "octocat",
+			externalAccount: "42",
+			principalId: "alice",
+		});
+	});
+
+	it("rejects a matching non-numeric GitHub profile identity", async () => {
+		const repository = new MemoryRepository();
+		repository.githubProfileRefreshCandidates = [
+			{
+				accessToken: "provider-secret",
+				actionVersionId: "github.get_current_user@v7",
+				connectionId: "connection-github",
+				credentialVersionId: "credential-github",
+				externalAccount: "legacy-id",
+				providerReleaseId: "github-release-v7",
+			},
+		];
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => ({ id: "legacy-id", login: "wrong-account" }),
+		});
+
+		await service.overview("alice");
+
+		expect(repository.githubProfileLabel).toBeUndefined();
+	});
+
+	it("keeps overview available when GitHub profile discovery fails", async () => {
+		const repository = new MemoryRepository();
+		repository.listGitHubProfileRefreshCandidates = async () => {
+			throw new Error("credential unavailable");
+		};
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw new Error("must not execute");
+			},
+		});
+
+		await expect(service.overview("alice")).resolves.toMatchObject({
+			connections: [],
+		});
+	});
 	it("requires reconfirmation unless reconnect authorization proof matches exactly", () => {
 		const current = {
 			actionVersionIds: actions.map((action) => action.id),

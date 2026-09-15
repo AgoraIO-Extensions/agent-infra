@@ -41,6 +41,80 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"caches a verified GitHub login without changing the external account",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 28),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const principalId = `principal-github-profile-${randomUUID()}`;
+			try {
+				await repository.publishProviderCatalog(githubConnectionCatalog);
+				await sql`
+					INSERT INTO connection_principals (id, display_name)
+					VALUES (${principalId}, 'GitHub Profile Test')
+				`;
+				const stored = await repository.storeGithubOAuthCredential({
+					accessToken: "github-profile-test-secret",
+					displayName: "Shared Profile Name",
+					externalAccount: "42",
+					grantedScopes: ["repo"],
+					principalId,
+				});
+
+				const candidates =
+					await repository.listGitHubProfileRefreshCandidates(principalId);
+				expect(candidates).toEqual([
+					expect.objectContaining({
+						accessToken: "github-profile-test-secret",
+						connectionId: stored.connectionId,
+						credentialVersionId: expect.any(String),
+						externalAccount: "42",
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+					}),
+				]);
+
+				await repository.storeGitHubProfileLabel({
+					connectionId: stored.connectionId,
+					credentialVersionId: candidates[0]?.credentialVersionId ?? "",
+					displayName: "octocat",
+					externalAccount: "42",
+					principalId,
+				});
+
+				const [account] = await sql<
+					{
+						display_name: string;
+						external_account: string;
+						profile_label_source: string;
+					}[]
+				>`
+					SELECT display_name, external_account, profile_label_source
+					FROM connection_accounts WHERE id = ${stored.connectionId}
+				`;
+				expect(account).toEqual({
+					display_name: "octocat",
+					external_account: "42",
+					profile_label_source: "github.login",
+				});
+				expect(
+					await repository.listGitHubProfileRefreshCandidates(principalId),
+				).toEqual([]);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"bootstraps one audited Connection administrator without promoting ordinary Principals",
 		async () => {
 			if (!databaseUrl) return;

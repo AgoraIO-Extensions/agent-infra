@@ -75,8 +75,8 @@ const api = vi.hoisted(() => ({
 				},
 				{
 					actionVersionIds: [],
-					displayName: "GitHub",
-					externalAccount: "guoxianzhe",
+					displayName: "connectionE2E2",
+					externalAccount: "329435106",
 					id: "connection-personal",
 					ownerType: "PERSONAL" as const,
 					providerId: "github",
@@ -265,6 +265,11 @@ describe("Connection 管理 mutation wiring", () => {
 		const open = vi.spyOn(window, "open");
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
+		expect(
+			screen.getByRole("heading", { name: "connectionE2E2" }),
+		).toBeTruthy();
+		expect(screen.getByText("329435106")).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "Confluence" })).toBeTruthy();
 		expect(screen.getByRole("columnheader", { name: "平台" })).toBeTruthy();
 		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
 		expect(screen.queryByText("github.get_repository")).toBeNull();
@@ -291,7 +296,9 @@ describe("Connection 管理 mutation wiring", () => {
 		]);
 		expect(open).not.toHaveBeenCalled();
 
-		fireEvent.click(screen.getByRole("button", { name: "断开 GitHub" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "断开 connectionE2E2" }),
+		);
 		await waitFor(() =>
 			expect(api.disconnectConnection).toHaveBeenCalledOnce(),
 		);

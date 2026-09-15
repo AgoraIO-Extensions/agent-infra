@@ -1136,6 +1136,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					UPDATE connection_accounts SET
 						provider_release_id = ${release.id},
 						display_name = ${input.displayName},
+						profile_label_source = NULL,
+						profile_label_attempted_at = NULL,
 						status = 'ACTIVE', revision = revision + 1,
 						execution_fence = execution_fence + 1
 					WHERE id = ${connectionId}
@@ -2390,6 +2392,132 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		};
 	}
 
+	async listGitHubProfileRefreshCandidates(principalId: string) {
+		const providerReleaseId =
+			this.publishedProviderReleaseIds.get(githubProvider);
+		if (!providerReleaseId) return [];
+		const rows = await this.sql<
+			{
+				action_version_id: string;
+				ciphertext: string;
+				connection_id: string;
+				external_account: string;
+				id: string;
+				nonce: string;
+				provider_release_id: string;
+				tag: string;
+			}[]
+		>`
+			WITH candidates AS (
+				SELECT account.id
+				FROM connection_accounts account
+				LEFT JOIN connection_shared_scopes shared_scope
+					ON shared_scope.id = account.shared_scope_id
+				LEFT JOIN connection_shared_scope_principals membership
+					ON membership.shared_scope_id = shared_scope.id
+					AND membership.principal_id = ${principalId}
+					AND membership.status = 'ACTIVE'
+				WHERE account.provider_id = ${githubProvider}
+					AND account.status = 'ACTIVE'
+					AND account.profile_label_source IS NULL
+					AND (
+						account.profile_label_attempted_at IS NULL
+						OR account.profile_label_attempted_at < now() - interval '24 hours'
+					)
+					AND ((
+						account.owner_type = 'PERSONAL'
+						AND account.owner_principal_id = ${principalId}
+					) OR (
+						account.owner_type = 'SHARED'
+						AND shared_scope.state = 'ACTIVE'
+						AND membership.principal_id IS NOT NULL
+					))
+				ORDER BY account.id
+				FOR UPDATE OF account SKIP LOCKED
+				LIMIT 10
+			), claimed AS (
+				UPDATE connection_accounts account
+				SET profile_label_attempted_at = now()
+				FROM candidates
+				WHERE account.id = candidates.id
+				RETURNING account.id, account.external_account
+			)
+			SELECT claimed.id AS connection_id, claimed.external_account,
+				action.provider_release_id,
+				action.id AS action_version_id,
+				credential.id, credential.ciphertext, credential.nonce, credential.tag
+			FROM claimed
+			JOIN connection_action_versions action
+				ON action.provider_release_id = ${providerReleaseId}
+				AND action.name = 'github.get_current_user'
+				AND action.status = 'PUBLISHED'
+			JOIN connection_credential_versions credential
+				ON credential.connection_id = claimed.id
+				AND credential.status = 'ACTIVE'
+		`;
+		return rows.flatMap((row) => {
+			try {
+				return [
+					{
+						accessToken: this.protector.decrypt(
+							row,
+							`credential:${row.id}:${row.connection_id}`,
+						),
+						actionVersionId: row.action_version_id,
+						connectionId: row.connection_id,
+						credentialVersionId: row.id,
+						externalAccount: row.external_account,
+						providerReleaseId: row.provider_release_id,
+					},
+				];
+			} catch {
+				return [];
+			}
+		});
+	}
+
+	async storeGitHubProfileLabel(input: {
+		connectionId: string;
+		credentialVersionId: string;
+		displayName: string;
+		externalAccount: string;
+		principalId: string;
+	}) {
+		await this.sql`
+			UPDATE connection_accounts
+			SET display_name = ${input.displayName},
+				profile_label_source = 'github.login'
+			WHERE id = ${input.connectionId}
+				AND provider_id = ${githubProvider}
+				AND external_account = ${input.externalAccount}
+				AND status = 'ACTIVE'
+				AND profile_label_source IS NULL
+				AND (
+					(
+						owner_type = 'PERSONAL'
+						AND owner_principal_id = ${input.principalId}
+					) OR (
+						owner_type = 'SHARED'
+						AND EXISTS (
+							SELECT 1 FROM connection_shared_scopes shared_scope
+							JOIN connection_shared_scope_principals membership
+								ON membership.shared_scope_id = shared_scope.id
+								AND membership.principal_id = ${input.principalId}
+								AND membership.status = 'ACTIVE'
+							WHERE shared_scope.id = connection_accounts.shared_scope_id
+								AND shared_scope.state = 'ACTIVE'
+						)
+					)
+				)
+				AND EXISTS (
+					SELECT 1 FROM connection_credential_versions credential
+					WHERE credential.id = ${input.credentialVersionId}
+						AND credential.connection_id = connection_accounts.id
+						AND credential.status = 'ACTIVE'
+				)
+		`;
+	}
+
 	async createOAuthTransaction(input: OAuthTransaction & { state: string }) {
 		const stateHash = hash(input.state);
 		const protectedVerifier = this.protector.encrypt(
@@ -2555,6 +2683,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				await sql`
 					UPDATE connection_accounts
 					SET provider_release_id = ${release.id}, display_name = ${input.displayName},
+						profile_label_source = NULL,
+						profile_label_attempted_at = NULL,
 						status = 'ACTIVE', revision = revision + 1,
 						execution_fence = execution_fence + 1
 					WHERE id = ${connectionId}
