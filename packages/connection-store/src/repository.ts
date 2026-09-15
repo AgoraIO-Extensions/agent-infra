@@ -2408,12 +2408,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			}[]
 		>`
 			SELECT account.id AS connection_id, account.external_account,
-				account.provider_release_id,
+				action.provider_release_id,
 				action.id AS action_version_id,
 				credential.id, credential.ciphertext, credential.nonce, credential.tag
 			FROM connection_accounts account
 			JOIN connection_action_versions action
-				ON action.provider_release_id = account.provider_release_id
+				ON action.provider_release_id = ${providerReleaseId}
 				AND action.name = 'github.get_current_user'
 				AND action.status = 'PUBLISHED'
 			JOIN connection_credential_versions credential
@@ -2426,7 +2426,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND membership.principal_id = ${principalId}
 				AND membership.status = 'ACTIVE'
 			WHERE account.provider_id = ${githubProvider}
-				AND account.provider_release_id = ${providerReleaseId}
 				AND account.status = 'ACTIVE'
 				AND account.profile_label_source IS NULL
 				AND ((
@@ -2438,16 +2437,24 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND membership.principal_id IS NOT NULL
 				))
 		`;
-		return rows.map((row) => ({
-			accessToken: this.protector.decrypt(
-				row,
-				`credential:${row.id}:${row.connection_id}`,
-			),
-			actionVersionId: row.action_version_id,
-			connectionId: row.connection_id,
-			externalAccount: row.external_account,
-			providerReleaseId: row.provider_release_id,
-		}));
+		return rows.flatMap((row) => {
+			try {
+				return [
+					{
+						accessToken: this.protector.decrypt(
+							row,
+							`credential:${row.id}:${row.connection_id}`,
+						),
+						actionVersionId: row.action_version_id,
+						connectionId: row.connection_id,
+						externalAccount: row.external_account,
+						providerReleaseId: row.provider_release_id,
+					},
+				];
+			} catch {
+				return [];
+			}
+		});
 	}
 
 	async storeGitHubProfileLabel(input: {

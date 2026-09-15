@@ -910,7 +910,12 @@ export class ConnectionApplicationService {
 		const list = this.repository.listGitHubProfileRefreshCandidates;
 		const store = this.repository.storeGitHubProfileLabel;
 		if (!list || !store) return;
-		const candidates = await list.call(this.repository, principalId);
+		let candidates: GitHubProfileRefreshCandidate[];
+		try {
+			candidates = await list.call(this.repository, principalId);
+		} catch {
+			return;
+		}
 		await Promise.allSettled(
 			candidates.map(async (candidate) => {
 				const profile = await this.executor.execute({
@@ -924,7 +929,13 @@ export class ConnectionApplicationService {
 				const profileId = profile.id == null ? "" : String(profile.id);
 				const login =
 					typeof profile.login === "string" ? profile.login.trim() : "";
-				if (profileId !== candidate.externalAccount || !login) return;
+				if (
+					!/^\d+$/.test(profileId) ||
+					BigInt(profileId) <= 0n ||
+					profileId !== candidate.externalAccount ||
+					!login
+				)
+					return;
 				await store.call(this.repository, {
 					connectionId: candidate.connectionId,
 					displayName: login,

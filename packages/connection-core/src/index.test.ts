@@ -449,24 +449,40 @@ describe("Connection application service", () => {
 		});
 	});
 
-	it("keeps the stored label when the GitHub profile identity does not match", async () => {
+	it("rejects a matching non-numeric GitHub profile identity", async () => {
 		const repository = new MemoryRepository();
 		repository.githubProfileRefreshCandidates = [
 			{
 				accessToken: "provider-secret",
 				actionVersionId: "github.get_current_user@v7",
 				connectionId: "connection-github",
-				externalAccount: "42",
+				externalAccount: "legacy-id",
 				providerReleaseId: "github-release-v7",
 			},
 		];
 		const service = new ConnectionApplicationService(repository, {
-			execute: async () => ({ id: 7, login: "wrong-account" }),
+			execute: async () => ({ id: "legacy-id", login: "wrong-account" }),
 		});
 
 		await service.overview("alice");
 
 		expect(repository.githubProfileLabel).toBeUndefined();
+	});
+
+	it("keeps overview available when GitHub profile discovery fails", async () => {
+		const repository = new MemoryRepository();
+		repository.listGitHubProfileRefreshCandidates = async () => {
+			throw new Error("credential unavailable");
+		};
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw new Error("must not execute");
+			},
+		});
+
+		await expect(service.overview("alice")).resolves.toMatchObject({
+			connections: [],
+		});
 	});
 	it("requires reconfirmation unless reconnect authorization proof matches exactly", () => {
 		const current = {
