@@ -1158,7 +1158,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.get(
-			"/api/v1/connection/admin/pat-consumers/:consumerId/declarations",
+			"/api/v1/connection/admin/consumers/:consumerId/declarations",
 			async (context) => {
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
@@ -1186,7 +1186,7 @@ export function createConnectionOAuthApp(
 		);
 
 		app.post(
-			"/api/v1/connection/admin/pat-consumers/:consumerId/declarations",
+			"/api/v1/connection/admin/consumers/:consumerId/declarations",
 			async (context) => {
 				requireSameOrigin(context.req.raw.headers, options.issuer);
 				const session = await currentBrowserApiAdministrator(context);

@@ -195,14 +195,14 @@ export const connectionApi = {
 		),
 	getConsumerDeclarationOptions: (consumerId: string) =>
 		patConsumerRequest<ConsumerDeclarationOptions>(
-			`/api/v1/connection/admin/pat-consumers/${encodeURIComponent(consumerId)}/declarations`,
+			`/api/v1/connection/admin/consumers/${encodeURIComponent(consumerId)}/declarations`,
 		),
 	publishConsumerDeclaration: (
 		consumerId: string,
 		input: { actionVersionIds: string[]; providerReleaseId: string },
 	) =>
 		patConsumerRequest<{ declarationId: string }>(
-			`/api/v1/connection/admin/pat-consumers/${encodeURIComponent(consumerId)}/declarations`,
+			`/api/v1/connection/admin/consumers/${encodeURIComponent(consumerId)}/declarations`,
 			{ body: JSON.stringify(input), method: "POST" },
 		),
 	getSession: () => unwrap<Session>(getSession()),

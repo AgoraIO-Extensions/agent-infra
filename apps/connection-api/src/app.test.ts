@@ -1352,7 +1352,7 @@ describe("Connection API", () => {
 			},
 		});
 		const deniedDeclarations = await app.request(
-			"/api/v1/connection/admin/pat-consumers/consumer-agent/declarations",
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
 			{ headers: { cookie: "connection_session=user-session" } },
 		);
 		expect(deniedDeclarations.status).toBe(404);
@@ -1376,7 +1376,7 @@ describe("Connection API", () => {
 			"conn_consumer_secret-once",
 		);
 		const declarationOptions = await app.request(
-			"/api/v1/connection/admin/pat-consumers/consumer-agent/declarations",
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
 			{ headers: { cookie: "connection_session=admin-session" } },
 		);
 		expect(declarationOptions.status).toBe(200);
@@ -1391,7 +1391,7 @@ describe("Connection API", () => {
 			],
 		});
 		const declaration = await app.request(
-			"/api/v1/connection/admin/pat-consumers/consumer-agent/declarations",
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
 			{
 				body: JSON.stringify({
 					actionVersionIds: ["github.get_repository@v7"],
@@ -1415,7 +1415,7 @@ describe("Connection API", () => {
 			},
 		]);
 		const duplicateDeclaration = await app.request(
-			"/api/v1/connection/admin/pat-consumers/consumer-agent/declarations",
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
 			{
 				body: JSON.stringify({
 					actionVersionIds: [

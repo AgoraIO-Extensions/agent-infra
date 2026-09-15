@@ -21,6 +21,13 @@ export function PatConsumersPage() {
 	const [actionEffect, setActionEffect] = useState<"ALL" | "READ" | "WRITE">(
 		"ALL",
 	);
+	const resetDeclarationEditor = (consumerId = "") => {
+		setDeclarationConsumerId(consumerId);
+		setProviderReleaseId("");
+		setSelectedActions(new Set());
+		setActionQuery("");
+		setActionEffect("ALL");
+	};
 	const consumers = useQuery({
 		queryKey: ["pat-consumers"],
 		queryFn: connectionApi.listPatConsumers,
@@ -67,7 +74,7 @@ export function PatConsumersPage() {
 				actionVersionIds: [...selectedActions].sort(),
 				providerReleaseId,
 			}),
-		onSuccess: () => setDeclarationConsumerId(""),
+		onSuccess: () => resetDeclarationEditor(),
 	});
 
 	return (
@@ -163,7 +170,7 @@ export function PatConsumersPage() {
 														className="button button-secondary"
 														type="button"
 														onClick={() =>
-															setDeclarationConsumerId(consumer.consumerId)
+															resetDeclarationEditor(consumer.consumerId)
 														}
 													>
 														<SlidersHorizontal aria-hidden="true" size={16} />
@@ -201,7 +208,7 @@ export function PatConsumersPage() {
 						<button
 							className="button button-secondary"
 							type="button"
-							onClick={() => setDeclarationConsumerId("")}
+							onClick={() => resetDeclarationEditor()}
 						>
 							关闭
 						</button>
