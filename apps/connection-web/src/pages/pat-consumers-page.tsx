@@ -52,13 +52,23 @@ export function PatConsumersPage() {
 	});
 	useEffect(() => {
 		const providers = declarationOptions.data?.providers ?? [];
-		if (
-			!providerReleaseId ||
-			!providers.some((item) => item.providerReleaseId === providerReleaseId)
-		) {
-			setProviderReleaseId(providers[0]?.providerReleaseId ?? "");
-			setSelectedActions(new Set());
+		const nextProviderReleaseId = providers.some(
+			(item) => item.providerReleaseId === providerReleaseId,
+		)
+			? providerReleaseId
+			: (providers[0]?.providerReleaseId ?? "");
+		if (nextProviderReleaseId !== providerReleaseId) {
+			setProviderReleaseId(nextProviderReleaseId);
 		}
+		const availableIds = new Set(
+			providers
+				.find((item) => item.providerReleaseId === nextProviderReleaseId)
+				?.actions.map((action) => action.id) ?? [],
+		);
+		setSelectedActions((current) => {
+			const retained = [...current].filter((id) => availableIds.has(id));
+			return retained.length === current.size ? current : new Set(retained);
+		});
 	}, [declarationOptions.data, providerReleaseId]);
 	const provider = declarationOptions.data?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
