@@ -1,4 +1,5 @@
 import type { LiveVerificationEvidence } from "../test-project.ts";
+import { githubV7LowRiskWriteScenarios } from "./github-v7-low-risk-write-scenarios.ts";
 
 export const githubV7VerificationEvidence = {
 	actionVersionIds: [
@@ -84,6 +85,9 @@ export const githubV7VerificationEvidence = {
 		"github.create_issue_comment@v7",
 		"github.update_issue_comment@v7",
 		"github.delete_issue_comment@v7",
+		...githubV7LowRiskWriteScenarios.map(
+			({ actionVersionId }) => actionVersionId,
+		),
 	],
 	cleanup: "SUCCEEDED",
 	containerId: "1369705971",
@@ -91,5 +95,5 @@ export const githubV7VerificationEvidence = {
 	provider: "github",
 	providerReleaseId:
 		"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7",
-	runId: "34863028751-1",
+	runId: "34929778284-1",
 } as const satisfies LiveVerificationEvidence;

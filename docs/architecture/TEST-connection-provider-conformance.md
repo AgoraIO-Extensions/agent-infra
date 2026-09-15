@@ -63,14 +63,15 @@ ConsumerInstance；GitHub OAuth credential 不进入 GitHub Actions。GitHub-hos
 dispatch 对应的不可变 `github.sha`。GitHub schedule 只加载默认分支上的 workflow；默认分支未同步
 该定义时，scheduled run 不作为 `connection` 分支的验收证据。
 
-当前生命周期覆盖 Issue 和 comment 的创建、读取、更新、删除 comment 与关闭 Issue。暂不执行
-repository 删除、协作者变更、fork、workflow、merge 或 release mutation。
+当前生命周期覆盖 Issue 和 comment 的创建、读取、更新、删除 comment 与关闭 Issue，以及专用测试
+仓库内可逆的 ref、label、Issue metadata、file、topics、star、milestone 和 release mutation。暂不执行
+repository 删除、协作者变更、fork、workflow 或 merge mutation。
 九个 lifecycle Action 固定使用已批准的 `@v7` ActionVersion；catalog 升级必须先更新测试基线并评审，
 不能由 nightly 自动接受新版本。
 
-当前 GitHub v7 catalog 共 145 项，其中 82 项具有 run `34863028751-1` 的真实 Provider 证据：77 个
-`READ` 和 5 个 lifecycle `WRITE`。`github.get_pull_request_review@v7` 因缺少第二测试账号保持
-`UNVERIFIED`，其余 62 个 `WRITE` 也保持 `UNVERIFIED`。版本升级后旧证据不继承。本阶段只更新验证
+当前 GitHub v7 catalog 共 145 项，其中 109 项具有 run `34929778284-1` 的真实 Provider 证据：77 个
+`READ` 和 32 个 `WRITE`。`github.get_pull_request_review@v7` 因缺少第二测试账号保持
+`UNVERIFIED`，其余 35 个 `WRITE` 也保持 `UNVERIFIED`。版本升级后旧证据不继承。本阶段只更新验证
 矩阵，不改变 production discovery、Grant、declaration 或 execution eligibility；对外门禁在更多
 Action 完成 E2E 后另行启用。Bitbucket、Jira 和 Confluence 必须分别完成验证，不能把 GitHub 证据
 外推到其他 Provider。
