@@ -160,7 +160,7 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds run 34863028751 to 77 of 78 reads", () => {
+test("GitHub verification matrix binds run 34929778284 to 109 actions", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
 		githubV7VerificationEvidence,
@@ -168,11 +168,11 @@ test("GitHub verification matrix binds run 34863028751 to 77 of 78 reads", () =>
 	assert.equal(matrix.length, 145);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		82,
+		109,
 	);
 	assert.equal(
 		matrix.filter((item) => item.status === "UNVERIFIED").length,
-		63,
+		36,
 	);
 	assert.equal(
 		matrix.filter(
@@ -193,7 +193,7 @@ test("GitHub verification matrix binds run 34863028751 to 77 of 78 reads", () =>
 				(item) =>
 					item.actionVersionId.endsWith("@v7") &&
 					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "34863028751-1",
+					item.evidence.runId === "34929778284-1",
 			),
 	);
 
@@ -238,7 +238,7 @@ test("GitHub verification matrix binds run 34863028751 to 77 of 78 reads", () =>
 		(item) => item.status === "LIVE_VERIFIED",
 	)?.evidence;
 	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
-	assert.equal(retainedEvidence?.actionVersionIds.length, 82);
+	assert.equal(retainedEvidence?.actionVersionIds.length, 109);
 	assert.ok(Object.isFrozen(retainedEvidence));
 	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
