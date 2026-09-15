@@ -23,6 +23,9 @@ IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
 目标平台组成 Tag，`PLATFORM` 支持 `linux/amd64`、`linux/arm64`，两个平台分别验收，不把单架构
 证据当作多架构发布。
 
+Docker daemon 需要能读取探针的绑定挂载路径；使用虚拟机中的 Docker 时，通过 `TMPDIR`
+把构建临时目录放到该虚拟机已共享的文件系统中。
+
 该入口复用现有 Git archive、两次无缓存构建和 Digest 一致性检查，验证 non-root、只读根文件
 系统和明确可写挂载；对实际待发布 OCI 产物执行现有 Trivy 政策，通过后才推送。扫描失败、
 High/Critical 或不合格例外都会阻止发布，例外仍由仓库既有政策校验。

@@ -20,6 +20,24 @@ function inspect(image) {
 	return JSON.parse(docker(["image", "inspect", "--format", "{{json .}}", image], "Custom Base Image inspection"));
 }
 
+async function configDigest(image) {
+	const temp = await mkdtemp(join(tmpdir(), "agent-infra-image-config-"));
+	try {
+		const archive = join(temp, "image.tar");
+		docker(["image", "save", "--output", archive, image], "Custom Base Image config export", 5 * 60_000);
+		const tar = process.env.TAR_BIN ?? "tar";
+		const options = { cwd: root, name: "Custom Base Image config readback", timeoutMs: 60_000 };
+		const manifests = JSON.parse(runCommand(tar, ["-xOf", archive, "manifest.json"], options));
+		assert.equal(manifests.length, 1);
+		const config = manifests[0].Config;
+		assert.match(config, /^(?:blobs\/sha256\/[a-f0-9]{64}|[a-f0-9]{64}\.json)$/);
+		runCommand(tar, ["-xf", archive, "-C", temp, config], options);
+		return `sha256:${sha256(await readFile(join(temp, config)))}`;
+	} finally {
+		await rm(temp, { recursive: true, force: true });
+	}
+}
+
 export async function scanCustomBaseImage(image, reportDirectory) {
 	const expected = await source();
 	const actual = inspect(image);
@@ -59,7 +77,7 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		docker(["pull", image], "Published Base Image pull", 5 * 60_000);
 	}
 	const actual = inspect(image);
-	if (remote) assert.equal(actual.Descriptor?.annotations?.["config.digest"] ?? actual.Id,
+	if (remote) assert.equal(await configDigest(image),
 		remote.config.digest, "pulled config differs from published manifest");
 	assert.equal(actual.Config.User, "node");
 	assert.equal(actual.Config.WorkingDir, "/workspace");
@@ -104,7 +122,7 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		assert.match(childConfigDigest, digestPattern);
 		assert.match(childImageId, digestPattern);
 		if (child.Descriptor) assert.equal(child.Descriptor.digest, childDigest);
-		assert.equal(child.Descriptor?.annotations?.["config.digest"] ?? childImageId, childConfigDigest);
+		assert.equal(await configDigest(childReference), childConfigDigest);
 		const childProbe = JSON.parse(docker([...options, childReference], "Custom Base Image downstream run"));
 		assert.equal(childProbe.status, "passed");
 		assert.equal(inspect(image).Id, actual.Id, "Base Image changed during verification");
