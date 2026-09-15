@@ -677,8 +677,11 @@ export function PreviewContent(props: {
 	reviewed?: boolean;
 	value: AuthorizationPreviewResponse;
 }) {
+	const availableActionIds = new Set(
+		props.value.preview.actions.map((action) => action.id),
+	);
 	const defaultSelection = props.initialActionVersionIds?.length
-		? props.initialActionVersionIds
+		? props.initialActionVersionIds.filter((id) => availableActionIds.has(id))
 		: props.value.preview.actions
 				.filter((action) => action.effect === "READ")
 				.map((action) => action.id);

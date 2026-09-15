@@ -51,10 +51,15 @@ export function PatConsumersPage() {
 		enabled: Boolean(declarationConsumerId),
 	});
 	useEffect(() => {
-		const first = declarationOptions.data?.providers[0];
-		setProviderReleaseId(first?.providerReleaseId ?? "");
-		setSelectedActions(new Set());
-	}, [declarationOptions.data]);
+		const providers = declarationOptions.data?.providers ?? [];
+		if (
+			!providerReleaseId ||
+			!providers.some((item) => item.providerReleaseId === providerReleaseId)
+		) {
+			setProviderReleaseId(providers[0]?.providerReleaseId ?? "");
+			setSelectedActions(new Set());
+		}
+	}, [declarationOptions.data, providerReleaseId]);
 	const provider = declarationOptions.data?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
 	);
