@@ -872,6 +872,27 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #440 adds only receipt reads and bounded unknown-delivery disposition.
+function isWecomReceiptOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/wecom/receipts",
+		"/api/v1/wecom/receipts/{receiptId}",
+		"/api/v1/wecom/receipts/{receiptId}/abandon",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"485001d12e58f13d46054340f9985cf278d95ec2b392da2352ef6f21943e40fe"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -881,7 +902,8 @@ function findBreakingChanges(previous, current) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
-			!isConversationFactsV2OpenApiAddition(previous, current)
+			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isWecomReceiptOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

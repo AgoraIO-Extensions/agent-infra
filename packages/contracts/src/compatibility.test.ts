@@ -189,6 +189,54 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only WeCom receipt routes and preserves existing browser authority", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const paths = [
+			"/api/v1/wecom/receipts",
+			"/api/v1/wecom/receipts/{receiptId}",
+			"/api/v1/wecom/receipts/{receiptId}/abandon",
+		] as const;
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-wecom-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const mutations = [
+				(document: typeof current) => {
+					delete document.paths[paths[0]];
+				},
+				(document: typeof current) => {
+					document.paths[paths[2]].post.operationId = "retryDelivery";
+				},
+				(document: typeof current) => {
+					document.paths[paths[0]].get.responses = {};
+				},
+				(document: typeof current) => {
+					delete document.paths["/api/v1/agents"];
+				},
+				(document: typeof current) => {
+					document.components.schemas = {};
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts only the Runtime status-recovery V2 addition", async () => {
 		const current = JSON.parse(
 			await readFile(runtimeHostV2ArtifactPath, "utf8"),
