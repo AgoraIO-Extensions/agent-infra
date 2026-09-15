@@ -1,8 +1,17 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
+import {
+	type ConversationMetadataRecoveryV1,
+	parseConversationMetadataRecoveryV1,
+} from "./conversation-dispatch.js";
 import type { PersistedConversationEventV1 } from "./conversation-events.js";
+import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
+import {
+	parseTaskAuthorizationBoundaryV1,
+	type TaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
 
@@ -13,6 +22,7 @@ export interface ConversationExecutionAuthorityV1 {
 	readonly channelId: string;
 	readonly authorizationRevision: string;
 	readonly supportsSupplementaryInstruction: boolean;
+	readonly taskBoundary?: TaskAuthorizationBoundaryV1;
 }
 
 export interface ConversationExecutionAuthorizationPortV1 {
@@ -90,6 +100,48 @@ export interface ConversationStateQueryV1 {
 	readonly conversationId: string;
 }
 
+export interface ConversationMetadataRecoveryQueryV1
+	extends ConversationStateQueryV1 {
+	readonly executionId?: string;
+}
+export interface ConversationMetadataRecoveryResultV1 {
+	readonly outcome: "scheduled" | "coalesced" | "not_applicable" | "denied";
+}
+
+export interface ConversationMetadataRecoveryStateV1 {
+	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
+	readonly candidates: readonly {
+		readonly execution: {
+			readonly executionId: string;
+			readonly conversationId: string;
+			readonly agentId: string;
+			readonly actorId: string;
+			readonly channelId: string;
+			readonly turnId: string;
+			readonly sessionGeneration: number;
+			readonly deliveryFence: number;
+			readonly runtimeCursor: string | null;
+			readonly authorizationRevision: string;
+			readonly status: string;
+		};
+		readonly originalOutboxes: readonly {
+			readonly itemId: string;
+			readonly operation: string;
+			readonly status: string;
+			readonly payload: unknown;
+		}[];
+		readonly boundary: unknown;
+		readonly latestToolFacts: readonly ConversationOperationFactV2[];
+	}[];
+}
+export interface ConversationMetadataRecoveryWritePlanV1 {
+	readonly result: ConversationMetadataRecoveryResultV1;
+	readonly updates: readonly {
+		readonly itemId: string;
+		readonly metadataRecovery: ConversationMetadataRecoveryV1;
+	}[];
+}
+
 export interface ConversationModelConfigurationV1 {
 	readonly configurationRevision: number;
 	readonly options: readonly {
@@ -101,6 +153,7 @@ export interface ConversationModelConfigurationV1 {
 }
 
 export interface ConversationExecutionConversationStateV1 {
+	readonly isolationPending?: true;
 	readonly schemaVersion: 1;
 	readonly conversationId: string;
 	readonly agentId: string;
@@ -474,6 +527,15 @@ export interface ConversationModelSelectionFallbackWriteV1
 }
 
 export interface ConversationExecutionTransactionPortV1 {
+	requestMetadataRecovery(
+		request: {
+			readonly query: ConversationMetadataRecoveryQueryV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+		},
+		decide: (
+			state: ConversationMetadataRecoveryStateV1,
+		) => ConversationMetadataRecoveryWritePlanV1,
+	): Promise<ConversationMetadataRecoveryResultV1>;
 	/**
 	 * Existing Conversation commands validate the persisted authority binding
 	 * before replay, then inspect active execution only after a replay miss.
@@ -547,6 +609,9 @@ export interface ConversationExecutionTransactionPortV1 {
 }
 
 export interface ConversationExecutionUseCaseV1 {
+	requestMetadataRecovery(
+		query: ConversationMetadataRecoveryQueryV1,
+	): Promise<ConversationMetadataRecoveryResultV1>;
 	readConversation(
 		query: ConversationStateQueryV1,
 	): Promise<ConversationStateDecisionV1>;
@@ -600,6 +665,7 @@ function unavailable(): never {
 function snapshotObject(
 	input: unknown,
 	keys: readonly string[],
+	optional: readonly string[] = [],
 ): Record<string, unknown> {
 	try {
 		if (
@@ -611,14 +677,18 @@ function snapshotObject(
 			invalidInput();
 		}
 		const descriptors = Object.getOwnPropertyDescriptors(input);
+		const actualKeys = [
+			...keys,
+			...optional.filter((key) => Object.hasOwn(descriptors, key)),
+		];
 		if (
-			Reflect.ownKeys(descriptors).length !== keys.length ||
-			keys.some((key) => !Object.hasOwn(descriptors, key))
+			Reflect.ownKeys(descriptors).length !== actualKeys.length ||
+			actualKeys.some((key) => !Object.hasOwn(descriptors, key))
 		) {
 			invalidInput();
 		}
 		const values: Record<string, unknown> = {};
-		for (const key of keys) {
+		for (const key of actualKeys) {
 			const descriptor = descriptors[key];
 			if (
 				descriptor?.enumerable !== true ||
@@ -837,6 +907,11 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		"channelId",
 		"authorizationRevision",
 		"supportsSupplementaryInstruction",
+		...(input !== null &&
+		typeof input === "object" &&
+		Object.hasOwn(input, "taskBoundary")
+			? ["taskBoundary"]
+			: []),
 	]);
 	if (
 		values.schemaVersion !== 1 ||
@@ -848,6 +923,19 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 	) {
 		invalidInput();
 	}
+	const taskBoundary =
+		values.taskBoundary === undefined
+			? undefined
+			: parseTaskAuthorizationBoundaryV1(values.taskBoundary);
+	if (
+		taskBoundary &&
+		(taskBoundary.principal.kind !== "user" ||
+			taskBoundary.principal.id !== values.actorId ||
+			taskBoundary.agentId !== values.agentId ||
+			taskBoundary.channelId !== values.channelId ||
+			taskBoundary.agentAuthorizationRevision !== values.authorizationRevision)
+	)
+		invalidInput();
 	return {
 		schemaVersion: 1,
 		actorId: values.actorId,
@@ -855,6 +943,7 @@ function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
 		channelId: values.channelId,
 		authorizationRevision: values.authorizationRevision,
 		supportsSupplementaryInstruction: values.supportsSupplementaryInstruction,
+		...(taskBoundary ? { taskBoundary } : {}),
 	};
 }
 
@@ -949,26 +1038,32 @@ function parseState(
 				activeExecution: undefined,
 			};
 		}
-		const conversation = snapshotObject(values.conversation, [
-			"schemaVersion",
-			"conversationId",
-			"agentId",
-			"actorId",
-			"channelId",
-			"status",
-			"sessionGeneration",
-			"hostSessionRef",
-			"authorizationRevision",
-			"lastConversationCursor",
-			"selectedModelOptionId",
-			"selectedReasoningLevel",
-			"createdAt",
-			"updatedAt",
-		]);
+		const conversation = snapshotObject(
+			values.conversation,
+			[
+				"schemaVersion",
+				"conversationId",
+				"agentId",
+				"actorId",
+				"channelId",
+				"status",
+				"sessionGeneration",
+				"hostSessionRef",
+				"authorizationRevision",
+				"lastConversationCursor",
+				"selectedModelOptionId",
+				"selectedReasoningLevel",
+				"createdAt",
+				"updatedAt",
+			],
+			["isolationPending"],
+		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
 		if (
 			conversation.schemaVersion !== 1 ||
+			(conversation.isolationPending !== undefined &&
+				conversation.isolationPending !== true) ||
 			!isText(conversation.conversationId) ||
 			!isText(conversation.agentId) ||
 			!isText(conversation.actorId) ||
@@ -1230,6 +1325,9 @@ function parseState(
 				actorId: conversation.actorId,
 				channelId: conversation.channelId,
 				status,
+				...(conversation.isolationPending === true
+					? { isolationPending: true as const }
+					: {}),
 				sessionGeneration,
 				hostSessionRef: conversation.hostSessionRef,
 				authorizationRevision: conversation.authorizationRevision,
@@ -1659,6 +1757,151 @@ function normalizeConversationStateDecision(
 	return unavailable();
 }
 
+/** Original-history recovery is a domain decision shared by persistent and Fake adapters. */
+function planMetadataRecovery(
+	query: ConversationMetadataRecoveryQueryV1,
+	authority: ConversationExecutionAuthorityV1,
+	state: ConversationMetadataRecoveryStateV1,
+	requestedAt: Date,
+	newId: () => string,
+): ConversationMetadataRecoveryWritePlanV1 {
+	const conversation = state.conversation;
+	if (
+		!conversation ||
+		conversation.conversationId !== query.conversationId ||
+		conversation.agentId !== authority.agentId ||
+		conversation.actorId !== authority.actorId ||
+		conversation.channelId !== authority.channelId
+	)
+		return { result: { outcome: "denied" }, updates: [] };
+	if (!conversation.hostSessionRef || conversation.isolationPending)
+		return { result: { outcome: "not_applicable" }, updates: [] };
+	const eligible: {
+		itemId: string;
+		status: string;
+		metadataRecovery?: ConversationMetadataRecoveryV1;
+	}[] = [];
+	for (const candidate of state.candidates) {
+		const execution = candidate.execution;
+		const [outbox] = candidate.originalOutboxes;
+		if (
+			candidate.originalOutboxes.length !== 1 ||
+			!outbox ||
+			execution.conversationId !== conversation.conversationId ||
+			execution.agentId !== conversation.agentId ||
+			execution.actorId !== conversation.actorId ||
+			execution.channelId !== conversation.channelId ||
+			execution.sessionGeneration !== conversation.sessionGeneration ||
+			(query.executionId !== undefined &&
+				execution.executionId !== query.executionId) ||
+			!["completed", "failed", "cancelled"].includes(execution.status) ||
+			!Number.isSafeInteger(execution.deliveryFence) ||
+			execution.deliveryFence < 1 ||
+			!execution.runtimeCursor ||
+			!candidate.latestToolFacts.some(
+				(fact) =>
+					fact.kind === "tool" && fact.connection?.verification !== "verified",
+			) ||
+			candidate.boundary === null ||
+			candidate.boundary === undefined
+		)
+			continue;
+		const originalId =
+			outbox.operation === "conversation.turn.submit.v1"
+				? `conversation:turn:${execution.executionId}`
+				: outbox.operation === "conversation.turn.regenerate.v1"
+					? `conversation:regenerate:${execution.executionId}`
+					: undefined;
+		if (outbox.itemId !== originalId) continue;
+		const payload = snapshotObject(
+			outbox.payload,
+			[
+				"schemaVersion",
+				"conversationId",
+				"executionId",
+				"messageId",
+				"turnId",
+				"sessionGeneration",
+			],
+			[
+				"modelConfigurationRevision",
+				"modelOptionId",
+				"reasoningLevel",
+				"metadataRecovery",
+			],
+		);
+		if (
+			payload.schemaVersion !== 1 ||
+			payload.conversationId !== execution.conversationId ||
+			payload.executionId !== execution.executionId ||
+			payload.turnId !== execution.turnId ||
+			payload.sessionGeneration !== execution.sessionGeneration ||
+			!isText(payload.messageId, 1024)
+		)
+			continue;
+		const boundary = parseTaskAuthorizationBoundaryV1(candidate.boundary);
+		if (
+			boundary.principal.kind !== "user" ||
+			boundary.principal.id !== execution.actorId ||
+			boundary.agentId !== execution.agentId ||
+			boundary.channelId !== execution.channelId ||
+			boundary.agentAuthorizationRevision !== execution.authorizationRevision
+		)
+			continue;
+		const metadataRecovery =
+			payload.metadataRecovery === undefined
+				? undefined
+				: parseConversationMetadataRecoveryV1(payload.metadataRecovery);
+		if (
+			!["succeeded", "failed"].includes(outbox.status) &&
+			(!metadataRecovery ||
+				!["pending", "processing", "retry_scheduled"].includes(outbox.status))
+		)
+			continue;
+		eligible.push({
+			itemId: outbox.itemId,
+			status: outbox.status,
+			...(metadataRecovery ? { metadataRecovery } : {}),
+		});
+	}
+	eligible.sort(
+		(a, b) =>
+			(a.metadataRecovery?.requestedAt ?? 0) -
+				(b.metadataRecovery?.requestedAt ?? 0) ||
+			a.itemId.localeCompare(b.itemId),
+	);
+	const updates: {
+		itemId: string;
+		metadataRecovery: ConversationMetadataRecoveryV1;
+	}[] = [];
+	let coalesced = false;
+	for (const candidate of eligible.slice(0, 16)) {
+		if (candidate.status !== "succeeded" && candidate.status !== "failed") {
+			coalesced = true;
+			continue;
+		}
+		updates.push({
+			itemId: candidate.itemId,
+			metadataRecovery: parseConversationMetadataRecoveryV1({
+				id: newId(),
+				requestedAt: requestedAt.getTime(),
+				originalStatus: candidate.status,
+			}),
+		});
+	}
+	return {
+		result: {
+			outcome:
+				updates.length > 0
+					? "scheduled"
+					: coalesced
+						? "coalesced"
+						: "not_applicable",
+		},
+		updates,
+	};
+}
+
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
 	options: ConversationExecutionUseCaseOptionsV1 = {},
@@ -1666,6 +1909,41 @@ export function createConversationExecutionUseCaseV1(
 	const now = options.now ?? (() => new Date());
 	const newId = options.newId ?? randomUUID;
 	return {
+		async requestMetadataRecovery(queryInput) {
+			const input = snapshotObject(
+				queryInput,
+				["schemaVersion", "conversationId"],
+				["executionId"],
+			);
+			const query = {
+				...parseConversationStateQuery({
+					schemaVersion: input.schemaVersion,
+					conversationId: input.conversationId,
+				}),
+				...(input.executionId !== undefined
+					? {
+							executionId: isText(input.executionId, 1024)
+								? input.executionId
+								: invalidInput(),
+						}
+					: {}),
+			};
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "conversation.read",
+				conversationId: query.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			try {
+				return await dependencies.transaction.requestMetadataRecovery(
+					{ query, authority },
+					(state) =>
+						planMetadataRecovery(query, authority, state, now(), newId),
+				);
+			} catch {
+				return unavailable();
+			}
+		},
 		async readConversation(queryInput) {
 			const query = parseConversationStateQuery(queryInput);
 			const authority = await authorize(dependencies.authorization, {
@@ -1809,7 +2087,10 @@ export function createConversationExecutionUseCaseV1(
 							) {
 								return { outcome: "denied" };
 							}
-							if (conversation.status === "unavailable")
+							if (
+								conversation.status === "unavailable" ||
+								conversation.isolationPending
+							)
 								return { outcome: "denied" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
@@ -2044,6 +2325,7 @@ export function createConversationExecutionUseCaseV1(
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								conversation.status === "unavailable" ||
+								conversation.isolationPending ||
 								!selected?.reasoningLevels.includes(command.reasoningLevel)
 							) {
 								return { outcome: "denied" };
@@ -2127,7 +2409,10 @@ export function createConversationExecutionUseCaseV1(
 							) {
 								return { outcome: "denied" };
 							}
-							if (conversation.status === "unavailable")
+							if (
+								conversation.status === "unavailable" ||
+								conversation.isolationPending
+							)
 								return { outcome: "denied" };
 							if (state.activeExecution) return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(

@@ -20,6 +20,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
@@ -74,7 +75,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterEach(async () => {
-	await client`truncate platform.conversation_events,
+	await client`truncate platform.task_control_records, platform.task_authorization_records,
+		platform.conversation_events,
 		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items,
 		platform.idempotency_records, platform.conversation_stops,
@@ -181,6 +183,8 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		{ newId: () => `runtime_event_fixture_${nextRuntimeEventId++}` },
 	);
 	const transaction: ConversationExecutionTransactionPortV1 = {
+		requestMetadataRecovery: (request, decide) =>
+			adapter.requestMetadataRecovery(request, decide),
 		readConversation: (request, project) =>
 			adapter.readConversation(request, project),
 		createConversation: (request, decide) =>
@@ -238,6 +242,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		},
 	);
 	const useCase: ConversationExecutionUseCaseV1 = {
+		requestMetadataRecovery: (query) => inner.requestMetadataRecovery(query),
 		readConversation: (query) => inner.readConversation(query),
 		createConversation: (command) => inner.createConversation(command),
 		async accept(command) {
@@ -537,6 +542,149 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("commits original task authority with acceptance and rolls back control when required audit fails", async () => {
+		await client`insert into platform.agents (id, authorization_revision) values (${authority.agentId}, ${authority.authorizationRevision}) on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
+		const taskBoundary = {
+			schemaVersion: 1 as const,
+			principal: { kind: "user" as const, id: authority.actorId },
+			agentId: authority.agentId,
+			channelId: "web",
+			identityRevision: "identity-different-from-agent",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+		};
+		const { transaction, useCase } = createConversation({
+			...authority,
+			taskBoundary,
+		});
+		const taskStore = new PostgresTaskAuthorizationStoreV1({ databaseUrl });
+		try {
+			await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "task-create",
+				requestId: "task-create",
+				traceId: "task-trace",
+			});
+			const command = {
+				schemaVersion: 1 as const,
+				command: "message" as const,
+				conversationId: "conversation_id_1",
+				text: "secret-task-body-sentinel",
+				idempotencyKey: "task-submit",
+				requestId: "task-submit",
+				traceId: "task-trace",
+			};
+			const accepted = await useCase.accept(command);
+			expect(accepted.outcome).toBe("accepted");
+			const [record] =
+				await client`select id, execution_id, boundary from platform.task_authorization_records`;
+			expect(record?.boundary).toEqual(taskBoundary);
+			if (!record) throw new Error("Task authority was not committed");
+			const [before] =
+				await client`select request_digest, result from platform.idempotency_records where idempotency_key = 'task-submit'`;
+			expect(await useCase.accept(command)).toMatchObject({
+				outcome: "replayed",
+				result: before?.result,
+			});
+			expect(
+				await client`select request_digest, result from platform.idempotency_records where idempotency_key = 'task-submit'`,
+			).toEqual([before]);
+			expect(
+				await client`select id from platform.task_authorization_records`,
+			).toHaveLength(1);
+			const audits =
+				await client`select details from platform.audit_events where action = 'task.authorization.accepted'`;
+			expect(audits).toHaveLength(1);
+			expect(JSON.stringify(audits)).not.toContain(command.text);
+			const control = {
+				executionId: record.execution_id,
+				authorizationRecordId: record.id,
+				reason: "authorization_revoked" as const,
+				workerId: "worker-test",
+				traceId: "task-trace",
+				requestId: "control-request",
+			};
+			for (const boundary of [
+				{
+					...taskBoundary,
+					principal: { kind: "user", id: "other-user" },
+					accessSources: [{ kind: "user", userId: "other-user" }],
+				},
+				{ ...taskBoundary, agentId: "other-agent" },
+				{ ...taskBoundary, channelId: "other-channel" },
+				{ ...taskBoundary, agentAuthorizationRevision: "other-revision" },
+			]) {
+				await client`update platform.task_authorization_records set boundary = ${client.json(boundary)} where id = ${record.id}`;
+				await expect(
+					taskStore.readExecution(record.execution_id),
+				).rejects.toThrow("Task authorization persistence is unavailable");
+				await expect(taskStore.recordControl(control)).rejects.toThrow(
+					"Task authorization persistence is unavailable",
+				);
+			}
+			await client`update platform.task_authorization_records set boundary = ${client.json(taskBoundary)} where id = ${record.id}`;
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(0);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(0);
+			await client.unsafe(
+				`create function platform.fail_task_control_audit() returns trigger as $$ begin if NEW.action = 'task.control.created' then raise exception 'controlled audit failure'; end if; return NEW; end; $$ language plpgsql`,
+			);
+			await client.unsafe(
+				"create trigger fail_task_control_audit before insert on platform.audit_events for each row execute function platform.fail_task_control_audit()",
+			);
+			await expect(taskStore.recordControl(control)).rejects.toThrow(
+				"Task authorization persistence is unavailable",
+			);
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(0);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(0);
+			expect(
+				await client`select id from platform.outbox_items where operation = 'conversation.turn.stop.v1'`,
+			).toHaveLength(0);
+			expect(
+				await client`select revoked_at from platform.task_authorization_records`,
+			).toEqual([{ revoked_at: null }]);
+			await client.unsafe(
+				"drop trigger fail_task_control_audit on platform.audit_events",
+			);
+			const created = await taskStore.recordControl(control);
+			expect(await taskStore.recordControl(control)).toEqual(created);
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(1);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(1);
+			expect(
+				await client`select id from platform.outbox_items where operation = 'conversation.turn.stop.v1'`,
+			).toHaveLength(1);
+			expect(
+				(
+					await client`select revoked_at from platform.task_authorization_records`
+				)[0]?.revoked_at,
+			).toBeInstanceOf(Date);
+			await expect(
+				taskStore.recordControl({ ...control, executionId: "other-execution" }),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+		} finally {
+			await client.unsafe(
+				"drop trigger if exists fail_task_control_audit on platform.audit_events",
+			);
+			await client.unsafe(
+				"drop function if exists platform.fail_task_control_audit()",
+			);
+			await transaction.close();
+			await taskStore.close();
+		}
+	});
+
 	it("keeps legacy rows valid while enforcing complete model selections", async () => {
 		await client`
 			insert into platform.conversations

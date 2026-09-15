@@ -154,6 +154,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
       '@agent-infra/image-registry':
         specifier: workspace:*
         version: link:../../packages/image-registry
@@ -200,6 +203,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
       '@agent-infra/image-registry':
         specifier: workspace:*
         version: link:../../packages/image-registry
@@ -334,6 +340,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.246
         version: 0.3.246(@anthropic-ai/sdk@0.125.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       eventsource-parser:
         specifier: 3.1.0
         version: 3.1.0
@@ -344,6 +353,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
+      json-schema-to-ts:
+        specifier: 3.1.1
+        version: 3.1.1
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
@@ -389,6 +401,28 @@ importers:
       zod-openapi:
         specifier: 'catalog:'
         version: 6.0.1(zod@4.4.3)
+
+  packages/identity:
+    dependencies:
+      '@agent-infra/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
 
   packages/image-registry:
     dependencies:
@@ -5191,7 +5225,7 @@ snapshots:
 
   '@types/stream-buffers@3.0.8':
     dependencies:
-      '@types/node': 24.13.3
+      '@types/node': 26.4.1
 
   '@types/validate-npm-package-name@4.0.2': {}
 

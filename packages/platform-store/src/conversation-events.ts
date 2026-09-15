@@ -8,8 +8,13 @@ import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventWritePlanV1,
 	type ConversationNormalizedEventV1,
+	type ConversationOperationFactV2,
 	type ConversationPersistedEventPayloadV1,
 	type PersistedRuntimeConversationEventV1,
+	parseConversationOperationEventV2,
+	parseConversationOperationFactV2,
+	parseTaskAuthorizationBoundaryV1,
+	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 
@@ -34,6 +39,11 @@ interface ExecutionRow {
 	readonly session_generation: string | number;
 	readonly delivery_fence: string | number;
 	readonly last_event_sequence: string | number;
+	readonly agent_id: string;
+	readonly actor_id: string;
+	readonly channel_id: string;
+	readonly model_option_id: string | null;
+	readonly reasoning_level: string | null;
 }
 
 interface EventRow {
@@ -49,6 +59,7 @@ interface EventRow {
 }
 
 interface DispatchLeaseRow {
+	readonly metadata_recovery: boolean;
 	readonly id: string;
 	readonly scope_type: string;
 	readonly scope_id: string;
@@ -172,6 +183,13 @@ function eventType(value: unknown): unknown {
 
 function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 	const type = eventType(value);
+	if (type === "execution.operation") {
+		try {
+			return parseConversationOperationEventV2(value);
+		} catch {
+			return unavailable();
+		}
+	}
 	if (type === "text.delta") {
 		const input = exactRecord(value, ["type", "text"]);
 		return { type: "text.delta", text: text(input.text, 65_536) };
@@ -284,10 +302,16 @@ function command(value: unknown): ConversationEventCommandV1 {
 			"occurredAt",
 			"event",
 		],
-		["transition", "dispatchLease"],
+		["transition", "dispatchLease", "operationMetadataOnly"],
 	);
 	if (input.schemaVersion !== 1) return unavailable();
 	const event = normalizedEvent(input.event);
+	if (
+		input.operationMetadataOnly !== undefined &&
+		(input.operationMetadataOnly !== true ||
+			event.type !== "execution.operation")
+	)
+		unavailable();
 	const transition =
 		input.transition === undefined
 			? undefined
@@ -318,6 +342,9 @@ function command(value: unknown): ConversationEventCommandV1 {
 		runtimeCursor: text(input.runtimeCursor),
 		occurredAt: timestamp(input.occurredAt),
 		event,
+		...(input.operationMetadataOnly === true
+			? { operationMetadataOnly: true as const }
+			: {}),
 		...(transition ? { transition } : {}),
 		...(dispatchLease ? { dispatchLease } : {}),
 	};
@@ -546,7 +573,8 @@ async function readExecution(
 ): Promise<ExecutionRow | undefined> {
 	const rows = await transaction<ExecutionRow[]>`
 		select execution_id, conversation_id, session_generation, delivery_fence,
-			last_event_sequence
+			last_event_sequence, agent_id, actor_id, channel_id,
+			model_option_id, reasoning_level
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update
@@ -568,7 +596,96 @@ async function readExistingEvent(
 			and source = 'runtime'
 	`;
 	if (rows.length > 1) unavailable();
+	const row = rows[0];
+	if (row?.event_type === "execution.operation") {
+		const observed = await transaction<{ details: unknown }[]>`
+			select details from platform.audit_events
+			where id = ${`operation-observed:${row.event_id}`}
+				and action = 'execution.operation.observed' and outcome = 'succeeded'
+				and target_type = 'execution' and target_id = ${executionId}
+		`;
+		const fact = parseConversationOperationEventV2(row.event_payload).fact;
+		const details = observed[0]?.details as Record<string, unknown> | undefined;
+		if (
+			observed.length !== 1 ||
+			!details ||
+			details.schemaVersion !== 2 ||
+			details.eventId !== row.event_id ||
+			details.executor !== "platform_worker" ||
+			JSON.stringify(parseConversationOperationFactV2(details.fact)) !==
+				JSON.stringify(fact)
+		)
+			unavailable();
+	}
 	return rows[0];
+}
+
+async function readOperationHistory(
+	transaction: Transaction,
+	executionId: string,
+): Promise<readonly ConversationOperationFactV2[]> {
+	const rows = await transaction<{ event_payload: unknown }[]>`
+		select event_payload from platform.conversation_events
+		where execution_id = ${executionId} and event_type = 'execution.operation' and source = 'runtime'
+		order by sequence
+	`;
+	return rows.map(
+		(row) => parseConversationOperationEventV2(row.event_payload).fact,
+	);
+}
+
+async function insertOperationAudit(
+	transaction: Transaction,
+	plan: ConversationEventWritePlanV1,
+	execution: ExecutionRow,
+): Promise<void> {
+	if (plan.event.event.type !== "execution.operation") return;
+	const { fact } = plan.event.event;
+	const records = await transaction<
+		{
+			id: string;
+			boundary: unknown;
+			trace_id: string;
+			request_id: string | null;
+			actor_type: string;
+			actor_id: string;
+			agent_id: string | null;
+		}[]
+	>`
+		select r.id, r.boundary, a.trace_id, a.request_id, a.actor_type, a.actor_id, a.agent_id
+		from platform.task_authorization_records r
+		join platform.audit_events a on a.target_id = r.execution_id and a.target_type = 'execution'
+			and a.action = 'task.authorization.accepted' and a.outcome = 'succeeded'
+			and a.details ->> 'authorizationRecordId' = r.id
+		where r.execution_id = ${plan.event.executionId}
+	`;
+	const record = records[0];
+	if (records.length !== 1 || !record) unavailable();
+	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	if (
+		boundary.principal.id !== execution.actor_id ||
+		boundary.agentId !== execution.agent_id ||
+		boundary.channelId !== execution.channel_id ||
+		record.actor_type !== boundary.principal.kind ||
+		record.actor_id !== boundary.principal.id ||
+		record.agent_id !== boundary.agentId
+	)
+		unavailable();
+	if (
+		fact.kind === "model" &&
+		(fact.model.modelOptionId !== execution.model_option_id ||
+			fact.model.reasoningLevel !== execution.reasoning_level)
+	)
+		unavailable();
+	// This outcome describes reliable observation, never model/tool success.
+	// The actual operation result remains the explicit fact.phase, including unknown.
+	await transaction`
+		insert into platform.audit_events
+			(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
+		values (${`operation-observed:${plan.event.eventId}`}, ${text(record.trace_id)}, ${boundary.principal.kind}, ${boundary.principal.id},
+			'execution.operation.observed', 'execution', ${plan.event.executionId}, 'succeeded', ${text(record.request_id)}, ${boundary.agentId},
+			${plan.event.occurredAt}, ${transaction.json({ schemaVersion: 2, eventId: plan.event.eventId, authorizationRecordId: text(record.id), executor: "platform_worker", fact } as unknown as JsonValue)})
+	`;
 }
 
 async function currentDispatchLease(
@@ -577,7 +694,7 @@ async function currentDispatchLease(
 ): Promise<boolean> {
 	if (!command.dispatchLease) return true;
 	const rows = await transaction<DispatchLeaseRow[]>`
-		select id, scope_type, scope_id, status, lease_owner,
+		select id, scope_type, scope_id, status, lease_owner, payload ? 'metadataRecovery' as metadata_recovery,
 			delivery_fence::text,
 			lease_expires_at > clock_timestamp() as lease_active
 		from platform.outbox_items
@@ -590,6 +707,10 @@ async function currentDispatchLease(
 		row?.scope_type === "conversation" &&
 		row.scope_id === command.conversationId &&
 		row.status === "processing" &&
+		(!row.metadata_recovery ||
+			(command.operationMetadataOnly === true &&
+				command.event.type === "execution.operation" &&
+				command.transition === undefined)) &&
 		row.lease_owner === command.dispatchLease.leaseOwner &&
 		safeInteger(row.delivery_fence, 1) ===
 			command.dispatchLease.deliveryFence &&
@@ -613,13 +734,13 @@ export class PostgresConversationEventTransactionV1
 		const persistedRequest = request(requestInput);
 		if (typeof decide !== "function") unavailable();
 		return this.#transaction(async (transaction) => {
-			const leaseCurrent = await currentDispatchLease(
-				transaction,
-				persistedRequest.command,
-			);
 			const conversation = await lockConversation(
 				transaction,
 				persistedRequest.command.conversationId,
+			);
+			const leaseCurrent = await currentDispatchLease(
+				transaction,
+				persistedRequest.command,
 			);
 			const existing = await readExistingEvent(
 				transaction,
@@ -638,6 +759,15 @@ export class PostgresConversationEventTransactionV1
 				conversation: conversationState(conversation),
 				execution: executionState(execution),
 				existingEvent: eventState(existing),
+				...(persistedRequest.command.event.type !== "execution.operation" ||
+				existing
+					? {}
+					: {
+							operationHistory: await readOperationHistory(
+								transaction,
+								persistedRequest.command.executionId,
+							),
+						}),
 			};
 			const decision = decide(state);
 			if (!isWritePlan(decision)) return validateDecision(decision, state);
@@ -647,6 +777,15 @@ export class PostgresConversationEventTransactionV1
 				return unavailable();
 			}
 			const plan = validatePlan(decision, persistedRequest, state);
+			if (plan.event.event.type === "execution.operation") {
+				if (!state.operationHistory || !execution) unavailable();
+				requireConversationOperationSuccessorV2(
+					state.operationHistory,
+					plan.event.event.fact,
+					persistedRequest.command.operationMetadataOnly,
+				);
+				await insertOperationAudit(transaction, plan, execution);
+			}
 
 			await transaction`
 					insert into platform.conversation_events
@@ -696,6 +835,8 @@ export class PostgresConversationEventTransactionV1
 						and last_event_sequence = ${plan.event.sequence}
 						and (status not in ('completed', 'failed', 'cancelled')
 							or status = ${plan.transition.executionStatus})
+						and not (status <> 'submitted' and ${plan.transition.executionStatus} = 'submitted')
+						and not (status = 'submitted' and ${plan.transition.executionStatus} in ('unknown', 'processing'))
 					returning execution_id
 				`;
 				if (transitionedExecution.length !== 1) unavailable();

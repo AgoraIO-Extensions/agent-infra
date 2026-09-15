@@ -24,6 +24,9 @@ import {
 	pilotBrowserSseOpenApiPathsV1,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
+	pilotOperationOpenApiPathsV2,
+	pilotOperationSchemasV2,
+	pilotOperationSseSchemasV2,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
 import {
@@ -31,11 +34,16 @@ import {
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
 	RuntimeDriverV2SchemaDefinitions,
+	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	RuntimeEventV1SchemaDefinitions,
+	RuntimeEventV2SchemaDefinitions,
 	RuntimeGenerationCancelRequestV1Schema,
+	RuntimeGrantV2SchemaDefinitions,
 	RuntimeHostV1SchemaDefinitions,
 	RuntimeHostV2SchemaDefinitions,
+	RuntimeHostV3SchemaDefinitions,
+	RuntimeLegacyMigrationV1SchemaDefinitions,
 	RuntimeModelConfigurationV3Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
@@ -70,6 +78,18 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	pilotSseJsonSchemaV2: resolve(
+		artifactRoot,
+		"json-schema/pilot-sse.v2.schema.json",
+	),
+	runtimeJsonSchemaV3: resolve(
+		artifactRoot,
+		"json-schema/runtime.v3.schema.json",
+	),
+	runtimeOpenapiV3: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v3.openapi.json",
+	),
 	readinessJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/runtime-readiness.v1.schema.json",
@@ -389,6 +409,100 @@ function buildArtifacts() {
 			},
 		},
 	});
+
+	const runtimeDefinitionsV3 = {
+		...RuntimeGrantV2SchemaDefinitions,
+		...RuntimeHostV3SchemaDefinitions,
+		...RuntimeEventV2SchemaDefinitions,
+		...RuntimeLegacyMigrationV1SchemaDefinitions,
+	};
+	const runtimeJsonSchemaV3 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v3.schema.json",
+		title: "Agent Infra Runtime Contracts V3",
+		definitions: runtimeDefinitionsV3,
+	});
+	const v3Operations = [
+		[
+			"turns",
+			"submitRuntimeTurnV3",
+			"RuntimeSubmitTurnRequestV3",
+			"RuntimeOperationResponseV3",
+		],
+		[
+			"instructions",
+			"supplementRuntimeTurnV3",
+			"RuntimeSupplementRequestV3",
+			"RuntimeOperationResponseV3",
+		],
+		[
+			"stops",
+			"stopRuntimeTurnV3",
+			"RuntimeStopRequestV3",
+			"RuntimeOperationResponseV3",
+		],
+		[
+			"status",
+			"recoverRuntimeStatusV3",
+			"RuntimeStatusRequestV3",
+			"RuntimeStatusResponseV3",
+		],
+		[
+			"generations/cancel",
+			"cancelRuntimeGenerationV3",
+			"RuntimeGenerationCancelRequestV3",
+			"RuntimeOperationResponseV3",
+		],
+		[
+			"authorizations/renew",
+			"renewRuntimeAuthorizationV3",
+			"RuntimeAuthorizationRenewRequestV3",
+			"RuntimeAuthorizationRenewResponseV3",
+		],
+		[
+			"events/ack",
+			"acknowledgeRuntimeEventsV3",
+			"RuntimeEventAckRequestV3",
+			"RuntimeEventAckResponseV3",
+		],
+	];
+	const runtimeOpenapiV3 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "3.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			...Object.fromEntries(
+				v3Operations.map(([path, operationId, request, response]) => [
+					`/internal/runtime/v3/${path}`,
+					{
+						post: postOperation(
+							operationId,
+							runtimeDefinitionsV3[request],
+							runtimeDefinitionsV3[response],
+							"application/json",
+						),
+					},
+				]),
+			),
+			"/internal/runtime/v3/events/stream": {
+				post: postOperation(
+					"streamRuntimeEventsV3",
+					RuntimeHostV3SchemaDefinitions.RuntimeEventPersistRequestV3,
+					RuntimeEventSchema,
+					"text/event-stream",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...runtimeDefinitionsV3,
+			},
+		},
+	});
+
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",
 		info: {
@@ -409,8 +523,10 @@ function buildArtifacts() {
 			title: "Agent Infra Pilot Browser Audit API",
 			version: "2.0.0",
 		},
-		paths: pilotBrowserOpenApiPathsV2,
-		components: { schemas: pilotBrowserSchemasV2 },
+		paths: { ...pilotBrowserOpenApiPathsV2, ...pilotOperationOpenApiPathsV2 },
+		components: {
+			schemas: { ...pilotBrowserSchemasV2, ...pilotOperationSchemasV2 },
+		},
 	});
 	const pilotSseJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v1.schema.json",
@@ -492,10 +608,17 @@ function buildArtifacts() {
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
 		pilotSseJsonSchema,
+		pilotSseJsonSchemaV2: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-sse.v2.schema.json",
+			title: "Agent Infra Pilot SSE Contracts V2",
+			definitions: pilotOperationSseSchemasV2,
+		}),
 		kubernetesWorkloadJsonSchema,
 		registryManifestJsonSchema,
 		secretLifecycleJsonSchema,
 		workerResultJsonSchema,
+		runtimeJsonSchemaV3,
+		runtimeOpenapiV3,
 		runtimeJsonSchema,
 		runtimeJsonSchemaV2,
 		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({

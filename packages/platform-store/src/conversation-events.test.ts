@@ -1,6 +1,7 @@
 import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
+	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
 } from "@agent-infra/platform-core";
 import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
@@ -8,6 +9,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
+import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -68,7 +70,7 @@ async function seedConformanceConversation(): Promise<void> {
 		values
 			(${conformanceExecutionId}, ${conformanceConversationId},
 			 'agent_event_fixture', 'actor_event_fixture', 'channel_event_fixture',
-			 'turn_event_fixture', 'submitted', 3, 5,
+			 'turn_event_fixture', 'unknown', 3, 5,
 			 'authorization_event_fixture', now(), now())
 	`;
 }
@@ -195,7 +197,7 @@ async function seedConversation(): Promise<{
 			 created_at, updated_at)
 		values
 			(${executionId}, ${conversationId}, 'agent_event', 'actor_event',
-			 'channel_event', 'turn_event', 'submitted', 3, 5,
+			 'channel_event', 'turn_event', 'unknown', 3, 5,
 			 'authorization_event', now(), now())
 	`;
 	return { conversationId, executionId };
@@ -234,6 +236,582 @@ function eventInput(
 		event: { type: "text.delta" as const, text: "Hello" },
 	};
 }
+
+async function operationFixture(withProvenance = true) {
+	const ids = await seedConversation();
+	const authorizationRecordId = `authorization_${ids.executionId}`;
+	await client`
+		update platform.conversation_executions
+		set model_configuration_revision = 1, model_option_id = 'option-1', reasoning_level = 'medium'
+		where execution_id = ${ids.executionId}
+	`;
+	if (withProvenance) {
+		await client`
+			insert into platform.task_authorization_records (id, execution_id, boundary)
+			values (${authorizationRecordId}, ${ids.executionId}, ${client.json({
+				schemaVersion: 1,
+				principal: { kind: "user", id: "actor_event" },
+				agentId: "agent_event",
+				channelId: "channel_event",
+				identityRevision: "identity-1",
+				agentAuthorizationRevision: "authorization_event",
+				accessSources: [{ kind: "user", userId: "actor_event" }],
+			})})
+		`;
+		await client`
+			insert into platform.audit_events
+				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+			values (${`acceptance_${ids.executionId}`}, 'trace-original', 'user', 'actor_event', 'task.authorization.accepted', 'execution',
+				${ids.executionId}, 'succeeded', 'request-original', 'agent_event', ${client.json({ authorizationRecordId })})
+		`;
+	}
+	const transaction = new PostgresConversationEventTransactionV1({
+		databaseUrl,
+	});
+	let counter = 1;
+	const events = createConversationEventUseCaseV1(
+		{ transaction },
+		{ newId: () => `${ids.executionId}_event_${counter++}` },
+	);
+	const query = new PostgresConversationQueryV1({ databaseUrl });
+	const fact: ConversationOperationFactV2 = {
+		kind: "model",
+		operationRef: "model-operation-1",
+		attemptRef: "attempt-1",
+		phase: "intent",
+		model: {
+			configVersion: "revision-1",
+			modelOptionId: "option-1",
+			modelId: "model-1",
+			reasoningLevel: "medium",
+		},
+	};
+	const command = (
+		next: ConversationOperationFactV2 = fact,
+		key = "operation-intent",
+	) => ({
+		...eventInput(ids.conversationId, ids.executionId, key),
+		event: {
+			type: "execution.operation" as const,
+			schemaVersion: 2 as const,
+			fact: next,
+		},
+	});
+	const snapshot = async () => {
+		const [row] = await client`
+			select e.last_event_sequence::int as sequence, e.last_runtime_cursor as runtime_cursor,
+				c.last_conversation_cursor::int as conversation_cursor,
+				(select count(*)::int from platform.conversation_events where execution_id = e.execution_id) as events,
+				(select count(*)::int from platform.audit_events where target_id = e.execution_id and action = 'execution.operation.observed') as audits
+			from platform.conversation_executions e join platform.conversations c on c.id = e.conversation_id where e.execution_id = ${ids.executionId}
+		`;
+		return row;
+	};
+	return {
+		...ids,
+		authorizationRecordId,
+		fact,
+		command,
+		events,
+		query,
+		snapshot,
+		close: () => Promise.all([transaction.close(), query.close()]),
+	};
+}
+
+describe("PostgreSQL actual operation facts and necessary audits", () => {
+	async function connectionFixture() {
+		const fixture = await operationFixture();
+		const intent = {
+			kind: "tool",
+			phase: "intent",
+			toolId: "connection.github.create_pr",
+			operationRef: "connection-operation-1",
+			attemptRef: "connection-attempt-1",
+			connection: {
+				serviceRef: "connection-primary",
+				verification: "unverified",
+				reason: "receipt_missing",
+			},
+		} as const;
+		const started = {
+			...intent,
+			phase: "started",
+			startedAt: "2026-09-04T00:00:00.000Z",
+		} as const;
+		const completed = {
+			...started,
+			phase: "completed",
+			finishedAt: "2026-09-04T00:00:01.000Z",
+			durationMs: 1_000,
+			resultRef: "result-1",
+			connection: {
+				...intent.connection,
+				callRef: "call-1",
+				reason: "record_unavailable",
+			},
+		} as const;
+		const verified = {
+			...completed,
+			connection: {
+				serviceRef: "connection-primary",
+				verification: "verified",
+				callRef: "call-1",
+			},
+		} as const;
+		for (const fact of [intent, started, completed])
+			await fixture.events.persist(
+				fixture.command(fact, `connection-${fact.phase}`),
+			);
+		return { ...fixture, completed, verified };
+	}
+
+	it("persists late Connection verification once and preserves one original tool outcome in history", async () => {
+		const fixture = await connectionFixture();
+		try {
+			const before = await fixture.query.get(
+				{ actorId: "actor_event", channelId: "channel_event" },
+				fixture.conversationId,
+			);
+			const command = {
+				...fixture.command(fixture.verified, "connection-verified"),
+				operationMetadataOnly: true as const,
+			};
+			const results = await Promise.all([
+				fixture.events.persist(command),
+				fixture.events.persist(command),
+			]);
+			expect(results.map((result) => result.outcome).sort()).toEqual([
+				"accepted",
+				"replayed",
+			]);
+			expect(await fixture.snapshot()).toMatchObject({
+				sequence: 4,
+				conversation_cursor: 4,
+				events: 4,
+				audits: 4,
+				runtime_cursor: "runtime_cursor_connection-verified",
+			});
+			const history = await fixture.query.get(
+				{ actorId: "actor_event", channelId: "channel_event" },
+				fixture.conversationId,
+			);
+			expect(history?.events.slice(0, 3)).toEqual(before?.events);
+			expect(history?.events[3]).toMatchObject({
+				eventSchemaVersion: 2,
+				eventPayload: command.event,
+			});
+			// A metadata event replaces the view of its attempt; it is not a new execution.
+			const outcomes = new Map<string, ConversationOperationFactV2>();
+			for (const event of history?.events ?? []) {
+				const payload = event.eventPayload as {
+					type: string;
+					fact: ConversationOperationFactV2;
+				};
+				if (payload.type === "execution.operation")
+					outcomes.set(
+						`${event.executionId}:${payload.fact.operationRef}:${payload.fact.attemptRef}`,
+						payload.fact,
+					);
+			}
+			expect([...outcomes.values()]).toEqual([fixture.verified]);
+			expect(
+				[...outcomes.values()].filter((fact) => fact.phase === "completed"),
+			).toHaveLength(1);
+			expect(
+				[...outcomes.values()].reduce(
+					(sum, fact) => sum + (fact.durationMs ?? 0),
+					0,
+				),
+			).toBe(1_000);
+			const [audit] =
+				await client`select actor_type, actor_id, agent_id, details from platform.audit_events where target_id = ${fixture.executionId} and details ->> 'fact' is not null order by occurred_at desc, id desc limit 1`;
+			expect(audit).toMatchObject({
+				actor_type: "user",
+				actor_id: "actor_event",
+				agent_id: "agent_event",
+				details: { fact: fixture.verified },
+			});
+			await expect(
+				fixture.query.get(
+					{ actorId: "another-user", channelId: "channel_event" },
+					fixture.conversationId,
+				),
+			).resolves.toBeUndefined();
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("rejects a post-terminal evidence update that completes or restarts an original tool attempt", async () => {
+		const fixture = await connectionFixture();
+		try {
+			const before = await fixture.snapshot();
+			for (const fact of [
+				{ ...fixture.verified, phase: "failed" as const },
+				{ ...fixture.verified, durationMs: 2000 },
+				{ ...fixture.fact, phase: "intent" as const },
+			]) {
+				await expect(
+					fixture.events.persist({
+						...fixture.command(fact, "post-terminal-invalid"),
+						operationMetadataOnly: true,
+					}),
+				).rejects.toThrow();
+				expect(await fixture.snapshot()).toEqual(before);
+			}
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("rejects Connection rebinding, downgrade and changed terminal metadata without advancing cursors", async () => {
+		const fixture = await connectionFixture();
+		try {
+			await fixture.events.persist(
+				fixture.command(fixture.verified, "connection-verified"),
+			);
+			const before = await fixture.snapshot();
+			const changes = [
+				{
+					connection: {
+						...fixture.verified.connection,
+						serviceRef: "other-service",
+					},
+				},
+				{
+					connection: { ...fixture.verified.connection, callRef: "other-call" },
+				},
+				{ connection: fixture.completed.connection },
+				{ connection: undefined },
+				{ operationRef: "other-operation" },
+				{ attemptRef: "other-attempt" },
+				{ phase: "failed" },
+				{ durationMs: 2_000 },
+				{ finishedAt: "2026-09-04T00:00:02.000Z" },
+				{ resultRef: "another-result" },
+				{},
+			];
+			for (const [i, change] of changes.entries()) {
+				await expect(
+					fixture.events.persist(
+						fixture.command(
+							{ ...fixture.verified, ...change } as ConversationOperationFactV2,
+							`invalid-association-${i}`,
+						),
+					),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toEqual(before);
+			}
+			const other = await operationFixture();
+			try {
+				await expect(
+					other.events.persist(
+						other.command(fixture.verified, "foreign-terminal-evidence"),
+					),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await other.snapshot()).toMatchObject({
+					events: 0,
+					audits: 0,
+					sequence: 0,
+				});
+			} finally {
+				await other.close();
+			}
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("rolls back a Connection metadata update and its audit before a safe retry", async () => {
+		const fixture = await connectionFixture();
+		try {
+			const before = await fixture.snapshot();
+			const command = fixture.command(fixture.verified, "connection-verified");
+			await armEventCommitFailure();
+			try {
+				await expect(fixture.events.persist(command)).rejects.toMatchObject({
+					code: "unavailable",
+				});
+				expect(await fixture.snapshot()).toEqual(before);
+			} finally {
+				await disarmEventCommitFailure();
+			}
+			await expect(fixture.events.persist(command)).resolves.toMatchObject({
+				outcome: "accepted",
+				event: { sequence: 4 },
+			});
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 4,
+				audits: 4,
+				sequence: 4,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("commits mixed versions, original actor audit and cursors once, then replays after lease changes", async () => {
+		const fixture = await operationFixture();
+		const scope = { actorId: "actor_event", channelId: "channel_event" };
+		try {
+			const text = await fixture.events.persist(
+				eventInput(
+					fixture.conversationId,
+					fixture.executionId,
+					"text-before-operation",
+				),
+			);
+			await fixture.events.persist(fixture.command());
+			const started = {
+				...fixture.fact,
+				phase: "started" as const,
+				startedAt: "2026-09-04T00:00:00.000Z",
+			};
+			await fixture.events.persist(
+				fixture.command(started, "operation-started"),
+			);
+			const completed = {
+				...started,
+				phase: "completed" as const,
+				finishedAt: "2026-09-04T00:00:01.000Z",
+				durationMs: 1_000,
+			};
+			const result = await fixture.events.persist(
+				fixture.command(completed, "operation-completed"),
+			);
+			expect(result).toMatchObject({
+				outcome: "accepted",
+				event: { sequence: 4, conversationCursor: 4 },
+			});
+			await expect(
+				fixture.events.persist({
+					...fixture.command(completed, "operation-completed"),
+					deliveryFence: 1,
+				}),
+			).resolves.toMatchObject({
+				outcome: "replayed",
+				event: { sequence: 4, conversationCursor: 4 },
+			});
+			expect(await fixture.snapshot()).toMatchObject({
+				sequence: 4,
+				conversation_cursor: 4,
+				events: 4,
+				audits: 3,
+				runtime_cursor: "runtime_cursor_operation-completed",
+			});
+			const audits =
+				await client`select actor_type, actor_id, agent_id, trace_id, request_id, details from platform.audit_events where target_id = ${fixture.executionId} and action = 'execution.operation.observed' order by details ->> 'eventId'`;
+			expect(audits).toHaveLength(3);
+			expect(
+				audits.every(
+					(audit) =>
+						audit.actor_type === "user" &&
+						audit.actor_id === "actor_event" &&
+						audit.agent_id === "agent_event" &&
+						audit.trace_id === "trace-original" &&
+						audit.request_id === "request-original" &&
+						audit.details.executor === "platform_worker",
+				),
+			).toBe(true);
+			const history = await fixture.query.get(scope, fixture.conversationId);
+			expect(history?.events[0]).not.toHaveProperty("eventSchemaVersion");
+			expect(history?.events[1]).toMatchObject({
+				eventSchemaVersion: 2,
+				eventPayload: fixture.command().event,
+			});
+			if (text.outcome === "stale") throw new Error("Expected stored text");
+			const replay = await fixture.query.replay(scope, fixture.conversationId, {
+				kind: "last-event-id",
+				value: text.event.eventId,
+			});
+			expect(replay).toMatchObject({
+				outcome: "events",
+				events: [
+					{ eventSchemaVersion: 2 },
+					{ eventSchemaVersion: 2 },
+					{ eventSchemaVersion: 2 },
+				],
+			});
+			await expect(
+				fixture.query.getExecution(
+					{ ...scope, actorId: "owner-other-user" },
+					fixture.conversationId,
+					fixture.executionId,
+				),
+			).resolves.toBeUndefined();
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("rolls back the event, audit and every cursor if audit persistence fails, then retries the same operation", async () => {
+		const fixture = await operationFixture();
+		try {
+			await client.unsafe(
+				`create function platform.operation_audit_test_failure() returns trigger language plpgsql as $$ begin if NEW.action = 'execution.operation.observed' then raise exception 'injected audit persistence failure'; end if; return NEW; end $$`,
+			);
+			await client.unsafe(
+				"create trigger operation_audit_test_failure before insert on platform.audit_events for each row execute function platform.operation_audit_test_failure()",
+			);
+			try {
+				await expect(
+					fixture.events.persist(fixture.command()),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					sequence: 0,
+					conversation_cursor: 0,
+					events: 0,
+					audits: 0,
+					runtime_cursor: null,
+				});
+			} finally {
+				await client.unsafe(
+					"drop trigger operation_audit_test_failure on platform.audit_events",
+				);
+				await client.unsafe(
+					"drop function platform.operation_audit_test_failure()",
+				);
+			}
+			await expect(
+				fixture.events.persist(fixture.command()),
+			).resolves.toMatchObject({ outcome: "accepted", event: { sequence: 1 } });
+			expect(await fixture.snapshot()).toMatchObject({ events: 1, audits: 1 });
+			const started = {
+				...fixture.fact,
+				phase: "started" as const,
+				startedAt: "2026-09-04T00:00:00.000Z",
+			};
+			await armEventCommitFailure();
+			try {
+				await expect(
+					fixture.events.persist(fixture.command(started, "after-audit-write")),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					events: 1,
+					audits: 1,
+					sequence: 1,
+					conversation_cursor: 1,
+					runtime_cursor: "runtime_cursor_operation-intent",
+				});
+			} finally {
+				await disarmEventCommitFailure();
+			}
+			await expect(
+				fixture.events.persist(fixture.command(started, "after-audit-write")),
+			).resolves.toMatchObject({ outcome: "accepted", event: { sequence: 2 } });
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 2,
+				audits: 2,
+				sequence: 2,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("denies missing identity provenance and bound model selection changes without acknowledgement", async () => {
+		for (const withProvenance of [false, true]) {
+			const fixture = await operationFixture(withProvenance);
+			try {
+				const fact =
+					withProvenance && fixture.fact.kind === "model"
+						? {
+								...fixture.fact,
+								model: {
+									...fixture.fact.model,
+									modelOptionId: "different-model-option",
+								},
+							}
+						: fixture.fact;
+				await expect(
+					fixture.events.persist(fixture.command(fact)),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					sequence: 0,
+					conversation_cursor: 0,
+					events: 0,
+					audits: 0,
+					runtime_cursor: null,
+				});
+			} finally {
+				await fixture.close();
+			}
+		}
+	});
+
+	it("rejects phase replays under a new key and missing necessary audit on an existing event", async () => {
+		const fixture = await operationFixture();
+		try {
+			const accepted = await fixture.events.persist(fixture.command());
+			await expect(
+				fixture.events.persist(
+					fixture.command(fixture.fact, "forged-retry-key"),
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 1,
+				audits: 1,
+				sequence: 1,
+			});
+			if (accepted.outcome === "stale")
+				throw new Error("Expected accepted fact");
+			await client`delete from platform.audit_events where id = ${`operation-observed:${accepted.event.eventId}`}`;
+			await expect(
+				fixture.events.persist(fixture.command()),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 1,
+				audits: 0,
+				sequence: 1,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("does not borrow another principal, Agent or channel's authorization provenance", async () => {
+		for (const change of [
+			{
+				principal: { kind: "user", id: "another-user" },
+				accessSources: [{ kind: "user", userId: "another-user" }],
+			},
+			{ agentId: "another-agent" },
+			{ channelId: "another-channel" },
+		]) {
+			const fixture = await operationFixture();
+			try {
+				await client`update platform.task_authorization_records set boundary = boundary || ${client.json(change)}::jsonb where id = ${fixture.authorizationRecordId}`;
+				await expect(
+					fixture.events.persist(fixture.command()),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					events: 0,
+					audits: 0,
+					sequence: 0,
+				});
+			} finally {
+				await fixture.close();
+			}
+		}
+	});
+
+	it("rejects corrupted operation history instead of returning an empty or downgraded V1 history", async () => {
+		const fixture = await operationFixture();
+		try {
+			await fixture.events.persist(fixture.command());
+			await client`update platform.conversation_events set event_payload = event_payload || '{"schemaVersion":1}'::jsonb where execution_id = ${fixture.executionId}`;
+			await expect(
+				fixture.query.get(
+					{ actorId: "actor_event", channelId: "channel_event" },
+					fixture.conversationId,
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+		} finally {
+			await fixture.close();
+		}
+	});
+});
 
 describe("PostgreSQL Conversation event transaction", () => {
 	it("atomically persists once, records the private runtime cursor, and replays before stale fencing", async () => {
@@ -365,6 +943,35 @@ describe("PostgreSQL Conversation event transaction", () => {
 			await close();
 		}
 	});
+
+	it.each(["unknown", "processing"] as const)(
+		"never releases %s capacity through a submitted status event",
+		async (status) => {
+			const { conversationId, executionId } = await seedConversation();
+			await client`update platform.conversation_executions set status = ${status} where execution_id = ${executionId}`;
+			const { events, close } = openEvents(`event_no_demotion_${status}`);
+			try {
+				await expect(
+					events.persist({
+						...eventInput(conversationId, executionId),
+						event: { type: "execution.status", status: "submitted" },
+						transition: {
+							executionStatus: "submitted",
+							conversationStatus: "active",
+						},
+					}),
+				).rejects.toMatchObject({ code: "unavailable" });
+				const [state] =
+					await client`select status, last_event_sequence::int as sequence from platform.conversation_executions where execution_id = ${executionId}`;
+				expect(state).toEqual({ status, sequence: 0 });
+				const [count] =
+					await client`select count(*)::int as count from platform.conversation_events where execution_id = ${executionId}`;
+				expect(count?.count).toBe(0);
+			} finally {
+				await close();
+			}
+		},
+	);
 
 	it("rolls back an event that would rewrite a terminal Execution", async () => {
 		const { conversationId, executionId } = await seedConversation();

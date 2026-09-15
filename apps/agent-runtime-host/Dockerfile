@@ -6,8 +6,11 @@ RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' \
 WORKDIR /app
 
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
+COPY deploy/runtime/vendor/codex/install-bundle.py ./deploy/runtime/vendor/codex/install-bundle.py
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
-RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex
+RUN apk add --no-cache python3
+RUN --mount=from=codex-native,target=/native-candidate,readonly \
+	node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex /native-candidate/codex-candidate.tar.gz
 COPY deploy/runtime/install-opencode.mjs ./deploy/runtime/install-opencode.mjs
 COPY packages/agent-runtime/src/opencode-release.json ./packages/agent-runtime/src/opencode-release.json
 COPY packages/agent-runtime/third-party/opencode-LICENSE ./packages/agent-runtime/third-party/opencode-LICENSE
@@ -46,4 +49,4 @@ COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 VOLUME ["/var/lib/agent-runtime"]
 USER node
-CMD ["node", "dist/index.mjs"]
+CMD ["sh", "./start-runtime-host.sh"]

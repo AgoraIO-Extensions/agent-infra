@@ -1,1 +1,10 @@
 .github/workflows/*.lock.yml linguist-generated=true
+
+# Unified-diff context markers are format bytes, not source-line whitespace.
+deploy/runtime/vendor/codex/patches/0001-release-lock-versions.patch whitespace=-blank-at-eol,-blank-at-eof
+deploy/runtime/vendor/codex/patches/0002-native-operation-barrier.patch whitespace=-blank-at-eol,-blank-at-eof
+deploy/runtime/vendor/codex/patches/0003-protected-connection-client.patch whitespace=-blank-at-eol,-blank-at-eof
+deploy/runtime/vendor/codex/patches/0004-native-dependency-security-updates.patch whitespace=-blank-at-eol,-blank-at-eof
+
+# Preserve verbatim upstream license texts, including original line endings.
+deploy/runtime/vendor/codex/licenses/dependency-updates-NOTICE.txt -text whitespace=-blank-at-eol,-blank-at-eof

@@ -4,14 +4,14 @@
 
 ## 1. 产品目标
 
-Connection 是与 Agent 平台并行建设的独立系统。它让员工连接自己的外部账号，或使用获准的公司共享账号，再把指定能力授权给代表某个 Agent 的 Agent Platform Consumer。
+Connection 是与 Agent 平台并行建设的独立系统。它让员工连接自己的外部账号，或使用获准的公司共享账号，再把指定能力授权给独立客户端，并按具体 Agent 分别授权。
 
 M1 首个受监督 Pilot 使用 GitHub，目标是：
 
 1. 员工通过 Connection 的独立中文入口连接专用 GitHub 测试账号。
-2. Agent Owner 决定 Agent 可以请求哪些 Provider 和 Action。
+2. 用户或应用在 Connection 独立确认客户端和具体 Agent 可以使用的能力。
 3. 使用者决定是否允许具体 Agent 使用自己的哪个 Connection 和哪些已确认能力。
-4. Platform 与 Connection 任一授权不满足时都拒绝调用。
+4. Platform 任务入口与 Connection 外部调用分别满足各自当前授权。
 5. Agent、模型、Platform 和浏览器都不能获得外部账号原始凭证。
 6. 两个测试用户完成真实读取、创建 Pull Request、审计、撤权和故障恢复闭环。
 
@@ -23,13 +23,13 @@ Pilot 完成不表示员工日常 GitHub 账号、其他 Provider、其他 Consu
 | --- | --- |
 | Provider | GitHub 等外部平台 |
 | Action | Provider 对外提供的一项受控能力 |
-| Principal | Connection 识别的稳定员工主体 |
-| Consumer | 使用 Connection 的客户端或服务；首个 Pilot 为 Agent Platform |
+| Principal | Connection 独立识别的稳定用户或应用主体；首个 Pilot 使用员工用户 |
+| Consumer | 独立取得 Connection 访问权限的客户端或应用；首个 Pilot 使用 Codex 客户端 |
 | Actor | Consumer 内被单独授权的稳定单元；首个 Pilot 为具体 Agent |
 | Connection | 已完成外部鉴权、对应一个稳定外部账号的连接 |
 | Connection Grant | Principal 允许 Consumer/Actor 使用某个 Connection 和已确认 Action 的授权 |
 
-Agent Owner 只能选择 Agent 的 Provider 和 Action policy，不能替普通使用者绑定外部账号或创建 Connection Grant。使用者在 Connection 中选择具体账号并确认能力；Agent 不能选择默认账号或替换目标 Connection。
+Agent Owner 不能替其他用户或应用绑定外部账号或创建 Connection Grant。授权主体在 Connection 中选择自己有权使用的账号并确认能力；Agent 不能选择默认账号或替换目标 Connection。
 
 ### 2.1 Connection 管理员
 
@@ -48,19 +48,13 @@ Connection 管理员可以发布或停用 Provider/Action、管理公司共享 C
 
 ### 3.2 Agent Platform 负责
 
-- Agent、Owner、使用范围和 Agent Action policy。
-- 只读同步 Connection 发布的 Provider/Action 目录。
-- 为当前用户、当前 Agent 和当前 Action 提供受信且短期有效的调用身份。
-- 在执行记录中保存 Connection 返回的稳定调用引用、状态和脱敏结果。
-- 在调用 Connection 前再次检查当前 Platform policy。
+Platform 的任务、身份及 Connection 集成边界以[平台 PRD 第 9 节](PRD-agent-platform-M1.md#9-connection-集成)为准。Platform 只记录自身执行事实及经过核实的关联引用，不代理 Connection 调用、签发代调用证明或保存 Connection 目录、授权、状态和审计投影。
 
-Platform 不保存第二份可写 Connection Grant，不保存 Provider Credential，也不能向 Connection 指定 Principal、Connection 或外部账号。
+### 3.3 Agent 与独立客户端负责
 
-### 3.3 Agent 负责
-
-- 从当前 Agent policy 中选择 Action 并只提交 Action 参数。
-- 使用脱敏结果继续完成任务。
-- 不保存或读取 Connection 原始凭证、用户身份或账号选择信息。
+- 从 Connection 当前允许的能力中请求 Action，使用受控结果继续完成任务。
+- 独立客户端使用原执行用户或应用的 Connection 访问凭据，并按原主体和具体 Agent 隔离；缺少有效凭据时拒绝调用，不回退到 Owner、应用责任人或平台服务身份。
+- 客户端访问凭据不能进入模型上下文、任务结果或其他主体可读的数据；外部账号原始凭据始终留在 Connection。
 
 ## 4. OpenConnector 复用范围
 
@@ -70,11 +64,11 @@ Connection 可以复用固定版本、经过审核的 Provider metadata、Action
 
 ## 5. Provider 与 Action
 
-- Connection 是 Provider 和 Action 的唯一目录来源；Agent Platform 只保存只读投影。
+- Connection 是 Provider 和 Action 的唯一目录来源；独立客户端按当前授权发现能力，Platform 不保存目录投影。
 - Action 至少展示名称、用途、参数、返回结果、外部效果和所需外部权限。
-- Consumer 或 Agent policy 只能收紧当前发布目录，不能扩大 Provider 或 Action 能力。
-- Owner 新增 Action 后，已有 Connection Grant 不自动获得新能力；使用者确认后才可使用。
-- Owner 移除 Action，或 Connection 停用 Provider/Action 后，后续调用立即停止。
+- Consumer 和具体 Agent 的 Connection 授权只能收紧当前发布目录，不能扩大 Provider 或 Action 能力。
+- 新增 Action 后，已有 Connection Grant 不自动获得新能力；授权主体确认后才可使用。
+- 撤销对应 Action 授权，或 Connection 停用 Provider/Action 后，后续调用立即停止。
 - 首个 Pilot 只发布读取当前账号、列出本人可见仓库和创建 Pull Request 三项 GitHub Action。
 - 首个 Pilot 只允许一个受控 private 测试仓库，不开放文件修改、分支创建、合并、Issue、Workflow、Release 或删除仓库等其他能力。
 - Bitbucket、Jira、Confluence 和其他 Provider 不进入首个 GitHub Pilot。
@@ -106,30 +100,25 @@ Connection 可以复用固定版本、经过审核的 Provider metadata、Action
 
 ### 7.3 Connection Grant
 
-- Connection Grant 绑定当前用户、Agent Platform、具体 Agent、Connection 和用户确认时展示的 Action 集合。
+- Connection Grant 绑定当前用户或应用、独立客户端、具体 Agent、Connection 和授权主体确认时展示的 Action 集合。
 - 授权页面必须展示 Agent、脱敏 GitHub 账号、三项 Action、写操作效果和 GitHub OAuth 权限范围。
 - 用户可以拒绝、创建、替换或撤销 Grant；拒绝 Grant 不删除已经建立的 Connection。
 - 同一用户、Agent 和 Provider 在首个 Pilot 中只有一个当前 Connection；切换账号必须明确确认。
 - 撤销一个 Agent 的 Grant 不影响其他 Agent 或其他用户的独立 Grant。
 
-## 8. 双层授权与隔离
+## 8. 独立授权与隔离
 
-一次调用只有同时满足以下条件才可执行：
+Platform 校验自身任务身份、Agent 使用权和执行归属。Connection 每次调用独立校验客户端用户或应用身份、具体 Agent 的有效 Grant，以及 Provider、Action、Connection 和外部凭证当前状态；Platform 授权不能替代 Connection 授权。
 
-- 当前用户仍可使用 Agent。
-- Action 仍在 Agent Owner 配置的 Platform policy 中。
-- Connection 中存在当前用户对 Agent Platform、具体 Agent、Connection 和 Action 的有效 Grant。
-- Provider、Action、Connection 和外部凭证当前可用。
+Connection 的主体、客户端、具体 Agent、Connection 和外部账号均由服务端解析。模型、浏览器或调用方提交的身份和账号字段不能创建、替换或扩大授权。应用的独立授权不继承自然人责任人的权限。
 
-当前用户、Agent Platform、具体 Agent、Connection 和外部账号均由服务端解析。Agent、模型、浏览器或调用方提交的身份和账号字段不能创建、替换或扩大授权。
-
-Alice 与 Bob 不能互相发现、授权、调用、断开或查询对方的 Connection、Grant、Credential、OAuth 事务和调用记录；拒绝响应不能泄露目标是否存在。
+Alice 与 Bob 不能互相发现、授权、调用、断开或查询对方的 Connection、Grant、Credential、OAuth 事务和调用记录；同一主体对不同 Agent 的授权也不能互相替代。拒绝响应不能泄露目标是否存在。
 
 ## 9. 凭证与调用
 
 - GitHub OAuth 与 Connection Grant 是两个独立确认步骤。
 - 首个 Pilot 使用专用 GitHub 测试账号和受控 private 仓库。页面必须明确展示 OAuth App 获得的广泛仓库权限；员工日常 GitHub 账号不进入 Pilot。
-- Agent Platform 使用受信短期调用证明代表当前 Principal 和 Agent Actor；普通浏览器会话不能作为 Action 调用凭据。
+- 用户或应用通过 Connection 的独立客户端授权流程取得访问凭据，按具体 Agent 获权；Platform 不签发代调用证明，普通浏览器会话不能作为 Action 调用凭据。
 - Connection 每次解析唯一授权 Connection，注入 Credential 并调用 Provider；原始 Credential 不离开 Connection。
 - 写 Action 必须使用跨重试稳定的请求标识。相同标识和请求返回同一次调用；相同标识用于不同请求时拒绝。
 
@@ -159,8 +148,8 @@ Connection M1 提供独立于 Agent Platform 的中文 Web 入口和部署单元
 
 - Connection 审计覆盖登录、连接、重连、断开、授权确认、撤销、Provider/Action 变更、每次调用、外部撤销和人工处理。
 - 审计能够回答哪个 Principal 通过哪个 Consumer/Actor、使用哪个 Connection、执行哪个 Action、何时提交以及结果如何。
-- Platform 与 Connection 通过稳定调用引用关联同一次调用，但 Platform 不复制 Connection 的可写状态机。
-- 审计和普通错误不记录 LDAP 密码、GitHub Token、Cookie、调用证明、密钥、聊天正文或模型内部思考。
+- Platform 与 Connection 的关联遵循[平台 PRD 第 9 节](PRD-agent-platform-M1.md#9-connection-集成)：须核对本次实际工具请求、Connection 确认的主体和原调用记录；两侧分别授权查询，Platform 不复制 Connection 状态或审计。
+- 审计和普通错误不记录 LDAP 密码、GitHub Token、Cookie、客户端访问凭据、密钥、聊天正文或模型内部思考。
 
 ## 13. 首个 GitHub Pilot 验收
 
@@ -169,25 +158,25 @@ Connection M1 提供独立于 Agent Platform 的中文 Web 入口和部署单元
 | 测试主体 | 两个 LDAP 测试用户分别绑定两个专用 GitHub 测试账号，只访问一个受控 private 仓库 |
 | 连接与账号 | 两人分别完成 LDAP 登录和 GitHub OAuth，并以稳定账号标识识别账号 |
 | 两次确认 | GitHub OAuth 后仍需为具体 Agent Actor 确认三项 Action |
-| 目录与 policy | Platform 只读同步三项 Action；Owner policy 或 Connection Grant 任一缺失都拒绝调用 |
+| 能力与授权 | 独立客户端只发现获准的三项 Action；原主体、具体 Agent 或 Connection 当前授权缺失时拒绝调用 |
 | 真实写操作 | 两个测试用户使用预先准备的不同分支创建真实 Pull Request |
 | 幂等 | 相同请求标识重试返回同一调用和 Pull Request，不创建第二个 PR |
 | 跨用户隔离 | Alice 与 Bob 不能发现或使用对方的 Connection、Grant、Credential 和调用记录 |
-| 调用证明 | 错误签名、受众、期限、workload、Actor、Action、参数或改变绑定的重复证明均拒绝；完全相同的传输重放只返回原调用 |
-| 撤权 | 移除 Platform policy、撤销 Grant、断开 Connection 或停用 Action 后，新调用立即失败 |
+| 客户端身份与关联 | 错误主体、客户端、具体 Agent、权限、期限或请求绑定均拒绝；其他任务的真实调用引用不能冒充本次调用；关联无法核实时明确显示 |
+| 撤权 | 撤销客户端访问凭据或 Grant、断开 Connection 或停用 Action 后，新调用立即失败 |
 | 未知结果 | 响应丢失进入待确认，覆盖自动对账、管理员处理和最终无法确认状态，不自动重发 |
 | Provider 撤销 | 断开时撤销单个 GitHub Token，并能看到成功、失败或待重试状态 |
 | 凭证保护 | 页面、Platform、Agent、日志、错误和审计均无法读取原始凭证或密钥 |
-| 失败停止 | 越权、凭证泄露、错误调用证明被接受、重复 PR 或撤权失效时立即停止 Pilot 并保留证据 |
+| 失败停止 | 越权、凭证泄露、错误客户端身份或调用绑定被接受、重复 PR 或撤权失效时立即停止 Pilot 并保留证据 |
 | 联合签收 | Platform、Connection、Security、SRE 和 Pilot 使用者分别签收自己的边界 |
 
-验收只允许声明：在具名 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Agent Platform delegated GitHub Pilot 已通过。
+验收只允许声明：在具名 LA3 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Codex 独立直连 GitHub Pilot 已通过。独立批准的本地首通按其具名范围举证，不关闭完整联合 Pilot，也不继承其他环境的例外条件；客户端开发与受控接口测试不构成环境准入或真实账号验收。
 
 ## 14. Pilot 后范围
 
 - 员工日常 GitHub 账号和 GitHub App 细粒度授权。
 - LDAP 离职状态的权威来源和正式停权时效。
 - 公司共享 Connection 的真实组织范围和账号。
-- Direct MCP Client、Connection PAT 和 Connection OAuth Authorization Server。
+- 首个 Pilot 以外的客户端及凭据产品形态。
 - Bitbucket、Jira、Confluence、Outlook 和其他 Provider。
 - 正式容量、灾备、值班、推广和广泛生产可用性。

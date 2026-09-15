@@ -1,20 +1,28 @@
 import type {
+	RuntimeAuthorizationRenewRequestV3,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
+	RuntimeEventAckRequestV3,
+	RuntimeEventPersistRequestV3,
 	RuntimeGenerationCancelRequestV1,
+	RuntimeGenerationCancelRequestV3,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusRequestV2,
+	RuntimeStatusRequestV3,
 	RuntimeStatusResponseV1,
 	RuntimeStatusResponseV2,
 	RuntimeStatusV1,
 	RuntimeStopRequestV1,
+	RuntimeStopRequestV3,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
+	RuntimeSubmitTurnRequestV3,
 	RuntimeSupplementRequestV1,
+	RuntimeSupplementRequestV3,
 	WorkloadReadinessRequestV1,
 	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
@@ -38,7 +46,6 @@ import {
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
-
 import type { RuntimeDriver } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -51,9 +58,16 @@ import {
 	type ExecutionGrantValidationOptions,
 	validateRuntimeExecutionGrant,
 } from "./grant.js";
+import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
+import {
+	type RuntimeOriginalExecutionRef,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
+import { RuntimeHostV3 } from "./runtime-host-v3.js";
 
 interface RuntimeHostOptions {
+	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
@@ -170,8 +184,24 @@ function isUncertainDriverFailure(error: unknown) {
 async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
-	} catch {
+	} catch (error) {
+		throwSessionRecoveryFailure(error);
 		driverInvalid();
+	}
+}
+
+function throwSessionRecoveryFailure(error: unknown) {
+	if (
+		error instanceof RuntimeHostError &&
+		error.driverFailureKind === "session_recovery_failed"
+	) {
+		throw new RuntimeHostError(
+			"RUNTIME_SESSION_RECOVERY_FAILED",
+			"Runtime Session recovery failed",
+			503,
+			false,
+			"session_recovery_failed",
+		);
 	}
 }
 
@@ -179,6 +209,7 @@ async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch (error) {
+		throwSessionRecoveryFailure(error);
 		if (isUncertainDriverFailure(error)) return driverUncertain;
 		driverInvalid();
 	}
@@ -274,7 +305,92 @@ function parseDriverLookup(
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
 
-	private constructor(private readonly options: RuntimeHostOptions) {}
+	private readonly v3?: RuntimeHostV3;
+	private constructor(private readonly options: RuntimeHostOptions) {
+		if (options.grantValidationV2)
+			this.v3 = new RuntimeHostV3({
+				store: options.store,
+				driver: options.driver,
+				grantValidation: options.grantValidationV2,
+				dispatch: (ref, operation, allowBusinessExecution) =>
+					this.dispatch(ref, operation, allowBusinessExecution),
+				serialize: (key, work) => this.serialize(key, work),
+			});
+	}
+
+	private trustedHost() {
+		return this.v3 ?? runtimeAuthorizationDenied();
+	}
+	async close() {
+		await this.v3?.close();
+	}
+	private requireLegacyHost() {
+		if (this.v3) runtimeAuthorizationDenied();
+	}
+
+	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
+		return this.trustedHost().submitTurn(value, verification);
+	}
+	supplementV3(value: RuntimeSupplementRequestV3, verification: unknown) {
+		return this.trustedHost().supplement(value, verification);
+	}
+	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
+		return this.trustedHost().stop(value, verification);
+	}
+	recoverStatusV3(
+		value: RuntimeStatusRequestV3,
+		verification: unknown,
+		signal?: AbortSignal,
+	) {
+		return this.trustedHost().recoverStatus(value, verification, signal);
+	}
+	cancelGenerationV3(
+		value: RuntimeGenerationCancelRequestV3,
+		verification: unknown,
+	) {
+		return this.trustedHost().cancelGeneration(value, verification);
+	}
+	renewAuthorizationV3(
+		value: RuntimeAuthorizationRenewRequestV3,
+		verification: unknown,
+	) {
+		return this.trustedHost().renewAuthorization(value, verification);
+	}
+	streamEventsV3(
+		value: RuntimeEventPersistRequestV3,
+		verification: unknown,
+		signal?: AbortSignal,
+	) {
+		return this.trustedHost().streamEvents(value, verification, signal);
+	}
+	acknowledgeEventsV3(value: RuntimeEventAckRequestV3, verification: unknown) {
+		return this.trustedHost().acknowledgeEvents(value, verification);
+	}
+	async authorizeExternalAction(action: {
+		nativeSessionRef: string;
+		executionId: string;
+		operationRef: string;
+		attemptRef: string;
+		runtimeOperationId: string;
+		kind: "model" | "tool";
+	}) {
+		this.trustedHost();
+		await this.options.store.authorizeExternalAction(
+			action,
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
+	}
+
+	/** Resolve the accepted original principal; this is not a Connection grant. */
+	async resolveOriginalExecutionBinding(
+		reference: RuntimeOriginalExecutionRef,
+	) {
+		this.trustedHost();
+		return this.options.store.resolveOriginalExecutionBinding(
+			reference,
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
+	}
 
 	static async open(options: RuntimeHostOptions) {
 		const host = new RuntimeHost(options);
@@ -286,6 +402,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -302,6 +419,7 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV2,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV2> {
+		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -372,6 +490,7 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV1,
 		verification: unknown,
 	): Promise<RuntimeStatusResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeStatusRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -398,6 +517,7 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV2,
 		verification: unknown,
 	): Promise<RuntimeStatusResponseV2> {
+		this.requireLegacyHost();
 		const parsed = RuntimeStatusRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -513,6 +633,7 @@ export class RuntimeHost {
 		value: RuntimeCapabilitiesRequestV1,
 		verification: unknown,
 	): Promise<RuntimeCapabilitiesResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeCapabilitiesRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -543,6 +664,7 @@ export class RuntimeHost {
 		value: RuntimeReplayRequestV1,
 		verification: unknown,
 	): Promise<RuntimeReplayResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -585,6 +707,7 @@ export class RuntimeHost {
 		verification: unknown,
 		signal?: AbortSignal,
 	) {
+		this.requireLegacyHost();
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -629,6 +752,7 @@ export class RuntimeHost {
 		value: RuntimeSupplementRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeSupplementRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -683,6 +807,7 @@ export class RuntimeHost {
 		value: RuntimeStopRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeStopRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -735,6 +860,7 @@ export class RuntimeHost {
 		value: RuntimeGenerationCancelRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
+		this.requireLegacyHost();
 		const parsed = RuntimeGenerationCancelRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -802,9 +928,14 @@ export class RuntimeHost {
 	private async dispatch(
 		hostSessionRef: string,
 		operation: StoredOperation,
+		allowBusinessExecution = true,
 	): Promise<RuntimeOperationResponse> {
-		if (operation.state === "resolved" && operation.result) {
-			let result = operation.result;
+		if (
+			operation.state === "resolved" &&
+			operation.result &&
+			operation.result.outcome !== "unknown"
+		) {
+			let result: RuntimeOperationResponse["result"] = operation.result;
 			if (result.outcome === "accepted" && result.status === "running") {
 				const nativeSessionRef =
 					this.options.store.nativeSessionRef(hostSessionRef) ??
@@ -856,6 +987,19 @@ export class RuntimeHost {
 		if (lookup.state === "found") {
 			rawDriverRecord = lookup.record;
 		} else {
+			// Unknown acceptance remains queryable, but missing evidence cannot
+			// turn a later lookup into a second business execution.
+			if (
+				(!allowBusinessExecution || operation.result?.outcome === "unknown") &&
+				!isInterruption(operation)
+			)
+				return unknownOperationResponse(hostSessionRef, operation);
+			if (this.v3 && !isInterruption(operation))
+				this.options.store.authorizePreparedOperation(
+					hostSessionRef,
+					operation,
+					(this.options.grantValidationV2?.now ?? Date.now)(),
+				);
 			const executed = await callDriverWithUncertainty(() =>
 				this.options.driver.execute(operation.command),
 			);
@@ -906,9 +1050,12 @@ export class RuntimeHost {
 							operation.operationId,
 						);
 					}
-					if (operation.state === "prepared") {
+					// V3 native recovery needs a current query/control Grant. Even
+					// interruption lookup can query or stop native sources, so defer it.
+					if (this.v3 && isInterruption(operation)) return;
+					if (operation.state === "prepared" && !this.v3) {
 						recoveredResult = (
-							await this.dispatch(session.hostSessionRef, operation)
+							await this.dispatch(session.hostSessionRef, operation, !this.v3)
 						).result;
 					} else {
 						const lookup = parseDriverLookup(
@@ -919,10 +1066,9 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
-							recoveredResult = await this.currentDriverResult(
-								lookup.record,
-								operation,
-							);
+							recoveredResult = this.v3
+								? lookup.record.result
+								: await this.currentDriverResult(lookup.record, operation);
 							if (
 								!isInterruption(operation) ||
 								recoveredResult.outcome !== "unknown"

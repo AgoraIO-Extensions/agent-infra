@@ -2,6 +2,7 @@ import type { PlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
+	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
@@ -1071,6 +1072,118 @@ export const outboxItems = platformSchema.table(
 	],
 );
 
+export const taskAuthorizationRecords = platformSchema.table(
+	"task_authorization_records",
+	{
+		id: text("id").primaryKey(),
+		executionId: text("execution_id").notNull(),
+		boundary: jsonb("boundary").$type<TaskAuthorizationBoundaryV1>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "task_authorization_execution_fk",
+		}),
+		uniqueIndex("task_authorization_execution_unique").on(table.executionId),
+		check("task_authorization_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"task_authorization_boundary_version",
+			sql`${table.boundary}->>'schemaVersion' = '1'`,
+		),
+	],
+);
+
+export const taskControlRecords = platformSchema.table(
+	"task_control_records",
+	{
+		id: text("id").primaryKey(),
+		executionId: text("execution_id").notNull(),
+		authorizationRecordId: text("authorization_record_id").notNull(),
+		reason: text("reason").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "task_control_execution_fk",
+		}),
+		foreignKey({
+			columns: [table.authorizationRecordId],
+			foreignColumns: [taskAuthorizationRecords.id],
+			name: "task_control_authorization_fk",
+		}),
+		uniqueIndex("task_control_execution_reason_unique").on(
+			table.executionId,
+			table.reason,
+		),
+		check("task_control_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"task_control_reason_valid",
+			sql`${table.reason} in ('stop', 'authorization_revoked', 'recovery', 'generation_isolation')`,
+		),
+	],
+);
+
+/** Pending rows keep the original generation authoritative until its Host barrier is acknowledged. */
+export const conversationGenerationTombstones = platformSchema.table(
+	"conversation_generation_tombstones",
+	{
+		operationId: text("operation_id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		sessionGeneration: bigint("session_generation", {
+			mode: "number",
+		}).notNull(),
+		executionId: text("execution_id").notNull(),
+		itemId: text("item_id").notNull(),
+		controlRecordId: text("control_record_id").notNull(),
+		controlSourceId: text("control_source_id").notNull(),
+		originalPrincipal: jsonb("original_principal")
+			.$type<{ kind: "user"; id: string }>()
+			.notNull(),
+		hostSessionRef: text("host_session_ref").notNull(),
+		status: text("status").notNull().default("pending"),
+		failureCode: text("failure_code").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+	},
+	(table) => [
+		uniqueIndex("conversation_generation_tombstone_unique").on(
+			table.conversationId,
+			table.sessionGeneration,
+		),
+		uniqueIndex("conversation_generation_control_unique").on(
+			table.controlRecordId,
+		),
+		index("conversation_generation_pending_idx").on(table.status, table.itemId),
+		check(
+			"conversation_generation_tombstone_generation_safe",
+			sql`${table.sessionGeneration} between 1 and 9007199254740990`,
+		),
+		check(
+			"conversation_generation_tombstone_status_valid",
+			sql`(${table.status} = 'pending' and ${table.confirmedAt} is null) or (${table.status} = 'confirmed' and ${table.confirmedAt} is not null)`,
+		),
+		check(
+			"conversation_generation_tombstone_reason_valid",
+			sql`${table.failureCode} = 'RUNTIME_SESSION_RECOVERY_FAILED'`,
+		),
+		check(
+			"conversation_generation_tombstone_principal_valid",
+			sql`${table.originalPrincipal}->>'kind' = 'user' and char_length(${table.originalPrincipal}->>'id') > 0`,
+		),
+	],
+);
+
 export const auditEvents = platformSchema.table(
 	"audit_events",
 	{
@@ -1262,6 +1375,9 @@ export const platformInfrastructureTables = [
 	agentManagementHistory,
 	conversations,
 	conversationExecutions,
+	taskAuthorizationRecords,
+	taskControlRecords,
+	conversationGenerationTombstones,
 	conversationMessages,
 	conversationStops,
 	conversationAuditEvents,

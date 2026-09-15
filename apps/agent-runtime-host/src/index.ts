@@ -6,6 +6,7 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -17,7 +18,9 @@ import {
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantV1,
+	RuntimeExecutionGrantV2,
 	VerifiedExecutionGrantV1,
+	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
 import { serve } from "@hono/node-server";
 
@@ -28,10 +31,22 @@ import {
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
+import {
+	createIndependentConnectionClientInput,
+	readConnectionClientProfile,
+} from "./connection-client-input.js";
+import { readRuntimeLegacyMigrationV1 } from "./legacy-migration.js";
+import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	runtimeWorkerId?: string;
+	verifyGrantV2?: (
+		grant: RuntimeExecutionGrantV2,
+	) =>
+		| VerifiedRuntimeExecutionGrantV2
+		| Promise<VerifiedRuntimeExecutionGrantV2>;
 	readinessWorkerId?: string;
 	host: RuntimeHost;
 	serviceToken: string;
@@ -89,6 +104,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
+	if (binding === "codex") assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
 		!isAbsolute(dataDirectory) ||
@@ -99,6 +115,14 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 	const port = runtimePort(environment.PORT, 3003);
 	const readinessBinding = readWorkloadReadinessBindingV1(environment);
+	const runtimeWorkerId =
+		readinessBinding?.workerId ?? required("AGENT_INFRA_RUNTIME_WORKER_ID");
+	if (
+		readinessBinding &&
+		environment.AGENT_INFRA_RUNTIME_WORKER_ID &&
+		environment.AGENT_INFRA_RUNTIME_WORKER_ID !== readinessBinding.workerId
+	)
+		runtimeConfigurationInvalid();
 	const keyId = required("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
 	const serviceToken = required("AGENT_INFRA_RUNTIME_SERVICE_TOKEN");
 	const expectedIssuer = required("AGENT_INFRA_RUNTIME_GRANT_ISSUER");
@@ -115,6 +139,10 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	const connectionProfile = readConnectionClientProfile(
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
+	);
+	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -123,11 +151,40 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
+	const legacyMigration = await readRuntimeLegacyMigrationV1({
+		environment,
+		expectedIssuer,
+		binding: readinessBinding,
+		dataDirectory,
+	});
 	if (configuration) {
 		await verifyCodexPilotInstallation();
 	}
+	const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
+	await legacyMigration?.apply(store);
+	let assembledHost: RuntimeHost | undefined;
 	const driver = configuration
 		? await CodexRuntimeDriver.open({
+				...(connectionProfile
+					? {
+							connectionClient: createIndependentConnectionClientInput({
+								dataDirectory,
+								profile: connectionProfile,
+								// The committed Store is ready before Host startup recovery invokes native bootstrap.
+								resolveOriginalBinding: (reference) =>
+									store.resolveOriginalExecutionBinding(reference, Date.now),
+							}),
+						}
+					: {}),
+				authorizeExternalAction: async (action) => {
+					if (!assembledHost)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization is not ready",
+							403,
+						);
+					await assembledHost.authorizeExternalAction(action);
+				},
 				launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 				path: join(dataDirectory, "codex-driver.json"),
 				configVersion: configuration.configVersion,
@@ -150,6 +207,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 					})
 			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
 	const close = async () => {
+		await assembledHost?.close();
 		if (
 			driver instanceof CodexRuntimeDriver ||
 			driver instanceof ClaudeRuntimeDriver ||
@@ -168,13 +226,19 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 						}),
 					}
 				: {}),
-			store: await FileRuntimeStore.open(join(dataDirectory, "host.json")),
+			store,
 			driver,
 			grantValidation: { expectedIssuer },
+			grantValidationV2: { expectedIssuer, expectedWorkerId: runtimeWorkerId },
 		});
+		assembledHost = host;
+		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
+			new Map([[keyId, publicKey]]),
+		);
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			runtimeWorkerId,
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }
 				: {}),
@@ -184,6 +248,19 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 			serviceToken,
 			port,
 			close,
+			verifyGrantV2: (grant: RuntimeExecutionGrantV2) => {
+				const verified = verifyV2(grant);
+				if (
+					(agentId && verified.claims.agentId !== agentId) ||
+					verified.claims.workerId !== runtimeWorkerId
+				)
+					throw new RuntimeHostError(
+						"RUNTIME_GRANT_INVALID",
+						"Runtime authorization does not match this deployment",
+						403,
+					);
+				return verified;
+			},
 			verifyGrant: (grant: ExecutionGrantV1) => {
 				const verified = verify(grant);
 				if (agentId && verified.claims.agentId !== agentId) {

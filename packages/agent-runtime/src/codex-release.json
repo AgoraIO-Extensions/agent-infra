@@ -7,19 +7,36 @@
 		"schemaSha256": "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
 	},
 	"artifacts": {
-		"amd64": {
-			"name": "codex-x86_64-unknown-linux-musl",
-			"archiveSha256": "sha256:35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e",
-			"executableSha256": "sha256:fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be"
-		},
 		"arm64": {
-			"name": "codex-aarch64-unknown-linux-musl",
-			"archiveSha256": "sha256:cc2c0c365d4d51c18163bba93cce5b922836900ca867f5bcf89b0e714a952a53",
-			"executableSha256": "sha256:c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
+			"target": "aarch64-unknown-linux-musl",
+			"archiveSha256": "sha256:ea703b781adeecd4f44bf4f04112291111bd8f137e0ed059cf5c8c845bb2c4af",
+			"candidateManifestSha256": "sha256:28023d7eec66b76053bd28ce46c92c6d6d5069fdd4bd612cf96d447de6f9fb3b",
+			"executableSha256": "sha256:d5e0dd52d4af1cc8a1a864093652066f3fe72ef3208a9032155acf6609b81b42",
+			"binaries": {
+				"codex": "sha256:d5e0dd52d4af1cc8a1a864093652066f3fe72ef3208a9032155acf6609b81b42",
+				"codex-code-mode-host": "sha256:9ffcaad662c0ac803215663522cc68b6a17f6d0b495e7df4d6d64c8c8ea56343",
+				"codex-responses-api-proxy": "sha256:c917d182a781454d0f763f271a5f0933e08d0ee6a765add0d5a5ae0c85ca1f11",
+				"bwrap": "sha256:f801ebbd4f1a6d70f75792cf17dd040a73d5b8b7c34d554c36ea8dc24115d8d9"
+			},
+			"transport": {
+				"kind": "github-actions",
+				"repository": "AgoraIO-Extensions/agent-infra",
+				"runId": 34975154495,
+				"runAttempt": 1,
+				"artifactId": 10401682954,
+				"sourceHead": "3b67d4acc82931910e93911569c817672f2879f1"
+			}
 		}
 	},
 	"legal": {
 		"LICENSE": "sha256:d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
 		"NOTICE": "sha256:9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+	},
+	"schemaVersion": 2,
+	"distribution": {
+		"kind": "derived",
+		"buildId": "agent-infra-0.153.0-arm64-e462627d36bf-run34975154495.1",
+		"sourceTree": "84d591b86533178b8b12a62c66e95c8c1b09a8b2",
+		"buildInputSha256": "sha256:e462627d36bf7a95add68319edd60b1ba4005eba394e0f9158763acee5816915"
 	}
 }

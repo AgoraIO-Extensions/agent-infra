@@ -1,12 +1,15 @@
 import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
+	ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
-	framePilotSseMessageV1,
+	ExecutionDetailProjectionV2Schema,
+	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
@@ -21,6 +24,7 @@ import {
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
 	parseConversationPersistedEventPayloadV1,
+	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
 	projectConversationMessagesV1,
 } from "@agent-infra/platform-core";
@@ -112,6 +116,7 @@ export interface ConversationRoutesDependencies {
 		| "accept"
 		| "createConversation"
 		| "readConversation"
+		| "requestMetadataRecovery"
 		| "regenerate"
 		| "selectModel"
 		| "stop"
@@ -123,7 +128,7 @@ export interface ConversationRoutesDependencies {
 type ConversationProjection = ReturnType<
 	typeof ConversationProjectionV1Schema.parse
 >;
-type SseMessage = ReturnType<typeof ConversationSseMessageV1Schema.parse>;
+type SseMessage = ReturnType<typeof ConversationSseMessageV2Schema.parse>;
 
 function fail(
 	code: ConstructorParameters<typeof HttpProtocolError>[0],
@@ -217,14 +222,30 @@ function authorityMatches(
 	identity: IdentityContext,
 	agentId?: string,
 ): boolean {
+	let boundary: ConversationExecutionAuthorityV1["taskBoundary"];
+	try {
+		boundary =
+			authority.taskBoundary === undefined
+				? undefined
+				: parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	} catch {
+		return false;
+	}
 	return (
 		typeof authority === "object" &&
 		authority !== null &&
-		Object.keys(authority).length === 6 &&
+		Object.keys(authority).length === (boundary ? 7 : 6) &&
 		authority.schemaVersion === 1 &&
 		authority.actorId === identity.userId &&
 		authority.channelId === "web" &&
-		authority.authorizationRevision === identity.authorizationRevision &&
+		(boundary
+			? boundary.principal.kind === "user" &&
+				boundary.principal.id === identity.userId &&
+				boundary.agentId === authority.agentId &&
+				boundary.channelId === "web" &&
+				boundary.identityRevision === identity.authorizationRevision &&
+				boundary.agentAuthorizationRevision === authority.authorizationRevision
+			: authority.authorizationRevision === identity.authorizationRevision) &&
 		(agentId === undefined || authority.agentId === agentId) &&
 		typeof authority.agentId === "string" &&
 		authority.agentId.length > 0 &&
@@ -279,7 +300,18 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function eventProjection(input: ConversationQueryEventV1): SseMessage {
+function eventProjection(
+	input: ConversationQueryEventV1,
+	contractVersion: 1 | 2,
+	conversationId: string,
+	executionId?: string,
+): SseMessage {
+	if (
+		input.conversationId !== conversationId ||
+		(executionId !== undefined && input.executionId !== executionId)
+	) {
+		throw new Error("Event projection binding is inconsistent");
+	}
 	const persisted = parseConversationPersistedEventPayloadV1(
 		input.eventPayload,
 	);
@@ -297,6 +329,18 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 		occurredAt: input.occurredAt.toISOString(),
 	};
 	let projected: unknown;
+	if (persisted.type === "execution.operation") {
+		if (contractVersion !== 2 || input.eventSchemaVersion !== 2)
+			throw new Error("Operation event requires the V2 contract");
+		return ConversationSseMessageV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "execution.operation",
+			payload: persisted.fact,
+		});
+	}
+	if (input.eventSchemaVersion !== undefined)
+		throw new Error("Original event version is inconsistent");
 	if (persisted.type === "text.delta") {
 		projected = {
 			...base,
@@ -401,10 +445,20 @@ function messageProjections(
 	);
 }
 
-function executionProjection(input: ConversationExecutionDetailV1) {
+function executionProjection(
+	input: ConversationExecutionDetailV1,
+	contractVersion: 1 | 2,
+	conversationId: string,
+	executionId: string,
+) {
+	if (
+		input.execution.conversationId !== conversationId ||
+		input.execution.executionId !== executionId
+	)
+		throw new Error("Execution projection binding is inconsistent");
 	const { failureTraceId, ...projection } =
 		projectConversationExecutionV1(input);
-	return ExecutionDetailProjectionV1Schema.parse({
+	const legacy = ExecutionDetailProjectionV1Schema.parse({
 		...projection,
 		schemaVersion: 1,
 		processSummary: projection.processSummary.map((item) => ({
@@ -418,13 +472,22 @@ function executionProjection(input: ConversationExecutionDetailV1) {
 				? null
 				: failure(failureTraceId, "EXECUTION_FAILED"),
 	});
+	return contractVersion === 1
+		? legacy
+		: ExecutionDetailProjectionV2Schema.parse({
+				...legacy,
+				schemaVersion: 2,
+				events: input.events.map((event) =>
+					eventProjection(event, 2, conversationId, executionId),
+				),
+			});
 }
 
 async function writeSseMessage(
 	stream: { writeSSE(message: { id?: string; data: string }): Promise<void> },
 	message: SseMessage,
 ): Promise<void> {
-	const frame = framePilotSseMessageV1(message);
+	const frame = framePilotSseMessageV2(message);
 	await stream.writeSSE({
 		...(frame.id === undefined ? {} : { id: frame.id }),
 		data: JSON.stringify(frame.data),
@@ -638,39 +701,53 @@ export function registerConversationRoutes(
 		}),
 	);
 
-	app.get("/api/v1/conversations/:conversationId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const conversationId = context.req.param("conversationId");
-			const effective = await effectiveConversation(
-				dependencies.commands(identity),
-				conversationId,
-				metadata.traceId,
-			);
-			const detail = await query(
-				() => dependencies.query.get(scope(identity), conversationId),
-				metadata.traceId,
-			);
-			if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-			return context.json(
-				project(
-					() =>
-						ConversationDetailProjectionV1Schema.parse({
-							conversation: conversationProjection(
-								detail.conversation,
-								effective,
-							),
-							messages: messageProjections(detail),
-						}),
-					metadata.traceId,
-				),
-			);
-		}),
-	);
+	for (const contractVersion of [1, 2] as const) {
+		app.get(
+			`/api/v${contractVersion}/conversations/:conversationId`,
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const conversationId = context.req.param("conversationId");
+					const effective = await effectiveConversation(
+						dependencies.commands(identity),
+						conversationId,
+						metadata.traceId,
+					);
+					const detail = await query(
+						() => dependencies.query.get(scope(identity), conversationId),
+						metadata.traceId,
+					);
+					if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+					await dependencies
+						.commands(identity)
+						.requestMetadataRecovery({ schemaVersion: 1, conversationId });
+					return context.json(
+						project(() => {
+							const legacy = ConversationDetailProjectionV1Schema.parse({
+								conversation: conversationProjection(
+									detail.conversation,
+									effective,
+								),
+								messages: messageProjections(detail),
+							});
+							return contractVersion === 1
+								? legacy
+								: ConversationDetailProjectionV2Schema.parse({
+										...legacy,
+										schemaVersion: 2,
+										events: detail.events.map((event) =>
+											eventProjection(event, 2, conversationId),
+										),
+									});
+						}, metadata.traceId),
+					);
+				}),
+		);
+	}
 
 	app.put("/api/v1/conversations/:conversationId/model-selection", (context) =>
 		boundary(context, async (metadata) => {
@@ -832,134 +909,165 @@ export function registerConversationRoutes(
 		}),
 	);
 
-	app.get(
-		"/api/v1/conversations/:conversationId/executions/:executionId",
-		(context) =>
-			boundary(context, async (metadata) => {
-				const identity = await resolveIdentity(
-					dependencies.identity,
-					context.req.raw,
-					metadata.traceId,
-				);
-				const conversationId = context.req.param("conversationId");
-				await effectiveConversation(
-					dependencies.commands(identity),
-					conversationId,
-					metadata.traceId,
-				);
-				const result = await query(
-					() =>
-						dependencies.query.getExecution(
-							scope(identity),
-							conversationId,
-							context.req.param("executionId"),
-						),
-					metadata.traceId,
-				);
-				if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
-				return context.json(
-					project(() => executionProjection(result), metadata.traceId),
-				);
-			}),
-	);
-
-	app.get("/api/v1/conversations/:conversationId/events", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const conversationId = context.req.param("conversationId");
-			await authorize(
-				dependencies,
-				identity,
-				{ schemaVersion: 1, operation: "conversation.read", conversationId },
-				metadata.traceId,
-				"sse",
-			);
-			const initialReplay = await query(
-				() =>
-					dependencies.query.replay(
-						scope(identity),
+	for (const contractVersion of [1, 2] as const) {
+		app.get(
+			`/api/v${contractVersion}/conversations/:conversationId/executions/:executionId`,
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const conversationId = context.req.param("conversationId");
+					await effectiveConversation(
+						dependencies.commands(identity),
 						conversationId,
-						replaySelector(context.req.raw, metadata.traceId),
-					),
-				metadata.traceId,
-			);
-			if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
-			if (initialReplay.outcome === "events") {
-				try {
-					initialReplay.events.forEach(eventProjection);
-				} catch {
-					return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-				}
-			}
-			const request = context.req.raw;
-			return streamSSE(
-				context,
-				async (stream) => {
-					let replay: ConversationReplayResultV1 = initialReplay;
-					let cursor = replay.resumeCursor;
-					while (!request.signal.aborted && !stream.aborted) {
-						const batch = replay;
-						if (batch.outcome === "reload") {
-							const authorization = await stillAuthorized(
-								dependencies,
-								request,
-								identity.userId,
+						metadata.traceId,
+					);
+					const result = await query(
+						() =>
+							dependencies.query.getExecution(
+								scope(identity),
 								conversationId,
-								metadata.traceId,
-							);
-							if (authorization !== "allowed") {
-								if (authorization === "revoked") {
-									await writeAuthorizationRevoked(stream, metadata.traceId);
-								}
-								return;
-							}
-							await writeSseMessage(
-								stream,
-								ConversationSseMessageV1Schema.parse({
-									schemaVersion: 1,
-									kind: "control",
-									type: "timeline.reload",
-									reason: batch.reason,
-									resumeCursor: batch.resumeCursor,
-								}),
-							);
-							return;
-						}
-						for (const persisted of batch.events) {
-							const authorization = await stillAuthorized(
-								dependencies,
-								request,
-								identity.userId,
-								conversationId,
-								metadata.traceId,
-							);
-							if (authorization !== "allowed") {
-								if (authorization === "revoked") {
-									await writeAuthorizationRevoked(stream, metadata.traceId);
-								}
-								return;
-							}
-							const message = eventProjection(persisted);
-							await writeSseMessage(stream, message);
-							cursor = persisted.conversationCursor;
-						}
-						await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
-						if (request.signal.aborted || stream.aborted) return;
-						const next = await dependencies.query.replay(
-							scope(identity),
+								context.req.param("executionId"),
+							),
+						metadata.traceId,
+					);
+					if (!result) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+					await dependencies.commands(identity).requestMetadataRecovery({
+						schemaVersion: 1,
+						conversationId,
+						executionId: context.req.param("executionId"),
+					});
+					return context.json(
+						project(
+							() =>
+								executionProjection(
+									result,
+									contractVersion,
+									conversationId,
+									context.req.param("executionId"),
+								),
+							metadata.traceId,
+						),
+					);
+				}),
+		);
+
+		app.get(
+			`/api/v${contractVersion}/conversations/:conversationId/events`,
+			(context) =>
+				boundary(context, async (metadata) => {
+					const identity = await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+					const conversationId = context.req.param("conversationId");
+					await authorize(
+						dependencies,
+						identity,
+						{
+							schemaVersion: 1,
+							operation: "conversation.read",
 							conversationId,
-							{ kind: "cursor", value: cursor },
-						);
-						if (!next) return;
-						replay = next;
+						},
+						metadata.traceId,
+						"sse",
+					);
+					const initialReplay = await query(
+						() =>
+							dependencies.query.replay(
+								scope(identity),
+								conversationId,
+								replaySelector(context.req.raw, metadata.traceId),
+							),
+						metadata.traceId,
+					);
+					if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
+					if (initialReplay.outcome === "events") {
+						try {
+							for (const event of initialReplay.events) {
+								eventProjection(event, contractVersion, conversationId);
+							}
+						} catch {
+							return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+						}
 					}
-				},
-				async (_error, stream) => stream.close(),
-			);
-		}),
-	);
+					await dependencies
+						.commands(identity)
+						.requestMetadataRecovery({ schemaVersion: 1, conversationId });
+					const request = context.req.raw;
+					return streamSSE(
+						context,
+						async (stream) => {
+							let replay: ConversationReplayResultV1 = initialReplay;
+							let cursor = replay.resumeCursor;
+							while (!request.signal.aborted && !stream.aborted) {
+								const batch = replay;
+								if (batch.outcome === "reload") {
+									const authorization = await stillAuthorized(
+										dependencies,
+										request,
+										identity.userId,
+										conversationId,
+										metadata.traceId,
+									);
+									if (authorization !== "allowed") {
+										if (authorization === "revoked") {
+											await writeAuthorizationRevoked(stream, metadata.traceId);
+										}
+										return;
+									}
+									await writeSseMessage(
+										stream,
+										ConversationSseMessageV1Schema.parse({
+											schemaVersion: 1,
+											kind: "control",
+											type: "timeline.reload",
+											reason: batch.reason,
+											resumeCursor: batch.resumeCursor,
+										}),
+									);
+									return;
+								}
+								for (const persisted of batch.events) {
+									const authorization = await stillAuthorized(
+										dependencies,
+										request,
+										identity.userId,
+										conversationId,
+										metadata.traceId,
+									);
+									if (authorization !== "allowed") {
+										if (authorization === "revoked") {
+											await writeAuthorizationRevoked(stream, metadata.traceId);
+										}
+										return;
+									}
+									const message = eventProjection(
+										persisted,
+										contractVersion,
+										conversationId,
+									);
+									await writeSseMessage(stream, message);
+									cursor = persisted.conversationCursor;
+								}
+								await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
+								if (request.signal.aborted || stream.aborted) return;
+								const next = await dependencies.query.replay(
+									scope(identity),
+									conversationId,
+									{ kind: "cursor", value: cursor },
+								);
+								if (!next) return;
+								replay = next;
+							}
+						},
+						async (_error, stream) => stream.close(),
+					);
+				}),
+		);
+	}
 }

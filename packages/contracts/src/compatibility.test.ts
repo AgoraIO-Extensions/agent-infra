@@ -230,7 +230,11 @@ describe("contract compatibility command", () => {
 		);
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths)) {
-			if (path !== "/api/v2/admin/audit") delete previous.paths[path];
+			if (
+				path !== "/api/v2/admin/audit" &&
+				!path.startsWith("/api/v2/conversations/")
+			)
+				delete previous.paths[path];
 		}
 		for (const name of [
 			"AgentApplicationCreateRequestV2",
@@ -276,6 +280,77 @@ describe("contract compatibility command", () => {
 				const changed = structuredClone(current);
 				mutate(changed);
 				await writeFile(currentPath, JSON.stringify(changed), "utf8");
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits reviewed V2 operation reads while preserving lifecycle and audit", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths)) {
+			if (path.startsWith("/api/v2/conversations/"))
+				delete previous.paths[path];
+		}
+		for (const name of [
+			"AuthorizationRevokedSignalV1",
+			"ConversationDetailProjectionV2",
+			"ConversationSseMessageV1",
+			"ConversationSseMessageV2",
+			"ExecutionDetailProjectionV2",
+			"ExecutionOperationEventV2",
+			"HeartbeatSignalV1",
+			"ModelSelectionFallbackEventV1",
+			"PersistedConversationEventV1",
+			"PersistedConversationEventV2",
+			"RuntimeConnectionAssociationV1",
+			"RuntimeOperationFactV2",
+			"RuntimeOperationFailureV2",
+			"SseEventIdV1",
+			"TimelineReloadSignalV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-operation-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths[
+						"/api/v2/conversations/{conversationId}/events"
+					];
+				},
+				(document: typeof current) => {
+					document.components.schemas.RuntimeOperationFactV2.required = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.PlatformAuditProjectionV2.required = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/conversations/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);
 			}
 		} finally {

@@ -1154,17 +1154,40 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
+					{
+						name: "runtime-tmp",
+						mountPath: "/tmp",
+						readOnly: false,
+						subPath: "",
+						subPathExpr: "",
+						mountPropagation: "None",
+					},
 				],
 			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
 			!hasSameStructure(
-				pod?.volumes?.map((volume) => ({
-					...volume,
-					persistentVolumeClaim: {
-						...volume.persistentVolumeClaim,
-						readOnly: volume.persistentVolumeClaim?.readOnly ?? false,
-					},
-				})),
+				pod?.volumes?.map((volume) => {
+					const size = volume.emptyDir?.sizeLimit;
+					const observed =
+						typeof size === "string" ? quantityRatio(size) : undefined;
+					const expected = quantityRatio("128Mi");
+					return {
+						...volume,
+						...(observed &&
+						expected &&
+						observed[0] * expected[1] === expected[0] * observed[1]
+							? { emptyDir: { ...volume.emptyDir, sizeLimit: "128Mi" } }
+							: {}),
+						...(volume.persistentVolumeClaim
+							? {
+									persistentVolumeClaim: {
+										...volume.persistentVolumeClaim,
+										readOnly: volume.persistentVolumeClaim.readOnly ?? false,
+									},
+								}
+							: {}),
+					};
+				}),
 				[
 					{
 						name: "data",
@@ -1172,6 +1195,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							claimName: value.persistentVolume.name,
 							readOnly: false,
 						},
+					},
+					{
+						name: "runtime-tmp",
+						emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 					},
 				],
 			)
@@ -1518,6 +1545,58 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			return false;
 		return true;
 	}
+	function validateRecoveryCreation(
+		value: AgentWorkloadDesiredV1,
+		creation: { revision: number; fence: number },
+	) {
+		if (
+			!Number.isSafeInteger(creation.revision) ||
+			creation.revision < 1 ||
+			creation.revision > value.workloadRevision ||
+			!Number.isSafeInteger(creation.fence) ||
+			creation.fence < 1 ||
+			creation.fence > value.fence
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
+	async function recoveryManagementResources(value: AgentWorkloadDesiredV1) {
+		const name = workloadResourceNameV1(value.agentId);
+		const resources = await Promise.all([
+			client.read<V1Service>("Service", name),
+			client.read("Ingress", name),
+			client.read("Service", `${name}-probe`),
+			client.read("ServiceAccount", name),
+			client.read("NetworkPolicy", name),
+			client.read("PersistentVolumeClaim", value.persistentVolume.name),
+		]);
+		// A newer management fence on any retained resource invalidates this
+		// cleanup, including retries after the candidate StatefulSet disappeared.
+		for (const resource of resources)
+			if (resource)
+				own(resource, value.agentId, value.workloadRevision, value.fence);
+		return resources;
+	}
+	async function recoveryCleanupIsClosed(value: AgentWorkloadDesiredV1) {
+		const name = workloadResourceNameV1(value.agentId);
+		const [service, ingress] = await recoveryManagementResources(value);
+		return (
+			ingress === null &&
+			(service === null ||
+				(hasOnlyControllerRoutingMetadata(service) &&
+					service.metadata?.labels?.[revisionLabel] ===
+						String(value.workloadRevision) &&
+					service.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+						String(value.fence) &&
+					matchesServiceSpec(
+						service.spec,
+						serviceSpec(
+							value,
+							routeSelector(name, value.workloadRevision, "closed"),
+						),
+					)))
+		);
+	}
+
 	async function statefulSet(value: AgentWorkloadDesiredV1) {
 		const current = await client.read<V1StatefulSet>(
 			"StatefulSet",
@@ -1794,6 +1873,132 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		closeRoute,
 		closeAgent,
 		observe,
+		/** Adoption verifies the persisted creation, independently of readiness. */
+		async observeRecoveryWorkload(
+			input: unknown,
+			identity: { uid: string; generation: number } | null,
+			management?: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			const managementValue = management
+				? desired({
+						...value,
+						workloadRevision: management.revision,
+						fence: management.fence,
+					})
+				: value;
+			validateRecoveryCreation(managementValue, {
+				revision: value.workloadRevision,
+				fence: value.fence,
+			});
+			await recoveryManagementResources(managementValue);
+			const current = await statefulSet(value);
+			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+			if (!current) {
+				if (pods.length) throw new WorkloadKubernetesError("conflict");
+				return null;
+			}
+			if (
+				!current.metadata?.uid ||
+				!current.metadata.resourceVersion ||
+				!Number.isSafeInteger(current.metadata.generation) ||
+				(current.metadata.generation ?? 0) < 1 ||
+				current.metadata.deletionTimestamp ||
+				!hasCurrentMetadata(current, value) ||
+				hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
+				hasDriftedStatefulSetSpec(value, current.spec) ||
+				(identity &&
+					(!identity.uid ||
+						!Number.isSafeInteger(identity.generation) ||
+						identity.generation < 1 ||
+						current.metadata.uid !== identity.uid ||
+						(current.metadata.generation ?? 0) < identity.generation)) ||
+				pods.some((pod) => !hasControllingWorkloadOwner(pod, current))
+			)
+				throw new WorkloadKubernetesError("conflict");
+			return {
+				uid: current.metadata.uid,
+				generation: current.metadata.generation ?? 1,
+			};
+		},
+		async removeRecoveryWorkload(
+			input: unknown,
+			identity: { uid: string; generation: number } | null,
+			creation: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			validateRecoveryCreation(value, creation);
+			if (!(await recoveryCleanupIsClosed(value))) return false;
+			const name = workloadResourceNameV1(value.agentId);
+			const current = await client.read<V1StatefulSet>("StatefulSet", name);
+			if (current) {
+				own(current, value.agentId, value.workloadRevision, value.fence);
+				if (
+					!identity?.uid ||
+					!Number.isSafeInteger(identity.generation) ||
+					identity.generation < 1 ||
+					current.metadata?.uid !== identity.uid ||
+					!current.metadata.resourceVersion ||
+					current.metadata.labels?.[revisionLabel] !==
+						String(creation.revision) ||
+					current.metadata.annotations?.["agent-infra.agora.io/fence"] !==
+						String(creation.fence) ||
+					!Number.isSafeInteger(current.metadata.generation) ||
+					(current.metadata.generation ?? 0) < identity.generation ||
+					hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
+					(current.spec?.persistentVolumeClaimRetentionPolicy?.whenDeleted ??
+						"Retain") !== "Retain" ||
+					(current.spec?.persistentVolumeClaimRetentionPolicy?.whenScaled ??
+						"Retain") !== "Retain"
+				)
+					return false;
+				const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+				if (pods.some((pod) => !hasControllingWorkloadOwner(pod, current)))
+					return false;
+				// The client sends both the observed UID and resourceVersion as
+				// Kubernetes deletion preconditions; PVCs are never deleted here.
+				await client.delete(current);
+			}
+			return (
+				(await client.read("StatefulSet", name)) === null &&
+				(await client.list("Pod", selector(value.agentId))).length === 0
+			);
+		},
+		async removeRecoverySecret(
+			input: unknown,
+			reference: AgentWorkloadDesiredV1["secretRefs"][number],
+			secretUid: string,
+			creation: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			validateRecoveryCreation(value, creation);
+			if (
+				!value.secretRefs.some((ref) => hasSameStructure(ref, reference)) ||
+				!secretUid
+			)
+				throw new WorkloadKubernetesError("policy");
+			if (!(await recoveryCleanupIsClosed(value))) return false;
+			if (
+				await client.read("StatefulSet", workloadResourceNameV1(value.agentId))
+			)
+				return false;
+			if ((await client.list("Pod", selector(value.agentId))).length)
+				return false;
+			const secret = await client.read<V1Secret>("Secret", reference.name);
+			if (!secret) return true;
+			own(secret, value.agentId, value.workloadRevision, value.fence);
+			if (
+				secret.metadata?.uid !== secretUid ||
+				!secret.metadata.resourceVersion ||
+				secret.metadata.labels?.[revisionLabel] !== String(creation.revision) ||
+				secret.metadata.annotations?.["agent-infra.agora.io/fence"] !==
+					String(creation.fence) ||
+				!isLiveOwnedImmutableSecret(secret, value, reference)
+			)
+				return false;
+			await client.delete(secret);
+			return (await client.read("Secret", reference.name)) === null;
+		},
 		async scaleDownAgent(
 			agentId: string,
 			workloadRevision: number,
@@ -2482,6 +2687,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
 										},
+										{ name: "runtime-tmp", mountPath: "/tmp" },
 									],
 								},
 							],
@@ -2491,6 +2697,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									persistentVolumeClaim: {
 										claimName: value.persistentVolume.name,
 									},
+								},
+								{
+									name: "runtime-tmp",
+									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
 							],
 						},

@@ -3,23 +3,46 @@ import { Buffer } from "node:buffer";
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
+	type RuntimeAuthorizationRenewRequestV3,
+	RuntimeAuthorizationRenewRequestV3Schema,
+	RuntimeAuthorizationRenewResponseV3Schema,
+	type RuntimeEventAckRequestV3,
+	RuntimeEventAckRequestV3Schema,
+	RuntimeEventAckResponseV3Schema,
+	type RuntimeEventPersistRequestV3,
+	RuntimeEventPersistRequestV3Schema,
+	RuntimeEventSchema,
 	RuntimeEventV1Schema,
+	type RuntimeEventV2,
+	type RuntimeGenerationCancelRequestV3,
+	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
+	RuntimeOperationResponseV3Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
+	type RuntimeStatusRequestV3,
+	RuntimeStatusRequestV3Schema,
 	RuntimeStatusResponseV2Schema,
+	RuntimeStatusResponseV3Schema,
 	RuntimeStopRequestV1Schema,
+	type RuntimeStopRequestV3,
+	RuntimeStopRequestV3Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
+	type RuntimeSubmitTurnRequestV3,
+	RuntimeSubmitTurnRequestV3Schema,
 	RuntimeSupplementRequestV1Schema,
+	type RuntimeSupplementRequestV3,
+	RuntimeSupplementRequestV3Schema,
 } from "@agent-infra/contracts/runtime";
 import {
+	type ConversationOperationFactV2,
 	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEventRequestV1,
-	type ConversationRuntimeEventV1,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
+	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
 
@@ -256,7 +279,10 @@ function statusBody(request: ConversationRuntimeStatusRequestV2) {
 	});
 }
 
-function parseFrame(value: string): ConversationRuntimeEventV1 | undefined {
+function parseFrame<T extends { cursor: string; type: string }>(
+	value: string,
+	schema: { parse(input: unknown): T },
+): T | undefined {
 	if (value.startsWith(":")) return undefined;
 	const fields = new Map<string, string>();
 	for (const line of value.split(/\r?\n/)) {
@@ -270,9 +296,7 @@ function parseFrame(value: string): ConversationRuntimeEventV1 | undefined {
 		fields.set(name, fieldValue);
 	}
 	try {
-		const event = RuntimeEventV1Schema.parse(
-			JSON.parse(fields.get("data") ?? ""),
-		);
+		const event = schema.parse(JSON.parse(fields.get("data") ?? ""));
 		if (
 			fields.get("id") !== event.cursor ||
 			fields.get("event") !== event.type
@@ -286,7 +310,10 @@ function parseFrame(value: string): ConversationRuntimeEventV1 | undefined {
 	}
 }
 
-async function* eventStream(response: Response) {
+async function* eventStream<T extends { cursor: string; type: string }>(
+	response: Response,
+	schema: { parse(input: unknown): T },
+) {
 	if (
 		!response.headers
 			.get("content-type")
@@ -323,7 +350,7 @@ async function* eventStream(response: Response) {
 						return failure("RUNTIME_EVENT_INVALID", true);
 					}
 					frame = [];
-					const event = parseFrame(value);
+					const event = parseFrame(value, schema);
 					if (event) yield event;
 				} else if (frame.length > maximumEventFrameBytes) {
 					return failure("RUNTIME_EVENT_INVALID", true);
@@ -418,7 +445,221 @@ export function createWorkerRuntimeHostClientV1(
 				body,
 				signal,
 			);
-			yield* eventStream(response);
+			yield* eventStream(response, RuntimeEventV1Schema);
+		},
+	};
+}
+
+/** Project only the already schema-validated public fields into domain facts. */
+function operationEvent(
+	event: RuntimeEventV2,
+): ConversationRuntimeOperationEventV2 {
+	const fact = event.payload;
+	const base = {
+		operationRef: fact.operationRef,
+		attemptRef: fact.attemptRef,
+		phase: fact.phase,
+		...(fact.parentOperationRef === undefined
+			? {}
+			: { parentOperationRef: fact.parentOperationRef }),
+		...(fact.startedAt === undefined ? {} : { startedAt: fact.startedAt }),
+		...(fact.finishedAt === undefined ? {} : { finishedAt: fact.finishedAt }),
+		...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
+		...(fact.failureCode === undefined
+			? {}
+			: { failureCode: fact.failureCode }),
+	};
+	let payload: ConversationOperationFactV2;
+	if (fact.kind === "tool") {
+		const association = fact.connection;
+		payload = {
+			...base,
+			kind: "tool",
+			toolId: fact.toolId,
+			...(fact.resultRef === undefined ? {} : { resultRef: fact.resultRef }),
+			...(association === undefined
+				? {}
+				: {
+						connection:
+							association.verification === "verified"
+								? {
+										serviceRef: association.serviceRef,
+										verification: "verified",
+										callRef: association.callRef,
+									}
+								: {
+										serviceRef: association.serviceRef,
+										verification: "unverified",
+										...(association.callRef === undefined
+											? {}
+											: { callRef: association.callRef }),
+										reason: association.reason,
+									},
+					}),
+		};
+	} else {
+		payload = {
+			...base,
+			kind: "model",
+			model: {
+				configVersion: fact.model.configVersion,
+				modelOptionId: fact.model.modelOptionId,
+				modelId: fact.model.modelId,
+				...(fact.model.reasoningLevel === undefined
+					? {}
+					: { reasoningLevel: fact.model.reasoningLevel }),
+			},
+			...(fact.usage === undefined
+				? {}
+				: {
+						usage: {
+							...(fact.usage.inputTokens === undefined
+								? {}
+								: { inputTokens: fact.usage.inputTokens }),
+							...(fact.usage.outputTokens === undefined
+								? {}
+								: { outputTokens: fact.usage.outputTokens }),
+							...(fact.usage.cachedInputTokens === undefined
+								? {}
+								: { cachedInputTokens: fact.usage.cachedInputTokens }),
+						},
+					}),
+		};
+	}
+	return {
+		schemaVersion: 2,
+		adapterEventKey: event.adapterEventKey,
+		executionId: event.executionId,
+		cursor: event.cursor,
+		occurredAt: event.occurredAt,
+		type: "operation",
+		payload,
+	};
+}
+
+/** V3 never signs, renews, or downgrades grants: the trusted caller supplies each fresh authorization. */
+export function createWorkerRuntimeHostClientV3(
+	options: WorkerRuntimeHostClientOptionsV1,
+) {
+	if (!options || typeof options !== "object" || !options.serviceToken)
+		throw new TypeError("RuntimeHost client options are invalid");
+	const fetcher = options.fetch ?? fetch;
+	const base = endpoint(options.baseUrl, "/");
+	async function request<T extends { traceId: string }, R>(
+		path: string,
+		value: T,
+		schema: { parse(input: unknown): T },
+		responseSchema: { parse(input: unknown): R },
+		signal?: AbortSignal,
+	): Promise<R> {
+		let body: T;
+		try {
+			body = schema.parse(value);
+		} catch {
+			return failure("RUNTIME_REQUEST_INVALID", false);
+		}
+		const response = await post(
+			fetcher,
+			new URL(`internal/runtime/v3/${path}`, base),
+			options.serviceToken,
+			body.traceId,
+			body,
+			signal,
+		);
+		try {
+			return responseSchema.parse(
+				JSON.parse(await boundedResponseText(response)),
+			);
+		} catch {
+			return failure("RUNTIME_RESPONSE_INVALID", true);
+		}
+	}
+	return {
+		submitTurn: (value: RuntimeSubmitTurnRequestV3, signal?: AbortSignal) =>
+			request(
+				"turns",
+				value,
+				RuntimeSubmitTurnRequestV3Schema,
+				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		supplement: (value: RuntimeSupplementRequestV3, signal?: AbortSignal) =>
+			request(
+				"instructions",
+				value,
+				RuntimeSupplementRequestV3Schema,
+				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		stop: (value: RuntimeStopRequestV3, signal?: AbortSignal) =>
+			request(
+				"stops",
+				value,
+				RuntimeStopRequestV3Schema,
+				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		recoverStatus: (value: RuntimeStatusRequestV3, signal?: AbortSignal) =>
+			request(
+				"status",
+				value,
+				RuntimeStatusRequestV3Schema,
+				RuntimeStatusResponseV3Schema,
+				signal,
+			),
+		cancelGeneration: (
+			value: RuntimeGenerationCancelRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"generations/cancel",
+				value,
+				RuntimeGenerationCancelRequestV3Schema,
+				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		renewAuthorization: (
+			value: RuntimeAuthorizationRenewRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"authorizations/renew",
+				value,
+				RuntimeAuthorizationRenewRequestV3Schema,
+				RuntimeAuthorizationRenewResponseV3Schema,
+				signal,
+			),
+		acknowledgeEvents: (
+			value: RuntimeEventAckRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"events/ack",
+				value,
+				RuntimeEventAckRequestV3Schema,
+				RuntimeEventAckResponseV3Schema,
+				signal,
+			),
+		async *events(value: RuntimeEventPersistRequestV3, signal?: AbortSignal) {
+			let body: RuntimeEventPersistRequestV3;
+			try {
+				body = RuntimeEventPersistRequestV3Schema.parse(value);
+			} catch {
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v3/events/stream", base),
+				options.serviceToken,
+				body.traceId,
+				body,
+				signal,
+			);
+			for await (const event of eventStream(response, RuntimeEventSchema)) {
+				if (event.executionId !== body.executionId)
+					return failure("RUNTIME_EVENT_INVALID", true);
+				yield event.schemaVersion === 2 ? operationEvent(event) : event;
+			}
 		},
 	};
 }

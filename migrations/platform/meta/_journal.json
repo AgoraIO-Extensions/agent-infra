@@ -99,6 +99,20 @@
       "when": 1789378850883,
       "tag": "0013_configuration_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789393436233,
+      "tag": "0014_trusted_task_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789406175385,
+      "tag": "0015_conversation_generation_tombstones",
+      "breakpoints": true
     }
   ]
 }

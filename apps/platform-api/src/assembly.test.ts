@@ -62,6 +62,13 @@ describe("Platform API production assembly", () => {
 			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
 			identity: {
 				resolve: vi.fn().mockResolvedValue(identity),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: identity.organizationIds,
+					authorizationRevision: identity.authorizationRevision,
+				}),
 				hydrateUsers: vi.fn().mockResolvedValue([]),
 			},
 			admissions: {
