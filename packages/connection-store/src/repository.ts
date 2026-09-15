@@ -2481,6 +2481,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
+		principalId: string;
 	}) {
 		await this.sql`
 			UPDATE connection_accounts
@@ -2491,6 +2492,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND external_account = ${input.externalAccount}
 				AND status = 'ACTIVE'
 				AND profile_label_source IS NULL
+				AND (
+					(
+						owner_type = 'PERSONAL'
+						AND owner_principal_id = ${input.principalId}
+					) OR (
+						owner_type = 'SHARED'
+						AND EXISTS (
+							SELECT 1 FROM connection_shared_scopes shared_scope
+							JOIN connection_shared_scope_principals membership
+								ON membership.shared_scope_id = shared_scope.id
+								AND membership.principal_id = ${input.principalId}
+								AND membership.status = 'ACTIVE'
+							WHERE shared_scope.id = connection_accounts.shared_scope_id
+								AND shared_scope.state = 'ACTIVE'
+						)
+					)
+				)
 				AND EXISTS (
 					SELECT 1 FROM connection_credential_versions credential
 					WHERE credential.id = ${input.credentialVersionId}

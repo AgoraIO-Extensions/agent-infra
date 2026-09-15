@@ -662,6 +662,7 @@ export interface ConnectionRepository {
 		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
+		principalId: string;
 	}): Promise<void>;
 	getOverview(principalId: string): Promise<ConnectionOverview>;
 	listAuthorizedConnections(
@@ -944,6 +945,7 @@ export class ConnectionApplicationService {
 					credentialVersionId: candidate.credentialVersionId,
 					displayName: login,
 					externalAccount: candidate.externalAccount,
+					principalId,
 				});
 			} catch {
 				// Profile projection is best effort and must not block the overview.

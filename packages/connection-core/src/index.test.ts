@@ -126,6 +126,7 @@ class MemoryRepository implements ConnectionRepository {
 		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
+		principalId: string;
 	};
 	private readonly activeReconciliationJobs = new Map<
 		string,
@@ -331,6 +332,7 @@ class MemoryRepository implements ConnectionRepository {
 		credentialVersionId: string;
 		displayName: string;
 		externalAccount: string;
+		principalId: string;
 	}) {
 		this.githubProfileLabel = input;
 	}
@@ -452,6 +454,7 @@ describe("Connection application service", () => {
 			credentialVersionId: "credential-github",
 			displayName: "octocat",
 			externalAccount: "42",
+			principalId: "alice",
 		});
 	});
 

@@ -85,6 +85,7 @@ describe("PostgreSQL Connection business authority", () => {
 					credentialVersionId: candidates[0]?.credentialVersionId ?? "",
 					displayName: "octocat",
 					externalAccount: "42",
+					principalId,
 				});
 
 				const [account] = await sql<
