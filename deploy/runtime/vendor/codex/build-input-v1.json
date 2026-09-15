@@ -286,7 +286,7 @@
     },
     {
       "path": "patches/0003-protected-connection-client.patch",
-      "sha256": "sha256:fa69922e5f1ea443564bb8388e17729289c1203ea4ffb10ab5c421b4df089ec3"
+      "sha256": "sha256:03cfd50e7b47d8bb69ec3467be4ef6088b7f58ac37b908571b69d2a7542b9557"
     }
   ],
   "sourceFiles": [
@@ -392,7 +392,7 @@
     },
     {
       "path": "codex-rs/core/src/native_operation_barrier_tests.rs",
-      "sha256": "sha256:e1244dd14e5b85141d1d6ae6fcd40b78e94540c939fd78af4b039da04f34e88b"
+      "sha256": "sha256:557af87e1c1324214b81c3ec262b18ad99eec6819f53fa23d1b28490564913da"
     },
     {
       "path": "codex-rs/core/src/native_process_protection.rs",

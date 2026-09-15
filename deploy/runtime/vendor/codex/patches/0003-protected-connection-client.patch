@@ -1033,7 +1033,23 @@ diff --git a/codex-rs/core/src/native_operation_barrier_tests.rs b/codex-rs/core
          source_owner: Some(SourceOwner {
              root_thread_id: "session".into(),
              root_turn_id: "turn".into(),
-@@ -214,3 +217,78 @@
+@@ -94,6 +97,7 @@
+         expires_at: None,
+         reason: None,
+         source_owner: None,
++        connection_request: None,
+     };
+     assert!(response.validate(&request, 1).is_err());
+ }
+@@ -147,6 +151,7 @@
+         identity,
+         permit_id: Uuid::new_v4(),
+         expires_at: now_ms().unwrap() + 5000,
++        connection_request: None,
+         cancelled: CancellationToken::new(),
+         state: Mutex::new(AttemptState::default()),
+         started_notification: tokio::sync::Notify::new(),
+@@ -214,3 +219,78 @@
      assert_eq!(running.await.unwrap(), Err(BarrierError));
      assert!(!dispatched.load(Ordering::Acquire));
  }
