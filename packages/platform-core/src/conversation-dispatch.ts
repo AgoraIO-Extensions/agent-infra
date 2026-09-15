@@ -1263,12 +1263,27 @@ function executionTerminal(status: ConversationDispatchExecutionStatusV1) {
 	);
 }
 
+/** Decide against the latest state under the same lock as retry/outbox commit. */
+export function decideConversationDispatchRetryTransitionV1(input: {
+	readonly operation: ConversationDispatchOperationV1;
+	readonly executionStatus: ConversationDispatchExecutionStatusV1;
+	readonly transition: ConversationDispatchStateTransitionV1;
+}): ConversationDispatchStateTransitionV1 {
+	return isTurnOperation(input.operation) &&
+		executionTerminal(input.executionStatus) &&
+		input.transition.executionStatus === "unknown"
+		? {}
+		: input.transition;
+}
+
 function retryTransition(claim: ConversationDispatchClaimV1) {
-	if (executionTerminal(claim.executionStatus)) return {};
-	return claim.operation === "conversation.turn.submit.v1" ||
-		claim.operation === "conversation.turn.regenerate.v1"
-		? transitionForStatus("unknown")
-		: {};
+	return decideConversationDispatchRetryTransitionV1({
+		operation: claim.operation,
+		executionStatus: claim.executionStatus,
+		transition: isTurnOperation(claim.operation)
+			? transitionForStatus("unknown")
+			: {},
+	});
 }
 
 function rejectedTransition(claim: ConversationDispatchClaimV1) {
@@ -1440,6 +1455,19 @@ export function createConversationDispatchUseCaseV1(
 					}
 				: undefined,
 		);
+		// An authorization renewal can fail after the lease was renewed, notably
+		// when stop changes the stream to control-only recovery. The Store must
+		// recheck ownership before releasing it; heartbeat failure alone is not
+		// evidence that another Worker owns the lease.
+		const retryInterruptedDrain = () =>
+			retry(
+				dependencies.store,
+				claim,
+				retryDelayMs,
+				"RUNTIME_HEARTBEAT_INTERRUPTED",
+				"retry",
+				{},
+			);
 		try {
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
@@ -1522,7 +1550,7 @@ export function createConversationDispatchUseCaseV1(
 			}
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
-			if (!current) return { schemaVersion: 1, outcome: "stale" };
+			if (!current) return retryInterruptedDrain();
 			const failure = runtimeFailure(error);
 			return failure.retryable
 				? retry(
@@ -1543,7 +1571,7 @@ export function createConversationDispatchUseCaseV1(
 			await eventHeartbeat.stop();
 		}
 		if (eventHeartbeat.signal.aborted) {
-			return { schemaVersion: 1, outcome: "stale" };
+			return retryInterruptedDrain();
 		}
 		if (!finalStatus) {
 			return retry(

@@ -13,7 +13,80 @@ import {
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
+	decideConversationDispatchRetryTransitionV1,
 } from "./index.js";
+
+describe("current-state retry transition", () => {
+	it.each(["completed", "failed", "cancelled"] as const)(
+		"preserves an already %s original Turn and its Conversation during unknown retry",
+		(executionStatus) => {
+			for (const operation of [
+				"conversation.turn.submit.v1",
+				"conversation.turn.regenerate.v1",
+			] as const) {
+				expect(
+					decideConversationDispatchRetryTransitionV1({
+						operation,
+						executionStatus,
+						transition: {
+							executionStatus: "unknown",
+							conversationStatus: "active",
+						},
+					}),
+				).toEqual({});
+			}
+		},
+	);
+
+	it.each(["submitted", "processing", "unknown"] as const)(
+		"retains the requested retry transition for %s work",
+		(executionStatus) => {
+			const transition = {
+				executionStatus: "unknown",
+				conversationStatus: "active",
+			} as const;
+			expect(
+				decideConversationDispatchRetryTransitionV1({
+					operation: "conversation.turn.submit.v1",
+					executionStatus,
+					transition,
+				}),
+			).toEqual(transition);
+		},
+	);
+
+	it("leaves control, conflicting terminal, and metadata transitions for the Store to validate", () => {
+		const cases = [
+			{
+				operation: "conversation.turn.stop.v1",
+				transition: {
+					executionStatus: "unknown",
+					conversationStatus: "active",
+				},
+			},
+			{
+				operation: "conversation.turn.supplement.v1",
+				transition: {
+					executionStatus: "unknown",
+					conversationStatus: "active",
+				},
+			},
+			{
+				operation: "conversation.turn.submit.v1",
+				transition: { executionStatus: "failed", conversationStatus: "ready" },
+			},
+			{ operation: "conversation.turn.submit.v1", transition: {} },
+		] as const;
+		for (const { operation, transition } of cases)
+			expect(
+				decideConversationDispatchRetryTransitionV1({
+					operation,
+					executionStatus: "cancelled",
+					transition,
+				}),
+			).toEqual(transition);
+	});
+});
 
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},

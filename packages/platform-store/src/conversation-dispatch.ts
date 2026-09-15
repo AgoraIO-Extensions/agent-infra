@@ -12,6 +12,7 @@ import {
 	type ConversationGenerationIsolationV1,
 	type ConversationMetadataRecoveryV1,
 	decideConversationDispatchCapacityV1,
+	decideConversationDispatchRetryTransitionV1,
 	parseConversationMetadataRecoveryV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
@@ -1567,7 +1568,8 @@ export class PostgresConversationDispatchStoreV1
 		requireClaim(input.claim);
 		requireLeaseDuration(input.leaseDurationMs);
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			// Stop changes authority, not ownership of the original event drain.
+			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
 			await renewLease(transaction, input.claim, input.leaseDurationMs);
 		});
@@ -1784,7 +1786,7 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Conversation dispatch outcome is invalid");
 		}
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
 			await applyTransition(transaction, state, input.claim, input.transition);
 			if (
@@ -1854,9 +1856,17 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Conversation dispatch retry is invalid");
 		}
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
-			await applyTransition(transaction, state, input.claim, input.transition);
+			// A concurrent stop can commit a terminal response before the original
+			// event stream fails. Release its lease without undoing that response or
+			// changing the Conversation now owned by a later Execution.
+			const transition = decideConversationDispatchRetryTransitionV1({
+				operation: input.claim.operation,
+				executionStatus: state.execution.status,
+				transition: input.transition,
+			});
+			await applyTransition(transaction, state, input.claim, transition);
 			await retryOutbox(
 				transaction,
 				state,

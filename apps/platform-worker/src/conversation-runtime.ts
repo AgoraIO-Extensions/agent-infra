@@ -573,13 +573,37 @@ export function createConversationRuntimeV2(
 					afterCursor: state.runtimeCursor,
 				};
 				let terminal = false;
-				for await (const event of client.events(
-					{ ...body, grant: signRequest(body, authority, "events.persist") },
-					active,
-				)) {
-					yield event;
-					if (event.type === "completed") terminal = true;
+				let streamFailure: ConversationRuntimeHostError | undefined;
+				try {
+					for await (const event of client.events(
+						{ ...body, grant: signRequest(body, authority, "events.persist") },
+						active,
+					)) {
+						yield event;
+						if (event.type === "completed") terminal = true;
+					}
+				} catch (error) {
+					if (
+						!(error instanceof ConversationRuntimeHostError) ||
+						!error.retryable
+					)
+						throw error;
+					streamFailure = error;
 				}
+				if (authority.purpose === "business" && !terminal) {
+					// Stop invalidates the old business stream. Re-enter the existing
+					// preparation boundary using the live lease and committed cursor;
+					// only that boundary may mint the new control grant.
+					const currentState = await stateFor(contextFor(request), active);
+					if (
+						currentState.stopPending ||
+						["completed", "failed", "cancelled"].includes(
+							currentState.executionStatus,
+						)
+					)
+						continue;
+				}
+				if (streamFailure) throw streamFailure;
 				if (
 					terminal ||
 					["completed", "failed", "cancelled"].includes(state.executionStatus)

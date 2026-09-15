@@ -4,11 +4,13 @@ import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
 	ConversationDispatchClaimV1,
+	ConversationDispatchStorePortV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
+import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeStateV2,
@@ -20,7 +22,7 @@ const verify = createRuntimeExecutionGrantVerifierV2(
 	new Map([["signing", keys.publicKey]]),
 );
 const now = 1_800_000_000_000;
-function harness() {
+function harness(reconnectDelayMs = 1) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		itemId: "item",
@@ -216,7 +218,7 @@ function harness() {
 		dispatchStore: store,
 		resolveRuntimeHost: resolver,
 		fetch: fetcher,
-		reconnectDelayMs: 1,
+		reconnectDelayMs,
 	});
 	async function authorize() {
 		const decision = await runtime.authorization.authorize({ ...claim, claim });
@@ -694,6 +696,476 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.sent().body).not.toHaveProperty("input");
 		h.runtime.close();
 	});
+	it.each(["error", "eof"] as const)(
+		"recovers the original event cursor immediately after concurrent stop closes the business stream with %s",
+		async (ending) => {
+			vi.useFakeTimers();
+			const timers = vi.spyOn(globalThis, "setTimeout");
+			const h = harness(1_000);
+			try {
+				h.store.readRuntimeState.mockImplementation(async () =>
+					structuredClone(h.state),
+				);
+				const context = await h.authorize();
+				const started = {
+					schemaVersion: 2,
+					adapterEventKey: "model-started",
+					cursor: "started",
+					executionId: "execution",
+					occurredAt: "2026-09-14T12:00:00Z",
+					type: "operation",
+					payload: {
+						kind: "model",
+						phase: "started",
+						operationRef: "original-model",
+						attemptRef: "original-attempt",
+						model: {
+							configVersion: "config-1",
+							modelOptionId: "option",
+							modelId: "model",
+						},
+					},
+				};
+				const interrupted = {
+					...started,
+					adapterEventKey: "model-interrupted",
+					cursor: "interrupted",
+					payload: { ...started.payload, phase: "unknown" },
+				};
+				const terminal = {
+					schemaVersion: 1,
+					adapterEventKey: "cancelled",
+					cursor: "cancelled",
+					executionId: "execution",
+					occurredAt: "2026-09-14T12:00:01Z",
+					type: "completed",
+					payload: { status: "cancelled" },
+				};
+				const frame = (event: typeof started | typeof terminal) =>
+					`id: ${event.cursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+				let oldPipe: ReadableStreamDefaultController<Uint8Array> | undefined;
+				let eventRequests = 0;
+				h.fetcher.mockImplementation(async (url, init) => {
+					if (String(url).endsWith("/events/ack")) {
+						const body = JSON.parse(init?.body as string);
+						return new Response(
+							JSON.stringify({
+								schemaVersion: 3,
+								executionId: "execution",
+								confirmedCursor: body.confirmedCursor,
+							}),
+						);
+					}
+					if (!String(url).endsWith("/events/stream"))
+						throw new Error("Recovery must not submit another Turn");
+					eventRequests += 1;
+					return new Response(
+						eventRequests === 1
+							? new ReadableStream<Uint8Array>({
+									start(controller) {
+										oldPipe = controller;
+										controller.enqueue(
+											new TextEncoder().encode(frame(started)),
+										);
+									},
+								})
+							: frame(interrupted) + frame(terminal),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(context))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(started);
+				Object.assign(h.state, {
+					runtimeCursor: "started",
+					executionStatus: "cancelled",
+					stopPending: false,
+				});
+				if (!oldPipe) throw new Error("Expected the business event stream");
+				if (ending === "error")
+					oldPipe.error(new Error("old business grant stream closed"));
+				else oldPipe.close();
+				const next = stream.next().then(
+					(value) => ({ value }),
+					(error: unknown) => ({ error }),
+				);
+				await vi.runAllTimersAsync();
+				expect(await next).toEqual({
+					value: { done: false, value: interrupted },
+				});
+				expect(timers.mock.calls.some((call) => call[1] === 1_000)).toBe(false);
+				Object.assign(h.state, { runtimeCursor: "interrupted" });
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(context),
+					confirmedCursor: "interrupted",
+				});
+				expect((await stream.next()).value).toEqual(terminal);
+				Object.assign(h.state, { runtimeCursor: "cancelled" });
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(context),
+					confirmedCursor: "cancelled",
+				});
+				expect((await stream.next()).done).toBe(true);
+				const bodies = h.fetcher.mock.calls.map((call) =>
+					JSON.parse(call[1]?.body as string),
+				);
+				expect(
+					bodies.map(
+						(body) => body.afterCursor ?? body.confirmedCursor ?? null,
+					),
+				).toEqual([null, "started", "interrupted", "cancelled"]);
+				expect(verify(bodies[0].grant).claims.purpose).toBe("business");
+				for (const body of bodies.slice(1)) {
+					expect(verify(body.grant).claims).toMatchObject({
+						purpose: "control",
+						reason: "recovery",
+						executionId: "execution",
+						turnId: "turn",
+						sessionGeneration: 1,
+					});
+					expect(body.operation.executionDeliveryFence).toBe(2);
+				}
+				expect(
+					new Set(bodies.map((body) => verify(body.grant).claims.grantId)).size,
+				).toBe(4);
+			} finally {
+				h.runtime.close();
+				timers.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		["cancelled", "stream"],
+		["pending", "stream"],
+		["cancelled", "ack"],
+		["pending", "ack"],
+		["cancelled", "lost lease"],
+	] as const)(
+		"releases an owned %s control drain interrupted by the heartbeat during %s",
+		async (stop, pause) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(now);
+			const h = harness(1_000);
+			let owned = false;
+			let leaseExpiresAt: number | null = null;
+			let status = "pending";
+			let attempts = 0;
+			const renewAuthorization = vi.spyOn(
+				h.runtime.runtimeHost,
+				"renewAuthorization",
+			);
+			const persisted: string[] = [];
+			const acknowledged: string[] = [];
+			const reachedControl = Promise.withResolvers<void>();
+			const store: ConversationDispatchStorePortV1 = {
+				async claim() {
+					owned = true;
+					status = "processing";
+					leaseExpiresAt = Date.now() + 30_000;
+					attempts += 1;
+					return {
+						outcome: "claimed",
+						claim: {
+							...h.claim,
+							deliveryFence: h.claim.deliveryFence + attempts - 1,
+							executionStatus: h.state.executionStatus,
+							stopPending: h.state.stopPending,
+							runtimeCursor: h.state.runtimeCursor,
+						},
+					};
+				},
+				renew: vi.fn(async () => {
+					if (!owned) return false;
+					leaseExpiresAt = Date.now() + 30_000;
+					return true;
+				}),
+				async prepareRuntimeDispatch() {
+					return owned;
+				},
+				async cancelUnaccepted() {
+					throw new Error("The original Turn was accepted");
+				},
+				async recordRuntimeResponse() {
+					return owned;
+				},
+				retry: vi.fn(async () => {
+					if (!owned || leaseExpiresAt === null || leaseExpiresAt <= Date.now())
+						return false;
+					owned = false;
+					leaseExpiresAt = null;
+					status = "retry_scheduled";
+					return true;
+				}),
+				async finish() {
+					if (!owned) return false;
+					owned = false;
+					leaseExpiresAt = null;
+					status = "succeeded";
+					return true;
+				},
+			};
+			h.store.readRuntimeState.mockImplementation(async () =>
+				owned ? structuredClone(h.state) : null,
+			);
+			const started = {
+				schemaVersion: 2,
+				adapterEventKey: "model-started",
+				cursor: "started",
+				executionId: "execution",
+				occurredAt: "2026-09-14T12:00:00Z",
+				type: "operation",
+				payload: {
+					kind: "model",
+					phase: "started",
+					operationRef: "original-model",
+					attemptRef: "original-attempt",
+					model: {
+						configVersion: "config-1",
+						modelOptionId: "option",
+						modelId: "model",
+					},
+				},
+			};
+			const interrupted = {
+				...started,
+				adapterEventKey: "model-interrupted",
+				cursor: "interrupted",
+				payload: { ...started.payload, phase: "unknown" },
+			};
+			const terminal = {
+				schemaVersion: 1,
+				adapterEventKey: "cancelled",
+				cursor: "cancelled",
+				executionId: "execution",
+				occurredAt: "2026-09-14T12:00:01Z",
+				type: "completed",
+				payload: { status: "cancelled" },
+			};
+			const frame = (event: typeof started | typeof terminal) =>
+				`id: ${event.cursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+			h.fetcher.mockImplementation(async (url, init) => {
+				const body = JSON.parse(init?.body as string);
+				if (String(url).endsWith("/status"))
+					return new Response(
+						JSON.stringify({
+							schemaVersion: 3,
+							outcome: "found",
+							hostSessionRef: "host",
+							executionId: "execution",
+							status: "running",
+						}),
+					);
+				if (String(url).endsWith("/events/ack")) {
+					if (
+						pause === "ack" &&
+						attempts === 1 &&
+						body.confirmedCursor === "interrupted"
+					) {
+						reachedControl.resolve();
+						await new Promise<never>((_resolve, reject) =>
+							init?.signal?.addEventListener(
+								"abort",
+								() => reject(new Error("ACK aborted")),
+								{ once: true },
+							),
+						);
+					}
+					acknowledged.push(body.confirmedCursor);
+					return new Response(
+						JSON.stringify({
+							schemaVersion: 3,
+							executionId: "execution",
+							confirmedCursor: body.confirmedCursor,
+						}),
+					);
+				}
+				if (!String(url).endsWith("/events/stream"))
+					throw new Error("No new business operation may be dispatched");
+				if (body.afterCursor === null) {
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(new TextEncoder().encode(frame(started)));
+								Object.assign(h.state, {
+									executionStatus:
+										stop === "cancelled" ? "cancelled" : "processing",
+									stopPending: stop === "pending",
+								});
+								controller.close();
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				}
+				if (attempts === 1 && pause !== "ack") {
+					reachedControl.resolve();
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								init?.signal?.addEventListener(
+									"abort",
+									() => controller.error(new Error("stream aborted")),
+									{ once: true },
+								);
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				}
+				return new Response(
+					(body.afterCursor === "started" ? frame(interrupted) : "") +
+						frame(terminal),
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			});
+			const useCase = createConversationDispatchUseCaseV1(
+				{
+					store,
+					authorization: h.runtime.authorization,
+					runtimeHost: h.runtime.runtimeHost,
+					events: {
+						async persist(command) {
+							if (!owned) return { outcome: "stale" };
+							if (!persisted.includes(command.runtimeCursor))
+								persisted.push(command.runtimeCursor);
+							Object.assign(h.state, {
+								runtimeCursor: command.runtimeCursor,
+								...(command.transition
+									? { executionStatus: command.transition.executionStatus }
+									: {}),
+							});
+							return {
+								outcome: "accepted",
+								event: {
+									schemaVersion: 1,
+									eventId: command.adapterEventKey,
+									conversationId: command.conversationId,
+									executionId: command.executionId,
+									sequence: persisted.length,
+									conversationCursor: persisted.length,
+									occurredAt: command.occurredAt,
+									event: command.event,
+								},
+							};
+						},
+					},
+				},
+				{ leaseDurationMs: 30_000, retryDelayMs: 0 },
+			);
+			try {
+				const command = {
+					schemaVersion: 1 as const,
+					itemId: h.claim.itemId,
+					workerId: h.claim.leaseOwner,
+				};
+				const dispatch = useCase.dispatch(command);
+				await reachedControl.promise;
+				if (pause === "lost lease") owned = false;
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(await dispatch).toMatchObject(
+					pause === "lost lease"
+						? { outcome: "stale" }
+						: { outcome: "retry", retryScheduled: true },
+				);
+				expect(store.renew).toHaveBeenCalledTimes(1);
+				expect(store.retry).toHaveBeenCalledTimes(1);
+				expect(store.retry).toHaveBeenCalledWith(
+					expect.objectContaining({ transition: {} }),
+				);
+				expect(Date.now()).toBe(now + 10_000);
+				if (pause === "lost lease") {
+					expect(renewAuthorization).not.toHaveBeenCalled();
+					expect(status).toBe("processing");
+					return;
+				}
+				expect(renewAuthorization).toHaveBeenCalledTimes(1);
+				expect(status).toBe("retry_scheduled");
+				expect(leaseExpiresAt).toBeNull();
+				expect(h.state.runtimeCursor).toBe(
+					pause === "ack" ? "interrupted" : "started",
+				);
+				Object.assign(h.state, {
+					executionStatus: "cancelled",
+					stopPending: false,
+				});
+				expect(await useCase.dispatch(command)).toMatchObject({
+					outcome: "accepted",
+				});
+				expect(persisted).toEqual(["started", "interrupted", "cancelled"]);
+				expect(acknowledged).toEqual(
+					pause === "ack"
+						? ["started", "interrupted", "cancelled"]
+						: ["started", "started", "interrupted", "cancelled"],
+				);
+				expect(status).toBe("succeeded");
+				const calls = h.fetcher.mock.calls.map((call) => ({
+					url: String(call[0]),
+					body: JSON.parse(call[1]?.body as string),
+				}));
+				expect(
+					calls.every(
+						(call) =>
+							!call.url.endsWith("/authorizations/renew") &&
+							!call.url.endsWith("/turns"),
+					),
+				).toBe(true);
+				for (const { body } of calls
+					.filter((call) => call.url.endsWith("/events/stream"))
+					.slice(1)) {
+					expect(verify(body.grant).claims.purpose).toBe("control");
+					expect(body.operation.executionDeliveryFence).toBe(
+						h.claim.executionDeliveryFence,
+					);
+				}
+			} finally {
+				h.runtime.close();
+				renewAuthorization.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(["business", "control", "lost lease"] as const)(
+		"leaves a failed %s stream to the dispatcher when no owned business-to-control transition can recover it",
+		async (state) => {
+			const h = harness(1_000);
+			try {
+				if (state === "control")
+					Object.assign(h.state, { executionStatus: "cancelled" });
+				const context = await h.authorize();
+				h.fetcher.mockImplementation(async () => {
+					if (state === "lost lease")
+						h.store.readRuntimeState.mockResolvedValue(null);
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.error(new Error("transport interrupted"));
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				});
+				await expect(
+					h.runtime.runtimeHost
+						.events(h.events(context))
+						[Symbol.asyncIterator]()
+						.next(),
+				).rejects.toMatchObject({
+					code:
+						state === "lost lease"
+							? "RUNTIME_FENCE_STALE"
+							: "RUNTIME_UNAVAILABLE",
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(1);
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it("reconnects with a fresh grant from the Platform committed cursor and preserves operation facts", async () => {
 		const h = harness();
 		const context = await h.authorize();

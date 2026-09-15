@@ -61,6 +61,7 @@ describe("platform-core package surface", () => {
 			"createWorkloadReconciliationV1",
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
+			"decideConversationDispatchRetryTransitionV1",
 			"immutableSecretNameV1",
 			"isAgentAccessAllowedV1",
 			"isAgentOwnerV1",

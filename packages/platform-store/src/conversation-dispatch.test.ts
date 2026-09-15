@@ -867,6 +867,356 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("releases the original Turn lease after a concurrent stop commits cancellation", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await seedStop(work);
+			const stop = await store.claim({
+				schemaVersion: 1,
+				itemId: `conversation:stop:${work.stopRequestId}`,
+				workerId: "stop-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (stop.outcome !== "claimed") throw new Error("Expected stop claim");
+			expect(
+				await store.recordRuntimeResponse({
+					claim: stop.claim,
+					hostSessionRef: "host-session-existing",
+					transition: {
+						executionStatus: "cancelled",
+						conversationStatus: "ready",
+					},
+				}),
+			).toBe(true);
+			expect(
+				await store.finish({
+					claim: stop.claim,
+					status: "succeeded",
+					transition: {},
+				}),
+			).toBe(true);
+			// The old business event stream fails before it sees the terminal event.
+			// Its immutable claim still asks to mark the original Turn unknown.
+			expect(
+				await store.retry({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_UNAVAILABLE",
+					transition: {
+						executionStatus: "unknown",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			const [released] = await client`
+				select status, lease_owner, lease_expires_at from platform.outbox_items
+				where id = ${work.itemId}
+			`;
+			expect(released).toEqual({
+				status: "retry_scheduled",
+				lease_owner: null,
+				lease_expires_at: null,
+			});
+			expect(await dispatchState(work)).toMatchObject({
+				execution_status: "cancelled",
+				execution_fence: decision.claim.executionDeliveryFence,
+			});
+			const [conversation] =
+				await client`select status from platform.conversations where id = ${work.conversationId}`;
+			expect(conversation?.status).toBe("ready");
+			const recovered = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "recovery-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(recovered).toMatchObject({
+				outcome: "claimed",
+				claim: {
+					executionId: work.executionId,
+					turnId: work.turnId,
+					executionStatus: "cancelled",
+					deliveryFence: decision.claim.deliveryFence + 1,
+					executionDeliveryFence: decision.claim.executionDeliveryFence,
+				},
+			});
+			// Relaxing stop bookkeeping must not permit the old Worker after takeover.
+			expect(
+				await store.renew({ claim: decision.claim, leaseDurationMs: 30_000 }),
+			).toBe(false);
+			expect(
+				await store.retry({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_UNAVAILABLE",
+					transition: {},
+				}),
+			).toBe(false);
+			expect(
+				await store.finish({
+					claim: decision.claim,
+					status: "succeeded",
+					transition: {},
+				}),
+			).toBe(false);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("recovers the stopped original Turn facts and ACKs from the committed cursor without another submit", async () => {
+		const work = await seed();
+		const authorizationRecordId = `authorization-${work.executionId}`;
+		await client`insert into platform.task_authorization_records (id, execution_id, boundary) values (${authorizationRecordId}, ${work.executionId}, ${client.json(
+			{
+				schemaVersion: 1,
+				principal: { kind: "user", id: "actor-dispatch" },
+				agentId: "agent-dispatch",
+				channelId: "web",
+				identityRevision: "identity-1",
+				agentAuthorizationRevision: "authorization-dispatch",
+				accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+			},
+		)})`;
+		await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+			values (${`acceptance-${work.executionId}`}, 'trace-original', 'user', 'actor-dispatch', 'task.authorization.accepted', 'execution', ${work.executionId}, 'succeeded', 'request-original', 'agent-dispatch', ${client.json({ authorizationRecordId })})`;
+		const store = open();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const claims: ConversationDispatchClaimV1[] = [];
+		const acknowledgements: string[] = [];
+		const eventRequests: { afterCursor?: string; runtimeGrant: unknown }[] = [];
+		let submits = 0;
+		const fact = (
+			phase: "intent" | "started" | "unknown",
+			sequence: number,
+		): ConversationRuntimeOperationEventV2 => ({
+			schemaVersion: 2,
+			adapterEventKey: `model-${phase}`,
+			executionId: work.executionId,
+			cursor: `cursor-${sequence}`,
+			occurredAt: `2026-09-14T12:00:0${sequence}Z`,
+			type: "operation",
+			payload: {
+				kind: "model",
+				phase,
+				operationRef: "original-model",
+				attemptRef: "original-attempt",
+				model: {
+					configVersion: "config-4",
+					modelOptionId: "model-option-dispatch",
+					modelId: "model",
+					reasoningLevel: "medium",
+				},
+			},
+		});
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch(request) {
+				submits += 1;
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-session-existing",
+					operationId: request.messageId ?? request.executionId,
+					result: { outcome: "accepted", status: "running" },
+				};
+			},
+			async recoverStatus() {
+				throw new Error(
+					"Terminal recovery must only drain the original events",
+				);
+			},
+			async *events(request) {
+				eventRequests.push(request);
+				if (request.runtimeGrant === "business") {
+					yield fact("intent", 1);
+					yield fact("started", 2);
+					await seedStop(work);
+					const stop = await store.claim({
+						schemaVersion: 1,
+						itemId: `conversation:stop:${work.stopRequestId}`,
+						workerId: "stop-worker",
+						leaseDurationMs: 30_000,
+					});
+					if (stop.outcome !== "claimed")
+						throw new Error("Expected stop claim");
+					expect(
+						await store.recordRuntimeResponse({
+							claim: stop.claim,
+							hostSessionRef: "host-session-existing",
+							transition: {
+								executionStatus: "cancelled",
+								conversationStatus: "ready",
+							},
+						}),
+					).toBe(true);
+					expect(
+						await store.finish({
+							claim: stop.claim,
+							status: "succeeded",
+							transition: {},
+						}),
+					).toBe(true);
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				}
+				yield fact("unknown", 3);
+				yield {
+					schemaVersion: 1,
+					adapterEventKey: "cancelled",
+					executionId: work.executionId,
+					cursor: "cursor-4",
+					occurredAt: "2026-09-14T12:00:04Z",
+					type: "completed",
+					payload: { status: "cancelled" },
+				};
+			},
+			async acknowledge(request) {
+				const [execution] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id = ${work.executionId}`;
+				expect(execution?.last_runtime_cursor).toBe(request.confirmedCursor);
+				acknowledgements.push(request.confirmedCursor);
+			},
+		};
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost,
+				events,
+				authorization: {
+					async authorize({ claim }) {
+						claims.push(claim);
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								agentId: claim.agentId,
+								actorId: claim.actorId,
+								channelId: claim.channelId,
+								conversationId: claim.conversationId,
+								executionId: claim.executionId,
+								turnId: claim.turnId,
+								sessionGeneration: claim.sessionGeneration,
+								authorizationRevision: claim.authorizationRevision,
+								runtimeGrant:
+									claim.executionStatus === "cancelled"
+										? "control"
+										: "business",
+								...(claim.executionStatus === "cancelled"
+									? { controlOnly: true as const }
+									: {}),
+							},
+						};
+					},
+				},
+			},
+			{ leaseDurationMs: 30_000, retryDelayMs: 0 },
+		);
+		try {
+			const command = {
+				schemaVersion: 1 as const,
+				itemId: work.itemId,
+				workerId: "original-worker",
+			};
+			expect(await useCase.dispatch(command)).toMatchObject({
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			expect(eventRequests).toHaveLength(1);
+			expect(acknowledgements).toEqual(["cursor-1", "cursor-2"]);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "cancelled",
+			});
+			expect(await useCase.dispatch(command)).toMatchObject({
+				outcome: "accepted",
+			});
+			expect(submits).toBe(1);
+			expect(
+				eventRequests.map(({ afterCursor, runtimeGrant }) => ({
+					afterCursor,
+					runtimeGrant,
+				})),
+			).toEqual([
+				{ afterCursor: undefined, runtimeGrant: "business" },
+				{ afterCursor: "cursor-2", runtimeGrant: "control" },
+			]);
+			expect(acknowledgements).toEqual([
+				"cursor-1",
+				"cursor-2",
+				"cursor-2",
+				"cursor-3",
+				"cursor-4",
+			]);
+			expect(claims[1]).toMatchObject({
+				executionId: work.executionId,
+				turnId: work.turnId,
+				executionDeliveryFence: claims[0]?.executionDeliveryFence,
+			});
+			const saved =
+				await client`select adapter_event_key from platform.conversation_events where execution_id = ${work.executionId} order by sequence`;
+			expect(saved.map((event) => event.adapter_event_key)).toEqual([
+				"model-intent",
+				"model-started",
+				"model-unknown",
+				"cancelled",
+			]);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "cancelled",
+				execution_fence: claims[0]?.executionDeliveryFence,
+			});
+		} finally {
+			await transaction.close();
+			await store.close();
+		}
+	});
+
+	it.each(["renew", "retry", "finish"] as const)(
+		"keeps owned Turn %s bookkeeping valid while stop is pending",
+		async (operation) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "processing",
+				hostSessionRef: "host-session-existing",
+			});
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await seedStop(work);
+				const result =
+					operation === "renew"
+						? await store.renew({
+								claim: decision.claim,
+								leaseDurationMs: 30_000,
+							})
+						: operation === "retry"
+							? await store.retry({
+									claim: decision.claim,
+									retryDelayMs: 0,
+									errorCode: "RUNTIME_UNAVAILABLE",
+									transition: {},
+								})
+							: await store.finish({
+									claim: decision.claim,
+									status: "succeeded",
+									transition: {},
+								});
+				expect(result).toBe(true);
+				expect(await dispatchState(work)).toMatchObject({
+					execution_status: "processing",
+					execution_fence: decision.claim.executionDeliveryFence,
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("invalidates a claim when stop becomes pending during authorization", async () => {
 		const work = await seed();
 		const { store, decision } = await claim(work.itemId);
