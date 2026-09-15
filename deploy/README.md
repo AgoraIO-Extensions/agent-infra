@@ -52,6 +52,10 @@ Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
 RuntimeHost 镜像额外通过[Codex Pilot 原生 HTTP/SSE probe](runtime/README.md#镜像验证)，
 对应证据与 image manifest 使用相同 commit 和镜像 Digest。
 
+自定义 Agent 的推荐父镜像使用同一入口的 `--custom-base-image` 模式独立构建、扫描、发布和
+验证继承，见 [Custom Agent Base Image](images/custom-agent-base/README.md)。它不进入 Platform
+Helm 的部署镜像清单。
+
 release、独立 migration 和 rollback 在部署前复用同一 Helm schema、模板与现有 migration
 检查：
 

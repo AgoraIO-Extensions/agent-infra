@@ -1044,7 +1044,7 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
   `packages/*` 的生产、开发/构建、可选及传递依赖；解析出的包清单必须覆盖 lockfile
   的全部精确包版本，workspace 清单必须与 lockfile importers 一致。
 - 镜像清单为 `web`、`platform-api`、`platform-worker`、`connection-api`、
-  `agent-runtime-host`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
+  `agent-runtime-host`、`custom-agent-base`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
   存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；不发布镜像。新增 Dockerfile
   必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
 - 使用 Trivy 输出的 `Severity` 阻断所有 High/Critical，包括无修复版本；中低等级及
