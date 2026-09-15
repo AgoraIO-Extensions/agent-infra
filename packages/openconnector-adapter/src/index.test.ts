@@ -50,7 +50,7 @@ test("GitHub OAuth uses published-action scopes and the kernel token flow", asyn
 		});
 		assert.deepEqual(identity, {
 			accessToken: "github-token",
-			displayName: "octocat",
+			displayName: "The Octocat",
 			externalAccount: "42",
 			grantedScopes: [
 				"delete_repo",
