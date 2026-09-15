@@ -189,9 +189,11 @@ export class OpenConnectorGitHubOAuthAdapter implements GitHubOAuthProvider {
 			throw new Error("GitHub OAuth profile lookup failed");
 		}
 		const displayName =
-			typeof user.login === "string" && user.login.trim()
-				? user.login.trim()
-				: externalAccount;
+			typeof user.name === "string" && user.name.trim()
+				? user.name.trim()
+				: typeof user.login === "string" && user.login.trim()
+					? user.login.trim()
+					: externalAccount;
 		const grantedScopes =
 			typeof credential.metadata.scope === "string"
 				? credential.metadata.scope
