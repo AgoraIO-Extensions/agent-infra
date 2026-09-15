@@ -16,31 +16,44 @@ const api = vi.hoisted(() => ({
 	connectProviderCredential: vi.fn(async () => ({
 		connectionId: "connection-bitbucket",
 	})),
-	createAuthorizationPreview: vi.fn(async () => ({
-		idempotencyKey: "confirmation-idempotency-key",
-		preview: {
-			actions: [
-				{
-					description: "创建 Pull Request",
-					effect: "WRITE" as const,
-					id: "github.create_pull_request@v2",
-					name: "github.create_pull_request",
-					requiredScopes: ["repo"],
+	createAuthorizationPreview: vi.fn(
+		async (input?: { actionVersionIds?: string[] }) => ({
+			idempotencyKey: "confirmation-idempotency-key",
+			preview: {
+				actions: [
+					{
+						description: "读取 Pull Request",
+						effect: "READ" as const,
+						id: "github.get_pull_request@v2",
+						name: "github.get_pull_request",
+						requiredScopes: ["repo"],
+					},
+					{
+						description: "创建 Pull Request",
+						effect: "WRITE" as const,
+						id: "github.create_pull_request@v2",
+						name: "github.create_pull_request",
+						requiredScopes: ["repo"],
+					},
+				].filter(
+					(action) =>
+						!input?.actionVersionIds ||
+						input.actionVersionIds.includes(action.id),
+				),
+				confirmationToken: "confirmation-token",
+				consumer: { id: "consumer-codex", name: "Codex" },
+				effectSummary: ["WRITE" as const],
+				expiresAt: "2026-08-26T12:00:00.000Z",
+				previewId: "preview-id",
+				requiredScopes: ["repo"],
+				targetConnection: {
+					displayName: "GitHub",
+					externalAccount: "guoxianzhe",
+					id: "connection-personal",
 				},
-			],
-			confirmationToken: "confirmation-token",
-			consumer: { id: "consumer-codex", name: "Codex" },
-			effectSummary: ["WRITE" as const],
-			expiresAt: "2026-08-26T12:00:00.000Z",
-			previewId: "preview-id",
-			requiredScopes: ["repo"],
-			targetConnection: {
-				displayName: "GitHub",
-				externalAccount: "guoxianzhe",
-				id: "connection-personal",
 			},
-		},
-	})),
+		}),
+	),
 	createSharedScope: vi.fn(async () => ({ sharedScopeId: "scope-created" })),
 	disconnectConnection: vi.fn(async () => undefined),
 	disconnectSharedConnection: vi.fn(async () => undefined),
@@ -291,7 +304,15 @@ describe("Connection 管理 mutation wiring", () => {
 			screen.getAllByRole("button", { name: "授权客户端" })[1] as HTMLElement,
 		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
+		await screen.findByRole("button", { name: "查看授权差异" });
+		expect(screen.getByText("已选择 1 项")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
 		await screen.findByRole("button", { name: "确认授权" });
+		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
+			actionVersionIds: ["github.get_pull_request@v2"],
+			connectionId: "connection-personal",
+			consumerId: "consumer-codex",
+		});
 		fireEvent.click(screen.getByRole("button", { name: "确认授权" }));
 		await waitFor(() =>
 			expect(api.confirmAuthorization).toHaveBeenCalledOnce(),

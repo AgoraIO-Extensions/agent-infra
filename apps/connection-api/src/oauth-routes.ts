@@ -35,6 +35,17 @@ export type ConnectionOAuthServerOptions = {
 	dynamicClientRegistration?: { clientName: string };
 	issuer: string;
 	management?: {
+		catalogs?: readonly {
+			actions: readonly {
+				description: string;
+				effect: "READ" | "WRITE";
+				id: string;
+				name: string;
+				requiredScopes: readonly string[];
+			}[];
+			provider: string;
+			providerReleaseId: string;
+		}[];
 		githubRedirectUri: string;
 		service: ConnectionApplicationService;
 	};
@@ -995,6 +1006,7 @@ export function createConnectionOAuthApp(
 						preview:
 							await management.service.createCurrentConsumerAuthorizationPreview(
 								{
+									actionVersionIds: body.actionVersionIds,
 									connectionId: body.connectionId,
 									consumerId: body.consumerId,
 									principalId: session.account.principalId,
@@ -1144,6 +1156,94 @@ export function createConnectionOAuthApp(
 			context.header("cache-control", "no-store");
 			return context.json({ issued }, 201);
 		});
+
+		app.get(
+			"/api/v1/connection/admin/pat-consumers/:consumerId/declarations",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const consumer = (await options.service.listPatBindingConsumers()).find(
+					(item) =>
+						item.consumerId === context.req.param("consumerId") &&
+						item.status === "ACTIVE",
+				);
+				if (!consumer) {
+					throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
+				}
+				context.header("cache-control", "no-store");
+				return context.json({
+					consumer: {
+						id: consumer.consumerId,
+						name: consumer.consumerName,
+					},
+					providers: (management.catalogs ?? []).map((catalog) => ({
+						actions: catalog.actions,
+						providerId: catalog.provider,
+						providerReleaseId: catalog.providerReleaseId,
+					})),
+				});
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/pat-consumers/:consumerId/declarations",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const body = (await context.req.json().catch(() => undefined)) as
+					| Record<string, unknown>
+					| undefined;
+				if (
+					!body ||
+					Object.keys(body).some(
+						(key) => key !== "providerReleaseId" && key !== "actionVersionIds",
+					) ||
+					typeof body.providerReleaseId !== "string" ||
+					!Array.isArray(body.actionVersionIds) ||
+					body.actionVersionIds.length === 0 ||
+					body.actionVersionIds.some((value) => typeof value !== "string") ||
+					new Set(body.actionVersionIds).size !== body.actionVersionIds.length
+				) {
+					throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
+				}
+				const consumer = (await options.service.listPatBindingConsumers()).find(
+					(item) =>
+						item.consumerId === context.req.param("consumerId") &&
+						item.status === "ACTIVE",
+				);
+				if (!consumer) {
+					throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
+				}
+				const published = await browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.consumer-declaration.publish",
+						request: {
+							actionVersionIds: body.actionVersionIds,
+							consumerId: consumer.consumerId,
+							providerReleaseId: body.providerReleaseId,
+						},
+						subject: session.account.principalId,
+					},
+					() =>
+						management.service.publishConsumerDeclarationAsAdministrator(
+							session.account.principalId,
+							{
+								actionVersionIds: body.actionVersionIds as string[],
+								consumer: {
+									id: consumer.consumerId,
+									name: consumer.consumerName,
+								},
+								providerReleaseId: body.providerReleaseId as string,
+							},
+						),
+				);
+				context.header("cache-control", "no-store");
+				return context.json(published, 201);
+			},
+		);
 
 		app.delete(
 			"/api/v1/connection/admin/pat-consumers/:consumerId",

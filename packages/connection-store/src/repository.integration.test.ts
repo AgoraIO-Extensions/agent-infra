@@ -850,13 +850,21 @@ describe("PostgreSQL Connection business authority", () => {
 					principalId: identity.principalId,
 				});
 
+				const selectedActionVersionId =
+					githubConnectionCatalog.actions.find(
+						(action) => action.effect === "READ",
+					)?.id ?? "";
 				const initial = await service.createCurrentConsumerAuthorizationPreview(
 					{
+						actionVersionIds: [selectedActionVersionId],
 						connectionId: accountA.connectionId,
 						consumerId: identity.consumerId,
 						principalId: identity.principalId,
 					},
 				);
+				expect(initial.actions.map((action) => action.id)).toEqual([
+					selectedActionVersionId,
+				]);
 				await expect(
 					service.listDirectConnectionsForIdentity(identity),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -866,6 +874,11 @@ describe("PostgreSQL Connection business authority", () => {
 					previewId: initial.previewId,
 					principalId: identity.principalId,
 				});
+				expect(
+					(await service.listDirectActionsForIdentity(identity)).map(
+						(action) => action.id,
+					),
+				).toEqual([selectedActionVersionId]);
 				const declarationStale =
 					await service.createCurrentConsumerAuthorizationPreview({
 						connectionId: accountB.connectionId,
