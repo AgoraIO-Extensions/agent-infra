@@ -439,7 +439,7 @@ describe("Connection API", () => {
 		});
 	});
 
-	it("binds a RehoboamAI PAT without placing the token in browser URLs", async () => {
+	it("binds a named Consumer PAT without placing the token in browser URLs", async () => {
 		const sessionToken = `conn_session_${"S".repeat(43)}`;
 		const pat = `conn_pat_${"P".repeat(43)}`;
 		const state = `conn_pat_binding_${"T".repeat(43)}`;
@@ -491,7 +491,7 @@ describe("Connection API", () => {
 					bindingId: "pat-binding-1",
 					callbackUrl: "https://rehoboam.example/api/connection/callback",
 					consumerId: "consumer-rehoboam-ai",
-					consumerName: "RehoboamAI",
+					consumerName: "Connection E2E Reviewer",
 					expiresAt: new Date("2026-09-11T07:00:00.000Z"),
 					name: "Alice / Agent A",
 				};
@@ -532,7 +532,10 @@ describe("Connection API", () => {
 		expect(page.headers.get("content-security-policy")).toContain(
 			"form-action 'self' https://rehoboam.example",
 		);
-		expect(await page.text()).toContain("Alice / Agent A");
+		const pageHtml = await page.text();
+		expect(pageHtml).toContain("Alice / Agent A");
+		expect(pageHtml).toContain("确认并返回 Connection E2E Reviewer");
+		expect(pageHtml).not.toContain("确认并返回 RehoboamAI");
 
 		const confirmed = await app.request("/connection/pat-bindings/confirm", {
 			body: new URLSearchParams({ state }),

@@ -202,7 +202,7 @@ button:hover { background: #14532d; }
 <p>本链接将在 ${html(input.expiresAt.toISOString())} 失效。</p>
 <form method="post" action="/connection/pat-bindings/confirm">
 <input type="hidden" name="state" value="${html(input.state)}">
-<button type="submit">确认并返回 RehoboamAI</button>
+<button type="submit">确认并返回 ${html(input.consumerName)}</button>
 </form>
 </main>
 </body>
