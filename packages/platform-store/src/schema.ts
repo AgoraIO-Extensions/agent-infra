@@ -1245,29 +1245,6 @@ export const workloadReconciliations = platformSchema.table(
 	],
 );
 
-export const platformInfrastructureTables = [
-	workloadReconciliations,
-	agents,
-	agentApplications,
-	agentConfigurationRevisions,
-	platformSecretRecords,
-	secretKeyRotations,
-	retiredSecretWrappingKeys,
-	agentOwners,
-	agentAvailability,
-	agentManagementHistory,
-	conversations,
-	conversationExecutions,
-	conversationMessages,
-	conversationStops,
-	conversationAuditEvents,
-	conversationEvents,
-	outboxItems,
-	auditEvents,
-	idempotencyRecords,
-	persistedEvents,
-] as const;
-
 export const platformFiles = platformSchema.table(
 	"files",
 	{
@@ -1343,3 +1320,29 @@ export const fileReconciliation = platformSchema.table("file_reconciliation", {
 	id: integer("id").primaryKey(),
 	cursor: text("cursor"),
 });
+
+export const platformInfrastructureTables = [
+	workloadReconciliations,
+	agents,
+	agentApplications,
+	agentConfigurationRevisions,
+	platformSecretRecords,
+	secretKeyRotations,
+	retiredSecretWrappingKeys,
+	agentOwners,
+	agentAvailability,
+	agentManagementHistory,
+	conversations,
+	conversationExecutions,
+	conversationMessages,
+	conversationStops,
+	conversationAuditEvents,
+	conversationEvents,
+	outboxItems,
+	auditEvents,
+	idempotencyRecords,
+	persistedEvents,
+	platformFiles,
+	platformFileAccesses,
+	fileReconciliation,
+] as const;
