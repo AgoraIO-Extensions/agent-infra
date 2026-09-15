@@ -2458,8 +2458,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		await this.sql`
 			UPDATE connection_accounts
 			SET display_name = ${input.displayName},
-				profile_label_source = 'github.login',
-				updated_at = now()
+				profile_label_source = 'github.login'
 			WHERE id = ${input.connectionId}
 				AND provider_id = ${githubProvider}
 				AND external_account = ${input.externalAccount}
