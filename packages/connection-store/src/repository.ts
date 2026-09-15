@@ -116,13 +116,20 @@ function selectAuthorizationActions(
 		? [...requestedActionVersionIds]
 				.sort()
 				.map((actionVersionId) => actionsById.get(actionVersionId))
-		: target.actions;
+		: target.actions.filter((action) =>
+				action.requiredScopes.every((scope) =>
+					target.credentialScopes.includes(scope),
+				),
+			);
 	if (actions.some((action) => !action)) {
 		invalidAuthorizationPreview(
 			"Authorization action selection exceeds the Consumer declaration",
 		);
 	}
 	const selected = actions as ActionDefinition[];
+	if (selected.length === 0) {
+		invalidAuthorizationPreview("No declared Actions are available");
+	}
 	const requiredScopes = new Set(
 		selected.flatMap((action) => [...action.requiredScopes]),
 	);

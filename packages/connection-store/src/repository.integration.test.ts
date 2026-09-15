@@ -849,6 +849,28 @@ describe("PostgreSQL Connection business authority", () => {
 					grantedScopes,
 					principalId: identity.principalId,
 				});
+				const limitedAccount = await repository.storeGithubOAuthCredential({
+					accessToken: `provider-limited-${suffix}`,
+					displayName: "GitHub Limited",
+					externalAccount: `github-limited-${suffix}`,
+					grantedScopes: grantedScopes.filter(
+						(scope) => scope !== "delete_repo" && scope !== "workflow",
+					),
+					principalId: identity.principalId,
+				});
+				const discovery =
+					await service.createCurrentConsumerAuthorizationPreview({
+						connectionId: limitedAccount.connectionId,
+						consumerId: identity.consumerId,
+						principalId: identity.principalId,
+					});
+				expect(
+					discovery.actions.every(
+						(action) =>
+							!action.requiredScopes.includes("delete_repo") &&
+							!action.requiredScopes.includes("workflow"),
+					),
+				).toBe(true);
 
 				const selectedActionVersionId =
 					githubConnectionCatalog.actions.find(

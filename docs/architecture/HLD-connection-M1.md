@@ -1108,7 +1108,7 @@ type AuthorizationPreview = {
 };
 ```
 
-创建 Preview 时，Browser 可以提交用户在当前 Consumer declaration 中选择的 `actionVersionIds` 非空子集；服务端只把这些 ID 当作选择器，必须重新读取 current declaration、账号、Catalog 和 Credential scope，拒绝重复、未知、跨 Provider、非 `PUBLISHED`、超出 declaration 或 scope 不足的集合，并冻结服务端计算的完整 Action 元数据与 digest。若 Browser 省略选择，仅允许显式的兼容调用方选择 current declaration 全集，Connection Web 不使用该兼容路径。
+创建 Preview 时，Browser 可以提交用户在当前 Consumer declaration 中选择的 `actionVersionIds` 非空子集；服务端只把这些 ID 当作选择器，必须重新读取 current declaration、账号、Catalog 和 Credential scope，拒绝重复、未知、跨 Provider、非 `PUBLISHED`、超出 declaration 或 scope 不足的集合，并冻结服务端计算的完整 Action 元数据与 digest。若 Browser 省略选择，服务端创建发现 preview，只包含 current declaration 中当前 Credential scope 可覆盖的 Action；该集合仍按普通 preview 冻结和确认，若为空则拒绝。Connection Web 使用发现 preview 展示候选能力，再为用户显式选择创建最终 preview。
 
 最终确认仍只提交 `previewId + opaque confirmation token + Idempotency-Key`，不能再次提交 Action 集、scope、actor、Connection 或 digest。这样确认内容只能等于用户看到且服务端冻结的集合。
 
