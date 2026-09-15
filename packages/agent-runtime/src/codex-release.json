@@ -9,22 +9,22 @@
 	"artifacts": {
 		"arm64": {
 			"target": "aarch64-unknown-linux-musl",
-			"archiveSha256": "sha256:96d183b5691f0de6ab5c4c02fa85122465be6cd548d876ca1061f261b6e38a30",
-			"candidateManifestSha256": "sha256:7ac2334d73ecc5130f789a4f804f2ce3370deb0efa1e462746243d310a1dc8ea",
-			"executableSha256": "sha256:19f335ab3dcaac24cd2809dab1ce394418a74cb4c0ff8978b93467a94f6537aa",
+			"archiveSha256": "sha256:ea703b781adeecd4f44bf4f04112291111bd8f137e0ed059cf5c8c845bb2c4af",
+			"candidateManifestSha256": "sha256:28023d7eec66b76053bd28ce46c92c6d6d5069fdd4bd612cf96d447de6f9fb3b",
+			"executableSha256": "sha256:d5e0dd52d4af1cc8a1a864093652066f3fe72ef3208a9032155acf6609b81b42",
 			"binaries": {
-				"codex": "sha256:19f335ab3dcaac24cd2809dab1ce394418a74cb4c0ff8978b93467a94f6537aa",
-				"codex-code-mode-host": "sha256:d8a948a86a6f10bb76f2b088c8eb79770fff99aa1a18fa4e98e1d946fd383006",
-				"codex-responses-api-proxy": "sha256:81e42146c797c714733ffc6439c8e77cf403a79da0aa332e948f4211172a5744",
-				"bwrap": "sha256:c547cbdc762a70ed216789ffaa4c6c0e7d2beabe32245a498f8e365a9fc8dab4"
+				"codex": "sha256:d5e0dd52d4af1cc8a1a864093652066f3fe72ef3208a9032155acf6609b81b42",
+				"codex-code-mode-host": "sha256:9ffcaad662c0ac803215663522cc68b6a17f6d0b495e7df4d6d64c8c8ea56343",
+				"codex-responses-api-proxy": "sha256:c917d182a781454d0f763f271a5f0933e08d0ee6a765add0d5a5ae0c85ca1f11",
+				"bwrap": "sha256:f801ebbd4f1a6d70f75792cf17dd040a73d5b8b7c34d554c36ea8dc24115d8d9"
 			},
 			"transport": {
 				"kind": "github-actions",
 				"repository": "AgoraIO-Extensions/agent-infra",
-				"runId": 34923699531,
+				"runId": 34975154495,
 				"runAttempt": 1,
-				"artifactId": 10380550363,
-				"sourceHead": "70999729d9a3d9036c0693bc7e5141faf7a51e08"
+				"artifactId": 10401682954,
+				"sourceHead": "3b67d4acc82931910e93911569c817672f2879f1"
 			}
 		}
 	},
@@ -35,8 +35,8 @@
 	"schemaVersion": 2,
 	"distribution": {
 		"kind": "derived",
-		"buildId": "agent-infra-0.153.0-arm64-98ccdcd1b407-run34923699531.1",
-		"sourceTree": "24041fcd80939b077424bff6cdc173bf3e0b1916",
-		"buildInputSha256": "sha256:98ccdcd1b4075a7383f4be521f4b0a5ecd6f815cda7e88c8581ebde0e4f0c98e"
+		"buildId": "agent-infra-0.153.0-arm64-e462627d36bf-run34975154495.1",
+		"sourceTree": "84d591b86533178b8b12a62c66e95c8c1b09a8b2",
+		"buildInputSha256": "sha256:e462627d36bf7a95add68319edd60b1ba4005eba394e0f9158763acee5816915"
 	}
 }
