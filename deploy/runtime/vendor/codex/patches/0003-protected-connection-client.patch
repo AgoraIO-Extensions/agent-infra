@@ -1567,10 +1567,12 @@ diff --git a/codex-rs/rmcp-client/BUILD.bazel b/codex-rs/rmcp-client/BUILD.bazel
 diff --git a/codex-rs/rmcp-client/Cargo.toml b/codex-rs/rmcp-client/Cargo.toml
 --- a/codex-rs/rmcp-client/Cargo.toml
 +++ b/codex-rs/rmcp-client/Cargo.toml
-@@ -46,6 +46,8 @@
+@@ -45,7 +45,9 @@
+     "transport-streamable-http-server",
  ] }
  serde = { workspace = true, features = ["derive"] }
- serde_json = { workspace = true }
+-serde_json = { workspace = true }
++serde_json = { workspace = true, features = ["raw_value"] }
 +serde_json_canonicalizer = { workspace = true }
 +uuid = { workspace = true, features = ["serde", "v4"] }
  sha2 = { workspace = true }
@@ -25224,81 +25226,80 @@ diff --git a/codex-rs/rmcp-client/src/native_connection/strict_json.rs b/codex-r
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/strict_json.rs
-@@ -0,0 +1,69 @@
-+//! Reject duplicate keys before serde's Value map can erase them. Serde also
-+//! rejects invalid UTF-8, lone surrogates, nonfinite numbers, and trailing JSON.
-+use serde::Deserialize;
+@@ -0,0 +1,68 @@
++//! Preserve JSON token kinds and reject duplicate keys before building Value.
++//! RawValue avoids arbitrary_precision's private number-map representation.
++use serde::Deserializer;
 +use serde::de::MapAccess;
-+use serde::de::SeqAccess;
 +use serde::de::Visitor;
 +use serde_json::Map;
 +use serde_json::Value;
++use serde_json::value::RawValue;
 +use std::fmt;
 +use std::io;
 +
 +pub(crate) fn parse_strict_json(bytes: &[u8]) -> io::Result<Value> {
-+    let mut parser = serde_json::Deserializer::from_slice(bytes);
-+    let value = StrictValue::deserialize(&mut parser).map_err(|_| super::unavailable())?;
-+    parser.end().map_err(|_| super::unavailable())?;
-+    Ok(value.0)
++    let raw: &RawValue = serde_json::from_slice(bytes).map_err(|_| super::unavailable())?;
++    parse_raw(raw, /*depth*/ 0)
 +}
-+struct StrictValue(Value);
-+impl<'de> Deserialize<'de> for StrictValue {
-+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-+        struct StrictVisitor;
-+        impl<'de> Visitor<'de> for StrictVisitor {
-+            type Value = StrictValue;
-+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-+                f.write_str("strict JSON")
-+            }
-+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
-+                Ok(StrictValue(Value::Bool(v)))
-+            }
-+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
-+                Ok(StrictValue(v.into()))
-+            }
-+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
-+                Ok(StrictValue(v.into()))
-+            }
-+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
-+                serde_json::Number::from_f64(v)
-+                    .map(|n| StrictValue(Value::Number(n)))
-+                    .ok_or_else(|| E::custom("invalid JSON"))
-+            }
-+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-+                Ok(StrictValue(v.into()))
-+            }
-+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
-+                Ok(StrictValue(v.into()))
-+            }
-+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-+                Ok(StrictValue(Value::Null))
-+            }
-+            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
-+                let mut values = Vec::new();
-+                while let Some(StrictValue(v)) = a.next_element()? {
-+                    values.push(v);
-+                }
-+                Ok(StrictValue(Value::Array(values)))
-+            }
-+            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
-+                let mut values = Map::new();
-+                while let Some((key, StrictValue(v))) = a.next_entry::<String, StrictValue>()? {
-+                    if values.insert(key, v).is_some() {
-+                        return Err(serde::de::Error::custom("duplicate JSON key"));
-+                    }
-+                }
-+                Ok(StrictValue(Value::Object(values)))
-+            }
++
++fn parse_raw(raw: &RawValue, depth: usize) -> io::Result<Value> {
++    let text = raw.get();
++    match text.as_bytes()[0] {
++        // Match serde_json's default limit of 127 nested containers.
++        b'{' | b'[' if depth >= 127 => Err(super::unavailable()),
++        b'{' => serde_json::Deserializer::from_str(text)
++            .deserialize_map(StrictObject { depth })
++            .map_err(|_| super::unavailable()),
++        b'[' => {
++            let elements: Vec<&RawValue> =
++                serde_json::from_str(text).map_err(|_| super::unavailable())?;
++            elements
++                .into_iter()
++                .map(|element| parse_raw(element, depth + 1))
++                .collect::<io::Result<Vec<_>>>()
++                .map(Value::Array)
 +        }
-+        deserializer.deserialize_any(StrictVisitor)
++        _ => {
++            let value: Value = serde_json::from_str(text).map_err(|_| super::unavailable())?;
++            if let Value::Number(number) = &value
++                && !number.as_f64().is_some_and(f64::is_finite)
++            {
++                return Err(super::unavailable());
++            }
++            Ok(value)
++        }
++    }
++}
++
++struct StrictObject {
++    depth: usize,
++}
++impl<'de> Visitor<'de> for StrictObject {
++    type Value = Value;
++
++    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        formatter.write_str("strict JSON object")
++    }
++
++    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
++        let mut values = Map::new();
++        while let Some((key, raw)) = map.next_entry::<String, &RawValue>()? {
++            if values.contains_key(&key) {
++                return Err(serde::de::Error::custom("duplicate JSON key"));
++            }
++            let value = parse_raw(raw, self.depth + 1)
++                .map_err(|_| serde::de::Error::custom("invalid JSON"))?;
++            values.insert(key, value);
++        }
++        Ok(Value::Object(values))
 +    }
 +}
 diff --git a/codex-rs/rmcp-client/src/native_connection/tests.rs b/codex-rs/rmcp-client/src/native_connection/tests.rs
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/rmcp-client/src/native_connection/tests.rs
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,368 @@
 +use super::*;
 +use pretty_assertions::assert_eq;
 +
@@ -25315,7 +25316,8 @@ new file mode 100644
 +        if frame["schemaVersion"] != 2 {
 +            continue;
 +        }
-+        let parsed = parse_native_private_json(&serde_json::to_vec(frame).unwrap()).unwrap();
++        // Schema validity is independent of the transport byte limit.
++        let parsed = parse_strict_json(&serde_json::to_vec(frame).unwrap()).unwrap();
 +        assert_eq!(
 +            validate_native_callback_v2(&parsed),
 +            case["schemaValid"].as_bool().unwrap(),
@@ -25340,6 +25342,16 @@ new file mode 100644
 +            "{}",
 +            case["id"]
 +        );
++    }
++    for case in corpus()["cases"].as_array().unwrap() {
++        if case["layer"] == "transport" {
++            assert_eq!(
++                parse_native_private_json(&serde_json::to_vec(&case["frame"]).unwrap()).is_ok(),
++                case["semanticExpected"]["accept"].as_bool().unwrap(),
++                "{}",
++                case["id"]
++            );
++        }
 +    }
 +    assert!(parse_native_private_json(br#"{"requestId":"a","request\u0049d":"b"}"#).is_err());
 +}
@@ -25600,6 +25612,61 @@ new file mode 100644
 +        duplicate_principal.as_bytes(),
 +        IDENTITY_NOW
 +    ));
++}
++
++#[test]
++fn strict_json_keeps_numeric_values_and_literal_private_marker_objects_distinct() {
++    for text in ["0.1", "-0", "1e30", "5e-324", "9007199254740993"] {
++        let value = parse_strict_json(text.as_bytes()).unwrap();
++        assert!(value.is_number(), "{text}");
++    }
++    let input = r#"{"$serde_json::private::Number":"0.1","nested":[{"$serde_json::private::RawValue":"0.1"},0.1]}"#;
++    let expected = json!({"$serde_json::private::Number":"0.1","nested":[{"$serde_json::private::RawValue":"0.1"},0.1]});
++    assert_eq!(parse_strict_json(input.as_bytes()).unwrap(), expected);
++    assert_eq!(
++        serde_json_canonicalizer::to_string(&parse_strict_json(input.as_bytes()).unwrap()).unwrap(),
++        input,
++    );
++}
++
++#[test]
++fn strict_json_rejects_nonfinite_numbers_and_invalid_nested_json() {
++    for text in [
++        "1e9999",
++        "-1e9999",
++        "[1e9999]",
++        r#"{"a":1e9999}"#,
++        "NaN",
++        "Infinity",
++        "-Infinity",
++        "01",
++        "1.",
++        "1e",
++        "{} {}",
++        r#"{"a":1,"\u0061":2}"#,
++        r#"{"outer":[{"a":1,"\u0061":2}]}"#,
++        r#"{"$serde_json::private::Number":"1","\u0024serde_json::private::Number":"2"}"#,
++        r#"{"a":"\ud800"}"#,
++        r#"{"\udfff":1}"#,
++    ] {
++        assert!(parse_strict_json(text.as_bytes()).is_err(), "{text}");
++    }
++    assert!(parse_strict_json(&[b'"', 0xff, b'"']).is_err());
++}
++
++#[test]
++fn strict_json_keeps_depth_and_native_utf8_frame_bounds() {
++    let within = format!("{}0{}", "[".repeat(127), "]".repeat(127));
++    let beyond = format!("[{within}]");
++    assert!(parse_strict_json(within.as_bytes()).is_ok());
++    assert!(parse_strict_json(beyond.as_bytes()).is_err());
++    let at_limit = serde_json::to_vec(&json!({"a":"é".repeat(8188)})).unwrap();
++    assert_eq!(at_limit.len(), 16_384);
++    assert!(parse_native_private_json(&at_limit).is_ok());
++    let over_limit = serde_json::to_vec(&json!({"a":format!("{}a", "é".repeat(8188))})).unwrap();
++    assert_eq!(over_limit.len(), 16_385);
++    assert!(parse_strict_json(&over_limit).is_ok());
++    assert!(parse_native_private_json(&over_limit).is_err());
 +}
 diff --git a/codex-rs/rmcp-client/src/native_connection/wire.rs b/codex-rs/rmcp-client/src/native_connection/wire.rs
 new file mode 100644

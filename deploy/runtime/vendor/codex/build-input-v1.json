@@ -286,7 +286,7 @@
     },
     {
       "path": "patches/0003-protected-connection-client.patch",
-      "sha256": "sha256:03cfd50e7b47d8bb69ec3467be4ef6088b7f58ac37b908571b69d2a7542b9557"
+      "sha256": "sha256:472ea19f98d6840055c4c5a4ce35cf7e58bcf2d4da3633f592dbd6fbf81b07b1"
     }
   ],
   "sourceFiles": [
@@ -532,7 +532,7 @@
     },
     {
       "path": "codex-rs/rmcp-client/Cargo.toml",
-      "sha256": "sha256:72f05aed6e23586446594554c8f7fa1f7e3d7d9ecac895bd3cc0613677672334"
+      "sha256": "sha256:1d959413ce27ca987a21fc9cc5aabec84cbb1494f385c570f825a42932d95b7f"
     },
     {
       "path": "codex-rs/rmcp-client/src/http_client_adapter.rs",
@@ -580,11 +580,11 @@
     },
     {
       "path": "codex-rs/rmcp-client/src/native_connection/strict_json.rs",
-      "sha256": "sha256:99f962e411ec12d971ab74331cb7810b234ce1a1287ce7550f716818cebc50c5"
+      "sha256": "sha256:971aae75ccd4df09f6f18fc8de62df1cf0c021840e24347e6973906aa118e2d8"
     },
     {
       "path": "codex-rs/rmcp-client/src/native_connection/tests.rs",
-      "sha256": "sha256:338cfbf48e9cddc791573d3d912a4a6fd7f7e722e25372634216d1c6185b9ed7"
+      "sha256": "sha256:e47c5fcfdc887565c4905f66ef5c28b141f1343c005c239245fb8c99e78eb003"
     },
     {
       "path": "codex-rs/rmcp-client/src/native_connection/wire.rs",
@@ -654,12 +654,12 @@
     "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
   },
   "currentValidation": {
-    "format": "current recovery source just fmt passed; no Rust type-check claim",
+    "format": "changed strict JSON and Connection test source rustfmt 1.95.0 check passed",
     "metadata": "current offline locked no-deps metadata passed; parsing only",
-    "bazelLock": "prior just bazel-lock-update passed; Cargo and Bazel lock bytes unchanged by recovery changes",
+    "bazelLock": "prior just bazel-lock-update passed; Cargo and Bazel lock bytes unchanged; raw_value already enabled by the upstream dependency closure",
     "sourceExport": "patch 0003 applied to exact frozen V1 bytes; all current source files matched",
-    "nativeCompilation": "not completed; hosted candidate at earlier identity-only head still in progress",
-    "nativeTests": "not run for recovery source; shared corpus has 174 frame cases (153 V2, 21 V1), 3 framing cases, 34 JCS vectors, receipt/record and complete identity/recovery negatives",
+    "nativeCompilation": "current canonical JSON correction awaits a new exact hosted build; prior producer compiled and failed two focused tests",
+    "nativeTests": "locked standalone exact Connection source seam: 10 passed, zero skipped across four arbitrary_precision/preserve_order combinations; shared corpus bytes and 16 KiB bound unchanged; full native Connection/core tests pending",
     "nativeLint": "not run for current patch",
     "releaseAcceptance": false
   }
