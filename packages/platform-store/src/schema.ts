@@ -1362,32 +1362,6 @@ export const workloadReconciliations = platformSchema.table(
 	],
 );
 
-export const platformInfrastructureTables = [
-	workloadReconciliations,
-	agents,
-	agentApplications,
-	agentConfigurationRevisions,
-	platformSecretRecords,
-	secretKeyRotations,
-	retiredSecretWrappingKeys,
-	agentOwners,
-	agentAvailability,
-	agentManagementHistory,
-	conversations,
-	conversationExecutions,
-	taskAuthorizationRecords,
-	taskControlRecords,
-	conversationGenerationTombstones,
-	conversationMessages,
-	conversationStops,
-	conversationAuditEvents,
-	conversationEvents,
-	outboxItems,
-	auditEvents,
-	idempotencyRecords,
-	persistedEvents,
-] as const;
-
 export const wecomReceipts = platformSchema.table(
 	"wecom_receipts",
 	{
@@ -1421,3 +1395,30 @@ export const wecomReceipts = platformSchema.table(
 		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
 	],
 );
+
+export const platformInfrastructureTables = [
+	workloadReconciliations,
+	agents,
+	agentApplications,
+	agentConfigurationRevisions,
+	platformSecretRecords,
+	secretKeyRotations,
+	retiredSecretWrappingKeys,
+	agentOwners,
+	agentAvailability,
+	agentManagementHistory,
+	conversations,
+	conversationExecutions,
+	taskAuthorizationRecords,
+	taskControlRecords,
+	conversationGenerationTombstones,
+	conversationMessages,
+	conversationStops,
+	conversationAuditEvents,
+	conversationEvents,
+	outboxItems,
+	auditEvents,
+	idempotencyRecords,
+	persistedEvents,
+	wecomReceipts,
+] as const;
