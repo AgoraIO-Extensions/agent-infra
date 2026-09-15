@@ -745,6 +745,37 @@ tbody tr:hover {
 .permission-list li:last-child {
 	border-bottom: 0;
 }
+
+.permission-controls {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 8px;
+}
+
+.permission-option {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr);
+	align-items: start;
+	gap: 10px;
+	width: 100%;
+}
+
+.permission-option span {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.permission-option small {
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+	.permission-controls {
+		grid-template-columns: 1fr;
+	}
+}
 .scope-summary {
 	margin-top: 4px;
 	color: var(--text);

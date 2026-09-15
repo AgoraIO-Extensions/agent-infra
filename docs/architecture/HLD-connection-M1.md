@@ -662,6 +662,7 @@ type ConsumerActionDeclaration = {
 ```
 
 发布时验证所有 ActionVersion 当前存在、属于同一 ProviderRelease、Schema 可生成 MCP/OpenAPI、Consumer 类型允许对应 effect class。声明只限制 Consumer 可以请求的最大集合，不授予任何 Principal 的账号。
+管理员只能为当前 ACTIVE Consumer 发布 declaration；管理界面按 ProviderRelease 展示可声明 Action，提交时服务端重新校验非空、无重复、同一 ProviderRelease、状态为 `PUBLISHED`，不能接受浏览器提供的 effect、scope 或 digest。声明发布、替换和撤回都写 audit/outbox，并提升 `consumerRevision`。
 每个 `(consumerId, providerId)` 独立维护一个 current declaration；发布 GitHub declaration 不得替换
 Bitbucket declaration，反之亦然。`PUBLISHED` 只用于该 Provider 的 current declaration；它被同 Provider
 新 declaration 替换后变为 `SUPERSEDED`。`SUPERSEDED` 仅当被
@@ -1107,7 +1108,9 @@ type AuthorizationPreview = {
 };
 ```
 
-Preview 由服务端根据当前 Consumer declaration、账号和 Catalog 计算。Browser 只提交 `previewId + opaque confirmation token + Idempotency-Key`，不能提交 Action 集、scope、actor、Connection 或 digest。
+创建 Preview 时，Browser 可以提交用户在当前 Consumer declaration 中选择的 `actionVersionIds` 非空子集；服务端只把这些 ID 当作选择器，必须重新读取 current declaration、账号、Catalog 和 Credential scope，拒绝重复、未知、跨 Provider、非 `PUBLISHED`、超出 declaration 或 scope 不足的集合，并冻结服务端计算的完整 Action 元数据与 digest。若 Browser 省略选择，服务端创建发现 preview，只包含 current declaration 中当前 Credential scope 可覆盖的 Action；该集合仍按普通 preview 冻结和确认，若为空则拒绝。Connection Web 使用发现 preview 展示候选能力，再为用户显式选择创建最终 preview。
+
+最终确认仍只提交 `previewId + opaque confirmation token + Idempotency-Key`，不能再次提交 Action 集、scope、actor、Connection 或 digest。这样确认内容只能等于用户看到且服务端冻结的集合。
 
 ### 17.5 Authorization Consent
 
@@ -1130,6 +1133,8 @@ Consent 保存用户看到并确认的 exact 事实：Consumer 名称/ID、Actor
 | 切换另一个 Connection | 新 preview/consent/Grant；旧 Grant replaced |
 | Consumer 新增 Action或Action扩权 | 新 preview/consent/Grant；旧集合继续有效直到替换 |
 | Consumer 撤回已授权 Action | 同一事务终结受影响 Grant 或创建收缩 replacement Grant；不能只发布不含该 Action 的新 declaration |
+| 用户增加已授权 Action | 基于 current declaration 创建新 preview/consent/replacement Grant；确认前旧集合继续有效 |
+| 用户减少已授权 Action | 基于新 preview/consent 创建收缩 replacement Grant；提交后旧 Action 立即不可发现、不可执行 |
 | 用户撤销 | Root fence 提升、current Grant revoked、pointer 清空 |
 | Principal/共享资格确定失效 | Grant terminated；重新获得资格也需新 consent |
 | Connection 暂时失效 | Grant paused；不得创建 Invocation |
@@ -1770,6 +1775,8 @@ GET    /api/v1/connection/action-calls/{callId}
 GET    /api/v1/connection/admin/administrators
 PUT    /api/v1/connection/admin/administrators/{principalId}
 DELETE /api/v1/connection/admin/administrators/{principalId}
+GET    /api/v1/connection/admin/consumers/{consumerId}/declarations
+POST   /api/v1/connection/admin/consumers/{consumerId}/declarations
 GET    /api/v1/connection/admin/shared-connections
 POST   /api/v1/connection/admin/shared-scopes
 PATCH  /api/v1/connection/admin/shared-scopes/{sharedScopeId}

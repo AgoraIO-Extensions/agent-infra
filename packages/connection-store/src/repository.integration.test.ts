@@ -849,14 +849,44 @@ describe("PostgreSQL Connection business authority", () => {
 					grantedScopes,
 					principalId: identity.principalId,
 				});
+				const limitedAccount = await repository.storeGithubOAuthCredential({
+					accessToken: `provider-limited-${suffix}`,
+					displayName: "GitHub Limited",
+					externalAccount: `github-limited-${suffix}`,
+					grantedScopes: grantedScopes.filter(
+						(scope) => scope !== "delete_repo" && scope !== "workflow",
+					),
+					principalId: identity.principalId,
+				});
+				const discovery =
+					await service.createCurrentConsumerAuthorizationPreview({
+						connectionId: limitedAccount.connectionId,
+						consumerId: identity.consumerId,
+						principalId: identity.principalId,
+					});
+				expect(
+					discovery.actions.every(
+						(action) =>
+							!action.requiredScopes.includes("delete_repo") &&
+							!action.requiredScopes.includes("workflow"),
+					),
+				).toBe(true);
 
+				const selectedActionVersionId =
+					githubConnectionCatalog.actions.find(
+						(action) => action.effect === "READ",
+					)?.id ?? "";
 				const initial = await service.createCurrentConsumerAuthorizationPreview(
 					{
+						actionVersionIds: [selectedActionVersionId],
 						connectionId: accountA.connectionId,
 						consumerId: identity.consumerId,
 						principalId: identity.principalId,
 					},
 				);
+				expect(initial.actions.map((action) => action.id)).toEqual([
+					selectedActionVersionId,
+				]);
 				await expect(
 					service.listDirectConnectionsForIdentity(identity),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -866,6 +896,11 @@ describe("PostgreSQL Connection business authority", () => {
 					previewId: initial.previewId,
 					principalId: identity.principalId,
 				});
+				expect(
+					(await service.listDirectActionsForIdentity(identity)).map(
+						(action) => action.id,
+					),
+				).toEqual([selectedActionVersionId]);
 				const declarationStale =
 					await service.createCurrentConsumerAuthorizationPreview({
 						connectionId: accountB.connectionId,

@@ -35,6 +35,7 @@ export const providerCredentialRequestSchema = z.union([
 ]);
 
 export const authorizationPreviewRequestSchema = z.strictObject({
+	actionVersionIds: z.array(opaqueId).min(1).max(500).optional(),
 	connectionId: opaqueId,
 	consumerId: opaqueId,
 });

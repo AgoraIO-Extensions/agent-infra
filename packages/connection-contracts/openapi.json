@@ -845,6 +845,12 @@
 				"additionalProperties": false,
 				"required": ["connectionId", "consumerId"],
 				"properties": {
+					"actionVersionIds": {
+						"type": "array",
+						"minItems": 1,
+						"maxItems": 500,
+						"items": { "type": "string" }
+					},
 					"connectionId": { "type": "string" },
 					"consumerId": { "type": "string" }
 				}

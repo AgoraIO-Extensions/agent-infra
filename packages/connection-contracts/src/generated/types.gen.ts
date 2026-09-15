@@ -158,6 +158,7 @@ export type OAuthTransaction = {
 };
 
 export type AuthorizationPreviewRequest = {
+    actionVersionIds?: Array<string>;
     connectionId: string;
     consumerId: string;
 };

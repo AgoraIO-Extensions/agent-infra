@@ -56,6 +56,21 @@ export type PatConsumerProfile = {
 	status: "ACTIVE" | "DISABLED";
 };
 
+export type ConsumerDeclarationOptions = {
+	consumer: { id: string; name: string };
+	providers: Array<{
+		actions: Array<{
+			description: string;
+			effect: "READ" | "WRITE";
+			id: string;
+			name: string;
+			requiredScopes: string[];
+		}>;
+		providerId: string;
+		providerReleaseId: string;
+	}>;
+};
+
 async function patConsumerRequest<T>(path: string, init?: RequestInit) {
 	const response = await fetch(path, {
 		...init,
@@ -177,6 +192,18 @@ export const connectionApi = {
 		patConsumerRequest<void>(
 			`/api/v1/connection/admin/pat-consumers/${encodeURIComponent(consumerId)}`,
 			{ method: "DELETE" },
+		),
+	getConsumerDeclarationOptions: (consumerId: string) =>
+		patConsumerRequest<ConsumerDeclarationOptions>(
+			`/api/v1/connection/admin/consumers/${encodeURIComponent(consumerId)}/declarations`,
+		),
+	publishConsumerDeclaration: (
+		consumerId: string,
+		input: { actionVersionIds: string[]; providerReleaseId: string },
+	) =>
+		patConsumerRequest<{ declarationId: string }>(
+			`/api/v1/connection/admin/consumers/${encodeURIComponent(consumerId)}/declarations`,
+			{ body: JSON.stringify(input), method: "POST" },
 		),
 	getSession: () => unwrap<Session>(getSession()),
 	login: (body: LoginRequest) =>

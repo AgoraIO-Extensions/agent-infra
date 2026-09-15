@@ -227,7 +227,10 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
   终止该实例的会话，不改变其他实例使用同一 Grant 的资格。
 - Consumer 只能调用自己已发布声明、用户已确认且 Connection 仍允许的 Action。
 - 授权界面同时展示 Consumer、Actor（如有）、外部账号、Action、外部效果和所需 scope。
+- Consumer declaration 定义可申请的 Action 上限；用户首次授权时可以搜索、筛选并选择其中的非空子集，默认不隐式全选写能力。
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。
+- 用户调整已授权 Action 时沿用授权预览与确认流程；缩权确认后立即生效，扩权在新确认完成前不得生效。
+- 调整 Action 授权不要求重签 Consumer PAT；只有所选 Action 超出 Provider 当前实际 scope 时才要求重新授权 Provider Connection。
 - 撤销只影响目标 Consumer/Actor，不影响其他 Consumer 对同一 Connection 的独立授权。
 - Consumer 授权不设置独立期限；用户撤销、换号、账号禁用或共享资格失效时终止，Connection 或 Credential 暂时失效时暂停。
 
@@ -319,6 +322,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |
 | 授权与撤销 | 用户可以授权或撤销 Consumer/Actor；其他 Consumer 的独立授权不受影响 |
 | Action 变化 | 新增或扩权必须重新确认；移除、收缩或停用立即生效 |
+| Action 子集 | 用户可在 Consumer declaration 上限内首次选择或后续调整；PAT 不因 Grant 调整而重签 |
 | 写 Action 可靠性 | 响应丢失不会重复创建 PR；结果进入可查询、可对账的“待确认”状态 |
 | 调用详情 | 用户可以看到本人使用的 Provider、脱敏账号、Consumer、Action、时间、状态和结果 |
 | 跨主体隔离 | 修改身份、ID、名称、参数、Actor 或 Consumer 都不能访问其他授权，也不能判断其是否存在 |

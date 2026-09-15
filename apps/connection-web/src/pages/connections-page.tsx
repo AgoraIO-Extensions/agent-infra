@@ -7,9 +7,10 @@ import {
 	KeyRound,
 	Plus,
 	ShieldOff,
+	SlidersHorizontal,
 	X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -36,7 +37,9 @@ export function ConnectionsPage() {
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
 		consumerId: string;
+		initialActionVersionIds: string[];
 		preview: AuthorizationPreviewResponse | null;
+		reviewed: boolean;
 	} | null>(null);
 	const [showHistory, setShowHistory] = useState(false);
 	const [bitbucketOpen, setBitbucketOpen] = useState(false);
@@ -127,9 +130,15 @@ export function ConnectionsPage() {
 	};
 	const preview = useMutation({
 		mutationFn: connectionApi.createAuthorizationPreview,
-		onSuccess: (value) =>
+		onSuccess: (value, variables) =>
 			setAuthorization((current) =>
-				current ? { ...current, preview: value } : current,
+				current
+					? {
+							...current,
+							preview: value,
+							reviewed: Boolean(variables.actionVersionIds),
+						}
+					: current,
 			),
 	});
 	const confirm = useMutation({
@@ -164,7 +173,9 @@ export function ConnectionsPage() {
 		setAuthorization({
 			connectionId: candidates[0].id,
 			consumerId: data.consumers[0]?.id ?? "",
+			initialActionVersionIds: [],
 			preview: null,
+			reviewed: false,
 		});
 	}, [data]);
 	const visibleGrants = data
@@ -228,7 +239,9 @@ export function ConnectionsPage() {
 								setAuthorization({
 									connectionId,
 									consumerId: data.consumers[0]?.id ?? "",
+									initialActionVersionIds: [],
 									preview: null,
+									reviewed: false,
 								})
 							}
 							onDisconnect={(connectionId) => {
@@ -317,23 +330,46 @@ export function ConnectionsPage() {
 													<GrantPermissions grant={grant} />
 												</td>
 												<td className="table-action">
-													<Button
-														variant="danger"
-														size="icon"
-														type="button"
-														disabled={
-															grant.status !== "ACTIVE" || revokeGrant.isPending
-														}
-														onClick={() => revokeGrant.mutate(grant.id)}
-														aria-label={`撤销 ${grant.consumerName}`}
-														title={
-															grant.status === "ACTIVE"
-																? "撤销授权"
-																: "历史授权不可操作"
-														}
-													>
-														<ShieldOff aria-hidden="true" size={17} />
-													</Button>
+													<div className="row-actions">
+														<Button
+															variant="secondary"
+															size="icon"
+															type="button"
+															disabled={grant.status !== "ACTIVE"}
+															onClick={() =>
+																setAuthorization({
+																	connectionId: grant.connectionId,
+																	consumerId: grant.consumerId,
+																	initialActionVersionIds:
+																		grant.actionVersionIds,
+																	preview: null,
+																	reviewed: false,
+																})
+															}
+															aria-label={`管理 ${grant.consumerName} 能力`}
+															title="管理能力"
+														>
+															<SlidersHorizontal aria-hidden="true" size={17} />
+														</Button>
+														<Button
+															variant="danger"
+															size="icon"
+															type="button"
+															disabled={
+																grant.status !== "ACTIVE" ||
+																revokeGrant.isPending
+															}
+															onClick={() => revokeGrant.mutate(grant.id)}
+															aria-label={`撤销 ${grant.consumerName}`}
+															title={
+																grant.status === "ACTIVE"
+																	? "撤销授权"
+																	: "历史授权不可操作"
+															}
+														>
+															<ShieldOff aria-hidden="true" size={17} />
+														</Button>
+													</div>
 												</td>
 											</tr>
 										))}
@@ -376,8 +412,18 @@ export function ConnectionsPage() {
 						</DialogHeader>
 						{authorization.preview ? (
 							<PreviewContent
+								key={authorization.preview.preview.previewId}
 								value={authorization.preview}
-								busy={confirm.isPending}
+								busy={confirm.isPending || preview.isPending}
+								initialActionVersionIds={authorization.initialActionVersionIds}
+								reviewed={authorization.reviewed}
+								onReview={(actionVersionIds) =>
+									preview.mutate({
+										actionVersionIds,
+										connectionId: authorization.connectionId,
+										consumerId: authorization.consumerId,
+									})
+								}
 								onConfirm={() =>
 									confirm.mutate({
 										confirmationToken:
@@ -625,9 +671,98 @@ export function ConnectionsPage() {
 
 export function PreviewContent(props: {
 	busy: boolean;
+	initialActionVersionIds?: string[];
 	onConfirm: () => void;
+	onReview?: (actionVersionIds: string[]) => void;
+	reviewed?: boolean;
 	value: AuthorizationPreviewResponse;
 }) {
+	const availableActionIds = new Set(
+		props.value.preview.actions.map((action) => action.id),
+	);
+	const defaultSelection = props.initialActionVersionIds?.length
+		? props.initialActionVersionIds.filter((id) => availableActionIds.has(id))
+		: props.value.preview.actions
+				.filter((action) => action.effect === "READ")
+				.map((action) => action.id);
+	const [selected, setSelected] = useState(() => new Set(defaultSelection));
+	const [query, setQuery] = useState("");
+	const [effect, setEffect] = useState<"ALL" | "READ" | "WRITE">("ALL");
+	const visibleActions = useMemo(() => {
+		const normalized = query.trim().toLowerCase();
+		return props.value.preview.actions.filter(
+			(action) =>
+				(effect === "ALL" || action.effect === effect) &&
+				(!normalized ||
+					action.name.toLowerCase().includes(normalized) ||
+					action.description.toLowerCase().includes(normalized)),
+		);
+	}, [effect, props.value.preview.actions, query]);
+	if (props.reviewed === false && props.onReview) {
+		return (
+			<div className="compact content-stack">
+				<div className="account-switch">
+					<strong>
+						{props.value.preview.targetConnection.externalAccount}
+					</strong>
+					<span>{props.value.preview.consumer.name}</span>
+				</div>
+				<div className="permission-controls">
+					<input
+						aria-label="搜索能力"
+						placeholder="搜索 Action"
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+					/>
+					<select
+						aria-label="能力类型"
+						value={effect}
+						onChange={(event) =>
+							setEffect(event.target.value as "ALL" | "READ" | "WRITE")
+						}
+					>
+						<option value="ALL">全部</option>
+						<option value="READ">读取</option>
+						<option value="WRITE">写入</option>
+					</select>
+				</div>
+				<p className="scope-summary">已选择 {selected.size} 项</p>
+				<ul className="permission-list">
+					{visibleActions.map((action) => (
+						<li key={action.id}>
+							<label className="permission-option">
+								<input
+									checked={selected.has(action.id)}
+									type="checkbox"
+									onChange={(event) =>
+										setSelected((current) => {
+											const next = new Set(current);
+											if (event.target.checked) next.add(action.id);
+											else next.delete(action.id);
+											return next;
+										})
+									}
+								/>
+								<span>
+									<strong>{action.name}</strong>
+									<small>{action.effect === "WRITE" ? "写入" : "读取"}</small>
+								</span>
+							</label>
+						</li>
+					))}
+				</ul>
+				<div className="dialog-actions">
+					<Button
+						type="button"
+						disabled={props.busy || selected.size === 0}
+						onClick={() => props.onReview?.([...selected].sort())}
+					>
+						查看授权差异
+					</Button>
+				</div>
+			</div>
+		);
+	}
 	return (
 		<div className="compact content-stack">
 			<div className="account-switch">

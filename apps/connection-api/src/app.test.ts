@@ -1103,6 +1103,7 @@ describe("Connection API", () => {
 			}),
 			await app.request("/api/v1/connection/authorization-previews", {
 				body: JSON.stringify({
+					actionVersionIds: ["github.get_repository@v7"],
 					connectionId: "connection-github",
 					consumerId: "consumer-portable-pat",
 				}),
@@ -1185,6 +1186,7 @@ describe("Connection API", () => {
 			{
 				name: "preview",
 				value: {
+					actionVersionIds: ["github.get_repository@v7"],
 					connectionId: "connection-github",
 					consumerId: "consumer-portable-pat",
 					principalId: "principal-user",
@@ -1215,6 +1217,7 @@ describe("Connection API", () => {
 
 	it("allows only Connection administrators to open the administrator console", async () => {
 		const mutations: Array<{ action: string; targetPrincipalId: string }> = [];
+		const declarations: unknown[] = [];
 		const accounts = new Map([
 			[
 				"admin-session",
@@ -1293,6 +1296,14 @@ describe("Connection API", () => {
 					},
 				];
 			},
+			publishConsumerDeclarationAsAdministrator: async (
+				actorPrincipalId: string,
+				input: unknown,
+			) => {
+				expect(actorPrincipalId).toBe("principal-admin");
+				declarations.push(input);
+				return { declarationId: "declaration-agent-github" };
+			},
 			revokeConnectionAdministrator: async (input: {
 				actorPrincipalId: string;
 				targetPrincipalId: string;
@@ -1307,6 +1318,21 @@ describe("Connection API", () => {
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
 			management: {
+				catalogs: [
+					{
+						actions: [
+							{
+								description: "Read a repository",
+								effect: "READ",
+								id: "github.get_repository@v7",
+								name: "github.get_repository",
+								requiredScopes: ["repo"],
+							},
+						],
+						provider: "github",
+						providerReleaseId: "github-release-v7",
+					},
+				],
 				githubRedirectUri: "https://connection.example/oauth/callback",
 				service: management,
 			},
@@ -1325,6 +1351,11 @@ describe("Connection API", () => {
 				messageKey: "connection.error.resource_not_found",
 			},
 		});
+		const deniedDeclarations = await app.request(
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
+			{ headers: { cookie: "connection_session=user-session" } },
+		);
+		expect(deniedDeclarations.status).toBe(404);
 		const adminApi = await app.request(
 			"/api/v1/connection/admin/administrators",
 			{ headers: { cookie: "connection_session=admin-session" } },
@@ -1344,6 +1375,65 @@ describe("Connection API", () => {
 		expect(JSON.stringify(await consumers.json())).not.toContain(
 			"conn_consumer_secret-once",
 		);
+		const declarationOptions = await app.request(
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
+			{ headers: { cookie: "connection_session=admin-session" } },
+		);
+		expect(declarationOptions.status).toBe(200);
+		expect(await declarationOptions.json()).toMatchObject({
+			consumer: { id: "consumer-agent", name: "Agent" },
+			providers: [
+				{
+					actions: [{ id: "github.get_repository@v7" }],
+					providerId: "github",
+					providerReleaseId: "github-release-v7",
+				},
+			],
+		});
+		const declaration = await app.request(
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
+			{
+				body: JSON.stringify({
+					actionVersionIds: ["github.get_repository@v7"],
+					providerReleaseId: "github-release-v7",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=admin-session",
+					"idempotency-key": "publish-agent-github-declaration",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(declaration.status).toBe(201);
+		expect(declarations).toEqual([
+			{
+				actionVersionIds: ["github.get_repository@v7"],
+				consumer: { id: "consumer-agent", name: "Agent" },
+				providerReleaseId: "github-release-v7",
+			},
+		]);
+		const duplicateDeclaration = await app.request(
+			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
+			{
+				body: JSON.stringify({
+					actionVersionIds: [
+						"github.get_repository@v7",
+						"github.get_repository@v7",
+					],
+					providerReleaseId: "github-release-v7",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=admin-session",
+					"Idempotency-Key": "duplicate-agent-declaration",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(duplicateDeclaration.status).toBe(400);
 		const registered = await app.request(
 			"/api/v1/connection/admin/pat-consumers",
 			{

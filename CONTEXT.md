@@ -20,6 +20,18 @@ _Avoid_: Consumer、Provider Connection
 当前 Principal 为具名 Consumer 的一个 ConsumerInstance 确认并交付独立 Connection PAT 的一次性过程。
 _Avoid_: Provider 授权、账号连接
 
+**Provider OAuth Scope**:
+Provider 授予 Connection Credential 的外部权限上限，不等于 Consumer 的 Connection 授权。
+_Avoid_: Action 权限、Consumer scope
+
+**Consumer Declaration**:
+Consumer 按 ProviderRelease 发布的、可向用户申请的 ActionVersion 最大集合；声明本身不授予账号访问权。
+_Avoid_: Connection Grant、OAuth scope
+
+**Connection Grant**:
+Principal 明确确认的 Consumer、Provider Connection 和 ActionVersion 非空子集；每次调整产生不可变 replacement。
+_Avoid_: PAT、Consumer Declaration
+
 **Provider Connection**:
 Principal 在 Connection 中建立的、对应一个稳定外部账号的连接。
 _Avoid_: PAT、ConsumerInstance

@@ -136,6 +136,12 @@ export async function createConnectionRuntime(
 			},
 			issuer: config.publicBaseUrl,
 			management: {
+				catalogs: [
+					githubConnectionCatalog,
+					bitbucketServerConnectionCatalog,
+					jiraServerConnectionCatalog,
+					confluenceServerConnectionCatalog,
+				],
 				githubRedirectUri: config.github.redirectUri,
 				service,
 			},

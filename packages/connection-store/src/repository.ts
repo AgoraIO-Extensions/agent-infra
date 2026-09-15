@@ -93,6 +93,56 @@ type AuthorizationTarget = {
 	sharedEligibilityPathHash: string | null;
 };
 
+function selectAuthorizationActions(
+	target: AuthorizationTarget,
+	requestedActionVersionIds: unknown,
+): AuthorizationTarget {
+	if (
+		requestedActionVersionIds !== undefined &&
+		(!Array.isArray(requestedActionVersionIds) ||
+			requestedActionVersionIds.length === 0 ||
+			requestedActionVersionIds.some(
+				(value) => typeof value !== "string" || !value,
+			) ||
+			new Set(requestedActionVersionIds).size !==
+				requestedActionVersionIds.length)
+	) {
+		invalidAuthorizationPreview("Authorization action selection is invalid");
+	}
+	const actionsById = new Map(
+		target.actions.map((action) => [action.id, action]),
+	);
+	const actions = Array.isArray(requestedActionVersionIds)
+		? [...requestedActionVersionIds]
+				.sort()
+				.map((actionVersionId) => actionsById.get(actionVersionId))
+		: target.actions.filter((action) =>
+				action.requiredScopes.every((scope) =>
+					target.credentialScopes.includes(scope),
+				),
+			);
+	if (actions.some((action) => !action)) {
+		invalidAuthorizationPreview(
+			"Authorization action selection exceeds the Consumer declaration",
+		);
+	}
+	const selected = actions as ActionDefinition[];
+	if (selected.length === 0) {
+		invalidAuthorizationPreview("No declared Actions are available");
+	}
+	const requiredScopes = new Set(
+		selected.flatMap((action) => [...action.requiredScopes]),
+	);
+	if (
+		[...requiredScopes].some(
+			(scope) => !target.credentialScopes.includes(scope),
+		)
+	) {
+		forbidden();
+	}
+	return { ...target, actions: selected };
+}
+
 type ConnectionEligibility = {
 	ownerType: "PERSONAL" | "SHARED";
 	providerId: string;
@@ -379,11 +429,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		consumer: { id: string; name: string };
 		providerReleaseId: string;
 	}) {
-		const actionVersionIds = [...new Set(input.actionVersionIds)].sort();
+		const actionVersionIds = [...input.actionVersionIds].sort();
 		if (
 			!input.consumer.id ||
 			!input.consumer.name ||
-			actionVersionIds.length === 0
+			actionVersionIds.length === 0 ||
+			new Set(actionVersionIds).size !== actionVersionIds.length
 		) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
@@ -1549,14 +1600,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			invalidAuthorizationPreview("No declared Actions are available");
 		}
 		const actions = actionRows.map(actionDefinition);
-		const requiredScopes = new Set(
-			actions.flatMap((action) => [...action.requiredScopes]),
-		);
-		if (
-			[...requiredScopes].some((scope) => !credentialScopes.includes(scope))
-		) {
-			forbidden();
-		}
 		return {
 			actions,
 			catalogRevisionDigest: canonicalHash(
@@ -1628,6 +1671,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async createCurrentConsumerAuthorizationPreview(input: {
+		actionVersionIds?: readonly string[];
 		connectionId: string;
 		consumerId: string;
 		principalId: string;
@@ -1685,7 +1729,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				if (!currentGrant)
 					throw new Error("Current Connection grant was not found");
 			}
-			const target = await this.loadAuthorizationTarget(sql, input);
+			const target = selectAuthorizationActions(
+				await this.loadAuthorizationTarget(sql, input),
+				input.actionVersionIds,
+			);
 			const root: AuthorizationRootSnapshot = {
 				currentGrantId: rootRow.current_grant_id,
 				fence: rootRow.fence,
@@ -1878,11 +1925,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				providerId: rootRow.provider_id,
 				status: rootRow.status,
 			};
-			const target = await this.loadAuthorizationTarget(sql, {
-				connectionId: preview.connection_id,
-				consumerId: rootRow.consumer_id,
-				principalId: input.principalId,
-			});
+			const target = selectAuthorizationActions(
+				await this.loadAuthorizationTarget(sql, {
+					connectionId: preview.connection_id,
+					consumerId: rootRow.consumer_id,
+					principalId: input.principalId,
+				}),
+				preview.action_version_ids,
+			);
 			const snapshot = this.authorizationSnapshot(
 				input.principalId,
 				root,
