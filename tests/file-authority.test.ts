@@ -362,10 +362,10 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		const orphanMetadata = (await fixture.storage.scan(null, 100)).objects.find(
 			(object) => object.objectRef === orphan,
 		);
-		expect(orphanMetadata).toBeDefined();
+		if (!orphanMetadata) throw new Error("Missing orphan metadata");
 		const graceWaitMs = Math.max(
 			0,
-			Date.parse(orphanMetadata!.createdAt) + 10 - Date.now(),
+			Date.parse(orphanMetadata.createdAt) + 10 - Date.now(),
 		);
 		expect(graceWaitMs).toBeLessThan(5000);
 		await new Promise((resolve) => setTimeout(resolve, graceWaitMs));

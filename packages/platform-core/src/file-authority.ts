@@ -651,10 +651,10 @@ function requireAvailableInput(
 }
 
 function requireUnboundInput(
-	file: FileRecordV1 | null,
+	input: FileRecordV1 | null,
 	scope: FileScopeV1,
 ): FileRecordV1 {
-	file = requireAvailableInput(file, scope);
+	const file = requireAvailableInput(input, scope);
 	if (
 		file.messageId !== null ||
 		file.executionId !== null ||
@@ -665,7 +665,7 @@ function requireUnboundInput(
 }
 
 export function bindInputFileV1(
-	file: FileRecordV1 | null,
+	input: FileRecordV1 | null,
 	scope: FileScopeV1,
 	binding: {
 		messageId: string;
@@ -674,7 +674,7 @@ export function bindInputFileV1(
 	},
 	now: Date,
 ): FileRecordV1 {
-	file = requireUnboundInput(file, scope);
+	const file = requireUnboundInput(input, scope);
 	return {
 		...file,
 		...binding,
