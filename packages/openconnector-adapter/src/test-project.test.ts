@@ -25,11 +25,43 @@ const catalogs = [
 ] as const;
 
 test("GitHub v7 low-risk writes have an exact isolated cleanup scenario", () => {
+	const approved = [
+		"create_ref",
+		"update_ref",
+		"rename_branch",
+		"delete_ref",
+		"create_label",
+		"update_label",
+		"delete_label",
+		"add_issue_labels",
+		"set_issue_labels",
+		"remove_issue_label",
+		"clear_issue_labels",
+		"add_issue_assignees",
+		"remove_issue_assignees",
+		"lock_issue",
+		"unlock_issue",
+		"create_or_update_file",
+		"delete_file",
+		"replace_repository_topics",
+		"star_repository",
+		"unstar_repository",
+		"create_milestone",
+		"update_milestone",
+		"delete_milestone",
+		"generate_release_notes",
+		"create_release",
+		"update_release",
+		"delete_release",
+	]
+		.map((name) => `github.${name}@v7`)
+		.sort();
 	const actionVersionIds = githubV7LowRiskWriteScenarios.map(
 		(scenario) => scenario.actionVersionId,
 	);
 	assert.equal(actionVersionIds.length, 27);
 	assert.equal(new Set(actionVersionIds).size, actionVersionIds.length);
+	assert.deepEqual([...actionVersionIds].sort(), approved);
 	for (const scenario of githubV7LowRiskWriteScenarios) {
 		const action = githubConnectionCatalog.actions.find(
 			(item) => item.id === scenario.actionVersionId,

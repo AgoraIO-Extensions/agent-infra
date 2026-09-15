@@ -14,6 +14,8 @@ const target = {
 const initialCommit = "7c63d061e74eaccb99dcccdc9b633511197c3406";
 const mainCommit = "410b111ccf673ab03ecb7239391442e226ad48fd";
 const writeActions = [
+	"create_issue",
+	"update_issue",
 	"create_ref",
 	"update_ref",
 	"rename_branch",
@@ -111,9 +113,20 @@ export async function runGitHubLowRiskWriteConformance({
 	const label = marker;
 	const renamedLabel = `${marker}-updated`;
 	const calls = [];
+	let uncertain = false;
 	const execute = async (actionId, input, step, record = true) => {
 		const args = { ...input, idempotencyKey: `${runId}:${step}` };
-		const result = await call("execute_action", { actionId, input: args });
+		let result;
+		try {
+			result = await call("execute_action", { actionId, input: args });
+		} catch (error) {
+			if (
+				!(error instanceof McpError) ||
+				error.data?.submissionUncertain === true
+			)
+				uncertain = true;
+			throw error;
+		}
 		if (result?.status !== "SUCCEEDED" || !result.callId)
 			throw new Error(`${actionId} did not succeed`);
 		if (record)
@@ -133,8 +146,11 @@ export async function runGitHubLowRiskWriteConformance({
 	let milestoneNumber;
 	let releaseId;
 	let releaseTag;
-	let topicsRestored = false;
-	let starRestored = false;
+	let originalTopics;
+	let originalStar;
+	let topicsChanged = false;
+	let starChanged = false;
+	const filePath = `connection-e2e/${runId}.txt`;
 	let cleanup = "SUCCEEDED";
 	try {
 		await execute(
@@ -196,7 +212,6 @@ export async function runGitHubLowRiskWriteConformance({
 				title: `${marker} metadata`,
 			},
 			"issue-create",
-			false,
 		);
 		issueNumber = issue?.number;
 		if (!Number.isSafeInteger(issueNumber))
@@ -264,11 +279,9 @@ export async function runGitHubLowRiskWriteConformance({
 			"github.update_issue",
 			{ ...issueInput, state: "closed" },
 			"issue-close",
-			false,
 		);
 		issueNumber = undefined;
 
-		const filePath = `connection-e2e/${runId}.txt`;
 		result = await execute(
 			"github.create_or_update_file",
 			{
@@ -298,7 +311,7 @@ export async function runGitHubLowRiskWriteConformance({
 			path: filePath,
 		});
 
-		const originalTopics = await read(
+		originalTopics = await read(
 			call,
 			"github.list_repository_topics",
 			repository,
@@ -309,6 +322,7 @@ export async function runGitHubLowRiskWriteConformance({
 			{ ...repository, names: [topic] },
 			"topics-replace",
 		);
+		topicsChanged = true;
 		assertNames(
 			result?.names?.map((name) => ({ name })),
 			[topic],
@@ -320,19 +334,21 @@ export async function runGitHubLowRiskWriteConformance({
 			"topics-restore",
 			false,
 		);
-		topicsRestored = true;
+		topicsChanged = false;
 
-		const originalStar =
+		originalStar =
 			(await read(call, "github.check_repository_starred", repository))
 				?.starred === true;
 		if (originalStar) {
 			await execute("github.unstar_repository", repository, "star-remove");
+			starChanged = true;
 			await execute("github.star_repository", repository, "star-restore");
 		} else {
 			await execute("github.star_repository", repository, "star-add");
+			starChanged = true;
 			await execute("github.unstar_repository", repository, "star-restore");
 		}
-		starRestored = true;
+		starChanged = false;
 
 		result = await execute(
 			"github.create_milestone",
@@ -425,6 +441,112 @@ export async function runGitHubLowRiskWriteConformance({
 			name: renamedLabel,
 		});
 	} finally {
+		const attempt = async (operation) => {
+			try {
+				await operation();
+			} catch {
+				cleanup = "FAILED";
+			}
+		};
+		if (!uncertain) {
+			if (releaseId)
+				await attempt(async () => {
+					await execute(
+						"github.delete_release",
+						{ ...repository, releaseId },
+						"cleanup-release",
+						false,
+					);
+					releaseId = undefined;
+				});
+			if (releaseTag)
+				await attempt(async () => {
+					await execute(
+						"github.delete_ref",
+						{ ...repository, ref: `tags/${releaseTag}` },
+						"cleanup-release-tag",
+						false,
+					);
+					releaseTag = undefined;
+				});
+			if (milestoneNumber)
+				await attempt(async () => {
+					await execute(
+						"github.delete_milestone",
+						{ ...repository, milestoneNumber },
+						"cleanup-milestone",
+						false,
+					);
+					milestoneNumber = undefined;
+				});
+			if (fileSha)
+				await attempt(async () => {
+					await execute(
+						"github.delete_file",
+						{
+							...repository,
+							message: `${marker} cleanup file`,
+							path: filePath,
+							sha: fileSha,
+						},
+						"cleanup-file",
+						false,
+					);
+					fileSha = undefined;
+				});
+			if (issueNumber)
+				await attempt(async () => {
+					await execute(
+						"github.update_issue",
+						{ ...repository, issueNumber, state: "closed" },
+						"cleanup-issue",
+						false,
+					);
+					issueNumber = undefined;
+				});
+			if (currentLabel)
+				await attempt(async () => {
+					await execute(
+						"github.delete_label",
+						{ ...repository, name: currentLabel },
+						"cleanup-label",
+						false,
+					);
+					currentLabel = undefined;
+				});
+			if (currentRef)
+				await attempt(async () => {
+					await execute(
+						"github.delete_ref",
+						{ ...repository, ref: currentRef },
+						"cleanup-ref",
+						false,
+					);
+					currentRef = undefined;
+				});
+			if (topicsChanged)
+				await attempt(async () => {
+					await execute(
+						"github.replace_repository_topics",
+						{ ...repository, names: originalTopics?.names ?? [] },
+						"cleanup-topics",
+						false,
+					);
+					topicsChanged = false;
+				});
+			if (starChanged)
+				await attempt(async () => {
+					await execute(
+						originalStar
+							? "github.star_repository"
+							: "github.unstar_repository",
+						repository,
+						"cleanup-star",
+						false,
+					);
+					starChanged = false;
+				});
+		}
 		if (
 			currentLabel ||
 			currentRef ||
@@ -433,8 +555,9 @@ export async function runGitHubLowRiskWriteConformance({
 			milestoneNumber ||
 			releaseId ||
 			releaseTag ||
-			!topicsRestored ||
-			!starRestored
+			topicsChanged ||
+			starChanged ||
+			uncertain
 		)
 			cleanup = "FAILED";
 	}

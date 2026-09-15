@@ -146,7 +146,7 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 	});
 
 	assert.equal(evidence.cleanup, "SUCCEEDED");
-	assert.equal(evidence.calls.length, 27);
+	assert.equal(evidence.calls.length, 29);
 	assert.deepEqual(topics, []);
 	assert.equal(starred, true);
 	assert.equal(file, undefined);
