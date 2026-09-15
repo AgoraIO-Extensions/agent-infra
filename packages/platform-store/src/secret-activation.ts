@@ -406,7 +406,7 @@ async function insertAudit(
 	event: SecretActivationAuditIntentV1,
 	occurredAt: Date,
 ): Promise<void> {
-	const rows = await sql<{ id: string }[]>`
+	const inserted = await sql<{ id: string }[]>`
 		insert into platform.audit_events
 			(id, trace_id, actor_type, actor_id, action, target_type, target_id,
 			 outcome, occurred_at, agent_id, details)
@@ -414,17 +414,23 @@ async function insertAudit(
 			(${event.auditId}, ${event.traceId}, ${event.actorType}, ${event.actorId},
 			 ${event.action}, ${event.targetType}, ${event.targetId}, ${event.outcome},
 			 ${occurredAt}, ${event.agentId}, ${sql.json(event.details)})
-		on conflict (id) do update set id = excluded.id
-		where audit_events.trace_id = excluded.trace_id
-			and audit_events.actor_type = excluded.actor_type
-			and audit_events.actor_id = excluded.actor_id
-			and audit_events.action = excluded.action
-			and audit_events.target_type = excluded.target_type
-			and audit_events.target_id = excluded.target_id
-			and audit_events.outcome = excluded.outcome
-			and audit_events.agent_id = excluded.agent_id
-			and audit_events.details = excluded.details
+		on conflict (id) do nothing
 		returning id
+	`;
+	if (inserted.length === 1) return;
+	// A separate statement sees a concurrent insert after its conflict wait.
+	const rows = await sql<{ id: string }[]>`
+		select id from platform.audit_events
+		where id = ${event.auditId}
+			and trace_id = ${event.traceId}
+			and actor_type = ${event.actorType}
+			and actor_id = ${event.actorId}
+			and action = ${event.action}
+			and target_type = ${event.targetType}
+			and target_id = ${event.targetId}
+			and outcome = ${event.outcome}
+			and agent_id = ${event.agentId}
+			and details = ${sql.json(event.details)}
 	`;
 	if (rows.length !== 1) throw new SecretActivationStoreError();
 }
