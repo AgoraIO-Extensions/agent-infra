@@ -10,7 +10,12 @@ import {
 
 test("GitHub read conformance emits sanitized evidence for every runnable scenario", async () => {
 	const actions = [];
+	let networkFailures = 1;
 	const fetch = async (_url, init) => {
+		if (networkFailures > 0) {
+			networkFailures -= 1;
+			throw new TypeError("fetch failed");
+		}
 		const request = JSON.parse(init.body);
 		const { arguments: args, name: tool } = request.params;
 		if (tool === "list_connections") {
@@ -46,6 +51,7 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 	});
 
 	assert.equal(actions.length, 77);
+	assert.equal(networkFailures, 0);
 	assert.equal(actions[0], "github.get_repository");
 	assert.equal(evidence.calls.length, 77);
 	assert.deepEqual(evidence.failures, []);
