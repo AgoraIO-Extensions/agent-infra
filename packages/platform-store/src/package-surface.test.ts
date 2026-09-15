@@ -62,6 +62,7 @@ describe("platform-store package surface", () => {
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
 			"PostgresTaskAuthorizationStoreV1",
+			"PostgresWecomChannelV1",
 			"SecretActivationStoreError",
 			"SecretKeyRotationStoreError",
 			"TaskAuthorizationStoreError",
@@ -96,6 +97,7 @@ describe("platform-store package surface", () => {
 				"dist/migrations/0007_secret_key_rotation.sql",
 				"dist/migrations/0014_trusted_task_authorization.sql",
 				"dist/migrations/0015_conversation_generation_tombstones.sql",
+				"dist/migrations/0016_wecom_text.sql",
 				"dist/migrations/meta/0000_snapshot.json",
 				"dist/migrations/meta/0001_snapshot.json",
 				"dist/migrations/meta/0002_snapshot.json",
@@ -106,6 +108,7 @@ describe("platform-store package surface", () => {
 				"dist/migrations/meta/0007_snapshot.json",
 				"dist/migrations/meta/0014_snapshot.json",
 				"dist/migrations/meta/0015_snapshot.json",
+				"dist/migrations/meta/0016_snapshot.json",
 				"dist/migrations/meta/_journal.json",
 			]),
 		);
