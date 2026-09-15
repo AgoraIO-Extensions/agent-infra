@@ -390,9 +390,9 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		throw new Error("runId is required");
 	}
 	let requestId = 0;
-	const call = async (name, args) => {
+	const call = async (name, args, retrySafe = false) => {
 		requestId += 1;
-		const response = await fetch(connectionEndpoint, {
+		const request = {
 			body: JSON.stringify({
 				id: requestId,
 				jsonrpc: "2.0",
@@ -404,8 +404,20 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 				"content-type": "application/json",
 			},
 			method: "POST",
-			signal: AbortSignal.timeout(requestTimeoutMs),
-		});
+		};
+		let response;
+		for (let attempt = 0; attempt < (retrySafe ? 2 : 1); attempt += 1) {
+			try {
+				response = await fetch(connectionEndpoint, {
+					...request,
+					signal: AbortSignal.timeout(requestTimeoutMs),
+				});
+			} catch (error) {
+				if (retrySafe && attempt === 0) continue;
+				throw error;
+			}
+			if (!retrySafe || response.status < 500 || attempt === 1) break;
+		}
 		if (!response.ok)
 			throw new Error(`Connection returned HTTP ${response.status}`);
 		const payload = await response.json();
@@ -415,9 +427,13 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		return payload.result?.structuredContent;
 	};
 
-	const connectionResult = await call("list_connections", {
-		service: "github",
-	});
+	const connectionResult = await call(
+		"list_connections",
+		{
+			service: "github",
+		},
+		true,
+	);
 	const activeGitHubConnections = connectionResult?.connections?.filter(
 		(item) => item.providerId === "github" && item.status === "ACTIVE",
 	);
@@ -431,10 +447,14 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 		);
 	}
 
-	const repositoryCall = await call("execute_action", {
-		actionId: "github.get_repository",
-		input: { owner: target.owner, repo: target.repository },
-	});
+	const repositoryCall = await call(
+		"execute_action",
+		{
+			actionId: "github.get_repository",
+			input: { owner: target.owner, repo: target.repository },
+		},
+		true,
+	);
 	if (repositoryCall?.status !== "SUCCEEDED") {
 		throw new Error("repository preflight did not succeed");
 	}
@@ -451,7 +471,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	}
 	const actionVersions = {};
 	for (const [actionId, effect] of Object.entries(actionEffects)) {
-		const guide = await call("get_action_guide", { actionId });
+		const guide = await call("get_action_guide", { actionId }, true);
 		const approvedVersion = `${actionId}@v7`;
 		if (guide?.action?.actionVersionId !== approvedVersion) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -468,7 +488,11 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 
 	const calls = [];
 	const execute = async (actionId, input) => {
-		const projection = await call("execute_action", { actionId, input });
+		const projection = await call(
+			"execute_action",
+			{ actionId, input },
+			actionEffects[actionId] === "READ",
+		);
 		if (
 			projection?.action !== actionId ||
 			typeof projection.callId !== "string" ||
@@ -486,7 +510,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	};
 	const expectProviderNotFound = async (actionId, input) => {
 		try {
-			await call("execute_action", { actionId, input });
+			await call("execute_action", { actionId, input }, true);
 		} catch (error) {
 			if (
 				error instanceof McpCallError &&

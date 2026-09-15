@@ -126,6 +126,83 @@ test("GitHub read conformance reports all reads after a fixture mismatch", async
 	);
 });
 
+test("GitHub issue conformance retries a preflight network failure", async () => {
+	let requests = 0;
+	const fetch = async (_url, init) => {
+		requests += 1;
+		if (requests === 1) throw new TypeError("fetch failed");
+		const request = JSON.parse(init.body);
+		if (request.params.name === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		return mcpResponse(request.id, {
+			action: "github.get_repository",
+			callId: "call-preflight",
+			result: { ...testRepository(), id: 999 },
+			status: "SUCCEEDED",
+		});
+	};
+
+	await assert.rejects(
+		runGitHubIssueConformance({
+			environment: enabledEnvironment(),
+			fetch,
+			runId: "run-preflight-retry",
+		}),
+		/repository ID does not match/,
+	);
+	assert.equal(requests, 3);
+});
+
+test("GitHub issue conformance does not retry a write network failure", async () => {
+	let createAttempts = 0;
+	const fetch = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		const { arguments: args, name: tool } = request.params;
+		if (tool === "list_connections") {
+			return mcpResponse(request.id, {
+				connections: [
+					{
+						externalAccount: "328682695",
+						providerId: "github",
+						status: "ACTIVE",
+					},
+				],
+			});
+		}
+		if (tool === "get_action_guide")
+			return actionGuide(request.id, args.actionId);
+		if (args.actionId === "github.create_issue") {
+			createAttempts += 1;
+			throw new TypeError("fetch failed");
+		}
+		return mcpResponse(request.id, {
+			action: args.actionId,
+			callId: "call-preflight",
+			result: testRepository(),
+			status: "SUCCEEDED",
+		});
+	};
+
+	await assert.rejects(
+		runGitHubIssueConformance({
+			environment: enabledEnvironment(),
+			fetch,
+			runId: "run-write-no-retry",
+		}),
+		/fetch failed/,
+	);
+	assert.equal(createAttempts, 1);
+});
+
 test("GitHub conformance is disabled by default without any network request", async () => {
 	let requests = 0;
 	await assert.rejects(
