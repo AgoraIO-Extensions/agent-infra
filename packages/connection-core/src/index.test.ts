@@ -445,6 +445,7 @@ describe("Connection application service", () => {
 		});
 
 		await service.overview("alice");
+		await new Promise((resolveRefresh) => setTimeout(resolveRefresh, 0));
 
 		expect(repository.githubProfileLabel).toEqual({
 			connectionId: "connection-github",

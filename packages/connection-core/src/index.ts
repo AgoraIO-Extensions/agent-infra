@@ -904,8 +904,9 @@ export class ConnectionApplicationService {
 	) {}
 
 	async overview(principalId: string) {
-		await this.refreshGitHubProfileLabels(principalId);
-		return this.repository.getOverview(principalId);
+		const overview = await this.repository.getOverview(principalId);
+		void this.refreshGitHubProfileLabels(principalId);
+		return overview;
 	}
 
 	private async refreshGitHubProfileLabels(principalId: string) {
@@ -918,8 +919,8 @@ export class ConnectionApplicationService {
 		} catch {
 			return;
 		}
-		await Promise.allSettled(
-			candidates.map(async (candidate) => {
+		for (const candidate of candidates) {
+			try {
 				const profile = await this.executor.execute({
 					action: "github.get_current_user",
 					actionVersionId: candidate.actionVersionId,
@@ -937,15 +938,17 @@ export class ConnectionApplicationService {
 					profileId !== candidate.externalAccount ||
 					!login
 				)
-					return;
+					continue;
 				await store.call(this.repository, {
 					connectionId: candidate.connectionId,
 					credentialVersionId: candidate.credentialVersionId,
 					displayName: login,
 					externalAccount: candidate.externalAccount,
 				});
-			}),
-		);
+			} catch {
+				// Profile projection is best effort and must not block the overview.
+			}
+		}
 	}
 
 	async connectProviderCredential(

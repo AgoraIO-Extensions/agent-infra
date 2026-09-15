@@ -1,5 +1,6 @@
 ALTER TABLE connection_accounts
-	ADD COLUMN profile_label_source text;
+	ADD COLUMN profile_label_source text,
+	ADD COLUMN profile_label_attempted_at timestamptz;
 
 ALTER TABLE connection_accounts
 	ADD CONSTRAINT connection_accounts_profile_label_source_check

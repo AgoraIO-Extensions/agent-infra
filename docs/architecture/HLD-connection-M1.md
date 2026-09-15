@@ -869,7 +869,7 @@ type ExternalAccountIdentity = {
 };
 ```
 
-仅接受 Provider 证明的 issuer/tenant/subject。login、email、display name、repository owner 或 OAuth state 不能作为 stable identity。GitHub Connection 可以通过当前锁定的 Provider executor 读取 `get_current_user`，在 positive numeric account ID 匹配后将 login 缓存为展示标签；该投影失败不得阻断 Connection 列表，也不得改变 external account、Credential、Grant 或 ProviderRelease digest。
+仅接受 Provider 证明的 issuer/tenant/subject。login、email、display name、repository owner 或 OAuth state 不能作为 stable identity。GitHub Connection 可以通过当前锁定的 Provider executor 读取 `get_current_user`，在 positive numeric account ID 匹配后将 login 缓存为展示标签；后台投影采用有界批次和持久化退避，失败不得阻断 Connection 列表，也不得改变 external account、Credential、Grant 或 ProviderRelease digest。
 
 ### 15.2 Fingerprint
 
