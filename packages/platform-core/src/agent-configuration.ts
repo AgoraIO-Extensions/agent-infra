@@ -232,6 +232,49 @@ export interface UpgradeCustomAgentImageCommandV1 {
 	readonly traceId: string;
 }
 
+/** An immutable, deployment-owned publication target; never an Owner update intent. */
+export interface StandardTemplateReleaseTargetV1 {
+	readonly schemaVersion: 1;
+	readonly releaseId: string;
+	readonly agentId: string;
+	readonly templateId: string;
+	readonly expectedConfigurationRevision: number;
+	readonly expectedImageDigest: string;
+	readonly targetImageDigest: string;
+}
+export interface ReleaseStandardTemplateCommandV1 {
+	readonly schemaVersion: 1;
+	readonly target: StandardTemplateReleaseTargetV1;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+export interface StandardTemplateReleaseAuthorizationV1 {
+	readonly schemaVersion: 1;
+	readonly status: "admitted";
+	readonly intent: "standard_template.release_to_agent";
+	readonly target: StandardTemplateReleaseTargetV1;
+	readonly actorId: string;
+	readonly accountStatus: "active";
+	readonly isAdministrator: true;
+	readonly identityRevision: string;
+	readonly deploymentRevision: string;
+	readonly authorizationRevision: string;
+}
+export interface StandardTemplateReleaseAuthorizationPortV1 {
+	authorize(input: {
+		readonly schemaVersion: 1;
+		readonly intent: "standard_template.release_to_agent";
+		readonly target: StandardTemplateReleaseTargetV1;
+		readonly actorId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+	}): Promise<
+		| StandardTemplateReleaseAuthorizationV1
+		| { readonly schemaVersion: 1; readonly status: "rejected" }
+	>;
+}
+
 export interface AgentConfigurationActorContextV1 {
 	readonly schemaVersion: 1;
 	readonly actorId: string;
@@ -472,6 +515,10 @@ export interface AgentConfigurationChannelAdmissionPortV1 {
 }
 
 export interface AgentConfigurationUseCaseV1 {
+	releaseStandardTemplate(
+		command: ReleaseStandardTemplateCommandV1,
+		actorContext: AgentConfigurationActorContextV1,
+	): Promise<AgentConfigurationResultV1>;
 	update(
 		command: UpdateAgentConfigurationCommandV2,
 		actorContext: AgentConfigurationActorContextV1,
@@ -509,6 +556,7 @@ export class AgentConfigurationError extends Error {
 }
 
 export interface AgentConfigurationUseCaseDependenciesV1 {
+	readonly standardTemplateReleaseAuthorization?: StandardTemplateReleaseAuthorizationPortV1;
 	readonly transaction: AgentConfigurationTransactionPortV1;
 	readonly authorizationAdmission: AgentConfigurationAuthorizationAdmissionPortV1;
 	readonly imageAdmission: AgentConfigurationImageAdmissionPortV1;
@@ -1154,6 +1202,71 @@ function parseUpgradeCustomImageCommand(
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+	};
+}
+
+export function parseStandardTemplateReleaseTargetV1(
+	input: unknown,
+): StandardTemplateReleaseTargetV1 {
+	const value = exactObject(input, [
+		"schemaVersion",
+		"releaseId",
+		"agentId",
+		"templateId",
+		"expectedConfigurationRevision",
+		"expectedImageDigest",
+		"targetImageDigest",
+	]);
+	if (
+		value.schemaVersion !== 1 ||
+		!isText(value.releaseId, 128) ||
+		!/^[A-Za-z0-9._~-]+$/.test(value.releaseId) ||
+		!isText(value.agentId, idMaxBytes) ||
+		!isText(value.templateId, idMaxBytes) ||
+		typeof value.expectedConfigurationRevision !== "number" ||
+		!Number.isSafeInteger(value.expectedConfigurationRevision) ||
+		value.expectedConfigurationRevision < 1 ||
+		typeof value.expectedImageDigest !== "string" ||
+		!/^sha256:[a-f0-9]{64}$/.test(value.expectedImageDigest) ||
+		typeof value.targetImageDigest !== "string" ||
+		!/^sha256:[a-f0-9]{64}$/.test(value.targetImageDigest) ||
+		value.expectedImageDigest === value.targetImageDigest
+	)
+		invalidCommand();
+	return {
+		schemaVersion: 1,
+		releaseId: value.releaseId,
+		agentId: value.agentId,
+		templateId: value.templateId,
+		expectedConfigurationRevision: value.expectedConfigurationRevision,
+		expectedImageDigest: value.expectedImageDigest,
+		targetImageDigest: value.targetImageDigest,
+	};
+}
+function parseReleaseStandardTemplateCommand(
+	input: unknown,
+): ReleaseStandardTemplateCommandV1 {
+	const value = exactObject(input, [
+		"schemaVersion",
+		"target",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		value.schemaVersion !== 1 ||
+		!isText(value.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(value.idempotencyKey) ||
+		!isText(value.requestId, idMaxBytes) ||
+		!isText(value.traceId, idMaxBytes)
+	)
+		invalidCommand();
+	return {
+		schemaVersion: 1,
+		target: parseStandardTemplateReleaseTargetV1(value.target),
+		idempotencyKey: value.idempotencyKey,
+		requestId: value.requestId,
+		traceId: value.traceId,
 	};
 }
 
@@ -2169,6 +2282,72 @@ async function admitCurrentAuthorization(
 	return authorization;
 }
 
+async function admitStandardTemplateRelease(
+	admission: StandardTemplateReleaseAuthorizationPortV1 | undefined,
+	target: StandardTemplateReleaseTargetV1,
+	command: { readonly requestId: string; readonly traceId: string },
+	actor: AgentConfigurationActorContextV1,
+): Promise<StandardTemplateReleaseAuthorizationV1> {
+	if (!admission) throw new AgentConfigurationError("not_authorized");
+	let value: Record<string, unknown>;
+	try {
+		value = exactObject(
+			await admission.authorize({
+				schemaVersion: 1,
+				intent: "standard_template.release_to_agent",
+				target: structuredClone(target),
+				actorId: actor.actorId,
+				...command,
+			}),
+			["schemaVersion", "status"],
+			[
+				"intent",
+				"target",
+				"actorId",
+				"accountStatus",
+				"isAdministrator",
+				"identityRevision",
+				"deploymentRevision",
+				"authorizationRevision",
+			],
+		);
+	} catch {
+		throw new AgentConfigurationError("dependency_unavailable");
+	}
+	if (
+		value.status !== "admitted" ||
+		value.schemaVersion !== 1 ||
+		value.intent !== "standard_template.release_to_agent" ||
+		value.actorId !== actor.actorId ||
+		value.accountStatus !== "active" ||
+		value.isAdministrator !== true ||
+		!isText(value.identityRevision, idMaxBytes) ||
+		!isText(value.deploymentRevision, idMaxBytes) ||
+		!isText(value.authorizationRevision, idMaxBytes)
+	)
+		throw new AgentConfigurationError("not_authorized");
+	let bound: StandardTemplateReleaseTargetV1;
+	try {
+		bound = parseStandardTemplateReleaseTargetV1(value.target);
+	} catch {
+		throw new AgentConfigurationError("not_authorized");
+	}
+	if (!sameValue(target, bound))
+		throw new AgentConfigurationError("not_authorized");
+	return {
+		schemaVersion: 1,
+		status: "admitted",
+		intent: "standard_template.release_to_agent",
+		target: bound,
+		actorId: actor.actorId,
+		accountStatus: "active",
+		isAdministrator: true,
+		identityRevision: value.identityRevision,
+		deploymentRevision: value.deploymentRevision,
+		authorizationRevision: value.authorizationRevision,
+	};
+}
+
 function admittedInitialAccess(
 	command: InitialAgentConfigurationCommandV2,
 	actorContext: AgentConfigurationActorContextV1,
@@ -2468,12 +2647,22 @@ function createAgentConfigurationUseCaseV1Internal(
 		) => UpdateAgentConfigurationCommandV2["changes"],
 		preserveConnectionEnabled = false,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
+		release?: StandardTemplateReleaseTargetV1,
 	): Promise<AgentConfigurationResultV1> => {
-		await admitCurrentAuthorization(
-			dependencies.authorizationAdmission,
-			command,
-			actorContext,
-		);
+		const firstReleaseAuthority = release
+			? await admitStandardTemplateRelease(
+					dependencies.standardTemplateReleaseAuthorization,
+					release,
+					{ requestId: command.requestId, traceId: command.traceId },
+					actorContext,
+				)
+			: undefined;
+		if (!release)
+			await admitCurrentAuthorization(
+				dependencies.authorizationAdmission,
+				command,
+				actorContext,
+			);
 		let readDecision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["read"]>
 		>;
@@ -2504,11 +2693,22 @@ function createAgentConfigurationUseCaseV1Internal(
 			throw new AgentConfigurationError("not_authorized");
 		}
 		const current = readDecision.record.configuration;
-		const authorization = await admitCurrentAuthorization(
-			dependencies.authorizationAdmission,
-			command,
-			actorContext,
-		);
+		const authorization = firstReleaseAuthority
+			? {
+					authorizationRevision: firstReleaseAuthority.authorizationRevision,
+					accessAuthority: undefined,
+				}
+			: await admitCurrentAuthorization(
+					dependencies.authorizationAdmission,
+					command,
+					actorContext,
+				);
+		if (
+			release &&
+			authorization.authorizationRevision !==
+				readDecision.record.authorizationRevision
+		)
+			throw new AgentConfigurationError("stale_revision");
 		const changes = changesFromCurrent(current);
 
 		let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
@@ -2648,6 +2848,25 @@ function createAgentConfigurationUseCaseV1Internal(
 			) {
 				throw new AgentConfigurationError("not_admitted");
 			}
+			if (
+				release &&
+				(admittedSource.kind !== "standard" ||
+					current.source.kind !== "standard" ||
+					admittedSource.imageDigest !== release.targetImageDigest ||
+					!sameValue(
+						{
+							...admittedSource,
+							imageDigest: undefined,
+							admissionRevision: undefined,
+						},
+						{
+							...current.source,
+							imageDigest: undefined,
+							admissionRevision: undefined,
+						},
+					))
+			)
+				throw new AgentConfigurationError("not_admitted");
 			if (sameSourceConfiguration(admittedSource, current.source)) {
 				source = current.source;
 			} else {
@@ -2965,6 +3184,24 @@ function createAgentConfigurationUseCaseV1Internal(
 				throw new AgentConfigurationError("dependency_unavailable");
 			}
 		}
+		if (release && firstReleaseAuthority) {
+			const latest = await admitStandardTemplateRelease(
+				dependencies.standardTemplateReleaseAuthorization,
+				release,
+				{ requestId: command.requestId, traceId: command.traceId },
+				actorContext,
+			);
+			if (
+				latest.identityRevision !== firstReleaseAuthority.identityRevision ||
+				latest.deploymentRevision !== firstReleaseAuthority.deploymentRevision
+			)
+				throw new AgentConfigurationError("not_authorized");
+			if (
+				latest.authorizationRevision !==
+				readDecision.record.authorizationRevision
+			)
+				throw new AgentConfigurationError("stale_revision");
+		}
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 		>;
@@ -2989,6 +3226,41 @@ function createAgentConfigurationUseCaseV1Internal(
 		return decision.result;
 	};
 	return {
+		async releaseStandardTemplate(commandInput, actorContextInput) {
+			const command = parseReleaseStandardTemplateCommand(commandInput);
+			const actorContext = parseActorContext(actorContextInput);
+			const digest = platformIdempotencyV1.canonicalRequestDigest({
+				schemaVersion: 1,
+				operation: "standard_template.release_to_agent.v1",
+				target: command.target as never,
+				actorId: actorContext.actorId,
+				rawRequestDigest: actorContext.rawRequestDigest,
+			});
+			return execute(
+				{ ...command, agentId: command.target.agentId },
+				actorContext,
+				digest,
+				(current) => {
+					const target = command.target;
+					if (
+						current.source.kind !== "standard" ||
+						current.source.templateId !== target.templateId
+					)
+						throw new AgentConfigurationError("not_admitted");
+					if (
+						current.revision !== target.expectedConfigurationRevision ||
+						current.source.imageDigest !== target.expectedImageDigest
+					)
+						throw new AgentConfigurationError("stale_revision");
+					return {
+						source: { kind: "standard", templateId: target.templateId },
+					};
+				},
+				true,
+				undefined,
+				command.target,
+			);
+		},
 		async update(commandInput, actorContextInput, attachment) {
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
