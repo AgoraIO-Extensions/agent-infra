@@ -307,3 +307,5 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		process.exitCode = 1;
 	});
 }
+
+export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";

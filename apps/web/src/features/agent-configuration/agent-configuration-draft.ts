@@ -17,6 +17,7 @@ export type AgentConfigurationSecretDraft = {
 };
 
 export type AgentConfigurationDraft = {
+	channels?: AgentConfigurationUpdateRequestV2Writable["channels"];
 	coOwnerIds: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
@@ -97,5 +98,6 @@ export function buildAgentConfigurationRequest(
 		],
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(secrets.length === 0 ? {} : { secrets }),
+		...(draft.channels?.length ? { channels: draft.channels } : {}),
 	};
 }

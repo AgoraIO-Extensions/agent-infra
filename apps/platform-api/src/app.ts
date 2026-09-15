@@ -18,6 +18,10 @@ import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
+import {
+	registerWecomRoutesV1,
+	type WecomRoutesDependenciesV1,
+} from "./http/wecom-routes.js";
 
 export const platformApiService = "platform-api";
 
@@ -26,6 +30,7 @@ export interface PlatformAppDependencies {
 		request: Request,
 		work: () => Promise<void>,
 	) => Promise<void>;
+	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -61,6 +66,7 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	}
 	registerRetiredManagementRoutes(app);
+	if (dependencies.wecom) registerWecomRoutesV1(app, dependencies.wecom);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
 	registerConversationRoutes(app, dependencies.conversation);

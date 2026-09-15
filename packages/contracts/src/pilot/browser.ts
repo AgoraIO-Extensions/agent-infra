@@ -518,7 +518,75 @@ export const CreateConversationRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 });
 
+export const WecomReceiptProjectionV1Schema = z.strictObject({
+	receiptId: OpaqueIdV1Schema,
+	status: z.enum(["accepted", "busy", "unavailable"]),
+	conversationId: OpaqueIdV1Schema.nullable(),
+	executionId: OpaqueIdV1Schema.nullable(),
+	deliveryStatus: z.enum([
+		"pending",
+		"claimed",
+		"sending",
+		"sent",
+		"failed",
+		"unknown",
+		"cancelled",
+		"expired",
+		"abandoned",
+	]),
+});
+const wecomReceiptPath = z.strictObject({ receiptId: pathId() });
 export const pilotBrowserHttpOpenApiPathsV1 = {
+	"/api/v1/wecom/receipts": {
+		get: {
+			operationId: "listWecomReceipts",
+			requestParams: {
+				query: z.strictObject({ cursor: OpaqueCursorV1Schema.optional() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery statuses",
+					z.strictObject({
+						items: z.array(WecomReceiptProjectionV1Schema),
+						nextCursor: OpaqueCursorV1Schema.nullable(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}": {
+		get: {
+			operationId: "getWecomReceipt",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery status",
+					WecomReceiptProjectionV1Schema.extend({
+						schemaVersion: SchemaVersionV1Schema,
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}/abandon": {
+		post: {
+			operationId: "abandonUnknownWecomDelivery",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Abandoned without resending",
+					z.strictObject({
+						schemaVersion: SchemaVersionV1Schema,
+						status: z.literal("abandoned"),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v1/session": {
 		get: {
 			operationId: "getCurrentSession",

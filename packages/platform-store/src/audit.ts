@@ -7,6 +7,57 @@ import postgres from "postgres";
 import { auditEvents } from "./schema.js";
 
 const platformAuditActionMetadata = {
+	"wecom.accepted": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.denied": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.unavailable": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.conflict": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.sending": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.sent": { actorKind: "system", subjectKind: "agent", details: "wecom" },
+	"wecom.failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.unknown": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.cancelled": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.expired": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
+	"wecom.abandoned": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: "wecom",
+	},
 	"agent.application.submitted": {
 		actorKind: "user",
 		subjectKind: "agent_application",
@@ -265,6 +316,33 @@ function changedFields(
 	const detailKind = platformAuditActionMetadata[action].details;
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
+	if (detailKind === "wecom") {
+		if (
+			!exactObject(details, [
+				"originalPrincipal",
+				"component",
+				"receiptId",
+				"status",
+			])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as Record<string, unknown>;
+		if (!exactObject(value.originalPrincipal, ["kind", "id"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const principal = value.originalPrincipal as Record<string, unknown>;
+		if (
+			!["user", "unknown"].includes(principal.kind as string) ||
+			!validText(principal.id) ||
+			(principal.kind === "unknown" && principal.id !== "unknown") ||
+			!["platform-api", "platform-worker"].includes(
+				value.component as string,
+			) ||
+			!validText(value.receiptId) ||
+			action !== `wecom.${value.status}`
+		)
+			throw new PlatformAuditQueryError("unavailable");
 		return [];
 	}
 	if (detailKind === "secret") {

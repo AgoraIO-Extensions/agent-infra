@@ -1855,3 +1855,175 @@ export type GetCurrentSessionResponses = {
 };
 
 export type GetCurrentSessionResponse = GetCurrentSessionResponses[keyof GetCurrentSessionResponses];
+
+export type ListWecomReceiptsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v1/wecom/receipts';
+};
+
+export type ListWecomReceiptsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListWecomReceiptsError = ListWecomReceiptsErrors[keyof ListWecomReceiptsErrors];
+
+export type ListWecomReceiptsResponses = {
+    /**
+     * Current sender's delivery statuses
+     */
+    200: {
+        items: Array<{
+            conversationId: string | null;
+            deliveryStatus: 'pending' | 'claimed' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled' | 'expired' | 'abandoned';
+            executionId: string | null;
+            receiptId: string;
+            status: 'accepted' | 'busy' | 'unavailable';
+        }>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListWecomReceiptsResponse = ListWecomReceiptsResponses[keyof ListWecomReceiptsResponses];
+
+export type GetWecomReceiptData = {
+    body?: never;
+    path: {
+        receiptId: string;
+    };
+    query?: never;
+    url: '/api/v1/wecom/receipts/{receiptId}';
+};
+
+export type GetWecomReceiptErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomReceiptError = GetWecomReceiptErrors[keyof GetWecomReceiptErrors];
+
+export type GetWecomReceiptResponses = {
+    /**
+     * Current sender's delivery status
+     */
+    200: {
+        conversationId: string | null;
+        deliveryStatus: 'pending' | 'claimed' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled' | 'expired' | 'abandoned';
+        executionId: string | null;
+        receiptId: string;
+        schemaVersion: 1;
+        status: 'accepted' | 'busy' | 'unavailable';
+    };
+};
+
+export type GetWecomReceiptResponse = GetWecomReceiptResponses[keyof GetWecomReceiptResponses];
+
+export type AbandonUnknownWecomDeliveryData = {
+    body?: never;
+    path: {
+        receiptId: string;
+    };
+    query?: never;
+    url: '/api/v1/wecom/receipts/{receiptId}/abandon';
+};
+
+export type AbandonUnknownWecomDeliveryErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type AbandonUnknownWecomDeliveryError = AbandonUnknownWecomDeliveryErrors[keyof AbandonUnknownWecomDeliveryErrors];
+
+export type AbandonUnknownWecomDeliveryResponses = {
+    /**
+     * Abandoned without resending
+     */
+    200: {
+        schemaVersion: 1;
+        status: 'abandoned';
+    };
+};
+
+export type AbandonUnknownWecomDeliveryResponse = AbandonUnknownWecomDeliveryResponses[keyof AbandonUnknownWecomDeliveryResponses];

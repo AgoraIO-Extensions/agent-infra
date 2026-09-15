@@ -1387,3 +1387,37 @@ export const platformInfrastructureTables = [
 	idempotencyRecords,
 	persistedEvents,
 ] as const;
+
+export const wecomReceipts = platformSchema.table(
+	"wecom_receipts",
+	{
+		id: text("id").primaryKey(),
+		requestDigest: text("request_digest").notNull(),
+		scope: jsonb("scope").notNull(),
+		actorId: text("actor_id").notNull(),
+		taskBoundary: jsonb("task_boundary").notNull(),
+		channelRevision: text("channel_revision").notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		acceptanceStatus: text("acceptance_status").notNull(),
+		conversationId: text("conversation_id"),
+		executionId: text("execution_id"),
+		replyHandle: text("reply_handle").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		deliveryStatus: text("delivery_status").notNull().default("pending"),
+		fence: integer("fence").notNull().default(0),
+		leaseUntil: timestamp("lease_until", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		check(
+			"wecom_acceptance_status",
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable')`,
+		),
+		check(
+			"wecom_delivery_status",
+			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,
+		),
+		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
+	],
+);
