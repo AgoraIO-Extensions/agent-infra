@@ -77,3 +77,4 @@ export type {
 } from "./task-runtime-authorization.js";
 export { createTaskRuntimeAuthorizationUseCaseV1 } from "./task-runtime-authorization.js";
 export * from "./workload-reconciliation.js";
+export * from "./workload-secret-recovery.js";

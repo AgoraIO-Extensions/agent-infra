@@ -170,7 +170,7 @@ Connection M1 提供独立于 Agent Platform 的中文 Web 入口和部署单元
 | 失败停止 | 越权、凭证泄露、错误客户端身份或调用绑定被接受、重复 PR 或撤权失效时立即停止 Pilot 并保留证据 |
 | 联合签收 | Platform、Connection、Security、SRE 和 Pilot 使用者分别签收自己的边界 |
 
-验收只允许声明：在具名 LA3 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Codex 独立直连 GitHub Pilot 已通过。本 Goal 的本地首通按独立批准范围举证，不关闭完整联合 Pilot，也不继承 LA3 明文 LDAP 例外；客户端开发与受控接口测试不构成环境准入或真实账号验收。
+验收只允许声明：在具名 LA3 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Codex 独立直连 GitHub Pilot 已通过。独立批准的本地首通按其具名范围举证，不关闭完整联合 Pilot，也不继承其他环境的例外条件；客户端开发与受控接口测试不构成环境准入或真实账号验收。
 
 ## 14. Pilot 后范围
 

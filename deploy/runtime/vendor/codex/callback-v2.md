@@ -76,11 +76,13 @@ verified 与工具 completed/failed/unknown 相互独立。
 
 原 terminal 保存后，native 在返回模型、释放原 source 前最多进行一次有时限的只读
 重查；核实成功使用 `connection-evidence` 补元数据，不重开 outcome、不改计数和时间，
-不重发 Provider Action。当前没有跨进程恢复输入；失去原 receipt 时保留 unverified。
+不重发 Provider Action。跨进程核实只使用原执行持久保存的 receipt/descriptor，
+并遵循相同的当前只读权限与原记录绑定检查；失去原 receipt 时保留 unverified。
 
 ## 验证边界
 
 本快照是消费方已批准契约的实现假设，不证明 Connection 服务已交付，也不证明真实
 OAuth、Provider PR、最终 native binary/image 或联合 Pilot 已通过。
-156 个结构 case、3 个 framing case、34 个 RFC 8785 vector 已作为共同测试输入；
-本轮 native 测试在依赖编译阶段因资源保护停止，不能声称这些 native case 已通过。
+共同结构 case、framing case 与 RFC 8785 vector 分别由 native 和 TypeScript 验证。
+测试输入的存在不能代替实际测试结果；证据必须绑定相同的源码、Schema、corpus 和
+构建产物，验收范围按对应记录核对。

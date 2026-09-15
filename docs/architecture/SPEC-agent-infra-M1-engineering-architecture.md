@@ -491,7 +491,51 @@ StatefulSet 的逐 Secret activation-fence 旁持久保存实际 Secret UID；�
 
 已有 active 绑定对应的对象缺失或同名对象 UID 改变时，Worker 必须保持路由关闭，并从 Platform DB 的原始密文记录可信解密、审计，创建或精确校验同一完整 Secret reference 的 immutable Opaque 对象及全部数据。仅当 StatefulSet UID 与持久 activation fence 匹配、generation 未回退、逐 Secret activation fence 与原值精确相等且当前管理 fence 校验通过时，才可在再次回读确认已验证的 live Secret UID 后，通过 StatefulSet resourceVersion CAS 更新 UID 绑定。同名 live 对象的新 UID 证明旧 UID 已不再占据该名称；创建后崩溃的重试仍须重新完成可信值校验，不依赖进程内标记。此路径不修改原 Secret 版本、密文或 activation fence，不重新激活；普通绑定、观察、元数据复用与回收不得据此放宽 UID 校验，任一校验或 CAS 失败继续关闭路由并重试。
 
-失败升级在切换到已验证配置前，先在关闭路由的 cleaning 步骤回收当前候选中尚未激活的 Secret；回收未完成则保留该步骤重试，避免回滚替换候选绑定和 UID/fence 见证后失去回收路径。该步骤不删除 Workload 或 PVC，仍保护 active、active-origin 与回滚保留项。 停止、重启或配置更新不能覆盖未完成的回收义务；清理期间继续按候选历史配置解析 Secret，使用最新管理 fence 保持路由关闭，完成后才切换至最新管理和配置期望。初次创建失败且无已验证配置时同样保留清理义务，沿既有路径完成候选 Secret、失败 Workload 与新 PVC 回收，并清除旧 Workload 身份后才接纳最新期望。
+已验证 Workload 的 StatefulSet 本身缺失时，原 activation fence 不授权新 StatefulSet。
+Core/Store 只能在当前 Agent 锁和管理 fence 下，从当前配置及已验证 Workload 派生恢复来源，
+校验完整 Secret reference、原 active record 与当前 Owner 绑定；Worker 先关闭路由并通过
+Kubernetes API 确认 StatefulSet 缺失，读取失败或同名对象身份不符不能视为缺失。
+在任何恢复解密或资源创建前，Platform DB 的候选 Workload 持久保存恢复意图，绑定来源
+reference 与 fence、候选 Workload revision、管理 fence 和确定的新 immutable Secret 名称。
+新名称保留 Agent、Secret 版本及来源配置修订关联，并包含本次恢复身份，满足 Kubernetes
+命名限制；调用方不能提交或覆盖该映射。取舍见
+[ADR: 为缺失 Workload 重建 Secret 物化](../adr/0012-reconstruct-secret-materializations-for-missing-workloads.md)。
+
+Worker 从原始密文可信解密并审计，以新名称创建或精确校验 immutable Opaque Secret 的
+完整身份与全部数据，再调谐只引用该候选物化的 Workload；模型投影与 env 必须消费同一映射。
+创建后崩溃时按持久意图重试相同名称并重新校验值。新 StatefulSet 只可收养与候选
+Agent、revision、fence 和完整期望 spec 精确一致的幂等创建；观测身份一经持久保存，
+其他 UID 不得替代。Worker 回读新 StatefulSet UID/generation 与实际 Secret UID，
+沿 resourceVersion CAS 绑定本次恢复 fence，完成健康检查、适用核心探测以及所有新绑定的
+再次观察后，才能提升已验证 Workload 并恢复路由。任一身份、管理 fence、值、探测或 CAS
+不一致均保持路由关闭，沿既有有界重试和失败流程处理，不使用原 activation fence 放行。
+
+恢复物化属于 Workload 私有持久状态，不修改原 Secret ID、版本、来源 configRevision、
+密文、AAD、原 Kubernetes reference 或 activation fence，不将 active record 改回 pending，
+也不重新激活原记录。后续重启、配置更新与回滚在锁内继承仍适用的已验证物化映射及身份，
+不能回退到已失效的原名称或仅凭 annotation 补造绑定；恢复后的 StatefulSet 再次缺失时，
+按新的候选恢复意图处理。
+
+恢复后的 StatefulSet 仍存在，但恢复物化的 Secret 缺失或 UID 改变时，目标名称与 fence
+只能来自锁内校验的已验证 Workload 私有映射。Worker 校验该映射与原 active record、
+完整来源 reference 和当前 Owner 绑定，从原密文可信解密并审计；仅在同一 StatefulSet UID、
+generation 未回退、逐 Secret 恢复 fence 精确相等及当前管理 fence 通过时，沿上述精确值
+校验、live Secret UID 回读和 resourceVersion CAS 流程修复该物化的 UID 绑定。
+原 record 与原 activation fence 保持不变；缺失可信映射时拒绝，不从 annotation 推导。
+
+失败清理保留恢复意图及未完成回收义务，只可按实际 UID/fence
+回收本候选且未被已验证或回滚 Workload 引用的物化，不能删除原 active Secret、原 PVC
+或任务数据。尚未提升为已验证版本的恢复候选 StatefulSet，可在关闭路由后按持久意图的
+精确 UID、revision、fence 及 Kubernetes 删除前置条件清理；确认其不再引用候选 Secret 后
+才回收对应物化。保留已验证恢复来源和回收义务，全部清理完成后才清除候选 Workload
+身份并进入新的恢复意图；已验证 Workload 不适用此删除例外。
+删除成功但进度尚未保存时，按原持久意图和可信缺失观察幂等继续；读取失败、同名不同
+UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fence 到来时保留清理义务，
+按最新管理 fence 关闭路由，清理完成后重新解析当前期望，不能恢复已撤销的运行资格。
+恢复运行资源不产生任务恢复授权；原 Conversation、Execution、Session、
+撤权、停止、unknown 和 generation barrier 继续按既有契约处理，不重放业务操作。
+
+不涉及上述 StatefulSet 重建的失败升级在切换到已验证配置前，先在关闭路由的 cleaning 步骤回收当前候选中尚未激活的 Secret；回收未完成则保留该步骤重试，避免回滚替换候选绑定和 UID/fence 见证后失去回收路径。该步骤不删除 Workload 或 PVC，仍保护 active、active-origin 与回滚保留项。 停止、重启或配置更新不能覆盖未完成的回收义务；清理期间继续按候选历史配置解析 Secret，使用最新管理 fence 保持路由关闭，完成后才切换至最新管理和配置期望。初次创建失败且无已验证配置时同样保留清理义务，沿既有路径完成候选 Secret、失败 Workload 与新 PVC 回收，并清除旧 Workload 身份后才接纳最新期望。
 
 ### 10.7 标准模板模型配置
 
