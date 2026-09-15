@@ -7,6 +7,8 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 	const actions = [];
 	let ref;
 	let label;
+	let issueLabels = [];
+	let assignees = [];
 	const fetch = async (_url, init) => {
 		const request = JSON.parse(init.body);
 		const { arguments: args, name: tool } = request.params;
@@ -47,6 +49,35 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 		if (actionId === "github.delete_label") label = undefined;
 		if (actionId === "github.get_label" && !label)
 			return provider404(request.id);
+		if (actionId === "github.create_issue")
+			return call(request.id, actionId, { number: 17 });
+		if (
+			actionId === "github.add_issue_labels" ||
+			actionId === "github.set_issue_labels"
+		) {
+			issueLabels = input.labels.map((name) => ({ name }));
+			return call(request.id, actionId, { labels: issueLabels });
+		}
+		if (actionId === "github.remove_issue_label") {
+			issueLabels = issueLabels.filter(({ name }) => name !== input.label);
+			return call(request.id, actionId, { labels: issueLabels });
+		}
+		if (actionId === "github.clear_issue_labels") {
+			issueLabels = [];
+			return call(request.id, actionId, { ok: true });
+		}
+		if (actionId === "github.add_issue_assignees") {
+			assignees = input.assignees.map((login) => ({ login }));
+			return call(request.id, actionId, { assignees });
+		}
+		if (actionId === "github.remove_issue_assignees") {
+			assignees = [];
+			return call(request.id, actionId, { assignees });
+		}
+		if (actionId === "github.lock_issue")
+			return call(request.id, actionId, { locked: true });
+		if (actionId === "github.unlock_issue")
+			return call(request.id, actionId, { locked: false });
 		const result =
 			actionId === "github.get_ref"
 				? { ref }
@@ -70,7 +101,7 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 	});
 
 	assert.equal(evidence.cleanup, "SUCCEEDED");
-	assert.equal(evidence.calls.length, 7);
+	assert.equal(evidence.calls.length, 15);
 	assert.ok(
 		actions
 			.filter(({ actionId }) => !actionId.startsWith("github.get_"))

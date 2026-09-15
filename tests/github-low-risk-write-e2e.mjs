@@ -20,6 +20,14 @@ const writeActions = [
 	"create_label",
 	"update_label",
 	"delete_label",
+	"add_issue_labels",
+	"set_issue_labels",
+	"remove_issue_label",
+	"clear_issue_labels",
+	"add_issue_assignees",
+	"remove_issue_assignees",
+	"lock_issue",
+	"unlock_issue",
 ];
 
 export async function runGitHubRefAndLabelConformance({
@@ -89,22 +97,24 @@ export async function runGitHubRefAndLabelConformance({
 	const label = marker;
 	const renamedLabel = `${marker}-updated`;
 	const calls = [];
-	const execute = async (actionId, input, step) => {
+	const execute = async (actionId, input, step, record = true) => {
 		const args = { ...input, idempotencyKey: `${runId}:${step}` };
 		const result = await call("execute_action", { actionId, input: args });
 		if (result?.status !== "SUCCEEDED" || !result.callId)
 			throw new Error(`${actionId} did not succeed`);
-		calls.push({
-			actionVersionId: `${actionId}@v7`,
-			callId: result.callId,
-			inputHash: hash(args),
-			status: result.status,
-			target,
-		});
+		if (record)
+			calls.push({
+				actionVersionId: `${actionId}@v7`,
+				callId: result.callId,
+				inputHash: hash(args),
+				status: result.status,
+				target,
+			});
 		return result.result;
 	};
 	let currentRef;
 	let currentLabel;
+	let issueNumber;
 	let cleanup = "SUCCEEDED";
 	try {
 		await execute(
@@ -158,6 +168,85 @@ export async function runGitHubRefAndLabelConformance({
 		if (updated?.name !== renamedLabel)
 			throw new Error("updated label does not match");
 		currentLabel = renamedLabel;
+		const issue = await execute(
+			"github.create_issue",
+			{
+				...repository,
+				body: `${marker} metadata`,
+				title: `${marker} metadata`,
+			},
+			"issue-create",
+			false,
+		);
+		issueNumber = issue?.number;
+		if (!Number.isSafeInteger(issueNumber))
+			throw new Error("created issue is invalid");
+		const issueInput = { ...repository, issueNumber };
+		let result = await execute(
+			"github.add_issue_labels",
+			{ ...issueInput, labels: [renamedLabel] },
+			"issue-label-add",
+		);
+		assertNames(result?.labels, [renamedLabel], "added issue labels");
+		result = await execute(
+			"github.set_issue_labels",
+			{ ...issueInput, labels: [renamedLabel] },
+			"issue-label-set",
+		);
+		assertNames(result?.labels, [renamedLabel], "set issue labels");
+		result = await execute(
+			"github.remove_issue_label",
+			{ ...issueInput, label: renamedLabel },
+			"issue-label-remove",
+		);
+		assertNames(result?.labels, [], "removed issue labels");
+		await execute(
+			"github.set_issue_labels",
+			{ ...issueInput, labels: [renamedLabel] },
+			"issue-label-reset",
+			false,
+		);
+		result = await execute(
+			"github.clear_issue_labels",
+			issueInput,
+			"issue-label-clear",
+		);
+		if (result?.ok !== true)
+			throw new Error("cleared issue labels do not match");
+		result = await execute(
+			"github.add_issue_assignees",
+			{ ...issueInput, assignees: ["AGORAconnectionE2E"] },
+			"issue-assignee-add",
+		);
+		assertNames(
+			result?.assignees,
+			["AGORAconnectionE2E"],
+			"added issue assignees",
+			"login",
+		);
+		result = await execute(
+			"github.remove_issue_assignees",
+			{ ...issueInput, assignees: ["AGORAconnectionE2E"] },
+			"issue-assignee-remove",
+		);
+		assertNames(result?.assignees, [], "removed issue assignees", "login");
+		result = await execute(
+			"github.lock_issue",
+			{ ...issueInput, lockReason: "resolved" },
+			"issue-lock",
+		);
+		if (result?.locked !== true)
+			throw new Error("locked issue state does not match");
+		result = await execute("github.unlock_issue", issueInput, "issue-unlock");
+		if (result?.locked !== false)
+			throw new Error("unlocked issue state does not match");
+		await execute(
+			"github.update_issue",
+			{ ...issueInput, state: "closed" },
+			"issue-close",
+			false,
+		);
+		issueNumber = undefined;
 		await execute(
 			"github.delete_label",
 			{ ...repository, name: currentLabel },
@@ -169,10 +258,18 @@ export async function runGitHubRefAndLabelConformance({
 			name: renamedLabel,
 		});
 	} finally {
-		if (currentLabel || currentRef) cleanup = "FAILED";
+		if (currentLabel || currentRef || issueNumber) cleanup = "FAILED";
 	}
 	if (cleanup !== "SUCCEEDED") throw new Error("GitHub write cleanup failed");
 	return { calls, cleanup, runId };
+}
+
+function assertNames(values, expected, name, field = "name") {
+	const actual = Array.isArray(values)
+		? values.map((value) => value?.[field]).sort()
+		: undefined;
+	if (JSON.stringify(actual) !== JSON.stringify([...expected].sort()))
+		throw new Error(`${name} do not match`);
 }
 
 async function expect404(call, actionId, input) {
