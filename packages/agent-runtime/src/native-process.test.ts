@@ -140,7 +140,13 @@ it.runIf(process.platform === "linux").each([
 			await vi.waitFor(async () =>
 				expect(await readFile(`/proc/${pid}/stat`, "utf8")).toMatch(/\) Z /),
 			);
-			expect((await readFile(`/proc/${pid}/environ`)).length).toBe(0);
+			// Root sees an empty environment; an unprivileged parent can instead
+			// receive EACCES after exit. Neither supplies ownership evidence.
+			const environment = await readFile(`/proc/${pid}/environ`).then(
+				(value) => value.length,
+				(error: NodeJS.ErrnoException) => error.code,
+			);
+			expect([0, "EACCES"]).toContain(environment);
 			expect(() => process.kill(-Number(pid), 0)).not.toThrow();
 			if (reap) {
 				resume = setTimeout(() => {
