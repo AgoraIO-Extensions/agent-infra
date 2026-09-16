@@ -497,7 +497,7 @@ export class RuntimeHostV3 {
 		const recoveryKey = this.options.store.sessionQueueKey(request);
 		await this.options.serialize(recoveryKey, async () => {
 			this.validate(request, "generation.cancel", verification);
-			await this.options.store.authorizeRequestV3(claims);
+			await this.options.store.authorizeRequestV3(claims, "generation-cancel");
 			this.closedRecoveryGenerations.add(recoveryKey);
 		});
 		await this.abortRecovery(recoveryKey);

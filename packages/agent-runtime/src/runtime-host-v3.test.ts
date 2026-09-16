@@ -72,6 +72,22 @@ async function submit(host: RuntimeHost) {
 	return host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant));
 }
 
+function generationCancelFixture(
+	hostSessionRef: string,
+	fence: number,
+	operationId = "generation:conversation-fixture:1",
+) {
+	return {
+		...base(hostSessionRef),
+		operation: {
+			kind: "generation" as const,
+			id: operationId,
+			deliveryFence: fence,
+			executionDeliveryFence: fence,
+		},
+	};
+}
+
 function guard(hostSessionRef: string, store: FileRuntimeStore) {
 	return {
 		nativeSessionRef: store.nativeSessionRef(hostSessionRef) as string,
@@ -601,6 +617,456 @@ describe("Runtime V3 durable authorization", () => {
 			expect(await env.driver.sideEffectCount()).toBe(2);
 		},
 	);
+
+	it("isolates the original generation under a higher Execution fence without recovering business work", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const before = JSON.parse(await readFile(env.storePath, "utf8")).sessions[
+				accepted.hostSessionRef
+			];
+			const execute = vi.spyOn(env.driver, "execute");
+			const status = vi.spyOn(env.driver, "getStatus");
+			const request = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					operation: {
+						kind: "generation" as const,
+						id: "generation:conversation-fixture:1",
+						deliveryFence: 2,
+						executionDeliveryFence: 2,
+					},
+				},
+				"generation.cancel",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				env.host.cancelGenerationV3(
+					request,
+					verifyRuntimeV2Fixture(request.grant),
+				),
+			).resolves.toMatchObject({
+				operationId: "generation:conversation-fixture:1",
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			const after = JSON.parse(await readFile(env.storePath, "utf8")).sessions[
+				accepted.hostSessionRef
+			];
+			expect(after).toMatchObject({
+				nativeSessionRef: before.nativeSessionRef,
+				sessionGeneration: 1,
+				highestFences: { "execution:execution-fixture": 2 },
+				executionAuthorities: {
+					"execution-fixture": {
+						executionDeliveryFence: 2,
+						stopped: true,
+						expiresAt: 0,
+						control: { reason: "generation_isolation" },
+					},
+				},
+				generationBarrier: {
+					tombstoneId: "generation:conversation-fixture:1",
+					state: "confirmed",
+				},
+			});
+			expect(after.operations["execution-fixture"]).toEqual({
+				...before.operations["execution-fixture"],
+				deliveryFence: 2,
+			});
+			expect(execute.mock.calls.map(([command]) => command.kind)).toEqual([
+				"generation-cancel",
+			]);
+			expect(status).not.toHaveBeenCalled();
+			await expect(
+				env.host.authorizeExternalAction(
+					guard(accepted.hostSessionRef, env.store),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it.each(["generation:conversation-fixture:1", "synthetic-generation"])(
+		"retries opaque generation cancellation %s after a lost receipt and restart without repeating its effect",
+		async (operationId) => {
+			const env = await setup();
+			let host = env.host;
+			try {
+				const accepted = await submit(host);
+				const first = signV3Fixture(
+					generationCancelFixture(accepted.hostSessionRef, 2, operationId),
+					"generation.cancel",
+					{ purpose: "control", reason: "generation_isolation" },
+				);
+				await host.cancelGenerationV3(
+					first,
+					verifyRuntimeV2Fixture(first.grant),
+				);
+				await host.close();
+				host = await RuntimeHost.open({
+					...env.hostOptions,
+					store: await FileRuntimeStore.open(env.storePath),
+				});
+				const retry = signV3Fixture(
+					generationCancelFixture(accepted.hostSessionRef, 3, operationId),
+					"generation.cancel",
+					{ purpose: "control", reason: "generation_isolation" },
+				);
+				await expect(
+					host.cancelGenerationV3(retry, verifyRuntimeV2Fixture(retry.grant)),
+				).resolves.toMatchObject({
+					operationId: first.operation.id,
+					result: { outcome: "accepted", status: "cancelled" },
+				});
+				const saved = await readFile(env.storePath, "utf8");
+				const session = JSON.parse(saved).sessions[accepted.hostSessionRef];
+				expect(session).toMatchObject({
+					highestFences: {
+						"execution:execution-fixture": 3,
+						"generation:1": 3,
+					},
+					executionAuthorities: {
+						"execution-fixture": { executionDeliveryFence: 3, stopped: true },
+					},
+					generationBarrier: {
+						state: "confirmed",
+						tombstoneId: first.operation.id,
+					},
+				});
+				for (const invalid of [
+					first,
+					signV3Fixture(
+						generationCancelFixture(
+							accepted.hostSessionRef,
+							4,
+							"different-tombstone",
+						),
+						"generation.cancel",
+						{ purpose: "control", reason: "generation_isolation" },
+					),
+					signV3Fixture(
+						{
+							...generationCancelFixture(
+								accepted.hostSessionRef,
+								4,
+								operationId,
+							),
+							operation: {
+								...retry.operation,
+								deliveryFence: 2,
+								executionDeliveryFence: 4,
+							},
+						},
+						"generation.cancel",
+						{ purpose: "control", reason: "generation_isolation" },
+					),
+					signV3Fixture(
+						generationCancelFixture(accepted.hostSessionRef, 4, operationId),
+						"generation.cancel",
+						{
+							purpose: "control",
+							reason: "generation_isolation",
+							claims: { controlRecordId: "different-tombstone-authority" },
+						},
+					),
+				]) {
+					await expect(
+						host.cancelGenerationV3(
+							invalid,
+							verifyRuntimeV2Fixture(invalid.grant),
+						),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+					expect(await readFile(env.storePath, "utf8")).toBe(saved);
+				}
+				expect(await env.driver.sideEffectCount()).toBe(2);
+			} finally {
+				await host.close();
+			}
+		},
+	);
+
+	it("rejects foreign or non-isolation generation controls before changing the original durable authority", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const original = generationCancelFixture(accepted.hostSessionRef, 2);
+			const saved = await readFile(env.storePath, "utf8");
+			const execute = vi.spyOn(env.driver, "execute");
+			for (const invalid of [
+				...[
+					{ principal: { kind: "user" as const, id: "foreign-user" } },
+					{ channelId: "foreign-channel" },
+					{ agentId: "foreign-agent" },
+					{ conversationId: "foreign-conversation" },
+					{ executionId: "foreign-execution" },
+					{ turnId: "foreign-turn" },
+					{ sessionGeneration: 2 },
+					{ hostSessionRef: "foreign-host" },
+					{ operation: { ...original.operation, kind: "execution" as const } },
+				].map((patch) =>
+					signV3Fixture({ ...original, ...patch }, "generation.cancel", {
+						purpose: "control",
+						reason: "generation_isolation",
+					}),
+				),
+				signV3Fixture(original, "generation.cancel", {
+					purpose: "control",
+					reason: "recovery",
+				}),
+				signV3Fixture(original, "session.status", {
+					purpose: "control",
+					reason: "generation_isolation",
+				}),
+				signV3Fixture(original, "session.status"),
+				signV3Fixture(original, "generation.cancel", {
+					purpose: "control",
+					reason: "generation_isolation",
+					claims: { workerId: "foreign-worker" },
+				}),
+			]) {
+				await expect(
+					env.host.cancelGenerationV3(
+						invalid,
+						verifyRuntimeV2Fixture(invalid.grant),
+					),
+				).rejects.toMatchObject({ httpStatus: 403 });
+				expect(await readFile(env.storePath, "utf8")).toBe(saved);
+			}
+			expect(execute).not.toHaveBeenCalled();
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("does not rebind an existing tombstone to another original Execution in the same generation", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			await env.driver.setOperationStatus("execution-fixture", "completed");
+			const second = signV3Fixture(
+				{
+					...submitV3Fixture(),
+					hostSessionRef: accepted.hostSessionRef,
+					executionId: "second-execution",
+					turnId: "second-turn",
+					operation: {
+						...base(accepted.hostSessionRef).operation,
+						id: "second-execution",
+					},
+				},
+				"turn.submit",
+			);
+			await env.host.submitTurnV3(second, verifyRuntimeV2Fixture(second.grant));
+			const first = signV3Fixture(
+				generationCancelFixture(accepted.hostSessionRef, 2),
+				"generation.cancel",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await env.host.cancelGenerationV3(
+				first,
+				verifyRuntimeV2Fixture(first.grant),
+			);
+			const saved = await readFile(env.storePath, "utf8");
+			const rebound = signV3Fixture(
+				{
+					...generationCancelFixture(accepted.hostSessionRef, 3),
+					executionId: second.executionId,
+					turnId: second.turnId,
+				},
+				"generation.cancel",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				env.host.cancelGenerationV3(
+					rebound,
+					verifyRuntimeV2Fixture(rebound.grant),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			expect(await readFile(env.storePath, "utf8")).toBe(saved);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("keeps generation authority fail closed across a crash before barrier preparation", async () => {
+		const env = await setup();
+		let host = env.host;
+		try {
+			const accepted = await submit(host);
+			await env.driver.makeOperationUnknown("execution-fixture");
+			await host.close();
+			const recoveringStore = await FileRuntimeStore.open(env.storePath);
+			host = await RuntimeHost.open({
+				...env.hostOptions,
+				store: recoveringStore,
+			});
+			const before = JSON.parse(await readFile(env.storePath, "utf8")).sessions[
+				accepted.hostSessionRef
+			];
+			expect(before.operations["execution-fixture"].result.outcome).toBe(
+				"unknown",
+			);
+			const driverBefore = await readFile(
+				join(env.directory, "driver.json"),
+				"utf8",
+			);
+			const execute = vi.spyOn(env.driver, "execute");
+			const status = vi.spyOn(env.driver, "getStatus");
+			// Fail only the next persistence boundary after the real authority commit.
+			vi.spyOn(recoveringStore, "prepareOperation").mockRejectedValueOnce(
+				new Error("synthetic crash before barrier preparation"),
+			);
+			const first = signV3Fixture(
+				generationCancelFixture(accepted.hostSessionRef, 2),
+				"generation.cancel",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				host.cancelGenerationV3(first, verifyRuntimeV2Fixture(first.grant)),
+			).rejects.toThrow("synthetic crash before barrier preparation");
+			const interrupted = JSON.parse(await readFile(env.storePath, "utf8"))
+				.sessions[accepted.hostSessionRef];
+			expect(interrupted).toMatchObject({
+				nativeSessionRef: before.nativeSessionRef,
+				sessionGeneration: 1,
+				highestFences: { "execution:execution-fixture": 2 },
+				executionAuthorities: {
+					"execution-fixture": {
+						executionDeliveryFence: 2,
+						stopped: true,
+						expiresAt: 0,
+						control: {
+							controlRecordId: "control-fixture",
+							reason: "generation_isolation",
+						},
+					},
+				},
+			});
+			expect(interrupted).not.toHaveProperty("generationBarrier");
+			expect(interrupted.operations).toEqual({
+				"execution-fixture": {
+					...before.operations["execution-fixture"],
+					deliveryFence: 2,
+				},
+			});
+			expect(await readFile(join(env.directory, "driver.json"), "utf8")).toBe(
+				driverBefore,
+			);
+			await host.close();
+			const reopenedStore = await FileRuntimeStore.open(env.storePath);
+			host = await RuntimeHost.open({
+				...env.hostOptions,
+				store: reopenedStore,
+			});
+			await expect(
+				host.authorizeExternalAction(
+					guard(accepted.hostSessionRef, reopenedStore),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const retry = signV3Fixture(
+				generationCancelFixture(accepted.hostSessionRef, 3),
+				"generation.cancel",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				host.cancelGenerationV3(retry, verifyRuntimeV2Fixture(retry.grant)),
+			).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			expect(execute.mock.calls.map(([command]) => command.kind)).toEqual([
+				"generation-cancel",
+			]);
+			expect(status).not.toHaveBeenCalled();
+		} finally {
+			await host.close();
+		}
+	});
+
+	it("rejects a superseded generation claim before Driver dispatch", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const execute = vi.spyOn(env.driver, "execute");
+			const [older, newer] = await Promise.allSettled(
+				[2, 3].map((fence) => {
+					const request = signV3Fixture(
+						generationCancelFixture(accepted.hostSessionRef, fence),
+						"generation.cancel",
+						{ purpose: "control", reason: "generation_isolation" },
+					);
+					return env.host.cancelGenerationV3(
+						request,
+						verifyRuntimeV2Fixture(request.grant),
+					);
+				}),
+			);
+			expect(older).toMatchObject({
+				status: "rejected",
+				reason: { code: "RUNTIME_FENCE_STALE" },
+			});
+			expect(newer).toMatchObject({
+				status: "fulfilled",
+				value: { result: { outcome: "accepted", status: "cancelled" } },
+			});
+			expect(execute.mock.calls.map(([command]) => command.kind)).toEqual([
+				"generation-cancel",
+			]);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("does not let event queries or renewal adopt a higher Execution fence", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const original = base(accepted.hostSessionRef);
+			const higher = {
+				...original,
+				operation: {
+					...original.operation,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			};
+			const saved = await readFile(env.storePath, "utf8");
+			const renewal = signV3Fixture(higher, "execution.renew");
+			await expect(
+				env.host.renewAuthorizationV3(
+					renewal,
+					verifyRuntimeV2Fixture(renewal.grant),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const query = signV3Fixture(
+				{
+					...higher,
+					consumer: "platform_worker_persistence" as const,
+					afterCursor: null,
+				},
+				"events.persist",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				env.host.streamEventsV3(query, verifyRuntimeV2Fixture(query.grant)),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const ack = signV3Fixture(
+				{
+					...higher,
+					consumer: "platform_worker_persistence" as const,
+					confirmedCursor: "cursor-1",
+				},
+				"events.ack",
+				{ purpose: "control", reason: "generation_isolation" },
+			);
+			await expect(
+				env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			expect(await readFile(env.storePath, "utf8")).toBe(saved);
+		} finally {
+			await env.host.close();
+		}
+	});
 
 	it("keeps unknown acceptance unresolved when later business retries cannot find the original receipt", async () => {
 		const env = await setup();

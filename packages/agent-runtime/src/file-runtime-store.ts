@@ -897,7 +897,7 @@ export class FileRuntimeStore {
 
 	authorizeRequestV3(
 		claims: RuntimeExecutionGrantClaimsV2,
-		mode: "query" | "renew" = "query",
+		mode: "query" | "renew" | "generation-cancel" = "query",
 	) {
 		return this.file.update((state) => {
 			assertStoreState(state);
@@ -910,10 +910,47 @@ export class FileRuntimeStore {
 			);
 			assertExecutionBinding(session, claims);
 			assertSessionAuthority(session.authority, claims);
-			if (
-				session.highestFences[`execution:${claims.executionId}`] !==
-				claims.operation.executionDeliveryFence
-			)
+			const executionScope = `execution:${claims.executionId}`;
+			const executionFence = claims.operation.executionDeliveryFence;
+			if (mode === "generation-cancel") {
+				const scope = `generation:${claims.sessionGeneration}`;
+				const operation = session.operations[claims.operation.id];
+				const control =
+					session.executionAuthorities?.[claims.executionId]?.control;
+				if (
+					claims.purpose !== "control" ||
+					claims.reason !== "generation_isolation" ||
+					claims.allowedCommands[0] !== "generation.cancel" ||
+					claims.operation.kind !== "generation" ||
+					executionFence < (session.highestFences[executionScope] ?? 0) ||
+					claims.operation.deliveryFence <
+						(session.highestFences[scope] ?? 0) ||
+					(!operation &&
+						claims.operation.deliveryFence === session.highestFences[scope]) ||
+					(session.generationBarrier &&
+						(session.generationBarrier.generation !==
+							claims.sessionGeneration ||
+							session.generationBarrier.tombstoneId !== claims.operation.id)) ||
+					(control?.reason === "generation_isolation" &&
+						control.controlRecordId !== claims.controlRecordId) ||
+					(operation &&
+						(operation.kind !== "generation-cancel" ||
+							operation.scope !== scope ||
+							operation.executionId !== claims.executionId ||
+							operation.turnId !== claims.turnId ||
+							operation.requestDigest !==
+								requestDigest({
+									kind: "generation-cancel",
+									agentId: claims.agentId,
+									conversationId: claims.conversationId,
+									executionId: claims.executionId,
+									turnId: claims.turnId,
+									sessionGeneration: claims.sessionGeneration,
+									tombstoneId: claims.operation.id,
+								})))
+				)
+					runtimeAuthorizationDenied();
+			} else if (session.highestFences[executionScope] !== executionFence)
 				runtimeAuthorizationDenied();
 			if (mode === "renew") {
 				const execution = session.operations[claims.executionId];
@@ -928,8 +965,15 @@ export class FileRuntimeStore {
 			const authority = applyRuntimeAuthority(
 				session.executionAuthorities,
 				claims,
-				mode,
+				mode === "generation-cancel" ? "query" : mode,
 			);
+			if (mode === "generation-cancel") {
+				// The isolation claim advances the original Turn's fence without recovering it.
+				session.highestFences[executionScope] = executionFence;
+				const execution =
+					session.operations[claims.executionId] ?? storeCorrupted();
+				execution.deliveryFence = executionFence;
+			}
 			return {
 				session: structuredClone(session),
 				authority: structuredClone(authority),
