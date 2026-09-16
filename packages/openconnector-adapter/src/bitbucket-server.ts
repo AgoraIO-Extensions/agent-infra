@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
 	CredentialForExecution,
 	ProviderCredentialConnector,
@@ -9,7 +11,7 @@ import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
 const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
 const providerId = "bitbucket";
 const apiOrigin = "https://bitbucket-api.agoralab.co";
-const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v3`;
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v4`;
 const credentialScope = "bitbucket.server.pat";
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
@@ -128,6 +130,31 @@ const actionSpecs: readonly ActionSpec[] = [
 			commit: stringField,
 		},
 		required: ["project", "repository", "commit"],
+	},
+	{
+		description: "比较 Bitbucket 仓库中的两个 ref，并返回匹配路径的文件 diff。",
+		effect: "READ",
+		name: "compare_refs",
+		properties: {
+			...repositoryProperties,
+			baseRef: stringField,
+			contextLines: { maximum: 100, minimum: 0, type: "integer" },
+			maxDiffBytes: {
+				maximum: maxResponseBytes,
+				minimum: 1024,
+				type: "integer",
+			},
+			maxFiles: { maximum: 50, minimum: 1, type: "integer" },
+			pathGlobs: {
+				items: stringField,
+				maxItems: 20,
+				minItems: 1,
+				type: "array",
+				uniqueItems: true,
+			},
+			targetRef: stringField,
+		},
+		required: ["project", "repository", "baseRef", "targetRef", "pathGlobs"],
 	},
 	{
 		description: "分页列出 Bitbucket 仓库 Pull Request。",
@@ -298,7 +325,7 @@ export const bitbucketServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v3`,
+		id: `${providerId}.${action.name}@v4`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -473,6 +500,8 @@ export class BitbucketServerAdapter
 					},
 				);
 			}
+			case "compare_refs":
+				return this.compareRefs(token, value);
 			case "list_pull_requests":
 				return this.requestJson(token, `${repoPath()}/pull-requests`, {
 					query: { ...pagination(value), state: value.state },
@@ -575,6 +604,117 @@ export class BitbucketServerAdapter
 	) {
 		return requestText(this.fetcher, accessToken, path, options);
 	}
+
+	private async compareRefs(accessToken: string, value: JsonObject) {
+		const pathGlobs = requiredStringArray(value.pathGlobs, "pathGlobs", 20);
+		const baseCommit = await this.requestJson(
+			accessToken,
+			`${repositoryPath(value)}/commits/${segment(value, "baseRef")}`,
+		);
+		const targetCommit = await this.requestJson(
+			accessToken,
+			`${repositoryPath(value)}/commits/${segment(value, "targetRef")}`,
+		);
+		const baseId = requiredObjectString(baseCommit, "id", "base ref");
+		const targetId = requiredObjectString(targetCommit, "id", "target ref");
+		const changes: JsonObject[] = [];
+		let start = 0;
+		let complete = false;
+		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+			const page = await this.requestJson(
+				accessToken,
+				`${repositoryPath(value)}/compare/changes`,
+				{ query: { from: baseId, limit: 100, start, to: targetId } },
+			);
+			changes.push(...pageValues(page));
+			if (page.isLastPage === true) {
+				complete = true;
+				break;
+			}
+			const next = page.nextPageStart;
+			if (!Number.isSafeInteger(next) || Number(next) <= start) {
+				throw providerError("Bitbucket compare pagination is invalid");
+			}
+			start = Number(next);
+		}
+		if (!complete) {
+			throw providerError(
+				"Bitbucket compare pagination exceeded the safe limit",
+			);
+		}
+		const candidates = changes
+			.map(projectChange)
+			.filter((change) =>
+				pathGlobs.some(
+					(pattern) =>
+						globMatches(pattern, change.path) ||
+						(change.sourcePath !== undefined &&
+							globMatches(pattern, change.sourcePath)),
+				),
+			);
+		const maxFiles = boundedInteger(value.maxFiles, "maxFiles", 50, 1, 50);
+		const maxDiffBytes = boundedInteger(
+			value.maxDiffBytes,
+			"maxDiffBytes",
+			1024 * 1024,
+			1024,
+			maxResponseBytes,
+		);
+		const contextLines = boundedInteger(
+			value.contextLines,
+			"contextLines",
+			3,
+			0,
+			100,
+		);
+		const files: JsonObject[] = [];
+		const omittedFiles: JsonObject[] = candidates
+			.slice(maxFiles)
+			.map((change) => ({ path: change.path, reason: "max_files" }));
+		let diffBytes = 0;
+		for (const change of candidates.slice(0, maxFiles)) {
+			const diff = await this.requestJson(
+				accessToken,
+				`${repositoryPath(value)}/compare/diff`,
+				{
+					query: {
+						contextLines,
+						from: baseId,
+						path: change.path,
+						to: targetId,
+					},
+				},
+			);
+			const size = Buffer.byteLength(JSON.stringify(diff));
+			if (diffBytes + size > maxDiffBytes) {
+				omittedFiles.push({ path: change.path, reason: "max_diff_bytes" });
+				continue;
+			}
+			diffBytes += size;
+			files.push({ ...change, diff });
+		}
+		const fingerprintPayload = {
+			baseCommit: baseId,
+			files,
+			pathGlobs,
+			targetCommit: targetId,
+		};
+		return {
+			baseCommit: projectCommit(baseCommit),
+			diffBytes,
+			files,
+			fingerprint: `sha256:${createHash("sha256")
+				.update(JSON.stringify(fingerprintPayload))
+				.digest("hex")}`,
+			omittedFileCount: omittedFiles.length,
+			omittedFiles,
+			pathGlobs,
+			targetCommit: projectCommit(targetCommit),
+			truncated:
+				omittedFiles.length > 0 ||
+				files.some((file) => (file.diff as JsonObject).truncated === true),
+		};
+	}
 }
 
 function projectPath(value: JsonObject) {
@@ -623,6 +763,88 @@ function stringArray(value: unknown): string[] {
 	return Array.isArray(value)
 		? value.filter((entry): entry is string => typeof entry === "string")
 		: [];
+}
+
+function requiredStringArray(value: unknown, key: string, maximum: number) {
+	const entries = stringArray(value);
+	if (entries.length === 0) {
+		throw new Error(`${key} must contain at least one pattern`);
+	}
+	if (
+		entries.length > maximum ||
+		new Set(entries).size !== entries.length ||
+		entries.some((entry) => !entry)
+	) {
+		throw new Error(`${key} is invalid`);
+	}
+	return entries;
+}
+
+function boundedInteger(
+	value: unknown,
+	key: string,
+	fallback: number,
+	minimum: number,
+	maximum: number,
+) {
+	if (value === undefined) return fallback;
+	if (
+		!Number.isSafeInteger(value) ||
+		Number(value) < minimum ||
+		Number(value) > maximum
+	) {
+		throw new Error(`${key} is invalid`);
+	}
+	return Number(value);
+}
+
+function requiredObjectString(value: JsonObject, key: string, label: string) {
+	const result = readString(value, key);
+	if (!result)
+		throw providerError(`Bitbucket ${label} did not resolve to a commit`);
+	return result;
+}
+
+function projectCommit(value: JsonObject) {
+	return compact({
+		displayId: readString(value, "displayId"),
+		id: readString(value, "id"),
+	});
+}
+
+function nestedString(value: JsonObject, key: string, nestedKey: string) {
+	const nested = value[key];
+	return typeof nested === "object" && nested !== null && !Array.isArray(nested)
+		? readString(nested as JsonObject, nestedKey)
+		: undefined;
+}
+
+function projectChange(value: JsonObject) {
+	const path = nestedString(value, "path", "toString");
+	if (!path) throw providerError("Bitbucket compare change has no path");
+	return compact({
+		path,
+		sourcePath: nestedString(value, "srcPath", "toString"),
+		status: readString(value, "type") ?? "UNKNOWN",
+	}) as { path: string; sourcePath?: string; status: string };
+}
+
+function globMatches(pattern: string, path: string) {
+	let expression = "^";
+	for (let index = 0; index < pattern.length; index += 1) {
+		const character = pattern.charAt(index);
+		if (character === "*" && pattern[index + 1] === "*") {
+			expression += ".*";
+			index += 1;
+		} else if (character === "*") {
+			expression += "[^/]*";
+		} else if (character === "?") {
+			expression += "[^/]";
+		} else {
+			expression += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+		}
+	}
+	return new RegExp(`${expression}$`, "u").test(path);
 }
 
 function compact(value: JsonObject) {

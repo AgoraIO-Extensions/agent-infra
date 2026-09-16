@@ -17,6 +17,7 @@ function createAdapter() {
 
 const expectedActions = [
 	"approve_pull_request",
+	"compare_refs",
 	"create_pull_request",
 	"create_pull_request_comment",
 	"create_repository",
@@ -51,7 +52,7 @@ test("Bitbucket Server catalog exposes the reviewed OpenConnector-compatible act
 		[...expectedActions].sort(),
 	);
 	for (const action of bitbucketServerConnectionCatalog.actions) {
-		assert.match(action.id, /^bitbucket\.[a-z_]+@v3$/);
+		assert.match(action.id, /^bitbucket\.[a-z_]+@v4$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["bitbucket.server.pat"]);
 	}
@@ -176,6 +177,112 @@ test("Bitbucket rejects a response body that misses the deadline", async () => {
 			}),
 			/response timed out/,
 		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Bitbucket compares resolved refs and returns only matching file diffs", async () => {
+	const requests: string[] = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (input) => {
+		const url = String(input);
+		requests.push(url);
+		if (url.endsWith("/commits/release%2F4.7.2")) {
+			return Response.json({ displayId: "base", id: "base-sha" });
+		}
+		if (url.endsWith("/commits/release%2F4.8.0")) {
+			return Response.json({ displayId: "target", id: "target-sha" });
+		}
+		if (url.includes("/compare/changes?")) {
+			return Response.json({
+				isLastPage: true,
+				values: [
+					{
+						path: { toString: "sdk/include/IAgoraRtcEngine.h" },
+						srcPath: { toString: "sdk/include/IAgoraRtcEngine.h" },
+						type: "MODIFY",
+					},
+					{
+						path: { toString: "sdk/src/RtcEngine.cpp" },
+						srcPath: { toString: "sdk/src/RtcEngine.cpp" },
+						type: "MODIFY",
+					},
+				],
+			});
+		}
+		if (url.includes("/compare/diff?")) {
+			return Response.json({
+				diffs: [{ destination: { toString: "sdk/include/IAgoraRtcEngine.h" } }],
+				fromHash: "base-sha",
+				toHash: "target-sha",
+				truncated: false,
+			});
+		}
+		throw new Error(`Unexpected request: ${url}`);
+	};
+	try {
+		const result = (await createAdapter().execute({
+			action: "bitbucket.compare_refs",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				baseRef: "release/4.7.2",
+				pathGlobs: ["sdk/include/**"],
+				project: "RTC",
+				repository: "native-sdk",
+				targetRef: "release/4.8.0",
+			},
+		})) as {
+			baseCommit: { id: string };
+			files: Array<{ path: string; status: string }>;
+			fingerprint: string;
+			omittedFileCount: number;
+			targetCommit: { id: string };
+			truncated: boolean;
+		};
+		assert.equal(result.baseCommit.id, "base-sha");
+		assert.equal(result.targetCommit.id, "target-sha");
+		assert.equal(result.files.length, 1);
+		const [file] = result.files;
+		assert.ok(file);
+		assert.equal(file.path, "sdk/include/IAgoraRtcEngine.h");
+		assert.equal(file.status, "MODIFY");
+		assert.equal(result.omittedFileCount, 0);
+		assert.equal(result.truncated, false);
+		assert.match(result.fingerprint, /^sha256:[a-f0-9]{64}$/);
+		assert.equal(requests.length, 4);
+		assert.equal(
+			requests.some((url) => url.includes("RtcEngine.cpp")),
+			false,
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Bitbucket compare refs rejects an empty path-glob set before provider access", async () => {
+	const originalFetch = globalThis.fetch;
+	let called = false;
+	globalThis.fetch = async () => {
+		called = true;
+		return Response.json({});
+	};
+	try {
+		await assert.rejects(
+			createAdapter().execute({
+				action: "bitbucket.compare_refs",
+				credential: { accessToken: "test-personal-access-token" },
+				input: {
+					baseRef: "main",
+					pathGlobs: [],
+					project: "RTC",
+					repository: "native-sdk",
+					targetRef: "release/4.8.0",
+				},
+			}),
+			/pathGlobs must contain at least one pattern/,
+		);
+		assert.equal(called, false);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

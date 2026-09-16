@@ -13,13 +13,14 @@
 		"build": "6007002",
 		"apiOrigin": "https://bitbucket-api.agoralab.co",
 		"authentication": "Personal Access Token sent as an Authorization Bearer value",
-		"executorDigest": "sha256:d722799caa8b7ccd0254720c14944e3fdf80f38e9a1eb4fdd9febe09b2da258d"
+		"executorDigest": "sha256:327737a15c8e591fe2005d4f95b9957a1a8fde99e67352ef2f2afafc427f41b3"
 	},
 	"atlassianCliReference": {
 		"version": "0.1.18",
 		"deployment": "server",
 		"authentication": "pat",
 		"actions": [
+			"compare_refs",
 			"list_projects",
 			"get_project",
 			"list_repositories",
@@ -48,7 +49,8 @@
 	"modifications": [
 		"Replace Bitbucket Cloud OAuth2 and REST 2.0 transport with fixed-origin Bitbucket Server REST 1.0 and PAT Bearer authentication.",
 		"Replace workspace semantics with project key and repository slug inputs.",
-		"Exclude Cloud-only action families and add reviewed Server project, build-status, diff, approval, and comment actions."
+		"Exclude Cloud-only action families and add reviewed Server project, build-status, diff, approval, and comment actions.",
+		"Add a bounded Server-only compare_refs read action that resolves immutable commit IDs and filters changed-file diffs by caller-approved path globs."
 	],
 	"overlap": {
 		"openConnectorAndServer": [
@@ -68,6 +70,7 @@
 			"create_pull_request_comment"
 		],
 		"serverOnlyForThisRelease": [
+			"compare_refs",
 			"list_projects",
 			"get_project",
 			"create_repository",
