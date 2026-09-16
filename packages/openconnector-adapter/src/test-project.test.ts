@@ -13,7 +13,11 @@ import {
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
-import { githubV7VerificationEvidence } from "./verification/github-v7.ts";
+import {
+	githubV7ReviewerVerificationEvidence,
+	githubV7VerificationEvidence,
+	githubV7VerificationEvidenceRecords,
+} from "./verification/github-v7.ts";
 import { githubV7LowRiskWriteScenarios } from "./verification/github-v7-low-risk-write-scenarios.ts";
 import { githubV7ReadScenarios } from "./verification/github-v7-read-scenarios.ts";
 
@@ -160,40 +164,38 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds run 34929778284 to 109 actions", () => {
+test("GitHub verification matrix binds account-scoped evidence to 117 actions", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
-		githubV7VerificationEvidence,
+		githubV7VerificationEvidenceRecords,
 	);
 	assert.equal(matrix.length, 145);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		109,
+		117,
 	);
 	assert.equal(
 		matrix.filter((item) => item.status === "UNVERIFIED").length,
-		36,
+		28,
 	);
 	assert.equal(
 		matrix.filter(
 			(item) => item.effect === "READ" && item.status === "LIVE_VERIFIED",
 		).length,
-		77,
+		78,
 	);
-	assert.deepEqual(
-		matrix
-			.filter((item) => item.effect === "READ" && item.status === "UNVERIFIED")
-			.map((item) => item.actionVersionId),
-		["github.get_pull_request_review@v7"],
+	const reviewerActionVersionIds = new Set<string>(
+		githubV7ReviewerVerificationEvidence.actionVersionIds,
 	);
 	assert.ok(
 		matrix
-			.filter((item) => item.status === "LIVE_VERIFIED")
+			.filter((item) => reviewerActionVersionIds.has(item.actionVersionId))
 			.every(
 				(item) =>
 					item.actionVersionId.endsWith("@v7") &&
 					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "34929778284-1",
+					item.evidence.runId === "35078565578-1" &&
+					item.evidence.externalAccount === "329435106",
 			),
 	);
 
