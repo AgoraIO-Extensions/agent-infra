@@ -33,6 +33,10 @@ export function createWecomSetupWorkerV1(
 	const transaction = new PostgresAgentConfigurationTransactionV1(options);
 	const query = new PostgresAgentConfigurationQueryV1(options);
 	const holderId = randomUUID();
+	const cachedBindings = new Map<
+		string,
+		{ ciphertext: string; configuration: WecomWebSocketConfigurationV1 }
+	>();
 	let closed = false;
 	let connecting: ReturnType<typeof createWecomWebSocketV1> | undefined;
 	async function credentials(
@@ -97,8 +101,30 @@ export function createWecomSetupWorkerV1(
 	}
 	const worker = {
 		async bindings() {
+			const bindings = await store.bindings();
+			const current = new Set(bindings.map((binding) => binding.sessionId));
+			for (const id of cachedBindings.keys())
+				if (!current.has(id)) cachedBindings.delete(id);
 			const result = await Promise.allSettled(
-				(await store.bindings()).map(credentials),
+				bindings.map(async (binding) => {
+					const ciphertext = JSON.stringify([
+						binding.agentId,
+						binding.actorId,
+						binding.configurationRevision,
+						binding.botId,
+						binding.encryptedCredential,
+					]);
+					const cached = cachedBindings.get(binding.sessionId);
+					if (cached?.ciphertext === ciphertext) return cached.configuration;
+					cachedBindings.delete(binding.sessionId);
+					const configuration = await credentials(binding);
+					if (!closed)
+						cachedBindings.set(binding.sessionId, {
+							ciphertext,
+							configuration,
+						});
+					return configuration;
+				}),
 			);
 			return result.flatMap((item) => {
 				if (item.status === "fulfilled") return [item.value];
@@ -249,6 +275,7 @@ export function createWecomSetupWorkerV1(
 		},
 		async close() {
 			closed = true;
+			cachedBindings.clear();
 			connecting?.close();
 			const results = await Promise.allSettled([
 				store.close(),

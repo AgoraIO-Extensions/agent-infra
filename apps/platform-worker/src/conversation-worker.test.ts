@@ -47,7 +47,10 @@ vi.mock("./wecom-worker.js", () => ({
 }));
 afterEach(() => vi.useRealTimers());
 
-import { createPlatformConversationWorkerV2 } from "./conversation-worker.js";
+import {
+	createPlatformConversationWorkerV2,
+	startPlatformConversationWorkerFromDeploymentV2,
+} from "./conversation-worker.js";
 
 const keys = generateKeyPairSync("ed25519");
 const options = {
@@ -204,6 +207,28 @@ it("keeps discovering while WeCom is pending and drains it before shutdown", asy
 		expect(mocks.wecomClose).toHaveBeenCalledTimes(1);
 	} finally {
 		pending.resolve();
+		await worker.stop();
+	}
+});
+
+it("loads WeCom deployment through the production conversation startup", async () => {
+	vi.useFakeTimers();
+	mocks.find.mockResolvedValue([]);
+	const deployed = {
+		...options,
+		signing: {
+			...options.signing,
+			privateKey: keys.privateKey.export({ type: "pkcs8", format: "pem" }),
+		},
+	};
+	const source = `export function createPlatformConversationWorkerOptionsV2() {return {...${JSON.stringify(deployed)}, directory:{resolveUser:async()=>null}, resolveRuntimeHost:async()=>({}), log:()=>{}, wecom:{identity:{resolveSender:async()=>null,activeUsers:async()=>[]},observe:()=>{},sender:{send:async()=>"failed"}}};}`;
+	const worker = await startPlatformConversationWorkerFromDeploymentV2(
+		`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`,
+	);
+	try {
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mocks.wecomDispatch).toHaveBeenCalledOnce();
+	} finally {
 		await worker.stop();
 	}
 });

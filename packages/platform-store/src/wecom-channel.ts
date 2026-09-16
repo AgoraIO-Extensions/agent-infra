@@ -184,11 +184,13 @@ export class PostgresWecomChannelV1
 				return reject("denied");
 			const [old] = await sql<
 				Row[]
-			>`select * from platform.wecom_receipts where id=${plan.eventKey}`;
-			if (old)
-				return old.request_digest === plan.requestDigest
-					? ({ outcome: "replayed", receipt: receipt(old) } as const)
-					: reject("conflict");
+			>`select * from platform.wecom_receipts where id=${plan.eventKey} for update`;
+			if (old) {
+				if (old.request_digest !== plan.requestDigest)
+					return reject("conflict");
+				await sql`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`;
+				return { outcome: "replayed", receipt: receipt(old) } as const;
+			}
 			const transaction = new PostgresConversationExecutionTransactionV1({
 				transaction: sql,
 			});

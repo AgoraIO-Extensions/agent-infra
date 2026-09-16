@@ -150,7 +150,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 				);
 			const rows = await sql<
 				Row[]
-			>`select * from platform.wecom_setup_sessions where status='verifying' and expires_at>clock_timestamp() order by expires_at limit 25`;
+			>`select s.* from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.bot_id=s.bot_id and w.binding_reference=s.session_id where s.status='verifying' and s.expires_at>clock_timestamp() and (w.lease_until is null or w.lease_until<=clock_timestamp()) order by w.lease_until nulls first,s.expires_at,s.session_id limit 25`;
 			return {
 				rows: rows.map(record),
 				ended: ended.map((row) => row.status as "expired" | "conflict"),

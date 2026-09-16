@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import postgres from "postgres";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { assembleWecomSetupApiV1 } from "../../../apps/platform-api/src/wecom-setup-assembly.ts";
 import { createWecomSetupWorkerV1 } from "../../../apps/platform-worker/src/wecom-setup.ts";
@@ -106,19 +106,21 @@ it.each([
 				hydrateUsers: async () => [],
 			},
 		});
+		const decryptor = createSecretKeyringDecryptorV1({
+			keys: [
+				{
+					keyVersion: "fixture",
+					privateKeyPkcs8DerBase64: pair.privateKey
+						.export({ format: "der", type: "pkcs8" })
+						.toString("base64"),
+				},
+			],
+		});
+		const decrypt = vi.fn(decryptor.decrypt);
 		const worker = createWecomSetupWorkerV1({
 			...db,
 			directory,
-			decryptor: createSecretKeyringDecryptorV1({
-				keys: [
-					{
-						keyVersion: "fixture",
-						privateKeyPkcs8DerBase64: pair.privateKey
-							.export({ format: "der", type: "pkcs8" })
-							.toString("base64"),
-					},
-				],
-			}),
+			decryptor: { decrypt },
 			endpoint: `ws://127.0.0.1:${address.port}`,
 			protectReply: async () => "fixture",
 			revealReply: async () => {
@@ -220,6 +222,23 @@ it.each([
 					(row) => row.action === "wecom.credentials_submitted",
 				),
 			).toHaveLength(1);
+			if (mode === "success") {
+				const before = decrypt.mock.calls.length;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 1);
+				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent' and revision=2`;
+				expect(await worker.bindings()).toHaveLength(0);
+				await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}',${sql.json([{ kind: "wecom_bot", bindingReference: session.sessionId }])}::jsonb) where agent_id='agent' and revision=2`;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 2);
+				await sql`update platform.wecom_setup_sessions set encrypted_credential='{}'::jsonb where session_id=${session.sessionId}`;
+				expect(await worker.bindings()).toHaveLength(0);
+				await sql`update platform.wecom_setup_sessions set encrypted_credential=${sql.json(saved?.encryptedCredential as postgres.JSONValue)} where session_id=${session.sessionId}`;
+				expect(await worker.bindings()).toHaveLength(1);
+				expect(decrypt).toHaveBeenCalledTimes(before + 3);
+			}
+
 			if (!succeeds)
 				expect(
 					page.items.some((row) => row.action === "wecom.setup_failed"),
@@ -253,6 +272,31 @@ it("returns all current active bindings beyond the former 100-row limit", async 
 		expect(new Set(bindings.map((binding) => binding.agentId)).size).toBe(101);
 		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent-101'`;
 		expect(await store.bindings()).toHaveLength(100);
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+});
+
+it("selects unattempted setups before a released timeout and skips live probes", async () => {
+	const db = await startPostgresTestDatabase("wecom-fairness");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomSetupV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) select 'agent-'||i,1,'auth' from generate_series(1,2) i`;
+		await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) select 'agent-'||i,'owner',now() from generate_series(1,2) i`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) select 'session-'||i,'agent-'||i,'owner',1,'auth','digest',now()+i*interval '1 minute','verifying','bot-'||i from generate_series(1,2) i`;
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values ('bot-1','agent-1','session-1','worker',1,now()-interval '1 second','disconnected')`;
+		expect((await store.candidates()).map((s) => s.sessionId)).toEqual([
+			"session-2",
+			"session-1",
+		]);
+		await sql`update platform.wecom_connections set lease_until=now()+interval '30 seconds' where bot_id='bot-1'`;
+		expect((await store.candidates()).map((s) => s.sessionId)).toEqual([
+			"session-2",
+		]);
 	} finally {
 		await store.close();
 		await sql.end();

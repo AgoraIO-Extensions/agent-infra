@@ -347,9 +347,33 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 			throw new Error("Expected WebSocket acceptance");
 		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
 		expect(await other.claim()).toBeNull();
-		const claim = await owner.claim();
-		expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
 		await sql`update platform.wecom_connections set fence=2,holder_id='worker-two' where bot_id=${message.providerId}`;
+		const freshFence = { ...fence, holderId: "worker-two", fence: 2 };
+		expect(
+			await channel(other).receive(
+				{ ...event, replyHandle: "fresh-route" },
+				freshFence,
+			),
+		).toMatchObject({ outcome: "replayed", receipt: accepted.receipt });
+		expect(await owner.claim()).toBeNull();
+		const claim = await other.claim();
+		expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+		expect(claim?.replyHandle).toBe("fresh-route");
+		for (const status of ["claimed", "sending", "unknown", "sent"]) {
+			await sql`update platform.wecom_receipts set delivery_status=${status} where id=${accepted.receipt.receiptId}`;
+			expect(
+				await channel(other).receive(
+					{ ...event, replyHandle: "must-not-replace" },
+					freshFence,
+				),
+			).toMatchObject({ outcome: "replayed" });
+			const [row] =
+				await sql`select reply_handle,delivery_status from platform.wecom_receipts where id=${accepted.receipt.receiptId}`;
+			expect(row).toMatchObject({
+				reply_handle: "fresh-route",
+				delivery_status: status,
+			});
+		}
 		expect(
 			await channel(owner).receive(
 				{ ...event, eventId: "old-owner-event" },
