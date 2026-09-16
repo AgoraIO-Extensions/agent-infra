@@ -403,7 +403,7 @@ export async function runGitHubReviewConformance({
 				await primaryExecute("github.delete_ref", {
 					idempotencyKey: `${runId}:fixture-ref-delete`,
 					owner: target.owner,
-					ref: `refs/heads/${branch}`,
+					ref: `heads/${branch}`,
 					repo: target.repository,
 				});
 			} catch (error) {
