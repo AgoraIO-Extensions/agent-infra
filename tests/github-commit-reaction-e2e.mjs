@@ -18,6 +18,8 @@ export async function runGitHubCommitReactionConformance({
 	fetch,
 	runId,
 }) {
+	if (environment.CONNECTION_E2E_SKIP_COMMIT_REACTION === "true")
+		return { cleanup: "SKIPPED", outcome: "SKIPPED", runId };
 	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true")
 		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
 	const token = environment.CONNECTION_E2E_TOKEN?.trim();
