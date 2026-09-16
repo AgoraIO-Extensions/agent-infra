@@ -252,12 +252,13 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 		assert.equal(result.baseCommit.id, "base-sha");
 		assert.equal(result.targetCommit.id, "target-sha");
 		assert.equal(result.files.length, 2);
-		const [file, rootFile] = result.files;
-		assert.ok(file);
-		assert.ok(rootFile);
-		assert.equal(file.path, "sdk/include/IAgoraRtcEngine.h");
-		assert.equal(file.status, "MODIFY");
-		assert.equal(rootFile.path, "CHANGELOG.md");
+		assert.deepEqual(
+			result.files.map((file) => [file.path, file.status]),
+			[
+				["CHANGELOG.md", "ADD"],
+				["sdk/include/IAgoraRtcEngine.h", "MODIFY"],
+			],
+		);
 		assert.equal(result.omittedFileCount, 0);
 		assert.equal(result.truncated, false);
 		assert.match(result.fingerprint, /^sha256:[a-f0-9]{64}$/);

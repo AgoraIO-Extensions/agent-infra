@@ -606,7 +606,9 @@ export class BitbucketServerAdapter
 	}
 
 	private async compareRefs(accessToken: string, value: JsonObject) {
-		const pathGlobs = requiredStringArray(value.pathGlobs, "pathGlobs", 20);
+		const pathGlobs = [
+			...requiredStringArray(value.pathGlobs, "pathGlobs", 20),
+		].sort();
 		const repository = repositoryPath(value);
 		const baseRef = segment(value, "baseRef");
 		const targetRef = segment(value, "targetRef");
@@ -659,8 +661,14 @@ export class BitbucketServerAdapter
 		const candidates: ReturnType<typeof projectChange>[] = [];
 		const matchBudget = { remaining: 1_000_000 };
 		let pathFilteringTruncated = false;
-		for (const rawChange of changes) {
-			const change = projectChange(rawChange);
+		const projectedChanges = changes
+			.map(projectChange)
+			.sort((left, right) =>
+				`${left.path}\0${left.sourcePath ?? ""}\0${left.status}`.localeCompare(
+					`${right.path}\0${right.sourcePath ?? ""}\0${right.status}`,
+				),
+			);
+		for (const change of projectedChanges) {
 			const matches = (path: string) =>
 				pathGlobs.some((pattern) => globMatches(pattern, path, matchBudget));
 			const included =
@@ -679,6 +687,15 @@ export class BitbucketServerAdapter
 		const selectedCandidates = candidates.slice(0, maxFiles);
 		let diffBytes = 0;
 		for (const [index, change] of selectedCandidates.entries()) {
+			if (diffBytes >= maxDiffBytes) {
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
+			}
 			const encodedPath = change.path
 				.split("/")
 				.map((entry) => encodeURIComponent(entry))
@@ -991,9 +1008,12 @@ function invalidCredential(message: string) {
 }
 
 function responseTooLarge() {
-	return Object.assign(new Error("Bitbucket Server response is too large"), {
-		responseTooLarge: true,
-	});
+	return Object.assign(
+		providerError("Bitbucket Server response is too large"),
+		{
+			responseTooLarge: true,
+		},
+	);
 }
 
 function isResponseTooLarge(error: unknown) {
@@ -1114,6 +1134,7 @@ async function request(
 async function boundedText(response: Response, limit = maxResponseBytes) {
 	const declaredLength = Number(response.headers.get("content-length") ?? 0);
 	if (declaredLength > limit) {
+		await response.body?.cancel();
 		throw responseTooLarge();
 	}
 	if (!response.body) return "";
