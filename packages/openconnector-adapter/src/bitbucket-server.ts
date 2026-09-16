@@ -606,6 +606,20 @@ export class BitbucketServerAdapter
 	}
 
 	private async compareRefs(accessToken: string, value: JsonObject) {
+		const deadline = Date.now() + 30_000;
+		const requestWithinDeadline = (
+			path: string,
+			options: RequestOptions = {},
+		) => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				throw providerError("Bitbucket compare deadline exceeded");
+			}
+			return this.requestJson(accessToken, path, {
+				...options,
+				requestTimeoutMs: remaining,
+			});
+		};
 		const pathGlobs = [
 			...requiredStringArray(value.pathGlobs, "pathGlobs", 20),
 		].sort();
@@ -627,12 +641,10 @@ export class BitbucketServerAdapter
 			0,
 			100,
 		);
-		const baseCommit = await this.requestJson(
-			accessToken,
+		const baseCommit = await requestWithinDeadline(
 			`${repository}/commits/${baseRef}`,
 		);
-		const targetCommit = await this.requestJson(
-			accessToken,
+		const targetCommit = await requestWithinDeadline(
 			`${repository}/commits/${targetRef}`,
 		);
 		const baseId = requiredObjectString(baseCommit, "id", "base ref");
@@ -641,8 +653,7 @@ export class BitbucketServerAdapter
 		let start = 0;
 		let complete = false;
 		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
-			const page = await this.requestJson(
-				accessToken,
+			const page = await requestWithinDeadline(
 				`${repository}/compare/changes`,
 				{ query: { from: baseId, limit: 100, start, to: targetId } },
 			);
@@ -704,8 +715,7 @@ export class BitbucketServerAdapter
 				.join("/");
 			let diff: JsonObject;
 			try {
-				diff = await this.requestJson(
-					accessToken,
+				diff = await requestWithinDeadline(
 					`${repository}/diff/${encodedPath}`,
 					{
 						query: {
@@ -1031,6 +1041,7 @@ type RequestOptions = {
 	credentialProbe?: boolean;
 	method?: "DELETE" | "GET" | "POST" | "PUT";
 	query?: JsonObject;
+	requestTimeoutMs?: number;
 	responseLimitBytes?: number;
 };
 
@@ -1088,7 +1099,13 @@ async function request(
 		}
 	}
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+	const timeout = setTimeout(
+		() => controller.abort(),
+		Math.min(
+			requestTimeoutMs,
+			Math.max(1, options.requestTimeoutMs ?? requestTimeoutMs),
+		),
+	);
 	try {
 		const response = await fetcher(url, {
 			body:
