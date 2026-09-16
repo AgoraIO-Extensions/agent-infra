@@ -1,7 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	onlineManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
 import {
 	deferred,
@@ -82,9 +86,70 @@ function revoked() {
 afterEach(() => {
 	cleanup();
 	for (const client of queryClients.splice(0)) client.clear();
+	vi.restoreAllMocks();
+	onlineManager.setOnline(true);
 });
 
 describe("Conversation execution detail Query ownership", () => {
+	it("suspends a still-open stream on browser offline and resumes reads only on explicit reconnect", async () => {
+		const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+		const first = sse();
+		const second = sse();
+		let streams = 0;
+		const { result, requests } = setup((request) => {
+			if (route(request) === "stream")
+				return (++streams === 1 ? first : second).response;
+			return Response.json(
+				route(request) === "execution" ? execution() : history(),
+			);
+		});
+		await waitFor(() => expect(streams).toBe(1));
+		const savedHistory = result.current.timeline.history;
+		online.mockReturnValue(false);
+		act(() => window.dispatchEvent(new Event("offline")));
+		expect(result.current.timeline.status).toBe("disconnected");
+		expect(result.current.timeline.history).toBe(savedHistory);
+		expect(
+			requests.find((request) => route(request) === "stream")?.signal.aborted,
+		).toBe(true);
+		const requestCount = requests.length;
+		await act(async () => {
+			await result.current.reconnect();
+		});
+		expect(requests).toHaveLength(requestCount);
+		expect(result.current.timeline.events).toEqual([event(1)]);
+		online.mockReturnValue(true);
+		act(() => window.dispatchEvent(new Event("online")));
+		expect(result.current.timeline.status).toBe("disconnected");
+		await act(async () => {
+			await result.current.reconnect();
+		});
+		await waitFor(() => expect(streams).toBe(2));
+		await act(async () => {
+			second.send(event(1));
+			second.send(event(2));
+		});
+		await waitFor(() =>
+			expect(result.current.timeline.events).toEqual([event(1), event(2)]),
+		);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it("keeps an offline page suspended when its aborted initial history resolves late", async () => {
+		vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+		const pending = deferred<Response>();
+		const { result } = setup(() => pending.promise, {
+			...initialSelection,
+			executionId: undefined,
+		});
+		expect(result.current.timeline.status).toBe("disconnected");
+		await act(async () => {
+			pending.resolve(Response.json(history()));
+		});
+		expect(result.current.timeline.status).toBe("disconnected");
+		expect(result.current.timeline.history).toBeNull();
+	});
+
 	it("refreshes selected operation facts without refetching on each text delta and supports explicit refresh", async () => {
 		const stream = sse();
 		let detailRevision = 0;
