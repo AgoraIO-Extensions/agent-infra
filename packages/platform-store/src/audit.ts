@@ -7,6 +7,51 @@ import postgres from "postgres";
 import { auditEvents } from "./schema.js";
 
 const platformAuditActionMetadata = {
+	"wecom.setup_started": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.credentials_submitted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_cancelled": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.setup_expired": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_verifying": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_connected": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_disconnected": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
+	"wecom.connection_auth_failed": {
+		actorKind: "system",
+		subjectKind: "agent",
+		details: false,
+	},
 	"wecom.accepted": {
 		actorKind: "system",
 		subjectKind: "agent",

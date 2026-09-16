@@ -18,6 +18,11 @@ export interface WecomReplyRouteV1 {
 	readonly scope: WecomScopeV1;
 	readonly responseUrl?: string;
 	readonly recipientId?: string;
+	readonly websocket?: {
+		readonly connectionId: string;
+		readonly requestId: string;
+		readonly streamId: string;
+	};
 }
 function replyKeyId(key: ReturnType<typeof createPublicKey>) {
 	return createHash("sha256")

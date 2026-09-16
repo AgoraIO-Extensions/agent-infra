@@ -19,7 +19,6 @@ import {
 	PostgresPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
-
 import { createWecomChannelAdmissionV1 } from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
@@ -37,12 +36,14 @@ import {
 	assembleWecomApiV1,
 	type WecomApiDeploymentV1,
 } from "./wecom-assembly.js";
+import { assembleWecomSetupApiV1 } from "./wecom-setup-assembly.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
 export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly wecom?: WecomApiDeploymentV1;
+	readonly wecomCredentialEncryptionKeys?: unknown;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
@@ -72,6 +73,13 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	const wecomSetup = input.wecomCredentialEncryptionKeys
+		? assembleWecomSetupApiV1({
+				databaseUrl: input.databaseUrl,
+				identity: input.identity,
+				encryptionKeys: input.wecomCredentialEncryptionKeys,
+			})
+		: undefined;
 	const wecom = input.wecom
 		? assembleWecomApiV1(input.databaseUrl, input.wecom)
 		: undefined;
@@ -230,6 +238,9 @@ export function assemblePlatformApi(
 		},
 	};
 	const dependencies: PlatformAppDependencies = {
+		...(wecomSetup
+			? { wecomSetup: { identity: input.identity, setup: wecomSetup.setup } }
+			: {}),
 		...(input.requestScope === undefined
 			? {}
 			: { requestScope: input.requestScope }),
@@ -278,6 +289,7 @@ export function assemblePlatformApi(
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
+		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),
 		foundationTransaction,
 		revisionTransaction,

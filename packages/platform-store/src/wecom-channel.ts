@@ -65,11 +65,14 @@ export class PostgresWecomChannelV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
 	readonly #management: PostgresAgentManagementTransactionV1;
+	readonly #connectionHolderId: string | null;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
 		readonly databaseUrl: string;
+		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
+		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#observe = (status) => {
 			try {
 				options.observe?.(status);
@@ -102,7 +105,13 @@ export class PostgresWecomChannelV1
 		outcome: "denied" | "unavailable" | "conflict",
 		metadata: { agentId: string; actorId?: string },
 	) {
-		await audit(this.#sql, eventKey, outcome, metadata, "platform-api");
+		await audit(
+			this.#sql,
+			eventKey,
+			outcome,
+			metadata,
+			this.#connectionHolderId ? "platform-worker" : "platform-api",
+		);
 	}
 
 	async list(actorId: string, cursor: string | undefined) {
@@ -120,7 +129,7 @@ export class PostgresWecomChannelV1
 	): Promise<WecomAcceptanceV1> {
 		return await this.#sql.begin(async (sql) => {
 			await sql`select set_config('lock_timeout','5s',true)`;
-			const reject = async (outcome: "denied" | "conflict") => {
+			const reject = async (outcome: "denied" | "conflict" | "unavailable") => {
 				await audit(
 					sql,
 					plan.eventKey,
@@ -129,10 +138,16 @@ export class PostgresWecomChannelV1
 						agentId: plan.message.agentId,
 						actorId: plan.authority.actor.actorId,
 					},
-					"platform-api",
+					plan.connectionFence ? "platform-worker" : "platform-api",
 				);
 				return { outcome };
 			};
+			if (plan.connectionFence) {
+				const fence = plan.connectionFence;
+				const [lease] =
+					await sql`select 1 from platform.wecom_connections where bot_id=${fence.botId} and bot_id=${plan.message.providerId} and agent_id=${plan.message.agentId} and binding_reference=${plan.message.bindingReference} and holder_id=${fence.holderId} and fence=${fence.fence} and lease_until>clock_timestamp() for share`;
+				if (!lease) return reject("unavailable");
+			}
 			await sql`select pg_advisory_xact_lock(hashtextextended(${plan.eventKey},0))`;
 			const [agent] = await sql<
 				{ configuration: unknown; authorization_revision: string }[]
@@ -205,8 +220,8 @@ export class PostgresWecomChannelV1
 				conversationType,
 				threadId,
 			};
-			await sql`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at)
-    values (${plan.eventKey},${plan.requestDigest},${sql.json(scope)},${plan.authority.actor.actorId},${sql.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${result.status},${result.conversationId},${result.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now())`;
+			await sql`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
+    values (${plan.eventKey},${plan.requestDigest},${sql.json(scope)},${plan.authority.actor.actorId},${sql.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${result.status},${result.conversationId},${result.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`;
 			await audit(
 				sql,
 				plan.eventKey,
@@ -215,7 +230,7 @@ export class PostgresWecomChannelV1
 					agentId: plan.message.agentId,
 					actorId: plan.authority.actor.actorId,
 				},
-				"platform-api",
+				plan.connectionFence ? "platform-worker" : "platform-api",
 			);
 			return {
 				outcome: "accepted",
@@ -241,7 +256,7 @@ export class PostgresWecomChannelV1
 			const [row] = await sql<
 				(Row & { execution_status: string | null })[]
 			>`select r.*,e.status as execution_status from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id
-    where (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or e.status in ('completed','failed','cancelled') or r.expires_at<=now()) order by r.created_at limit 1 for update of r skip locked`;
+    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or e.status in ('completed','failed','cancelled') or r.expires_at<=now()) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
 			await sql`update platform.wecom_receipts set delivery_status='claimed',fence=fence+1,lease_until=now()+interval '30 seconds',updated_at=now() where id=${row.id}`;
 			const [size] = row.execution_id
@@ -281,7 +296,7 @@ export class PostgresWecomChannelV1
 	): Promise<boolean> {
 		return this.#sql.begin(async (sql) => {
 			const rows =
-				await sql`update platform.wecom_receipts set delivery_status='sending',updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed' and lease_until>now() and expires_at>now() and exists (
+				await sql`update platform.wecom_receipts set delivery_status='sending',updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed' and lease_until>now() and expires_at>now() and (connection_bot_id is null or exists (select 1 from platform.wecom_connections w where w.bot_id=connection_bot_id and w.fence=connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and exists (
     select 1 from platform.agents a join platform.agent_applications m on m.agent_id=a.id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
     where a.id=${claim.scope.agentId} and a.authorization_revision=${authority.actor.authorizationRevision} and m.management_revision=${authority.managementRevision} and m.status='available' and m.service_availability='ready' and c.configuration->>'channelRevision'=${claim.channelRevision}
    ) returning id`;

@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import {
 	createWecomAuthorizationV1,
+	createWecomChannelV1,
 	createWecomDeliveryV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type WecomDeliveryStatusV1,
@@ -7,18 +9,30 @@ import {
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
+import {
+	createPlatformWecomConnectionsV1,
+	type WecomConnectionsDeploymentV1,
+} from "./wecom-connections.js";
+import {
+	createWecomSetupWorkerV1,
+	type WecomSetupWorkerDeploymentV1,
+} from "./wecom-setup.js";
 
 export interface WecomWorkerDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
 	readonly sender: WecomSendPortV1;
+	readonly connections?: WecomConnectionsDeploymentV1;
+	readonly setup?: WecomSetupWorkerDeploymentV1;
 }
 
-/** Reply delivery only; Runtime execution is owned by the shared conversation Worker. */
+/** Channel transport and replies; Runtime execution stays with the shared conversation Worker. */
 export function createPlatformWecomWorkerV1(
 	options: WecomWorkerDeploymentV1 & { readonly databaseUrl: string },
 ) {
+	const connectionHolderId = randomUUID();
 	const store = new PostgresWecomChannelV1({
+		connectionHolderId,
 		databaseUrl: options.databaseUrl,
 		observe: options.observe,
 	});
@@ -26,13 +40,57 @@ export function createPlatformWecomWorkerV1(
 		identity: options.identity,
 		state: store,
 	});
+	const channel = createWecomChannelV1({ authorization, store });
+	if (options.setup && !options.connections)
+		throw new Error("WeCom setup requires a connection deployment");
+	const setup =
+		options.setup && options.connections
+			? createWecomSetupWorkerV1({
+					...options.setup,
+					...options.connections,
+					databaseUrl: options.databaseUrl,
+				})
+			: undefined;
+	const deployment = options.connections;
+	const connections = deployment
+		? createPlatformWecomConnectionsV1({
+				...options.connections,
+				holderId: connectionHolderId,
+				bindings: async () => [
+					...(await deployment.bindings()),
+					...((await setup?.bindings()) ?? []),
+				],
+				databaseUrl: options.databaseUrl,
+				receive: channel.receive,
+			})
+		: undefined;
 	const delivery = createWecomDeliveryV1({
 		store,
 		authorization,
-		sender: options.sender,
+		sender: {
+			async send(input) {
+				if (connections && options.connections) {
+					const route = await options.connections.revealReply(
+						input.replyHandle,
+					);
+					if (route.websocket) return connections.sender.send(input);
+				}
+				return options.sender.send(input);
+			},
+		},
 	});
 	return {
-		dispatch: delivery.dispatch,
+		async dispatch() {
+			await connections?.tick();
+			void setup?.tick().catch(() => {
+				try {
+					options.connections?.observeIngress?.("unavailable");
+				} catch {
+					/* Observation only. */
+				}
+			});
+			return delivery.dispatch();
+		},
 		async channelAuthorizationCurrent(
 			record: TaskRuntimeAuthorizationRecordV1,
 		) {
@@ -50,6 +108,10 @@ export function createPlatformWecomWorkerV1(
 				current.authority.channelRevision === receipt.channelRevision
 			);
 		},
-		close: () => store.close(),
+		async close() {
+			await setup?.close();
+			await connections?.close();
+			await store.close();
+		},
 	};
 }

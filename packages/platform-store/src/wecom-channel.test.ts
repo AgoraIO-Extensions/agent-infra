@@ -316,3 +316,51 @@ it("retains trusted rejection audit metadata without a business receipt or messa
 		await sql`select actor_type,actor_id from platform.audit_events where request_id='audit-unknown'`,
 	).toEqual([{ actor_type: "system", actor_id: "platform-api" }]);
 });
+
+it("fences WebSocket ingress inside the transaction and reserves replies for the connection owner", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
+	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values (${message.providerId},${message.agentId},${message.bindingReference},'worker-one',1,now()+interval '30 seconds','connected')`;
+	const owner = new PostgresWecomChannelV1({
+		...db,
+		connectionHolderId: "worker-one",
+	});
+	const other = new PostgresWecomChannelV1({
+		...db,
+		connectionHolderId: "worker-two",
+	});
+	try {
+		const fence = {
+			botId: message.providerId,
+			holderId: "worker-one",
+			fence: 1,
+		};
+		const event = {
+			...message,
+			eventId: "websocket-event",
+			senderId: "websocket-sender",
+		};
+		expect(await channel(owner).receive(event, { ...fence, fence: 2 })).toEqual(
+			{ outcome: "unavailable" },
+		);
+		const accepted = await channel(owner).receive(event, fence);
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected WebSocket acceptance");
+		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		expect(await other.claim()).toBeNull();
+		const claim = await owner.claim();
+		expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+		await sql`update platform.wecom_connections set fence=2,holder_id='worker-two' where bot_id=${message.providerId}`;
+		expect(
+			await channel(owner).receive(
+				{ ...event, eventId: "old-owner-event" },
+				fence,
+			),
+		).toEqual({ outcome: "unavailable" });
+		expect(
+			await sql`select id from platform.wecom_receipts where connection_bot_id=${message.providerId}`,
+		).toHaveLength(1);
+	} finally {
+		await owner.close();
+		await other.close();
+	}
+});

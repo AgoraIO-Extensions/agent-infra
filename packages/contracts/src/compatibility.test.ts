@@ -189,7 +189,7 @@ describe("contract compatibility command", () => {
 		}
 	});
 
-	it("admits only WeCom receipt routes and preserves existing browser authority", async () => {
+	it("admits only WeCom receipt and setup routes and preserves existing browser authority", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
@@ -197,6 +197,11 @@ describe("contract compatibility command", () => {
 			"/api/v1/wecom/receipts",
 			"/api/v1/wecom/receipts/{receiptId}",
 			"/api/v1/wecom/receipts/{receiptId}/abandon",
+			"/api/v1/agents/{agentId}/wecom-bot",
+			"/api/v1/agents/{agentId}/wecom-setup",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
 		] as const;
 		const previous = structuredClone(current);
 		for (const path of paths) delete previous.paths[path];
@@ -215,6 +220,9 @@ describe("contract compatibility command", () => {
 				},
 				(document: typeof current) => {
 					document.paths[paths[2]].post.operationId = "retryDelivery";
+				},
+				(document: typeof current) => {
+					document.paths[paths[6]].post.requestBody = {};
 				},
 				(document: typeof current) => {
 					document.paths[paths[0]].get.responses = {};

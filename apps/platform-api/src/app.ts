@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import {
 	type ConfigurationRoutesDependencies,
@@ -22,6 +21,7 @@ import {
 	registerWecomRoutesV1,
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
+import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
 
 export const platformApiService = "platform-api";
 
@@ -31,6 +31,7 @@ export interface PlatformAppDependencies {
 		work: () => Promise<void>,
 	) => Promise<void>;
 	readonly wecom?: WecomRoutesDependenciesV1;
+	readonly wecomSetup?: Parameters<typeof registerWecomSetupRoutesV1>[1];
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -66,6 +67,8 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	}
 	registerRetiredManagementRoutes(app);
+	if (dependencies.wecomSetup)
+		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
 	if (dependencies.wecom) registerWecomRoutesV1(app, dependencies.wecom);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);

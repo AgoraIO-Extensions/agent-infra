@@ -872,12 +872,17 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	);
 }
 
-// #440 adds only receipt reads and bounded unknown-delivery disposition.
+// #440 adds bounded receipt management and Owner-scoped bot setup.
 function isWecomReceiptOpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v1/wecom/receipts",
 		"/api/v1/wecom/receipts/{receiptId}",
 		"/api/v1/wecom/receipts/{receiptId}/abandon",
+		"/api/v1/agents/{agentId}/wecom-bot",
+		"/api/v1/agents/{agentId}/wecom-setup",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
 	];
 	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
 	const addition = Object.fromEntries(
@@ -885,7 +890,7 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"485001d12e58f13d46054340f9985cf278d95ec2b392da2352ef6f21943e40fe"
+		"05fb778c5fc936652a2daa3e7710b2038b13895604a4ce5acd71c1a39c93860f"
 	)
 		return false;
 	const normalized = structuredClone(current);

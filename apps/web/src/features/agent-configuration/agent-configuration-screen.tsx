@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
-
 import type {
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
@@ -21,6 +20,7 @@ import {
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
+import { WecomBotSetup } from "./wecom-bot-setup.js";
 
 type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
@@ -323,11 +323,15 @@ export function AgentConfigurationScreen({
 									Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
 								</p>
 								<p className="text-slate-600 text-sm">
-									从部署环境取得获准的配置标识后绑定，无需在此填写企微密钥。
+									自建应用使用部署提供的回调配置；智能机器人可在下方直接绑定。
 								</p>
-								{(["wecom_bot", "wecom_app"] as const).map((kind) => {
-									const label =
-										kind === "wecom_bot" ? "智能机器人" : "自建应用";
+								<WecomBotSetup
+									key={agent.agentId}
+									agentId={agent.agentId}
+									onUnbind={onSave}
+								/>
+								{(["wecom_app"] as const).map((kind) => {
+									const label = "自建应用";
 									const change = draft.channels?.find((c) => c.kind === kind);
 									const update = (
 										next:

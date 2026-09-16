@@ -289,9 +289,12 @@ let assembly: ReturnType<typeof assemblePlatformApi> | undefined;
 let app: ReturnType<typeof createPlatformApp>;
 
 function openApi() {
-	assembly = assemblePlatformApi(
-		createProductionPlatformApiAssemblyInputV1(fixture.input),
+	const input = createProductionPlatformApiAssemblyInputV1(fixture.input);
+	expect(input.wecomCredentialEncryptionKeys).toBe(
+		fixture.input.encryptionKeys,
 	);
+	assembly = assemblePlatformApi(input);
+	expect(assembly.dependencies.wecomSetup).toBeDefined();
 	app = createPlatformApp(assembly.dependencies);
 }
 

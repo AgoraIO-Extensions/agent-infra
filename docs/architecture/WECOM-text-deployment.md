@@ -31,6 +31,32 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 替换凭证、解绑、重启和多副本接管都要验证旧持有者不再处理消息或发送回复。
 对可能挤掉其他部署连接的验证或重新绑定，先向 Owner 展示影响并确认；不拿生产机器人做无提示的连接探测。
 
+## 装配与凭证维护
+
+当前长连接 Adapter 固定使用 `@wecom/aibot-node-sdk@1.0.7`；禁用 SDK 原始 payload 日志。
+生产 API 的 `createProductionPlatformApiAssemblyInputV1` 把已有 `encryptionKeys` 公钥输入传给机器人配置模块；
+直接调用 `assemblePlatformApi` 时显式提供 `wecomCredentialEncryptionKeys`。
+身份 Adapter 必须提供 `resolveUser`，每次配置操作重新校验当前账号和 Owner 权限。
+
+共享 Worker 的 `wecom` 输入除身份映射、回调 sender 和投递指标外，设置：
+
+- `connections.bindings`：现有部署托管长连接的可信解析器；仅使用页面配置时返回空数组。
+- `connections.protectReply/revealReply`：Worker 内部回复上下文保护，使用既有加密路由实现；不需公网回调。
+- `connections.observeConnection/observeSetup/observeIngress`：固定状态指标出口，不添加 Bot ID、用户 ID 或正文标签。
+- `setup.directory`：实时公司身份目录；`setup.decryptor`：由 Worker-only 私钥 keyring 创建的 `createSecretKeyringDecryptorV1`。
+
+配置候选与密文保存在 `wecom_setup_sessions`，不写入 Runtime Secret 投影表。
+Worker 实际认证通过、Owner/配置版本/连接租约仍有效后，通过原 Agent 配置事务激活引用。
+失败清除候选密文，保留原绑定；同一 Bot 的探测可能暂时中断原连接，必须先取得页面接管确认。
+更新或解除绑定同时清除不再使用的机器人密文，旧 Worker 失去租约后不能继续收发或终结新候选。
+
+渠道密文纳入共享 wrapping key 退役引用检查，新凭证写入与退役使用同一个数据库锁。
+当前渠道密文尚不参与 Runtime Secret 的自动重新封装任务：更换加密公钥后，逐个重新验证并绑定机器人，
+确认旧渠道引用清除后再退役旧 key；在此之前保留旧 Worker 私钥。不能用 Runtime Secret 轮换完成状态代替该检查。
+
+扫码入口当前返回 `authorization_correlation_unverified` 并展示手动替代入口；
+没有通过官方授权来源与一次性配置会话关联验证前，不启用扫码提交，不将本实现计为扫码验收通过。
+
 ## 自建应用与显式回调模式
 
 自建应用需要企业 ID、应用 ID、应用 Secret，以及接收消息配置的 Token、EncodingAESKey 和公开 TLS 回调。

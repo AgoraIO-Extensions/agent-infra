@@ -68,6 +68,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	return {
 		databaseUrl: input.databaseUrl,
 		identity: input.identity,
+		wecomCredentialEncryptionKeys: input.encryptionKeys,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,

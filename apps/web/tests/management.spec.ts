@@ -69,6 +69,10 @@ async function fixture(
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
+		if (pathname.endsWith("/wecom-bot")) {
+			await route.fulfill({ json: { status: "not_configured" } });
+			return;
+		}
 		if (request.method() !== "GET") {
 			commands.push({
 				path: pathname,
@@ -381,8 +385,8 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		"password",
 	);
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
-	await page.getByRole("checkbox", { name: "修改智能机器人绑定" }).check();
-	await page.getByLabel("智能机器人配置标识").fill("approved-bot-fixture");
+	await page.getByRole("checkbox", { name: "修改自建应用绑定" }).check();
+	await page.getByLabel("自建应用配置标识").fill("approved-app-fixture");
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
 	await page.getByRole("button", { name: "Save configuration" }).click();
@@ -402,9 +406,9 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
 		channels: [
 			{
-				kind: "wecom_bot",
+				kind: "wecom_app",
 				enabled: true,
-				bindingReference: "approved-bot-fixture",
+				bindingReference: "approved-app-fixture",
 			},
 		],
 	});
@@ -487,4 +491,62 @@ test("employee has no Owner or administrator controls, with loading and error st
 		"Please contact an administrator.",
 	);
 	await capture(page, info, "agents-unavailable");
+});
+
+test("Owner manually configures a bot without exposing its Secret or an internal reference", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	const session = {
+		sessionId: "fixture-setup",
+		agentId: "agent-pilot-1",
+		configurationRevision: 1,
+		expiresAt: new Date(Date.now() + 300000).toISOString(),
+	};
+	let active = false;
+	let saved: unknown;
+	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-bot"))
+			return route.fulfill({
+				json: { status: active ? "connected" : "not_configured" },
+			});
+		if (path.endsWith("/wecom-setup"))
+			return route.fulfill({
+				json: {
+					...session,
+					status: "awaiting_input",
+					state: "fixture-state",
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				},
+			});
+		if (path.endsWith("/credentials")) {
+			saved = route.request().postDataJSON();
+			active = true;
+			return route.fulfill({ json: { ...session, status: "verifying" } });
+		}
+		return route.fulfill({ json: { ...session, status: "active" } });
+	});
+	await page.goto("/agents/agent-pilot-1");
+	await page.getByRole("link", { name: "Owner settings" }).click();
+	await page.getByRole("button", { name: "扫码授权" }).click();
+	await expect(
+		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
+	).toBeVisible();
+	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
+	await page.getByLabel("Secret", { exact: true }).fill("synthetic-bot-secret");
+	await page.getByRole("checkbox", { name: /我已知悉/ }).check();
+	await capture(page, info, "wecom-manual");
+	await page.getByRole("button", { name: "验证并绑定" }).click();
+	await expect(page.getByLabel("Secret", { exact: true })).toHaveValue("");
+	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
+	expect(saved).toEqual({
+		state: "fixture-state",
+		botId: "fixture-bot",
+		secret: "synthetic-bot-secret",
+		takeoverConfirmed: true,
+	});
+	await expect(page.getByLabel("智能机器人配置标识")).toHaveCount(0);
+	await capture(page, info, "wecom-connected");
 });

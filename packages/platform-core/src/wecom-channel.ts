@@ -64,7 +64,13 @@ export type WecomAcceptanceV1 =
 			readonly receipt: WecomReceiptV1;
 	  }
 	| { readonly outcome: "denied" | "unavailable" | "conflict" };
+export interface WecomConnectionFenceV1 {
+	readonly botId: string;
+	readonly holderId: string;
+	readonly fence: number;
+}
 export interface WecomAcceptancePlanV1 {
+	readonly connectionFence?: WecomConnectionFenceV1;
 	readonly message: WecomMessageV1;
 	readonly authority: WecomAuthorityV1;
 	readonly eventKey: string;
@@ -98,7 +104,10 @@ export function createWecomChannelV1(dependencies: {
 	readonly store: WecomChannelStorePortV1;
 }) {
 	return {
-		async receive(input: WecomMessageV1): Promise<WecomAcceptanceV1> {
+		async receive(
+			input: WecomMessageV1,
+			connectionFence?: WecomConnectionFenceV1,
+		): Promise<WecomAcceptanceV1> {
 			const value = snapshotAgentManagementDataObject(input);
 			requireAgentManagementExactKeys(value, [
 				"agentId",
@@ -179,7 +188,14 @@ export function createWecomChannelV1(dependencies: {
 				authority.actor.actorId,
 			]);
 			return dependencies.store.accept(
-				{ message, authority, eventKey, conversationKey, requestDigest },
+				{
+					message,
+					authority,
+					eventKey,
+					conversationKey,
+					requestDigest,
+					...(connectionFence ? { connectionFence } : {}),
+				},
 				async (conversation) => {
 					const created = await conversation.createConversation({
 						schemaVersion: 1,
