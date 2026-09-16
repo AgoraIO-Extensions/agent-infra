@@ -94,7 +94,7 @@ jobs:
             write_status=1
             echo '{"outcome":"SKIPPED","reason":"read conformance failed"}' > connection-github-write-e2e-result.json
           fi
-          sleep 60
+          sleep 180
           node tests/github-commit-reaction-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-commit-reaction-e2e-result.json
           commit_reaction_status=${PIPESTATUS[0]}
