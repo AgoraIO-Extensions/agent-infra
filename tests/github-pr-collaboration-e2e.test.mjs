@@ -76,6 +76,11 @@ test("pull request collaboration completes and cleans an owned lifecycle", async
 		new Set(calls.filter(({ target }) => target).map(({ target }) => target)),
 		new Set(evidence.actionVersionIds),
 	);
+	const reviewCreate = calls.find(
+		({ action }) => action === "github.create_pull_request_review",
+	);
+	assert.equal(reviewCreate.input.commitId, "head-2");
+	assert.deepEqual(reviewCreate.input.comments, []);
 	assert.deepEqual(
 		calls
 			.filter(({ action }) => action === "github.delete_ref")

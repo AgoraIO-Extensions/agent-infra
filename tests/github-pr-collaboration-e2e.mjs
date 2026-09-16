@@ -267,6 +267,8 @@ export async function runGitHubPullRequestCollaboration({
 			{
 				...target,
 				body: marker,
+				comments: [],
+				commitId: updatedHeadSha,
 				idempotencyKey: `${runId}:review-create`,
 				pullNumber,
 			},
