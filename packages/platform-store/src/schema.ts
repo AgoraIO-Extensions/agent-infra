@@ -1362,6 +1362,94 @@ export const workloadReconciliations = platformSchema.table(
 	],
 );
 
+export const wecomReceipts = platformSchema.table(
+	"wecom_receipts",
+	{
+		id: text("id").primaryKey(),
+		requestDigest: text("request_digest").notNull(),
+		scope: jsonb("scope").notNull(),
+		actorId: text("actor_id").notNull(),
+		taskBoundary: jsonb("task_boundary").notNull(),
+		channelRevision: text("channel_revision").notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		acceptanceStatus: text("acceptance_status").notNull(),
+		conversationId: text("conversation_id"),
+		executionId: text("execution_id"),
+		replyHandle: text("reply_handle").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		deliveryStatus: text("delivery_status").notNull().default("pending"),
+		fence: integer("fence").notNull().default(0),
+		leaseUntil: timestamp("lease_until", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		connectionBotId: text("connection_bot_id"),
+		connectionFence: bigint("connection_fence", { mode: "number" }),
+	},
+	(table) => [
+		check(
+			"wecom_acceptance_status",
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable')`,
+		),
+		check(
+			"wecom_delivery_status",
+			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,
+		),
+		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
+	],
+);
+
+export const wecomConnections = platformSchema.table(
+	"wecom_connections",
+	{
+		botId: text("bot_id").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		bindingReference: text("binding_reference").notNull(),
+		holderId: text("holder_id").notNull(),
+		fence: bigint("fence", { mode: "number" }).notNull(),
+		leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+		status: text("status").notNull(),
+	},
+	(table) => [
+		check(
+			"wecom_connection_fence_safe",
+			sql`${table.fence} between 1 and 9007199254740991`,
+		),
+		check(
+			"wecom_connection_status",
+			sql`${table.status} in ('verifying','connected','disconnected','auth_failed')`,
+		),
+	],
+);
+
+export const wecomSetupSessions = platformSchema.table(
+	"wecom_setup_sessions",
+	{
+		sessionId: text("session_id").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		actorId: text("actor_id").notNull(),
+		configurationRevision: bigint("configuration_revision", {
+			mode: "number",
+		}).notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		stateDigest: text("state_digest").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		status: text("status").notNull(),
+		botId: text("bot_id"),
+		encryptedCredential: jsonb("encrypted_credential"),
+	},
+	(table) => [
+		check(
+			"wecom_setup_status",
+			sql`${table.status} in ('awaiting_input','verifying','active','auth_failed','conflict','cancelled','expired')`,
+		),
+		index("wecom_setup_pending").on(table.status, table.expiresAt),
+	],
+);
+
 export const platformInfrastructureTables = [
 	workloadReconciliations,
 	agents,
@@ -1386,4 +1474,7 @@ export const platformInfrastructureTables = [
 	auditEvents,
 	idempotencyRecords,
 	persistedEvents,
+	wecomReceipts,
+	wecomConnections,
+	wecomSetupSessions,
 ] as const;

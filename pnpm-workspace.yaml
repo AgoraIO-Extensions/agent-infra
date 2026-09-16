@@ -5,6 +5,8 @@ allowBuilds:
   esbuild: true
   sharp: true
 overrides:
+  "@kubernetes/client-node@2.0.0>ws": 8.21.3
+  "@wecom/aibot-node-sdk@1.0.7>ws": 8.21.3
   "@hey-api/json-schema-ref-parser@1.4.4>js-yaml": 4.3.2
   "cosmiconfig@9.0.2>js-yaml": 4.3.2
   "ajv@8.20.0>fast-uri": 3.1.6

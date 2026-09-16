@@ -85,7 +85,7 @@ server-deploy: docker
 flowchart LR
     U[公司员工] --> W[Platform Web SPA]
     U --> CW[Connection Web SPA]
-    QW[企微] --> PA[Platform API]
+    QW[企微] -->|自建应用 / 显式机器人回调| PA[Platform API]
     CLI[用户或应用客户端] --> PA
     CLI -->|独立身份 / MCP + API| CA
     W --> PA
@@ -95,6 +95,7 @@ flowchart LR
     PA --> OS[(Object Storage)]
     PA --> IDP[IdentityAdapter]
     PW[Platform Worker] --> PD
+    PW <-->|智能机器人长连接| QW
 
     PW --> K8S[Kubernetes]
     K8S --> AP[Agent Pod]
@@ -119,8 +120,8 @@ flowchart LR
 | --- | --- | --- |
 | `web` | Agent、凭证与应用管理、审批、对话、执行详情、Eval 和审计；可独立静态托管 | 否 |
 | `connection-web` | 独立 Connection 中文 SPA、登录和 OAuth/Grant 管理入口 | 否 |
-| `platform-api` | 可信用户/应用接入、Agent 与任务 API、权限、业务状态/outbox/审计事务、SSE、企微回调、Eval 管理和查询；部署位置无关 | 否 |
-| `platform-worker` | Kubernetes Workload Plane 中的 Workload 调谐、模板升级、outbox 认领、有界任务投递、RuntimeHost Client 与 Eval 执行/评分工作项 | 否 |
+| `platform-api` | 可信用户/应用接入、Agent 与任务 API、权限、业务状态/outbox/审计事务、SSE、企微配置与回调、Eval 管理和查询；部署位置无关 | 否 |
+| `platform-worker` | Kubernetes Workload Plane 中的 Workload 调谐、模板升级、outbox 认领、有界任务投递、RuntimeHost Client、企微长连接与回复、Eval 执行/评分工作项 | 否 |
 | `connection-api` | 独立登录与客户端身份、MCP/API、Provider/Action、OAuth、Grant、凭证、外部执行、恢复和审计 | 否 |
 | `agent pod` | 标准模板与 `platform-adapter` 的 RuntimeHost/Driver，或 `self-managed` Agent 的自有服务与实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、应用/API 凭证及授权、审批、配置、会话、执行、Eval、反馈和平台审计 | 是 |
@@ -844,7 +845,7 @@ sequenceDiagram
 
 ### 12.2 可靠性规则
 
-- `platform-api` 在 Conversation 数据库锁内完成命令准入，并把平台业务记录与 outbox 原子写入 Platform DB；`platform-worker` 只认领已提交的 outbox，再通过 RuntimeHost Client 调用 Agent Pod 内的固定 Driver。
+- HTTP/Web/回调入口由 `platform-api` 调用 Core，企微长连接入口由 `platform-worker` 调用同一 Core；两者都在同一 Conversation 数据库锁内完成命令准入，将业务记录与 outbox 原子写入 Platform DB。Runtime 投递仅由共享 Worker 认领已提交的 outbox，再通过 RuntimeHost Client 调用 Agent Pod 内的固定 Driver；长连接入站不得直接调用 Runtime。
 - 消息持久化成功后才向用户显示“已提交”。后续投递失败不能删除消息或静默丢弃，必须收敛为可解释状态。
 - 同一 Conversation 同时只有一个活跃 Turn。普通消息、补充指令、重新生成和停止的重试不能产生重复 Execution、越过发送者边界，或改绑到后续 Execution。
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
@@ -927,18 +928,59 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
 
 ### 14.2 企微
 
-企微 Adapter 位于平台侧：
+企微 Adapter 位于平台侧，绑定体验以[平台 PRD §10.2](../prd/PRD-agent-platform-M1.md#102-渠道绑定)为准。
+平台只为四个标准模板和通过 Generic ACP 验证的 `platform-adapter` 自定义 Agent 创建企微绑定；
+`self-managed` Agent 的绑定请求在保存前拒绝。
 
-平台只为四个标准模板和通过 Generic ACP 验证的 `platform-adapter` 自定义 Agent 创建企微绑定；`self-managed` Agent 的绑定请求在保存前拒绝。
+#### 14.2.1 配置与凭证
 
-1. 验证企微回调签名并解析绑定的 Agent。
-2. 把企微发送者映射为公司稳定用户 ID。
-3. 校验 Agent 可用范围和渠道绑定。
-4. 按单聊、群聊和线程规则生成稳定的 Platform Conversation 映射；群聊和线程的映射键必须包含服务端解析的发送者 ID。
-5. 持久化消息和 outbox，由 `platform-worker` 通过 RuntimeHost Client 交给 Agent Pod 内的固定 Driver。
-6. 需要外部操作时由 Agent/客户端直连 Connection；Connection 独立验证触发消息发送者已经授予的调用权限，不能使用其他群成员的授权。
+智能机器人默认使用 WebSocket 长连接。Owner 扫码授权或手动提交 Bot ID、Secret，
+两者调用相同的 Core 配置用例；服务端生成渠道引用并复用 Agent 配置的版本、绑定和审计权威。
+浏览器表单不要求用户填写内部 `bindingReference`。扫码优先复用企微授权 SDK，手动配置作为独立入口；
+部署提供获准的 `source` 与固定官方授权 origin，不能由普通请求指定授权端点。
 
-群聊、线程和附件映射由 Channel 层负责；同一群或线程中的不同发送者必须映射到不同 Platform Conversation 和 RuntimeHost Session。RuntimeHost/Driver 不感知企微身份或自行改变会话键。四个标准模板和通过 ACP 验证的自定义 Agent 使用同一渠道链路。Web 与企微会话不合并。
+配置会话绑定当前 Owner、Agent、配置版本及一次性短时随机 state；验证弹窗 origin、source、state、
+过期和一次消费，防止跨用户、跨 Agent、重放及旧配置覆盖。SDK 的成功回调不是平台授权或凭证有效证明，
+激活前仍由 Core 重验 Owner 权限和当前配置版本，由 Worker 验证企微认证。配置失败或取消保留原有效绑定。
+若认证探测会争用正在使用的机器人连接，先展示影响并取得 Owner 确认，不能以“验证”名义静默接管。
+
+企微 Channel 凭证属于 Platform 的渠道接入，不属于 Agent 运行时 env/Secret 或 Connection 外部账号。
+Bot Secret 与应用发送 Secret 按既有平台应用层加密规范由 API 只写密文，Worker-only keyring 解密用于连接/发送；
+密文用途绑定 Agent、渠道和配置版本，不走会向 Agent Pod 投射 Secret 的路径。
+官方扫码返回及手动输入的 Secret 只在本次提交中短暂存在，提交后清除；不得查询回显、写浏览器持久存储、
+URL、日志或审计。Agent、模型和 Runtime 均不得获得渠道凭证。
+
+自建应用单独校验企业 ID、应用 ID、应用 Secret 和接收消息的 Token、EncodingAESKey、TLS 回调地址。
+应用主动发送凭证不能代替接收消息配置；启用自建应用或显式机器人回调模式时才要求可达的 TLS 回调。
+回调 Token、EncodingAESKey 是 API 校验/解密入站消息所必需的独立材料，由部署的可信绑定解析器按获准绑定
+受限注入 API，不从 Worker-only 密文库解密，也不通过 API–Worker RPC 获取。
+API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解密私钥；回调校验材料亦不得进入用户查询、
+日志或 Agent Pod。部署注入仅提供协议验证能力，不替代 Core 中的绑定与业务授权。
+
+#### 14.2.2 传输与执行
+
+1. `platform-worker` 的企微 Adapter 优先使用固定版本官方 Node SDK 建立、认证并维护长连接，
+   SDK 负责协议与心跳/有界重连，业务授权、持久化和投递语义仍由平台负责。重连不等于重放业务发送。
+   同一机器人只有一个有效连接持有者；复用 PostgreSQL 租约/隔离令牌，在多副本、重启、解绑和轮换时
+   关闭旧连接、隔离旧持有者，防止连接互踢和重复副作用，不新增渠道微服务。
+2. 长连接入站验证已认证连接的机器人身份、帧结构、大小、有效期和稳定消息标识，不能信任任意帧自报的身份。
+   自建应用与显式机器人回调由 `platform-api` 验证签名、加密接收方、有效期和大小；
+   两类传输统一转换为 Core 命令，不向 Core 传递 SDK 对象。
+3. 通过部署身份边界把企微发送者映射为公司稳定用户 ID，校验当前身份、组织、Agent 可用范围和绑定。
+4. 按单聊、群聊和协议支持的线程生成稳定的 Conversation 映射，键包含 Agent、绑定、渠道及服务端发送者；
+   同群不同发送者保持独立 Runtime Session，协议无独立线程标识时不伪造线程支持。
+5. 复用同一事务保存消息、Execution、授权边界、outbox 与回复意图，由共享 Worker 通过 RuntimeHost Client
+   投递 Agent Pod 内的固定 Driver。重投/重连按稳定事件 ID 去重，变更同 ID 的内容、主体或绑定则拒绝。
+6. 回复前再次校验当前身份、绑定和权限，沿获准协议发送。长连接回复不依赖 HTTP `response_url`；
+   发送前记录意图，ACK 丢失或断连后保留 `unknown`，不得自动重发或将服务端受理宣称为终端送达。
+   协议不支持可验证恢复时保留有界处置；失去有效回复上下文时明确失败/过期。
+7. 需要外部操作时由 Agent/客户端直连 Connection；Connection 独立验证触发消息发送者已授予的调用权限，
+   不能使用其他群成员的授权。渠道传输变化不得绕过既有授权或新增 Runtime 调度器。
+
+SDK 默认日志、debug 和重试行为必须验证，不照抄输出凭证或正文的示例。审计与指标覆盖绑定、凭证替换、
+配置会话、连接状态、受理及回复，保持固定标签和脱敏投影。
+群聊、线程和附件映射由 Channel 层负责，RuntimeHost/Driver 不感知企微身份或自行改变映射。
+四个标准模板和通过 ACP 验证的自定义 Agent 使用同一执行链路；Web 与企微会话不合并。
 
 ### 14.3 自有交互入口
 
@@ -1140,7 +1182,7 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 | Agent 使用 | 对话/任务详情、SSE、停止、重生成、模型选择 | API 闭环、会话/Execution、有界 Dispatch、RuntimeHost/Driver、恢复 |
 | 附件 | 上传、预览、限制和下载 | 预签名地址、对象权限、元数据和 Agent 临时访问 |
 | Connection | 独立中文登录、连接、Grant、扩权确认、调用记录和管理员待处理页面 | 独立用户/应用身份、OAuth、MCP/API、Credential、Grant、外部执行、恢复和审计 |
-| 企微渠道 | Owner 绑定配置和状态 | 回调校验、身份映射、Channel 会话键和消息持久化 |
+| 企微渠道 | Owner 扫码/手动配置、连接状态和解绑 | 机器人长连接、自建应用/显式回调校验、身份映射、Channel 会话键、消息持久化及回复 |
 | 自有交互入口 | 入口、不可用与无权限状态 | Auth Gateway、Runtime Manifest、Service 和访问调谐 |
 | 管理与审计 | 平台审计查询页；Connection 管理在独立入口 | 持久事务审计、受控查询 API、真实调用关联 |
 | 运行观测 | 本主体执行阶段/失败详情；运维使用部署后端 | 实际模型/工具采集、日志/指标/Trace、去重与告警 |
