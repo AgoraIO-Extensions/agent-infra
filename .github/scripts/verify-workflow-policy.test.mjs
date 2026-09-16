@@ -162,6 +162,19 @@ test("keeps the Connection E2E token only in its fixed conformance step", async 
 	);
 });
 
+test("keeps the Connection E2E reviewer token only in its fixed conformance step", async () => {
+	const workflows = await actualWorkflows();
+	workflows["ci.yml"].jobs.ci.steps[0].env = {
+		CONNECTION_E2E_REVIEWER_TOKEN:
+			"${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN }}",
+	};
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("CONNECTION_E2E_REVIEWER_TOKEN"),
+		),
+	);
+});
+
 test("keeps GitHub read conformance in the fixed token-bearing step", async () => {
 	const workflows = await actualWorkflows();
 	const step = workflows["connection-github-e2e.yml"].jobs.conformance.steps.find(

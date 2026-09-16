@@ -1,0 +1,542 @@
+import { pathToFileURL } from "node:url";
+
+const endpoint = "https://agent-connector.la3.agoralab.co/mcp";
+const target = {
+	owner: "AgoraConnectionE2EORG",
+	repository: "connector-conformance",
+	repositoryId: 1369705971,
+};
+
+const actionEffects = {
+	"github.get_repository": "READ",
+	"github.get_current_user": "READ",
+	"github.get_pull_request": "READ",
+	"github.get_pull_request_review": "READ",
+	"github.list_pull_request_reviews": "READ",
+	"github.list_pull_request_review_comments": "READ",
+	"github.create_pull_request_review": "WRITE",
+	"github.submit_pull_request_review": "WRITE",
+	"github.create_pull_request_review_comment": "WRITE",
+	"github.reply_pull_request_review_comment": "WRITE",
+	"github.update_pull_request_review_comment": "WRITE",
+	"github.delete_pull_request_review_comment": "WRITE",
+	"github.delete_pending_pull_request_review": "WRITE",
+};
+
+export const githubReviewActionIds = Object.keys(actionEffects);
+
+export async function runGitHubReviewConformance({
+	environment,
+	fetch,
+	runId,
+}) {
+	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true") {
+		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
+	}
+	const primaryToken = environment.CONNECTION_E2E_TOKEN?.trim();
+	const reviewerToken = environment.CONNECTION_E2E_REVIEWER_TOKEN?.trim();
+	if (!primaryToken) throw new Error("CONNECTION_E2E_TOKEN is required");
+	if (!reviewerToken)
+		throw new Error("CONNECTION_E2E_REVIEWER_TOKEN is required");
+	if (typeof runId !== "string" || !runId.trim())
+		throw new Error("runId is required");
+
+	const primary = mcpClient(fetch, primaryToken);
+	const reviewer = mcpClient(fetch, reviewerToken);
+	const marker = `connection-e2e:${runId}`;
+	const branch = `connection-e2e-review-${runId.replace(/[^A-Za-z0-9._-]/g, "-")}`;
+	const path = `fixtures/${branch}.txt`;
+	const calls = [];
+	let branchCreated = false;
+	let pullNumber;
+
+	await assertSingleAccount(primary, "328682695");
+	await assertSingleAccount(reviewer, "329435106");
+	const search = await reviewer.call(
+		"search_actions",
+		{ limit: 50, query: "", service: "github" },
+		true,
+	);
+	const discovered = search?.actions?.map((action) => action.actionId).sort();
+	if (
+		!Array.isArray(discovered) ||
+		JSON.stringify(discovered) !==
+			JSON.stringify([...githubReviewActionIds].sort())
+	) {
+		throw new Error(
+			"Reviewer PAT must expose exactly the approved review actions",
+		);
+	}
+	for (const actionId of githubReviewActionIds) {
+		const guide = await reviewer.call("get_action_guide", { actionId }, true);
+		if (
+			guide?.action?.actionVersionId !== `${actionId}@v7` ||
+			guide.action.effect !== actionEffects[actionId]
+		) {
+			throw new Error(`${actionId} has an unapproved ActionVersion`);
+		}
+	}
+
+	const primaryExecute = async (actionId, input, retrySafe = false) =>
+		(await primary.execute(actionId, input, retrySafe)).result;
+	const reviewerExecute = async (actionId, input) => {
+		const projection = await reviewer.execute(
+			actionId,
+			input,
+			actionEffects[actionId] === "READ",
+		);
+		calls.push({
+			actionVersionId: `${actionId}@v7`,
+			callId: projection.callId,
+			status: projection.status,
+		});
+		return projection.result;
+	};
+
+	try {
+		const repository = await primaryExecute(
+			"github.get_repository",
+			{ owner: target.owner, repo: target.repository },
+			true,
+		);
+		assertRepository(repository);
+		const mainRef = await primaryExecute(
+			"github.get_ref",
+			{ owner: target.owner, ref: "refs/heads/main", repo: target.repository },
+			true,
+		);
+		if (!mainRef?.object?.sha)
+			throw new Error("main ref did not return a commit SHA");
+		const createdRef = await primaryExecute("github.create_ref", {
+			idempotencyKey: `${runId}:fixture-ref-create`,
+			owner: target.owner,
+			ref: `refs/heads/${branch}`,
+			repo: target.repository,
+			sha: mainRef.object.sha,
+		});
+		if (createdRef?.ref !== `refs/heads/${branch}`)
+			throw new Error("fixture ref does not match");
+		branchCreated = true;
+		const file = await primaryExecute("github.create_or_update_file", {
+			branch,
+			content: `${marker}\n`,
+			idempotencyKey: `${runId}:fixture-file-create`,
+			message: marker,
+			owner: target.owner,
+			path,
+			repo: target.repository,
+		});
+		const headSha = file?.commit?.sha;
+		if (!headSha) throw new Error("fixture file did not return a commit SHA");
+		const pull = await primaryExecute("github.create_pull_request", {
+			base: "main",
+			body: marker,
+			draft: false,
+			head: branch,
+			idempotencyKey: `${runId}:fixture-pull-create`,
+			maintainerCanModify: false,
+			owner: target.owner,
+			repo: target.repository,
+			title: marker,
+		});
+		pullNumber = positiveInteger(pull?.number, "fixture pull number");
+		if (pull?.body !== marker || pull?.head?.sha !== headSha) {
+			throw new Error("fixture pull ownership marker does not match");
+		}
+
+		assertRepository(
+			await reviewerExecute("github.get_repository", {
+				owner: target.owner,
+				repo: target.repository,
+			}),
+		);
+		const currentUser = await reviewerExecute("github.get_current_user", {});
+		if (String(currentUser?.id) !== "329435106")
+			throw new Error("reviewer identity does not match");
+		assertOwnedPull(
+			await reviewerExecute("github.get_pull_request", {
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+			}),
+			marker,
+			pullNumber,
+		);
+		await reviewerExecute("github.list_pull_request_reviews", {
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+		});
+		await reviewerExecute("github.list_pull_request_review_comments", {
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+		});
+
+		const comment = await reviewerExecute(
+			"github.create_pull_request_review_comment",
+			{
+				body: `${marker} comment`,
+				commitId: headSha,
+				idempotencyKey: `${runId}:comment-create`,
+				line: 1,
+				owner: target.owner,
+				path,
+				pullNumber,
+				repo: target.repository,
+				side: "RIGHT",
+			},
+		);
+		const commentId = ownedCommentId(comment, marker);
+		const updated = await reviewerExecute(
+			"github.update_pull_request_review_comment",
+			{
+				body: `${marker} updated`,
+				commentId,
+				idempotencyKey: `${runId}:comment-update`,
+				owner: target.owner,
+				repo: target.repository,
+			},
+		);
+		ownedCommentId(updated, marker);
+		const reply = await reviewerExecute(
+			"github.reply_pull_request_review_comment",
+			{
+				body: `${marker} reply`,
+				commentId,
+				idempotencyKey: `${runId}:comment-reply`,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+			},
+		);
+		const replyId = ownedCommentId(reply, marker);
+		const comments = await reviewerExecute(
+			"github.list_pull_request_review_comments",
+			{
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+			},
+		);
+		for (const id of [commentId, replyId]) {
+			if (
+				!comments?.comments?.some(
+					(item) => item.id === id && item.body?.includes(marker),
+				)
+			) {
+				throw new Error(
+					`review comment ownership marker does not match: ${id}`,
+				);
+			}
+		}
+		await reviewerExecute("github.delete_pull_request_review_comment", {
+			commentId: replyId,
+			idempotencyKey: `${runId}:reply-delete`,
+			owner: target.owner,
+			repo: target.repository,
+		});
+		await reviewerExecute("github.delete_pull_request_review_comment", {
+			commentId,
+			idempotencyKey: `${runId}:comment-delete`,
+			owner: target.owner,
+			repo: target.repository,
+		});
+
+		const review = await reviewerExecute("github.create_pull_request_review", {
+			body: `${marker} pending`,
+			comments: [],
+			commitId: headSha,
+			idempotencyKey: `${runId}:review-create`,
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+		});
+		const reviewId = ownedPendingReviewId(review, marker);
+		ownedPendingReviewId(
+			await reviewerExecute("github.get_pull_request_review", {
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+				reviewId,
+			}),
+			marker,
+		);
+		const submitted = await reviewerExecute(
+			"github.submit_pull_request_review",
+			{
+				body: `${marker} submitted`,
+				event: "COMMENT",
+				idempotencyKey: `${runId}:review-submit`,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+				reviewId,
+			},
+		);
+		if (submitted?.id !== reviewId || submitted?.state !== "COMMENTED") {
+			throw new Error("submitted review does not match");
+		}
+		const reviews = await reviewerExecute("github.list_pull_request_reviews", {
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+		});
+		if (
+			!reviews?.reviews?.some(
+				(item) => item.id === reviewId && item.body?.includes(marker),
+			)
+		) {
+			throw new Error("submitted review ownership marker does not match");
+		}
+		const cleanupReview = await reviewerExecute(
+			"github.create_pull_request_review",
+			{
+				body: `${marker} cleanup`,
+				comments: [],
+				commitId: headSha,
+				idempotencyKey: `${runId}:cleanup-review-create`,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+			},
+		);
+		const cleanupReviewId = ownedPendingReviewId(cleanupReview, marker);
+		ownedPendingReviewId(
+			await reviewerExecute("github.delete_pending_pull_request_review", {
+				idempotencyKey: `${runId}:cleanup-review-delete`,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+				reviewId: cleanupReviewId,
+			}),
+			marker,
+		);
+	} finally {
+		try {
+			if (pullNumber) {
+				await cleanupReviewerArtifacts({
+					marker,
+					pullNumber,
+					reviewerExecute,
+					runId,
+				});
+			}
+		} finally {
+			if (pullNumber) {
+				await primaryExecute("github.update_pull_request", {
+					idempotencyKey: `${runId}:fixture-pull-close`,
+					owner: target.owner,
+					pullNumber,
+					repo: target.repository,
+					state: "closed",
+				});
+			}
+			if (branchCreated) {
+				await primaryExecute("github.delete_ref", {
+					idempotencyKey: `${runId}:fixture-ref-delete`,
+					owner: target.owner,
+					ref: `refs/heads/${branch}`,
+					repo: target.repository,
+				});
+			}
+		}
+	}
+
+	return {
+		actionVersionIds: githubReviewActionIds.map((id) => `${id}@v7`),
+		calls,
+		cleanup: "SUCCEEDED",
+		pullNumber,
+		runId,
+	};
+}
+
+async function cleanupReviewerArtifacts({
+	marker,
+	pullNumber,
+	reviewerExecute,
+	runId,
+}) {
+	const comments = await reviewerExecute(
+		"github.list_pull_request_review_comments",
+		{
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+		},
+	);
+	const ownedComments = (comments?.comments ?? [])
+		.filter((comment) => comment.body?.includes(marker))
+		.sort(
+			(left, right) =>
+				Number(Boolean(right.in_reply_to_id)) -
+				Number(Boolean(left.in_reply_to_id)),
+		);
+	for (const comment of ownedComments) {
+		await reviewerExecute("github.delete_pull_request_review_comment", {
+			commentId: positiveInteger(comment.id, "cleanup review comment id"),
+			idempotencyKey: `${runId}:cleanup-comment-${comment.id}`,
+			owner: target.owner,
+			repo: target.repository,
+		});
+	}
+	const reviews = await reviewerExecute("github.list_pull_request_reviews", {
+		owner: target.owner,
+		pullNumber,
+		repo: target.repository,
+	});
+	for (const review of reviews?.reviews ?? []) {
+		if (review.state !== "PENDING" || !review.body?.includes(marker)) continue;
+		await reviewerExecute("github.delete_pending_pull_request_review", {
+			idempotencyKey: `${runId}:cleanup-review-${review.id}`,
+			owner: target.owner,
+			pullNumber,
+			repo: target.repository,
+			reviewId: positiveInteger(review.id, "cleanup review id"),
+		});
+	}
+}
+
+function mcpClient(fetch, token) {
+	let id = 0;
+	return {
+		async call(name, args, retrySafe = false) {
+			const request = {
+				body: JSON.stringify({
+					id: ++id,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: { arguments: args, name },
+				}),
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				method: "POST",
+			};
+			let response;
+			for (let attempt = 0; attempt < (retrySafe ? 2 : 1); attempt += 1) {
+				try {
+					response = await fetch(endpoint, {
+						...request,
+						signal: AbortSignal.timeout(30_000),
+					});
+				} catch (error) {
+					if (retrySafe && attempt === 0) continue;
+					throw error;
+				}
+				if (!retrySafe || response.status < 500 || attempt === 1) break;
+			}
+			if (!response?.ok)
+				throw new Error(`Connection returned HTTP ${response?.status}`);
+			const payload = await response.json();
+			if (payload.error)
+				throw new Error(`Connection MCP error ${payload.error.code}`);
+			return payload.result?.structuredContent;
+		},
+		async execute(actionId, input, retrySafe = false) {
+			const projection = await this.call(
+				"execute_action",
+				{ actionId, input },
+				retrySafe,
+			);
+			if (
+				projection?.action !== actionId ||
+				!projection.callId ||
+				projection.status !== "SUCCEEDED"
+			) {
+				throw new Error(`${actionId} did not succeed`);
+			}
+			return projection;
+		},
+	};
+}
+
+async function assertSingleAccount(client, externalAccount) {
+	const result = await client.call(
+		"list_connections",
+		{ service: "github" },
+		true,
+	);
+	const active = result?.connections?.filter(
+		(connection) =>
+			connection.providerId === "github" && connection.status === "ACTIVE",
+	);
+	if (
+		!Array.isArray(active) ||
+		active.length !== 1 ||
+		active[0]?.externalAccount !== externalAccount
+	) {
+		throw new Error(
+			"Connection E2E consumer must expose exactly the approved GitHub account",
+		);
+	}
+}
+
+function assertRepository(repository) {
+	if (
+		repository?.id !== target.repositoryId ||
+		repository.full_name !== `${target.owner}/${target.repository}` ||
+		repository.private !== true ||
+		repository.default_branch !== "main"
+	) {
+		throw new Error("repository boundary does not match");
+	}
+}
+
+function assertOwnedPull(pull, marker, number) {
+	if (
+		pull?.number !== number ||
+		pull?.body !== marker ||
+		pull?.state !== "open"
+	) {
+		throw new Error("fixture pull ownership marker does not match");
+	}
+}
+
+function ownedCommentId(comment, marker) {
+	if (!comment?.body?.includes(marker))
+		throw new Error("review comment ownership marker does not match");
+	return positiveInteger(comment.id, "review comment id");
+}
+
+function ownedPendingReviewId(review, marker) {
+	if (review?.state !== "PENDING" || !review?.body?.includes(marker)) {
+		throw new Error("pending review ownership marker does not match");
+	}
+	return positiveInteger(review.id, "review id");
+}
+
+function positiveInteger(value, label) {
+	if (!Number.isSafeInteger(value) || value < 1)
+		throw new Error(`${label} is invalid`);
+	return value;
+}
+
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	const runId = process.argv[2] ?? "local";
+	runGitHubReviewConformance({ environment: process.env, fetch, runId })
+		.then((evidence) => {
+			process.stdout.write(
+				`${JSON.stringify({ ...evidence, outcome: "SUCCEEDED", suite: "review" })}\n`,
+			);
+		})
+		.catch((error) => {
+			process.stderr.write(
+				`${JSON.stringify({
+					error:
+						error instanceof Error
+							? error.message
+							: "GitHub review conformance failed",
+					outcome: "FAILED",
+					runId,
+					suite: "review",
+				})}\n`,
+			);
+			process.exitCode = 1;
+		});
+}
