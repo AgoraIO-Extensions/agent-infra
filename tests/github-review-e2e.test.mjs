@@ -83,6 +83,7 @@ test("GitHub review conformance never retries a started reviewer write", async (
 				CONNECTION_GITHUB_E2E_ENABLED: "true",
 			},
 			fetch: lifecycleFetch(calls, {
+				cleanupDeleteFailureId: 102,
 				failAction: "github.create_pull_request_review_comment",
 				marker: "connection-e2e:write-network-failure",
 			}),
@@ -97,6 +98,23 @@ test("GitHub review conformance never retries a started reviewer write", async (
 				token === "reviewer-token",
 		).length,
 		1,
+	);
+	assert.deepEqual(
+		calls
+			.filter(
+				({ action, token }) =>
+					action === "github.delete_pull_request_review_comment" &&
+					token === "reviewer-token",
+			)
+			.map(({ input }) => input.commentId),
+		[102, 101],
+	);
+	assert.ok(
+		calls.some(
+			({ action, token }) =>
+				action === "github.list_pull_request_reviews" &&
+				token === "reviewer-token",
+		),
 	);
 	assert.deepEqual(
 		calls
@@ -325,6 +343,12 @@ function lifecycleFetch(calls, options = {}) {
 		calls.push({ action, input: args.input, token });
 		if (options.failAction === action && token === "reviewer-token") {
 			throw new TypeError("fetch failed after submission started");
+		}
+		if (
+			action === "github.delete_pull_request_review_comment" &&
+			args.input?.commentId === options.cleanupDeleteFailureId
+		) {
+			throw new TypeError("cleanup delete failed");
 		}
 		if (tool === "list_connections") {
 			return response(request.id, {

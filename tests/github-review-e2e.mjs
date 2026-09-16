@@ -74,6 +74,7 @@ export async function runGitHubReviewConformance({
 	for (const actionId of githubReviewActionIds) {
 		const guide = await reviewer.call("get_action_guide", { actionId }, true);
 		if (
+			guide?.action?.actionId !== actionId ||
 			guide?.action?.actionVersionId !== `${actionId}@v7` ||
 			guide.action.effect !== actionEffects[actionId]
 		) {
@@ -421,43 +422,65 @@ async function cleanupReviewerArtifacts({
 	reviewerExecute,
 	runId,
 }) {
-	const comments = await reviewerExecute(
-		"github.list_pull_request_review_comments",
-		{
+	const failures = [];
+	let ownedComments = [];
+	try {
+		const comments = await reviewerExecute(
+			"github.list_pull_request_review_comments",
+			{
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+			},
+		);
+		ownedComments = (comments?.comments ?? [])
+			.filter((comment) => comment.body?.includes(marker))
+			.sort(
+				(left, right) =>
+					Number(Boolean(right.in_reply_to_id)) -
+					Number(Boolean(left.in_reply_to_id)),
+			);
+	} catch (error) {
+		failures.push(error);
+	}
+	for (const comment of ownedComments) {
+		try {
+			await reviewerExecute("github.delete_pull_request_review_comment", {
+				commentId: positiveInteger(comment.id, "cleanup review comment id"),
+				idempotencyKey: `${runId}:cleanup-comment-${comment.id}`,
+				owner: target.owner,
+				repo: target.repository,
+			});
+		} catch (error) {
+			failures.push(error);
+		}
+	}
+	let reviews = { reviews: [] };
+	try {
+		reviews = await reviewerExecute("github.list_pull_request_reviews", {
 			owner: target.owner,
 			pullNumber,
 			repo: target.repository,
-		},
-	);
-	const ownedComments = (comments?.comments ?? [])
-		.filter((comment) => comment.body?.includes(marker))
-		.sort(
-			(left, right) =>
-				Number(Boolean(right.in_reply_to_id)) -
-				Number(Boolean(left.in_reply_to_id)),
-		);
-	for (const comment of ownedComments) {
-		await reviewerExecute("github.delete_pull_request_review_comment", {
-			commentId: positiveInteger(comment.id, "cleanup review comment id"),
-			idempotencyKey: `${runId}:cleanup-comment-${comment.id}`,
-			owner: target.owner,
-			repo: target.repository,
 		});
+	} catch (error) {
+		failures.push(error);
 	}
-	const reviews = await reviewerExecute("github.list_pull_request_reviews", {
-		owner: target.owner,
-		pullNumber,
-		repo: target.repository,
-	});
 	for (const review of reviews?.reviews ?? []) {
 		if (review.state !== "PENDING" || !review.body?.includes(marker)) continue;
-		await reviewerExecute("github.delete_pending_pull_request_review", {
-			idempotencyKey: `${runId}:cleanup-review-${review.id}`,
-			owner: target.owner,
-			pullNumber,
-			repo: target.repository,
-			reviewId: positiveInteger(review.id, "cleanup review id"),
-		});
+		try {
+			await reviewerExecute("github.delete_pending_pull_request_review", {
+				idempotencyKey: `${runId}:cleanup-review-${review.id}`,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+				reviewId: positiveInteger(review.id, "cleanup review id"),
+			});
+		} catch (error) {
+			failures.push(error);
+		}
+	}
+	if (failures.length > 0) {
+		throw new AggregateError(failures, "Reviewer artifact cleanup failed");
 	}
 }
 
