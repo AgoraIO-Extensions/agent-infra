@@ -218,7 +218,9 @@ test("pull request collaboration rechecks an uncertain ref during cleanup", asyn
 
 function lifecycleFetch(calls, config = {}) {
 	let branchUpdated = false;
+	const deletedRefs = new Set();
 	let executeId = 0;
+	let pullClosed = false;
 	const failedActions = new Set();
 	const actionCounts = new Map();
 	return async (_url, requestOptions) => {
@@ -268,10 +270,15 @@ function lifecycleFetch(calls, config = {}) {
 				throw new Error("fetch failed after submission started");
 			}
 			if (action === "github.update_pull_request_branch") branchUpdated = true;
+			if (action === "github.update_pull_request" && input.state === "closed")
+				pullClosed = true;
+			if (action === "github.delete_ref") deletedRefs.add(input.ref);
 			const result = providerResult(action, input, {
 				actionCount,
 				branchUpdated,
 				config,
+				deletedRefs,
+				pullClosed,
 			});
 			structuredContent = {
 				action,
@@ -333,6 +340,7 @@ function providerResult(action, input, state) {
 				sha: state.branchUpdated ? "head-2" : "head-1",
 			},
 			number: 31,
+			state: state.pullClosed ? "closed" : "open",
 			title: marker,
 		},
 		"github.get_repository": {
@@ -354,8 +362,9 @@ function providerResult(action, input, state) {
 		},
 		"github.list_matching_refs": {
 			refs:
-				state.config.preexistingRef ||
-				(state.config.uncertainRef && state.actionCount >= 4)
+				(state.config.preexistingRef ||
+					(state.config.uncertainRef && state.actionCount >= 4)) &&
+				!state.deletedRefs.has(input.ref)
 					? [{ object: { sha: "main-1" }, ref: `refs/${input.ref}` }]
 					: [],
 		},

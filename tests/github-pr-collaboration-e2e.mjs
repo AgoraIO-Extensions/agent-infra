@@ -323,12 +323,28 @@ export async function runGitHubPullRequestCollaboration({
 		}
 		if (pullNumber) {
 			try {
-				await execute(primary, "github.update_pull_request", {
+				const closed = await execute(primary, "github.update_pull_request", {
 					...target,
 					idempotencyKey: `${runId}:pull-close`,
 					pullNumber,
 					state: "closed",
 				});
+				if (closed?.number !== pullNumber || closed.state !== "closed") {
+					cleanupFailures.push(
+						new Error("pull request close did not complete"),
+					);
+				} else {
+					const confirmed = await execute(
+						primary,
+						"github.get_pull_request",
+						{ ...target, pullNumber },
+						true,
+					);
+					if (confirmed?.number !== pullNumber || confirmed.state !== "closed")
+						cleanupFailures.push(
+							new Error("pull request remained open after cleanup"),
+						);
+				}
 			} catch (error) {
 				cleanupFailures.push(error);
 			}
@@ -363,6 +379,18 @@ export async function runGitHubPullRequestCollaboration({
 					idempotencyKey: `${runId}:${key}-ref-delete`,
 					ref: `heads/${branch}`,
 				});
+				const remaining = await execute(
+					primary,
+					"github.list_matching_refs",
+					{ ...target, ref: `heads/${branch}` },
+					true,
+				);
+				if (
+					(remaining?.refs ?? []).some(
+						(item) => item.ref === `refs/heads/${branch}`,
+					)
+				)
+					cleanupFailures.push(new Error("fixture ref remained after cleanup"));
 			} catch (error) {
 				cleanupFailures.push(error);
 			}
