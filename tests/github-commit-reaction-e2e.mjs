@@ -116,12 +116,23 @@ export async function runGitHubCommitReactionConformance({
 			state: "success",
 			targetUrl: `https://github.com/${target.owner}/${target.repo}/actions`,
 		});
-		if (
-			status?.context !== marker ||
-			status.state !== "success" ||
-			status.sha !== commitSha
-		)
+		const statusId = positiveInteger(status?.id, "commit status id");
+		if (status?.context !== marker || status.state !== "success")
 			throw new Error("commit status ownership marker does not match");
+		const statuses = await execute(
+			"github.get_commit_statuses",
+			{ ...target, ref: commitSha },
+			true,
+		);
+		if (
+			!(statuses?.statuses ?? []).some(
+				(item) =>
+					item.id === statusId &&
+					item.context === marker &&
+					item.state === "success",
+			)
+		)
+			throw new Error("commit status was not created on the fixture commit");
 		const commitComment = await execute("github.create_commit_comment", {
 			...target,
 			body: marker,

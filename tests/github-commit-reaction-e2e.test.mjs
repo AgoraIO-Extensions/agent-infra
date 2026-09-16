@@ -162,7 +162,7 @@ function providerResult(action, input, state) {
 			},
 			"github.create_commit_status": {
 				context: marker,
-				sha: "commit-1",
+				id: 30,
 				state: "success",
 			},
 			"github.create_issue": {
@@ -185,6 +185,9 @@ function providerResult(action, input, state) {
 				title: marker,
 			},
 			"github.get_issue_comment": { body: marker, id: 60 },
+			"github.get_commit_statuses": {
+				statuses: [{ context: marker, id: 30, state: "success" }],
+			},
 			"github.get_repository": {
 				default_branch: "main",
 				full_name: "AgoraConnectionE2EORG/connector-conformance",
