@@ -73,7 +73,30 @@ test("commit and reaction conformance cleans a created issue when ownership read
 	);
 });
 
+test("commit and reaction conformance reconciles an uncertain branch before cleanup", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubCommitReactionConformance({
+			environment: {
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { failCreateRef: true }),
+			runId: "commit-run",
+		}),
+		/fetch failed/,
+	);
+	assert.ok(
+		calls.some(
+			({ action, input }) =>
+				action === "github.delete_ref" &&
+				input.ref === "heads/connection-e2e-commit-commit-run",
+		),
+	);
+});
+
 function lifecycleFetch(calls, config = {}) {
+	const actionCounts = new Map();
 	let id = 0;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
@@ -101,12 +124,16 @@ function lifecycleFetch(calls, config = {}) {
 			const action = args.actionId;
 			const input = args.input;
 			calls.push({ action, input });
+			const actionCount = (actionCounts.get(action) ?? 0) + 1;
+			actionCounts.set(action, actionCount);
+			if (config.failCreateRef && action === "github.create_ref")
+				throw new Error("fetch failed");
 			if (action === config.failAction) throw new Error("fetch failed");
 			structuredContent = {
 				action,
 				actionVersionId: `${action}@v7`,
 				callId: `call-${++id}`,
-				result: providerResult(action, input),
+				result: providerResult(action, input, { actionCount, config }),
 				status: "SUCCEEDED",
 			};
 		}
@@ -118,7 +145,7 @@ function lifecycleFetch(calls, config = {}) {
 	};
 }
 
-function providerResult(action, input) {
+function providerResult(action, input, state) {
 	const marker = "connection-e2e:commit-run";
 	return (
 		{
@@ -156,7 +183,17 @@ function providerResult(action, input) {
 				id: 1369705971,
 				private: true,
 			},
-			"github.list_matching_refs": { refs: [] },
+			"github.list_matching_refs": {
+				refs:
+					state.config.failCreateRef && state.actionCount > 1
+						? [
+								{
+									object: { sha: "main-1" },
+									ref: "refs/heads/connection-e2e-commit-commit-run",
+								},
+							]
+						: [],
+			},
 			"github.update_issue": {
 				body: marker,
 				number: 50,

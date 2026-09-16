@@ -41,7 +41,9 @@ export async function runGitHubCommitReactionConformance({
 	const marker = `connection-e2e:${runId}`;
 	const branch = `connection-e2e-commit-${runId.replace(/[^A-Za-z0-9._-]/g, "-")}`;
 	const calls = [];
+	let branchCreationStarted = false;
 	let branchCreated = false;
+	let expectedInitialSha;
 	let issueNumber;
 	let commentId;
 	let cleanupFailure;
@@ -76,6 +78,8 @@ export async function runGitHubCommitReactionConformance({
 			(existing?.refs ?? []).some((item) => item.ref === `refs/heads/${branch}`)
 		)
 			throw new Error("fixture ref already exists");
+		expectedInitialSha = main.commit.sha;
+		branchCreationStarted = true;
 		await execute("github.create_ref", {
 			...target,
 			idempotencyKey: `${runId}:ref-create`,
@@ -181,6 +185,25 @@ export async function runGitHubCommitReactionConformance({
 		failure = error;
 	} finally {
 		const cleanupFailures = [];
+		if (branchCreationStarted && !branchCreated) {
+			try {
+				const refs = await execute(
+					"github.list_matching_refs",
+					{ ...target, ref: `heads/${branch}` },
+					true,
+				);
+				const matches = (refs?.refs ?? []).filter(
+					(item) =>
+						item.ref === `refs/heads/${branch}` &&
+						item.object?.sha === expectedInitialSha,
+				);
+				if (matches.length > 1)
+					cleanupFailures.push(new Error("fixture ref cleanup is ambiguous"));
+				else if (matches.length === 1) branchCreated = true;
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
 		if (commentId) {
 			try {
 				await execute("github.delete_issue_comment", {
