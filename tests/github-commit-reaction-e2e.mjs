@@ -122,22 +122,38 @@ export async function runGitHubCommitReactionConformance({
 			idempotencyKey: `${runId}:issue-create`,
 			title: marker,
 		});
+		const candidateIssueNumber = positiveInteger(issue?.number, "issue number");
+		const providerIssue = await execute(
+			"github.get_issue",
+			{ ...target, issueNumber: candidateIssueNumber },
+			true,
+		);
+		if (providerIssue?.body !== marker || providerIssue.title !== marker)
+			throw new Error("issue ownership marker does not match");
+		issueNumber = candidateIssueNumber;
 		if (
 			issue?.body !== marker ||
 			issue.title !== marker ||
-			!Number.isSafeInteger(issue.number)
+			issue.number !== issueNumber
 		)
 			throw new Error("issue ownership marker does not match");
-		issueNumber = issue.number;
 		const comment = await execute("github.create_issue_comment", {
 			...target,
 			body: marker,
 			idempotencyKey: `${runId}:issue-comment-create`,
 			issueNumber,
 		});
-		if (comment?.body !== marker || !Number.isSafeInteger(comment.id))
+		const candidateCommentId = positiveInteger(comment?.id, "comment id");
+		const providerComment = await execute(
+			"github.get_issue_comment",
+			{ ...target, commentId: candidateCommentId },
+			true,
+		);
+		if (providerComment?.body !== marker)
 			throw new Error("issue comment ownership marker does not match");
-		commentId = comment.id;
+		commentId = candidateCommentId;
+		if (comment?.body !== marker || comment.id !== commentId)
+			throw new Error("issue comment ownership marker does not match");
 		const issueReaction = await execute("github.create_issue_reaction", {
 			...target,
 			content: "rocket",
@@ -210,6 +226,12 @@ export async function runGitHubCommitReactionConformance({
 		cleanup: "SUCCEEDED",
 		runId,
 	};
+}
+
+function positiveInteger(value, label) {
+	if (!Number.isSafeInteger(value) || value < 1)
+		throw new Error(`${label} is invalid`);
+	return value;
 }
 
 if (

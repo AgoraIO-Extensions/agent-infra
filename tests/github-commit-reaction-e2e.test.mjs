@@ -121,6 +121,13 @@ function providerResult(action, input) {
 			"github.create_issue_reaction": { content: "rocket", id: 71 },
 			"github.create_or_update_file": { commit: { sha: "commit-1" } },
 			"github.get_branch": { commit: { sha: "main-1" } },
+			"github.get_issue": {
+				body: marker,
+				number: 50,
+				state: "open",
+				title: marker,
+			},
+			"github.get_issue_comment": { body: marker, id: 60 },
 			"github.get_repository": {
 				default_branch: "main",
 				full_name: "AgoraConnectionE2EORG/connector-conformance",
