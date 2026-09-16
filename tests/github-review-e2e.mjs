@@ -626,8 +626,10 @@ function mcpClient(fetch, token) {
 			if (!response?.ok)
 				throw new Error(`Connection returned HTTP ${response?.status}`);
 			const payload = await response.json();
-			if (payload.error)
-				throw new Error(`Connection MCP error ${payload.error.code}`);
+			if (payload.error) {
+				const message = safeMcpErrorMessage(payload.error.message);
+				throw new Error(`Connection MCP error ${payload.error.code}${message}`);
+			}
 			return payload.result?.structuredContent;
 		},
 		async execute(actionId, input, retrySafe = false) {
@@ -646,6 +648,17 @@ function mcpClient(fetch, token) {
 			return projection;
 		},
 	};
+}
+
+function safeMcpErrorMessage(value) {
+	const allowed = new Set([
+		"Connection authorization is not active",
+		"Provider authorization is no longer valid",
+		"Provider request failed",
+		"Provider resource was not found",
+		"Provider write submission outcome is unknown; reconciliation is pending",
+	]);
+	return typeof value === "string" && allowed.has(value) ? `: ${value}` : "";
 }
 
 async function assertSingleAccount(client, externalAccount) {
