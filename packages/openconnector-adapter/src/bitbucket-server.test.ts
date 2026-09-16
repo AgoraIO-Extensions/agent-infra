@@ -212,10 +212,15 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 						path: { toString: "CHANGELOG.md" },
 						type: "ADD",
 					},
+					{
+						path: { toString: "private/FormerHeader.h" },
+						srcPath: { toString: "sdk/include/FormerHeader.h" },
+						type: "MOVE",
+					},
 				],
 			});
 		}
-		if (url.includes("/compare/diff?")) {
+		if (url.includes("/diff/")) {
 			return Response.json({
 				diffs: [{ destination: { toString: "sdk/include/IAgoraRtcEngine.h" } }],
 				fromHash: "base-sha",
@@ -256,9 +261,33 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 		assert.equal(result.omittedFileCount, 0);
 		assert.equal(result.truncated, false);
 		assert.match(result.fingerprint, /^sha256:[a-f0-9]{64}$/);
-		assert.equal(requests.length, 5);
+		const reordered = (await createAdapter().execute({
+			action: "bitbucket.compare_refs",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				baseRef: "release/4.7.2",
+				pathGlobs: ["**/*.md", "sdk/include/**"],
+				project: "RTC",
+				repository: "native-sdk",
+				targetRef: "release/4.8.0",
+			},
+		})) as { fingerprint: string };
+		assert.equal(reordered.fingerprint, result.fingerprint);
+		assert.equal(requests.length, 10);
+		assert.equal(
+			requests.some((url) =>
+				url.includes(
+					"/diff/sdk/include/IAgoraRtcEngine.h?contextLines=3&since=base-sha&srcPath=sdk%2Finclude%2FIAgoraRtcEngine.h&until=target-sha",
+				),
+			),
+			true,
+		);
 		assert.equal(
 			requests.some((url) => url.includes("RtcEngine.cpp")),
+			false,
+		);
+		assert.equal(
+			requests.some((url) => url.includes("private/FormerHeader.h")),
 			false,
 		);
 	} finally {
@@ -325,7 +354,7 @@ test("Bitbucket compare refs stops fetching diffs after the byte budget is exhau
 				})),
 			});
 		}
-		if (url.includes("/compare/diff?")) {
+		if (url.includes("/diff/")) {
 			diffRequests += 1;
 			return Response.json({ data: "x".repeat(1024) });
 		}

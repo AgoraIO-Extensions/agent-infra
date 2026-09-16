@@ -146,7 +146,7 @@ const actionSpecs: readonly ActionSpec[] = [
 			},
 			maxFiles: { maximum: 50, minimum: 1, type: "integer" },
 			pathGlobs: {
-				items: stringField,
+				items: { maxLength: 256, ...stringField },
 				maxItems: 20,
 				minItems: 1,
 				type: "array",
@@ -638,16 +638,14 @@ export class BitbucketServerAdapter
 			start = Number(next);
 		}
 		const changePagesTruncated = !complete;
-		const candidates = changes
-			.map(projectChange)
-			.filter((change) =>
-				pathGlobs.some(
-					(pattern) =>
-						globMatches(pattern, change.path) ||
-						(change.sourcePath !== undefined &&
-							globMatches(pattern, change.sourcePath)),
-				),
+		const candidates = changes.map(projectChange).filter((change) => {
+			const matches = (path: string) =>
+				pathGlobs.some((pattern) => globMatches(pattern, path));
+			return (
+				matches(change.path) &&
+				(change.sourcePath === undefined || matches(change.sourcePath))
 			);
+		});
 		const maxFiles = boundedInteger(value.maxFiles, "maxFiles", 50, 1, 50);
 		const maxDiffBytes = boundedInteger(
 			value.maxDiffBytes,
@@ -670,15 +668,21 @@ export class BitbucketServerAdapter
 		const selectedCandidates = candidates.slice(0, maxFiles);
 		let diffBytes = 0;
 		for (const [index, change] of selectedCandidates.entries()) {
+			const encodedPath = change.path
+				.split("/")
+				.map((entry) => encodeURIComponent(entry))
+				.join("/");
 			const diff = await this.requestJson(
 				accessToken,
-				`${repositoryPath(value)}/compare/diff`,
+				`${repositoryPath(value)}/diff/${encodedPath}`,
 				{
 					query: {
 						contextLines,
-						from: baseId,
-						path: change.path,
-						to: targetId,
+						since: baseId,
+						...(change.sourcePath === undefined
+							? {}
+							: { srcPath: change.sourcePath }),
+						until: targetId,
 					},
 				},
 			);
@@ -700,7 +704,7 @@ export class BitbucketServerAdapter
 			changePagesTruncated,
 			files,
 			omittedFiles,
-			pathGlobs,
+			pathGlobs: [...pathGlobs].sort(),
 			targetCommit: targetId,
 		};
 		return {
@@ -779,7 +783,7 @@ function requiredStringArray(value: unknown, key: string, maximum: number) {
 	if (
 		entries.length > maximum ||
 		new Set(entries).size !== entries.length ||
-		entries.some((entry) => !entry)
+		entries.some((entry) => !entry || entry.length > 256)
 	) {
 		throw new Error(`${key} is invalid`);
 	}
@@ -836,26 +840,62 @@ function projectChange(value: JsonObject) {
 }
 
 function globMatches(pattern: string, path: string) {
-	let expression = "^";
-	for (let index = 0; index < pattern.length; index += 1) {
-		const character = pattern.charAt(index);
-		if (character === "*" && pattern[index + 1] === "*") {
-			if (pattern[index + 2] === "/") {
-				expression += "(?:.*/)?";
-				index += 2;
-			} else {
-				expression += ".*";
-				index += 1;
-			}
-		} else if (character === "*") {
-			expression += "[^/]*";
-		} else if (character === "?") {
-			expression += "[^/]";
+	type Token = "*" | "**" | "**/" | "?" | { literal: string };
+	const tokens: Token[] = [];
+	for (let index = 0; index < pattern.length; ) {
+		if (pattern.startsWith("**/", index)) {
+			tokens.push("**/");
+			index += 3;
+		} else if (pattern.startsWith("**", index)) {
+			tokens.push("**");
+			index += 2;
 		} else {
-			expression += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+			const character = pattern.charAt(index);
+			tokens.push(
+				character === "*" || character === "?"
+					? character
+					: { literal: character },
+			);
+			index += 1;
 		}
 	}
-	return new RegExp(`${expression}$`, "u").test(path);
+	let current = Array<boolean>(path.length + 1).fill(false);
+	current[0] = true;
+	for (const token of tokens) {
+		const next = Array<boolean>(path.length + 1).fill(false);
+		if (token === "**") {
+			next[0] = current[0] === true;
+			for (let index = 1; index <= path.length; index += 1) {
+				next[index] = current[index] === true || next[index - 1] === true;
+			}
+		} else if (token === "**/") {
+			let reachable = false;
+			for (let index = 0; index <= path.length; index += 1) {
+				reachable ||= current[index] === true;
+				next[index] ||= current[index] === true;
+				if (index < path.length && reachable && path.charAt(index) === "/") {
+					next[index + 1] = true;
+				}
+			}
+		} else if (token === "*") {
+			next[0] = current[0] === true;
+			for (let index = 1; index <= path.length; index += 1) {
+				next[index] =
+					current[index] === true ||
+					(path.charAt(index - 1) !== "/" && next[index - 1] === true);
+			}
+		} else {
+			for (let index = 0; index < path.length; index += 1) {
+				const matches =
+					token === "?"
+						? path.charAt(index) !== "/"
+						: path.charAt(index) === token.literal;
+				if (current[index] && matches) next[index + 1] = true;
+			}
+		}
+		current = next;
+	}
+	return current[path.length];
 }
 
 function compact(value: JsonObject) {
