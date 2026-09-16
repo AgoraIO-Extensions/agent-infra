@@ -881,34 +881,61 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
-	it("regenerates from an existing user message without creating another message", async () => {
-		const { transaction, useCase } = createConversation();
-		try {
-			await useCase.createConversation({
-				schemaVersion: 1,
-				agentId: authority.agentId,
-				idempotencyKey: "create_02",
-				requestId: "request_create_02",
-				traceId: "trace_create_02",
+	it.each(["ready", "active"] as const)(
+		"regenerates a %s conversation from its existing user message",
+		async (status) => {
+			const { transaction, useCase } = createConversation();
+			const eventTransaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
 			});
-			const initial = await useCase.accept({
-				schemaVersion: 1,
-				command: "message",
-				conversationId: "conversation_id_1",
-				text: "regenerate this answer",
-				idempotencyKey: "message_02",
-				requestId: "request_message_02",
-				traceId: "trace_message_02",
-			});
-			expect(initial).toMatchObject({ outcome: "accepted" });
-			await client`
-				update platform.conversation_executions
-				set status = 'completed'
-				where execution_id = 'conversation_id_3'
-			`;
+			const events = createConversationEventUseCaseV1(
+				{ transaction: eventTransaction },
+				{ newId: () => "terminal_event_02" },
+			);
+			try {
+				await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "create_02",
+					requestId: "request_create_02",
+					traceId: "trace_create_02",
+				});
+				const initial = await useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId: "conversation_id_1",
+					text: "regenerate this answer",
+					idempotencyKey: "message_02",
+					requestId: "request_message_02",
+					traceId: "trace_message_02",
+				});
+				expect(initial).toMatchObject({ outcome: "accepted" });
+				if (status === "ready") {
+					await expect(
+						events.persist({
+							schemaVersion: 1,
+							conversationId: "conversation_id_1",
+							executionId: "conversation_id_3",
+							sessionGeneration: 1,
+							deliveryFence: 0,
+							adapterEventKey: "terminal_02",
+							runtimeCursor: "runtime_terminal_02",
+							occurredAt: "2026-09-04T00:00:00.000Z",
+							event: { type: "execution.status", status: "completed" },
+							transition: {
+								executionStatus: "completed",
+								conversationStatus: "ready",
+							},
+						}),
+					).resolves.toMatchObject({ outcome: "accepted" });
+				} else {
+					await client`update platform.conversation_executions set status = 'completed' where execution_id = 'conversation_id_3'`;
+				}
+				expect(
+					await client`select status from platform.conversations where id = 'conversation_id_1'`,
+				).toEqual([{ status }]);
 
-			await expect(
-				useCase.regenerate({
+				const regeneration = {
 					schemaVersion: 1,
 					command: "regenerate",
 					conversationId: "conversation_id_1",
@@ -916,19 +943,32 @@ describe("PostgreSQL Conversation command transaction", () => {
 					idempotencyKey: "regenerate_02",
 					requestId: "request_regenerate_02",
 					traceId: "trace_regenerate_02",
-				}),
-			).resolves.toEqual({
-				outcome: "accepted",
-				result: {
-					schemaVersion: 1,
-					status: "submitted",
-					messageId: null,
-					executionId: "conversation_id_5",
-				},
-			});
+				} as const;
+				await expect(useCase.regenerate(regeneration)).resolves.toEqual({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "conversation_id_5",
+					},
+				});
+				await expect(useCase.regenerate(regeneration)).resolves.toEqual({
+					outcome: "replayed",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "conversation_id_5",
+					},
+				});
 
-			const [counts, outbox, audit] = await Promise.all([
-				client`
+				expect(
+					await client`select status from platform.conversations where id = 'conversation_id_1'`,
+				).toEqual([{ status: "active" }]);
+
+				const [counts, outbox, audit] = await Promise.all([
+					client`
 					select
 						(select count(*)::int from platform.conversation_messages) as messages,
 						(select count(*)::int from platform.conversation_executions) as executions,
@@ -936,50 +976,51 @@ describe("PostgreSQL Conversation command transaction", () => {
 						(select count(*)::int from platform.idempotency_records) as idempotency,
 						(select count(*)::int from platform.conversation_audit_events) as audit
 				`,
-				client`
+					client`
 					select operation, payload from platform.outbox_items
 					where operation = 'conversation.turn.regenerate.v1'
 				`,
-				client`
+					client`
 					select action, conversation_id, execution_id
 					from platform.conversation_audit_events
 					where action = 'conversation.regeneration.accepted'
 				`,
-			]);
-			expect(counts[0]).toEqual({
-				messages: 1,
-				executions: 2,
-				outbox: 2,
-				idempotency: 3,
-				audit: 2,
-			});
-			expect(outbox).toEqual([
-				{
-					operation: "conversation.turn.regenerate.v1",
-					payload: {
-						schemaVersion: 1,
-						conversationId: "conversation_id_1",
-						executionId: "conversation_id_5",
-						messageId: "conversation_id_2",
-						turnId: "conversation_id_6",
-						sessionGeneration: 1,
-						modelConfigurationRevision: null,
-						modelOptionId: null,
-						reasoningLevel: null,
+				]);
+				expect(counts[0]).toEqual({
+					messages: 1,
+					executions: 2,
+					outbox: 2,
+					idempotency: 3,
+					audit: 2,
+				});
+				expect(outbox).toEqual([
+					{
+						operation: "conversation.turn.regenerate.v1",
+						payload: {
+							schemaVersion: 1,
+							conversationId: "conversation_id_1",
+							executionId: "conversation_id_5",
+							messageId: "conversation_id_2",
+							turnId: "conversation_id_6",
+							sessionGeneration: 1,
+							modelConfigurationRevision: null,
+							modelOptionId: null,
+							reasoningLevel: null,
+						},
 					},
-				},
-			]);
-			expect(audit).toEqual([
-				{
-					action: "conversation.regeneration.accepted",
-					conversation_id: "conversation_id_1",
-					execution_id: "conversation_id_5",
-				},
-			]);
-		} finally {
-			await transaction.close();
-		}
-	});
+				]);
+				expect(audit).toEqual([
+					{
+						action: "conversation.regeneration.accepted",
+						conversation_id: "conversation_id_1",
+						execution_id: "conversation_id_5",
+					},
+				]);
+			} finally {
+				await Promise.all([transaction.close(), eventTransaction.close()]);
+			}
+		},
+	);
 
 	it("creates one stable stop request for a target execution", async () => {
 		const { transaction, useCase } = createConversation();

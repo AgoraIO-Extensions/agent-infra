@@ -1318,7 +1318,7 @@ function validateRegenerationPlan(
 		conversation.agentId !== current.agentId ||
 		conversation.actorId !== current.actorId ||
 		conversation.channelId !== current.channelId ||
-		current.status !== "active" ||
+		(current.status !== "ready" && current.status !== "active") ||
 		conversation.status !== "active" ||
 		conversation.sessionGeneration !== current.sessionGeneration ||
 		conversation.hostSessionRef !== current.hostSessionRef ||
