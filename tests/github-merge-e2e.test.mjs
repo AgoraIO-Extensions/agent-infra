@@ -41,6 +41,7 @@ test("merge conformance merges only run-owned disposable branches", async () => 
 });
 
 function lifecycleFetch(calls) {
+	let branchMerged = false;
 	let id = 0;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
@@ -65,12 +66,13 @@ function lifecycleFetch(calls) {
 				},
 			};
 		else {
+			if (args.actionId === "github.merge_branch") branchMerged = true;
 			calls.push({ action: args.actionId, input: args.input });
 			structuredContent = {
 				action: args.actionId,
 				actionVersionId: `${args.actionId}@v7`,
 				callId: `call-${++id}`,
-				result: resultFor(args.actionId, args.input),
+				result: resultFor(args.actionId, args.input, { branchMerged }),
 				status: "SUCCEEDED",
 			};
 		}
@@ -82,7 +84,7 @@ function lifecycleFetch(calls) {
 	};
 }
 
-function resultFor(action, input) {
+function resultFor(action, input, state) {
 	const marker = "connection-e2e:merge-run";
 	if (action === "github.get_repository")
 		return {
@@ -95,11 +97,13 @@ function resultFor(action, input) {
 		return {
 			commit: {
 				sha:
-					input.branch === "main" || input.branch.includes("base")
-						? "main-sha"
-						: input.branch.includes("pr-head")
-							? "pr-head-sha"
-							: "branch-head-sha",
+					input.branch.includes("merge-base") && state.branchMerged
+						? "branch-merge-sha"
+						: input.branch === "main" || input.branch.includes("base")
+							? "main-sha"
+							: input.branch.includes("pr-head")
+								? "pr-head-sha"
+								: "branch-head-sha",
 			},
 		};
 	if (action === "github.create_or_update_file")

@@ -108,8 +108,16 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 			head: branches[1],
 			idempotencyKey: `${runId}:branch-merge`,
 		});
-		if (!branchMerge?.sha && !branchMerge?.commit?.sha)
+		const branchMergeSha = branchMerge?.sha ?? branchMerge?.commit?.sha;
+		if (!branchMergeSha)
 			throw new Error("branch merge did not return a commit SHA");
+		const mergedBranch = await execute(
+			"github.get_branch",
+			{ ...target, branch: branches[0] },
+			true,
+		);
+		if (mergedBranch?.commit?.sha !== branchMergeSha)
+			throw new Error("branch merge was not confirmed");
 		const prHead = await execute(
 			"github.get_branch",
 			{ ...target, branch: branches[3] },
@@ -142,7 +150,14 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 			{ ...target, pullNumber: pull.number },
 			true,
 		);
-		if (confirmed?.body !== marker || confirmed.head?.sha !== prHeadSha)
+		if (
+			confirmed?.body !== marker ||
+			confirmed.title !== marker ||
+			confirmed.state !== "open" ||
+			confirmed.base?.ref !== branches[2] ||
+			confirmed.head?.ref !== branches[3] ||
+			confirmed.head?.sha !== prHeadSha
+		)
 			throw new Error("pull request ownership marker does not match");
 		const merged = await execute("github.merge_pull_request", {
 			...target,

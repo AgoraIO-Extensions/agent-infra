@@ -41,13 +41,13 @@ jobs:
         env:
           CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
           CONNECTION_GITHUB_E2E_ENABLED: "true"
-        run: node tests/github-merge-e2e.mjs "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | tee connection-github-merge-e2e-result.json
+        run: node tests/github-merge-e2e.mjs "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-merge-e2e-result.json
       - name: Upload merge evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: connection-github-merge-${{ github.run_id }}
+          name: connection-github-merge-${{ github.run_id }}-${{ github.run_attempt }}
           path: connection-github-merge-e2e-result.json
           retention-days: 30
 
