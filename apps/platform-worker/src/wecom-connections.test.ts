@@ -84,3 +84,40 @@ it.each(["timeout", "retry_exhausted", "auth_failed"])(
 		}
 	},
 );
+
+it.each([false, true])(
+	"releases claimed leases after reconcile failure even if release fails: %s",
+	async (releaseFails) => {
+		mocks.connect.mockRejectedValueOnce(new Error("connect unavailable"));
+		if (releaseFails)
+			mocks.release.mockRejectedValueOnce(new Error("release unavailable"));
+		const worker = createPlatformWecomConnectionsV1({
+			databaseUrl: "postgres://fixture",
+			holderId: "worker",
+			bindings: async () => [
+				{
+					botId: "bot",
+					agentId: "agent",
+					bindingReference: "binding",
+					credentialVersion: "v1",
+					secret: "fixture",
+				},
+			],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+			receive: async () => ({ outcome: "denied" }),
+		});
+		try {
+			await expect(worker.tick()).rejects.toThrow("connect unavailable");
+			expect(mocks.release).toHaveBeenCalledWith(
+				expect.objectContaining({ botId: "bot", holderId: "worker", fence: 1 }),
+			);
+			await worker.tick();
+			expect(mocks.connect).toHaveBeenCalledTimes(2);
+		} finally {
+			await worker.close();
+		}
+	},
+);

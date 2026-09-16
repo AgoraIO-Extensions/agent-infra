@@ -89,7 +89,15 @@ export function createPlatformWecomWorkerV1(
 					/* Observation only. */
 				}
 			});
-			return delivery.dispatch();
+			// Claim a bounded batch so one slow reply cannot serialize all bots.
+			const results = await Promise.allSettled(
+				Array.from({ length: 8 }, () => delivery.dispatch()),
+			);
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
+			return results.some(
+				(result) => result.status === "fulfilled" && result.value,
+			);
 		},
 		async channelAuthorizationCurrent(
 			record: TaskRuntimeAuthorizationRecordV1,

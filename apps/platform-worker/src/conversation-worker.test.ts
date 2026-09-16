@@ -71,6 +71,7 @@ const options = {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
+	mocks.wecomDispatch.mockReset().mockResolvedValue(undefined);
 });
 
 describe("Conversation Worker discovery and shutdown", () => {
@@ -164,8 +165,45 @@ it("starts WeCom dispatch independently of failed or unsettled discovery", async
 		expect(log).toHaveBeenCalledTimes(1);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(5);
+		expect(mocks.find).toHaveBeenCalledTimes(2);
 	} finally {
 		pending.resolve([]);
+		await worker.stop();
+	}
+});
+
+it("keeps discovering while WeCom is pending and drains it before shutdown", async () => {
+	vi.useFakeTimers();
+	const pending = Promise.withResolvers<void>();
+	mocks.find.mockResolvedValue([]);
+	mocks.wecomDispatch.mockReturnValue(pending.promise);
+	const worker = createPlatformConversationWorkerV2({
+		...options,
+		pollIntervalMs: 1000,
+		wecom: {
+			identity: {
+				resolveSender: async () => null,
+				activeUsers: async () => [],
+			},
+			observe: () => {},
+			sender: { send: async () => "failed" },
+		},
+	});
+	try {
+		worker.start();
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(mocks.find).toHaveBeenCalledTimes(4);
+		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(1);
+		const stopped = worker.stop();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mocks.wecomClose).not.toHaveBeenCalled();
+		pending.resolve();
+		await stopped;
+		expect(mocks.wecomClose).toHaveBeenCalledTimes(1);
+	} finally {
+		pending.resolve();
 		await worker.stop();
 	}
 });

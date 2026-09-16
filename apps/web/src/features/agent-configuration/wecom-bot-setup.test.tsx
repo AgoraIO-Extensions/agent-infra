@@ -81,47 +81,53 @@ it("explains unavailable QR without fabricating a successful binding", () => {
 	);
 });
 
-it("reconciles a lost submission response without claiming authentication failure", async () => {
-	client.setConfig({ baseUrl: "https://platform.test" });
-	const session = {
-		sessionId: "setup",
-		agentId: "agent",
-		configurationRevision: 1,
-		expiresAt: new Date(Date.now() + 300000).toISOString(),
-	};
-	let reads = 0;
-	vi.stubGlobal(
-		"fetch",
-		vi.fn(async (input: Request) => {
-			const path = new URL(input.url).pathname;
-			if (path.endsWith("/wecom-bot"))
-				return Response.json({ status: "connected" });
-			if (path.endsWith("/wecom-setup"))
-				return Response.json({
-					...session,
-					state: "fixture",
-					status: "awaiting_input",
-					qrAvailable: false,
-				});
-			if (path.endsWith("/credentials"))
-				throw new TypeError("Network lost after commit");
-			reads++;
-			return Response.json({ ...session, status: "active" });
-		}),
-	);
-	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
-	fireEvent.change(screen.getByLabelText("Bot ID"), {
-		target: { value: "bot" },
-	});
-	fireEvent.change(screen.getByLabelText("Secret"), {
-		target: { value: "fixture" },
-	});
-	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
-	await waitFor(() => expect(reads).toBe(1));
-	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
-	expect(screen.queryByRole("alert")).toBeNull();
-});
+it.each([0, 408, 429, 500, 503])(
+	"reconciles an ambiguous submission response %s without claiming authentication failure",
+	async (status) => {
+		client.setConfig({ baseUrl: "https://platform.test" });
+		const session = {
+			sessionId: "setup",
+			agentId: "agent",
+			configurationRevision: 1,
+			expiresAt: new Date(Date.now() + 300000).toISOString(),
+		};
+		let reads = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: Request) => {
+				const path = new URL(input.url).pathname;
+				if (path.endsWith("/wecom-bot"))
+					return Response.json({ status: "connected" });
+				if (path.endsWith("/wecom-setup"))
+					return Response.json({
+						...session,
+						state: "fixture",
+						status: "awaiting_input",
+						qrAvailable: false,
+					});
+				if (path.endsWith("/credentials")) {
+					if (status)
+						return Response.json({ error: "upstream unavailable" }, { status });
+					throw new TypeError("Network lost after commit");
+				}
+				reads++;
+				return Response.json({ ...session, status: "active" });
+			}),
+		);
+		render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
+		fireEvent.change(screen.getByLabelText("Bot ID"), {
+			target: { value: "bot" },
+		});
+		fireEvent.change(screen.getByLabelText("Secret"), {
+			target: { value: "fixture" },
+		});
+		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+		await waitFor(() => expect(reads).toBe(1));
+		await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
+		expect(screen.queryByRole("alert")).toBeNull();
+	},
+);
 it("keeps the pending configuration when cancellation is unconfirmed", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
 	const session = {
@@ -191,7 +197,7 @@ it("clears a previously connected status when refresh fails", async () => {
 	);
 });
 
-it.each([400, 403, 409, 503])(
+it.each([400, 403, 409])(
 	"releases the form after a confirmed HTTP %s credential rejection",
 	async (status) => {
 		client.setConfig({ baseUrl: "https://platform.test" });
@@ -237,3 +243,22 @@ it.each([400, 403, 409, 503])(
 		expect(reads).toBe(0);
 	},
 );
+
+it("ignores an older connection status response after a newer refresh", async () => {
+	const initial = Promise.withResolvers<Response>();
+	let reads = 0;
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			++reads === 1 ? initial.promise : Response.json({ status: "connected" }),
+		),
+	);
+	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
+	await waitFor(() => expect(reads).toBe(1));
+	fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
+	initial.resolve(Response.json({ status: "not_configured" }));
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(screen.getByText("已连接")).toBeTruthy();
+	expect(screen.queryByText("未配置")).toBeNull();
+});

@@ -178,9 +178,20 @@ export function createPlatformWecomConnectionsV1(
 		tick() {
 			if (closed) return Promise.resolve();
 			polling ??= reconcile()
-				.catch((error: unknown) => {
-					for (const entry of active.values()) entry.connection.close();
+				.catch(async (error: unknown) => {
+					const entries = [...active.values()];
+					for (const entry of entries) entry.connection.close();
 					active.clear();
+					await Promise.allSettled(
+						entries.map(async (entry) => {
+							try {
+								await statuses.get(entry.claim.botId);
+								await leases.release(entry.claim);
+							} finally {
+								statuses.delete(entry.claim.botId);
+							}
+						}),
+					);
 					throw error;
 				})
 				.finally(() => {

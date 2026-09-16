@@ -251,3 +251,29 @@ it("does not send authentication when ownership expires during the handshake", a
 	await expect.poll(() => adapter.terminalReason).not.toBeNull();
 	expect(frames).toEqual([]);
 });
+
+it.each([
+	{ ack: { errcode: 40014 }, outcome: "failed" },
+	{ ack: {}, outcome: "unknown" },
+])(
+	"classifies provider acknowledgement $outcome through the official SDK",
+	async ({ ack, outcome }) => {
+		const s = await setup();
+		await s.authenticate();
+		s.push();
+		await expect.poll(() => s.messages.length).toBe(1);
+		const message = s.messages[0];
+		if (!message) throw new Error("Missing message");
+		const reply = once(s.socket, "message");
+		const result = s.adapter.sender.send({
+			scope: message,
+			replyHandle: message.replyHandle,
+			text: "fixture answer",
+		});
+		const [raw] = await reply;
+		s.socket.send(
+			JSON.stringify({ headers: JSON.parse(raw.toString()).headers, ...ack }),
+		);
+		expect(await result).toBe(outcome);
+	},
+);

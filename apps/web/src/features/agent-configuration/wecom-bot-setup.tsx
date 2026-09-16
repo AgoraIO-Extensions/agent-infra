@@ -35,18 +35,28 @@ export function WecomBotSetup({
 	const [error, setError] = useState("");
 	const session = useRef<string | undefined>(undefined);
 	const generation = useRef(0);
+	const refreshSequence = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const refresh = useCallback(async () => {
 		const attempt = generation.current;
+		const sequence = ++refreshSequence.current;
 		try {
 			const result = await getWecomBotConnection({
 				path: { agentId },
 				responseStyle: "fields",
 				throwOnError: false,
 			});
-			if (attempt === generation.current) setStatus(result.data?.status);
+			if (
+				attempt === generation.current &&
+				sequence === refreshSequence.current
+			)
+				setStatus(result.data?.status);
 		} catch {
-			if (attempt === generation.current) setStatus(undefined);
+			if (
+				attempt === generation.current &&
+				sequence === refreshSequence.current
+			)
+				setStatus(undefined);
 		}
 	}, [agentId]);
 	useEffect(() => {
@@ -102,6 +112,7 @@ export function WecomBotSetup({
 		setSecret("");
 		setError("");
 		setBusy(true);
+		refreshSequence.current++;
 		setStatus("verifying");
 		const attempt = generation.current;
 		try {
@@ -125,7 +136,15 @@ export function WecomBotSetup({
 				throwOnError: false,
 			});
 			if (attempt !== generation.current) return;
-			if (!submitted.data && submitted.response && !submitted.response.ok) {
+			const statusCode = submitted.response?.status;
+			if (
+				!submitted.data &&
+				statusCode !== undefined &&
+				statusCode >= 400 &&
+				statusCode < 500 &&
+				statusCode !== 408 &&
+				statusCode !== 429
+			) {
 				session.current = undefined;
 				setBusy(false);
 				setStatus(undefined);

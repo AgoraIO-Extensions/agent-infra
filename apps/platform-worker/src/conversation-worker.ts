@@ -116,6 +116,7 @@ export function createPlatformConversationWorkerV2(
 	>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let polling: Promise<number> | undefined;
+	let wecomPolling: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
 	let started = false;
 	let stopped = false;
@@ -176,13 +177,18 @@ export function createPlatformConversationWorkerV2(
 		});
 		return polling;
 	}
-	async function poll() {
-		const results = await Promise.allSettled([
-			tick(),
-			wecom?.dispatch() ?? Promise.resolve(),
-		]);
-		if (results.some((result) => result.status === "rejected"))
-			log("CONVERSATION_DISCOVERY_UNAVAILABLE");
+	function poll() {
+		if (stopped || signal.aborted) return;
+		if (!polling)
+			void tick().catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"));
+		if (wecom && !wecomPolling)
+			wecomPolling = wecom
+				.dispatch()
+				.then(() => undefined)
+				.catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"))
+				.finally(() => {
+					wecomPolling = undefined;
+				});
 		if (!stopped && !signal.aborted)
 			timer = setTimeout(() => {
 				void poll();
@@ -204,6 +210,7 @@ export function createPlatformConversationWorkerV2(
 			closing = (async () => {
 				await Promise.allSettled([
 					polling,
+					wecomPolling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const results = await Promise.allSettled([
