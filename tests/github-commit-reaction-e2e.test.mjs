@@ -52,7 +52,28 @@ test("commit and reaction conformance mutates only run-owned resources and clean
 	);
 });
 
-function lifecycleFetch(calls) {
+test("commit and reaction conformance cleans a created issue when ownership read fails", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubCommitReactionConformance({
+			environment: {
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { failAction: "github.get_issue" }),
+			runId: "commit-run",
+		}),
+		/fetch failed/,
+	);
+	assert.ok(
+		calls.some(
+			({ action, input }) =>
+				action === "github.update_issue" && input.state === "closed",
+		),
+	);
+});
+
+function lifecycleFetch(calls, config = {}) {
 	let id = 0;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
@@ -80,6 +101,7 @@ function lifecycleFetch(calls) {
 			const action = args.actionId;
 			const input = args.input;
 			calls.push({ action, input });
+			if (action === config.failAction) throw new Error("fetch failed");
 			structuredContent = {
 				action,
 				actionVersionId: `${action}@v7`,
