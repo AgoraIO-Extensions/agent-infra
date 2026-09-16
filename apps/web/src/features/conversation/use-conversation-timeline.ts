@@ -60,8 +60,12 @@ export function useConversationTimeline({
 			)
 				clearDetails();
 		});
+		const offline = () => session.reader.disconnect();
+		window.addEventListener("offline", offline);
 		void session.reader.open(conversationId);
+		if (!navigator.onLine) offline();
 		return () => {
+			window.removeEventListener("offline", offline);
 			unsubscribe();
 			session.reader.abort();
 			clearDetails();
@@ -111,6 +115,10 @@ export function useConversationTimeline({
 		staleTime: 0,
 	});
 	const refresh = useCallback(async () => {
+		if (!navigator.onLine) {
+			session.reader.disconnect();
+			return;
+		}
 		await session.reader.refresh();
 		const state = session.reader.getSnapshot();
 		if (state.status !== "ready" || !state.history) return;
@@ -119,12 +127,19 @@ export function useConversationTimeline({
 			{ cancelRefetch: false },
 		);
 	}, [session, queryClient]);
+	const reconnect = useCallback(async () => {
+		if (!navigator.onLine) {
+			session.reader.disconnect();
+			return;
+		}
+		await session.reader.reconnect();
+	}, [session]);
 
 	return {
 		timeline,
 		execution,
 		refresh,
-		reconnect: session.reader.reconnect,
+		reconnect,
 		abort: session.reader.abort,
 	};
 }

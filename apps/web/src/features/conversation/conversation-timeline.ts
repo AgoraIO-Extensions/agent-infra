@@ -267,6 +267,17 @@ export function createConversationTimeline({
 				void readStream(session);
 			}
 		},
+		disconnect() {
+			const session = current;
+			if (!session) return;
+			session.historyRequest?.abort();
+			session.stream?.abort();
+			publish({
+				...state,
+				status: "disconnected",
+				failure: { kind: "network" },
+			});
+		},
 		rejectRead(failure: ConversationReadFailure) {
 			if (current) fail(current, failure);
 		},
