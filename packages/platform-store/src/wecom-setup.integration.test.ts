@@ -15,6 +15,8 @@ import { PostgresWecomSetupV1 } from "./wecom-setup.ts";
 
 it.each([
 	"success",
+	"probe-closed",
+	"concurrent-submit",
 	"revoked",
 	"wrong-secret",
 	"stale-config",
@@ -29,7 +31,9 @@ it.each([
 			"activation-unavailable",
 			"commit-unavailable",
 		].includes(mode);
-		const succeeds = mode === "success" || recovers;
+		const succeeds =
+			["success", "probe-closed", "concurrent-submit"].includes(mode) ||
+			recovers;
 		const db = await startPostgresTestDatabase("wecom-setup");
 		const sql = postgres(db.databaseUrl);
 		const store = new PostgresWecomSetupV1(db);
@@ -41,8 +45,12 @@ it.each([
 		if (!address || typeof address === "string") throw new Error("No address");
 		let active = true;
 		let authFrames = 0;
+		let probeClosed = false;
 		let dependencyUnavailable = mode === "activation-unavailable";
-		server.on("connection", (socket) =>
+		server.on("connection", (socket) => {
+			socket.on("close", () => {
+				probeClosed = true;
+			});
 			socket.on("message", (raw) => {
 				const frame = JSON.parse(raw.toString());
 				if (frame.cmd !== "aibot_subscribe") return;
@@ -55,8 +63,8 @@ it.each([
 						errcode: mode === "wrong-secret" ? 40014 : 0,
 					}),
 				);
-			}),
-		);
+			});
+		});
 		const pair = generateKeyPairSync("rsa", { modulusLength: 3072 });
 		const der = pair.publicKey.export({ format: "der", type: "spki" });
 		const encryptionKeys = {
@@ -76,6 +84,8 @@ it.each([
 		};
 		const directory = {
 			async resolveUser(userId: string) {
+				if (mode === "probe-closed" && authFrames > 0)
+					await expect.poll(() => probeClosed, { timeout: 1000 }).toBe(true);
 				if (dependencyUnavailable && authFrames > 0)
 					throw new Error("Identity dependency unavailable");
 				return {
@@ -128,17 +138,23 @@ it.each([
 			await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
 			await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values ('agent',1,'template_01',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
 			const session = await api.setup.begin("agent", "owner");
-			await api.setup.submit(
-				{
-					agentId: "agent",
-					sessionId: session.sessionId,
-					state: session.state,
-					botId: "fixture-bot",
-					secret: "fixture-secret",
-					takeoverConfirmed: true,
-				},
-				"owner",
-			);
+			const submit = () =>
+				api.setup.submit(
+					{
+						agentId: "agent",
+						sessionId: session.sessionId,
+						state: session.state,
+						botId: "fixture-bot",
+						secret: "fixture-secret",
+						takeoverConfirmed: true,
+					},
+					"owner",
+				);
+			if (mode === "concurrent-submit") {
+				const results = await Promise.allSettled([submit(), submit()]);
+				expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+				expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+			} else await submit();
 			await expect(
 				api.setup.submit(
 					{
@@ -200,8 +216,10 @@ it.each([
 				{ schemaVersion: 1, limit: 100 },
 			);
 			expect(
-				page.items.some((row) => row.action === "wecom.credentials_submitted"),
-			).toBe(true);
+				page.items.filter(
+					(row) => row.action === "wecom.credentials_submitted",
+				),
+			).toHaveLength(1);
 			if (!succeeds)
 				expect(
 					page.items.some((row) => row.action === "wecom.setup_failed"),

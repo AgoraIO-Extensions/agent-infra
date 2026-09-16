@@ -202,13 +202,22 @@ export function createPlatformWecomConnectionsV1(
 		async close() {
 			closed = true;
 			await polling?.catch(() => {});
-			for (const entry of active.values()) {
-				entry.connection.close();
-				await statuses.get(entry.claim.botId);
-				await leases.release(entry.claim);
-			}
+			const entries = [...active.values()];
 			active.clear();
-			await leases.close();
+			const results = await Promise.allSettled(
+				entries.map(async (entry) => {
+					try {
+						entry.connection.close();
+						await statuses.get(entry.claim.botId);
+					} finally {
+						statuses.delete(entry.claim.botId);
+						await leases.release(entry.claim);
+					}
+				}),
+			);
+			results.push(...(await Promise.allSettled([leases.close()])));
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 		},
 	};
 }

@@ -5,19 +5,21 @@ const mocks = vi.hoisted(() => ({
 	release: vi.fn(async () => {}),
 	connect: vi.fn(async () => {}),
 	terminal: null as string | null,
+	socketClose: vi.fn(),
+	storeClose: vi.fn(async () => {}),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWecomConnectionsV1: class {
 		claim = mocks.claim;
 		release = mocks.release;
 		renew = async () => true;
-		close = async () => {};
+		close = mocks.storeClose;
 	},
 }));
 vi.mock("@agent-infra/wecom/worker", () => ({
 	createWecomWebSocketV1: () => ({
 		connect: mocks.connect,
-		close: () => {},
+		close: mocks.socketClose,
 		get terminalReason() {
 			return mocks.terminal;
 		},
@@ -121,3 +123,29 @@ it.each([false, true])(
 		}
 	},
 );
+
+it("closes every connection and store when releasing the first lease fails", async () => {
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () =>
+			["one", "two"].map((botId) => ({
+				botId,
+				agentId: botId,
+				bindingReference: botId,
+				credentialVersion: "v1",
+				secret: "fixture",
+			})),
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({ outcome: "denied" }),
+	});
+	await worker.tick();
+	mocks.release.mockRejectedValueOnce(new Error("release unavailable"));
+	await expect(worker.close()).rejects.toThrow("release unavailable");
+	expect(mocks.socketClose).toHaveBeenCalledTimes(2);
+	expect(mocks.release).toHaveBeenCalledTimes(2);
+	expect(mocks.storeClose).toHaveBeenCalledTimes(1);
+});

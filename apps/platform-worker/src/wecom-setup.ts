@@ -134,7 +134,13 @@ export function createWecomSetupWorkerV1(
 						isLocallyCurrent: () =>
 							!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
 						isCurrent: () => leases.current(claim),
-						receive: async () => {},
+						receive: async () => {
+							connection.close();
+							throw new Error("WeCom setup probe cannot receive messages");
+						},
+						...(options.observeIngress
+							? { observeIngress: options.observeIngress }
+							: {}),
 						protectReply: options.protectReply,
 						revealReply: options.revealReply,
 						observe() {},
@@ -146,6 +152,8 @@ export function createWecomSetupWorkerV1(
 							await store.fail(session.sessionId, "auth_failed", claim);
 						return;
 					}
+					connection.close();
+					connecting = undefined;
 					const unavailable = async (): Promise<never> => {
 						throw new Error("Unexpected WeCom configuration admission");
 					};
