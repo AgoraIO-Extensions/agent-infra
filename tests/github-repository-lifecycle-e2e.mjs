@@ -35,6 +35,7 @@ export async function runGitHubRepositoryLifecycle({
 			90,
 		);
 	const marker = `connection-e2e:${runId}`;
+	let creationStarted = false;
 	let owned = false;
 	let failure;
 	let cleanupFailure;
@@ -62,6 +63,7 @@ export async function runGitHubRepositoryLifecycle({
 			)
 				throw error;
 		}
+		creationStarted = true;
 		const created = await execute("github.create_repository", {
 			autoInit: true,
 			description: marker,
@@ -105,6 +107,32 @@ export async function runGitHubRepositoryLifecycle({
 	} catch (error) {
 		failure = error;
 	} finally {
+		if (creationStarted && !owned) {
+			try {
+				const current = await execute(
+					"github.get_repository",
+					{ owner, repo: name },
+					true,
+				);
+				if (
+					current?.name === name &&
+					current.owner?.login === owner &&
+					current.private === true &&
+					current.description === marker
+				)
+					owned = true;
+				else
+					cleanupFailure = new Error(
+						"repository cleanup ownership marker does not match",
+					);
+			} catch (error) {
+				if (
+					!(error instanceof Error) ||
+					!error.message.includes("Provider resource was not found")
+				)
+					cleanupFailure = error;
+			}
+		}
 		if (owned) {
 			try {
 				const current = await execute(
