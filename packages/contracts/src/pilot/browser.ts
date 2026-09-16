@@ -518,7 +518,182 @@ export const CreateConversationRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 });
 
+export const WecomReceiptProjectionV1Schema = z.strictObject({
+	receiptId: OpaqueIdV1Schema,
+	status: z.enum(["accepted", "busy", "unavailable"]),
+	conversationId: OpaqueIdV1Schema.nullable(),
+	executionId: OpaqueIdV1Schema.nullable(),
+	deliveryStatus: z.enum([
+		"pending",
+		"claimed",
+		"sending",
+		"sent",
+		"failed",
+		"unknown",
+		"cancelled",
+		"expired",
+		"abandoned",
+	]),
+});
+const wecomReceiptPath = z.strictObject({ receiptId: pathId() });
+export const WecomSetupProjectionV1Schema = z.strictObject({
+	sessionId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	configurationRevision: z.number().int().positive(),
+	expiresAt: Rfc3339TimestampV1Schema,
+	status: z.enum([
+		"awaiting_input",
+		"verifying",
+		"active",
+		"auth_failed",
+		"conflict",
+		"cancelled",
+		"expired",
+	]),
+});
+export const WecomSetupCredentialsV1Schema = z.strictObject({
+	state: z.string().min(1).max(1024),
+	botId: z.string().min(1).max(1024),
+	secret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+	takeoverConfirmed: z.literal(true),
+});
+const wecomSetupPath = z.strictObject({
+	agentId: pathId(),
+	sessionId: pathId(),
+});
 export const pilotBrowserHttpOpenApiPathsV1 = {
+	"/api/v1/agents/{agentId}/wecom-bot": {
+		get: {
+			operationId: "getWecomBotConnection",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner bot connection status",
+					z.strictObject({
+						status: z.enum([
+							"not_configured",
+							"callback",
+							"verifying",
+							"connected",
+							"disconnected",
+							"auth_failed",
+						]),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup": {
+		post: {
+			operationId: "beginWecomSetup",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration session",
+					WecomSetupProjectionV1Schema.extend({
+						state: z.string(),
+						qrAvailable: z.literal(false),
+						qrUnavailableReason: z.literal(
+							"authorization_correlation_unverified",
+						),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}": {
+		get: {
+			operationId: "getWecomSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration status",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials": {
+		post: {
+			operationId: "submitWecomCredentials",
+			requestParams: { path: wecomSetupPath },
+			requestBody: requiredJsonRequestBody(WecomSetupCredentialsV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Candidate pending Worker validation",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel": {
+		post: {
+			operationId: "cancelWecomSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Cancelled configuration session",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
+	"/api/v1/wecom/receipts": {
+		get: {
+			operationId: "listWecomReceipts",
+			requestParams: {
+				query: z.strictObject({ cursor: OpaqueCursorV1Schema.optional() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery statuses",
+					z.strictObject({
+						items: z.array(WecomReceiptProjectionV1Schema),
+						nextCursor: OpaqueCursorV1Schema.nullable(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}": {
+		get: {
+			operationId: "getWecomReceipt",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery status",
+					WecomReceiptProjectionV1Schema.extend({
+						schemaVersion: SchemaVersionV1Schema,
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}/abandon": {
+		post: {
+			operationId: "abandonUnknownWecomDelivery",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Abandoned without resending",
+					z.strictObject({
+						schemaVersion: SchemaVersionV1Schema,
+						status: z.literal("abandoned"),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v1/session": {
 		get: {
 			operationId: "getCurrentSession",

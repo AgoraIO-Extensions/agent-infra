@@ -382,3 +382,29 @@ describe("explicit historical metadata recovery authority", () => {
 		).rejects.toMatchObject({ code: "RUNTIME_FENCE_STALE" });
 	});
 });
+
+it("channel revocation persists shared system control instead of dropping a running task", async () => {
+	const h = harness();
+	const channelAuthorizationCurrent = vi.fn(async () => false);
+	const useCase = createTaskRuntimeAuthorizationUseCaseV1({
+		...h.ports,
+		channelAuthorizationCurrent,
+	});
+	const result = await useCase.current(
+		h.context,
+		h.state,
+		"execution.renew",
+		signal(),
+	);
+	expect(result.authority).toMatchObject({
+		purpose: "control",
+		reason: "authorization_revoked",
+	});
+	expect(h.ports.recordControl).toHaveBeenCalledWith(
+		expect.objectContaining({
+			executionId: h.claim.executionId,
+			reason: "authorization_revoked",
+		}),
+		expect.any(AbortSignal),
+	);
+});

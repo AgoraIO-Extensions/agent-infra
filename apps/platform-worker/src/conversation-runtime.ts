@@ -53,6 +53,10 @@ export interface ConversationLegacyControlStoreV2 {
 }
 
 export interface ConversationRuntimeOptionsV2 {
+	readonly channelAuthorizationCurrent?: (
+		record: TaskRuntimeAuthorizationRecordV1,
+		signal: AbortSignal,
+	) => Promise<boolean>;
 	/** Instance identity owning the PostgreSQL dispatch lease. */
 	readonly workerId: string;
 	readonly signing: {
@@ -151,6 +155,10 @@ export function createConversationRuntimeV2(
 	const legacyControlStore = options.legacyControlStore;
 	const taskAuthorization = createTaskRuntimeAuthorizationUseCaseV1({
 		workerId: options.workerId,
+		channelAuthorizationCurrent: (record, signal) =>
+			options.channelAuthorizationCurrent
+				? bounded(options.channelAuthorizationCurrent(record, signal), signal)
+				: Promise.resolve(!/^wecom_(bot|app):/.test(record.boundary.channelId)),
 		readRuntimeState: (claim, signal) =>
 			bounded(options.dispatchStore.readRuntimeState({ claim }), signal),
 		readAuthorization: (executionId, signal) =>

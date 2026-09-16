@@ -26,7 +26,7 @@ import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 
 type DatabaseRows = Record<string, unknown>[];
 interface DatabaseReader {
-	unsafe(query: string): Promise<DatabaseRows>;
+	unsafe(query: string, parameters?: readonly unknown[]): Promise<DatabaseRows>;
 	end(): Promise<void>;
 }
 
@@ -200,6 +200,11 @@ function deploymentInput(databaseUrl: string) {
 	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const der = publicKey.export({ format: "der", type: "spki" });
 	const input: ProductionPlatformApiInputV1 = {
+		wecomSetupEnabled: true,
+		wecomIdentity: {
+			resolveSender: async () => null,
+			activeUsers: async () => [],
+		},
 		databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
 		identity,
@@ -289,9 +294,20 @@ let assembly: ReturnType<typeof assemblePlatformApi> | undefined;
 let app: ReturnType<typeof createPlatformApp>;
 
 function openApi() {
-	assembly = assemblePlatformApi(
-		createProductionPlatformApiAssemblyInputV1(fixture.input),
+	expect(
+		createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			wecomSetupEnabled: undefined,
+		}).wecomCredentialEncryptionKeys,
+	).toBeUndefined();
+	const input = createProductionPlatformApiAssemblyInputV1(fixture.input);
+	expect(input.wecomCredentialEncryptionKeys).toBe(
+		fixture.input.encryptionKeys,
 	);
+	assembly = assemblePlatformApi(input);
+	expect(assembly.dependencies.wecomSetup).toBeDefined();
+	expect(assembly.dependencies.wecomReceipts).toBeDefined();
+	expect(assembly.dependencies.wecom).toBeUndefined();
 	app = createPlatformApp(assembly.dependencies);
 }
 
@@ -355,6 +371,11 @@ afterAll(async () => {
 
 describe("production Platform API assembly with PostgreSQL", () => {
 	it("persists the admitted application, current Owner changes and encrypted Secrets across API reopening", async () => {
+		await json(await request("/api/v1/wecom/receipts", "alice"), 200);
+		await json(await app.request("/api/v1/wecom/receipts"), 401);
+		expect((await app.request("/callbacks/wecom/unconfigured")).status).toBe(
+			404,
+		);
 		const empty = await readDatabase();
 		const path = "/api/v2/agent-applications";
 		await json(
@@ -477,10 +498,19 @@ describe("production Platform API assembly with PostgreSQL", () => {
 			await request(configurationPath, "admin", update, "update-denied-admin"),
 			404,
 		);
+		await reader.unsafe(
+			`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id,encrypted_credential) select 'stale-setup',id,'alice',current_configuration_revision,authorization_revision,'fixture-digest',now()+interval '5 minutes','verifying','fixture-bot','{"fixture":"encrypted"}'::jsonb from platform.agents where id=$1`,
+			[approved.agentId],
+		);
 		const updated = await json(
 			await request(configurationPath, "alice", update, "update-owner"),
 			200,
 		);
+		expect(
+			await reader.unsafe(
+				"select status,encrypted_credential from platform.wecom_setup_sessions where session_id='stale-setup'",
+			),
+		).toEqual([{ status: "conflict", encrypted_credential: null }]);
 		expect(updated).toMatchObject({
 			configuration: {
 				environment: update.environment,

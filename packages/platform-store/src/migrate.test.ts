@@ -300,7 +300,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 				where table_schema = 'platform'
 					and column_name ~ '(connection|kubernetes|credential|message_body)'
 				`;
-			expect(forbiddenObjects).toEqual([]);
+			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
+			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
+				"wecom_connections",
+				"wecom_receipts.connection_bot_id",
+				"wecom_receipts.connection_fence",
+				"wecom_setup_sessions.encrypted_credential",
+			]);
 
 			await expectConstraintFailure(
 				client`

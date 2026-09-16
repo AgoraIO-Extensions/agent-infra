@@ -184,3 +184,29 @@ describe("AgentConfigurationScreen", () => {
 		await waitFor(() => expect(document.activeElement).toBe(status));
 	});
 });
+
+it("shows group visibility before an Owner submits a WeCom binding through the existing configuration request", () => {
+	const onSave = vi.fn();
+	render(
+		<AgentConfigurationScreen
+			agent={agent}
+			onSave={onSave}
+			onUpgradeImage={vi.fn()}
+			session={{ kind: "ready", session: ownerSession }}
+			submitting={false}
+		/>,
+	);
+	expect(screen.getByText(/群消息和 Agent 回复对群成员可见/)).toBeTruthy();
+	fireEvent.click(screen.getByRole("checkbox", { name: "修改自建应用绑定" }));
+	fireEvent.change(screen.getByLabelText("自建应用配置标识"), {
+		target: { value: "approved_bot" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+	expect(onSave).toHaveBeenCalledWith(
+		expect.objectContaining({
+			channels: [
+				{ kind: "wecom_app", enabled: true, bindingReference: "approved_bot" },
+			],
+		}),
+	);
+});
