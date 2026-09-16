@@ -201,6 +201,10 @@ function deploymentInput(databaseUrl: string) {
 	const der = publicKey.export({ format: "der", type: "spki" });
 	const input: ProductionPlatformApiInputV1 = {
 		wecomSetupEnabled: true,
+		wecomIdentity: {
+			resolveSender: async () => null,
+			activeUsers: async () => [],
+		},
 		databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
 		identity,
@@ -302,6 +306,8 @@ function openApi() {
 	);
 	assembly = assemblePlatformApi(input);
 	expect(assembly.dependencies.wecomSetup).toBeDefined();
+	expect(assembly.dependencies.wecomReceipts).toBeDefined();
+	expect(assembly.dependencies.wecom).toBeUndefined();
 	app = createPlatformApp(assembly.dependencies);
 }
 
@@ -365,6 +371,11 @@ afterAll(async () => {
 
 describe("production Platform API assembly with PostgreSQL", () => {
 	it("persists the admitted application, current Owner changes and encrypted Secrets across API reopening", async () => {
+		await json(await request("/api/v1/wecom/receipts", "alice"), 200);
+		await json(await app.request("/api/v1/wecom/receipts"), 401);
+		expect((await app.request("/callbacks/wecom/unconfigured")).status).toBe(
+			404,
+		);
 		const empty = await readDatabase();
 		const path = "/api/v2/agent-applications";
 		await json(

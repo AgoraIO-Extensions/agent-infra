@@ -1,7 +1,9 @@
+import type { WecomSendPortV1 } from "@agent-infra/platform-core";
 import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
+	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
 	connectionsClose: vi.fn(async () => {}),
@@ -15,7 +17,10 @@ vi.mock("@agent-infra/platform-store", () => ({
 vi.mock("@agent-infra/platform-core", () => ({
 	createWecomAuthorizationV1: () => ({}),
 	createWecomChannelV1: () => ({}),
-	createWecomDeliveryV1: () => ({ dispatch: mocks.dispatch }),
+	createWecomDeliveryV1: (options: { sender: WecomSendPortV1 }) => {
+		mocks.sender = options.sender;
+		return { dispatch: mocks.dispatch };
+	},
 }));
 
 vi.mock("./wecom-connections.js", () => ({
@@ -118,3 +123,40 @@ it.each(["reconcile", "setup-close", "connections-close"])(
 		expect(mocks.close).toHaveBeenCalledTimes(1);
 	},
 );
+
+it("classifies a rejected reply route as failed without calling any external sender", async () => {
+	const send = vi.fn(async () => "sent" as const);
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send },
+		connections: {
+			bindings: async () => [],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("invalid route");
+			},
+		},
+	});
+	try {
+		expect(
+			await mocks.sender?.send({
+				scope: {
+					agentId: "agent",
+					bindingReference: "binding",
+					kind: "wecom_bot",
+					senderId: "sender",
+					peerId: "peer",
+					conversationType: "single",
+					threadId: null,
+				},
+				replyHandle: "invalid",
+				text: "fixture",
+			}),
+		).toBe("failed");
+		expect(send).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});

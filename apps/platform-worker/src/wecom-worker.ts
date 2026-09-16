@@ -70,9 +70,10 @@ export function createPlatformWecomWorkerV1(
 		sender: {
 			async send(input) {
 				if (connections && options.connections) {
-					const route = await options.connections.revealReply(
-						input.replyHandle,
-					);
+					const route = await options.connections
+						.revealReply(input.replyHandle)
+						.catch(() => null);
+					if (!route) return "failed";
 					if (route.websocket) return connections.sender.send(input);
 				}
 				return options.sender.send(input);

@@ -28,6 +28,63 @@ export interface WecomRoutesDependenciesV1 {
 			| "invalid",
 	) => void;
 }
+export type WecomReceiptRoutesDependenciesV1 = Pick<
+	WecomRoutesDependenciesV1,
+	"receipts" | "identity"
+>;
+export function registerWecomReceiptRoutesV1(
+	app: Hono,
+	dependencies: WecomReceiptRoutesDependenciesV1,
+) {
+	app.get("/api/v1/wecom/receipts", async (context) => {
+		const traceId = requestMetadata(context.req.raw).traceId;
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			traceId,
+		);
+		const cursor = context.req.query("cursor");
+		if (cursor !== undefined && !/^[a-f0-9]{64}$/.test(cursor))
+			throw new HttpProtocolError("INVALID_REQUEST", traceId);
+		return context.json(
+			await dependencies.receipts.list(identity.userId, cursor),
+		);
+	});
+	app.get("/api/v1/wecom/receipts/:receiptId", async (context) => {
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			requestMetadata(context.req.raw).traceId,
+		);
+		const receipt = await dependencies.receipts.read(
+			context.req.param("receiptId"),
+			identity.userId,
+		);
+		if (!receipt)
+			throw new HttpProtocolError(
+				"RESOURCE_UNAVAILABLE",
+				requestMetadata(context.req.raw).traceId,
+			);
+		return context.json({ schemaVersion: 1, ...receipt });
+	});
+	app.post("/api/v1/wecom/receipts/:receiptId/abandon", async (context) => {
+		const identity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			requestMetadata(context.req.raw).traceId,
+		);
+		const abandoned = await dependencies.receipts.abandon(
+			context.req.param("receiptId"),
+			identity.userId,
+		);
+		if (!abandoned)
+			throw new HttpProtocolError(
+				"RESOURCE_UNAVAILABLE",
+				requestMetadata(context.req.raw).traceId,
+			);
+		return context.json({ schemaVersion: 1, status: "abandoned" });
+	});
+}
 export function registerWecomRoutesV1(
 	app: Hono,
 	dependencies: WecomRoutesDependenciesV1,
@@ -96,52 +153,5 @@ export function registerWecomRoutesV1(
 			}
 		},
 	);
-	app.get("/api/v1/wecom/receipts", async (context) => {
-		const traceId = requestMetadata(context.req.raw).traceId;
-		const identity = await resolveIdentity(
-			dependencies.identity,
-			context.req.raw,
-			traceId,
-		);
-		const cursor = context.req.query("cursor");
-		if (cursor !== undefined && !/^[a-f0-9]{64}$/.test(cursor))
-			throw new HttpProtocolError("INVALID_REQUEST", traceId);
-		return context.json(
-			await dependencies.receipts.list(identity.userId, cursor),
-		);
-	});
-	app.get("/api/v1/wecom/receipts/:receiptId", async (context) => {
-		const identity = await resolveIdentity(
-			dependencies.identity,
-			context.req.raw,
-			requestMetadata(context.req.raw).traceId,
-		);
-		const receipt = await dependencies.receipts.read(
-			context.req.param("receiptId"),
-			identity.userId,
-		);
-		if (!receipt)
-			throw new HttpProtocolError(
-				"RESOURCE_UNAVAILABLE",
-				requestMetadata(context.req.raw).traceId,
-			);
-		return context.json({ schemaVersion: 1, ...receipt });
-	});
-	app.post("/api/v1/wecom/receipts/:receiptId/abandon", async (context) => {
-		const identity = await resolveIdentity(
-			dependencies.identity,
-			context.req.raw,
-			requestMetadata(context.req.raw).traceId,
-		);
-		const abandoned = await dependencies.receipts.abandon(
-			context.req.param("receiptId"),
-			identity.userId,
-		);
-		if (!abandoned)
-			throw new HttpProtocolError(
-				"RESOURCE_UNAVAILABLE",
-				requestMetadata(context.req.raw).traceId,
-			);
-		return context.json({ schemaVersion: 1, status: "abandoned" });
-	});
+	registerWecomReceiptRoutesV1(app, dependencies);
 }

@@ -1,6 +1,9 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
-import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationAuthorityContextV1,
+	WecomIdentityPortV1,
+} from "@agent-infra/platform-core";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
@@ -29,6 +32,7 @@ export interface ProductionPlatformApiInputV1
 	readonly encryptionKeys: unknown;
 	/** Enable only when the paired Worker deployment provides wecom.setup and connections. */
 	readonly wecomSetupEnabled?: boolean;
+	readonly wecomIdentity?: WecomIdentityPortV1;
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resourceProfile"];
@@ -53,6 +57,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 			typeof input.loadAuthorityContext !== "function"
 		)
 			throw new Error();
+		if (
+			input.wecomSetupEnabled === true &&
+			(typeof input.wecomIdentity?.resolveSender !== "function" ||
+				typeof input.wecomIdentity?.activeUsers !== "function")
+		)
+			throw new Error();
 		resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
 			input.resourceProfile,
 		);
@@ -70,6 +80,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	return {
 		databaseUrl: input.databaseUrl,
 		identity: input.identity,
+		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
 		...(input.wecomSetupEnabled === true
 			? { wecomCredentialEncryptionKeys: input.encryptionKeys }
 			: {}),

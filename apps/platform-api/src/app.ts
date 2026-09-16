@@ -18,7 +18,9 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+	registerWecomReceiptRoutesV1,
 	registerWecomRoutesV1,
+	type WecomReceiptRoutesDependenciesV1,
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
 import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
@@ -31,6 +33,7 @@ export interface PlatformAppDependencies {
 		work: () => Promise<void>,
 	) => Promise<void>;
 	readonly wecom?: WecomRoutesDependenciesV1;
+	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
 	readonly wecomSetup?: Parameters<typeof registerWecomSetupRoutesV1>[1];
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
@@ -70,6 +73,8 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
 	if (dependencies.wecom) registerWecomRoutesV1(app, dependencies.wecom);
+	else if (dependencies.wecomReceipts)
+		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
 	registerConversationRoutes(app, dependencies.conversation);

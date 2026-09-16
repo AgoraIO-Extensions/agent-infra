@@ -6,6 +6,7 @@ import {
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresAgentConfigurationQueryV1,
@@ -34,6 +35,7 @@ import {
 } from "./projection.js";
 import {
 	assembleWecomApiV1,
+	assembleWecomReceiptApiV1,
 	type WecomApiDeploymentV1,
 } from "./wecom-assembly.js";
 import { assembleWecomSetupApiV1 } from "./wecom-setup-assembly.js";
@@ -44,6 +46,7 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly wecom?: WecomApiDeploymentV1;
 	readonly wecomCredentialEncryptionKeys?: unknown;
+	readonly wecomIdentity?: WecomIdentityPortV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
@@ -73,6 +76,12 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	if (
+		input.wecomCredentialEncryptionKeys &&
+		!input.wecom &&
+		!input.wecomIdentity
+	)
+		throw new Error("WeCom setup requires a receipt identity deployment");
 	const wecomSetup = input.wecomCredentialEncryptionKeys
 		? assembleWecomSetupApiV1({
 				databaseUrl: input.databaseUrl,
@@ -83,6 +92,10 @@ export function assemblePlatformApi(
 	const wecom = input.wecom
 		? assembleWecomApiV1(input.databaseUrl, input.wecom)
 		: undefined;
+	const wecomReceipts =
+		!wecom && input.wecomIdentity
+			? assembleWecomReceiptApiV1(input.databaseUrl, input.wecomIdentity)
+			: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -238,6 +251,14 @@ export function assemblePlatformApi(
 		},
 	};
 	const dependencies: PlatformAppDependencies = {
+		...(wecomReceipts
+			? {
+					wecomReceipts: {
+						...wecomReceipts.dependencies,
+						identity: input.identity,
+					},
+				}
+			: {}),
 		...(wecomSetup
 			? { wecomSetup: { identity: input.identity, setup: wecomSetup.setup } }
 			: {}),
@@ -289,6 +310,7 @@ export function assemblePlatformApi(
 		sessionAudit: { identity: input.identity, audit: auditQuery },
 	};
 	const adapters = [
+		...(wecomReceipts ? [wecomReceipts] : []),
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),
 		foundationTransaction,
