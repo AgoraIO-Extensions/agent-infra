@@ -12,6 +12,10 @@ import {
 	type ConversationRuntimeOptionsV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import {
+	createPlatformWecomWorkerV1,
+	type WecomWorkerDeploymentV1,
+} from "./wecom-worker.js";
 
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
@@ -19,6 +23,7 @@ export interface PlatformConversationWorkerOptionsV2
 		"dispatchStore" | "taskAuthorizationStore" | "legacyControlStore"
 	> {
 	readonly databaseUrl: string;
+	readonly wecom?: WecomWorkerDeploymentV1;
 	readonly pollIntervalMs?: number;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
@@ -56,11 +61,28 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	let wecom: ReturnType<typeof createPlatformWecomWorkerV1> | undefined;
 	let runtime: ReturnType<typeof createConversationRuntimeV2>;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
+		wecom = options.wecom
+			? createPlatformWecomWorkerV1({
+					...options.wecom,
+					databaseUrl: options.databaseUrl,
+				})
+			: undefined;
 		runtime = createConversationRuntimeV2({
 			...options,
+			channelAuthorizationCurrent: async (record, signal) => {
+				if (
+					options.channelAuthorizationCurrent &&
+					!(await options.channelAuthorizationCurrent(record, signal))
+				)
+					return false;
+				return wecom
+					? wecom.channelAuthorizationCurrent(record)
+					: !/^wecom_(bot|app):/.test(record.boundary.channelId);
+			},
 			signal,
 			dispatchStore: store,
 			taskAuthorizationStore,
@@ -81,6 +103,7 @@ export function createPlatformConversationWorkerV2(
 	} catch (error) {
 		controller.abort();
 		void Promise.allSettled([
+			...(wecom ? [wecom.close()] : []),
 			transaction.close(),
 			store.close(),
 			taskAuthorizationStore.close(),
@@ -94,6 +117,9 @@ export function createPlatformConversationWorkerV2(
 	>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let polling: Promise<number> | undefined;
+	let wecomPolling: Promise<void> | undefined;
+	let connectionPolling: Promise<void> | undefined;
+	let connectionTimer: ReturnType<typeof setTimeout> | undefined;
 	let closing: Promise<void> | undefined;
 	let started = false;
 	let stopped = false;
@@ -154,12 +180,30 @@ export function createPlatformConversationWorkerV2(
 		});
 		return polling;
 	}
-	async function poll() {
-		try {
-			await tick();
-		} catch {
-			log("CONVERSATION_DISCOVERY_UNAVAILABLE");
-		}
+	function pollConnections() {
+		if (stopped || signal.aborted || !wecom) return;
+		if (!connectionPolling)
+			connectionPolling = wecom
+				.reconcile()
+				.catch(() => log("WECOM_CONNECTION_RECONCILE_UNAVAILABLE"))
+				.finally(() => {
+					connectionPolling = undefined;
+				});
+		if (!stopped && !signal.aborted)
+			connectionTimer = setTimeout(pollConnections, Math.min(interval, 5000));
+	}
+	function poll() {
+		if (stopped || signal.aborted) return;
+		if (!polling)
+			void tick().catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"));
+		if (wecom && !wecomPolling)
+			wecomPolling = wecom
+				.dispatch()
+				.then(() => undefined)
+				.catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"))
+				.finally(() => {
+					wecomPolling = undefined;
+				});
 		if (!stopped && !signal.aborted)
 			timer = setTimeout(() => {
 				void poll();
@@ -170,20 +214,25 @@ export function createPlatformConversationWorkerV2(
 		start() {
 			if (started || stopped) return;
 			started = true;
+			pollConnections();
 			void poll();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			clearTimeout(timer);
+			clearTimeout(connectionTimer);
 			controller.abort();
 			runtime.close();
 			closing = (async () => {
 				await Promise.allSettled([
 					polling,
+					wecomPolling,
+					connectionPolling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const results = await Promise.allSettled([
+					...(wecom ? [wecom.close()] : []),
 					transaction.close(),
 					store.close(),
 					taskAuthorizationStore.close(),

@@ -80,6 +80,11 @@ type TaskRuntimeAuthorityV1 =
 	  };
 
 interface Options {
+	/** A channel denial enters the same durable revocation path as user access loss. */
+	channelAuthorizationCurrent?(
+		record: TaskRuntimeAuthorizationRecordV1,
+		signal: AbortSignal,
+	): Promise<boolean>;
 	readonly workerId: string;
 	readRuntimeState(
 		claim: ConversationDispatchClaimV1,
@@ -327,6 +332,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		if (
 			latest.revokedAt ||
+			(options.channelAuthorizationCurrent &&
+				!(await options.channelAuthorizationCurrent(latest, signal))) ||
 			!user ||
 			!isTaskAuthorizationCurrentV1({
 				boundary: latest.boundary,

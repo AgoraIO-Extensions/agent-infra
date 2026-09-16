@@ -71,5 +71,14 @@ export type {
 	TaskRuntimeRecoveryStateV1,
 } from "./task-runtime-authorization.js";
 export { createTaskRuntimeAuthorizationUseCaseV1 } from "./task-runtime-authorization.js";
+export type { WecomConnectionFenceV1 } from "./wecom-channel.js";
+export * from "./wecom-channel.js";
+export {
+	createWecomSetupV1,
+	WecomSetupError,
+	type WecomSetupRecordV1,
+	type WecomSetupStatusV1,
+	type WecomSetupStoreV1,
+} from "./wecom-setup.js";
 export * from "./workload-reconciliation.js";
 export * from "./workload-secret-recovery.js";

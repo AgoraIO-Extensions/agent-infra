@@ -1318,7 +1318,7 @@ function validateRegenerationPlan(
 		conversation.agentId !== current.agentId ||
 		conversation.actorId !== current.actorId ||
 		conversation.channelId !== current.channelId ||
-		current.status !== "active" ||
+		(current.status !== "ready" && current.status !== "active") ||
 		conversation.status !== "active" ||
 		conversation.sessionGeneration !== current.sessionGeneration ||
 		conversation.hostSessionRef !== current.hostSessionRef ||
@@ -2009,9 +2009,18 @@ async function insertModelSelectionFallback(
 export class PostgresConversationExecutionTransactionV1
 	implements ConversationExecutionTransactionPortV1
 {
-	readonly #client: ReturnType<typeof postgres>;
+	readonly #client: ReturnType<typeof postgres> | undefined;
+	readonly #existingTransaction: Transaction | undefined;
 
-	constructor(options: PostgresConversationExecutionOptionsV1) {
+	constructor(
+		options:
+			| PostgresConversationExecutionOptionsV1
+			| { readonly transaction: Transaction },
+	) {
+		if ("transaction" in options) {
+			this.#existingTransaction = options.transaction;
+			return;
+		}
 		try {
 			this.#client = postgres(
 				platformDatabaseUrlFromEnvironment({
@@ -2724,7 +2733,7 @@ export class PostgresConversationExecutionTransactionV1
 
 	async close(): Promise<void> {
 		try {
-			await this.#client.end();
+			await this.#client?.end();
 		} catch {
 			unavailable();
 		}
@@ -2734,6 +2743,9 @@ export class PostgresConversationExecutionTransactionV1
 		work: (transaction: Transaction) => Promise<T>,
 	): Promise<T> {
 		try {
+			if (this.#existingTransaction)
+				return await work(this.#existingTransaction);
+			if (!this.#client) return unavailable();
 			return (await this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;
 				return work(transaction);
