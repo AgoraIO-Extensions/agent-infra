@@ -13,7 +13,7 @@
 		"dev": "turbo run dev",
 		"build": "turbo run build",
 		"check": "biome check . && node tests/support/web-ui-policy.mjs",
-		"check-types": "turbo run check-types",
+		"check-types": "tsc --project deploy/local/authentik/tsconfig.json --noEmit && turbo run check-types",
 		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test",
 		"smoke": "node tests/smoke.mjs",
 		"local-topology": "pnpm build && docker compose --project-name agent-infra-local-topology up -d --wait postgres object-storage && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra pnpm --filter @agent-infra/platform-store migrate && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra node tests/local-topology.mjs",
@@ -30,9 +30,12 @@
 		"docker:logs": "docker compose logs -f"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.6",
 		"@agent-infra/config": "workspace:*",
+		"@biomejs/biome": "^2.5.6",
+		"@hono/node-server": "2.0.12",
 		"@types/node": "catalog:",
+		"esbuild": "0.28.1",
+		"openid-client": "6.8.8",
 		"turbo": "^2.10.7",
 		"typescript": "catalog:",
 		"vitest": "catalog:",

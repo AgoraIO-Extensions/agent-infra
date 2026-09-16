@@ -71,9 +71,18 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.6
         version: 2.5.7
+      '@hono/node-server':
+        specifier: 2.0.12
+        version: 2.0.12(hono@4.13.0)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
+      openid-client:
+        specifier: 6.8.8
+        version: 6.8.8
       turbo:
         specifier: ^2.10.7
         version: 2.10.8
@@ -1437,6 +1446,12 @@ packages:
 
   '@hey-api/types@0.1.4':
     resolution: {integrity: sha512-thWfawrDIP7wSI9ioT13I5soaaqB5vAPIiZmgD8PbeEVKNrkonc0N/Sjj97ezl7oQgusZmaNphGdMKipPO6IBg==}
+
+  '@hono/node-server@2.0.12':
+    resolution: {integrity: sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4
 
   '@hono/node-server@2.1.0':
     resolution: {integrity: sha512-XovyyCCnBzW+zKu+z/zq8hwNs4KOR5rEMAOxo2f40Q5xoOI37IMm6MIg2COOUtUApo0i6850MTBKH2u4QLGIqg==}
@@ -5108,6 +5123,10 @@ snapshots:
       '@hey-api/types': 0.1.4
 
   '@hey-api/types@0.1.4': {}
+
+  '@hono/node-server@2.0.12(hono@4.13.0)':
+    dependencies:
+      hono: 4.13.0
 
   '@hono/node-server@2.1.0(hono@4.13.0)':
     dependencies:
