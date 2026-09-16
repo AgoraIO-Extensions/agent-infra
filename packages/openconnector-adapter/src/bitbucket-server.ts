@@ -11,7 +11,7 @@ import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
 const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
 const providerId = "bitbucket";
 const apiOrigin = "https://bitbucket-api.agoralab.co";
-const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v4`;
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v5`;
 const credentialScope = "bitbucket.server.pat";
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
@@ -325,7 +325,7 @@ export const bitbucketServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v4`,
+		id: `${providerId}.${action.name}@v5`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -624,8 +624,8 @@ export class BitbucketServerAdapter
 			...requiredStringArray(value.pathGlobs, "pathGlobs", 20),
 		].sort();
 		const repository = repositoryPath(value);
-		const baseRef = segment(value, "baseRef");
-		const targetRef = segment(value, "targetRef");
+		const baseRef = stringValue(value, "baseRef");
+		const targetRef = stringValue(value, "targetRef");
 		const maxFiles = boundedInteger(value.maxFiles, "maxFiles", 50, 1, 50);
 		const maxDiffBytes = boundedInteger(
 			value.maxDiffBytes,
@@ -641,12 +641,18 @@ export class BitbucketServerAdapter
 			0,
 			100,
 		);
-		const baseCommit = await requestWithinDeadline(
-			`${repository}/commits/${baseRef}`,
-		);
-		const targetCommit = await requestWithinDeadline(
-			`${repository}/commits/${targetRef}`,
-		);
+		const resolveRef = async (ref: string, label: string) => {
+			const page = await requestWithinDeadline(`${repository}/commits`, {
+				query: { limit: 1, until: ref },
+			});
+			const [commit] = pageValues(page);
+			if (!commit) {
+				throw providerError(`Bitbucket ${label} did not resolve to a commit`);
+			}
+			return commit;
+		};
+		const baseCommit = await resolveRef(baseRef, "base ref");
+		const targetCommit = await resolveRef(targetRef, "target ref");
 		const baseId = requiredObjectString(baseCommit, "id", "base ref");
 		const targetId = requiredObjectString(targetCommit, "id", "target ref");
 		const projectedChanges: ReturnType<typeof projectChange>[] = [];
