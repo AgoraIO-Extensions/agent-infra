@@ -284,6 +284,39 @@ test("GitHub review conformance requires the reviewer PAT before networking", as
 	assert.equal(requests, 0);
 });
 
+test("GitHub review conformance preserves the safe MCP error message", async () => {
+	await assert.rejects(
+		runGitHubReviewConformance({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: async (_url, init) => {
+				const request = JSON.parse(init.body);
+				return Response.json({
+					error: {
+						code: -32001,
+						data: { providerBody: "must-not-appear" },
+						message: "Provider request failed",
+					},
+					id: request.id,
+					jsonrpc: "2.0",
+				});
+			},
+			runId: "mcp-error",
+		}),
+		(error) => {
+			assert.equal(
+				error.message,
+				"Connection MCP error -32001: Provider request failed",
+			);
+			assert.doesNotMatch(error.message, /must-not-appear/);
+			return true;
+		},
+	);
+});
+
 test("GitHub review conformance CLI emits sanitized failure evidence", () => {
 	const result = spawnSync(
 		process.execPath,
