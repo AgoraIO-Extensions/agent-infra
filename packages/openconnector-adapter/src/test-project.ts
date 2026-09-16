@@ -74,7 +74,9 @@ export function capabilityVerificationMatrix(
 	for (const record of records) {
 		const actionVersionIds = new Set(record.actionVersionIds);
 		if (actionVersionIds.size !== record.actionVersionIds.length) {
-			throw new Error("verification evidence contains duplicate ActionVersions");
+			throw new Error(
+				"verification evidence contains duplicate ActionVersions",
+			);
 		}
 		if (
 			record.actionVersionIds.some(
