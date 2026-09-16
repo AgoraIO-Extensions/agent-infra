@@ -649,7 +649,7 @@ export class BitbucketServerAdapter
 		);
 		const baseId = requiredObjectString(baseCommit, "id", "base ref");
 		const targetId = requiredObjectString(targetCommit, "id", "target ref");
-		const changes: JsonObject[] = [];
+		const projectedChanges: ReturnType<typeof projectChange>[] = [];
 		let start = 0;
 		let complete = false;
 		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
@@ -657,7 +657,7 @@ export class BitbucketServerAdapter
 				`${repository}/compare/changes`,
 				{ query: { from: baseId, limit: 100, start, to: targetId } },
 			);
-			changes.push(...pageValues(page));
+			projectedChanges.push(...pageValues(page).map(projectChange));
 			if (page.isLastPage === true) {
 				complete = true;
 				break;
@@ -672,7 +672,7 @@ export class BitbucketServerAdapter
 		const candidates: ReturnType<typeof projectChange>[] = [];
 		const matchBudget = { remaining: 1_000_000 };
 		let pathFilteringTruncated = false;
-		const projectedChanges = changes.map(projectChange).sort((left, right) => {
+		projectedChanges.sort((left, right) => {
 			const leftKey = [left.path, left.sourcePath ?? "", left.status].join(
 				"\0",
 			);
@@ -1051,11 +1051,19 @@ async function requestJson(
 	path: string,
 	options: RequestOptions = {},
 ): Promise<JsonObject> {
+	const timeoutMs = effectiveRequestTimeout(options);
+	const startedAt = Date.now();
 	const response = await request(fetcher, accessToken, path, options);
+	const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+	if (remainingTimeoutMs <= 0) {
+		await response.body?.cancel();
+		throw providerError("Bitbucket Server response timed out");
+	}
 	if (response.status === 204) return { ok: true };
 	const text = await boundedText(
 		response,
 		options.responseLimitBytes ?? maxResponseBytes,
+		remainingTimeoutMs,
 	);
 	try {
 		const value: unknown = JSON.parse(text);
@@ -1101,10 +1109,7 @@ async function request(
 	const controller = new AbortController();
 	const timeout = setTimeout(
 		() => controller.abort(),
-		Math.min(
-			requestTimeoutMs,
-			Math.max(1, options.requestTimeoutMs ?? requestTimeoutMs),
-		),
+		effectiveRequestTimeout(options),
 	);
 	try {
 		const response = await fetcher(url, {
@@ -1150,7 +1155,18 @@ async function request(
 	}
 }
 
-async function boundedText(response: Response, limit = maxResponseBytes) {
+function effectiveRequestTimeout(options: RequestOptions) {
+	return Math.min(
+		requestTimeoutMs,
+		Math.max(1, options.requestTimeoutMs ?? requestTimeoutMs),
+	);
+}
+
+async function boundedText(
+	response: Response,
+	limit = maxResponseBytes,
+	timeoutMs = requestTimeoutMs,
+) {
 	const declaredLength = Number(response.headers.get("content-length") ?? 0);
 	if (declaredLength > limit) {
 		await response.body?.cancel();
@@ -1164,7 +1180,7 @@ async function boundedText(response: Response, limit = maxResponseBytes) {
 	const timeout = setTimeout(() => {
 		timedOut = true;
 		void reader.cancel();
-	}, requestTimeoutMs);
+	}, timeoutMs);
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
