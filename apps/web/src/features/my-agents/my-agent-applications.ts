@@ -61,6 +61,20 @@ export function getAgentApplicationEditAction(
 	return agentApplicationEditActionByStatus[application.status];
 }
 
+export function hasCreatedAgent(
+	application: AgentApplicationProjectionV2,
+): application is AgentApplicationProjectionV2 & { agentId: string } {
+	// An application can reserve an Agent ID before approval starts creation.
+	return (
+		application.agentId !== null &&
+		(application.status === "creating" ||
+			application.status === "available" ||
+			application.status === "stopped" ||
+			application.status === "creation_failed" ||
+			application.status === "disabled")
+	);
+}
+
 function requestError(retryable: boolean) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
 		retryable,
