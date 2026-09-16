@@ -288,9 +288,12 @@ test("GitHub review conformance preserves the safe MCP error message", async () 
 	for (const [message, expected] of [
 		[
 			"Provider request failed",
-			"Connection MCP error -32001: Provider request failed",
+			"Connection MCP error -32001 during list_connections: Provider request failed",
 		],
-		["Bearer secret-token", "Connection MCP error -32001"],
+		[
+			"Bearer secret-token",
+			"Connection MCP error -32001 during list_connections",
+		],
 	]) {
 		await assert.rejects(
 			runGitHubReviewConformance({
