@@ -23,7 +23,7 @@
 ## 2. 运行结构
 
 ```text
-Web / 用户与应用 API / 平台托管企微
+Web / 用户与应用 API / 企微回调
         |
         v
 Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
@@ -37,13 +37,15 @@ Platform API --事务写入--> Platform DB <--认领 outbox-- Platform Worker
                                                                                   |
                                                                       Runtime Driver --> Runtime
 
+企微智能机器人 <--长连接--> Platform Worker --同一 Core 事务--> Platform DB
+
 Agent / Client --Connection 独立身份--> Connection MCP/API --> External Provider
 ```
 
-- `platform-api` 解析可信用户/应用身份；API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。它不直接调用 Agent Pod。
+- `platform-api` 解析 HTTP/Web/回调入口的可信用户/应用身份；企微长连接由 `platform-worker` 解析可信发送者并调用同一 Core 准入事务，传输边界见[工程 Spec §14.2](SPEC-agent-infra-M1-engineering-architecture.md#142-企微)。API 任务按 8.4 持久受理，以下 Web/托管渠道命令按各自路径原子保存：普通消息保存 Message、初始 Execution 和 Turn outbox；补充指令保存 Message 和绑定当前 Execution 的补充指令 outbox；重新生成复用已有 Message 并保存新的 Execution 和 Turn outbox；停止命令只保存绑定请求目标 Execution 的 stop outbox。两类入口都不能绕过 outbox 直接调用 Agent Pod。
 - `platform-worker` 只投递 Platform Dispatch 按 7.2/8.4 准入的 Execution，并通过 worker 侧 RuntimeHost Client Adapter 调用 Agent Service 的内部 HTTP/SSE Interface；worker 不启动 Runtime 子进程，也不加载 Native/ACP Driver。
 - Agent Pod 内的 RuntimeHost 运行固定 Runtime Driver，将平台 Conversation/Execution 映射为 Runtime Session/Turn，并把原生事件归一化后返回；`platform-worker` 只把已经通过 fence 校验的规范化事件写回 Platform DB。
-- `platform-api` 只把已经持久化且通过与历史读取相同的当前连接主体授权校验的事件推送给浏览器、API 订阅者或渠道；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。当前主体权限、API 凭证、Agent 可用范围、渠道绑定或 Conversation 访问范围失效后，服务端必须关闭或暂停对应连接；继续推送前必须重新鉴权。
+- `platform-api` 向浏览器/API 订阅者推送事件，`platform-worker` 通过企微 Adapter 回复渠道消息；两者只输出已经持久化且通过当前接收主体授权与访问范围校验的结果。浏览器/API 事件遵循与历史读取相同的授权；初始补发和后续每次推送都不能只依赖 SSE 建连时的授权快照。当前主体权限、API 凭证、Agent 可用范围、渠道绑定或 Conversation 访问范围失效后，服务端停止该主体的输出并关闭或暂停其专属订阅；单个发送者撤权不关闭其他主体共用的机器人长连接。机器人绑定整体失效时才停止对应渠道连接；继续输出前必须重新鉴权。
 - Agent Pod 保存 Runtime 自有工作区和 Session 数据，但不保存平台权威会话或授权。
 
 ## 3. Runtime Registry 与交互模式
