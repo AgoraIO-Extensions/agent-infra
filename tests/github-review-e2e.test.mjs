@@ -63,7 +63,7 @@ test("GitHub review conformance completes an owned two-account lifecycle", async
 		[
 			"list_connections",
 			"github.get_repository",
-			"github.get_ref",
+			"github.get_branch",
 			"github.create_ref",
 			"github.create_or_update_file",
 			"github.create_pull_request",
@@ -568,8 +568,8 @@ function providerResult(
 	}
 	if (action === "github.get_current_user")
 		return { id: 329435106, login: "connectionE2E2" };
-	if (action === "github.get_ref")
-		return { object: { sha: "base-sha" }, ref: "refs/heads/main" };
+	if (action === "github.get_branch")
+		return { commit: { sha: "base-sha" }, name: "main" };
 	if (action === "github.create_ref")
 		return { object: { sha: "base-sha" }, ref: input.ref };
 	if (action === "github.list_matching_refs") {
