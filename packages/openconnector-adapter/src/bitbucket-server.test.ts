@@ -52,7 +52,7 @@ test("Bitbucket Server catalog exposes the reviewed OpenConnector-compatible act
 		[...expectedActions].sort(),
 	);
 	for (const action of bitbucketServerConnectionCatalog.actions) {
-		assert.match(action.id, /^bitbucket\.[a-z_]+@v4$/);
+		assert.match(action.id, /^bitbucket\.[a-z_]+@v5$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["bitbucket.server.pat"]);
 	}
@@ -188,11 +188,15 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 	globalThis.fetch = async (input) => {
 		const url = String(input);
 		requests.push(url);
-		if (url.endsWith("/commits/release%2F4.7.2")) {
-			return Response.json({ displayId: "base", id: "base-sha" });
+		if (url.endsWith("/commits?limit=1&until=release%2F4.7.2")) {
+			return Response.json({
+				values: [{ displayId: "base", id: "base-sha" }],
+			});
 		}
-		if (url.endsWith("/commits/release%2F4.8.0")) {
-			return Response.json({ displayId: "target", id: "target-sha" });
+		if (url.endsWith("/commits?limit=1&until=release%2F4.8.0")) {
+			return Response.json({
+				values: [{ displayId: "target", id: "target-sha" }],
+			});
 		}
 		if (url.includes("/compare/changes?")) {
 			return Response.json({
@@ -301,9 +305,9 @@ test("Bitbucket compare refs returns a truncated result at the change-page limit
 	let changeRequests = 0;
 	globalThis.fetch = async (input) => {
 		const url = String(input);
-		if (url.includes("/commits/")) {
+		if (url.includes("/commits?")) {
 			return Response.json({
-				id: url.endsWith("/commits/main") ? "base" : "target",
+				values: [{ id: url.includes("until=main") ? "base" : "target" }],
 			});
 		}
 		if (url.includes("/compare/changes?")) {
@@ -341,9 +345,9 @@ test("Bitbucket compare refs stops fetching diffs after the byte budget is exhau
 	let diffRequests = 0;
 	globalThis.fetch = async (input) => {
 		const url = String(input);
-		if (url.includes("/commits/")) {
+		if (url.includes("/commits?")) {
 			return Response.json({
-				id: url.endsWith("/commits/main") ? "base" : "target",
+				values: [{ id: url.includes("until=main") ? "base" : "target" }],
 			});
 		}
 		if (url.includes("/compare/changes?")) {
