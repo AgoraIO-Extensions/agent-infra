@@ -42,6 +42,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 	const created = [];
 	const calls = [];
 	let cleanupFailure;
+	let expectedPrHeadSha;
 	let failure;
 	let pullNumber;
 	let pullMerged = false;
@@ -128,6 +129,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 		const prHeadSha = prHead?.commit?.sha;
 		if (!prHeadSha || prHeadSha === mainSha)
 			throw new Error("pull request head is not run-owned");
+		expectedPrHeadSha = prHeadSha;
 		const pull = await execute("github.create_pull_request", {
 			...target,
 			base: branches[2],
@@ -192,7 +194,14 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 					{ ...target, pullNumber },
 					true,
 				);
-				if (current?.state === "open")
+				if (
+					current?.state === "open" &&
+					current.body === marker &&
+					current.title === marker &&
+					current.base?.ref === branches[2] &&
+					current.head?.ref === branches[3] &&
+					current.head?.sha === expectedPrHeadSha
+				)
 					await execute("github.update_pull_request", {
 						...target,
 						idempotencyKey: `${runId}:pull-close`,
