@@ -64,50 +64,59 @@ export function capabilityCoverage(
 
 export function capabilityVerificationMatrix(
 	catalog: VerifiableCatalog,
-	evidence: LiveVerificationEvidence,
+	evidence: LiveVerificationEvidence | readonly LiveVerificationEvidence[],
 ): CapabilityVerification[] {
 	const catalogActionVersionIds = new Set(
 		catalog.actions.map((action) => action.id),
 	);
-	const actionVersionIds = new Set(evidence.actionVersionIds);
-	if (actionVersionIds.size !== evidence.actionVersionIds.length) {
-		throw new Error("verification evidence contains duplicate ActionVersions");
-	}
-	if (
-		evidence.actionVersionIds.some(
-			(actionVersionId) => !catalogActionVersionIds.has(actionVersionId),
-		)
-	) {
-		throw new Error("verification evidence contains unknown ActionVersions");
-	}
-	if (
-		evidence.cleanup !== "SUCCEEDED" ||
-		evidence.provider !== catalog.provider ||
-		evidence.providerReleaseId !== catalog.providerReleaseId
-	) {
-		throw new Error("verification evidence does not match the catalog");
-	}
-	for (const [name, value] of Object.entries(evidence)) {
-		if (name !== "actionVersionIds" && name !== "cleanup") {
-			requireValue(`verification evidence ${name}`, value);
+	const records = "actionVersionIds" in evidence ? [evidence] : evidence;
+	const evidenceByActionVersion = new Map<string, LiveVerificationEvidence>();
+	for (const record of records) {
+		const actionVersionIds = new Set(record.actionVersionIds);
+		if (actionVersionIds.size !== record.actionVersionIds.length) {
+			throw new Error(
+				"verification evidence contains duplicate ActionVersions",
+			);
+		}
+		if (
+			record.actionVersionIds.some(
+				(actionVersionId) => !catalogActionVersionIds.has(actionVersionId),
+			)
+		) {
+			throw new Error("verification evidence contains unknown ActionVersions");
+		}
+		if (
+			record.cleanup !== "SUCCEEDED" ||
+			record.provider !== catalog.provider ||
+			record.providerReleaseId !== catalog.providerReleaseId
+		) {
+			throw new Error("verification evidence does not match the catalog");
+		}
+		for (const [name, value] of Object.entries(record)) {
+			if (name !== "actionVersionIds" && name !== "cleanup") {
+				requireValue(`verification evidence ${name}`, value);
+			}
+		}
+		const validatedEvidence = Object.freeze({
+			...record,
+			actionVersionIds: Object.freeze([...record.actionVersionIds]),
+		});
+		for (const actionVersionId of record.actionVersionIds) {
+			evidenceByActionVersion.set(actionVersionId, validatedEvidence);
 		}
 	}
-	const validatedEvidence = Object.freeze({
-		...evidence,
-		actionVersionIds: Object.freeze([...evidence.actionVersionIds]),
-	});
 	return capabilityCoverage([catalog]).map((coverage) => {
-		const verified = actionVersionIds.has(coverage.actionId);
+		const verifiedEvidence = evidenceByActionVersion.get(coverage.actionId);
 		return {
 			...coverage,
 			actionVersionId: coverage.actionId,
-			...(verified ? { evidence: validatedEvidence } : {}),
+			...(verifiedEvidence ? { evidence: verifiedEvidence } : {}),
 			requirements: {
 				contract: "REQUIRED",
 				liveProvider: "REQUIRED",
 				unit: "REQUIRED",
 			},
-			status: verified ? "LIVE_VERIFIED" : "UNVERIFIED",
+			status: verifiedEvidence ? "LIVE_VERIFIED" : "UNVERIFIED",
 		};
 	});
 }
