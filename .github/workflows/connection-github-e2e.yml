@@ -15,6 +15,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  reviewer-health:
+    name: GitHub Reviewer v2 health
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'
+    environment: connection-e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted dispatch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Run read-only GitHub Reviewer v2 health probe
+        env:
+          CONNECTION_E2E_REVIEWER_TOKEN: ${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}
+        run: node tests/github-review-health.mjs | tee connection-github-review-health-result.json
+      - name: Upload health evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: connection-github-review-health-${{ github.run_id }}
+          path: connection-github-review-health-result.json
+          retention-days: 30
+
   conformance:
     name: GitHub issue conformance
     if: >-
@@ -81,7 +110,7 @@ jobs:
 
   outcome:
     name: Publish terminal outcome
-    needs: [conformance]
+    needs: [reviewer-health, conformance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

@@ -126,7 +126,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "connection-github-e2e.yml": {
-    needs: ["conformance"],
+    needs: ["reviewer-health", "conformance"],
     operation: "connection-github-e2e",
   },
   "pr-agent-review.yml": {
@@ -305,14 +305,24 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 				secret === "CONNECTION_E2E_REVIEWER_TOKEN_V2"
 					? "CONNECTION_E2E_REVIEWER_TOKEN"
 					: secret;
+			const allowedHealthProbe =
+				secret === "CONNECTION_E2E_REVIEWER_TOKEN_V2" &&
+				workflowName === "connection-github-e2e.yml" &&
+				jobName === "reviewer-health" &&
+				step.name === "Run read-only GitHub Reviewer v2 health probe" &&
+				step.run ===
+					"node tests/github-review-health.mjs | tee connection-github-review-health-result.json" &&
+				step.env?.[envName] === reference &&
+				occurrences === 1;
       if (
-        workflowName !== "connection-github-e2e.yml" ||
+				!allowedHealthProbe &&
+				(workflowName !== "connection-github-e2e.yml" ||
         jobName !== "conformance" ||
         step.name !== "Run deterministic Connection GitHub conformance" ||
         step.run !==
           'set -o pipefail\nset +e\nnode tests/github-review-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-review-e2e-result.json\nreview_status=${PIPESTATUS[0]}\nnode tests/github-connection-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json\nissue_status=${PIPESTATUS[0]}\nnode tests/github-connection-e2e.mjs read \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-read-e2e-result.json\nread_status=${PIPESTATUS[0]}\nif [ "$read_status" -eq 0 ]; then\n  node tests/github-low-risk-write-e2e.mjs \\\n    "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-write-e2e-result.json\n  write_status=${PIPESTATUS[0]}\nelse\n  write_status=1\n  echo \'{"outcome":"SKIPPED","reason":"read conformance failed"}\' > connection-github-write-e2e-result.json\nfi\nif [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ]; then\n  exit 1\nfi\n' ||
 				step.env?.[envName] !== reference ||
-        occurrences !== 1
+        occurrences !== 1)
       ) {
         errors.push(
 					`${workflowName}/${jobName}: ${secret} is allowed only in the fixed GitHub conformance step`,
@@ -713,6 +723,21 @@ export function validateWorkflowDocuments(workflows) {
       "Connection GitHub E2E must bind manual runs to the immutable connection dispatch commit",
     );
   }
+	const reviewerHealthJob =
+		workflows["connection-github-e2e.yml"]?.jobs?.["reviewer-health"];
+	const reviewerHealthCheckout = reviewerHealthJob?.steps?.find(
+		(step) => step.name === "Checkout trusted dispatch commit",
+	);
+	if (
+		reviewerHealthJob?.if !==
+			"github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'" ||
+		reviewerHealthCheckout?.with?.ref !== "${{ github.sha }}" ||
+		reviewerHealthCheckout?.with?.["persist-credentials"] !== false
+	) {
+		errors.push(
+			"Connection GitHub Reviewer health must bind manual runs to the immutable connection dispatch commit",
+		);
+	}
 
   for (const [name, contract] of Object.entries(RUN_NAME_CONTRACTS)) {
     const runName = workflows[name]?.["run-name"];

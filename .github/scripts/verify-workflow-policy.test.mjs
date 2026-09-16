@@ -202,6 +202,18 @@ test("binds Connection E2E to the immutable connection dispatch commit", async (
 	);
 });
 
+test("runs the Reviewer v2 health probe read-only without enabling the E2E gate", async () => {
+	const workflows = await actualWorkflows();
+	const job = workflows["connection-github-e2e.yml"].jobs["reviewer-health"];
+	assert.equal(
+		job.if,
+		"github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'",
+	);
+	assert.equal(job.steps[0].with.ref, "${{ github.sha }}");
+	assert.equal(job.steps[2].env.CONNECTION_E2E_REVIEWER_TOKEN, "${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}");
+	assert.doesNotMatch(job.steps[2].run, /CONNECTION_GITHUB_E2E_ENABLED|github-review-e2e/);
+});
+
 test("requires bounded deduplicated outcome and post-merge behavior", async () => {
   const sources = await actualTrustedScriptSources();
   assert.deepEqual(validateTrustedScriptSources(sources), []);
