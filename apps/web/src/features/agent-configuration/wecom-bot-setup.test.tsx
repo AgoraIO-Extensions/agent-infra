@@ -1,4 +1,5 @@
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -261,4 +262,44 @@ it("ignores an older connection status response after a newer refresh", async ()
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(screen.getByText("已连接")).toBeTruthy();
 	expect(screen.queryByText("未配置")).toBeNull();
+});
+
+it("refreshes transitional connection status until authentication settles", async () => {
+	vi.useFakeTimers();
+	client.setConfig({ baseUrl: "https://platform.test" });
+	let reads = 0;
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				status: ["disconnected", "verifying", "connected"][
+					Math.min(reads++, 2)
+				],
+			}),
+		),
+	);
+	try {
+		const rendered = render(
+			<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />,
+		);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(screen.getByText("已断开")).toBeTruthy();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2000);
+		});
+		expect(screen.getByText("验证中")).toBeTruthy();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2000);
+		});
+		expect(screen.getByText("已连接")).toBeTruthy();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4000);
+		});
+		expect(reads).toBe(3);
+		rendered.unmount();
+	} finally {
+		vi.useRealTimers();
+	}
 });

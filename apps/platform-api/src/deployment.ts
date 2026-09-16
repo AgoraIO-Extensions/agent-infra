@@ -27,6 +27,8 @@ export interface ProductionPlatformApiInputV1
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
+	/** Enable only when the paired Worker deployment provides wecom.setup and connections. */
+	readonly wecomSetupEnabled?: boolean;
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resourceProfile"];
@@ -68,7 +70,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 	return {
 		databaseUrl: input.databaseUrl,
 		identity: input.identity,
-		wecomCredentialEncryptionKeys: input.encryptionKeys,
+		...(input.wecomSetupEnabled === true
+			? { wecomCredentialEncryptionKeys: input.encryptionKeys }
+			: {}),
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,

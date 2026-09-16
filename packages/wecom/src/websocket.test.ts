@@ -277,3 +277,42 @@ it.each([
 		expect(await result).toBe(outcome);
 	},
 );
+
+it("allows eight distinct requests to await ACK on the same connection", async () => {
+	const fixture = await setup();
+	await fixture.authenticate();
+	for (let i = 0; i < 8; i++)
+		fixture.socket.send(
+			JSON.stringify({
+				cmd: "aibot_msg_callback",
+				headers: { req_id: `request-${i}` },
+				body: {
+					aibotid: "bot-1",
+					msgid: `event-${i}`,
+					chattype: "group",
+					chatid: "group-1",
+					from: { userid: "sender-1" },
+					msgtype: "text",
+					text: { content: "fixture" },
+				},
+			}),
+		);
+	await expect.poll(() => fixture.messages.length).toBe(8);
+	const replies: { headers: { req_id: string } }[] = [];
+	fixture.socket.on("message", (raw) => {
+		const frame = JSON.parse(raw.toString());
+		if (frame.cmd === "aibot_respond_msg") replies.push(frame);
+	});
+	const sent = fixture.messages.map((message) =>
+		fixture.adapter.sender.send({
+			scope: message,
+			replyHandle: message.replyHandle,
+			text: "fixture reply",
+		}),
+	);
+	// All frames must arrive before any ACK: the SDK queue limit is per request ID.
+	await expect.poll(() => replies.length).toBe(8);
+	for (const frame of replies)
+		fixture.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	expect(await Promise.all(sent)).toEqual(Array(8).fill("sent"));
+});

@@ -34,7 +34,9 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 ## 装配与凭证维护
 
 当前长连接 Adapter 固定使用 `@wecom/aibot-node-sdk@1.0.7`；禁用 SDK 原始 payload 日志。
-生产 API 的 `createProductionPlatformApiAssemblyInputV1` 把已有 `encryptionKeys` 公钥输入传给机器人配置模块；
+生产 API 的 `createProductionPlatformApiAssemblyInputV1` 默认不开放机器人配置 API。
+部署同时配置下述 Worker `wecom.setup` 和 `connections` 后，显式设置 `wecomSetupEnabled: true`，
+才把已有 `encryptionKeys` 公钥输入传给机器人配置模块；
 直接调用 `assemblePlatformApi` 时显式提供 `wecomCredentialEncryptionKeys`。
 身份 Adapter 必须提供 `resolveUser`，每次配置操作重新校验当前账号和 Owner 权限。
 

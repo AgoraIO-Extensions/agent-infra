@@ -37,33 +37,47 @@ export function WecomBotSetup({
 	const generation = useRef(0);
 	const refreshSequence = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	const refresh = useCallback(async () => {
-		const attempt = generation.current;
-		const sequence = ++refreshSequence.current;
-		try {
-			const result = await getWecomBotConnection({
-				path: { agentId },
-				responseStyle: "fields",
-				throwOnError: false,
-			});
-			if (
-				attempt === generation.current &&
-				sequence === refreshSequence.current
-			)
-				setStatus(result.data?.status);
-		} catch {
-			if (
-				attempt === generation.current &&
-				sequence === refreshSequence.current
-			)
-				setStatus(undefined);
-		}
-	}, [agentId]);
+	const connectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+		undefined,
+	);
+	const refresh = useCallback(
+		async function refreshConnection() {
+			clearTimeout(connectionTimer.current);
+			const attempt = generation.current;
+			const sequence = ++refreshSequence.current;
+			try {
+				const result = await getWecomBotConnection({
+					path: { agentId },
+					responseStyle: "fields",
+					throwOnError: false,
+				});
+				if (
+					attempt === generation.current &&
+					sequence === refreshSequence.current
+				) {
+					const next = result.data?.status;
+					setStatus(next);
+					if (next === "verifying" || next === "disconnected")
+						connectionTimer.current = setTimeout(() => {
+							void refreshConnection();
+						}, 2000);
+				}
+			} catch {
+				if (
+					attempt === generation.current &&
+					sequence === refreshSequence.current
+				)
+					setStatus(undefined);
+			}
+		},
+		[agentId],
+	);
 	useEffect(() => {
 		void refresh();
 		return () => {
 			generation.current++;
 			clearTimeout(timer.current);
+			clearTimeout(connectionTimer.current);
 		};
 	}, [refresh]);
 	async function poll(attempt: number) {
@@ -113,6 +127,7 @@ export function WecomBotSetup({
 		setError("");
 		setBusy(true);
 		refreshSequence.current++;
+		clearTimeout(connectionTimer.current);
 		setStatus("verifying");
 		const attempt = generation.current;
 		try {
