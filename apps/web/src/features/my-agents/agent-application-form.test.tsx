@@ -18,22 +18,22 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Application name"), {
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
 		});
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Standard template ID"), {
+		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
 			target: { value: "codex" },
 		});
 		expect(
-			(screen.getByLabelText("Model option ID") as HTMLInputElement).required,
+			(screen.getByLabelText("模型选项 ID") as HTMLInputElement).required,
 		).toBe(true);
 		expect(
-			(screen.getByLabelText("Credential value") as HTMLInputElement).required,
+			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
 		).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -48,34 +48,34 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Application name"), {
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
 		});
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Standard template ID"), {
+		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
 			target: { value: "codex" },
 		});
-		fireEvent.change(screen.getByLabelText("Model option ID"), {
+		fireEvent.change(screen.getByLabelText("模型选项 ID"), {
 			target: { value: "model-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Model endpoint ID"), {
+		fireEvent.change(screen.getByLabelText("获准端点 ID"), {
 			target: { value: "endpoint-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Model ID"), {
+		fireEvent.change(screen.getByLabelText("模型 ID"), {
 			target: { value: "gpt-5" },
 		});
-		fireEvent.change(screen.getByLabelText("Reasoning levels"), {
+		fireEvent.change(screen.getByLabelText("允许的推理档位"), {
 			target: { value: "medium" },
 		});
-		fireEvent.change(screen.getByLabelText("Default model option ID"), {
+		fireEvent.change(screen.getByLabelText("默认模型选项 ID"), {
 			target: { value: "model-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Default reasoning level"), {
+		fireEvent.change(screen.getByLabelText("默认推理档位"), {
 			target: { value: "medium" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -104,12 +104,10 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Resubmitted after capacity review" },
 		});
-		fireEvent.click(
-			screen.getByRole("button", { name: "Resubmit application" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
 			schemaVersion: 2,
@@ -151,14 +149,12 @@ describe("AgentApplicationForm", () => {
 		);
 
 		expect(
-			(screen.getByLabelText("Source kind") as HTMLSelectElement).disabled,
+			(screen.getByLabelText("Agent 来源") as HTMLSelectElement).disabled,
 		).toBe(true);
 		expect(
-			(screen.getByLabelText("Image reference") as HTMLInputElement).disabled,
+			(screen.getByLabelText("镜像地址") as HTMLInputElement).disabled,
 		).toBe(true);
-		fireEvent.click(
-			screen.getByRole("button", { name: "Resubmit application" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({ source: customApplication.source }),
 		);
@@ -174,22 +170,22 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Application name"), {
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
 		});
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Source kind"), {
+		fireEvent.change(screen.getByLabelText("Agent 来源"), {
 			target: { value: "custom-self-managed" },
 		});
-		fireEvent.change(screen.getByLabelText("Image reference"), {
+		fireEvent.change(screen.getByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
-		fireEvent.change(screen.getByLabelText("Identity responsibility"), {
+		fireEvent.change(screen.getByLabelText("入口身份校验"), {
 			target: { value: "self-managed" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -213,63 +209,61 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Application name"), {
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
 		});
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Standard template ID"), {
+		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
 			target: { value: "codex" },
 		});
-		fireEvent.change(screen.getByLabelText("Co-owner IDs"), {
+		fireEvent.change(screen.getByLabelText("共同 Owner 用户 ID"), {
 			target: { value: "owner-2\nowner-3" },
 		});
-		fireEvent.change(screen.getByLabelText("User availability IDs"), {
+		fireEvent.change(screen.getByLabelText("可使用的用户 ID"), {
 			target: { value: "user-available" },
 		});
-		fireEvent.change(screen.getByLabelText("Organization availability IDs"), {
+		fireEvent.change(screen.getByLabelText("可使用的组织 ID"), {
 			target: { value: "organization-available" },
 		});
 		expect(screen.queryByRole("button", { name: "Add action" })).toBeNull();
-		fireEvent.click(
-			screen.getByRole("button", { name: "Add environment value" }),
-		);
-		fireEvent.change(screen.getByLabelText("Environment name"), {
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.change(screen.getByLabelText("变量名称"), {
 			target: { value: "LOG_LEVEL" },
 		});
-		fireEvent.change(screen.getByLabelText("Environment value"), {
+		fireEvent.change(screen.getByLabelText("变量值"), {
 			target: { value: "debug" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Add secret" }));
-		fireEvent.change(screen.getByLabelText("Secret name"), {
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
 			target: { value: "MODEL_API_KEY" },
 		});
-		fireEvent.change(screen.getByLabelText("Secret value"), {
+		fireEvent.change(screen.getByLabelText("替换值"), {
 			target: { value: "never-echo" },
 		});
-		fireEvent.change(screen.getByLabelText("Model option ID"), {
+		fireEvent.change(screen.getByLabelText("模型选项 ID"), {
 			target: { value: "model-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Model endpoint ID"), {
+		fireEvent.change(screen.getByLabelText("获准端点 ID"), {
 			target: { value: "endpoint-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Model ID"), {
+		fireEvent.change(screen.getByLabelText("模型 ID"), {
 			target: { value: "gpt-5" },
 		});
-		fireEvent.change(screen.getByLabelText("Reasoning levels"), {
+		fireEvent.change(screen.getByLabelText("允许的推理档位"), {
 			target: { value: "medium\nhigh" },
 		});
-		fireEvent.change(screen.getByLabelText("Credential value"), {
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
 			target: { value: "never-echo-model" },
 		});
-		fireEvent.change(screen.getByLabelText("Default model option ID"), {
+		fireEvent.change(screen.getByLabelText("默认模型选项 ID"), {
 			target: { value: "model-primary" },
 		});
-		fireEvent.change(screen.getByLabelText("Default reasoning level"), {
+		fireEvent.change(screen.getByLabelText("默认推理档位"), {
 			target: { value: "medium" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
 			schemaVersion: 2,
@@ -310,25 +304,23 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("Application name"), {
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
 		});
-		fireEvent.change(screen.getByLabelText("Description"), {
+		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Standard template ID"), {
+		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
 			target: { value: "codex" },
 		});
-		fireEvent.click(
-			screen.getByRole("button", { name: "Add environment value" }),
-		);
-		fireEvent.change(screen.getByLabelText("Environment name"), {
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.change(screen.getByLabelText("变量名称"), {
 			target: { value: "github" },
 		});
-		expect(
-			(screen.getByLabelText("Environment value") as HTMLInputElement).required,
-		).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Create application" }));
+		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
+			true,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -358,7 +350,7 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 		expect(
-			(screen.getByLabelText("Application name") as HTMLInputElement).value,
+			(screen.getByLabelText("Agent 名称") as HTMLInputElement).value,
 		).toBe("Release assistant request");
 
 		rerender(
@@ -372,7 +364,7 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 		expect(
-			(screen.getByLabelText("Application name") as HTMLInputElement).value,
+			(screen.getByLabelText("Agent 名称") as HTMLInputElement).value,
 		).toBe("Other release assistant");
 	});
 });

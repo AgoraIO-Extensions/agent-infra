@@ -510,6 +510,22 @@ describe("functional conversation screen", () => {
 		expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1");
 	});
 
+	it("restores the history deep link and reports view navigation without replacing the conversation", async () => {
+		const onViewChange = vi.fn();
+		const { rerenderScope, props } = setup(undefined, {
+			view: "history",
+			onViewChange,
+		});
+		await screen.findByRole("heading", { name: "个人历史", level: 1 });
+		fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
+		expect(onViewChange).toHaveBeenCalledWith("conversation");
+		expect(props.onConversationChange).not.toHaveBeenCalled();
+		rerenderScope({ view: "conversation" });
+		await composer();
+		fireEvent.click(screen.getByRole("button", { name: "个人历史" }));
+		expect(onViewChange).toHaveBeenLastCalledWith("history");
+	});
+
 	it("creates a durable conversation before navigating", async () => {
 		const { props, requests } = setup(
 			(request) =>

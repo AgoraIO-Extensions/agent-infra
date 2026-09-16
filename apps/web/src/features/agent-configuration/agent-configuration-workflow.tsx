@@ -1,4 +1,5 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { AgentLifecycleWorkflow } from "../agent-administration/agent-lifecycle-workflow.js";
 import { useBrowserSession } from "../agent-administration/use-browser-session.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
@@ -19,6 +20,7 @@ export function AgentConfigurationWorkflow({
 
 	return (
 		<AgentConfigurationScreen
+			lifecycle={<AgentLifecycleWorkflow agent={agent} />}
 			agent={agent}
 			commandError={commandError}
 			commandResult={submission.data}
