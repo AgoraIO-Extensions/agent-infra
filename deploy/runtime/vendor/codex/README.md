@@ -3,7 +3,8 @@
 本目录保存 #508 原生执行屏障的可复现源码补丁和构建输入。
 当前消费的派生产物由 [release pin](../../../../packages/agent-runtime/src/codex-release.json)
 固定；pin 与候选构建成功均不表示完整原生验收已完成。
-权威边界见 [ADR 0011](../../../../docs/adr/0011-require-codex-native-operation-barrier.md)。
+执行屏障边界见 [ADR 0011](../../../../docs/adr/0011-require-codex-native-operation-barrier.md)，
+模型切换压缩边界见 [ADR 0013](../../../../docs/adr/0013-use-current-selection-for-codex-switch-compaction.md)。
 协议入口为 [V1](callback-v1.md) 与 [Connection V2](callback-v2.md)。
 原生 probe 的 `schemaVersion: 1` 表示 probe 自身格式；其 `callbackSchemaSha256`
 指向同时包含严格 V1/V2 帧的 canonical Schema，另固定共同 corpus 和 coverage SHA。
@@ -28,6 +29,9 @@ probe 静态声明不能替代当前进程保护安装或最终镜像的负向�
 5. `patches/0005-tls-error-chain-and-test-backend.patch`：修复嵌套 `io::Error` 中的 TLS
    证书错误分类；回退测试显式选择 native TLS 起始客户端，避免自定义 CA 改变测试前提。
    生产 TLS 后端选择和证书校验保持不变，新增 reqwest feature 仅用于测试。
+6. `patches/0006-current-model-switch-compaction.patch`：local 模型切换前置压缩使用本次
+   有效模型，覆盖 CompHashChanged 与 ModelDownshift；保留原窗口判断、历史处理和
+   压缩算法，以及 remote 和 TokenBudget 路径。
 
 上游 Apache-2.0 的 [LICENSE](UPSTREAM-LICENSE) 与 [NOTICE](UPSTREAM-NOTICE) 保持不变。
 没有修改共享 Cargo registry 或外部 `rmcp 3.1.3` 源码。
@@ -47,7 +51,7 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 
 ## 验证与验收边界
 
-必须按序应用全部五份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
+必须按序应用全部六份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
 lock、Schema、corpus 和 coverage。manifest/lock 可解析、格式化通过或静态 probe
 声明均不能代替原生类型检查、聚焦测试和实际进程保护验证。
 
@@ -75,6 +79,8 @@ TurnComplete 不证明后台进程已退出；list/terminate 和原 attempt outc
 
 [构建入口](build-linux-aarch64.sh) 先通过 `paths` 固定目录，再按
 `prepare`、`musl`、`v8`、`build`、`seal`、`tests` 分步运行；
+`tests` 除现有执行屏障与依赖测试外，还运行 `codex-core` 的 `suite::compact::`
+集成套件，覆盖模型切换及原生压缩回归；合成响应不能代替真实模型历史兼容性验收。
 参数和专属目录由 workflow 固定。musl 和 V8 输出的 `GITHUB_ENV` 必须在后续 step 生效，
 不通过 shell source 解析；V8 脚本明确使用原生 checkout，避免 workspace 根目录歧义。
 构建保留 runner 默认 Cargo home，使用独立 target 目录、Rust 1.96.0、Zig 0.14.0、

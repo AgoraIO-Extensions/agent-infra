@@ -455,10 +455,15 @@ class Builder:
             ("network-proxy", "codex-network-proxy", "all()"),
             ("git-utils", "codex-git-utils", "all()"),
             ("http-client", "codex-http-client", "all()"),
+            ("model-switch-compaction", "codex-core", "test(suite::compact::)"),
         ):
-            command = ["just", "test", "-p", "codex-rmcp-client", "-p", "codex-core",
-                       "-p", "codex-network-proxy", "-p", "codex-git-utils", "-p", "codex-http-client",
-                       "--locked", "--lib", "--target", TARGET, "--release", "--test-threads", "2",
+            targets = ["--test", "all"] if name == "model-switch-compaction" else ["--lib"]
+            packages = (["codex-core"] if name == "model-switch-compaction" else
+                        ["codex-rmcp-client", "codex-core", "codex-network-proxy",
+                         "codex-git-utils", "codex-http-client"])
+            package_args = [argument for package in packages for argument in ("-p", package)]
+            command = ["just", "test", *package_args, "--locked", *targets,
+                       "--target", TARGET, "--release", "--test-threads", "2",
                        "--no-tests=fail", "-E", f"package(={crate}) & ({selection})"]
             commands.append(command)
             self.run(f"native-tests-{name}", command, cwd=self.source, env=env)

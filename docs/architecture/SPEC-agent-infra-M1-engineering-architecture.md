@@ -22,7 +22,7 @@
 
 ## 2. 架构结论
 
-M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 上游原生源码的受控补丁是唯一非 TypeScript 实现例外，范围与准入见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
+M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 上游原生源码的受控补丁是唯一非 TypeScript 实现例外，覆盖持久执行屏障及按当前 Execution 选择执行模型切换前置压缩所需的原生接缝，范围与准入见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
 
 ### 2.1 技术栈
 
@@ -605,6 +605,27 @@ Codex Driver 在 Agent Pod 内管理一个仅绑定 loopback 的模型传输入�
 的 optionId/reasoning 决定该次原生 Turn；重试沿用原选择，未知选项、配置版本或路由标识拒绝。
 Worker 负责目录解析和配置/SecretRef 投影，RuntimeHost 不读取目录、数据库或 Kubernetes。
 
+Codex 模型切换所需的 local pre-turn compaction 也必须使用该 Execution 已冻结且当前获准的
+模型选项与 reasoning。原 Session 的上一模型记为 A，本次有效选择记为 B；在原生调用点
+显式使用 B 的 TurnContext，覆盖 `CompHashChanged / PreTurn` 和 `ModelDownshift / PreTurn`，
+不先请求 A，也不因压缩失败切换模型。A 仅用于原生历史与触发条件判断，不要求 A 的选项
+仍在当前清单或凭据仍可用，不为 A 增加授权。B 的准入、实际压缩请求与后续回答沿用现有
+模型 operation/attempt、意图、结果和用量事实，不新增 compaction Grant、公共 Schema 或
+私有 FD 协议；若实现不能满足既有屏障，须明确缺口并评审，不能以用途字段放宽准入。
+
+该策略保留原 Session/thread、模型切换和压缩触发、原生历史标准化、窗口与 overflow 算法、
+实际压缩及摘要安装顺序；普通当前模型的 context-limit 压缩仍遵循同一选择与授权边界。
+禁止在 HTTP body 中把 A 请求改写成 B、伪造或删除 comp_hash、为通过兼容验证而人为删改
+reasoning/加密项或历史、跳过实际压缩或更换 Session。既有内部别名到所选真实模型的映射
+保持不变。原生重试仍须通过现有每次实际请求的意图与授权屏障，unknown 不授予下一次请求。
+
+这是待验证的原生工程策略，不是对任意真实 provider 或历史格式的兼容承诺。完整验证矩阵
+以 [Runtime HLD 第 11 节](HLD-agent-runtime-M1.md#11-验证)为准；部分案例通过不形成永久
+支持清单，也不缩减 PRD 的会话内模型切换要求。任一切换路径仍需请求 A 时，唯一 B 准入
+继续拒绝该请求；这表示模型选择对接尚未完成，不能作为新的产品例外或宣称完整修复。失败边界见
+[Runtime HLD 8.5.2](HLD-agent-runtime-M1.md#852-codex-模型切换前置压缩)，取舍见
+[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0013-use-current-selection-for-codex-switch-compaction.md)。
+
 模型 endpoint 必须使用 HTTPS；HTTP 仅允许原始 URL 显式使用 `127.0.0.1` 或 `[::1]`
 的 loopback 地址，不接受主机名或其他 IP 别名。注入 credential 必须为 16–8192 个可打印
 非空格 ASCII 字符；配置准入拒绝过短值，避免逐子串泄漏检测误拒正常 SSE 字段。
@@ -754,8 +775,10 @@ Claude 原生进程会将模型 API 的错误正文写入会话记录；仅归�
 ### 10.11 Codex 上游原生补丁与执行屏障
 
 为满足 PRD 的实际操作意图与事实要求，允许在固定 Codex 上游源码上维护受控 vendor patch，
-将实际原生工具尝试接入 Driver 的持久意图与授权屏障。例外仅覆盖原生执行、协议接缝及其
-回归测试所必需的上游 Rust 补丁；补丁与构建声明位于 `deploy/runtime/vendor/codex/`，完整
+将实际原生工具尝试接入 Driver 的持久意图与授权屏障，并在 10.8 规定的模型切换前置压缩
+调用点显式应用当前 Execution 的模型选择。例外仅覆盖这两项所需的原生执行、协议接缝及
+回归测试，不扩张模型授权、重写历史兼容算法或增加推理循环。补丁与构建声明位于
+`deploy/runtime/vendor/codex/`，完整
 上游源码在隔离构建目录取得。仓库不新增自有 Rust crate，Platform、Connection、Host 和 Driver
 继续使用 TypeScript。原生推理循环、标准 built-in catalog、工具执行器、部署单元及 10.9 的
 Linux/Darwin 文件隔离保留，不引入新 loop、服务、插件平台或平台统一 Sandbox。
@@ -786,7 +809,10 @@ unknown 或新协议状态只能核实原执行，不得新建 Session/Turn、�
 候选文档、vendor patch 范围和 native contract 须先完成适用架构/安全/维护评审，随后才实施与
 更新 pin。真实各 target 产物、原 built-ins 正向能力、隔离、故障与恢复均按 HLD 第 11 节验证；
 既有官方 binary 的证明不转移给派生字节。长期维护及上游替代的取舍见
-[ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)。
+[ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)及
+[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0013-use-current-selection-for-codex-switch-compaction.md)。
+原执行屏障的既有评审不代表新增压缩策略已获评审；本差额的文档和 Issue 范围先完成独立
+架构、安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
 
 ## 11. Agent Runtime 边界
 
