@@ -12,7 +12,6 @@ export const githubPullRequestCollaborationActionIds = [
 	"github.request_pull_request_reviewers",
 	"github.remove_pull_request_reviewers",
 	"github.update_pull_request_branch",
-	"github.dismiss_pull_request_review",
 ];
 
 export async function runGitHubPullRequestCollaboration({
@@ -261,43 +260,6 @@ export async function runGitHubPullRequestCollaboration({
 		}
 		if (!updatedHeadSha)
 			throw new Error("pull request branch update did not complete");
-		const pending = await execute(
-			reviewer,
-			"github.create_pull_request_review",
-			{
-				...target,
-				body: marker,
-				comments: [],
-				commitId: updatedHeadSha,
-				idempotencyKey: `${runId}:review-create`,
-				pullNumber,
-			},
-		);
-		assertOwnedReview(pending, marker, "PENDING");
-		const approved = await execute(
-			reviewer,
-			"github.submit_pull_request_review",
-			{
-				...target,
-				body: marker,
-				event: "APPROVE",
-				idempotencyKey: `${runId}:review-submit`,
-				pullNumber,
-				reviewId: pending.id,
-			},
-		);
-		assertOwnedReview(approved, marker, "APPROVED");
-		assertOwnedReview(
-			await execute(primary, "github.dismiss_pull_request_review", {
-				...target,
-				idempotencyKey: `${runId}:review-dismiss`,
-				message: marker,
-				pullNumber,
-				reviewId: pending.id,
-			}),
-			marker,
-			"DISMISSED",
-		);
 		const removed = await execute(
 			primary,
 			"github.remove_pull_request_reviewers",
@@ -466,16 +428,6 @@ function positiveInteger(value, label) {
 	if (!Number.isSafeInteger(value) || value < 1)
 		throw new Error(`${label} is invalid`);
 	return value;
-}
-
-function assertOwnedReview(review, marker, state) {
-	if (
-		review?.body !== marker ||
-		review.state !== state ||
-		String(review.user?.id) !== "329435106" ||
-		!Number.isSafeInteger(review.id)
-	)
-		throw new Error("pull request review ownership marker does not match");
 }
 
 if (

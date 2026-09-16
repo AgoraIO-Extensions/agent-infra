@@ -20,6 +20,9 @@ test("GitHub review conformance completes an owned two-account lifecycle", async
 	});
 
 	assert.equal(evidence.cleanup, "SUCCEEDED");
+	assert.deepEqual(evidence.primaryActionVersionIds, [
+		"github.dismiss_pull_request_review@v7",
+	]);
 	assert.equal(evidence.pullNumber, 17);
 	assert.deepEqual(
 		evidence.actionVersionIds,
@@ -62,11 +65,13 @@ test("GitHub review conformance completes an owned two-account lifecycle", async
 			.map(({ action }) => action),
 		[
 			"list_connections",
+			"get_action_guide",
 			"github.get_repository",
 			"github.get_branch",
 			"github.create_ref",
 			"github.create_or_update_file",
 			"github.create_pull_request",
+			"github.dismiss_pull_request_review",
 			"github.update_pull_request",
 			"github.delete_ref",
 		],
@@ -384,7 +389,11 @@ test("GitHub review conformance preserves an unowned fixture before reviewer mut
 				action: {
 					actionId: args.actionId,
 					actionVersionId: `${args.actionId}@v7`,
-					effect: writeActions.has(args.actionId) ? "WRITE" : "READ",
+					effect:
+						writeActions.has(args.actionId) ||
+						args.actionId === "github.dismiss_pull_request_review"
+							? "WRITE"
+							: "READ",
 				},
 			});
 		}
@@ -484,7 +493,11 @@ function lifecycleFetch(calls, options = {}) {
 				action: {
 					actionId: args.actionId,
 					actionVersionId: `${args.actionId}@v7`,
-					effect: writeActions.has(args.actionId) ? "WRITE" : "READ",
+					effect:
+						writeActions.has(args.actionId) ||
+						args.actionId === "github.dismiss_pull_request_review"
+							? "WRITE"
+							: "READ",
 				},
 			});
 		}
@@ -680,7 +693,14 @@ function providerResult(
 		return {
 			body: input.body,
 			id: 201,
-			state: "COMMENTED",
+			state: "APPROVED",
+			user: { id: 329435106 },
+		};
+	if (action === "github.dismiss_pull_request_review")
+		return {
+			body: marker,
+			id: 201,
+			state: "DISMISSED",
 			user: { id: 329435106 },
 		};
 	if (action === "github.list_pull_request_reviews")
@@ -689,7 +709,7 @@ function providerResult(
 				{
 					body: marker,
 					id: 201,
-					state: "COMMENTED",
+					state: "DISMISSED",
 					user: { id: 329435106 },
 				},
 			],
