@@ -59,6 +59,20 @@ export async function runGitHubReviewConformance({
 
 	await assertSingleAccount(primary, "328682695");
 	await assertSingleAccount(reviewer, "329435106");
+	const dismissGuide = await primary.call(
+		"get_action_guide",
+		{ actionId: "github.dismiss_pull_request_review" },
+		true,
+	);
+	if (
+		dismissGuide?.action?.actionVersionId !==
+			"github.dismiss_pull_request_review@v7" ||
+		dismissGuide.action.effect !== "WRITE"
+	) {
+		throw new Error(
+			"github.dismiss_pull_request_review has an unapproved ActionVersion",
+		);
+	}
 	const search = await reviewer.call(
 		"search_actions",
 		{ limit: 50, query: "", service: "github" },
@@ -289,7 +303,7 @@ export async function runGitHubReviewConformance({
 			"github.submit_pull_request_review",
 			{
 				body: `${marker} submitted`,
-				event: "COMMENT",
+				event: "APPROVE",
 				idempotencyKey: `${runId}:review-submit`,
 				owner: target.owner,
 				pullNumber,
@@ -299,10 +313,28 @@ export async function runGitHubReviewConformance({
 		);
 		if (
 			submitted?.id !== reviewId ||
-			submitted?.state !== "COMMENTED" ||
+			submitted?.state !== "APPROVED" ||
 			String(submitted?.user?.id) !== reviewerExternalAccount
 		) {
 			throw new Error("submitted review does not match");
+		}
+		const dismissed = await primary.execute(
+			"github.dismiss_pull_request_review",
+			{
+				idempotencyKey: `${runId}:review-dismiss`,
+				message: marker,
+				owner: target.owner,
+				pullNumber,
+				repo: target.repository,
+				reviewId,
+			},
+		);
+		if (
+			dismissed.actionVersionId !== "github.dismiss_pull_request_review@v7" ||
+			dismissed.result?.id !== reviewId ||
+			dismissed.result?.state !== "DISMISSED"
+		) {
+			throw new Error("dismissed review does not match");
 		}
 		const reviews = await reviewerExecute("github.list_pull_request_reviews", {
 			owner: target.owner,
@@ -313,6 +345,7 @@ export async function runGitHubReviewConformance({
 			!reviews?.reviews?.some(
 				(item) =>
 					item.id === reviewId &&
+					item.state === "DISMISSED" &&
 					item.body?.includes(marker) &&
 					String(item.user?.id) === reviewerExternalAccount,
 			)
@@ -417,6 +450,7 @@ export async function runGitHubReviewConformance({
 		actionVersionIds: githubReviewActionIds.map((id) => `${id}@v7`),
 		calls,
 		cleanup: "SUCCEEDED",
+		primaryActionVersionIds: ["github.dismiss_pull_request_review@v7"],
 		pullNumber,
 		runId,
 	};

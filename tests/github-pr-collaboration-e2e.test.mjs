@@ -68,7 +68,6 @@ test("pull request collaboration completes and cleans an owned lifecycle", async
 		"github.request_pull_request_reviewers@v7",
 		"github.remove_pull_request_reviewers@v7",
 		"github.update_pull_request_branch@v7",
-		"github.dismiss_pull_request_review@v7",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.equal(evidence.pullNumber, 31);
@@ -76,11 +75,6 @@ test("pull request collaboration completes and cleans an owned lifecycle", async
 		new Set(calls.filter(({ target }) => target).map(({ target }) => target)),
 		new Set(evidence.actionVersionIds),
 	);
-	const reviewCreate = calls.find(
-		({ action }) => action === "github.create_pull_request_review",
-	);
-	assert.equal(reviewCreate.input.commitId, "head-2");
-	assert.deepEqual(reviewCreate.input.comments, []);
 	assert.deepEqual(
 		calls
 			.filter(({ action }) => action === "github.delete_ref")
@@ -304,7 +298,6 @@ const targetActions = new Set([
 	"github.request_pull_request_reviewers",
 	"github.remove_pull_request_reviewers",
 	"github.update_pull_request_branch",
-	"github.dismiss_pull_request_review",
 ]);
 
 function providerResult(action, input, state) {
