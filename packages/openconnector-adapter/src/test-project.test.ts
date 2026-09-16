@@ -164,7 +164,7 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds account-scoped evidence to 117 actions", () => {
+test("GitHub verification matrix binds account-scoped evidence to 123 actions", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
 		githubV7VerificationEvidenceRecords,
@@ -172,11 +172,11 @@ test("GitHub verification matrix binds account-scoped evidence to 117 actions", 
 	assert.equal(matrix.length, 145);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		117,
+		123,
 	);
 	assert.equal(
 		matrix.filter((item) => item.status === "UNVERIFIED").length,
-		28,
+		22,
 	);
 	assert.equal(
 		matrix.filter(
@@ -194,7 +194,7 @@ test("GitHub verification matrix binds account-scoped evidence to 117 actions", 
 				(item) =>
 					item.actionVersionId.endsWith("@v7") &&
 					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "35078565578-1" &&
+					item.evidence.runId === "35092020126-1" &&
 					item.evidence.externalAccount === "329435106",
 			),
 	);
@@ -240,7 +240,7 @@ test("GitHub verification matrix binds account-scoped evidence to 117 actions", 
 		(item) => item.status === "LIVE_VERIFIED",
 	)?.evidence;
 	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
-	assert.equal(retainedEvidence?.actionVersionIds.length, 109);
+	assert.equal(retainedEvidence?.actionVersionIds.length, 115);
 	assert.ok(Object.isFrozen(retainedEvidence));
 	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
