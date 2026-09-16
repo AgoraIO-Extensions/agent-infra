@@ -58,10 +58,7 @@ export function createPlatformWecomConnectionsV1(
 	async function reconcile() {
 		const bindings = await options.bindings();
 		if (closed) return;
-		if (
-			bindings.length > 100 ||
-			new Set(bindings.map((b) => b.botId)).size !== bindings.length
-		)
+		if (new Set(bindings.map((b) => b.botId)).size !== bindings.length)
 			throw new Error("Invalid WeCom connection bindings");
 		for (const [botId, entry] of active) {
 			const desired = bindings.find((b) => b.botId === botId);
@@ -121,7 +118,9 @@ export function createPlatformWecomConnectionsV1(
 					!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
 				isCurrent: () => leases.current(claim),
 				receive: async (message) => {
-					const result = await options.receive(message, claim);
+					const result = await options
+						.receive(message, claim)
+						.catch(() => ({ outcome: "unavailable" as const }));
 					if (result.outcome === "denied" || result.outcome === "unavailable") {
 						const status = await connection.sender.send({
 							scope: message,

@@ -81,7 +81,9 @@ export function createPlatformWecomWorkerV1(
 	});
 	return {
 		async dispatch() {
-			await connections?.tick();
+			const [connectionResult] = await Promise.allSettled([
+				connections?.tick(),
+			]);
 			void setup?.tick().catch(() => {
 				try {
 					options.connections?.observeIngress?.("unavailable");
@@ -95,6 +97,8 @@ export function createPlatformWecomWorkerV1(
 			);
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
+			if (connectionResult?.status === "rejected")
+				throw connectionResult.reason;
 			return results.some(
 				(result) => result.status === "fulfilled" && result.value,
 			);
@@ -117,9 +121,13 @@ export function createPlatformWecomWorkerV1(
 			);
 		},
 		async close() {
-			await setup?.close();
-			await connections?.close();
-			await store.close();
+			const results = await Promise.allSettled([
+				setup?.close(),
+				connections?.close(),
+				store.close(),
+			]);
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 		},
 	};
 }

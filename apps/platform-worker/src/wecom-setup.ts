@@ -250,10 +250,14 @@ export function createWecomSetupWorkerV1(
 		async close() {
 			closed = true;
 			connecting?.close();
-			await store.close();
-			await leases.close();
-			await transaction.close();
-			await query.close();
+			const results = await Promise.allSettled([
+				store.close(),
+				leases.close(),
+				transaction.close(),
+				query.close(),
+			]);
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 		},
 	};
 	let running: Promise<void> | undefined;

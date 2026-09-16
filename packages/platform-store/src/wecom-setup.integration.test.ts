@@ -238,3 +238,24 @@ it.each([
 	},
 	30000,
 );
+
+it("returns all current active bindings beyond the former 100-row limit", async () => {
+	const db = await startPostgresTestDatabase("wecom-bindings");
+	const sql = postgres(db.databaseUrl);
+	const store = new PostgresWecomSetupV1(db);
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) select 'agent-'||i,1,'authorization' from generate_series(1,101) i`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) select 'agent-'||i,1,'template',jsonb_build_object('schemaVersion',2,'agentId','agent-'||i,'revision',1,'channels',jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference','session-'||i))),now() from generate_series(1,101) i`;
+		await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,bot_id) select 'session-'||i,'agent-'||i,'owner',1,'authorization','digest',now(),'active','bot-'||i from generate_series(1,101) i`;
+		const bindings = await store.bindings();
+		expect(bindings).toHaveLength(101);
+		expect(new Set(bindings.map((binding) => binding.agentId)).size).toBe(101);
+		await sql`update platform.agent_configuration_revisions set configuration=jsonb_set(configuration,'{channels}','[]'::jsonb) where agent_id='agent-101'`;
+		expect(await store.bindings()).toHaveLength(100);
+	} finally {
+		await store.close();
+		await sql.end();
+		await db.stop();
+	}
+});

@@ -183,7 +183,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	async bindings() {
 		const rows = await this.#sql<
 			Row[]
-		>`select s.* from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',s.session_id)) order by s.session_id limit 100`;
+		>`select s.* from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',s.session_id)) order by s.session_id`;
 		return rows.map(record);
 	}
 }
