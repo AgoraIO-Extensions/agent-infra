@@ -48,6 +48,9 @@ jobs:
           node tests/github-connection-e2e.mjs read \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-read-e2e-result.json
           read_status=${PIPESTATUS[0]}
+          node tests/github-review-e2e.mjs \
+            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-review-e2e-result.json
+          review_status=${PIPESTATUS[0]}
           if [ "$read_status" -eq 0 ]; then
             node tests/github-low-risk-write-e2e.mjs \
               "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-write-e2e-result.json
@@ -59,9 +62,6 @@ jobs:
           node tests/github-connection-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json
           issue_status=${PIPESTATUS[0]}
-          node tests/github-review-e2e.mjs \
-            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-review-e2e-result.json
-          review_status=${PIPESTATUS[0]}
           if [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ]; then
             exit 1
           fi
