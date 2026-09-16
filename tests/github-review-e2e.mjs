@@ -6,6 +6,7 @@ const target = {
 	repository: "connector-conformance",
 	repositoryId: 1369705971,
 };
+const reviewerExternalAccount = "329435106";
 
 const actionEffects = {
 	"github.get_repository": "READ",
@@ -48,6 +49,7 @@ export async function runGitHubReviewConformance({
 	const path = `fixtures/${branch}.txt`;
 	const calls = [];
 	const approvedVersions = new Map();
+	let branchCreationStarted = false;
 	let branchCreated = false;
 	let failure;
 	let pullCreationStarted = false;
@@ -117,6 +119,7 @@ export async function runGitHubReviewConformance({
 		);
 		if (!mainRef?.object?.sha)
 			throw new Error("main ref did not return a commit SHA");
+		branchCreationStarted = true;
 		const createdRef = await primaryExecute("github.create_ref", {
 			idempotencyKey: `${runId}:fixture-ref-create`,
 			owner: target.owner,
@@ -285,7 +288,11 @@ export async function runGitHubReviewConformance({
 				reviewId,
 			},
 		);
-		if (submitted?.id !== reviewId || submitted?.state !== "COMMENTED") {
+		if (
+			submitted?.id !== reviewId ||
+			submitted?.state !== "COMMENTED" ||
+			String(submitted?.user?.id) !== reviewerExternalAccount
+		) {
 			throw new Error("submitted review does not match");
 		}
 		const reviews = await reviewerExecute("github.list_pull_request_reviews", {
@@ -295,7 +302,10 @@ export async function runGitHubReviewConformance({
 		});
 		if (
 			!reviews?.reviews?.some(
-				(item) => item.id === reviewId && item.body?.includes(marker),
+				(item) =>
+					item.id === reviewId &&
+					item.body?.includes(marker) &&
+					String(item.user?.id) === reviewerExternalAccount,
 			)
 		) {
 			throw new Error("submitted review ownership marker does not match");
@@ -326,6 +336,18 @@ export async function runGitHubReviewConformance({
 	} catch (error) {
 		failure = error;
 	} finally {
+		if (branchCreationStarted && !branchCreated) {
+			try {
+				branchCreated = await reconcileBranch({ branch, primaryExecute });
+				if (!branchCreated) {
+					failure ??= new Error(
+						"fixture branch reconciliation did not find the owned branch",
+					);
+				}
+			} catch (error) {
+				failure ??= error;
+			}
+		}
 		if (pullCreationStarted && !pullNumber) {
 			try {
 				pullNumber = await reconcilePullNumber({
@@ -390,6 +412,24 @@ export async function runGitHubReviewConformance({
 	};
 }
 
+async function reconcileBranch({ branch, primaryExecute }) {
+	const result = await primaryExecute(
+		"github.list_matching_refs",
+		{
+			owner: target.owner,
+			ref: `heads/${branch}`,
+			repo: target.repository,
+		},
+		true,
+	);
+	const matches = (result?.refs ?? []).filter(
+		(ref) => ref.ref === `refs/heads/${branch}`,
+	);
+	if (matches.length > 1)
+		throw new Error("fixture branch reconciliation is ambiguous");
+	return matches.length === 1;
+}
+
 async function reconcilePullNumber({ branch, marker, primaryExecute }) {
 	const result = await primaryExecute(
 		"github.list_pull_requests",
@@ -434,7 +474,11 @@ async function cleanupReviewerArtifacts({
 			},
 		);
 		ownedComments = (comments?.comments ?? [])
-			.filter((comment) => comment.body?.includes(marker))
+			.filter(
+				(comment) =>
+					comment.body?.includes(marker) &&
+					String(comment.user?.id) === reviewerExternalAccount,
+			)
 			.sort(
 				(left, right) =>
 					Number(Boolean(right.in_reply_to_id)) -
@@ -466,7 +510,12 @@ async function cleanupReviewerArtifacts({
 		failures.push(error);
 	}
 	for (const review of reviews?.reviews ?? []) {
-		if (review.state !== "PENDING" || !review.body?.includes(marker)) continue;
+		if (
+			review.state !== "PENDING" ||
+			!review.body?.includes(marker) ||
+			String(review.user?.id) !== reviewerExternalAccount
+		)
+			continue;
 		try {
 			await reviewerExecute("github.delete_pending_pull_request_review", {
 				idempotencyKey: `${runId}:cleanup-review-${review.id}`,
@@ -582,13 +631,20 @@ function assertOwnedPull(pull, marker, number) {
 }
 
 function ownedCommentId(comment, marker) {
-	if (!comment?.body?.includes(marker))
+	if (
+		!comment?.body?.includes(marker) ||
+		String(comment.user?.id) !== reviewerExternalAccount
+	)
 		throw new Error("review comment ownership marker does not match");
 	return positiveInteger(comment.id, "review comment id");
 }
 
 function ownedPendingReviewId(review, marker) {
-	if (review?.state !== "PENDING" || !review?.body?.includes(marker)) {
+	if (
+		review?.state !== "PENDING" ||
+		!review?.body?.includes(marker) ||
+		String(review.user?.id) !== reviewerExternalAccount
+	) {
 		throw new Error("pending review ownership marker does not match");
 	}
 	return positiveInteger(review.id, "review id");

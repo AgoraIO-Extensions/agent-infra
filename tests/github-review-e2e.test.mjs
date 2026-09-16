@@ -160,6 +160,32 @@ test("GitHub review conformance reconciles an orphaned fixture pull read-only", 
 	);
 });
 
+test("GitHub review conformance reconciles an uncertain fixture branch", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubReviewConformance({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, {
+				malformedRef: true,
+				marker: "connection-e2e:uncertain-branch",
+			}),
+			runId: "uncertain-branch",
+		}),
+		/fixture ref does not match/,
+	);
+	assert.deepEqual(
+		calls
+			.filter(({ token, input }) => token === "primary-token" && input)
+			.slice(-2)
+			.map(({ action }) => action),
+		["github.list_matching_refs", "github.delete_ref"],
+	);
+});
+
 test("GitHub review conformance preserves the branch when pull reconciliation fails", async () => {
 	const calls = [];
 	await assert.rejects(
@@ -389,6 +415,14 @@ function lifecycleFetch(calls, options = {}) {
 				status: "SUCCEEDED",
 			});
 		}
+		if (options.malformedRef && action === "github.create_ref") {
+			return response(request.id, {
+				action,
+				callId: `call-${calls.length}`,
+				result: { object: { sha: "base-sha" } },
+				status: "SUCCEEDED",
+			});
+		}
 		return response(request.id, {
 			action: args.actionId,
 			callId: `call-${calls.length}`,
@@ -426,6 +460,11 @@ function providerResult(
 		return { object: { sha: "base-sha" }, ref: "refs/heads/main" };
 	if (action === "github.create_ref")
 		return { object: { sha: "base-sha" }, ref: input.ref };
+	if (action === "github.list_matching_refs") {
+		return {
+			refs: [{ object: { sha: "base-sha" }, ref: `refs/${input.ref}` }],
+		};
+	}
 	if (action === "github.create_or_update_file")
 		return { commit: { sha: "head-sha" } };
 	if (action === "github.create_pull_request") {
@@ -454,11 +493,16 @@ function providerResult(
 		};
 	}
 	if (action === "github.create_pull_request_review_comment")
-		return { body: input.body, id: 101 };
+		return { body: input.body, id: 101, user: { id: 329435106 } };
 	if (action === "github.update_pull_request_review_comment")
-		return { body: input.body, id: 101 };
+		return { body: input.body, id: 101, user: { id: 329435106 } };
 	if (action === "github.reply_pull_request_review_comment")
-		return { body: input.body, id: 102, in_reply_to_id: 101 };
+		return {
+			body: input.body,
+			id: 102,
+			in_reply_to_id: 101,
+			user: { id: 329435106 },
+		};
 	if (action === "github.list_pull_request_review_comments") {
 		const deleted = calls.filter(
 			({ action: item, input: executedInput }) =>
@@ -468,8 +512,22 @@ function providerResult(
 			comments:
 				deleted === 0
 					? [
-							{ body: `${marker} updated`, id: 101 },
-							{ body: `${marker} reply`, id: 102, in_reply_to_id: 101 },
+							{
+								body: `${marker} updated`,
+								id: 101,
+								user: { id: 329435106 },
+							},
+							{
+								body: `${marker} reply`,
+								id: 102,
+								in_reply_to_id: 101,
+								user: { id: 329435106 },
+							},
+							{
+								body: `${marker} foreign`,
+								id: 999,
+								user: { id: 7 },
+							},
 						]
 					: [],
 		};
@@ -479,16 +537,45 @@ function providerResult(
 			({ action: item, input: executedInput }) =>
 				item === action && executedInput,
 		).length;
-		return { body: input.body, id: count === 1 ? 201 : 202, state: "PENDING" };
+		return {
+			body: input.body,
+			id: count === 1 ? 201 : 202,
+			state: "PENDING",
+			user: { id: 329435106 },
+		};
 	}
 	if (action === "github.get_pull_request_review")
-		return { body: marker, id: 201, state: "PENDING" };
+		return {
+			body: marker,
+			id: 201,
+			state: "PENDING",
+			user: { id: 329435106 },
+		};
 	if (action === "github.submit_pull_request_review")
-		return { body: input.body, id: 201, state: "COMMENTED" };
+		return {
+			body: input.body,
+			id: 201,
+			state: "COMMENTED",
+			user: { id: 329435106 },
+		};
 	if (action === "github.list_pull_request_reviews")
-		return { reviews: [{ body: marker, id: 201, state: "COMMENTED" }] };
+		return {
+			reviews: [
+				{
+					body: marker,
+					id: 201,
+					state: "COMMENTED",
+					user: { id: 329435106 },
+				},
+			],
+		};
 	if (action === "github.delete_pending_pull_request_review")
-		return { body: marker, id: 202, state: "PENDING" };
+		return {
+			body: marker,
+			id: 202,
+			state: "PENDING",
+			user: { id: 329435106 },
+		};
 	if (action === "github.update_pull_request")
 		return { number: 17, state: "closed" };
 	return {};
