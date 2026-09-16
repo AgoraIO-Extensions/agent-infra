@@ -36,6 +36,8 @@ export type ConversationScreenProps = {
 	agentId: string;
 	conversationId?: string;
 	identityKey: string;
+	view?: "history" | "conversation";
+	onViewChange?: (view: "history" | "conversation") => void;
 	onConversationChange: (conversationId: string | undefined) => void;
 	onAccessDenied?: () => void;
 };
@@ -66,7 +68,13 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		[instanceId, identityKey, agentId],
 	);
 	const [denied, setDenied] = useState(false);
-	const [showHistory, setShowHistory] = useState(false);
+	const [internalHistory, setInternalHistory] = useState(false);
+	const showHistory =
+		props.view === undefined ? internalHistory : props.view === "history";
+	function setHistory(value: boolean) {
+		setInternalHistory(value);
+		props.onViewChange?.(value ? "history" : "conversation");
+	}
 	const agentQuery = useQuery({
 		queryKey,
 		enabled: Boolean(identityKey && agentId) && !denied,
@@ -151,10 +159,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-2">
-					<Button
-						variant="outline"
-						onClick={() => setShowHistory((value) => !value)}
-					>
+					<Button variant="outline" onClick={() => setHistory(!showHistory)}>
 						{showHistory ? (
 							<ArrowLeft aria-hidden="true" />
 						) : (
@@ -166,7 +171,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 						variant="outline"
 						disabled={!available || selfManaged}
 						onClick={() => {
-							setShowHistory(false);
+							setInternalHistory(false);
 							onConversationChange(undefined);
 						}}
 					>
@@ -194,7 +199,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					identityKey={identityKey}
 					current={conversationId}
 					onSelect={(id) => {
-						setShowHistory(false);
+						setInternalHistory(false);
 						onConversationChange(id);
 					}}
 					onDenied={deny}

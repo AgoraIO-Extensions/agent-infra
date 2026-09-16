@@ -51,8 +51,8 @@ export const agentApplicationEditActionLabels: Record<
 	AgentApplicationEditAction,
 	string
 > = {
-	edit: "Edit application",
-	resubmit: "Resubmit application",
+	edit: "修改申请",
+	resubmit: "修改并重新提交",
 };
 
 export function getAgentApplicationEditAction(
