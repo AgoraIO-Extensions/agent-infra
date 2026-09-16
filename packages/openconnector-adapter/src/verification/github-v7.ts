@@ -91,6 +91,10 @@ export const githubV7VerificationEvidence = {
 		"github.remove_pull_request_reviewers@v7",
 		"github.update_pull_request_branch@v7",
 		"github.dismiss_pull_request_review@v7",
+		"github.create_commit_status@v7",
+		"github.create_commit_comment@v7",
+		"github.create_issue_reaction@v7",
+		"github.create_issue_comment_reaction@v7",
 		...githubV7LowRiskWriteScenarios.map(
 			({ actionVersionId }) => actionVersionId,
 		),
@@ -101,7 +105,7 @@ export const githubV7VerificationEvidence = {
 	provider: "github",
 	providerReleaseId:
 		"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7",
-	runId: "35092020126-1",
+	runId: "35101911446-1",
 } as const satisfies LiveVerificationEvidence;
 
 export const githubV7ReviewerVerificationEvidence = {
