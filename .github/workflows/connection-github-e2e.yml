@@ -77,6 +77,9 @@ jobs:
           node tests/github-review-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-review-e2e-result.json
           review_status=${PIPESTATUS[0]}
+          node tests/github-pr-collaboration-e2e.mjs \
+            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-pr-collaboration-e2e-result.json
+          collaboration_status=${PIPESTATUS[0]}
           node tests/github-connection-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json
           issue_status=${PIPESTATUS[0]}
@@ -91,7 +94,7 @@ jobs:
             write_status=1
             echo '{"outcome":"SKIPPED","reason":"read conformance failed"}' > connection-github-write-e2e-result.json
           fi
-          if [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ]; then
+          if [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ] || [ "$collaboration_status" -ne 0 ]; then
             exit 1
           fi
 
@@ -104,6 +107,7 @@ jobs:
           path: |
             connection-github-e2e-result.json
             connection-github-read-e2e-result.json
+            connection-github-pr-collaboration-e2e-result.json
             connection-github-review-e2e-result.json
             connection-github-write-e2e-result.json
           retention-days: 30
