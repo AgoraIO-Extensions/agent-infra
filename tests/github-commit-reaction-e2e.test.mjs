@@ -97,6 +97,7 @@ test("commit and reaction conformance reconciles an uncertain branch before clea
 
 function lifecycleFetch(calls, config = {}) {
 	const actionCounts = new Map();
+	let branchAdvanced = false;
 	let id = 0;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
@@ -129,11 +130,16 @@ function lifecycleFetch(calls, config = {}) {
 			if (config.failCreateRef && action === "github.create_ref")
 				throw new Error("fetch failed");
 			if (action === config.failAction) throw new Error("fetch failed");
+			if (action === "github.create_or_update_file") branchAdvanced = true;
 			structuredContent = {
 				action,
 				actionVersionId: `${action}@v7`,
 				callId: `call-${++id}`,
-				result: providerResult(action, input, { actionCount, config }),
+				result: providerResult(action, input, {
+					actionCount,
+					branchAdvanced,
+					config,
+				}),
 				status: "SUCCEEDED",
 			};
 		}
@@ -169,7 +175,9 @@ function providerResult(action, input, state) {
 			"github.create_issue_comment_reaction": { content: "eyes", id: 70 },
 			"github.create_issue_reaction": { content: "rocket", id: 71 },
 			"github.create_or_update_file": { commit: { sha: "commit-1" } },
-			"github.get_branch": { commit: { sha: "main-1" } },
+			"github.get_branch": {
+				commit: { sha: state.branchAdvanced ? "commit-1" : "main-1" },
+			},
 			"github.get_issue": {
 				body: marker,
 				number: 50,

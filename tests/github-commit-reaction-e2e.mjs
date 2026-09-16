@@ -47,7 +47,9 @@ export async function runGitHubCommitReactionConformance({
 	let issueNumber;
 	let commentId;
 	let cleanupFailure;
+	let commentCreationStarted = false;
 	let failure;
+	let issueCreationStarted = false;
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
 		if (projection.actionVersionId !== `${actionId}@v7`)
@@ -96,7 +98,15 @@ export async function runGitHubCommitReactionConformance({
 			path: `fixtures/${branch}.txt`,
 		});
 		const commitSha = file?.commit?.sha;
-		if (!commitSha) throw new Error("fixture commit did not return a SHA");
+		if (!commitSha || commitSha === expectedInitialSha)
+			throw new Error("fixture commit did not create a new commit");
+		const fixtureBranch = await execute(
+			"github.get_branch",
+			{ ...target, branch },
+			true,
+		);
+		if (fixtureBranch?.commit?.sha !== commitSha)
+			throw new Error("fixture commit is not owned by the run branch");
 		const status = await execute("github.create_commit_status", {
 			...target,
 			context: marker,
@@ -120,6 +130,7 @@ export async function runGitHubCommitReactionConformance({
 		});
 		if (commitComment?.body !== marker || commitComment.commit_id !== commitSha)
 			throw new Error("commit comment ownership marker does not match");
+		issueCreationStarted = true;
 		const issue = await execute("github.create_issue", {
 			...target,
 			body: marker,
@@ -127,22 +138,25 @@ export async function runGitHubCommitReactionConformance({
 			title: marker,
 		});
 		const candidateIssueNumber = positiveInteger(issue?.number, "issue number");
-		issueNumber = candidateIssueNumber;
 		if (issue?.body !== marker || issue.title !== marker)
 			throw new Error("issue ownership marker does not match");
+		issueNumber = candidateIssueNumber;
 		const providerIssue = await execute(
 			"github.get_issue",
 			{ ...target, issueNumber: candidateIssueNumber },
 			true,
 		);
-		if (providerIssue?.body !== marker || providerIssue.title !== marker)
+		if (providerIssue?.body !== marker || providerIssue.title !== marker) {
+			issueNumber = undefined;
 			throw new Error("issue ownership marker does not match");
+		}
 		if (
 			issue?.body !== marker ||
 			issue.title !== marker ||
 			issue.number !== issueNumber
 		)
 			throw new Error("issue ownership marker does not match");
+		commentCreationStarted = true;
 		const comment = await execute("github.create_issue_comment", {
 			...target,
 			body: marker,
@@ -150,16 +164,18 @@ export async function runGitHubCommitReactionConformance({
 			issueNumber,
 		});
 		const candidateCommentId = positiveInteger(comment?.id, "comment id");
-		commentId = candidateCommentId;
 		if (comment?.body !== marker)
 			throw new Error("issue comment ownership marker does not match");
+		commentId = candidateCommentId;
 		const providerComment = await execute(
 			"github.get_issue_comment",
 			{ ...target, commentId: candidateCommentId },
 			true,
 		);
-		if (providerComment?.body !== marker)
+		if (providerComment?.body !== marker) {
+			commentId = undefined;
 			throw new Error("issue comment ownership marker does not match");
+		}
 		if (comment?.body !== marker || comment.id !== commentId)
 			throw new Error("issue comment ownership marker does not match");
 		const issueReaction = await execute("github.create_issue_reaction", {
@@ -185,6 +201,42 @@ export async function runGitHubCommitReactionConformance({
 		failure = error;
 	} finally {
 		const cleanupFailures = [];
+		if (issueCreationStarted && !issueNumber) {
+			try {
+				const issues = await execute(
+					"github.list_repository_issues",
+					{ ...target, page: 1, perPage: 100, state: "all" },
+					true,
+				);
+				const matches = (issues?.issues ?? []).filter(
+					(item) => item.body === marker && item.title === marker,
+				);
+				if (matches.length > 1)
+					cleanupFailures.push(new Error("issue cleanup is ambiguous"));
+				else if (matches.length === 1)
+					issueNumber = positiveInteger(matches[0].number, "issue number");
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
+		if (commentCreationStarted && issueNumber && !commentId) {
+			try {
+				const comments = await execute(
+					"github.list_issue_comments",
+					{ ...target, issueNumber, page: 1, perPage: 100 },
+					true,
+				);
+				const matches = (comments?.comments ?? []).filter(
+					(item) => item.body === marker,
+				);
+				if (matches.length > 1)
+					cleanupFailures.push(new Error("issue comment cleanup is ambiguous"));
+				else if (matches.length === 1)
+					commentId = positiveInteger(matches[0].id, "comment id");
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
 		if (branchCreationStarted && !branchCreated) {
 			try {
 				const refs = await execute(
