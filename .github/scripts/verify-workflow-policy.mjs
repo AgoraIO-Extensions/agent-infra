@@ -126,7 +126,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "connection-github-e2e.yml": {
-    needs: ["reviewer-health", "conformance", "commit-reaction"],
+    needs: ["reviewer-health", "conformance", "commit-reaction", "merge"],
     operation: "connection-github-e2e",
   },
   "pr-agent-review.yml": {
@@ -321,9 +321,17 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 				step.name === "Run commit and reaction conformance" &&
 				step.env?.[envName] === reference &&
 				occurrences === 1;
+			const allowedMerge =
+				secret === "CONNECTION_E2E_TOKEN" &&
+				workflowName === "connection-github-e2e.yml" &&
+				jobName === "merge" &&
+				step.name === "Run isolated GitHub merge conformance" &&
+				step.env?.[envName] === reference &&
+				occurrences === 1;
       if (
 				!allowedHealthProbe &&
 				!allowedCommitReaction &&
+				!allowedMerge &&
 				(workflowName !== "connection-github-e2e.yml" ||
         jobName !== "conformance" ||
         step.name !== "Run deterministic Connection GitHub conformance" ||
