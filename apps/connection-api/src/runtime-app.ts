@@ -30,6 +30,7 @@ import {
 	jiraServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/jira-server";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 
 import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
@@ -96,9 +97,26 @@ export async function createConnectionRuntime(
 		resource: config.resourceUrl,
 	});
 	const github = new OpenConnectorGitHubAdapter();
-	const bitbucket = new BitbucketServerAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
-	);
+	const proxyDispatcher = config.bitbucketProxyUrl
+		? new ProxyAgent(config.bitbucketProxyUrl)
+		: undefined;
+	const bitbucketFetch = createGuardedFetch({
+		allowPrivateNetwork: false,
+		...(proxyDispatcher === undefined
+			? {}
+			: {
+					fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+						undiciFetch(
+							input as never,
+							{
+								...init,
+								dispatcher: proxyDispatcher,
+							} as never,
+						)) as unknown as typeof fetch,
+				}),
+		maxRedirects: 0,
+	});
+	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
 	const jiraFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
 		maxRedirects: 0,

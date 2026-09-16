@@ -1,6 +1,7 @@
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 export type ConnectionApiRuntimeConfig = {
+	bitbucketProxyUrl?: string;
 	databaseUrl: string;
 	directConsumer: { id: string; name: string };
 	identityKey: Uint8Array;
@@ -142,6 +143,28 @@ function optionalHttps(environment: RuntimeEnvironment, name: string) {
 	return value ? requireHttps(value, name) : undefined;
 }
 
+function optionalProxyUrl(environment: RuntimeEnvironment) {
+	const value = environment.BITBUCKET_SERVER_PROXY_URL;
+	if (!value) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new Error("BITBUCKET_SERVER_PROXY_URL must be an HTTP proxy origin");
+	}
+	if (
+		(url.protocol !== "http:" && url.protocol !== "https:") ||
+		url.username ||
+		url.password ||
+		url.pathname !== "/" ||
+		url.search ||
+		url.hash
+	) {
+		throw new Error("BITBUCKET_SERVER_PROXY_URL must be an HTTP proxy origin");
+	}
+	return url.toString();
+}
+
 function requireJiraTokenUrl(environment: RuntimeEnvironment) {
 	const tokenUrl = new URL(
 		requireHttps(
@@ -177,7 +200,9 @@ export function connectionApiRuntimeConfig(
 		"CONNECTION_PUBLIC_BASE_URL",
 	);
 	const resourceUrl = new URL("/mcp", publicBaseUrl).toString();
+	const bitbucketProxyUrl = optionalProxyUrl(environment);
 	return {
+		...(bitbucketProxyUrl === undefined ? {} : { bitbucketProxyUrl }),
 		databaseUrl: requirePostgres(requireValue(environment, "DATABASE_URL")),
 		directConsumer: {
 			id: requireValue(environment, "CONNECTION_DIRECT_CONSUMER_ID"),

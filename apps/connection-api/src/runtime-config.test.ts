@@ -86,6 +86,27 @@ describe("Connection runtime configuration", () => {
 		);
 	});
 
+	it("accepts only a credential-free Bitbucket proxy origin", () => {
+		expect(
+			fullConnectionRuntimeConfig({
+				...accountBase,
+				BITBUCKET_SERVER_PROXY_URL: "http://103.101.125.158:28062",
+			}).bitbucketProxyUrl,
+		).toBe("http://103.101.125.158:28062/");
+		for (const value of [
+			"socks5://proxy.example:1080",
+			"http://user:secret@proxy.example:8080",
+			"http://proxy.example:8080/path",
+		]) {
+			expect(() =>
+				fullConnectionRuntimeConfig({
+					...accountBase,
+					BITBUCKET_SERVER_PROXY_URL: value,
+				}),
+			).toThrow(/BITBUCKET_SERVER_PROXY_URL/);
+		}
+	});
+
 	it("rejects a Jira token endpoint outside the fixed company service", () => {
 		expect(() =>
 			fullConnectionRuntimeConfig({
