@@ -184,6 +184,7 @@ export type CurrentConsumerAuthorizationPreview = {
 
 export type CallProjection = {
 	action: ActionName;
+	actionVersionId?: string;
 	callId: string;
 	connectionId: string;
 	createdAt: string;
@@ -375,6 +376,7 @@ export function canonicalHashMatches(value: unknown, storedHash: string) {
 function projectCall(call: StoredCall): CallProjection {
 	return {
 		action: call.action,
+		...(call.actionVersionId ? { actionVersionId: call.actionVersionId } : {}),
 		callId: call.callId,
 		connectionId: call.connectionId,
 		createdAt: call.createdAt,
