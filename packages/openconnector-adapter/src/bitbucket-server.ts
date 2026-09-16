@@ -637,11 +637,7 @@ export class BitbucketServerAdapter
 			}
 			start = Number(next);
 		}
-		if (!complete) {
-			throw providerError(
-				"Bitbucket compare pagination exceeded the safe limit",
-			);
-		}
+		const changePagesTruncated = !complete;
 		const candidates = changes
 			.map(projectChange)
 			.filter((change) =>
@@ -671,8 +667,9 @@ export class BitbucketServerAdapter
 		const omittedFiles: JsonObject[] = candidates
 			.slice(maxFiles)
 			.map((change) => ({ path: change.path, reason: "max_files" }));
+		const selectedCandidates = candidates.slice(0, maxFiles);
 		let diffBytes = 0;
-		for (const change of candidates.slice(0, maxFiles)) {
+		for (const [index, change] of selectedCandidates.entries()) {
 			const diff = await this.requestJson(
 				accessToken,
 				`${repositoryPath(value)}/compare/diff`,
@@ -687,20 +684,28 @@ export class BitbucketServerAdapter
 			);
 			const size = Buffer.byteLength(JSON.stringify(diff));
 			if (diffBytes + size > maxDiffBytes) {
-				omittedFiles.push({ path: change.path, reason: "max_diff_bytes" });
-				continue;
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
 			}
 			diffBytes += size;
 			files.push({ ...change, diff });
 		}
 		const fingerprintPayload = {
 			baseCommit: baseId,
+			changePagesTruncated,
 			files,
+			omittedFiles,
 			pathGlobs,
 			targetCommit: targetId,
 		};
 		return {
 			baseCommit: projectCommit(baseCommit),
+			changePagesTruncated,
 			diffBytes,
 			files,
 			fingerprint: `sha256:${createHash("sha256")
@@ -711,6 +716,7 @@ export class BitbucketServerAdapter
 			pathGlobs,
 			targetCommit: projectCommit(targetCommit),
 			truncated:
+				changePagesTruncated ||
 				omittedFiles.length > 0 ||
 				files.some((file) => (file.diff as JsonObject).truncated === true),
 		};
@@ -834,8 +840,13 @@ function globMatches(pattern: string, path: string) {
 	for (let index = 0; index < pattern.length; index += 1) {
 		const character = pattern.charAt(index);
 		if (character === "*" && pattern[index + 1] === "*") {
-			expression += ".*";
-			index += 1;
+			if (pattern[index + 2] === "/") {
+				expression += "(?:.*/)?";
+				index += 2;
+			} else {
+				expression += ".*";
+				index += 1;
+			}
 		} else if (character === "*") {
 			expression += "[^/]*";
 		} else if (character === "?") {

@@ -208,6 +208,10 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 						srcPath: { toString: "sdk/src/RtcEngine.cpp" },
 						type: "MODIFY",
 					},
+					{
+						path: { toString: "CHANGELOG.md" },
+						type: "ADD",
+					},
 				],
 			});
 		}
@@ -227,7 +231,7 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 			credential: { accessToken: "test-personal-access-token" },
 			input: {
 				baseRef: "release/4.7.2",
-				pathGlobs: ["sdk/include/**"],
+				pathGlobs: ["sdk/include/**", "**/*.md"],
 				project: "RTC",
 				repository: "native-sdk",
 				targetRef: "release/4.8.0",
@@ -242,19 +246,107 @@ test("Bitbucket compares resolved refs and returns only matching file diffs", as
 		};
 		assert.equal(result.baseCommit.id, "base-sha");
 		assert.equal(result.targetCommit.id, "target-sha");
-		assert.equal(result.files.length, 1);
-		const [file] = result.files;
+		assert.equal(result.files.length, 2);
+		const [file, rootFile] = result.files;
 		assert.ok(file);
+		assert.ok(rootFile);
 		assert.equal(file.path, "sdk/include/IAgoraRtcEngine.h");
 		assert.equal(file.status, "MODIFY");
+		assert.equal(rootFile.path, "CHANGELOG.md");
 		assert.equal(result.omittedFileCount, 0);
 		assert.equal(result.truncated, false);
 		assert.match(result.fingerprint, /^sha256:[a-f0-9]{64}$/);
-		assert.equal(requests.length, 4);
+		assert.equal(requests.length, 5);
 		assert.equal(
 			requests.some((url) => url.includes("RtcEngine.cpp")),
 			false,
 		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Bitbucket compare refs returns a truncated result at the change-page limit", async () => {
+	const originalFetch = globalThis.fetch;
+	let changeRequests = 0;
+	globalThis.fetch = async (input) => {
+		const url = String(input);
+		if (url.includes("/commits/")) {
+			return Response.json({
+				id: url.endsWith("/commits/main") ? "base" : "target",
+			});
+		}
+		if (url.includes("/compare/changes?")) {
+			changeRequests += 1;
+			return Response.json({
+				isLastPage: false,
+				nextPageStart: changeRequests * 100,
+				values: [],
+			});
+		}
+		throw new Error(`Unexpected request: ${url}`);
+	};
+	try {
+		const result = (await createAdapter().execute({
+			action: "bitbucket.compare_refs",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				baseRef: "main",
+				pathGlobs: ["include/**"],
+				project: "RTC",
+				repository: "native-sdk",
+				targetRef: "next",
+			},
+		})) as { changePagesTruncated: boolean; truncated: boolean };
+		assert.equal(changeRequests, 10);
+		assert.equal(result.changePagesTruncated, true);
+		assert.equal(result.truncated, true);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Bitbucket compare refs stops fetching diffs after the byte budget is exhausted", async () => {
+	const originalFetch = globalThis.fetch;
+	let diffRequests = 0;
+	globalThis.fetch = async (input) => {
+		const url = String(input);
+		if (url.includes("/commits/")) {
+			return Response.json({
+				id: url.endsWith("/commits/main") ? "base" : "target",
+			});
+		}
+		if (url.includes("/compare/changes?")) {
+			return Response.json({
+				isLastPage: true,
+				values: ["One.h", "Two.h"].map((path) => ({
+					path: { toString: path },
+					type: "MODIFY",
+				})),
+			});
+		}
+		if (url.includes("/compare/diff?")) {
+			diffRequests += 1;
+			return Response.json({ data: "x".repeat(1024) });
+		}
+		throw new Error(`Unexpected request: ${url}`);
+	};
+	try {
+		const result = (await createAdapter().execute({
+			action: "bitbucket.compare_refs",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				baseRef: "main",
+				maxDiffBytes: 1024,
+				pathGlobs: ["*.h"],
+				project: "RTC",
+				repository: "native-sdk",
+				targetRef: "next",
+			},
+		})) as { omittedFileCount: number; truncated: boolean };
+		assert.equal(diffRequests, 1);
+		assert.equal(result.omittedFileCount, 2);
+		assert.equal(result.truncated, true);
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

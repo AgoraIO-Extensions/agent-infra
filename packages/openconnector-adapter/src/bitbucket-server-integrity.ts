@@ -1,2 +1,2 @@
 export const bitbucketServerExecutorDigest =
-	"sha256:327737a15c8e591fe2005d4f95b9957a1a8fde99e67352ef2f2afafc427f41b3";
+	"sha256:ce1174f2a83d48522fbd3866bd23074e1c4bbab4ddaac8bb2892a9b0e3a48157";
