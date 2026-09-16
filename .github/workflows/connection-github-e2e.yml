@@ -6,6 +6,12 @@ on:
   schedule:
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        options: [full, commit-reaction]
+        default: full
+        required: true
 
 permissions:
   contents: read
@@ -15,6 +21,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  commit-reaction:
+    name: GitHub commit and reaction conformance
+    if: vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection' && inputs.suite == 'commit-reaction'
+    environment: connection-e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted dispatch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Run commit and reaction conformance
+        env:
+          CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
+          CONNECTION_GITHUB_E2E_ENABLED: "true"
+        run: node tests/github-commit-reaction-e2e.mjs "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | tee connection-github-commit-reaction-e2e-result.json
+      - name: Upload commit and reaction evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: connection-github-commit-reaction-${{ github.run_id }}
+          path: connection-github-commit-reaction-e2e-result.json
+          retention-days: 30
+
   reviewer-health:
     name: GitHub Reviewer v2 health
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'
@@ -49,7 +85,8 @@ jobs:
     if: >-
       vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' &&
       github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/connection'
+      github.ref == 'refs/heads/connection' &&
+      inputs.suite == 'full'
     environment: connection-e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -69,6 +106,7 @@ jobs:
         env:
           CONNECTION_E2E_REVIEWER_TOKEN: ${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}
           CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
+          CONNECTION_E2E_SKIP_COMMIT_REACTION: "true"
           CONNECTION_GITHUB_E2E_ENABLED: "true"
         shell: bash
         run: |
@@ -94,7 +132,6 @@ jobs:
             write_status=1
             echo '{"outcome":"SKIPPED","reason":"read conformance failed"}' > connection-github-write-e2e-result.json
           fi
-          sleep 180
           node tests/github-commit-reaction-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-commit-reaction-e2e-result.json
           commit_reaction_status=${PIPESTATUS[0]}
@@ -119,7 +156,7 @@ jobs:
 
   outcome:
     name: Publish terminal outcome
-    needs: [reviewer-health, conformance]
+    needs: [reviewer-health, conformance, commit-reaction]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 1

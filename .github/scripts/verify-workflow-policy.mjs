@@ -126,7 +126,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "ci",
   },
   "connection-github-e2e.yml": {
-    needs: ["reviewer-health", "conformance"],
+    needs: ["reviewer-health", "conformance", "commit-reaction"],
     operation: "connection-github-e2e",
   },
   "pr-agent-review.yml": {
@@ -314,12 +314,20 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 					"node tests/github-review-health.mjs | tee connection-github-review-health-result.json" &&
 				step.env?.[envName] === reference &&
 				occurrences === 1;
+			const allowedCommitReaction =
+				secret === "CONNECTION_E2E_TOKEN" &&
+				workflowName === "connection-github-e2e.yml" &&
+				jobName === "commit-reaction" &&
+				step.name === "Run commit and reaction conformance" &&
+				step.env?.[envName] === reference &&
+				occurrences === 1;
       if (
 				!allowedHealthProbe &&
+				!allowedCommitReaction &&
 				(workflowName !== "connection-github-e2e.yml" ||
         jobName !== "conformance" ||
         step.name !== "Run deterministic Connection GitHub conformance" ||
-        step.run?.replace("sleep 180\n", "") !==
+        step.run !==
           'set -o pipefail\nset +e\nnode tests/github-review-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-review-e2e-result.json\nreview_status=${PIPESTATUS[0]}\nnode tests/github-pr-collaboration-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-pr-collaboration-e2e-result.json\ncollaboration_status=${PIPESTATUS[0]}\nnode tests/github-connection-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json\nissue_status=${PIPESTATUS[0]}\nnode tests/github-connection-e2e.mjs read \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-read-e2e-result.json\nread_status=${PIPESTATUS[0]}\nif [ "$read_status" -eq 0 ]; then\n  node tests/github-low-risk-write-e2e.mjs \\\n    "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-write-e2e-result.json\n  write_status=${PIPESTATUS[0]}\nelse\n  write_status=1\n  echo \'{"outcome":"SKIPPED","reason":"read conformance failed"}\' > connection-github-write-e2e-result.json\nfi\nnode tests/github-commit-reaction-e2e.mjs \\\n  "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-commit-reaction-e2e-result.json\ncommit_reaction_status=${PIPESTATUS[0]}\nif [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ] || [ "$collaboration_status" -ne 0 ] || [ "$commit_reaction_status" -ne 0 ]; then\n  exit 1\nfi\n' ||
 				step.env?.[envName] !== reference ||
         occurrences !== 1)
@@ -715,7 +723,7 @@ export function validateWorkflowDocuments(workflows) {
   );
   if (
     connectionE2eJob?.if !==
-      "vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection'" ||
+      "vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection' && inputs.suite == 'full'" ||
     connectionE2eCheckout?.with?.ref !== "${{ github.sha }}" ||
     connectionE2eCheckout?.with?.["persist-credentials"] !== false
   ) {
