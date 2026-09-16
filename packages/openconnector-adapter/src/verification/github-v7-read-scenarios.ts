@@ -211,6 +211,7 @@ function scenarioInput(name: string): Readonly<Record<string, unknown>> {
 		return { query: "connection-e2e", repositoryId: fixture.repositoryId };
 	if (name === "search_topics") return { query: "connection-e2e-fixture" };
 	if (name === "get_branch") input.branch = "main";
+	if (name === "list_commits") input.sha = fixture.mainCommit;
 	if (
 		["get_commit", "get_commit_statuses", "list_check_runs_for_ref"].includes(
 			name,
@@ -259,6 +260,7 @@ function scenarioInput(name: string): Readonly<Record<string, unknown>> {
 	)
 		input.runId = fixture.runId;
 	if (name === "get_workflow") input.workflowId = fixture.workflowId;
+	if (name === "list_workflow_runs") input.created = "2026-09-14";
 	if (["get_release", "list_release_assets"].includes(name))
 		input.releaseId = fixture.releaseId;
 	if (name === "get_release_by_tag") input.tag = fixture.releaseTag;
