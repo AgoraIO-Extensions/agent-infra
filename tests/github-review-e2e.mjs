@@ -51,6 +51,7 @@ export async function runGitHubReviewConformance({
 	const approvedVersions = new Map();
 	let branchCreationStarted = false;
 	let branchCreated = false;
+	let expectedHeadSha;
 	let failure;
 	let pullCreationStarted = false;
 	let pullHandled = false;
@@ -141,6 +142,7 @@ export async function runGitHubReviewConformance({
 		});
 		const headSha = file?.commit?.sha;
 		if (!headSha) throw new Error("fixture file did not return a commit SHA");
+		expectedHeadSha = headSha;
 		pullCreationStarted = true;
 		const pull = await primaryExecute("github.create_pull_request", {
 			base: "main",
@@ -356,6 +358,7 @@ export async function runGitHubReviewConformance({
 			try {
 				pullNumber = await reconcilePullNumber({
 					branch,
+					expectedHeadSha,
 					marker,
 					primaryExecute,
 				});
@@ -434,7 +437,12 @@ async function reconcileBranch({ branch, primaryExecute }) {
 	return matches.length === 1;
 }
 
-async function reconcilePullNumber({ branch, marker, primaryExecute }) {
+async function reconcilePullNumber({
+	branch,
+	expectedHeadSha,
+	marker,
+	primaryExecute,
+}) {
 	const result = await primaryExecute(
 		"github.list_pull_requests",
 		{
@@ -454,13 +462,31 @@ async function reconcilePullNumber({ branch, marker, primaryExecute }) {
 		(pull) =>
 			pull.body === marker &&
 			pull.title === marker &&
-			pull.head?.ref === branch,
+			pull.head?.ref === branch &&
+			pull.head?.sha === expectedHeadSha,
 	);
 	if (matches.length > 1)
 		throw new Error("fixture pull reconciliation is ambiguous");
-	return matches[0]
-		? positiveInteger(matches[0].number, "reconciled pull number")
-		: undefined;
+	if (!matches[0]) return undefined;
+	const pullNumber = positiveInteger(
+		matches[0].number,
+		"reconciled pull number",
+	);
+	const pull = await primaryExecute(
+		"github.get_pull_request",
+		{ owner: target.owner, pullNumber, repo: target.repository },
+		true,
+	);
+	if (
+		pull?.body !== marker ||
+		pull?.title !== marker ||
+		pull?.head?.ref !== branch ||
+		pull?.head?.sha !== expectedHeadSha ||
+		pull?.state !== "open"
+	) {
+		throw new Error("reconciled pull ownership marker does not match");
+	}
+	return pullNumber;
 }
 
 async function cleanupReviewerArtifacts({

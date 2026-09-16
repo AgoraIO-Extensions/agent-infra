@@ -150,10 +150,11 @@ test("GitHub review conformance reconciles an orphaned fixture pull read-only", 
 	assert.deepEqual(
 		calls
 			.filter(({ token, input }) => token === "primary-token" && input)
-			.slice(-3)
+			.slice(-4)
 			.map(({ action }) => action),
 		[
 			"github.list_pull_requests",
+			"github.get_pull_request",
 			"github.update_pull_request",
 			"github.delete_ref",
 		],
@@ -309,6 +310,8 @@ test("GitHub review conformance preserves an unowned fixture before reviewer mut
 		const result = providerResult(args.actionId, args.input, executed);
 		if (args.actionId === "github.create_pull_request")
 			result.body = "someone-else";
+		if (args.actionId === "github.list_pull_requests")
+			result.pull_requests[0].body = "someone-else";
 		return response(request.id, {
 			action: args.actionId,
 			callId: `call-${executed.length}`,
@@ -477,9 +480,12 @@ function providerResult(
 		};
 	}
 	if (action === "github.get_pull_request") {
+		const branch = calls
+			.find(({ action: item }) => item === "github.create_ref")
+			?.input?.ref?.replace("refs/heads/", "");
 		return {
 			body: marker,
-			head: { sha: "head-sha" },
+			head: { ref: branch, sha: "head-sha" },
 			number: 17,
 			state: "open",
 			title: marker,
@@ -490,7 +496,7 @@ function providerResult(
 			pull_requests: [
 				{
 					body: marker,
-					head: { ref: input.head.split(":").at(-1) },
+					head: { ref: input.head.split(":").at(-1), sha: "head-sha" },
 					number: 17,
 					state: "open",
 					title: marker,
