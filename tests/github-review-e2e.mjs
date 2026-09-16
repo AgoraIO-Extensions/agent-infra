@@ -98,6 +98,9 @@ export async function runGitHubReviewConformance({
 		if (actionVersionId !== `${actionId}@v7`) {
 			throw new Error(`${actionId} has no approved ActionVersion`);
 		}
+		if (projection.actionVersionId !== actionVersionId) {
+			throw new Error(`${actionId} executed an unapproved ActionVersion`);
+		}
 		calls.push({
 			actionVersionId,
 			callId: projection.callId,

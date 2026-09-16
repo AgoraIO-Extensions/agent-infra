@@ -351,6 +351,7 @@ test("GitHub review conformance preserves an unowned fixture before reviewer mut
 			result.pull_requests[0].body = "someone-else";
 		return response(request.id, {
 			action: args.actionId,
+			actionVersionId: `${args.actionId}@v7`,
 			callId: `call-${executed.length}`,
 			result,
 			status: "SUCCEEDED",
@@ -445,6 +446,7 @@ function lifecycleFetch(calls, options = {}) {
 		if (options.malformedPull && action === "github.create_pull_request") {
 			return response(request.id, {
 				action,
+				actionVersionId: `${action}@v7`,
 				callId: `call-${calls.length}`,
 				result: {
 					body: options.marker,
@@ -458,6 +460,7 @@ function lifecycleFetch(calls, options = {}) {
 		if (options.malformedRef && action === "github.create_ref") {
 			return response(request.id, {
 				action,
+				actionVersionId: `${action}@v7`,
 				callId: `call-${calls.length}`,
 				result: { object: { sha: "base-sha" } },
 				status: "SUCCEEDED",
@@ -484,6 +487,7 @@ function lifecycleFetch(calls, options = {}) {
 						];
 			return response(request.id, {
 				action,
+				actionVersionId: `${action}@v7`,
 				callId: `call-${calls.length}`,
 				result: { comments },
 				status: "SUCCEEDED",
@@ -491,6 +495,7 @@ function lifecycleFetch(calls, options = {}) {
 		}
 		return response(request.id, {
 			action: args.actionId,
+			actionVersionId: `${args.actionId}@v7`,
 			callId: `call-${calls.length}`,
 			result:
 				options.reconciliationEmpty && action === "github.list_pull_requests"

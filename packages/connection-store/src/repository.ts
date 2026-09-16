@@ -51,6 +51,7 @@ type InvocationRow = {
 
 type StoredCallRow = InvocationRow & {
 	action_name: ActionName;
+	action_version_id?: string;
 	created_at: Date;
 	id: string;
 	idempotency_key: string | null;
@@ -221,6 +222,9 @@ function invocation(row: InvocationRow): InvocationContext {
 function storedCall(row: StoredCallRow): StoredCall {
 	return {
 		action: row.action_name,
+		...(row.action_version_id
+			? { actionVersionId: row.action_version_id }
+			: {}),
 		argsHash: row.request_hash,
 		callId: row.id,
 		connectionId: row.connection_id,
@@ -3197,7 +3201,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					) WHERE idempotency_key IS NOT NULL DO NOTHING
 					RETURNING id, principal_id, consumer_id, instance_id, grant_id,
 					connection_id, credential_version_id, request_hash, idempotency_key,
-					status, result, created_at, actor_key, ${input.action}::text AS action_name
+					status, result, created_at, actor_key, ${input.action}::text AS action_name,
+					${action.id}::text AS action_version_id
 			`;
 			if (!row) {
 				const existing = input.idempotencyKey
@@ -3241,7 +3246,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			SELECT call.id, call.principal_id, call.consumer_id, call.instance_id,
 				call.grant_id, call.connection_id, call.credential_version_id,
 				call.request_hash, call.idempotency_key, call.status, call.result,
-				call.created_at, call.actor_key, action.name AS action_name
+				call.created_at, call.actor_key, action.name AS action_name,
+				action.id AS action_version_id
 			FROM connection_calls call
 			JOIN connection_action_versions action ON action.id = call.action_version_id
 			WHERE call.principal_id = ${input.invocation.principalId}

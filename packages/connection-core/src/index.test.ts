@@ -214,8 +214,13 @@ class MemoryRepository implements ConnectionRepository {
 			: undefined;
 		if (existing) return { call: existing, created: false };
 		this.sequence += 1;
+		const actionVersionId =
+			input.actionVersionId ??
+			actions.find((action) => action.name === input.action)?.id ??
+			input.action;
 		const call: StoredCall = {
 			action: input.action,
+			actionVersionId,
 			argsHash: input.argsHash,
 			callId: `call-${this.sequence}`,
 			connectionId: input.invocation.connectionId,
@@ -227,12 +232,7 @@ class MemoryRepository implements ConnectionRepository {
 		};
 		this.calls.push(call);
 		this.callInputs.set(call.callId, input.input);
-		this.callActionVersionIds.set(
-			call.callId,
-			input.actionVersionId ??
-				actions.find((action) => action.name === input.action)?.id ??
-				input.action,
-		);
+		this.callActionVersionIds.set(call.callId, actionVersionId);
 		return { call, created: true };
 	}
 	async claimReconciliationJob() {
@@ -709,6 +709,7 @@ describe("Connection application service", () => {
 			),
 		).toMatchObject({
 			action: "github.getRepository",
+			actionVersionId: "github.getRepository@v1",
 			result: { fullName: "acme/widgets" },
 			status: "SUCCEEDED",
 		});
