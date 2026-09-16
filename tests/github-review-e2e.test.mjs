@@ -273,7 +273,7 @@ test("GitHub review conformance CLI emits sanitized failure evidence", () => {
 	assert.doesNotMatch(`${result.stdout}${result.stderr}`, /primary-secret/);
 });
 
-test("GitHub review conformance cleans an unowned fixture before reviewer mutation", async () => {
+test("GitHub review conformance preserves an unowned fixture before reviewer mutation", async () => {
 	const executed = [];
 	const fetch = async (_url, init) => {
 		const request = JSON.parse(init.body);
@@ -331,7 +331,7 @@ test("GitHub review conformance cleans an unowned fixture before reviewer mutati
 	);
 	assert.deepEqual(
 		executed.slice(-2).map(({ action }) => action),
-		["github.update_pull_request", "github.delete_ref"],
+		["github.create_pull_request", "github.list_pull_requests"],
 	);
 	assert.equal(
 		executed.some(
@@ -488,7 +488,13 @@ function providerResult(
 	if (action === "github.list_pull_requests") {
 		return {
 			pull_requests: [
-				{ body: marker, number: 17, state: "open", title: marker },
+				{
+					body: marker,
+					head: { ref: input.head.split(":").at(-1) },
+					number: 17,
+					state: "open",
+					title: marker,
+				},
 			],
 		};
 	}

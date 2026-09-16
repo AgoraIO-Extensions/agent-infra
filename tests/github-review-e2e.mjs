@@ -153,10 +153,14 @@ export async function runGitHubReviewConformance({
 			repo: target.repository,
 			title: marker,
 		});
-		pullNumber = positiveInteger(pull?.number, "fixture pull number");
+		const createdPullNumber = positiveInteger(
+			pull?.number,
+			"fixture pull number",
+		);
 		if (pull?.body !== marker || pull?.head?.sha !== headSha) {
 			throw new Error("fixture pull ownership marker does not match");
 		}
+		pullNumber = createdPullNumber;
 
 		assertRepository(
 			await reviewerExecute("github.get_repository", {
@@ -447,7 +451,10 @@ async function reconcilePullNumber({ branch, marker, primaryExecute }) {
 		true,
 	);
 	const matches = (result?.pull_requests ?? []).filter(
-		(pull) => pull.body === marker && pull.title === marker,
+		(pull) =>
+			pull.body === marker &&
+			pull.title === marker &&
+			pull.head?.ref === branch,
 	);
 	if (matches.length > 1)
 		throw new Error("fixture pull reconciliation is ambiguous");
