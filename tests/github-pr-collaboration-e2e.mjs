@@ -58,6 +58,7 @@ export async function runGitHubPullRequestCollaboration({
 	let pullNumber;
 	let failure;
 	const cleanupFailures = [];
+	const refCreationAttempts = new Map();
 	const execute = async (client, actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
 		if (projection.actionVersionId !== `${actionId}@v7`)
@@ -80,6 +81,7 @@ export async function runGitHubPullRequestCollaboration({
 		);
 		if ((existing?.refs ?? []).length !== 0)
 			throw new Error("fixture ref already exists");
+		refCreationAttempts.set(branch, sha);
 		try {
 			await execute(primary, "github.create_ref", {
 				...target,
@@ -328,15 +330,34 @@ export async function runGitHubPullRequestCollaboration({
 					state: "closed",
 				});
 			} catch (error) {
-				failure ??= error;
+				cleanupFailures.push(error);
 			}
 		}
 		for (const [created, branch, key] of [
 			[headCreated, headBranch, "head"],
 			[baseCreated, baseBranch, "base"],
 		]) {
-			if (!created) continue;
+			const attemptedSha = refCreationAttempts.get(branch);
+			if (!created && !attemptedSha) continue;
 			try {
+				if (!created) {
+					const refs = await execute(
+						primary,
+						"github.list_matching_refs",
+						{ ...target, ref: `heads/${branch}` },
+						true,
+					);
+					const matches = (refs?.refs ?? []).filter(
+						(item) =>
+							item.ref === `refs/heads/${branch}` &&
+							item.object?.sha === attemptedSha,
+					);
+					if (matches.length === 0) continue;
+					if (matches.length > 1) {
+						cleanupFailures.push(new Error("fixture ref cleanup is ambiguous"));
+						continue;
+					}
+				}
 				await execute(primary, "github.delete_ref", {
 					...target,
 					idempotencyKey: `${runId}:${key}-ref-delete`,

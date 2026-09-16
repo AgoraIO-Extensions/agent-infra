@@ -194,10 +194,33 @@ test("pull request collaboration closes a provider-owned PR when its create proj
 	);
 });
 
+test("pull request collaboration rechecks an uncertain ref during cleanup", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubPullRequestCollaboration({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+			},
+			fetch: lifecycleFetch(calls, { uncertainRef: true }),
+			runId: "pr-run",
+		}),
+		/fetch failed after submission started/,
+	);
+	assert.ok(
+		calls.some(
+			({ action, input }) =>
+				action === "github.delete_ref" &&
+				input.ref === "heads/connection-e2e-base-pr-run",
+		),
+	);
+});
+
 function lifecycleFetch(calls, config = {}) {
 	let branchUpdated = false;
 	let executeId = 0;
 	const failedActions = new Set();
+	const actionCounts = new Map();
 	return async (_url, requestOptions) => {
 		const request = JSON.parse(requestOptions.body);
 		const token = requestOptions.headers.authorization.replace("Bearer ", "");
@@ -228,6 +251,16 @@ function lifecycleFetch(calls, config = {}) {
 			const input = args.input;
 			const target = targetActions.has(action) ? `${action}@v7` : undefined;
 			calls.push({ action, input, target, token });
+			const actionCount = (actionCounts.get(action) ?? 0) + 1;
+			actionCounts.set(action, actionCount);
+			if (
+				config.uncertainRef &&
+				((action === "github.create_ref" && actionCount === 1) ||
+					(action === "github.list_matching_refs" &&
+						(actionCount === 2 || actionCount === 3)))
+			) {
+				throw new Error("fetch failed after submission started");
+			}
 			const shouldFail =
 				action === config.failAction || config.failActions?.includes(action);
 			if (shouldFail && !failedActions.has(action)) {
@@ -235,7 +268,11 @@ function lifecycleFetch(calls, config = {}) {
 				throw new Error("fetch failed after submission started");
 			}
 			if (action === "github.update_pull_request_branch") branchUpdated = true;
-			const result = providerResult(action, input, { branchUpdated, config });
+			const result = providerResult(action, input, {
+				actionCount,
+				branchUpdated,
+				config,
+			});
 			structuredContent = {
 				action,
 				actionVersionId: `${action}@v7`,
@@ -316,9 +353,11 @@ function providerResult(action, input, state) {
 			],
 		},
 		"github.list_matching_refs": {
-			refs: state.config.preexistingRef
-				? [{ object: { sha: "main-1" }, ref: `refs/${input.ref}` }]
-				: [],
+			refs:
+				state.config.preexistingRef ||
+				(state.config.uncertainRef && state.actionCount >= 4)
+					? [{ object: { sha: "main-1" }, ref: `refs/${input.ref}` }]
+					: [],
 		},
 		"github.request_pull_request_reviewers": {
 			requested_reviewers: [{ id: 329435106, login: "connectionE2E2" }],
