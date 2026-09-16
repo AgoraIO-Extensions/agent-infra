@@ -593,7 +593,7 @@ async function listAllReviewerArtifacts(
 	throw new Error(`${actionId} cleanup pagination exceeded the limit`);
 }
 
-function mcpClient(fetch, token) {
+export function mcpClient(fetch, token) {
 	let id = 0;
 	return {
 		async call(name, args, retrySafe = false) {
@@ -667,7 +667,7 @@ function safeMcpErrorMessage(value) {
 	return typeof value === "string" && allowed.has(value) ? `: ${value}` : "";
 }
 
-async function assertSingleAccount(client, externalAccount) {
+export async function assertSingleAccount(client, externalAccount) {
 	const result = await client.call(
 		"list_connections",
 		{ service: "github" },
@@ -688,7 +688,7 @@ async function assertSingleAccount(client, externalAccount) {
 	}
 }
 
-function assertRepository(repository) {
+export function assertRepository(repository) {
 	if (
 		repository?.id !== target.repositoryId ||
 		repository.full_name !== `${target.owner}/${target.repository}` ||
