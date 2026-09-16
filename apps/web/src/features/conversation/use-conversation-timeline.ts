@@ -1,5 +1,11 @@
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useSyncExternalStore } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useSyncExternalStore,
+} from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { createConversationTimeline } from "./conversation-timeline.js";
 import {
@@ -62,8 +68,20 @@ export function useConversationTimeline({
 		};
 	}, [session, queryClient, conversationId]);
 
+	const executionRevision = timeline.events.findLast(
+		(event) =>
+			event.executionId === executionId &&
+			(event.type === "execution.status" ||
+				event.type === "execution.operation" ||
+				event.type === "execution.detail" ||
+				event.type === "conversation.error"),
+	)?.eventId;
 	const execution = useQuery({
-		queryKey: [...session.queryScope, executionId ?? null],
+		queryKey: [
+			...session.queryScope,
+			executionId ?? null,
+			executionRevision ?? null,
+		],
 		queryFn:
 			timeline.history && executionId
 				? async ({ signal }) => {
@@ -92,10 +110,20 @@ export function useConversationTimeline({
 		gcTime: 0,
 		staleTime: 0,
 	});
+	const refresh = useCallback(async () => {
+		await session.reader.refresh();
+		const state = session.reader.getSnapshot();
+		if (state.status !== "ready" || !state.history) return;
+		await queryClient.invalidateQueries(
+			{ queryKey: session.queryScope, refetchType: "active" },
+			{ cancelRefetch: false },
+		);
+	}, [session, queryClient]);
 
 	return {
 		timeline,
 		execution,
+		refresh,
 		reconnect: session.reader.reconnect,
 		abort: session.reader.abort,
 	};

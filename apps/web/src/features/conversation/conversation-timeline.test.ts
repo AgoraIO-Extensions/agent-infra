@@ -44,6 +44,49 @@ afterEach(() => {
 });
 
 describe("Conversation generated-client data consumer", () => {
+	it("refreshes the authoritative projection after a receipt and resumes from the new cursor", async () => {
+		const first = sse();
+		const second = sse();
+		let reads = 0;
+		let streams = 0;
+		const updated = history("conversation-1", [event(1), event(2)]);
+		const { reader, requests } = setup((request) =>
+			route(request) === "stream"
+				? (++streams === 1 ? first : second).response
+				: Response.json(++reads === 1 ? history() : updated),
+		);
+		await reader.open("conversation-1");
+		await reader.refresh();
+		expect(reader.getSnapshot().history).toEqual(updated);
+		await vi.waitFor(() => expect(streams).toBe(2));
+		expect(
+			new URL(requests[requests.length - 1].url).searchParams.get("cursor"),
+		).toBe(event(2).conversationCursor);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+	it("drops a delayed refresh after switching scope and cannot refresh after denial", async () => {
+		const pending = deferred<Response>();
+		let reads = 0;
+		const { reader, requests } = setup((request) => {
+			if (route(request) === "stream") return sse().response;
+			if (new URL(request.url).pathname.endsWith("conversation-2"))
+				return Response.json(history("conversation-2"));
+			return ++reads === 1 ? Response.json(history()) : pending.promise;
+		});
+		await reader.open("conversation-1");
+		const refresh = reader.refresh();
+		await reader.open("conversation-2");
+		pending.resolve(Response.json(history("conversation-1", [event(9)])));
+		await refresh;
+		expect(reader.getSnapshot().conversationId).toBe("conversation-2");
+		expect(reader.getSnapshot().events).toEqual([event(1, "conversation-2")]);
+		reader.rejectRead({ kind: "authorization" });
+		const count = requests.length;
+		await reader.refresh();
+		expect(requests).toHaveLength(count);
+		expect(reader.getSnapshot().history).toBeNull();
+	});
+
 	it("merges original persisted history, mixed live facts and duplicate replay", async () => {
 		const first = event(1);
 		const second = event(2);

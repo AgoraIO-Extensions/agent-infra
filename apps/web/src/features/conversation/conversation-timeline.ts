@@ -254,6 +254,10 @@ export function createConversationTimeline({
 			publish({ ...emptyState(), conversationId, status: "loading" });
 			await readHistory(session);
 		},
+		async refresh() {
+			const session = current;
+			if (session) await readHistory(session);
+		},
 		async reconnect() {
 			const session = current;
 			if (!session) return;

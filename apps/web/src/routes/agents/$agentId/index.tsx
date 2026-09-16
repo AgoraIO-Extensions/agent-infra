@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { buttonVariants } from "@/components/ui/button";
 
 import { AgentLifecycleWorkflow } from "../../../features/agent-administration/agent-lifecycle-workflow.js";
 import { useBrowserSession } from "../../../features/agent-administration/use-browser-session.js";
@@ -35,6 +36,20 @@ function AgentDetailRoute() {
 					}
 					ownerSettings={ownerSettings}
 				/>
+				{agent &&
+				!(
+					agent.source.kind === "custom" &&
+					agent.source.interactionMode === "self-managed"
+				) ? (
+					<Link
+						className={buttonVariants()}
+						to="/agents/$agentId/conversations"
+						params={{ agentId }}
+						search={{ conversation: undefined }}
+					>
+						对话与个人历史
+					</Link>
+				) : null}
 				{agent ? <AgentLifecycleWorkflow agent={agent} /> : null}
 			</div>
 		</main>

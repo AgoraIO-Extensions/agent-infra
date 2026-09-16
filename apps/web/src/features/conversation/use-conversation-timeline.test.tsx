@@ -85,6 +85,72 @@ afterEach(() => {
 });
 
 describe("Conversation execution detail Query ownership", () => {
+	it("refreshes selected operation facts without refetching on each text delta and supports explicit refresh", async () => {
+		const stream = sse();
+		let detailRevision = 0;
+		let streamCount = 0;
+		const { result, requests } = setup((request) => {
+			if (route(request) === "stream")
+				return ++streamCount === 1 ? stream.response : sse().response;
+			if (route(request) === "execution")
+				return Response.json({
+					...execution(),
+					processSummary: detailRevision
+						? [
+								{
+									kind: "agent_summary",
+									category: "model_call",
+									occurredAt: "2026-09-15T10:00:00Z",
+									summary: `Revision ${detailRevision}`,
+								},
+							]
+						: [],
+				});
+			return Response.json(history());
+		});
+		await waitFor(() => expect(result.current.execution.isSuccess).toBe(true));
+		act(() => stream.send(event(2)));
+		await waitFor(() => expect(result.current.timeline.events.length).toBe(2));
+		expect(
+			requests.filter((request) => route(request) === "execution"),
+		).toHaveLength(1);
+		detailRevision = 1;
+		act(() =>
+			stream.send({
+				...event(3),
+				schemaVersion: 2,
+				type: "execution.operation",
+				payload: {
+					kind: "model",
+					operationRef: "op-1",
+					attemptRef: "attempt-1",
+					phase: "completed",
+					durationMs: 17,
+					model: {
+						modelId: "model-1",
+						modelOptionId: "option-1",
+						configVersion: "version-1",
+					},
+				},
+			}),
+		);
+		await waitFor(() =>
+			expect(result.current.execution.data?.processSummary[0]?.summary).toBe(
+				"Revision 1",
+			),
+		);
+		detailRevision = 2;
+		await act(async () => {
+			await result.current.refresh();
+		});
+		await waitFor(() =>
+			expect(result.current.execution.data?.processSummary[0]?.summary).toBe(
+				"Revision 2",
+			),
+		);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
 	it("exposes Query loading and its original execution result without copying detail into the timeline", async () => {
 		const stream = sse();
 		const pending = deferred<Response>();
