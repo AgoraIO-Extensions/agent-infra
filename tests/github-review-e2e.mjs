@@ -47,7 +47,11 @@ export async function runGitHubReviewConformance({
 	const branch = `connection-e2e-review-${runId.replace(/[^A-Za-z0-9._-]/g, "-")}`;
 	const path = `fixtures/${branch}.txt`;
 	const calls = [];
+	const approvedVersions = new Map();
 	let branchCreated = false;
+	let failure;
+	let pullCreationStarted = false;
+	let pullHandled = false;
 	let pullNumber;
 
 	await assertSingleAccount(primary, "328682695");
@@ -75,6 +79,7 @@ export async function runGitHubReviewConformance({
 		) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
 		}
+		approvedVersions.set(actionId, guide.action.actionVersionId);
 	}
 
 	const primaryExecute = async (actionId, input, retrySafe = false) =>
@@ -85,8 +90,12 @@ export async function runGitHubReviewConformance({
 			input,
 			actionEffects[actionId] === "READ",
 		);
+		const actionVersionId = approvedVersions.get(actionId);
+		if (actionVersionId !== `${actionId}@v7`) {
+			throw new Error(`${actionId} has no approved ActionVersion`);
+		}
 		calls.push({
-			actionVersionId: `${actionId}@v7`,
+			actionVersionId,
 			callId: projection.callId,
 			status: projection.status,
 		});
@@ -128,6 +137,7 @@ export async function runGitHubReviewConformance({
 		});
 		const headSha = file?.commit?.sha;
 		if (!headSha) throw new Error("fixture file did not return a commit SHA");
+		pullCreationStarted = true;
 		const pull = await primaryExecute("github.create_pull_request", {
 			base: "main",
 			body: marker,
@@ -312,25 +322,37 @@ export async function runGitHubReviewConformance({
 			}),
 			marker,
 		);
+	} catch (error) {
+		failure = error;
 	} finally {
-		if (branchCreated && !pullNumber) {
-			pullNumber = await reconcilePullNumber({
-				branch,
-				marker,
-				primaryExecute,
-			});
+		if (pullCreationStarted && !pullNumber) {
+			try {
+				pullNumber = await reconcilePullNumber({
+					branch,
+					marker,
+					primaryExecute,
+				});
+			} catch (error) {
+				failure ??= error;
+			}
+			if (!pullNumber) {
+				failure ??= new Error(
+					"fixture pull reconciliation did not find the owned pull",
+				);
+			}
 		}
-		try {
-			if (pullNumber) {
+		if (pullNumber) {
+			try {
 				await cleanupReviewerArtifacts({
 					marker,
 					pullNumber,
 					reviewerExecute,
 					runId,
 				});
+			} catch (error) {
+				failure ??= error;
 			}
-		} finally {
-			if (pullNumber) {
+			try {
 				await primaryExecute("github.update_pull_request", {
 					idempotencyKey: `${runId}:fixture-pull-close`,
 					owner: target.owner,
@@ -338,17 +360,25 @@ export async function runGitHubReviewConformance({
 					repo: target.repository,
 					state: "closed",
 				});
+				pullHandled = true;
+			} catch (error) {
+				failure ??= error;
 			}
-			if (branchCreated) {
+		}
+		if (branchCreated && (!pullCreationStarted || pullHandled)) {
+			try {
 				await primaryExecute("github.delete_ref", {
 					idempotencyKey: `${runId}:fixture-ref-delete`,
 					owner: target.owner,
 					ref: `refs/heads/${branch}`,
 					repo: target.repository,
 				});
+			} catch (error) {
+				failure ??= error;
 			}
 		}
 	}
+	if (failure) throw failure;
 
 	return {
 		actionVersionIds: githubReviewActionIds.map((id) => `${id}@v7`),

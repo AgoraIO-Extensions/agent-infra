@@ -142,6 +142,33 @@ test("GitHub review conformance reconciles an orphaned fixture pull read-only", 
 	);
 });
 
+test("GitHub review conformance preserves the branch when pull reconciliation fails", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubReviewConformance({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, {
+				malformedPull: true,
+				marker: "connection-e2e:missing-pull",
+				reconciliationEmpty: true,
+			}),
+			runId: "missing-pull",
+		}),
+		/fixture pull number is invalid/,
+	);
+	assert.deepEqual(
+		calls
+			.filter(({ token, input }) => token === "primary-token" && input)
+			.slice(-1)
+			.map(({ action }) => action),
+		["github.list_pull_requests"],
+	);
+});
+
 test("GitHub review conformance is disabled before networking", async () => {
 	let requests = 0;
 	await assert.rejects(
@@ -341,12 +368,15 @@ function lifecycleFetch(calls, options = {}) {
 		return response(request.id, {
 			action: args.actionId,
 			callId: `call-${calls.length}`,
-			result: providerResult(
-				args.actionId,
-				args.input,
-				calls,
-				options.marker ?? "connection-e2e:review-run",
-			),
+			result:
+				options.reconciliationEmpty && action === "github.list_pull_requests"
+					? { pull_requests: [] }
+					: providerResult(
+							args.actionId,
+							args.input,
+							calls,
+							options.marker ?? "connection-e2e:review-run",
+						),
 			status: "SUCCEEDED",
 		});
 	};
