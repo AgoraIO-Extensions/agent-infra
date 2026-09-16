@@ -41,6 +41,7 @@ jobs:
         env:
           CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
           CONNECTION_GITHUB_E2E_ENABLED: "true"
+        shell: bash
         run: node tests/github-merge-e2e.mjs "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-merge-e2e-result.json
       - name: Upload merge evidence
         if: always()

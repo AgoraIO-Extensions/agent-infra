@@ -43,6 +43,8 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 	const calls = [];
 	let cleanupFailure;
 	let failure;
+	let pullNumber;
+	let pullMerged = false;
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
 		if (projection.actionVersionId !== `${actionId}@v7`)
@@ -76,13 +78,13 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 				)
 			)
 				throw new Error("fixture ref already exists");
+			created.push(branch);
 			await execute("github.create_ref", {
 				...target,
 				idempotencyKey: `${runId}:${branch}:create`,
 				ref: `refs/heads/${branch}`,
 				sha: mainSha,
 			});
-			created.push(branch);
 		}
 		for (const head of [branches[1], branches[3]]) {
 			await execute("github.create_or_update_file", {
@@ -109,7 +111,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 			idempotencyKey: `${runId}:branch-merge`,
 		});
 		const branchMergeSha = branchMerge?.sha ?? branchMerge?.commit?.sha;
-		if (!branchMergeSha)
+		if (!branchMergeSha || branchMergeSha === mainSha)
 			throw new Error("branch merge did not return a commit SHA");
 		const mergedBranch = await execute(
 			"github.get_branch",
@@ -145,6 +147,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 			!Number.isSafeInteger(pull.number)
 		)
 			throw new Error("pull request ownership marker does not match");
+		pullNumber = pull.number;
 		const confirmed = await execute(
 			"github.get_pull_request",
 			{ ...target, pullNumber: pull.number },
@@ -170,6 +173,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 		});
 		if (merged?.merged !== true || !merged.sha)
 			throw new Error("pull request merge did not succeed");
+		pullMerged = true;
 		const mergedCheck = await execute(
 			"github.check_pull_request_merged",
 			{ ...target, pullNumber: pull.number },
@@ -181,6 +185,24 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 		failure = error;
 	} finally {
 		const cleanupFailures = [];
+		if (failure && pullNumber && !pullMerged) {
+			try {
+				const current = await execute(
+					"github.get_pull_request",
+					{ ...target, pullNumber },
+					true,
+				);
+				if (current?.state === "open")
+					await execute("github.update_pull_request", {
+						...target,
+						idempotencyKey: `${runId}:pull-close`,
+						pullNumber,
+						state: "closed",
+					});
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
 		for (const branch of [...created].reverse()) {
 			try {
 				await execute("github.delete_ref", {
