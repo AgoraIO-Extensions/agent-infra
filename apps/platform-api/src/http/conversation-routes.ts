@@ -1006,7 +1006,7 @@ export function registerConversationRoutes(
 							let cursor = replay.resumeCursor;
 							while (!request.signal.aborted && !stream.aborted) {
 								const batch = replay;
-								if (batch.outcome === "reload") {
+								if (batch.outcome === "reload" || batch.events.length === 0) {
 									const authorization = await stillAuthorized(
 										dependencies,
 										request,
@@ -1020,6 +1020,8 @@ export function registerConversationRoutes(
 										}
 										return;
 									}
+								}
+								if (batch.outcome === "reload") {
 									await writeSseMessage(
 										stream,
 										ConversationSseMessageV1Schema.parse({
