@@ -12,6 +12,7 @@ import type {
 	ConversationDetailProjectionV2,
 	PersistedConversationEventV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { AssistantMarkdown } from "./assistant-markdown.js";
 import {
 	answerText,
 	commandFailure,
@@ -101,7 +102,7 @@ export function ConversationMessages({
 									Agent
 								</div>
 								<div className="answer space-y-3">
-									<p className="message-text whitespace-pre-wrap break-words">
+									<AssistantMarkdown>
 										{selected.executionId
 											? answerText(
 													history,
@@ -110,7 +111,7 @@ export function ConversationMessages({
 													selected.text,
 												) || "尚未输出正文。"
 											: selected.text || "尚未输出正文。"}
-									</p>
+									</AssistantMarkdown>
 									<Badge
 										variant={
 											selectedStatus === "failed" ? "destructive" : "secondary"
@@ -210,7 +211,7 @@ export function ConversationMessages({
 						<Bot aria-hidden="true" className="size-5" />
 						Agent
 					</div>
-					<p className="message-text whitespace-pre-wrap break-words">
+					<AssistantMarkdown>
 						{events
 							.filter(
 								(event) =>
@@ -220,7 +221,7 @@ export function ConversationMessages({
 								event.type === "text.delta" ? event.payload.text : "",
 							)
 							.join("")}
-					</p>
+					</AssistantMarkdown>
 					<p className="text-muted-foreground text-sm">
 						{
 							executionStatusLabels[
