@@ -57,6 +57,7 @@ export async function runGitHubPullRequestCollaboration({
 	let pullCreationStarted = false;
 	let pullNumber;
 	let failure;
+	const cleanupFailures = [];
 	const execute = async (client, actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
 		if (projection.actionVersionId !== `${actionId}@v7`)
@@ -315,7 +316,7 @@ export async function runGitHubPullRequestCollaboration({
 			try {
 				pullNumber = await reconcilePull();
 			} catch (error) {
-				failure ??= error;
+				cleanupFailures.push(error);
 			}
 		}
 		if (pullNumber) {
@@ -342,9 +343,19 @@ export async function runGitHubPullRequestCollaboration({
 					ref: `heads/${branch}`,
 				});
 			} catch (error) {
-				failure ??= error;
+				cleanupFailures.push(error);
 			}
 		}
+	}
+	if (cleanupFailures.length > 0) {
+		const cleanupMessage = cleanupFailures
+			.map((error) =>
+				error instanceof Error ? error.message : "unknown error",
+			)
+			.join("; ");
+		throw new Error(
+			`${failure instanceof Error ? `${failure.message}; ` : ""}cleanup failed: ${cleanupMessage}`,
+		);
 	}
 	if (failure) throw failure;
 	return {

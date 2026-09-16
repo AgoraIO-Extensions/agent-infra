@@ -130,11 +130,27 @@ test("pull request collaboration fails when cleanup is incomplete", async () => 
 			fetch: lifecycleFetch(calls, { failAction: "github.delete_ref" }),
 			runId: "pr-run",
 		}),
-		/fetch failed after submission started/,
+		/cleanup failed: fetch failed after submission started/,
 	);
 	assert.equal(
 		calls.filter(({ action }) => action === "github.delete_ref").length,
 		2,
+	);
+});
+
+test("pull request collaboration reports cleanup failure after a lifecycle failure", async () => {
+	await assert.rejects(
+		runGitHubPullRequestCollaboration({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+			},
+			fetch: lifecycleFetch([], {
+				failActions: ["github.create_pull_request", "github.delete_ref"],
+			}),
+			runId: "pr-run",
+		}),
+		/fetch failed after submission started; cleanup failed:/,
 	);
 });
 
@@ -181,7 +197,7 @@ test("pull request collaboration closes a provider-owned PR when its create proj
 function lifecycleFetch(calls, config = {}) {
 	let branchUpdated = false;
 	let executeId = 0;
-	let failed = false;
+	const failedActions = new Set();
 	return async (_url, requestOptions) => {
 		const request = JSON.parse(requestOptions.body);
 		const token = requestOptions.headers.authorization.replace("Bearer ", "");
@@ -212,8 +228,10 @@ function lifecycleFetch(calls, config = {}) {
 			const input = args.input;
 			const target = targetActions.has(action) ? `${action}@v7` : undefined;
 			calls.push({ action, input, target, token });
-			if (!failed && action === config.failAction) {
-				failed = true;
+			const shouldFail =
+				action === config.failAction || config.failActions?.includes(action);
+			if (shouldFail && !failedActions.has(action)) {
+				failedActions.add(action);
 				throw new Error("fetch failed after submission started");
 			}
 			if (action === "github.update_pull_request_branch") branchUpdated = true;
