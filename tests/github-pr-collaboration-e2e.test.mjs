@@ -73,11 +73,8 @@ test("pull request collaboration completes and cleans an owned lifecycle", async
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.equal(evidence.pullNumber, 31);
 	assert.deepEqual(
-		calls
-			.filter(({ target }) => target)
-			.slice(0, 6)
-			.map(({ target }) => target),
-		evidence.actionVersionIds,
+		new Set(calls.filter(({ target }) => target).map(({ target }) => target)),
+		new Set(evidence.actionVersionIds),
 	);
 	assert.deepEqual(
 		calls
