@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import {
+	validateAgentWorkloadDesiredV1,
+	validatePlatformSecretRecordV1,
+} from "@agent-infra/contracts/workload";
 import {
 	parseWorkloadExecutionCapacityV1,
+	parseWorkloadSecretRecoveriesV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
@@ -45,6 +49,7 @@ function persistedWorkloadVersion(input: unknown, agentId: string) {
 					"deployment",
 					"modelProjection",
 					"executionCapacity",
+					"secretRecoveries",
 				].includes(key),
 		)
 	)
@@ -54,6 +59,14 @@ function persistedWorkloadVersion(input: unknown, agentId: string) {
 	return {
 		configuration,
 		deployment: value.deployment,
+		...(Object.hasOwn(value, "secretRecoveries")
+			? {
+					secretRecoveries: parseWorkloadSecretRecoveriesV1(
+						value.secretRecoveries,
+						agentId,
+					),
+				}
+			: {}),
 		...(Object.hasOwn(value, "executionCapacity")
 			? {
 					executionCapacity: parseWorkloadExecutionCapacityV1(
@@ -164,6 +177,26 @@ export function decodePersistedWorkloadStateV1(
 				? null
 				: persistedWorkloadVersion(value.verified, agentId),
 	};
+	for (const version of [normalized.candidate, normalized.verified]) {
+		if (!version?.secretRecoveries) continue;
+		const deployment = validateAgentWorkloadDesiredV1(version.deployment);
+		if (
+			deployment.agentId !== agentId ||
+			deployment.configRevision !== version.configuration.revision ||
+			version.secretRecoveries.some(
+				(recovery) =>
+					recovery.workloadRevision > (value.revision as number) ||
+					!Number.isSafeInteger(value.fence) ||
+					recovery.fence > (value.fence as number) ||
+					recovery.sourceReference.configRevision >
+						version.configuration.revision ||
+					!deployment.secretRefs.some((reference) =>
+						isDeepStrictEqual(reference, recovery.reference),
+					),
+			)
+		)
+			throw new Error("Invalid persisted Workload recovery binding");
+	}
 	if ((normalized.verified === null) !== (value.verifiedRevision === null))
 		throw new Error();
 	if (

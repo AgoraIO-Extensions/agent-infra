@@ -4019,6 +4019,406 @@ describe("Codex Runtime Driver", () => {
 		).toEqual({ outcome: "accepted", status: "running" });
 	});
 
+	it("reads an original accepted receipt across configuration changes without allowing submit replay", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(
+			path,
+			firstBridge,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommand();
+		const accepted = await firstDriver.execute(command);
+		await firstDriver.close();
+
+		const bridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		const recovered = await openDriver(
+			path,
+			bridge,
+			undefined,
+			"configuration-b",
+		);
+		drivers.push(recovered);
+		const before = bridge.requests.length;
+		await expect(recovered.lookupOperation(command)).resolves.toEqual({
+			state: "found",
+			record: accepted,
+		});
+		await expect(recovered.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		expect(bridge.requests.slice(before)).toEqual([]);
+		await expect(
+			recovered.lookupOperation({
+				...command,
+				conversationId: "foreign-conversation",
+			}),
+		).resolves.toEqual({ state: "missing" });
+	});
+
+	it("recovers sealed original facts and control across configuration changes without business admission", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const started = Promise.withResolvers<void>();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					'data: {"type":"response.created","response":{"id":"held-response","status":"in_progress"}}\n\n',
+				);
+				started.resolve();
+			}),
+		);
+		const firstBridge = new TestCodexBridge();
+		let modelAccess: CodexModelAccess | undefined;
+		const firstDriver = await openDriverWithModelEndpoint(
+			path,
+			firstBridge,
+			endpoint,
+			(options) => {
+				modelAccess = options.modelAccess;
+			},
+			"configuration-a",
+		);
+		drivers.push(firstDriver);
+		const command = submitCommandV2();
+		const accepted = await firstDriver.execute(command);
+		if (!modelAccess) throw new Error("missing model access");
+		const request = modelRequest(modelAccess, firstBridge)
+			.then((response) => response.text())
+			.catch(() => undefined);
+		await started.promise;
+		await vi.waitFor(async () => {
+			expect(
+				await firstDriver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toHaveLength(3);
+		});
+		const original = await firstDriver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(original.map((event) => event.cursor)).toEqual([
+			"codex-cursor-1",
+			"codex-cursor-2",
+			"codex-cursor-3",
+		]);
+		await firstDriver.acknowledgeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-3",
+		);
+		await firstDriver.close();
+		await request;
+
+		const bridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		let replacementModelAccess: CodexModelAccess | undefined;
+		let replacementNativeCallback: CodexAppServerBridgeOptions["nativeCallback"];
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			(options) => {
+				replacementModelAccess = options.modelAccess;
+				replacementNativeCallback = options.nativeCallback;
+			},
+			"configuration-b",
+		);
+		drivers.push(recovered);
+		const before = bridge.requests.length;
+		const events = await recovered.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-3",
+		);
+		expect(events).toEqual([
+			expect.objectContaining({
+				cursor: "codex-cursor-4",
+				type: "operation",
+				payload: expect.objectContaining({
+					...original[2]?.payload,
+					phase: "unknown",
+					failureCode: "interrupted",
+				}),
+			}),
+		]);
+		expect(events.some((event) => event.type === "completed")).toBe(false);
+		await recovered.acknowledgeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-4",
+		);
+		expect(
+			await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-3",
+			),
+		).toEqual(events);
+		expect(
+			await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-4",
+			),
+		).toEqual([]);
+		await expect(
+			recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"foreign-cursor",
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(bridge.requests.slice(before)).toEqual([]);
+		modelTransportTestHooks.registerTurn = () => {
+			throw new Error("Sealed recovery must not register model admission");
+		};
+		await expect(
+			recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+		).resolves.toBe("running");
+		if (!replacementNativeCallback) throw new Error("missing native callback");
+		await expect(
+			replacementNativeCallback(
+				{
+					schemaVersion: 1,
+					requestId: "sealed-tool-intent",
+					phase: "intent",
+					occurredAt: Date.now(),
+					identity: {
+						sessionId: firstBridge.nativeThreadId,
+						turnId: firstBridge.nativeTurnId,
+						callId: "sealed-tool-call",
+						attemptRef: "sealed-tool-attempt",
+						toolName: "exec_command",
+					},
+				},
+				new AbortController().signal,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		await expect(recovered.execute(command)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+		});
+		const beforeForeign = bridge.requests.length;
+		await expect(
+			recovered.execute({
+				...stopCommand(accepted.nativeSessionRef),
+				conversationId: "foreign-conversation",
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(bridge.requests.length).toBe(beforeForeign);
+		bridge.completeOnInterrupt("interrupted");
+		await expect(
+			recovered.execute(stopCommand(accepted.nativeSessionRef)),
+		).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toEqual([]);
+		expect(
+			bridge.requests.find(({ method }) => method === "turn/interrupt")?.params,
+		).toEqual({
+			threadId: firstBridge.nativeThreadId,
+			turnId: firstBridge.nativeTurnId,
+		});
+		if (!replacementModelAccess)
+			throw new Error("missing replacement model access");
+		expect((await modelRequest(replacementModelAccess, bridge)).status).toBe(
+			403,
+		);
+		expect(upstreamCalls).toBe(1);
+	});
+
+	it("replays sealed original facts under the same configuration before unavailable native status recovery", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const started = Promise.withResolvers<void>();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					'data: {"type":"response.created","response":{"id":"held-response","status":"in_progress"}}\n\n',
+				);
+				started.resolve();
+			}),
+		);
+		const firstBridge = new TestCodexBridge();
+		let modelAccess: CodexModelAccess | undefined;
+		const first = await openDriverWithModelEndpoint(
+			path,
+			firstBridge,
+			endpoint,
+			(options) => {
+				modelAccess = options.modelAccess;
+			},
+			"configuration-a",
+		);
+		drivers.push(first);
+		const command = submitCommandV2();
+		const accepted = await first.execute(command);
+		if (!modelAccess) throw new Error("missing model access");
+		const request = modelRequest(modelAccess, firstBridge)
+			.then((response) => response.text())
+			.catch(() => undefined);
+		await started.promise;
+		const original = await vi.waitFor(async () => {
+			const events = await first.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events).toHaveLength(3);
+			return events;
+		});
+		await first.acknowledgeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-3",
+		);
+		await first.close();
+		await request;
+
+		const bridge = new TestCodexBridge(
+			firstBridge.nativeThreadId,
+			firstBridge.nativeTurnId,
+		);
+		bridge.resumeError = {
+			code: -32_000,
+			message: "synthetic native recovery unavailable",
+		};
+		const recovered = await openDriverWithModelEndpoint(
+			path,
+			bridge,
+			endpoint,
+			undefined,
+			"configuration-a",
+		);
+		drivers.push(recovered);
+		modelTransportTestHooks.registerTurn = () => {
+			throw new Error("Sealed recovery must not register model admission");
+		};
+		const before = bridge.requests.length;
+		const events = await recovered.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-3",
+		);
+		expect(events).toEqual([
+			expect.objectContaining({
+				cursor: "codex-cursor-4",
+				type: "operation",
+				payload: expect.objectContaining({
+					...original[2]?.payload,
+					phase: "unknown",
+					failureCode: "interrupted",
+				}),
+			}),
+		]);
+		await recovered.acknowledgeEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+			"codex-cursor-4",
+		);
+		expect(
+			await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-3",
+			),
+		).toEqual(events);
+		expect(
+			await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-4",
+			),
+		).toEqual([]);
+		expect(bridge.requests.slice(before)).toEqual([]);
+		await expect(
+			recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_SESSION_RECOVERY_FAILED" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/resume"),
+		).toHaveLength(1);
+		expect(
+			await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-3",
+			),
+		).toEqual(events);
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toEqual([]);
+		expect(upstreamCalls).toBe(1);
+	});
+
+	it.each(["configVersion", "internalModel", "reasoningLevel"] as const)(
+		"rejects sealed original native recovery without durable %s provenance",
+		async (field) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const firstBridge = new TestCodexBridge();
+			const first = await openDriver(
+				path,
+				firstBridge,
+				undefined,
+				"configuration-a",
+			);
+			drivers.push(first);
+			const command = submitCommandV2();
+			const accepted = await first.execute(command);
+			await first.close();
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const operation = Object.values(state.operations)[0];
+			const session = Object.values(state.sessions)[0];
+			const journal = Object.values(session?.journals ?? {})[0];
+			if (!operation || !journal)
+				throw new Error("missing original persisted fixture");
+			delete operation[field];
+			journal.externalActionsBlocked = true;
+			await writeFile(path, `${JSON.stringify(state)}\n`);
+			const bridge = new TestCodexBridge(
+				firstBridge.nativeThreadId,
+				firstBridge.nativeTurnId,
+			);
+			const recovered = await openDriver(
+				path,
+				bridge,
+				undefined,
+				"configuration-b",
+			);
+			drivers.push(recovered);
+			const beforeRecovery = bridge.requests.length;
+			await expect(recovered.lookupOperation(command)).resolves.toMatchObject({
+				state: "found",
+				record: accepted,
+			});
+			await expect(
+				recovered.replayEvents(accepted.nativeSessionRef, command.executionId),
+			).resolves.toHaveLength(1);
+			await expect(
+				recovered.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				recovered.execute(stopCommand(accepted.nativeSessionRef)),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(bridge.requests.slice(beforeRecovery)).toEqual([]);
+		},
+	);
+
 	it("fails closed before recovering a running Turn under a different configuration revision", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -4072,7 +4472,13 @@ describe("Codex Runtime Driver", () => {
 				accepted.nativeSessionRef,
 				command.executionId,
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		).resolves.toEqual([
+			expect.objectContaining({
+				cursor: "codex-cursor-1",
+				type: "status",
+				payload: { status: "running" },
+			}),
+		]);
 		await expect(
 			recoveredDriver.execute(stopCommand(accepted.nativeSessionRef)),
 		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
@@ -4132,7 +4538,7 @@ describe("Codex Runtime Driver", () => {
 		"missing-model",
 		"unconfigured-model",
 	] as const)(
-		"does not replay cached running acceptance with %s",
+		"reads the original receipt but does not reexecute cached running acceptance with %s",
 		async (mutation) => {
 			const directory = await runtimeDirectory();
 			const path = join(directory, "driver.json");
@@ -4167,8 +4573,12 @@ describe("Codex Runtime Driver", () => {
 			);
 			drivers.push(recovered);
 			const before = bridge.requests.length;
-			expect(await recovered.lookupOperation(command)).toEqual({
-				state: "unknown",
+			expect(await recovered.lookupOperation(command)).toMatchObject({
+				state: "found",
+				record: {
+					operationId: command.operationId,
+					result: { outcome: "accepted", status: "running" },
+				},
 			});
 			await expect(recovered.execute(command)).rejects.toMatchObject({
 				code: "RUNTIME_CODEX_UNAVAILABLE",
@@ -6247,7 +6657,13 @@ describe("Codex Runtime Driver", () => {
 						accepted.nativeSessionRef,
 						command.executionId,
 					),
-				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				).resolves.toEqual([
+					expect.objectContaining({
+						cursor: "codex-cursor-1",
+						type: "status",
+						payload: { status: "running" },
+					}),
+				]);
 			} else {
 				expect(
 					await recovered.getStatus(

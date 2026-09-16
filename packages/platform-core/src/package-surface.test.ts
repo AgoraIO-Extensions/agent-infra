@@ -68,7 +68,9 @@ describe("platform-core package surface", () => {
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
 			"decideConversationDispatchRetryTransitionV1",
+			"hasUnverifiedWorkloadSecretRecoveryV1",
 			"immutableSecretNameV1",
+			"inheritWorkloadSecretRecoveriesV1",
 			"isAgentAccessAllowedV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",
@@ -83,8 +85,10 @@ describe("platform-core package surface", () => {
 			"parseCurrentTaskUserV1",
 			"parseTaskAuthorizationBoundaryV1",
 			"parseWorkloadExecutionCapacityV1",
+			"parseWorkloadSecretRecoveriesV1",
 			"planConversationGenerationConfirmationV1",
 			"planConversationGenerationIsolationV1",
+			"planMissingWorkloadSecretRecoveryV1",
 			"planTaskSystemControlV1",
 			"platformIdempotencyV1",
 			"projectConversationExecutionV1",
@@ -95,8 +99,10 @@ describe("platform-core package surface", () => {
 			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
+			"validateWorkloadSecretRecoverySourcesV1",
 			"wecomChannelIdV1",
 			"workloadManagementObservationV1",
+			"workloadSecretRecoveriesV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href

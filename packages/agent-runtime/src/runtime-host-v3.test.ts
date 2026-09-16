@@ -444,6 +444,185 @@ describe("Runtime V3 durable authorization", () => {
 		expect(await env.driver.sideEffectCount()).toBe(0);
 	});
 
+	it("rechecks an unknown original receipt after restart without executing the Turn again", async () => {
+		const env = await setup();
+		const accepted = await submit(env.host);
+		const unavailableReceipt = vi
+			.spyOn(env.driver, "lookupOperation")
+			.mockResolvedValue({ state: "unknown" });
+		const reopened = await RuntimeHost.open({
+			...env.hostOptions,
+			store: await FileRuntimeStore.open(env.storePath),
+		});
+		const recovery = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				originalOperationDigest: originalDigest(),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		await expect(
+			reopened.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "unknown" });
+		unavailableReceipt.mockRestore();
+		await expect(
+			reopened.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		expect(await env.driver.sideEffectCount()).toBe(1);
+	});
+
+	it("waits for current V3 query authority before refreshing native status after restart", async () => {
+		const env = await setup();
+		const accepted = await submit(env.host);
+		const status = vi.spyOn(env.driver, "getStatus");
+		const reopened = await RuntimeHost.open({
+			...env.hostOptions,
+			store: await FileRuntimeStore.open(env.storePath),
+		});
+		expect(status).not.toHaveBeenCalled();
+		const original = {
+			...base(accepted.hostSessionRef),
+			operation: {
+				...base(accepted.hostSessionRef).operation,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			originalOperationDigest: originalDigest(),
+		};
+		const recovery = signV3Fixture(original, "session.status", {
+			purpose: "control",
+			reason: "recovery",
+		});
+		await expect(
+			reopened.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "running" });
+		expect(status).toHaveBeenCalledTimes(1);
+		for (const invalid of [
+			{
+				...original,
+				principal: { kind: "user" as const, id: "foreign-principal" },
+			},
+			{ ...original, agentId: "foreign-agent" },
+			{ ...original, conversationId: "foreign-conversation" },
+			{ ...original, executionId: "foreign-execution" },
+			{ ...original, turnId: "foreign-turn" },
+			{ ...original, sessionGeneration: 2 },
+			{ ...original, originalOperationDigest: "0".repeat(64) },
+			{
+				...original,
+				operation: {
+					...original.operation,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			},
+		]) {
+			const request = signV3Fixture(invalid, "session.status", {
+				purpose: "control",
+				reason: "recovery",
+			});
+			await expect(
+				reopened.recoverStatusV3(
+					request,
+					verifyRuntimeV2Fixture(request.grant),
+				),
+			).rejects.toThrow();
+		}
+		expect(status).toHaveBeenCalledTimes(1);
+		expect(await env.driver.sideEffectCount()).toBe(1);
+	});
+
+	it.each(["stop", "generation"] as const)(
+		"defers prepared %s recovery at V3 startup until current control authority arrives",
+		async (kind) => {
+			let crash = false;
+			const env = await setup({
+				afterOperationPrepared: () => {
+					if (crash) throw new Error("synthetic interruption crash");
+				},
+			});
+			const accepted = await submit(env.host);
+			const request = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					operation: {
+						kind,
+						id:
+							kind === "stop"
+								? "original-stop"
+								: "generation:conversation-fixture:1",
+						deliveryFence: 2,
+						executionDeliveryFence: 1,
+					},
+				},
+				kind === "stop" ? "turn.stop" : "generation.cancel",
+				{
+					purpose: "control",
+					reason: kind === "stop" ? "stop" : "generation_isolation",
+				},
+			);
+			const control = (host: RuntimeHost) =>
+				kind === "stop"
+					? host.stopV3(request, verifyRuntimeV2Fixture(request.grant))
+					: host.cancelGenerationV3(
+							request,
+							verifyRuntimeV2Fixture(request.grant),
+						);
+			crash = true;
+			await expect(control(env.host)).rejects.toThrow(
+				"synthetic interruption crash",
+			);
+			const lookup = vi.spyOn(env.driver, "lookupOperation");
+			const execute = vi.spyOn(env.driver, "execute");
+			const status = vi.spyOn(env.driver, "getStatus");
+			const reopened = await RuntimeHost.open({
+				...env.hostOptions,
+				afterOperationPrepared: undefined,
+				store: await FileRuntimeStore.open(env.storePath),
+			});
+			expect(
+				lookup.mock.calls.every(([command]) => command.kind === "submit-turn"),
+			).toBe(true);
+			expect(execute).not.toHaveBeenCalled();
+			expect(status).not.toHaveBeenCalled();
+			await expect(control(reopened)).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+			expect(await env.driver.sideEffectCount()).toBe(2);
+		},
+	);
+
+	it("keeps unknown acceptance unresolved when later business retries cannot find the original receipt", async () => {
+		const env = await setup();
+		await submit(env.host);
+		const lookup = vi
+			.spyOn(env.driver, "lookupOperation")
+			.mockResolvedValue({ state: "unknown" });
+		const reopened = await RuntimeHost.open({
+			...env.hostOptions,
+			store: await FileRuntimeStore.open(env.storePath),
+		});
+		lookup.mockResolvedValue({ state: "missing" });
+		const execute = vi.spyOn(env.driver, "execute");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await expect(submit(reopened)).resolves.toMatchObject({
+				result: { outcome: "unknown" },
+			});
+		}
+		expect(execute).not.toHaveBeenCalled();
+		expect(await env.driver.sideEffectCount()).toBe(1);
+	});
+
 	it("does not let the first V3 caller claim legacy ownership; protected migration checks the original history", async () => {
 		const env = await setup();
 		const legacy = await RuntimeHost.open({

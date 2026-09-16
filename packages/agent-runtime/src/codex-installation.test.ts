@@ -89,6 +89,7 @@ const otherFiles = [
 	"legal/UPSTREAM-LICENSE",
 	"legal/UPSTREAM-NOTICE",
 	"legal/JCS-NOTICE",
+	"legal/licenses/dependency-updates-NOTICE.txt",
 	"legal/licenses/ryu-js-1.0.3-APACHE.txt",
 	"legal/licenses/ryu-js-1.0.3-BOOST.txt",
 	"legal/licenses/serde_json_canonicalizer-0.3.2-MIT.txt",

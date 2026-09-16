@@ -930,8 +930,12 @@ export class RuntimeHost {
 		operation: StoredOperation,
 		allowBusinessExecution = true,
 	): Promise<RuntimeOperationResponse> {
-		if (operation.state === "resolved" && operation.result) {
-			let result = operation.result;
+		if (
+			operation.state === "resolved" &&
+			operation.result &&
+			operation.result.outcome !== "unknown"
+		) {
+			let result: RuntimeOperationResponse["result"] = operation.result;
 			if (result.outcome === "accepted" && result.status === "running") {
 				const nativeSessionRef =
 					this.options.store.nativeSessionRef(hostSessionRef) ??
@@ -983,7 +987,12 @@ export class RuntimeHost {
 		if (lookup.state === "found") {
 			rawDriverRecord = lookup.record;
 		} else {
-			if (!allowBusinessExecution && !isInterruption(operation))
+			// Unknown acceptance remains queryable, but missing evidence cannot
+			// turn a later lookup into a second business execution.
+			if (
+				(!allowBusinessExecution || operation.result?.outcome === "unknown") &&
+				!isInterruption(operation)
+			)
 				return unknownOperationResponse(hostSessionRef, operation);
 			if (this.v3 && !isInterruption(operation))
 				this.options.store.authorizePreparedOperation(
@@ -1041,7 +1050,10 @@ export class RuntimeHost {
 							operation.operationId,
 						);
 					}
-					if (operation.state === "prepared") {
+					// V3 native recovery needs a current query/control Grant. Even
+					// interruption lookup can query or stop native sources, so defer it.
+					if (this.v3 && isInterruption(operation)) return;
+					if (operation.state === "prepared" && !this.v3) {
 						recoveredResult = (
 							await this.dispatch(session.hostSessionRef, operation, !this.v3)
 						).result;
@@ -1054,10 +1066,9 @@ export class RuntimeHost {
 							session.nativeSessionRef,
 						);
 						if (lookup.state === "found") {
-							recoveredResult = await this.currentDriverResult(
-								lookup.record,
-								operation,
-							);
+							recoveredResult = this.v3
+								? lookup.record.result
+								: await this.currentDriverResult(lookup.record, operation);
 							if (
 								!isInterruption(operation) ||
 								recoveredResult.outcome !== "unknown"

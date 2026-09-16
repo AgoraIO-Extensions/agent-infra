@@ -103,6 +103,119 @@ function fixture() {
 }
 
 describe("durable Workload reconciliation", () => {
+	it("persists a prepared resource intention across a Worker restart before observing it", async () => {
+		const f = fixture();
+		await f.tick(3);
+		if (!f.state) throw new Error();
+		const candidate = {
+			...f.state.candidate,
+			deployment: { admitted: true, receipt: "persist-before-create" },
+		};
+		vi.mocked(f.runtime.apply).mockResolvedValueOnce({
+			status: "prepared",
+			candidate,
+			identity: null,
+		});
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "applying",
+			identity: null,
+			candidate,
+		});
+		expect(f.runtime.observe).not.toHaveBeenCalled();
+		f.restart();
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "observing",
+			identity: { uid: "uid-a" },
+			candidate,
+		});
+		expect(vi.mocked(f.runtime.apply).mock.calls.at(-1)?.[0].candidate).toEqual(
+			candidate,
+		);
+	});
+	it.each([false, true])(
+		"keeps same-configuration recovery cleanup durable when disabled=%s",
+		async (disabled) => {
+			const f = fixture();
+			await f.tick(7);
+			f.start();
+			await f.tick(3);
+			const sourceReference = {
+				schemaVersion: 1 as const,
+				ownerType: "agent-owner" as const,
+				ownerId: "owner-a",
+				agentId: "agent-a",
+				secretId: "secret-a",
+				secretVersion: 1,
+				configRevision: 1,
+				algorithmVersion: "aes-256-gcm:v1" as const,
+				wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+				wrappingKeyVersion: "key-a",
+				name: "agent-a.secret-a-v1-r1",
+			};
+			if (!f.state) throw new Error();
+			const candidate = {
+				...f.state.candidate,
+				secretRecoveries: [
+					{
+						sourceReference,
+						sourceActivationFence: {
+							schemaVersion: 1 as const,
+							agentId: "agent-a",
+							secretId: "secret-a",
+							secretVersion: 1,
+							configRevision: 1,
+							kubernetesSecretName: sourceReference.name,
+							workloadUid: "old-workload",
+							workloadGeneration: 1,
+							fence: 1,
+						},
+						reference: {
+							...sourceReference,
+							name: `${sourceReference.name}-w2-f42`,
+						},
+						workloadRevision: 2,
+						fence: 42,
+						secretUid: "candidate-secret",
+						identity: { uid: "candidate-workload", generation: 1 },
+					},
+				],
+			};
+			vi.mocked(f.runtime.apply).mockResolvedValueOnce({
+				status: "prepared",
+				candidate,
+				identity: { uid: "candidate-workload", generation: 1 },
+			});
+			await f.tick();
+			f.stop(disabled);
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				cleanupInterrupted: true,
+				candidate,
+				identity: { uid: "candidate-workload" },
+				fence: 43,
+			});
+			vi.mocked(f.runtime.discardUnactivatedSecrets)
+				.mockResolvedValueOnce({
+					status: "prepared",
+					candidate,
+					identity: { uid: "candidate-workload", generation: 2 },
+				})
+				.mockResolvedValueOnce(false);
+			await f.tick();
+			f.restart();
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				candidate,
+				identity: { uid: "candidate-workload", generation: 2 },
+			});
+			await f.tick();
+			expect(f.state).toMatchObject({ phase: "closing", identity: null });
+		},
+	);
 	it.each(["stop", "restart", "configuration"] as const)(
 		"retains a materialized unactivated candidate across %s and preflight rejection",
 		async (command) => {

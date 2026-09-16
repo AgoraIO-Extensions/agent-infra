@@ -955,6 +955,418 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 		expect(child?.attemptRef).not.toBe(saved[0]?.attemptRef);
 	});
 
+	it("retains one operation and separate attempts across a native tool retry", async () => {
+		const env = await setup();
+		const execution = await env.start();
+		const callId = "same-native-logical-call";
+		const first = await permit(
+			execution.bridge,
+			intent(execution.bridge, { callId }),
+		);
+		const begin = started(first.request, first.response);
+		await execution.bridge.callback(begin);
+		await execution.bridge.callback({
+			...completed(begin),
+			outcome: "failed",
+			reason: "execution_failed",
+		});
+		const second = await permit(
+			execution.bridge,
+			intent(execution.bridge, { callId }),
+		);
+		await expect(execution.bridge.callback(second.request)).resolves.toEqual(
+			second.response,
+		);
+		const retry = started(second.request, second.response);
+		const startedAck = await execution.bridge.callback(retry);
+		await expect(execution.bridge.callback(retry)).resolves.toEqual(startedAck);
+		const result = completed(retry);
+		const outcomeAck = await execution.bridge.callback(result);
+		await expect(execution.bridge.callback(result)).resolves.toEqual(
+			outcomeAck,
+		);
+		const events = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const operations = events.flatMap((event) =>
+			event.type === "operation" ? [event.payload] : [],
+		);
+		expect(operations.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"failed",
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(new Set(operations.map((fact) => fact.operationRef)).size).toBe(1);
+		expect(new Set(operations.map((fact) => fact.attemptRef)).size).toBe(2);
+		expect(second.response.permitId).not.toBe(first.response.permitId);
+		await env.driver.close();
+		const reopened = await env.reopen();
+		expect(
+			await reopened.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			),
+		).toEqual(events);
+	});
+
+	it("retains the original native operation when its next attempt starts after restart", async () => {
+		const env = await setup();
+		const execution = await env.start();
+		const first = await permit(execution.bridge);
+		const begin = started(first.request, first.response);
+		await execution.bridge.callback(begin);
+		const failed = { ...completed(begin), outcome: "failed" as const };
+		const firstAck = await execution.bridge.callback(failed);
+		const original = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		await env.driver.close();
+		const reopened = await env.reopen();
+		await reopened.getStatus(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const bridge = env.bridgeFor(execution.command);
+		await expect(bridge.callback(failed)).resolves.toEqual(firstAck);
+		const second = await permit(
+			bridge,
+			intent(bridge, { callId: first.request.identity.callId }),
+		);
+		const retry = started(second.request, second.response);
+		await bridge.callback(retry);
+		await bridge.callback(completed(retry));
+		const events = await reopened.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		expect(events.slice(0, original.length)).toEqual(original);
+		const operations = events.flatMap((event) =>
+			event.type === "operation" ? [event.payload] : [],
+		);
+		expect(operations.at(-1)).toMatchObject({
+			operationRef: operations[0]?.operationRef,
+			phase: "completed",
+		});
+		expect(operations.at(-1)?.attemptRef).not.toBe(operations[0]?.attemptRef);
+		expect(bridge.methods).not.toContain("turn/start");
+		expect(bridge.native.turnStarts).toBe(1);
+	});
+
+	it("keeps different native calls, tools, Conversations and Turns on distinct operations", async () => {
+		const env = await setup();
+		const alpha = await env.start();
+		const beta = await env.start("beta");
+		const callId = "reused-call-id";
+		const references: string[] = [];
+		for (const [execution, identity] of [
+			[alpha, { callId }],
+			[alpha, { callId: "another-call" }],
+			[alpha, { callId, toolName: "apply_patch" }],
+			[beta, { callId }],
+		] as const) {
+			const allowed = await permit(
+				execution.bridge,
+				intent(execution.bridge, identity),
+			);
+			const begin = started(allowed.request, allowed.response);
+			await execution.bridge.callback(begin);
+			await execution.bridge.callback(completed(begin));
+			const events = await env.driver.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			);
+			const last = events.at(-1);
+			assert(last?.type === "operation");
+			references.push(last.payload.operationRef);
+		}
+		await alpha.bridge.completeInferenceTurn();
+		expect(
+			await env.driver.getStatus(
+				alpha.nativeSessionRef,
+				alpha.command.executionId,
+			),
+		).toBe("completed");
+		const nextCommand: SubmitCommand = {
+			...alpha.command,
+			nativeSessionRef: alpha.nativeSessionRef,
+			operationId: "execution-next",
+			executionId: "execution-next",
+			turnId: "turn-next",
+		};
+		await env.driver.execute(nextCommand);
+		await permit(alpha.bridge, intent(alpha.bridge, { callId }));
+		const nextEvents = await env.driver.replayEvents(
+			alpha.nativeSessionRef,
+			nextCommand.executionId,
+		);
+		const next = nextEvents.at(-1);
+		assert(next?.type === "operation");
+		references.push(next.payload.operationRef);
+		expect(new Set(references).size).toBe(5);
+	});
+
+	it("keeps the same call under different native sources and parent attempts distinct", async () => {
+		const env = await setup();
+		const execution = await env.start();
+		const child = await startChild(execution);
+		const callId = "same-call-in-each-source";
+		const root = await permit(
+			execution.bridge,
+			intent(execution.bridge, { callId }),
+		);
+		const begin = started(root.request, root.response);
+		await execution.bridge.callback(begin);
+		await execution.bridge.callback(completed(begin));
+		await permit(
+			execution.bridge,
+			intent(execution.bridge, {
+				callId,
+				sessionId: child.bind.source.threadId,
+				turnId: child.bind.source.turnId,
+			}),
+		);
+		await permit(
+			execution.bridge,
+			intent(execution.bridge, {
+				callId,
+				parentAttemptRef: child.parent.request.identity.attemptRef,
+			}),
+		);
+		const events = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const operations = events.flatMap((event) =>
+			event.type === "operation" && event.payload.phase === "intent"
+				? [event.payload]
+				: [],
+		);
+		expect(new Set(operations.map((fact) => fact.operationRef)).size).toBe(4);
+	});
+
+	it.each(["intent", "started", "unknown"] as const)(
+		"does not admit a native retry while the original attempt is %s",
+		async (phase) => {
+			const authorize = vi.fn<Authorize>(async () => {});
+			const env = await setup(authorize);
+			const execution = await env.start();
+			const first = await permit(execution.bridge);
+			const begin = started(first.request, first.response);
+			if (phase !== "intent") await execution.bridge.callback(begin);
+			if (phase === "unknown")
+				await execution.bridge.callback({
+					...completed(begin),
+					outcome: "unknown",
+					reason: "result_unconfirmed",
+				});
+			const before = await env.driver.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			);
+			await expect(
+				execution.bridge.callback(
+					intent(execution.bridge, { callId: first.request.identity.callId }),
+				),
+			).rejects.toThrow();
+			await expect(
+				execution.bridge.callback(
+					intent(execution.bridge, {
+						callId: "different-call",
+						attemptRef: first.request.identity.attemptRef,
+					}),
+				),
+			).rejects.toThrow();
+			expect(
+				await env.driver.replayEvents(
+					execution.nativeSessionRef,
+					execution.command.executionId,
+				),
+			).toEqual(before);
+			expect(authorize).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("recovers only the unfinished retry as unknown and blocks another attempt", async () => {
+		const env = await setup();
+		const execution = await env.start();
+		const first = await permit(execution.bridge);
+		const begin = started(first.request, first.response);
+		await execution.bridge.callback(begin);
+		await execution.bridge.callback({ ...completed(begin), outcome: "failed" });
+		const retry = await permit(
+			execution.bridge,
+			intent(execution.bridge, { callId: first.request.identity.callId }),
+		);
+		await execution.bridge.callback(started(retry.request, retry.response));
+		const before = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const originalRetry = before.at(-1);
+		assert(originalRetry?.type === "operation");
+		await env.driver.close();
+		const reopened = await env.reopen();
+		const after = await reopened.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		expect(after.slice(0, before.length)).toEqual(before);
+		expect(after.slice(before.length)).toEqual([
+			expect.objectContaining({
+				type: "operation",
+				payload: expect.objectContaining({
+					operationRef: originalRetry.payload.operationRef,
+					attemptRef: originalRetry.payload.attemptRef,
+					phase: "unknown",
+				}),
+			}),
+		]);
+		await reopened.getStatus(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const bridge = env.bridgeFor(execution.command);
+		await expect(
+			bridge.callback(
+				intent(bridge, { callId: first.request.identity.callId }),
+			),
+		).rejects.toThrow();
+		expect(bridge.methods).not.toContain("turn/start");
+	});
+
+	it("preserves legacy split operation references and refuses to guess the next retry binding", async () => {
+		const env = await setup();
+		const execution = await env.start();
+		const first = await permit(execution.bridge);
+		const second = await permit(execution.bridge);
+		for (const allowed of [first, second]) {
+			const begin = started(allowed.request, allowed.response);
+			await execution.bridge.callback(begin);
+			await execution.bridge.callback({
+				...completed(begin),
+				outcome: "failed",
+			});
+		}
+		const original = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		await env.driver.close();
+		const legacy = await env.saved();
+		const originalAttempt = journal(legacy, execution).nativeToolAttempts?.[
+			second.request.identity.attemptRef
+		];
+		assert(originalAttempt);
+		// Model the pre-fix journal: one native call was assigned two references.
+		originalAttempt.identity = {
+			...originalAttempt.identity,
+			callId: first.request.identity.callId,
+		};
+		await writeFile(env.path, JSON.stringify(legacy));
+		const reopened = await env.reopen();
+		expect(
+			await reopened.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			),
+		).toEqual(original);
+		await reopened.getStatus(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const bridge = env.bridgeFor(execution.command);
+		const before = await readFile(env.path, "utf8");
+		await expect(
+			bridge.callback(
+				intent(bridge, { callId: first.request.identity.callId }),
+			),
+		).rejects.toThrow();
+		expect(await readFile(env.path, "utf8")).toBe(before);
+	});
+
+	it.each(["callId", "toolName", "parentAttemptRef"] as const)(
+		"rejects persisted shared operation references whose %s binding changed",
+		async (field) => {
+			const env = await setup();
+			const execution = await env.start();
+			const callId = "one-logical-call";
+			let lastAttemptRef: string | undefined;
+			for (let attempt = 0; attempt < 2; attempt += 1) {
+				const allowed = await permit(
+					execution.bridge,
+					intent(execution.bridge, { callId }),
+				);
+				lastAttemptRef = allowed.request.identity.attemptRef;
+				const begin = started(allowed.request, allowed.response);
+				await execution.bridge.callback(begin);
+				await execution.bridge.callback({
+					...completed(begin),
+					outcome: "failed",
+				});
+			}
+			await env.driver.close();
+			const state = await env.saved();
+			assert(lastAttemptRef);
+			const attempt = journal(state, execution).nativeToolAttempts?.[
+				lastAttemptRef
+			];
+			assert(attempt);
+			attempt.identity = { ...attempt.identity, [field]: "different-binding" };
+			await writeFile(env.path, JSON.stringify(state));
+			await expect(env.reopen()).rejects.toThrow();
+		},
+	);
+
+	it("reauthorizes a retry and records revocation against only the new attempt", async () => {
+		const authorize = vi.fn<Authorize>(async () => {});
+		const env = await setup(authorize);
+		const execution = await env.start();
+		const first = await permit(execution.bridge);
+		const begin = started(first.request, first.response);
+		await execution.bridge.callback(begin);
+		await execution.bridge.callback({
+			...completed(begin),
+			outcome: "failed",
+			reason: "execution_failed",
+		});
+		authorize.mockRejectedValueOnce(
+			new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"synthetic revocation",
+				403,
+			),
+		);
+		await expect(
+			execution.bridge.callback(
+				intent(execution.bridge, { callId: first.request.identity.callId }),
+			),
+		).resolves.toMatchObject({
+			decision: "deny",
+			reason: "authorization_denied",
+		});
+		const events = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const failures = events.flatMap((event) =>
+			event.type === "operation" && event.payload.phase === "failed"
+				? [event.payload]
+				: [],
+		);
+		expect(failures.map((fact) => fact.failureCode)).toEqual([
+			"operation_failed",
+			"authorization_denied",
+		]);
+		expect(failures[1]?.operationRef).toBe(failures[0]?.operationRef);
+		expect(failures[1]?.attemptRef).not.toBe(failures[0]?.attemptRef);
+		expect(authorize).toHaveBeenCalledTimes(2);
+	});
+
 	it("replays matching started/outcome receipts and rejects changed contents or reused phase IDs", async () => {
 		const env = await setup();
 		const execution = await env.start();
@@ -2471,6 +2883,34 @@ describe("Codex Driver Connection journal and admission", () => {
 			expect(facts(await env.saved(), execution)).toEqual([]);
 		},
 	);
+
+	it("keeps distinct Connection operations separate when their native call ID is reused", async () => {
+		const { options } = connectionOptions();
+		const env = await setup(undefined, undefined, options);
+		const execution = await env.start();
+		for (let operation = 0; operation < 2; operation += 1) {
+			const { request } = await connectionIntent(execution);
+			const next: ConnectionIntent = {
+				...request,
+				identity: { ...request.identity, callId: "same-native-call" },
+			};
+			const begin = await connectionStarted(execution, next);
+			await execution.bridge.connectionCallback(
+				connectionOutcome(begin, {
+					verification: "unverified",
+					reason: "receipt_missing",
+				}),
+			);
+		}
+		const events = await env.driver.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const operations = events.flatMap((event) =>
+			event.type === "operation" ? [event.payload] : [],
+		);
+		expect(new Set(operations.map((fact) => fact.operationRef)).size).toBe(2);
+	});
 
 	it("binds the descriptor to the same source, attempt, nonces, and slot", async () => {
 		const { options } = connectionOptions();

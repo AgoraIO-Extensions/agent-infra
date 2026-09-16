@@ -81,3 +81,4 @@ export {
 	type WecomSetupStoreV1,
 } from "./wecom-setup.js";
 export * from "./workload-reconciliation.js";
+export * from "./workload-secret-recovery.js";
