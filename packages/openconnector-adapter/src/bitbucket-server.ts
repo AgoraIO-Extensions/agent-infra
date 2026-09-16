@@ -661,13 +661,15 @@ export class BitbucketServerAdapter
 		const candidates: ReturnType<typeof projectChange>[] = [];
 		const matchBudget = { remaining: 1_000_000 };
 		let pathFilteringTruncated = false;
-		const projectedChanges = changes
-			.map(projectChange)
-			.sort((left, right) =>
-				`${left.path}\0${left.sourcePath ?? ""}\0${left.status}`.localeCompare(
-					`${right.path}\0${right.sourcePath ?? ""}\0${right.status}`,
-				),
+		const projectedChanges = changes.map(projectChange).sort((left, right) => {
+			const leftKey = [left.path, left.sourcePath ?? "", left.status].join(
+				"\0",
 			);
+			const rightKey = [right.path, right.sourcePath ?? "", right.status].join(
+				"\0",
+			);
+			return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+		});
 		for (const change of projectedChanges) {
 			const matches = (path: string) =>
 				pathGlobs.some((pattern) => globMatches(pattern, path, matchBudget));

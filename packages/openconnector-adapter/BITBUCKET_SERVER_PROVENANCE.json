@@ -13,7 +13,7 @@
 		"build": "6007002",
 		"apiOrigin": "https://bitbucket-api.agoralab.co",
 		"authentication": "Personal Access Token sent as an Authorization Bearer value",
-		"executorDigest": "sha256:e68914587c10abe72de0658b025d407e14f700a1de7fc968705a38dea07b9147"
+		"executorDigest": "sha256:f54e3a96d21312451cacbdbca6c42ca0e328e9e9bf46bf5b74ec3d38ddb20613"
 	},
 	"atlassianCliReference": {
 		"version": "0.1.18",
