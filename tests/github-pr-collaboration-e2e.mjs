@@ -56,6 +56,7 @@ export async function runGitHubPullRequestCollaboration({
 	let expectedHeadSha;
 	let pullCreationStarted = false;
 	let pullNumber;
+	let reviewerRequested = false;
 	let failure;
 	const cleanupFailures = [];
 	const refCreationAttempts = new Map();
@@ -228,23 +229,7 @@ export async function runGitHubPullRequestCollaboration({
 		);
 		if (requested?.requested_reviewers?.[0]?.login !== "connectionE2E2")
 			throw new Error("requested reviewer does not match");
-		const removed = await execute(
-			primary,
-			"github.remove_pull_request_reviewers",
-			{
-				...target,
-				idempotencyKey: `${runId}:reviewer-remove`,
-				pullNumber,
-				reviewers: ["connectionE2E2"],
-				teamReviewers: [],
-			},
-		);
-		if (
-			removed?.requested_reviewers?.some(
-				(item) => item.login === "connectionE2E2",
-			)
-		)
-			throw new Error("requested reviewer was not removed");
+		reviewerRequested = true;
 		await execute(primary, "github.create_or_update_file", {
 			...target,
 			branch: baseBranch,
@@ -311,9 +296,52 @@ export async function runGitHubPullRequestCollaboration({
 			marker,
 			"DISMISSED",
 		);
+		const removed = await execute(
+			primary,
+			"github.remove_pull_request_reviewers",
+			{
+				...target,
+				idempotencyKey: `${runId}:reviewer-remove`,
+				pullNumber,
+				reviewers: ["connectionE2E2"],
+				teamReviewers: [],
+			},
+		);
+		if (
+			removed?.requested_reviewers?.some(
+				(item) => item.login === "connectionE2E2",
+			)
+		)
+			throw new Error("requested reviewer was not removed");
+		reviewerRequested = false;
 	} catch (error) {
 		failure = error;
 	} finally {
+		if (reviewerRequested && pullNumber) {
+			try {
+				const removed = await execute(
+					primary,
+					"github.remove_pull_request_reviewers",
+					{
+						...target,
+						idempotencyKey: `${runId}:reviewer-cleanup-remove`,
+						pullNumber,
+						reviewers: ["connectionE2E2"],
+						teamReviewers: [],
+					},
+				);
+				if (
+					removed?.requested_reviewers?.some(
+						(item) => item.login === "connectionE2E2",
+					)
+				)
+					cleanupFailures.push(
+						new Error("requested reviewer remained after cleanup"),
+					);
+			} catch (error) {
+				cleanupFailures.push(error);
+			}
+		}
 		if (pullCreationStarted && !pullNumber) {
 			try {
 				pullNumber = await reconcilePull();
