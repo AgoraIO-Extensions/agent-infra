@@ -71,6 +71,10 @@ test("GitHub review conformance completes an owned two-account lifecycle", async
 			"github.delete_ref",
 		],
 	);
+	assert.equal(
+		calls.find(({ action }) => action === "github.delete_ref")?.input?.ref,
+		"heads/connection-e2e-review-review-run",
+	);
 });
 
 test("GitHub review conformance never retries a started reviewer write", async () => {
