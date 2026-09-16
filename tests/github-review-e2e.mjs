@@ -628,8 +628,12 @@ function mcpClient(fetch, token) {
 			const payload = await response.json();
 			if (payload.error) {
 				const message = safeMcpErrorMessage(payload.error.message);
+				const operation =
+					name === "execute_action" && typeof args.actionId === "string"
+						? `${name}:${args.actionId}`
+						: name;
 				throw new Error(
-					`Connection MCP error ${payload.error.code} during ${name}${message}`,
+					`Connection MCP error ${payload.error.code} during ${operation}${message}`,
 				);
 			}
 			return payload.result?.structuredContent;
