@@ -207,6 +207,22 @@ test("keeps pull request collaboration in the fixed token-bearing step", async (
 	);
 });
 
+test("keeps commit and reaction conformance in the fixed token-bearing step", async () => {
+	const workflows = await actualWorkflows();
+	const step = workflows["connection-github-e2e.yml"].jobs.conformance.steps.find(
+		(item) => item.env?.CONNECTION_E2E_TOKEN,
+	);
+	step.run = step.run.replace(
+		/node tests\/github-commit-reaction-e2e\.mjs[^\n]*\n[^\n]*\n/,
+		"",
+	);
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("fixed GitHub conformance step"),
+		),
+	);
+});
+
 test("binds Connection E2E to the immutable connection dispatch commit", async () => {
 	const workflows = await actualWorkflows();
 	const checkout = workflows["connection-github-e2e.yml"].jobs.conformance.steps[0];

@@ -80,6 +80,9 @@ jobs:
           node tests/github-pr-collaboration-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-pr-collaboration-e2e-result.json
           collaboration_status=${PIPESTATUS[0]}
+          node tests/github-commit-reaction-e2e.mjs \
+            "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-commit-reaction-e2e-result.json
+          commit_reaction_status=${PIPESTATUS[0]}
           node tests/github-connection-e2e.mjs \
             "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" 2>&1 | tee connection-github-e2e-result.json
           issue_status=${PIPESTATUS[0]}
@@ -94,7 +97,7 @@ jobs:
             write_status=1
             echo '{"outcome":"SKIPPED","reason":"read conformance failed"}' > connection-github-write-e2e-result.json
           fi
-          if [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ] || [ "$collaboration_status" -ne 0 ]; then
+          if [ "$read_status" -ne 0 ] || [ "$write_status" -ne 0 ] || [ "$issue_status" -ne 0 ] || [ "$review_status" -ne 0 ] || [ "$collaboration_status" -ne 0 ] || [ "$commit_reaction_status" -ne 0 ]; then
             exit 1
           fi
 
@@ -106,6 +109,7 @@ jobs:
           name: connection-github-e2e-${{ github.run_id }}
           path: |
             connection-github-e2e-result.json
+            connection-github-commit-reaction-e2e-result.json
             connection-github-read-e2e-result.json
             connection-github-pr-collaboration-e2e-result.json
             connection-github-review-e2e-result.json
