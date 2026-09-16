@@ -140,3 +140,26 @@ it("keeps pending routes readable across a key rotation and fails closed for a r
 		createWecomReplyDecryptorV1(next.privateKey)(oldHandle),
 	).rejects.toThrow("WeCom reply route is unavailable");
 });
+
+it.each(["short-tag", "short-iv", "short-key", "noncanonical"])(
+	"rejects malformed persisted reply envelope: %s",
+	async (kind) => {
+		const envelope = JSON.parse(await protect(route));
+		if (kind === "short-tag")
+			envelope.tag = Buffer.from(envelope.tag, "base64")
+				.subarray(0, 12)
+				.toString("base64");
+		if (kind === "short-iv")
+			envelope.iv = Buffer.from(envelope.iv, "base64")
+				.subarray(0, 8)
+				.toString("base64");
+		if (kind === "short-key")
+			envelope.wrapped = Buffer.from(envelope.wrapped, "base64")
+				.subarray(1)
+				.toString("base64");
+		if (kind === "noncanonical") envelope.ciphertext += "\n";
+		await expect(reveal(JSON.stringify(envelope))).rejects.toThrow(
+			"WeCom reply route is unavailable",
+		);
+	},
+);

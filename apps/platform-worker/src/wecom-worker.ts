@@ -30,6 +30,8 @@ export interface WecomWorkerDeploymentV1 {
 export function createPlatformWecomWorkerV1(
 	options: WecomWorkerDeploymentV1 & { readonly databaseUrl: string },
 ) {
+	if (options.setup && !options.connections)
+		throw new Error("WeCom setup requires a connection deployment");
 	const connectionHolderId = randomUUID();
 	const store = new PostgresWecomChannelV1({
 		connectionHolderId,
@@ -41,8 +43,6 @@ export function createPlatformWecomWorkerV1(
 		state: store,
 	});
 	const channel = createWecomChannelV1({ authorization, store });
-	if (options.setup && !options.connections)
-		throw new Error("WeCom setup requires a connection deployment");
 	const setup =
 		options.setup && options.connections
 			? createWecomSetupWorkerV1({
@@ -81,10 +81,7 @@ export function createPlatformWecomWorkerV1(
 		},
 	});
 	return {
-		async dispatch() {
-			const [connectionResult] = await Promise.allSettled([
-				connections?.tick(),
-			]);
+		async reconcile() {
 			void setup?.tick().catch(() => {
 				try {
 					options.connections?.observeIngress?.("unavailable");
@@ -92,14 +89,15 @@ export function createPlatformWecomWorkerV1(
 					/* Observation only. */
 				}
 			});
+			await connections?.tick();
+		},
+		async dispatch() {
 			// Claim a bounded batch so one slow reply cannot serialize all bots.
 			const results = await Promise.allSettled(
 				Array.from({ length: 8 }, () => delivery.dispatch()),
 			);
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
-			if (connectionResult?.status === "rejected")
-				throw connectionResult.reason;
 			return results.some(
 				(result) => result.status === "fulfilled" && result.value,
 			);

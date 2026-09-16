@@ -104,23 +104,38 @@ export function createWecomReplyDecryptorV1(
 		try {
 			if (handle.length > 12000) throw new Error();
 			const value = JSON.parse(handle);
-			if (value.version !== 1) throw new Error();
+			if (!value || typeof value !== "object" || value.version !== 1)
+				throw new Error();
 			const key = keys.get(value.keyId);
 			if (!key) throw new Error();
+			const decode = (encoded: unknown, expectedLength?: number) => {
+				if (typeof encoded !== "string") throw new Error();
+				const decoded = Buffer.from(encoded, "base64");
+				if (
+					decoded.toString("base64") !== encoded ||
+					(expectedLength !== undefined && decoded.length !== expectedLength)
+				)
+					throw new Error();
+				return decoded;
+			};
 			dek = privateDecrypt(
 				{ key, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
-				Buffer.from(value.wrapped, "base64"),
+				decode(
+					value.wrapped,
+					(key.asymmetricKeyDetails?.modulusLength ?? 0) / 8,
+				),
 			);
+			if (dek.length !== 32) throw new Error();
 			const decipher = createDecipheriv(
 				"aes-256-gcm",
 				dek,
-				Buffer.from(value.iv, "base64"),
+				decode(value.iv, 12),
 			);
 			decipher.setAAD(Buffer.from(`wecom-reply-v1:${value.keyId}`));
-			decipher.setAuthTag(Buffer.from(value.tag, "base64"));
+			decipher.setAuthTag(decode(value.tag, 16));
 			return JSON.parse(
 				Buffer.concat([
-					decipher.update(Buffer.from(value.ciphertext, "base64")),
+					decipher.update(decode(value.ciphertext)),
 					decipher.final(),
 				]).toString("utf8"),
 			) as WecomReplyRouteV1;

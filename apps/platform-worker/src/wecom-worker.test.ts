@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
+	storeOpen: vi.fn(),
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
@@ -11,6 +12,9 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWecomChannelV1: class {
+		constructor() {
+			mocks.storeOpen();
+		}
 		close = mocks.close;
 	},
 }));
@@ -108,7 +112,8 @@ it.each(["reconcile", "setup-close", "connections-close"])(
 				new Error("reconcile unavailable"),
 			);
 			mocks.dispatch.mockResolvedValue(true);
-			await expect(worker.dispatch()).rejects.toThrow("reconcile unavailable");
+			await expect(worker.reconcile()).rejects.toThrow("reconcile unavailable");
+			expect(await worker.dispatch()).toBe(true);
 			expect(mocks.dispatch).toHaveBeenCalledTimes(8);
 			await worker.close();
 		} else {
@@ -159,4 +164,27 @@ it("classifies a rejected reply route as failed without calling any external sen
 	} finally {
 		await worker.close();
 	}
+});
+
+it("rejects invalid setup deployment before opening a database store", () => {
+	expect(() =>
+		createPlatformWecomWorkerV1({
+			databaseUrl: "postgres://fixture",
+			identity: {
+				resolveSender: async () => null,
+				activeUsers: async () => [],
+			},
+			observe: () => {},
+			sender: { send: async () => "failed" },
+			setup: {
+				directory: { resolveUser: async () => null },
+				decryptor: {
+					decrypt: async () => {
+						throw new Error("unused");
+					},
+				},
+			},
+		}),
+	).toThrow("requires a connection deployment");
+	expect(mocks.storeOpen).not.toHaveBeenCalled();
 });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	find: vi.fn(),
 	wecomDispatch: vi.fn(async () => {}),
+	wecomReconcile: vi.fn(async () => {}),
 	wecomClose: vi.fn(async () => {}),
 	dispatch: vi.fn(),
 	storeClose: vi.fn(async () => {}),
@@ -42,6 +43,7 @@ vi.mock("./conversation-runtime.js", () => ({
 vi.mock("./wecom-worker.js", () => ({
 	createPlatformWecomWorkerV1: () => ({
 		dispatch: mocks.wecomDispatch,
+		reconcile: mocks.wecomReconcile,
 		close: mocks.wecomClose,
 	}),
 }));
@@ -75,6 +77,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
 	mocks.wecomDispatch.mockReset().mockResolvedValue(undefined);
+	mocks.wecomReconcile.mockReset().mockResolvedValue(undefined);
 });
 
 describe("Conversation Worker discovery and shutdown", () => {
@@ -177,39 +180,49 @@ it("starts WeCom dispatch independently of failed or unsettled discovery", async
 	}
 });
 
-it("keeps discovering while WeCom is pending and drains it before shutdown", async () => {
-	vi.useFakeTimers();
-	const pending = Promise.withResolvers<void>();
-	mocks.find.mockResolvedValue([]);
-	mocks.wecomDispatch.mockReturnValue(pending.promise);
-	const worker = createPlatformConversationWorkerV2({
-		...options,
-		pollIntervalMs: 1000,
-		wecom: {
-			identity: {
-				resolveSender: async () => null,
-				activeUsers: async () => [],
+it.each(["reply", "connection"])(
+	"keeps independent work running past 30s while %s is pending",
+	async (pendingKind) => {
+		vi.useFakeTimers();
+		const pending = Promise.withResolvers<void>();
+		mocks.find.mockResolvedValue([]);
+		if (pendingKind === "reply")
+			mocks.wecomDispatch.mockReturnValue(pending.promise);
+		else mocks.wecomReconcile.mockReturnValue(pending.promise);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			pollIntervalMs: 1000,
+			wecom: {
+				identity: {
+					resolveSender: async () => null,
+					activeUsers: async () => [],
+				},
+				observe: () => {},
+				sender: { send: async () => "failed" },
 			},
-			observe: () => {},
-			sender: { send: async () => "failed" },
-		},
-	});
-	try {
-		worker.start();
-		await vi.advanceTimersByTimeAsync(3000);
-		expect(mocks.find).toHaveBeenCalledTimes(4);
-		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(1);
-		const stopped = worker.stop();
-		await vi.advanceTimersByTimeAsync(0);
-		expect(mocks.wecomClose).not.toHaveBeenCalled();
-		pending.resolve();
-		await stopped;
-		expect(mocks.wecomClose).toHaveBeenCalledTimes(1);
-	} finally {
-		pending.resolve();
-		await worker.stop();
-	}
-});
+		});
+		try {
+			worker.start();
+			await vi.advanceTimersByTimeAsync(31000);
+			expect(mocks.find).toHaveBeenCalledTimes(32);
+			expect(mocks.wecomReconcile).toHaveBeenCalledTimes(
+				pendingKind === "reply" ? 32 : 1,
+			);
+			expect(mocks.wecomDispatch).toHaveBeenCalledTimes(
+				pendingKind === "reply" ? 1 : 32,
+			);
+			const stopped = worker.stop();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(mocks.wecomClose).not.toHaveBeenCalled();
+			pending.resolve();
+			await stopped;
+			expect(mocks.wecomClose).toHaveBeenCalledTimes(1);
+		} finally {
+			pending.resolve();
+			await worker.stop();
+		}
+	},
+);
 
 it("loads WeCom deployment through the production conversation startup", async () => {
 	vi.useFakeTimers();

@@ -61,15 +61,16 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
-	const wecom = options.wecom
-		? createPlatformWecomWorkerV1({
-				...options.wecom,
-				databaseUrl: options.databaseUrl,
-			})
-		: undefined;
+	let wecom: ReturnType<typeof createPlatformWecomWorkerV1> | undefined;
 	let runtime: ReturnType<typeof createConversationRuntimeV2>;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
+		wecom = options.wecom
+			? createPlatformWecomWorkerV1({
+					...options.wecom,
+					databaseUrl: options.databaseUrl,
+				})
+			: undefined;
 		runtime = createConversationRuntimeV2({
 			...options,
 			channelAuthorizationCurrent: async (record, signal) => {
@@ -117,6 +118,8 @@ export function createPlatformConversationWorkerV2(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let polling: Promise<number> | undefined;
 	let wecomPolling: Promise<void> | undefined;
+	let connectionPolling: Promise<void> | undefined;
+	let connectionTimer: ReturnType<typeof setTimeout> | undefined;
 	let closing: Promise<void> | undefined;
 	let started = false;
 	let stopped = false;
@@ -177,6 +180,18 @@ export function createPlatformConversationWorkerV2(
 		});
 		return polling;
 	}
+	function pollConnections() {
+		if (stopped || signal.aborted || !wecom) return;
+		if (!connectionPolling)
+			connectionPolling = wecom
+				.reconcile()
+				.catch(() => log("WECOM_CONNECTION_RECONCILE_UNAVAILABLE"))
+				.finally(() => {
+					connectionPolling = undefined;
+				});
+		if (!stopped && !signal.aborted)
+			connectionTimer = setTimeout(pollConnections, Math.min(interval, 5000));
+	}
 	function poll() {
 		if (stopped || signal.aborted) return;
 		if (!polling)
@@ -199,18 +214,21 @@ export function createPlatformConversationWorkerV2(
 		start() {
 			if (started || stopped) return;
 			started = true;
+			pollConnections();
 			void poll();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			clearTimeout(timer);
+			clearTimeout(connectionTimer);
 			controller.abort();
 			runtime.close();
 			closing = (async () => {
 				await Promise.allSettled([
 					polling,
 					wecomPolling,
+					connectionPolling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const results = await Promise.allSettled([
