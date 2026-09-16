@@ -113,7 +113,7 @@ export function WecomBotSetup({
 			if (attempt !== generation.current) return;
 			if (!started.data) throw new Error();
 			session.current = started.data.sessionId;
-			await submitWecomCredentials({
+			const submitted = await submitWecomCredentials({
 				path: { agentId, sessionId: started.data.sessionId },
 				body: {
 					state: started.data.state,
@@ -124,6 +124,14 @@ export function WecomBotSetup({
 				responseStyle: "fields",
 				throwOnError: false,
 			});
+			if (attempt !== generation.current) return;
+			if (!submitted.data && submitted.response && !submitted.response.ok) {
+				session.current = undefined;
+				setBusy(false);
+				setStatus(undefined);
+				setError("凭证提交被拒绝，请检查输入并重试。");
+				return;
+			}
 		} catch {
 			if (attempt !== generation.current) return;
 			if (!session.current) {

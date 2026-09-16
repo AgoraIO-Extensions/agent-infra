@@ -190,3 +190,50 @@ it("clears a previously connected status when refresh fails", async () => {
 		expect(screen.getByText("连接状态暂不可用")).toBeTruthy(),
 	);
 });
+
+it.each([400, 403, 409, 503])(
+	"releases the form after a confirmed HTTP %s credential rejection",
+	async (status) => {
+		client.setConfig({ baseUrl: "https://platform.test" });
+		let reads = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: Request) => {
+				const path = new URL(input.url).pathname;
+				if (path.endsWith("/wecom-bot"))
+					return Response.json({ status: "not_configured" });
+				if (path.endsWith("/wecom-setup"))
+					return Response.json({
+						sessionId: "setup",
+						state: "fixture",
+						status: "awaiting_input",
+					});
+				if (path.endsWith("/credentials"))
+					return Response.json({ error: "rejected" }, { status });
+				reads++;
+				return Response.json({ status: "awaiting_input" });
+			}),
+		);
+		render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
+		fireEvent.change(screen.getByLabelText("Bot ID"), {
+			target: { value: "bot" },
+		});
+		fireEvent.change(screen.getByLabelText("Secret"), {
+			target: { value: "fixture" },
+		});
+		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toContain("提交被拒绝"),
+		);
+		expect(
+			(screen.getByRole("button", { name: "验证并绑定" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+		expect((screen.getByLabelText("Secret") as HTMLInputElement).value).toBe(
+			"",
+		);
+		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull();
+		expect(reads).toBe(0);
+	},
+);

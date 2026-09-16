@@ -177,12 +177,12 @@ export function createPlatformConversationWorkerV2(
 		return polling;
 	}
 	async function poll() {
-		try {
-			await tick();
-			await wecom?.dispatch();
-		} catch {
+		const results = await Promise.allSettled([
+			tick(),
+			wecom?.dispatch() ?? Promise.resolve(),
+		]);
+		if (results.some((result) => result.status === "rejected"))
 			log("CONVERSATION_DISCOVERY_UNAVAILABLE");
-		}
 		if (!stopped && !signal.aborted)
 			timer = setTimeout(() => {
 				void poll();

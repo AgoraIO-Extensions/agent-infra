@@ -142,7 +142,8 @@ export function createWecomSetupWorkerV1(
 					connecting = connection;
 					await connection.connect();
 					if (!(await connection.authentication)) {
-						await store.fail(session.sessionId, "auth_failed", claim);
+						if (connection.terminalReason === "auth_failed")
+							await store.fail(session.sessionId, "auth_failed", claim);
 						return;
 					}
 					const unavailable = async (): Promise<never> => {
@@ -226,8 +227,10 @@ export function createWecomSetupWorkerV1(
 					} catch {
 						/* Observation only. */
 					}
-				} catch {
-					await store.fail(session.sessionId, "conflict", claim);
+				} catch (error) {
+					if (!(await authority(session)))
+						await store.fail(session.sessionId, "conflict", claim);
+					else throw error;
 				} finally {
 					connecting?.close();
 					connecting = undefined;

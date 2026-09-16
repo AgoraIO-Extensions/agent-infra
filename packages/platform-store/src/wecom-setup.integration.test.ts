@@ -13,9 +13,23 @@ import { migratePlatformDatabase } from "./migrate.ts";
 import { startPostgresTestDatabase } from "./postgres-test.ts";
 import { PostgresWecomSetupV1 } from "./wecom-setup.ts";
 
-it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
+it.each([
+	"success",
+	"revoked",
+	"wrong-secret",
+	"stale-config",
+	"timeout",
+	"activation-unavailable",
+	"commit-unavailable",
+] as const)(
 	"manual onboarding %s uses Worker authentication and the existing configuration authority",
 	async (mode) => {
+		const recovers = [
+			"timeout",
+			"activation-unavailable",
+			"commit-unavailable",
+		].includes(mode);
+		const succeeds = mode === "success" || recovers;
 		const db = await startPostgresTestDatabase("wecom-setup");
 		const sql = postgres(db.databaseUrl);
 		const store = new PostgresWecomSetupV1(db);
@@ -27,11 +41,13 @@ it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
 		if (!address || typeof address === "string") throw new Error("No address");
 		let active = true;
 		let authFrames = 0;
+		let dependencyUnavailable = mode === "activation-unavailable";
 		server.on("connection", (socket) =>
 			socket.on("message", (raw) => {
 				const frame = JSON.parse(raw.toString());
 				if (frame.cmd !== "aibot_subscribe") return;
 				authFrames++;
+				if (mode === "timeout" && authFrames === 1) return;
 				if (mode === "revoked") active = false;
 				socket.send(
 					JSON.stringify({
@@ -60,6 +76,8 @@ it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
 		};
 		const directory = {
 			async resolveUser(userId: string) {
+				if (dependencyUnavailable && authFrames > 0)
+					throw new Error("Identity dependency unavailable");
 				return {
 					schemaVersion: 1,
 					userId,
@@ -136,16 +154,28 @@ it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
 			).rejects.toThrow("unavailable");
 			if (mode === "stale-config")
 				await sql`update platform.agents set authorization_revision='updated' where id='agent'`;
+			if (mode === "commit-unavailable")
+				await sql`alter table platform.agent_configuration_revisions add constraint fixture_commit_unavailable check (revision < 2)`;
+			if (recovers) {
+				if (mode !== "timeout") await expect(worker.tick()).rejects.toThrow();
+				else await worker.tick();
+				const pending = await store.read(session.sessionId);
+				expect(pending?.status).toBe("verifying");
+				expect(pending?.encryptedCredential).toBeTruthy();
+				dependencyUnavailable = false;
+				if (mode === "commit-unavailable")
+					await sql`alter table platform.agent_configuration_revisions drop constraint fixture_commit_unavailable`;
+			}
 			await worker.tick();
 			const saved = await store.read(session.sessionId);
 			expect(saved?.status).toBe(
-				mode === "success"
+				succeeds
 					? "active"
 					: mode === "wrong-secret"
 						? "auth_failed"
 						: "conflict",
 			);
-			expect(authFrames).toBe(mode === "stale-config" ? 0 : 1);
+			expect(authFrames).toBe(mode === "stale-config" ? 0 : recovers ? 2 : 1);
 			const current = await query.readAuthority({
 				agentId: "agent",
 				actorId: "owner",
@@ -157,11 +187,10 @@ it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
 			expect(current.configuration.channels).toEqual([
 				{
 					kind: "wecom_bot",
-					bindingReference:
-						mode === "success" ? session.sessionId : "old-binding",
+					bindingReference: succeeds ? session.sessionId : "old-binding",
 				},
 			]);
-			expect(current.configuration.revision).toBe(mode === "success" ? 2 : 1);
+			expect(current.configuration.revision).toBe(succeeds ? 2 : 1);
 			expect(JSON.stringify(saved)).not.toContain("fixture-secret");
 			expect(
 				await sql`select secret_id from platform.secret_records`,
@@ -173,7 +202,7 @@ it.each(["success", "revoked", "wrong-secret", "stale-config"] as const)(
 			expect(
 				page.items.some((row) => row.action === "wecom.credentials_submitted"),
 			).toBe(true);
-			if (mode !== "success")
+			if (!succeeds)
 				expect(
 					page.items.some((row) => row.action === "wecom.setup_failed"),
 				).toBe(true);

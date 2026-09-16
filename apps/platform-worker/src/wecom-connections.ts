@@ -51,6 +51,7 @@ export function createPlatformWecomConnectionsV1(
 		}
 	>();
 	const blocked = new Map<string, string>();
+	const retryAfter = new Map<string, { version: string; time: number }>();
 	const statuses = new Map<string, Promise<unknown>>();
 	let closed = false;
 	let polling: Promise<void> | undefined;
@@ -65,8 +66,13 @@ export function createPlatformWecomConnectionsV1(
 		for (const [botId, entry] of active) {
 			const desired = bindings.find((b) => b.botId === botId);
 			const terminal = entry.connection.terminalReason;
-			if (terminal && terminal !== "ownership_lost" && terminal !== "stopped")
+			if (terminal === "auth_failed")
 				blocked.set(botId, entry.credentialVersion);
+			else if (terminal === "timeout" || terminal === "retry_exhausted")
+				retryAfter.set(botId, {
+					version: entry.credentialVersion,
+					time: Date.now() + 5000,
+				});
 			if (
 				terminal ||
 				!desired ||
@@ -81,14 +87,22 @@ export function createPlatformWecomConnectionsV1(
 				await leases.release(entry.claim);
 			}
 		}
+		for (const botId of retryAfter.keys()) {
+			if (!bindings.some((binding) => binding.botId === botId))
+				retryAfter.delete(botId);
+		}
 		for (const configuration of bindings) {
+			const retry = retryAfter.get(configuration.botId);
 			if (
 				closed ||
 				active.has(configuration.botId) ||
-				blocked.get(configuration.botId) === configuration.credentialVersion
+				blocked.get(configuration.botId) === configuration.credentialVersion ||
+				(retry?.version === configuration.credentialVersion &&
+					Date.now() < retry.time)
 			)
 				continue;
 			blocked.delete(configuration.botId);
+			retryAfter.delete(configuration.botId);
 			const claim = await leases.claim({
 				botId: configuration.botId,
 				agentId: configuration.agentId,

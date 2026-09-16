@@ -1,8 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	find: vi.fn(),
+	wecomDispatch: vi.fn(async () => {}),
+	wecomClose: vi.fn(async () => {}),
 	dispatch: vi.fn(),
 	storeClose: vi.fn(async () => {}),
 	eventsClose: vi.fn(async () => {}),
@@ -36,6 +38,14 @@ vi.mock("./conversation-runtime.js", () => ({
 		return { authorization: {}, runtimeHost: {}, close: mocks.runtimeClose };
 	},
 }));
+
+vi.mock("./wecom-worker.js", () => ({
+	createPlatformWecomWorkerV1: () => ({
+		dispatch: mocks.wecomDispatch,
+		close: mocks.wecomClose,
+	}),
+}));
+afterEach(() => vi.useRealTimers());
 
 import { createPlatformConversationWorkerV2 } from "./conversation-worker.js";
 
@@ -125,4 +135,37 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
 	});
+});
+
+it("starts WeCom dispatch independently of failed or unsettled discovery", async () => {
+	vi.useFakeTimers();
+	const pending = Promise.withResolvers<[]>();
+	mocks.find
+		.mockRejectedValueOnce(new Error("unavailable"))
+		.mockReturnValue(pending.promise);
+	const log = vi.fn();
+	const worker = createPlatformConversationWorkerV2({
+		...options,
+		log,
+		pollIntervalMs: 1000,
+		wecom: {
+			identity: {
+				resolveSender: async () => null,
+				activeUsers: async () => [],
+			},
+			observe: () => {},
+			sender: { send: async () => "failed" },
+		},
+	});
+	try {
+		worker.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(1);
+		expect(log).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(mocks.wecomDispatch).toHaveBeenCalledTimes(2);
+	} finally {
+		pending.resolve([]);
+		await worker.stop();
+	}
 });
