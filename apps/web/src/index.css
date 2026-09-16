@@ -273,6 +273,77 @@
 	max-width: 780px;
 	margin: 0 auto 30px;
 }
+.assistant-markdown {
+	line-height: 1.8;
+	overflow-wrap: anywhere;
+}
+.assistant-markdown > * + * {
+	margin-top: 16px;
+}
+.assistant-markdown :is(h1, h2, h3, h4, h5, h6) {
+	font-size: 18px;
+	font-weight: 650;
+}
+.assistant-markdown :is(ul, ol) {
+	padding-left: 24px;
+}
+.assistant-markdown ul {
+	list-style: disc;
+}
+.assistant-markdown ol {
+	list-style: decimal;
+}
+.assistant-markdown blockquote {
+	border-left: 3px solid var(--border);
+	padding-left: 16px;
+	color: var(--muted-foreground);
+}
+.assistant-markdown a {
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.assistant-markdown code {
+	font-size: 14px;
+	background: var(--muted);
+	border-radius: 4px;
+	padding: 2px 4px;
+}
+.assistant-markdown .markdown-code,
+.assistant-markdown .markdown-table {
+	max-width: 100%;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+}
+.assistant-markdown pre {
+	padding: 16px;
+	background: var(--muted);
+	white-space: pre;
+	overflow-wrap: normal;
+}
+.assistant-markdown pre code {
+	padding: 0;
+}
+.assistant-markdown :is(.markdown-code, .markdown-table):focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+}
+.assistant-markdown table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+.assistant-markdown :is(th, td) {
+	padding: 10px 14px;
+	border: 1px solid var(--border);
+	text-align: left;
+	min-width: 120px;
+}
+.assistant-markdown th {
+	background: var(--muted);
+}
 .chat-thread .composer-zone {
 	flex-shrink: 0;
 	max-height: 62%;
