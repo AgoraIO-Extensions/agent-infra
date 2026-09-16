@@ -313,6 +313,13 @@ export async function runGitHubReviewConformance({
 			marker,
 		);
 	} finally {
+		if (branchCreated && !pullNumber) {
+			pullNumber = await reconcilePullNumber({
+				branch,
+				marker,
+				primaryExecute,
+			});
+		}
 		try {
 			if (pullNumber) {
 				await cleanupReviewerArtifacts({
@@ -350,6 +357,32 @@ export async function runGitHubReviewConformance({
 		pullNumber,
 		runId,
 	};
+}
+
+async function reconcilePullNumber({ branch, marker, primaryExecute }) {
+	const result = await primaryExecute(
+		"github.list_pull_requests",
+		{
+			base: "main",
+			direction: "desc",
+			head: `${target.owner}:${branch}`,
+			owner: target.owner,
+			page: 1,
+			perPage: 10,
+			repo: target.repository,
+			sort: "updated",
+			state: "all",
+		},
+		true,
+	);
+	const matches = (result?.pull_requests ?? []).filter(
+		(pull) => pull.body === marker && pull.title === marker,
+	);
+	if (matches.length > 1)
+		throw new Error("fixture pull reconciliation is ambiguous");
+	return matches[0]
+		? positiveInteger(matches[0].number, "reconciled pull number")
+		: undefined;
 }
 
 async function cleanupReviewerArtifacts({

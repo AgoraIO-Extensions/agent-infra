@@ -107,6 +107,41 @@ test("GitHub review conformance never retries a started reviewer write", async (
 	);
 });
 
+test("GitHub review conformance reconciles an orphaned fixture pull read-only", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubReviewConformance({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, {
+				malformedPull: true,
+				marker: "connection-e2e:orphaned-pull",
+			}),
+			runId: "orphaned-pull",
+		}),
+		/fixture pull number is invalid/,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.create_pull_request")
+			.length,
+		1,
+	);
+	assert.deepEqual(
+		calls
+			.filter(({ token, input }) => token === "primary-token" && input)
+			.slice(-3)
+			.map(({ action }) => action),
+		[
+			"github.list_pull_requests",
+			"github.update_pull_request",
+			"github.delete_ref",
+		],
+	);
+});
+
 test("GitHub review conformance is disabled before networking", async () => {
 	let requests = 0;
 	await assert.rejects(
@@ -290,6 +325,19 @@ function lifecycleFetch(calls, options = {}) {
 				},
 			});
 		}
+		if (options.malformedPull && action === "github.create_pull_request") {
+			return response(request.id, {
+				action,
+				callId: `call-${calls.length}`,
+				result: {
+					body: options.marker,
+					head: { sha: "head-sha" },
+					state: "open",
+					title: options.marker,
+				},
+				status: "SUCCEEDED",
+			});
+		}
 		return response(request.id, {
 			action: args.actionId,
 			callId: `call-${calls.length}`,
@@ -342,6 +390,13 @@ function providerResult(
 			number: 17,
 			state: "open",
 			title: marker,
+		};
+	}
+	if (action === "github.list_pull_requests") {
+		return {
+			pull_requests: [
+				{ body: marker, number: 17, state: "open", title: marker },
+			],
 		};
 	}
 	if (action === "github.create_pull_request_review_comment")
