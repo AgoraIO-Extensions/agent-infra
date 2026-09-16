@@ -344,12 +344,12 @@ export async function runGitHubReviewConformance({
 	} finally {
 		if (branchCreationStarted && !branchCreated) {
 			try {
-				branchCreated = await reconcileBranch({ branch, primaryExecute });
-				if (!branchCreated) {
-					failure ??= new Error(
-						"fixture branch reconciliation did not find the owned branch",
-					);
-				}
+				const branchFound = await reconcileBranch({ branch, primaryExecute });
+				failure ??= new Error(
+					branchFound
+						? "fixture branch exists but ownership is unproven"
+						: "fixture branch reconciliation did not find the owned branch",
+				);
 			} catch (error) {
 				failure ??= error;
 			}
@@ -498,15 +498,13 @@ async function cleanupReviewerArtifacts({
 	const failures = [];
 	let ownedComments = [];
 	try {
-		const comments = await reviewerExecute(
+		const comments = await listAllReviewerArtifacts(
+			reviewerExecute,
 			"github.list_pull_request_review_comments",
-			{
-				owner: target.owner,
-				pullNumber,
-				repo: target.repository,
-			},
+			"comments",
+			{ owner: target.owner, pullNumber, repo: target.repository },
 		);
-		ownedComments = (comments?.comments ?? [])
+		ownedComments = comments
 			.filter(
 				(comment) =>
 					comment.body?.includes(marker) &&
@@ -534,11 +532,14 @@ async function cleanupReviewerArtifacts({
 	}
 	let reviews = { reviews: [] };
 	try {
-		reviews = await reviewerExecute("github.list_pull_request_reviews", {
-			owner: target.owner,
-			pullNumber,
-			repo: target.repository,
-		});
+		reviews = {
+			reviews: await listAllReviewerArtifacts(
+				reviewerExecute,
+				"github.list_pull_request_reviews",
+				"reviews",
+				{ owner: target.owner, pullNumber, repo: target.repository },
+			),
+		};
 	} catch (error) {
 		failures.push(error);
 	}
@@ -564,6 +565,29 @@ async function cleanupReviewerArtifacts({
 	if (failures.length > 0) {
 		throw new AggregateError(failures, "Reviewer artifact cleanup failed");
 	}
+}
+
+async function listAllReviewerArtifacts(
+	reviewerExecute,
+	actionId,
+	envelope,
+	input,
+) {
+	const items = [];
+	for (let page = 1; page <= 10; page += 1) {
+		const result = await reviewerExecute(actionId, {
+			...input,
+			page,
+			perPage: 100,
+		});
+		const batch = result?.[envelope];
+		if (!Array.isArray(batch)) {
+			throw new Error(`${actionId} returned an invalid cleanup result`);
+		}
+		items.push(...batch);
+		if (batch.length < 100) return items;
+	}
+	throw new Error(`${actionId} cleanup pagination exceeded the limit`);
 }
 
 function mcpClient(fetch, token) {

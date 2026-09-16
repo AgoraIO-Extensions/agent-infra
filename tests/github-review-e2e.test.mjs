@@ -125,6 +125,43 @@ test("GitHub review conformance never retries a started reviewer write", async (
 	);
 });
 
+test("GitHub review conformance paginates marker-scoped cleanup", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubReviewConformance({
+			environment: {
+				CONNECTION_E2E_REVIEWER_TOKEN: "reviewer-token",
+				CONNECTION_E2E_TOKEN: "primary-token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, {
+				failAction: "github.create_pull_request_review_comment",
+				marker: "connection-e2e:paginated-cleanup",
+				paginatedCleanup: true,
+			}),
+			runId: "paginated-cleanup",
+		}),
+		/fetch failed after submission started/,
+	);
+	assert.deepEqual(
+		calls
+			.filter(
+				({ action, input }) =>
+					action === "github.list_pull_request_review_comments" && input?.page,
+			)
+			.slice(-2)
+			.map(({ input }) => input.page),
+		[1, 2],
+	);
+	assert.ok(
+		calls.some(
+			({ action, input }) =>
+				action === "github.delete_pull_request_review_comment" &&
+				input?.commentId === 777,
+		),
+	);
+});
+
 test("GitHub review conformance reconciles an orphaned fixture pull read-only", async () => {
 	const calls = [];
 	await assert.rejects(
@@ -183,7 +220,7 @@ test("GitHub review conformance reconciles an uncertain fixture branch", async (
 			.filter(({ token, input }) => token === "primary-token" && input)
 			.slice(-2)
 			.map(({ action }) => action),
-		["github.list_matching_refs", "github.delete_ref"],
+		["github.create_ref", "github.list_matching_refs"],
 	);
 });
 
@@ -423,6 +460,32 @@ function lifecycleFetch(calls, options = {}) {
 				action,
 				callId: `call-${calls.length}`,
 				result: { object: { sha: "base-sha" } },
+				status: "SUCCEEDED",
+			});
+		}
+		if (
+			options.paginatedCleanup &&
+			action === "github.list_pull_request_review_comments" &&
+			args.input?.page
+		) {
+			const comments =
+				args.input.page === 1
+					? Array.from({ length: 100 }, (_, index) => ({
+							body: "foreign",
+							id: 1_000 + index,
+							user: { id: 7 },
+						}))
+					: [
+							{
+								body: options.marker,
+								id: 777,
+								user: { id: 329435106 },
+							},
+						];
+			return response(request.id, {
+				action,
+				callId: `call-${calls.length}`,
+				result: { comments },
 				status: "SUCCEEDED",
 			});
 		}
