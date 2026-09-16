@@ -607,45 +607,9 @@ export class BitbucketServerAdapter
 
 	private async compareRefs(accessToken: string, value: JsonObject) {
 		const pathGlobs = requiredStringArray(value.pathGlobs, "pathGlobs", 20);
-		const baseCommit = await this.requestJson(
-			accessToken,
-			`${repositoryPath(value)}/commits/${segment(value, "baseRef")}`,
-		);
-		const targetCommit = await this.requestJson(
-			accessToken,
-			`${repositoryPath(value)}/commits/${segment(value, "targetRef")}`,
-		);
-		const baseId = requiredObjectString(baseCommit, "id", "base ref");
-		const targetId = requiredObjectString(targetCommit, "id", "target ref");
-		const changes: JsonObject[] = [];
-		let start = 0;
-		let complete = false;
-		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
-			const page = await this.requestJson(
-				accessToken,
-				`${repositoryPath(value)}/compare/changes`,
-				{ query: { from: baseId, limit: 100, start, to: targetId } },
-			);
-			changes.push(...pageValues(page));
-			if (page.isLastPage === true) {
-				complete = true;
-				break;
-			}
-			const next = page.nextPageStart;
-			if (!Number.isSafeInteger(next) || Number(next) <= start) {
-				throw providerError("Bitbucket compare pagination is invalid");
-			}
-			start = Number(next);
-		}
-		const changePagesTruncated = !complete;
-		const candidates = changes.map(projectChange).filter((change) => {
-			const matches = (path: string) =>
-				pathGlobs.some((pattern) => globMatches(pattern, path));
-			return (
-				matches(change.path) &&
-				(change.sourcePath === undefined || matches(change.sourcePath))
-			);
-		});
+		const repository = repositoryPath(value);
+		const baseRef = segment(value, "baseRef");
+		const targetRef = segment(value, "targetRef");
 		const maxFiles = boundedInteger(value.maxFiles, "maxFiles", 50, 1, 50);
 		const maxDiffBytes = boundedInteger(
 			value.maxDiffBytes,
@@ -661,6 +625,53 @@ export class BitbucketServerAdapter
 			0,
 			100,
 		);
+		const baseCommit = await this.requestJson(
+			accessToken,
+			`${repository}/commits/${baseRef}`,
+		);
+		const targetCommit = await this.requestJson(
+			accessToken,
+			`${repository}/commits/${targetRef}`,
+		);
+		const baseId = requiredObjectString(baseCommit, "id", "base ref");
+		const targetId = requiredObjectString(targetCommit, "id", "target ref");
+		const changes: JsonObject[] = [];
+		let start = 0;
+		let complete = false;
+		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+			const page = await this.requestJson(
+				accessToken,
+				`${repository}/compare/changes`,
+				{ query: { from: baseId, limit: 100, start, to: targetId } },
+			);
+			changes.push(...pageValues(page));
+			if (page.isLastPage === true) {
+				complete = true;
+				break;
+			}
+			const next = page.nextPageStart;
+			if (!Number.isSafeInteger(next) || Number(next) <= start) {
+				throw providerError("Bitbucket compare pagination is invalid");
+			}
+			start = Number(next);
+		}
+		const changePagesTruncated = !complete;
+		const candidates: ReturnType<typeof projectChange>[] = [];
+		const matchBudget = { remaining: 1_000_000 };
+		let pathFilteringTruncated = false;
+		for (const rawChange of changes) {
+			const change = projectChange(rawChange);
+			const matches = (path: string) =>
+				pathGlobs.some((pattern) => globMatches(pattern, path, matchBudget));
+			const included =
+				matches(change.path) &&
+				(change.sourcePath === undefined || matches(change.sourcePath));
+			if (matchBudget.remaining <= 0) {
+				pathFilteringTruncated = true;
+				break;
+			}
+			if (included) candidates.push(change);
+		}
 		const files: JsonObject[] = [];
 		const omittedFiles: JsonObject[] = candidates
 			.slice(maxFiles)
@@ -672,20 +683,33 @@ export class BitbucketServerAdapter
 				.split("/")
 				.map((entry) => encodeURIComponent(entry))
 				.join("/");
-			const diff = await this.requestJson(
-				accessToken,
-				`${repositoryPath(value)}/diff/${encodedPath}`,
-				{
-					query: {
-						contextLines,
-						since: baseId,
-						...(change.sourcePath === undefined
-							? {}
-							: { srcPath: change.sourcePath }),
-						until: targetId,
+			let diff: JsonObject;
+			try {
+				diff = await this.requestJson(
+					accessToken,
+					`${repository}/diff/${encodedPath}`,
+					{
+						query: {
+							contextLines,
+							since: baseId,
+							...(change.sourcePath === undefined
+								? {}
+								: { srcPath: change.sourcePath }),
+							until: targetId,
+						},
+						responseLimitBytes: maxDiffBytes - diffBytes,
 					},
-				},
-			);
+				);
+			} catch (error) {
+				if (!isResponseTooLarge(error)) throw error;
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
+			}
 			const size = Buffer.byteLength(JSON.stringify(diff));
 			if (diffBytes + size > maxDiffBytes) {
 				omittedFiles.push(
@@ -704,6 +728,7 @@ export class BitbucketServerAdapter
 			changePagesTruncated,
 			files,
 			omittedFiles,
+			pathFilteringTruncated,
 			pathGlobs: [...pathGlobs].sort(),
 			targetCommit: targetId,
 		};
@@ -713,14 +738,16 @@ export class BitbucketServerAdapter
 			diffBytes,
 			files,
 			fingerprint: `sha256:${createHash("sha256")
-				.update(JSON.stringify(fingerprintPayload))
+				.update(stableJson(fingerprintPayload))
 				.digest("hex")}`,
 			omittedFileCount: omittedFiles.length,
 			omittedFiles,
 			pathGlobs,
+			pathFilteringTruncated,
 			targetCommit: projectCommit(targetCommit),
 			truncated:
 				changePagesTruncated ||
+				pathFilteringTruncated ||
 				omittedFiles.length > 0 ||
 				files.some((file) => (file.diff as JsonObject).truncated === true),
 		};
@@ -776,18 +803,20 @@ function stringArray(value: unknown): string[] {
 }
 
 function requiredStringArray(value: unknown, key: string, maximum: number) {
-	const entries = stringArray(value);
-	if (entries.length === 0) {
+	if (!Array.isArray(value) || value.length === 0) {
 		throw new Error(`${key} must contain at least one pattern`);
 	}
 	if (
-		entries.length > maximum ||
-		new Set(entries).size !== entries.length ||
-		entries.some((entry) => !entry || entry.length > 256)
+		value.length > maximum ||
+		new Set(value).size !== value.length ||
+		value.some(
+			(entry) =>
+				typeof entry !== "string" || entry.length === 0 || entry.length > 256,
+		)
 	) {
 		throw new Error(`${key} is invalid`);
 	}
-	return entries;
+	return value as string[];
 }
 
 function boundedInteger(
@@ -839,7 +868,11 @@ function projectChange(value: JsonObject) {
 	}) as { path: string; sourcePath?: string; status: string };
 }
 
-function globMatches(pattern: string, path: string) {
+function globMatches(
+	pattern: string,
+	path: string,
+	budget: { remaining: number },
+) {
 	type Token = "*" | "**" | "**/" | "?" | { literal: string };
 	const tokens: Token[] = [];
 	for (let index = 0; index < pattern.length; ) {
@@ -862,15 +895,18 @@ function globMatches(pattern: string, path: string) {
 	let current = Array<boolean>(path.length + 1).fill(false);
 	current[0] = true;
 	for (const token of tokens) {
+		if (--budget.remaining <= 0) return false;
 		const next = Array<boolean>(path.length + 1).fill(false);
 		if (token === "**") {
 			next[0] = current[0] === true;
 			for (let index = 1; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
 				next[index] = current[index] === true || next[index - 1] === true;
 			}
 		} else if (token === "**/") {
 			let reachable = false;
 			for (let index = 0; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
 				reachable ||= current[index] === true;
 				next[index] ||= current[index] === true;
 				if (index < path.length && reachable && path.charAt(index) === "/") {
@@ -880,12 +916,14 @@ function globMatches(pattern: string, path: string) {
 		} else if (token === "*") {
 			next[0] = current[0] === true;
 			for (let index = 1; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
 				next[index] =
 					current[index] === true ||
 					(path.charAt(index - 1) !== "/" && next[index - 1] === true);
 			}
 		} else {
 			for (let index = 0; index < path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
 				const matches =
 					token === "?"
 						? path.charAt(index) !== "/"
@@ -896,6 +934,18 @@ function globMatches(pattern: string, path: string) {
 		current = next;
 	}
 	return current[path.length];
+}
+
+function stableJson(value: unknown): string {
+	return JSON.stringify(value, (_key, entry) =>
+		typeof entry === "object" && entry !== null && !Array.isArray(entry)
+			? Object.fromEntries(
+					Object.entries(entry).sort(([left], [right]) =>
+						left < right ? -1 : left > right ? 1 : 0,
+					),
+				)
+			: entry,
+	);
 }
 
 function compact(value: JsonObject) {
@@ -940,11 +990,26 @@ function invalidCredential(message: string) {
 	return Object.assign(new Error(message), { providerCredentialInvalid: true });
 }
 
+function responseTooLarge() {
+	return Object.assign(new Error("Bitbucket Server response is too large"), {
+		responseTooLarge: true,
+	});
+}
+
+function isResponseTooLarge(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { responseTooLarge?: unknown }).responseTooLarge === true
+	);
+}
+
 type RequestOptions = {
 	body?: JsonObject;
 	credentialProbe?: boolean;
 	method?: "DELETE" | "GET" | "POST" | "PUT";
 	query?: JsonObject;
+	responseLimitBytes?: number;
 };
 
 async function requestJson(
@@ -955,7 +1020,10 @@ async function requestJson(
 ): Promise<JsonObject> {
 	const response = await request(fetcher, accessToken, path, options);
 	if (response.status === 204) return { ok: true };
-	const text = await boundedText(response);
+	const text = await boundedText(
+		response,
+		options.responseLimitBytes ?? maxResponseBytes,
+	);
 	try {
 		const value: unknown = JSON.parse(text);
 		if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -1043,10 +1111,10 @@ async function request(
 	}
 }
 
-async function boundedText(response: Response) {
+async function boundedText(response: Response, limit = maxResponseBytes) {
 	const declaredLength = Number(response.headers.get("content-length") ?? 0);
-	if (declaredLength > maxResponseBytes) {
-		throw providerError("Bitbucket Server response is too large");
+	if (declaredLength > limit) {
+		throw responseTooLarge();
 	}
 	if (!response.body) return "";
 	const reader = response.body.getReader();
@@ -1062,9 +1130,9 @@ async function boundedText(response: Response) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			size += value.byteLength;
-			if (size > maxResponseBytes) {
+			if (size > limit) {
 				await reader.cancel();
-				throw providerError("Bitbucket Server response is too large");
+				throw responseTooLarge();
 			}
 			chunks.push(value);
 		}

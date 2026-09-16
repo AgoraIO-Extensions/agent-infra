@@ -389,20 +389,22 @@ test("Bitbucket compare refs rejects an empty path-glob set before provider acce
 		return Response.json({});
 	};
 	try {
-		await assert.rejects(
-			createAdapter().execute({
-				action: "bitbucket.compare_refs",
-				credential: { accessToken: "test-personal-access-token" },
-				input: {
-					baseRef: "main",
-					pathGlobs: [],
-					project: "RTC",
-					repository: "native-sdk",
-					targetRef: "release/4.8.0",
-				},
-			}),
-			/pathGlobs must contain at least one pattern/,
-		);
+		for (const pathGlobs of [[], ["*.h", 1]]) {
+			await assert.rejects(
+				createAdapter().execute({
+					action: "bitbucket.compare_refs",
+					credential: { accessToken: "test-personal-access-token" },
+					input: {
+						baseRef: "main",
+						pathGlobs,
+						project: "RTC",
+						repository: "native-sdk",
+						targetRef: "release/4.8.0",
+					},
+				}),
+				/pathGlobs must contain at least one pattern|pathGlobs is invalid/,
+			);
+		}
 		assert.equal(called, false);
 	} finally {
 		globalThis.fetch = originalFetch;
