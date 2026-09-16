@@ -166,11 +166,11 @@ test("keeps the Connection E2E reviewer token only in its fixed conformance step
 	const workflows = await actualWorkflows();
 	workflows["ci.yml"].jobs.ci.steps[0].env = {
 		CONNECTION_E2E_REVIEWER_TOKEN:
-			"${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN }}",
+			"${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}",
 	};
 	assert.ok(
 		validateWorkflowDocuments(workflows).some((error) =>
-			error.includes("CONNECTION_E2E_REVIEWER_TOKEN"),
+			error.includes("CONNECTION_E2E_REVIEWER_TOKEN_V2"),
 		),
 	);
 });

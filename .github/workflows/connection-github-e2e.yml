@@ -38,7 +38,7 @@ jobs:
 
       - name: Run deterministic Connection GitHub conformance
         env:
-          CONNECTION_E2E_REVIEWER_TOKEN: ${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN }}
+          CONNECTION_E2E_REVIEWER_TOKEN: ${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}
           CONNECTION_E2E_TOKEN: ${{ secrets.CONNECTION_E2E_TOKEN }}
           CONNECTION_GITHUB_E2E_ENABLED: "true"
         shell: bash
