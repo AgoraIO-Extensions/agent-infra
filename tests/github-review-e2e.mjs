@@ -116,20 +116,20 @@ export async function runGitHubReviewConformance({
 			true,
 		);
 		assertRepository(repository);
-		const mainRef = await primaryExecute(
-			"github.get_ref",
-			{ owner: target.owner, ref: "refs/heads/main", repo: target.repository },
+		const mainBranch = await primaryExecute(
+			"github.get_branch",
+			{ branch: "main", owner: target.owner, repo: target.repository },
 			true,
 		);
-		if (!mainRef?.object?.sha)
-			throw new Error("main ref did not return a commit SHA");
+		if (!mainBranch?.commit?.sha)
+			throw new Error("main branch did not return a commit SHA");
 		branchCreationStarted = true;
 		const createdRef = await primaryExecute("github.create_ref", {
 			idempotencyKey: `${runId}:fixture-ref-create`,
 			owner: target.owner,
 			ref: `refs/heads/${branch}`,
 			repo: target.repository,
-			sha: mainRef.object.sha,
+			sha: mainBranch.commit.sha,
 		});
 		if (createdRef?.ref !== `refs/heads/${branch}`)
 			throw new Error("fixture ref does not match");
