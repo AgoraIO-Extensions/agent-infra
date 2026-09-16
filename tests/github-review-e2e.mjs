@@ -628,7 +628,9 @@ function mcpClient(fetch, token) {
 			const payload = await response.json();
 			if (payload.error) {
 				const message = safeMcpErrorMessage(payload.error.message);
-				throw new Error(`Connection MCP error ${payload.error.code}${message}`);
+				throw new Error(
+					`Connection MCP error ${payload.error.code} during ${name}${message}`,
+				);
 			}
 			return payload.result?.structuredContent;
 		},
