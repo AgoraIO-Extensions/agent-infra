@@ -160,7 +160,7 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub OAuth v8 starts fail closed until its 143 actions have exact evidence", () => {
+test("GitHub OAuth v8 verifies all 143 actions with exact live evidence", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
 		githubV8VerificationEvidenceRecords,
@@ -168,17 +168,14 @@ test("GitHub OAuth v8 starts fail closed until its 143 actions have exact eviden
 	assert.equal(matrix.length, 143);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		0,
-	);
-	assert.equal(
-		matrix.filter((item) => item.status === "UNVERIFIED").length,
 		143,
 	);
+	assert.equal(matrix.filter((item) => item.status === "UNVERIFIED").length, 0);
 	assert.equal(
 		matrix.filter(
 			(item) => item.effect === "READ" && item.status === "LIVE_VERIFIED",
 		).length,
-		0,
+		78,
 	);
 	assert.ok(matrix.every((item) => item.actionVersionId.endsWith("@v8")));
 
