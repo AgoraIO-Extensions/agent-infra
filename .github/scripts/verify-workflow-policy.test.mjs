@@ -223,6 +223,19 @@ test("keeps commit and reaction conformance in the fixed token-bearing step", as
 	);
 });
 
+test("installs frozen workspace dependencies before GitHub conformance", async () => {
+	const workflows = await actualWorkflows();
+	const steps = workflows["connection-github-e2e.yml"].jobs.conformance.steps;
+	workflows["connection-github-e2e.yml"].jobs.conformance.steps = steps.filter(
+		(step) => step.name !== "Install dependencies",
+	);
+	assert.ok(
+		validateWorkflowDocuments(workflows).some((error) =>
+			error.includes("frozen workspace dependencies"),
+		),
+	);
+});
+
 test("binds Connection E2E to the immutable connection dispatch commit", async () => {
 	const workflows = await actualWorkflows();
 	const checkout = workflows["connection-github-e2e.yml"].jobs.conformance.steps[0];

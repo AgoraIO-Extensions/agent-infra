@@ -748,6 +748,29 @@ export function validateWorkflowDocuments(workflows) {
       "Connection GitHub E2E must bind manual runs to the immutable connection dispatch commit",
     );
   }
+	const connectionE2eSteps = connectionE2eJob?.steps ?? [];
+	const connectionE2eRunIndex = connectionE2eSteps.findIndex(
+		(step) => step.name === "Run deterministic Connection GitHub conformance",
+	);
+	const installPnpmIndex = connectionE2eSteps.findIndex(
+		(step) =>
+			step.name === "Install pnpm" &&
+			step.run === "npm install --global pnpm@11.20.0",
+	);
+	const installDependenciesIndex = connectionE2eSteps.findIndex(
+		(step) =>
+			step.name === "Install dependencies" &&
+			step.run === "pnpm install --frozen-lockfile",
+	);
+	if (
+		installPnpmIndex < 0 ||
+		installDependenciesIndex !== installPnpmIndex + 1 ||
+		connectionE2eRunIndex !== installDependenciesIndex + 1
+	) {
+		errors.push(
+			"Connection GitHub E2E must install frozen workspace dependencies before conformance",
+		);
+	}
 	const reviewerHealthJob =
 		workflows["connection-github-e2e.yml"]?.jobs?.["reviewer-health"];
 	const reviewerHealthCheckout = reviewerHealthJob?.steps?.find(
