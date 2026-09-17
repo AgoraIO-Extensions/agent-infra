@@ -83,6 +83,17 @@
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
+GitHub 的当前 **[设计决策]** profile 固定为 OAuth App 与 classic scopes
+`read:user`、`user:email`、`repo`、`workflow`、`delete_repo`。对应的
+`connection-v8` ProviderRelease 只发布已由该 credential mode 真实验证的 143 个 ActionVersion。
+`rerequest_check_run` 与 `rerequest_check_suite` 要求 GitHub `Checks: write`，且目标 Check 必须属于
+对应 GitHub App；它们不能用 `workflow` scope 代替，也不进入 OAuth ProviderRelease。旧
+`connection-v7` Release 及其两个不兼容 ActionVersion 在 v8 发布时整体停用，既有 v7 Grant
+立即 fail closed；用户重连到 v8 后必须重新确认 143 项范围。未来若支持 GitHub App，必须建立独立
+ProviderRelease、Credential、Connection、Grant 与真实 App-owned Check E2E，不能在运行时复用或
+切换 OAuth Credential。完整取舍见
+[GitHub credential mode 与 Action compatibility](../adr/ADR-connection-github-credential-mode-compatibility.md)。
+
 公司存在多个 Jenkins deployment。由于 Consumer declaration 和 AuthorizationRoot 都以
 `providerId` 为授权唯一维度，每个 Jenkins deployment 必须使用独立稳定 Provider ID、
 ProviderRelease、固定 origin、Credential 和 Grant；不能共用 `providerId=jenkins`，也不能通过

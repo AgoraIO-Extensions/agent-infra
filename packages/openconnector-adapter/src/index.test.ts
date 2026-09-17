@@ -92,9 +92,20 @@ test("GitHub execution resolves a newly cataloged action through the kernel", as
 	}
 });
 
-test("GitHub catalog publishes one immutable release generation", () => {
-	assert.match(githubConnectionCatalog.providerReleaseId, /-connection-v7$/);
+test("GitHub OAuth catalog publishes only its 143 compatible v8 actions", () => {
+	assert.match(githubConnectionCatalog.providerReleaseId, /-connection-v8$/);
+	assert.equal(githubConnectionCatalog.actions.length, 143);
+	assert.deepEqual(
+		githubConnectionCatalog.actions
+			.filter(({ name }) =>
+				["github.rerequest_check_run", "github.rerequest_check_suite"].includes(
+					name,
+				),
+			)
+			.map(({ name }) => name),
+		[],
+	);
 	for (const action of githubConnectionCatalog.actions) {
-		assert.match(action.id, /@v7$/);
+		assert.match(action.id, /@v8$/);
 	}
 });
