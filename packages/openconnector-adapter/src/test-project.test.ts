@@ -199,17 +199,23 @@ test("GitHub verification matrix binds account-scoped evidence to 143 actions", 
 	const repositoryLifecycleActionVersionIds = new Set<string>(
 		githubV7RepositoryLifecycleVerificationEvidence.actionVersionIds,
 	);
+	const repositoryLifecycleMatrix = matrix.filter((item) =>
+		repositoryLifecycleActionVersionIds.has(item.actionVersionId),
+	);
+	assert.equal(repositoryLifecycleMatrix.length, 14);
+	assert.deepEqual(
+		new Set(repositoryLifecycleMatrix.map((item) => item.actionVersionId)),
+		repositoryLifecycleActionVersionIds,
+	);
 	assert.ok(
-		matrix
-			.filter((item) =>
-				repositoryLifecycleActionVersionIds.has(item.actionVersionId),
-			)
-			.every(
-				(item) =>
-					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "35189503119-1" &&
-					item.evidence.externalAccount === "328682695",
-			),
+		repositoryLifecycleMatrix.every(
+			(item) =>
+				item.evidence?.cleanup === "SUCCEEDED" &&
+				item.evidence.runId === "35189503119-1" &&
+				item.evidence.externalAccount === "328682695" &&
+				item.evidence.providerReleaseId ===
+					"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7",
+		),
 	);
 
 	const bumpedCatalog = {
