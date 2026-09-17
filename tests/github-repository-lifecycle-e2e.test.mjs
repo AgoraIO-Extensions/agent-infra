@@ -33,6 +33,12 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 		"github.add_repository_collaborator@v7",
 		"github.fork_repository@v7",
 		"github.sync_fork_branch_with_upstream@v7",
+		"github.dispatch_workflow@v7",
+		"github.cancel_workflow_run@v7",
+		"github.rerun_failed_jobs@v7",
+		"github.rerun_workflow@v7",
+		"github.disable_workflow@v7",
+		"github.enable_workflow@v7",
 		"github.remove_repository_collaborator@v7",
 		"github.delete_repository@v7",
 	]);
@@ -71,6 +77,38 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 	);
 	assert.equal(deletes[0].input.owner, "AgoraConnectionE2EORG");
 	assert.equal(deletes[1].input.owner, "AGORAconnectionE2E");
+	const workflowActions = calls.filter(({ action }) =>
+		[
+			"github.dispatch_workflow",
+			"github.cancel_workflow_run",
+			"github.rerun_failed_jobs",
+			"github.rerun_workflow",
+			"github.disable_workflow",
+			"github.enable_workflow",
+		].includes(action),
+	);
+	assert.deepEqual(
+		workflowActions.map(({ action }) => action),
+		[
+			"github.dispatch_workflow",
+			"github.cancel_workflow_run",
+			"github.dispatch_workflow",
+			"github.rerun_failed_jobs",
+			"github.rerun_workflow",
+			"github.disable_workflow",
+			"github.enable_workflow",
+		],
+	);
+	assert.ok(
+		workflowActions.every(
+			({ input }) =>
+				input.owner === "AGORAconnectionE2E" &&
+				input.repo === "connection-e2e-repo-run",
+		),
+	);
+	assert.equal(workflowActions[1].input.runId, 801);
+	assert.equal(workflowActions[3].input.runId, 802);
+	assert.equal(workflowActions[4].input.runId, 802);
 });
 
 test("repository lifecycle waits a bounded number of times for the fork branch", async () => {
@@ -138,6 +176,26 @@ test("repository lifecycle refuses to delete a fork with a foreign marker", asyn
 				input.owner === "AgoraConnectionE2EORG",
 		).length,
 		0,
+	);
+});
+
+test("repository lifecycle fails closed on ambiguous workflow run discovery and cleans repositories", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { ambiguousWorkflowRuns: true }),
+			runId: "repo-run",
+			sleep: async () => {},
+		}),
+		/workflow run discovery was ambiguous/,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.delete_repository").length,
+		2,
 	);
 });
 
@@ -213,6 +271,18 @@ function lifecycleFetch(calls, config = {}) {
 	let description = "";
 	let id = 0;
 	let branchAttempts = 0;
+	const workflowIds = {
+		"connection-e2e-cancel.yml": 701,
+		"connection-e2e-failure.yml": 702,
+	};
+	const workflowStates = new Map(
+		Object.entries(workflowIds).map(([file, workflowId]) => [
+			file,
+			{ id: workflowId, name: file, state: "active" },
+		]),
+	);
+	const workflowRuns = new Map();
+	let lastDispatchedWorkflow;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
 		const { arguments: args, name } = request.params;
@@ -311,6 +381,60 @@ function lifecycleFetch(calls, config = {}) {
 			};
 		} else if (action === "github.get_branch") {
 			result = { name: "main" };
+		} else if (action === "github.get_workflow") {
+			result = workflowStates.get(input.workflowId);
+		} else if (action === "github.dispatch_workflow") {
+			const workflowId = workflowIds[input.workflowId];
+			lastDispatchedWorkflow = workflowId;
+			workflowRuns.set(workflowId + 100, {
+				conclusion:
+					workflowId === workflowIds["connection-e2e-cancel.yml"]
+						? null
+						: "failure",
+				event: "workflow_dispatch",
+				head_branch: "main",
+				id: workflowId + 100,
+				status:
+					workflowId === workflowIds["connection-e2e-cancel.yml"]
+						? "in_progress"
+						: "completed",
+				workflow_id: workflowId,
+			});
+			result = { dispatched: true };
+		} else if (action === "github.list_workflow_runs") {
+			const run = workflowRuns.get(lastDispatchedWorkflow + 100);
+			result = {
+				total_count: config.ambiguousWorkflowRuns ? 2 : 1,
+				workflow_runs: config.ambiguousWorkflowRuns
+					? [run, { ...run, id: run.id + 1 }]
+					: [run],
+			};
+		} else if (action === "github.cancel_workflow_run") {
+			const run = workflowRuns.get(input.runId);
+			Object.assign(run, { conclusion: "cancelled", status: "completed" });
+			result = { cancel_requested: true };
+		} else if (
+			action === "github.rerun_failed_jobs" ||
+			action === "github.rerun_workflow"
+		) {
+			workflowRuns.get(input.runId).rerunPhase = 1;
+			result = { rerun_requested: true };
+		} else if (action === "github.get_workflow_run") {
+			const run = workflowRuns.get(input.runId);
+			if (run.rerunPhase === 1) {
+				run.rerunPhase = 2;
+				result = { ...run, conclusion: null, status: "queued" };
+			} else if (run.rerunPhase === 2) {
+				run.rerunPhase = 0;
+				Object.assign(run, { conclusion: "failure", status: "completed" });
+				result = run;
+			} else result = run;
+		} else if (action === "github.disable_workflow") {
+			workflowStates.get(input.workflowId).state = "disabled_manually";
+			result = { acknowledged: true };
+		} else if (action === "github.enable_workflow") {
+			workflowStates.get(input.workflowId).state = "active";
+			result = { acknowledged: true };
 		} else if (action === "github.delete_repository") {
 			if (input.owner === "AgoraConnectionE2EORG") forkExists = false;
 			else exists = false;
