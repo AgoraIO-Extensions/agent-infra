@@ -311,7 +311,8 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
 				jobName === "reviewer-health" &&
 				step.name === "Run read-only GitHub Reviewer v2 health probe" &&
 				step.run ===
-					"node tests/github-review-health.mjs | tee connection-github-review-health-result.json" &&
+					"set -o pipefail\nnode tests/github-review-health.mjs | tee connection-github-review-health-result.json\n" &&
+				step.shell === "bash" &&
 				step.env?.[envName] === reference &&
 				occurrences === 1;
 			const allowedCommitReaction =
