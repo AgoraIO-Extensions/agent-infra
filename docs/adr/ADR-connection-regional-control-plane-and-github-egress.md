@@ -2,7 +2,7 @@
 
 ## 状态
 
-已批准进入 staging 实现；生产 cutover 仍受 Issue #601 的 GZ3 namespace、国内 PostgreSQL、24 小时网络证据和 Security/SRE 评审约束。
+已批准直接在隔离的 GZ3 production namespace 实现；接入生产流量前仍受 Issue #601 的国内 PostgreSQL、24 小时网络证据和 Security/SRE 评审约束。
 
 ## 决策
 
@@ -13,4 +13,4 @@ Connection 的唯一 control plane、PostgreSQL authority、Identity、Credentia
 - GZ3 普通 Pod 到 Jenkins 公网入口成功，P50 约 70 ms；LDAP TCP P50 38 ms。
 - GZ3 到现有美国 RDS TCP P50 170 ms、最大 1173 ms，因此 GZ3 control plane 必须使用国内 PostgreSQL。
 - GZ3 直连 GitHub OAuth 在 5 次探测中仅 2 次成功；经固定 proxy 的 GitHub API、authorize 和 token endpoint 探测均为 5/5 成功，P50 约 1.1 秒。
-- GZ3 到 LA3 Connection health 30/30 成功，P50 983 ms、P95 1702 ms；该短测只证明 staging 可行，不替代 24 小时 SLO 证据。
+- GZ3 到 LA3 Connection health 30/30 成功，P50 983 ms、P95 1702 ms；该短测只证明部署验证可行，不替代 24 小时 SLO 证据。
