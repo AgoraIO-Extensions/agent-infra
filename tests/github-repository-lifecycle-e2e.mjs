@@ -280,7 +280,7 @@ export async function runGitHubRepositoryLifecycle({
 			owner: forkOwner,
 			repo: name,
 		});
-		if (sync?.base_branch !== "main")
+		if (sync?.base_branch !== `${owner}:main`)
 			throw new Error("fork synchronization did not match");
 		const releaseTag = `${name}-asset`;
 		const assetName = `${releaseTag}.txt`;

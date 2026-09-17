@@ -419,7 +419,7 @@ function lifecycleFetch(calls, config = {}) {
 			};
 		} else if (action === "github.sync_fork_branch_with_upstream") {
 			result = {
-				base_branch: "main",
+				base_branch: "AGORAconnectionE2E:main",
 				merge_type: "fast-forward",
 				message: "Successfully synced with upstream",
 			};
