@@ -641,7 +641,20 @@ export interface ConnectionRepository {
 		principalId: string;
 		providerId: string;
 		providerReleaseId: string;
+		expectedConnectionId?: string;
+		expectedCredentialVersionId?: string;
 	}): Promise<{ connectionId: string }>;
+	getProviderCredentialForUpgrade(input: {
+		connectionId: string;
+		principalId: string;
+	}): Promise<
+		CredentialForExecution & {
+			credentialVersionId: string;
+			externalAccount: string;
+			grantedScopes: readonly string[];
+			providerId: string;
+		}
+	>;
 	storeSharedGithubOAuthCredential(input: {
 		accessToken: string;
 		actorPrincipalId: string;
@@ -994,6 +1007,51 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			principalId,
+		});
+	}
+
+	async upgradeProviderConnection(principalId: string, connectionId: string) {
+		const current = await this.repository.getProviderCredentialForUpgrade({
+			connectionId,
+			principalId,
+		});
+		const connector = this.credentialConnectors[current.providerId];
+		if (!connector) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Provider credential connector is unavailable",
+			);
+		}
+		let identity: ProviderCredentialIdentity;
+		try {
+			identity = await connector.validateCredential(current.accessToken);
+		} catch (error) {
+			const invalidCredential = isProviderCredentialInvalid(error);
+			throw new ConnectionError(
+				invalidCredential ? "INVALID_REQUEST" : "PROVIDER_UNAVAILABLE",
+				invalidCredential
+					? "Provider credential validation failed"
+					: "Provider credential service is unavailable",
+			);
+		}
+		if (
+			identity.providerId !== current.providerId ||
+			identity.providerId !== connector.providerId ||
+			identity.providerReleaseId !== connector.providerReleaseId ||
+			identity.externalAccount !== current.externalAccount ||
+			JSON.stringify([...identity.grantedScopes].sort()) !==
+				JSON.stringify([...current.grantedScopes].sort())
+		) {
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Provider identity changed during upgrade",
+			);
+		}
+		return this.repository.storeProviderCredential({
+			...identity,
+			expectedConnectionId: connectionId,
+			expectedCredentialVersionId: current.credentialVersionId,
 			principalId,
 		});
 	}

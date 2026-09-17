@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
 	connectProviderCredential: vi.fn(async () => ({
 		connectionId: "connection-bitbucket",
 	})),
+	upgradeProviderConnection: vi.fn(async (connectionId: string) => ({ connectionId })),
 	createAuthorizationPreview: vi.fn(
 		async (input?: { actionVersionIds?: string[] }) => ({
 			idempotencyKey: "confirmation-idempotency-key",

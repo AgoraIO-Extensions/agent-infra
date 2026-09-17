@@ -517,6 +517,52 @@ export type DisconnectConnectionResponses = {
 
 export type DisconnectConnectionResponse = DisconnectConnectionResponses[keyof DisconnectConnectionResponses];
 
+export type UpgradeProviderConnectionData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        connectionId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/connections/{connectionId}/upgrade';
+};
+
+export type UpgradeProviderConnectionErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type UpgradeProviderConnectionError = UpgradeProviderConnectionErrors[keyof UpgradeProviderConnectionErrors];
+
+export type UpgradeProviderConnectionResponses = {
+    /**
+     * Connected provider account
+     */
+    200: ConnectionCreated;
+};
+
+export type UpgradeProviderConnectionResponse = UpgradeProviderConnectionResponses[keyof UpgradeProviderConnectionResponses];
+
 export type ConnectProviderCredentialData = {
     body: ProviderCredentialRequest;
     headers: {

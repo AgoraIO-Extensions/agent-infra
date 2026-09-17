@@ -851,6 +851,11 @@ stateDiagram-v2
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
 - ProviderRelease/ActionVersion disable 不改变 Connection 状态，但 effective eligibility 立即为 false。
+- ProviderRelease 升级不等于 Credential 失效。auth profile、Credential scope 与 stable account proof
+  兼容时，用户发起 Provider Connection Upgrade，服务端使用 current Credential 对新 Release 重新做
+  identity proof，并以 expected Connection/CredentialVersion CAS 创建新 CredentialVersion；浏览器不接收
+  或重新提交 Secret。新增 Action 仍单独 preview/consent。只有验证失败、scope 变化、auth profile 变化、
+  换号或用户主动轮换时进入 Credential Rotation 并收集新 Credential。
 - Identity、Shared scope 或 Recovery evidence 不可用时返回暂时不可用，不猜测为永久 loss。
 
 ### 14.4 Shared Scope

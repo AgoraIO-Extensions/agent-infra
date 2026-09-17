@@ -117,6 +117,23 @@
 				}
 			}
 		},
+		"/api/v1/connection/connections/{connectionId}/upgrade": {
+			"post": {
+				"operationId": "upgradeProviderConnection",
+				"parameters": [
+					{ "$ref": "#/components/parameters/ConnectionId" },
+					{ "$ref": "#/components/parameters/IdempotencyKey" }
+				],
+				"responses": {
+					"200": { "$ref": "#/components/responses/ConnectionCreated" },
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/provider-credentials": {
 			"post": {
 				"operationId": "connectProviderCredential",

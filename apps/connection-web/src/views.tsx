@@ -217,6 +217,7 @@ export function ConnectionsView(props: {
 	onAuthorize: (connectionId: string) => void;
 	onDisconnect: (connectionId: string) => void;
 	onReconnect: (connectionId: string) => void;
+	onUpgrade: (connectionId: string) => void;
 }) {
 	if (!props.connections.length) {
 		return (
@@ -255,7 +256,9 @@ export function ConnectionsView(props: {
 							{versions.length ? <p>授权版本 {versions.join(", ")}</p> : null}
 							{connection.requiresReconnect ? (
 								<p role="alert">
-									Provider 已升级。请先重新连接，再重新授权客户端。
+									Provider 已升级。请先
+									{connection.providerId === "github" ? "重新连接" : "升级连接"}
+									，再确认新增授权。
 								</p>
 							) : null}
 						</div>
@@ -265,10 +268,14 @@ export function ConnectionsView(props: {
 								<button
 									className="button button-secondary"
 									type="button"
-									onClick={() => props.onReconnect(connection.id)}
+									onClick={() =>
+										connection.providerId === "github"
+											? props.onReconnect(connection.id)
+											: props.onUpgrade(connection.id)
+									}
 								>
 									<RefreshCw aria-hidden="true" size={16} />
-									重新连接
+									{connection.providerId === "github" ? "重新连接" : "升级连接"}
 								</button>
 							) : (
 								<button
@@ -280,6 +287,16 @@ export function ConnectionsView(props: {
 									授权客户端
 								</button>
 							)}
+							{connection.requiresReconnect &&
+							connection.ownerType === "PERSONAL" ? (
+								<button
+									className="button button-secondary"
+									type="button"
+									onClick={() => props.onReconnect(connection.id)}
+								>
+									更新凭证
+								</button>
+							) : null}
 							{connection.ownerType === "PERSONAL" ? (
 								<button
 									className="icon-button danger"

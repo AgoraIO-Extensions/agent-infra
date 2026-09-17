@@ -2626,6 +2626,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId: string;
 		providerId: string;
 		providerReleaseId: string;
+		expectedConnectionId?: string;
+		expectedCredentialVersionId?: string;
 	}) {
 		const grantedScopes = [...new Set(input.grantedScopes)].sort();
 		if (
@@ -2674,14 +2676,29 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ORDER BY root.id
 				FOR UPDATE OF active_grant
 			`;
-			const [existing] = await sql<{ id: string }[]>`
-				SELECT id FROM connection_accounts
-				WHERE owner_type = 'PERSONAL'
-					AND owner_principal_id = ${input.principalId}
-					AND provider_id = ${input.providerId}
-					AND external_account = ${input.externalAccount}
-				FOR UPDATE
-			`;
+			const [existing] = await sql<
+				{ credential_version_id: string | null; id: string }[]
+			>`
+					SELECT account.id, credential.id AS credential_version_id
+					FROM connection_accounts account
+					LEFT JOIN connection_credential_versions credential
+						ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
+					WHERE owner_type = 'PERSONAL'
+						AND account.owner_principal_id = ${input.principalId}
+						AND account.provider_id = ${input.providerId}
+						AND account.external_account = ${input.externalAccount}
+					FOR UPDATE OF account, credential
+				`;
+			if (
+				input.expectedConnectionId &&
+				(existing?.id !== input.expectedConnectionId ||
+					existing.credential_version_id !== input.expectedCredentialVersionId)
+			) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Connection credential changed during upgrade",
+				);
+			}
 			const connectionId = existing?.id ?? `connection-${randomUUID()}`;
 			if (existing) {
 				await sql`
@@ -2707,6 +2724,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					)
 				`;
 			}
+
 			await sql`
 				UPDATE connection_credential_versions
 				SET status = 'REVOKED', revision = revision + 1
@@ -2737,6 +2755,56 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			`;
 			return { connectionId };
 		});
+	}
+
+	async getProviderCredentialForUpgrade(input: {
+		connectionId: string;
+		principalId: string;
+	}) {
+		const [row] = await this.sql<
+			{
+				ciphertext: string;
+				external_account: string;
+				id: string;
+				nonce: string;
+				provider_id: string;
+				provider_release_id: string;
+				scope_json: unknown;
+				tag: string;
+			}[]
+		>`
+			SELECT credential.id, credential.ciphertext, credential.nonce, credential.tag,
+				account.external_account, account.provider_id, account.provider_release_id,
+				credential.scope_json
+			FROM connection_accounts account
+			JOIN connection_credential_versions credential
+				ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
+			WHERE account.id = ${input.connectionId}
+				AND account.owner_type = 'PERSONAL'
+				AND account.owner_principal_id = ${input.principalId}
+				AND account.status = 'ACTIVE'
+		`;
+		if (!row) forbidden();
+		if (this.publishedProviderReleaseIds.get(row.provider_id) === row.provider_release_id) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Provider Connection is already current",
+			);
+		}
+		const grantedScopes = Array.isArray(row.scope_json)
+			? row.scope_json.filter((value): value is string => typeof value === "string")
+			: [];
+		if (grantedScopes.length === 0) forbidden();
+		return {
+			accessToken: this.protector.decrypt(
+				row,
+				`credential:${row.id}:${input.connectionId}`,
+			),
+			credentialVersionId: row.id,
+			externalAccount: row.external_account,
+			grantedScopes,
+			providerId: row.provider_id,
+		};
 	}
 
 	async getOverview(principalId: string): Promise<ConnectionOverview> {

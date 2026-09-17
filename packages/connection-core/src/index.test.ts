@@ -110,6 +110,15 @@ const delegated: InvocationContext = {
 };
 
 class MemoryRepository implements ConnectionRepository {
+	getProviderCredentialForUpgrade(): Promise<{
+		accessToken: string;
+		credentialVersionId: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		providerId: string;
+	}> {
+		throw new Error("not implemented");
+	}
 	readonly calls: StoredCall[] = [];
 	readonly reconciliationJobs: ReconciliationJob[] = [];
 	readonly rescheduledCallIds: string[] = [];
@@ -1269,6 +1278,56 @@ describe("Connection application service", () => {
 		await expect(
 			service.connectProviderCredential("alice", "bitbucket", "test-pat"),
 		).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+	});
+
+	it("upgrades a ProviderRelease with the stored credential and stable identity", async () => {
+		const repository = new MemoryRepository();
+		repository.getProviderCredentialForUpgrade = async () => ({
+			accessToken: "stored-token",
+			credentialVersionId: "credential-v1",
+			externalAccount: "alice",
+			grantedScopes: ["jenkins.read"],
+			providerId: "jenkins-release",
+		});
+		let stored: Record<string, unknown> | undefined;
+		repository.storeProviderCredential = async (input) => {
+			stored = input;
+			return { connectionId: "connection-jenkins" };
+		};
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				"jenkins-release": {
+					providerId: "jenkins-release",
+					providerReleaseId: "jenkins-release-v2",
+					validateCredential: async (accessToken) => {
+						expect(accessToken).toBe("stored-token");
+						return {
+							accessToken,
+							displayName: "Alice",
+							externalAccount: "alice",
+							grantedScopes: ["jenkins.read"],
+							providerId: "jenkins-release",
+							providerReleaseId: "jenkins-release-v2",
+						};
+					},
+				},
+			},
+		);
+		expect(
+			await service.upgradeProviderConnection(
+				"principal-alice",
+				"connection-jenkins",
+			),
+		).toEqual({ connectionId: "connection-jenkins" });
+		expect(stored).toMatchObject({
+			expectedConnectionId: "connection-jenkins",
+			expectedCredentialVersionId: "credential-v1",
+			principalId: "principal-alice",
+			providerReleaseId: "jenkins-release-v2",
+		});
 	});
 
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {

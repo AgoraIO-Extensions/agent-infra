@@ -59,6 +59,15 @@ const delegated: InvocationContext = {
 };
 
 class TestRepository implements ConnectionRepository {
+	getProviderCredentialForUpgrade(): Promise<{
+		accessToken: string;
+		credentialVersionId: string;
+		externalAccount: string;
+		grantedScopes: readonly string[];
+		providerId: string;
+	}> {
+		throw new Error("not implemented");
+	}
 	readonly calls: StoredCall[] = [];
 	private readonly actionSet: ActionDefinition[];
 	storedOAuthCredential?: { accessToken: string; principalId: string };
@@ -1035,6 +1044,13 @@ describe("Connection API", () => {
 				});
 				return { connectionId: "connection-bitbucket" };
 			},
+			upgradeProviderConnection: async (
+				principalId: string,
+				connectionId: string,
+			) => {
+				calls.push({ name: "upgrade", value: { connectionId, principalId } });
+				return { connectionId };
+			},
 		} as unknown as ConnectionApplicationService;
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
@@ -1142,6 +1158,17 @@ describe("Connection API", () => {
 				},
 				method: "POST",
 			}),
+			await app.request(
+				"/api/v1/connection/connections/connection-old/upgrade",
+				{
+					headers: {
+						cookie,
+						"idempotency-key": "test-connection-upgrade",
+						origin: "https://connection.example",
+					},
+					method: "POST",
+				},
+			),
 			await app.request("/api/v1/connection/authorization-consents", {
 				body: JSON.stringify({
 					confirmationToken: "opaque-preview-token",
@@ -1173,7 +1200,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 201, 204, 204,
+			200, 201, 201, 201, 201, 200, 201, 204, 204,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -1190,6 +1217,9 @@ describe("Connection API", () => {
 		expect(await apiResponses[4]?.json()).toMatchObject({
 			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
 			preview: { previewId: "preview-1" },
+		});
+		expect(await apiResponses[5]?.json()).toEqual({
+			connectionId: "connection-old",
 		});
 		expect(calls).toEqual([
 			{
@@ -1226,6 +1256,13 @@ describe("Connection API", () => {
 					actionVersionIds: ["github.get_repository@v7"],
 					connectionId: "connection-github",
 					consumerId: "consumer-portable-pat",
+					principalId: "principal-user",
+				},
+			},
+			{
+				name: "upgrade",
+				value: {
+					connectionId: "connection-old",
 					principalId: "principal-user",
 				},
 			},

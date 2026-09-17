@@ -74,6 +74,11 @@ export function ConnectionsPage() {
 		onSuccess: () =>
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
+	const upgrade = useMutation({
+		mutationFn: connectionApi.upgradeProviderConnection,
+		onSuccess: () =>
+			queryClient.invalidateQueries({ queryKey: ["connections"] }),
+	});
 	const connectBitbucket = async (accessToken: string) => {
 		setBitbucketPending(true);
 		setBitbucketError(null);
@@ -264,6 +269,7 @@ export function ConnectionsPage() {
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
+			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
 			{data ? (
 				<div className="content-stack">
 					<section className="data-section">
@@ -290,6 +296,7 @@ export function ConnectionsPage() {
 									disconnect.mutate(connectionId);
 								}
 							}}
+							onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
 							onReconnect={(connectionId) => {
 								const connection = data.connections.find(
 									(entry) => entry.id === connectionId,

@@ -112,6 +112,7 @@ describe("Connection Web 中文界面", () => {
 				onAuthorize={() => undefined}
 				onDisconnect={() => undefined}
 				onReconnect={() => undefined}
+				onUpgrade={() => undefined}
 			/>,
 		);
 
@@ -122,6 +123,7 @@ describe("Connection Web 中文界面", () => {
 	});
 
 	it("显示授权版本和明确的 Provider 升级处理步骤", () => {
+		const onUpgrade = vi.fn();
 		render(
 			<ConnectionsView
 				connections={[
@@ -139,13 +141,17 @@ describe("Connection Web 中文界面", () => {
 				onAuthorize={() => undefined}
 				onDisconnect={() => undefined}
 				onReconnect={() => undefined}
+				onUpgrade={onUpgrade}
 			/>,
 		);
 
 		expect(screen.getByText("授权版本 v7")).toBeTruthy();
 		expect(screen.getByRole("alert").textContent).toContain(
-			"请先重新连接，再重新授权客户端",
+			"请先升级连接，再确认新增授权",
 		);
+		fireEvent.click(screen.getByRole("button", { name: "升级连接" }));
+		expect(onUpgrade).toHaveBeenCalledWith("jira");
+		expect(screen.getByRole("button", { name: "更新凭证" })).toBeTruthy();
 	});
 
 	it("把所有 Grant 状态显示为中文", () => {

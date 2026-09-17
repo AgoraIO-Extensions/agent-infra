@@ -36,6 +36,14 @@ _Avoid_: PAT、Consumer Declaration
 Principal 在 Connection 中建立的、对应一个稳定外部账号的连接。
 _Avoid_: PAT、ConsumerInstance
 
+**Provider Connection Upgrade**:
+在认证方式、Credential scope 与稳定外部账号兼容时，复用 current Credential 将 Provider Connection 迁移到新的 ProviderRelease。
+_Avoid_: Credential Rotation、Consumer 授权
+
+**Credential Rotation**:
+用户为同一 Provider Connection 提交新 Credential 并替换 current CredentialVersion 的过程。
+_Avoid_: Provider Connection Upgrade、重新授权客户端
+
 **Verification Evidence**:
 绑定 exact ProviderRelease、ActionVersion、隔离测试边界和终态结果的脱敏验证证明。
 _Avoid_: 测试计划、Mock 成功、其他 ActionVersion 的历史结果

@@ -45,6 +45,7 @@ import {
 	sharedScopeNameSchema,
 	startGithubOAuth,
 	type TokenList,
+	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
 
 client.setConfig({ baseUrl: "/", credentials: "same-origin" });
@@ -286,6 +287,13 @@ export const connectionApi = {
 	disconnectConnection: (connectionId: string) =>
 		unwrap<void>(
 			disconnectConnection({
+				headers: commandHeaders(),
+				path: { connectionId },
+			}),
+		),
+	upgradeProviderConnection: (connectionId: string) =>
+		unwrap<ConnectionCreated>(
+			upgradeProviderConnection({
 				headers: commandHeaders(),
 				path: { connectionId },
 			}),

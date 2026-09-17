@@ -231,6 +231,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。
 - 用户调整已授权 Action 时沿用授权预览与确认流程；缩权确认后立即生效，扩权在新确认完成前不得生效。
 - 调整 Action 授权不要求重签 Consumer PAT；只有所选 Action 超出 Provider 当前实际 scope 时才要求重新授权 Provider Connection。
+- ProviderRelease 升级且原 Credential 仍能证明同一外部账号和相同 scope 时，用户确认升级即可复用已保存 Credential，不重新输入只展示一次的 Token；Token 失效、scope 或认证方式变化、换号和主动轮换才要求更新凭证。
 - 撤销只影响目标 Consumer/Actor，不影响其他 Consumer 对同一 Connection 的独立授权。
 - Consumer 授权不设置独立期限；用户撤销、换号、账号禁用或共享资格失效时终止，Connection 或 Credential 暂时失效时暂停。
 

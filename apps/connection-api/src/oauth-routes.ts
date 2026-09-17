@@ -1112,6 +1112,35 @@ export function createConnectionOAuthApp(
 			},
 		);
 
+		app.post(
+			"/api/v1/connection/connections/:connectionId/upgrade",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const connectionId = context.req.param("connectionId");
+				const upgraded = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.account.upgrade",
+							request: { connectionId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.upgradeProviderConnection(
+								session.account.principalId,
+								connectionId,
+							),
+					),
+				);
+				if (upgraded instanceof Response) return upgraded;
+				context.header("cache-control", "no-store");
+				return context.json(upgraded);
+			},
+		);
+
 		app.get("/api/v1/connection/admin/pat-consumers", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
