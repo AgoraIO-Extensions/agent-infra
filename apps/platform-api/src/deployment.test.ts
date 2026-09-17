@@ -355,6 +355,54 @@ async function json(response: Response, status: number) {
 	return body;
 }
 
+it("wires application self-service only with explicit deployment configuration", async () => {
+	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const application = {
+		publicOrigin: "https://platform.example.test",
+		callbackKeys: {
+			activeKeyId: "test",
+			keys: [{ id: "test", keyBase64: Buffer.alloc(32, 7).toString("base64") }],
+		},
+		replyEncryptionPublicKeyPem: publicKey
+			.export({ format: "pem", type: "spki" })
+			.toString(),
+	};
+	expect(() =>
+		createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			wecomSetupEnabled: false,
+			wecomApplicationSetup: application,
+		}),
+	).toThrow("WeCom setup must be enabled");
+	const input = createProductionPlatformApiAssemblyInputV1({
+		...fixture.input,
+		wecomApplicationSetup: application,
+	});
+	expect(() =>
+		assemblePlatformApi({ ...input, wecomCredentialEncryptionKeys: undefined }),
+	).toThrow("requires encryption keys");
+	expect(() =>
+		assemblePlatformApi({
+			...input,
+			wecomApplicationSetup: {
+				...application,
+				publicOrigin: "http://platform.example.test",
+			},
+		}),
+	).toThrow("Invalid WeCom callback origin");
+	const configured = assemblePlatformApi(input);
+	try {
+		expect(configured.dependencies.wecom).toBeDefined();
+		expect(configured.dependencies.wecomApplicationSetup).toBeDefined();
+		const configuredApp = createPlatformApp(configured.dependencies);
+		expect(
+			(await configuredApp.request("/api/v1/agents/example/wecom-app")).status,
+		).toBe(401);
+	} finally {
+		await configured.close();
+	}
+});
+
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("production-api-assembly");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });

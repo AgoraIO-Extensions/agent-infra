@@ -245,6 +245,62 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits exact application setup additions against both WeCom baselines", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const paths = [
+			"/api/v1/agents/{agentId}/wecom-app",
+			"/api/v1/agents/{agentId}/wecom-app-setup",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+		] as const;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-wecom-app-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const removeEarlierWecom of [false, true]) {
+				const previous = structuredClone(current);
+				for (const path of paths) delete previous.paths[path];
+				if (removeEarlierWecom) {
+					for (const path of Object.keys(previous.paths)) {
+						if (
+							path.startsWith("/api/v1/wecom/receipts") ||
+							path.includes("/wecom-bot") ||
+							path.includes("/wecom-setup")
+						)
+							delete previous.paths[path];
+					}
+				}
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				for (const path of [
+					...paths,
+					"/api/v1/agents",
+					"/api/v1/agents/{agentId}/wecom-bot",
+				]) {
+					const changed = structuredClone(current);
+					delete changed.paths[path];
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+				const changed = structuredClone(current);
+				changed.paths[paths[3]].post.requestBody = {};
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				// Once published, the additive exception must not permit mutations.
+				await writeFile(previousPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts only the Runtime status-recovery V2 addition", async () => {
 		const current = JSON.parse(
 			await readFile(runtimeHostV2ArtifactPath, "utf8"),

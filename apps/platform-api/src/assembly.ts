@@ -46,6 +46,11 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly wecom?: WecomApiDeploymentV1;
 	readonly wecomCredentialEncryptionKeys?: unknown;
+	readonly wecomApplicationSetup?: {
+		readonly publicOrigin: string;
+		readonly callbackKeys: import("@agent-infra/wecom").WecomCallbackKeysV1;
+		readonly replyEncryptionPublicKeyPem: string;
+	};
 	readonly wecomIdentity?: WecomIdentityPortV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
@@ -76,6 +81,8 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	if (input.wecomApplicationSetup && !input.wecomCredentialEncryptionKeys)
+		throw new Error("WeCom application setup requires encryption keys");
 	if (
 		input.wecomCredentialEncryptionKeys &&
 		!input.wecom &&
@@ -87,10 +94,39 @@ export function assemblePlatformApi(
 				databaseUrl: input.databaseUrl,
 				identity: input.identity,
 				encryptionKeys: input.wecomCredentialEncryptionKeys,
+				...(input.wecomApplicationSetup
+					? { application: input.wecomApplicationSetup }
+					: {}),
 			})
 		: undefined;
-	const wecom = input.wecom
-		? assembleWecomApiV1(input.databaseUrl, input.wecom)
+	const wecomDeployment =
+		input.wecom ??
+		(input.wecomApplicationSetup && input.wecomIdentity
+			? {
+					identity: input.wecomIdentity,
+					replyEncryptionPublicKeyPem:
+						input.wecomApplicationSetup.replyEncryptionPublicKeyPem,
+					resolveBinding: async () => null,
+					observe: () => {},
+				}
+			: undefined);
+	const wecom = wecomDeployment
+		? assembleWecomApiV1(input.databaseUrl, {
+				...wecomDeployment,
+				resolveBinding: async (reference) => {
+					if (wecomSetup && (await wecomSetup.ownsReference(reference)))
+						return wecomSetup.resolveApplication(reference);
+					return wecomDeployment.resolveBinding(reference);
+				},
+				...(wecomSetup
+					? {
+							verifyCallback: wecomSetup.verifyCallback,
+							acceptMessages: async (reference) =>
+								!(await wecomSetup.ownsReference(reference)) ||
+								(await wecomSetup.isActive(reference)),
+						}
+					: {}),
+			})
 		: undefined;
 	const wecomReceipts =
 		!wecom && input.wecomIdentity
@@ -260,7 +296,18 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(wecomSetup
-			? { wecomSetup: { identity: input.identity, setup: wecomSetup.setup } }
+			? {
+					wecomSetup: { identity: input.identity, setup: wecomSetup.setup },
+					...(input.wecomApplicationSetup
+						? {
+								wecomApplicationSetup: {
+									identity: input.identity,
+									setup: wecomSetup.setup,
+									callbackUrl: wecomSetup.callbackUrl,
+								},
+							}
+						: {}),
+				}
 			: {}),
 		...(input.requestScope === undefined
 			? {}

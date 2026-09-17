@@ -3,6 +3,7 @@ import {
 	createWecomDeliveryV1,
 	type WecomAuthorityV1,
 	type WecomDeliveryClaimV1,
+	type WecomSendPortV1,
 } from "./wecom-channel.ts";
 
 const boundary = {
@@ -57,7 +58,9 @@ function fixture() {
 	const authorization = {
 		authorize: vi.fn(async () => ({ outcome: "allowed" as const, authority })),
 	};
-	const sender = { send: vi.fn(async () => "sent" as const) };
+	const sender = {
+		send: vi.fn<WecomSendPortV1["send"]>(async () => "sent" as const),
+	};
 	return {
 		store,
 		authorization,
@@ -80,6 +83,7 @@ it("checks the original boundary and persists sending before producing the exter
 		scope: claim.scope,
 		replyHandle: "encrypted",
 		text: "final reply",
+		isCurrent: expect.any(Function),
 	});
 	expect(f.store.finish).toHaveBeenCalledWith(claim, "sent");
 });
@@ -117,4 +121,19 @@ it("does not send expired or oversized replies", async () => {
 	expect(f.sender.send).not.toHaveBeenCalled();
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "expired");
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
+});
+
+it("keeps the original actor and channel revision in the final send guard", async () => {
+	const f = fixture();
+	f.sender.send.mockImplementation(async (input) => {
+		expect(await input.isCurrent?.()).toBe(true);
+		f.authorization.authorize.mockResolvedValue({
+			outcome: "allowed",
+			authority: { ...authority, channelRevision: "changed" },
+		});
+		expect(await input.isCurrent?.()).toBe(false);
+		return "failed";
+	});
+	await f.useCase.dispatch();
+	expect(f.store.finish).toHaveBeenCalledWith(claim, "failed");
 });

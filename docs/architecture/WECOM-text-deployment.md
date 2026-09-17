@@ -65,9 +65,28 @@ Worker 实际认证通过、Owner/配置版本/连接租约仍有效后，通过
 自建应用需要企业 ID、应用 ID、应用 Secret，以及接收消息配置的 Token、EncodingAESKey 和公开 TLS 回调。
 `/callbacks/wecom/{bindingReference}` 的 GET 验证 challenge，POST 验证签名、期限、接收方与大小。
 平台生成内部引用，Owner 不需要手工编造该标识；已有主动推送凭证不能证明接收回调已配置。
-回调 Token/EncodingAESKey 由部署可信绑定解析器受限注入 API；Bot/App 发送 Secret 仅由 Worker 解密使用，
-两类材料不能混用，也不通过 API–Worker RPC 传递。
+新自助配置由平台保存回调专用密文，API 仅用独立回调 keyring 解密 Token/EncodingAESKey；
+Bot/App 发送 Secret 仍仅由 Worker 解密，两类材料不通过 API–Worker RPC 传递。
+旧绑定可继续使用部署可信解析器，新配置不会回退该解析器。
 不得自动覆盖已有正式应用回调。
+
+在已启用 `wecomSetupEnabled` 并配套上述 Worker 的部署上，API 增加 `wecomApplicationSetup`：
+
+- `publicOrigin`：固定公开 HTTPS origin，不带路径、查询、用户名或密码；平台生成该 origin 下的回调 URL。
+- `callbackKeys`：`activeKeyId` 与 `{ id, keyBase64 }` 数组，密钥为平台部署生成的 32 字节 CSPRNG 材料，采用 canonical Base64；仅挂载给 API。
+- `replyEncryptionPublicKeyPem`：回调回复路由公钥；对应私钥仍仅位于 Worker。
+
+应用凭证沿 `/api/v1/agents/{agentId}/wecom-app-setup` 配置会话提交，发送和回调密文分别保存；
+Owner 无需提供平台 keyring。配置页返回接收消息 URL，Owner 在企微后台显式保存后才进入应用身份验证和激活。
+候选收到业务消息时拒绝；回调验证与 Worker 应用认证未完成时不替换原绑定。
+
+回调密文格式固定为 `version: 1`，AES-256-GCM 使用每次生成的 12 字节 nonce 和完整 16 字节 tag，
+认证材料包含用途、key ID、Agent、Owner、配置会话和版本。轮换先将新 key 加入所有 API 的 keyring，
+再切换 `activeKeyId`；仍被候选或有效绑定引用的旧 key 必须保留。新提交检查已有密文 key 引用，
+读取缺少 key 时保持不可用；不能以失败回退旧解析器、明文或 Worker 私钥。
+更新绑定后旧密文随原配置事务清除；过期、取消、失效候选由既有配置生命周期清除。
+Worker 应用认证仅请求固定企微 `gettoken` 和 `agent/get` 接口，不发送探测消息；
+真实回调与文本收发仍需单独验收，不能用应用认证成功替代。
 
 机器人回调仅作为显式兼容模式，使用机器人 ID、Token、EncodingAESKey 和 TLS 回调；
 不把该模式的材料列为机器人长连接或扫码的前置条件。

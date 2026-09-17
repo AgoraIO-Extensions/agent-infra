@@ -303,3 +303,59 @@ it("refreshes transitional connection status until authentication settles", asyn
 		vi.useRealTimers();
 	}
 });
+it("configures an application without internal references and clears all credential inputs", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const bodies: Record<string, unknown>[] = [];
+	const callbackUrl = "https://platform.test/callbacks/wecom/server-generated";
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: Request) => {
+			const path = new URL(input.url).pathname;
+			if (path.endsWith("/wecom-app"))
+				return Response.json({ status: "not_configured" });
+			const session = {
+				sessionId: "server-generated",
+				agentId: "agent",
+				configurationRevision: 1,
+				expiresAt: new Date(Date.now() + 300000).toISOString(),
+				status: "verifying",
+				callbackUrl,
+			};
+			if (path.endsWith("/wecom-app-setup"))
+				return Response.json({ ...session, state: "state" });
+			if (path.endsWith("/credentials")) bodies.push(await input.json());
+			if (path.endsWith("/cancel"))
+				return Response.json({ ...session, status: "cancelled" });
+			return Response.json(session);
+		}),
+	);
+	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} application />);
+	for (const [label, value] of [
+		["企业 ID", "corp"],
+		["应用 ID", "7"],
+		["应用 Secret", "fixture-secret"],
+		["Token", "fixture-token"],
+		["EncodingAESKey", "a".repeat(43)],
+	])
+		fireEvent.change(screen.getByLabelText(label), { target: { value } });
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	for (const label of ["应用 Secret", "Token", "EncodingAESKey"])
+		expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe("");
+	await waitFor(() => expect(bodies).toHaveLength(1));
+	expect(bodies[0]).toEqual({
+		corporationId: "corp",
+		applicationId: "7",
+		secret: "fixture-secret",
+		token: "fixture-token",
+		encodingAesKey: "a".repeat(43),
+		state: "state",
+	});
+	expect(screen.queryByLabelText("自建应用配置标识")).toBeNull();
+	expect(
+		(screen.getByLabelText("接收消息 URL") as HTMLInputElement).value,
+	).toBe(callbackUrl);
+	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	await waitFor(() =>
+		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
+	);
+});

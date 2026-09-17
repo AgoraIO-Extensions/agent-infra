@@ -146,13 +146,22 @@ export function createWecomReplyDecryptorV1(
 		}
 	};
 }
+type WecomSendingConfigurationV1 = Pick<
+	WecomConfigurationV1,
+	| "agentId"
+	| "kind"
+	| "bindingReference"
+	| "credentialVersion"
+	| "applicationId"
+	| "corporationId"
+>;
 export function createWecomSenderV1(options: {
 	readonly resolveConfiguration: (
 		scope: WecomScopeV1,
-	) => Promise<WecomConfigurationV1 | null>;
+	) => Promise<WecomSendingConfigurationV1 | null>;
 	readonly revealReply: (handle: string) => Promise<WecomReplyRouteV1>;
 	readonly getApplicationAccessToken: (
-		config: WecomConfigurationV1,
+		config: WecomSendingConfigurationV1,
 	) => Promise<string>;
 	readonly fetch?: typeof fetch;
 	readonly now?: () => Date;
@@ -210,6 +219,11 @@ export function createWecomSenderV1(options: {
 						text: { content: input.text },
 					};
 				}
+			} catch {
+				return "failed";
+			}
+			try {
+				if (input.isCurrent && !(await input.isCurrent())) return "failed";
 			} catch {
 				return "failed";
 			}

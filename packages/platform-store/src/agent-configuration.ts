@@ -313,6 +313,8 @@ export class PostgresAgentConfigurationTransactionV1
 						.for("update");
 					if (
 						!candidate ||
+						(candidate.session.kind === "wecom_app" &&
+							!candidate.session.callbackVerifiedAt) ||
 						candidate.session.agentId !== plan.agentId ||
 						candidate.session.actorId !== plan.auditEvent.actorId ||
 						candidate.session.configurationRevision !== plan.baseRevision ||
@@ -322,7 +324,7 @@ export class PostgresAgentConfigurationTransactionV1
 						plan.result.changedFields[0] !== "channels" ||
 						!plan.configuration.channels.some(
 							(c) =>
-								c.kind === "wecom_bot" &&
+								c.kind === candidate.session.kind &&
 								c.bindingReference === setup.sessionId,
 						)
 					)
@@ -430,14 +432,14 @@ export class PostgresAgentConfigurationTransactionV1
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
 				await transaction.execute(sql`with ended as (
- update platform.wecom_setup_sessions set status='conflict',encrypted_credential=null
+ update platform.wecom_setup_sessions set status='conflict',encrypted_credential=null,encrypted_callback=null
  where agent_id=${plan.agentId} and status in ('awaiting_input','verifying') and configuration_revision<>${plan.configuration.revision}
  returning session_id,agent_id
  ) insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
  select gen_random_uuid()::text,session_id,'system',${setup ? "platform-worker" : "platform-api"},'wecom.setup_failed','agent',agent_id,'failed',session_id,agent_id,NULL from ended`);
 				// Retired channel bindings must not retain decryptable credentials indefinitely.
-				await transaction.execute(sql`update platform.wecom_setup_sessions set status='cancelled',encrypted_credential=null
-				 where agent_id=${plan.agentId} and status='active' and not (${JSON.stringify(plan.configuration.channels)}::jsonb @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',session_id)))`);
+				await transaction.execute(sql`update platform.wecom_setup_sessions set status='cancelled',encrypted_credential=null,encrypted_callback=null
+				 where agent_id=${plan.agentId} and status='active' and not (${JSON.stringify(plan.configuration.channels)}::jsonb @> jsonb_build_array(jsonb_build_object('kind',kind,'bindingReference',session_id)))`);
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

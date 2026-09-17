@@ -9,6 +9,10 @@ import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 import type { WecomConnectionClaimV1 } from "./wecom-connections.js";
 
 type Row = {
+	kind: "wecom_bot" | "wecom_app";
+	application: WecomSetupRecordV1["application"];
+	encrypted_callback: unknown;
+	callback_verified_at: Date | null;
 	session_id: string;
 	agent_id: string;
 	actor_id: string;
@@ -28,6 +32,10 @@ type Row = {
 function record(row: Row): WecomSetupRecordV1 {
 	return {
 		sessionId: row.session_id,
+		kind: row.kind,
+		application: row.application,
+		encryptedCallback: row.encrypted_callback,
+		callbackVerifiedAt: row.callback_verified_at?.toISOString() ?? null,
 		agentId: row.agent_id,
 		actorId: row.actor_id,
 		configurationRevision: Number(row.configuration_revision),
@@ -74,13 +82,19 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	async create(session: WecomSetupRecordV1) {
 		await this.#sql.begin(async (sql) => {
 			const rows =
-				await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status)
-    select ${session.sessionId},a.id,${session.actorId},${session.configurationRevision},${session.authorizationRevision},${session.stateDigest},${new Date(session.expiresAt)},'awaiting_input'
+				await sql`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,kind)
+    select ${session.sessionId},a.id,${session.actorId},${session.configurationRevision},${session.authorizationRevision},${session.stateDigest},${new Date(session.expiresAt)},'awaiting_input',${session.kind ?? "wecom_bot"}
     from platform.agents a where a.id=${session.agentId} and a.current_configuration_revision=${session.configurationRevision} and a.authorization_revision=${session.authorizationRevision}
     and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=${session.actorId}) returning session_id`;
 			if (rows.length !== 1) throw new Error("WeCom setup unavailable");
 			await audit(sql, session, "wecom.setup_started");
 		});
+	}
+	async pendingApplication(agentId: string, actorId: string) {
+		const [row] = await this.#sql<
+			Row[]
+		>`select * from platform.wecom_setup_sessions where kind='wecom_app' and agent_id=${agentId} and actor_id=${actorId} and status='verifying' and expires_at>clock_timestamp() order by expires_at desc,session_id limit 1`;
+		return row ? record(row) : null;
 	}
 	async read(sessionId: string) {
 		const [row] = await this.#sql<
@@ -98,7 +112,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			credential.ownerId !== session.actorId ||
 			credential.ownerType !== "agent-owner" ||
 			credential.secretId !== session.sessionId ||
-			credential.name !== "wecom_bot" ||
+			credential.name !== (session.kind ?? "wecom_bot") ||
 			credential.configRevision !== session.configurationRevision ||
 			credential.secretVersion !== 1
 		)
@@ -113,11 +127,11 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			await sql`select pg_advisory_xact_lock(hashtextextended(${`wecom-setup:${input.botId}`},0))`;
 			const [conflict] =
 				await sql`select 1 from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
-    where s.bot_id=${input.botId} and s.session_id!=${session.sessionId} and ((s.status='verifying' and s.expires_at>clock_timestamp()) or (s.agent_id!=${session.agentId} and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',s.session_id))))`;
+    where s.bot_id=${input.botId} and s.session_id!=${session.sessionId} and ((s.status='verifying' and s.expires_at>clock_timestamp()) or (s.agent_id!=${session.agentId} and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id))))`;
 			if (conflict) return false;
 			const rows =
-				await sql`update platform.wecom_setup_sessions s set bot_id=${input.botId},encrypted_credential=${sql.json(credential as unknown as postgres.JSONValue)},status='verifying'
-    from platform.agents a where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.actor_id=${session.actorId} and s.state_digest=${session.stateDigest} and s.status='awaiting_input' and s.expires_at>clock_timestamp()
+				await sql`update platform.wecom_setup_sessions s set bot_id=${input.botId},application=${input.application ? sql.json(input.application) : null},encrypted_callback=${input.encryptedCallback ? sql.json(input.encryptedCallback as postgres.JSONValue) : null},encrypted_credential=${sql.json(credential as unknown as postgres.JSONValue)},status='verifying'
+    from platform.agents a where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.actor_id=${session.actorId} and s.state_digest=${session.stateDigest} and s.kind=${session.kind ?? "wecom_bot"} and s.status='awaiting_input' and s.expires_at>clock_timestamp()
     and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
     and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) returning s.session_id`;
 			if (!rows.length) return false;
@@ -128,17 +142,17 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	async cancel(session: WecomSetupRecordV1) {
 		return this.#sql.begin(async (sql) => {
 			const rows =
-				await sql`update platform.wecom_setup_sessions set status='cancelled',encrypted_credential=null where session_id=${session.sessionId} and actor_id=${session.actorId} and agent_id=${session.agentId} and status in ('awaiting_input','verifying') returning session_id`;
+				await sql`update platform.wecom_setup_sessions set status='cancelled',encrypted_credential=null,encrypted_callback=null where session_id=${session.sessionId} and actor_id=${session.actorId} and agent_id=${session.agentId} and status in ('awaiting_input','verifying') returning session_id`;
 			if (!rows.length) return false;
 			await audit(sql, session, "wecom.setup_cancelled");
 			return true;
 		});
 	}
-	async candidates() {
+	async candidates(kind: "wecom_bot" | "wecom_app" = "wecom_bot") {
 		const result = await this.#sql.begin(async (sql) => {
 			const ended = await sql<
 				Row[]
-			>`update platform.wecom_setup_sessions s set status=case when s.expires_at<=clock_timestamp() then 'expired' else 'conflict' end,encrypted_credential=null from platform.agents a
+			>`update platform.wecom_setup_sessions s set status=case when s.expires_at<=clock_timestamp() then 'expired' else 'conflict' end,encrypted_credential=null,encrypted_callback=null from platform.agents a
     where s.agent_id=a.id and s.status in ('awaiting_input','verifying') and (s.expires_at<=clock_timestamp() or a.current_configuration_revision!=s.configuration_revision or a.authorization_revision!=s.authorization_revision or not exists(select 1 from platform.agent_owners o where o.agent_id=s.agent_id and o.owner_id=s.actor_id)) returning s.*`;
 			for (const row of ended)
 				await audit(
@@ -150,7 +164,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 				);
 			const rows = await sql<
 				Row[]
-			>`select s.* from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.bot_id=s.bot_id and w.binding_reference=s.session_id where s.status='verifying' and s.expires_at>clock_timestamp() and (w.lease_until is null or w.lease_until<=clock_timestamp()) order by w.lease_until nulls first,s.expires_at,s.session_id limit 25`;
+			>`select s.* from platform.wecom_setup_sessions s left join platform.wecom_connections w on w.bot_id=s.bot_id and w.binding_reference=s.session_id where s.kind=${kind} and (s.kind='wecom_bot' or s.callback_verified_at is not null) and s.status='verifying' and s.expires_at>clock_timestamp() and (w.lease_until is null or w.lease_until<=clock_timestamp()) order by w.lease_until nulls first,s.expires_at,s.session_id limit 25`;
 			return {
 				rows: rows.map(record),
 				ended: ended.map((row) => row.status as "expired" | "conflict"),
@@ -172,7 +186,7 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			}
 			const rows = await sql<
 				Row[]
-			>`update platform.wecom_setup_sessions set status=${status},encrypted_credential=null where session_id=${sessionId} and status='verifying' returning *`;
+			>`update platform.wecom_setup_sessions set status=${status},encrypted_credential=null,encrypted_callback=null where session_id=${sessionId} and status='verifying' returning *`;
 			for (const row of rows)
 				await audit(sql, record(row), "wecom.setup_failed");
 			return rows.length > 0;
@@ -180,10 +194,21 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 		if (changed) this.#observe(status);
 	}
 
-	async bindings() {
+	async verifyCallback(sessionId: string) {
+		const rows = await this
+			.#sql`update platform.wecom_setup_sessions s set callback_verified_at=clock_timestamp() from platform.agents a where s.session_id=${sessionId} and s.kind='wecom_app' and s.status='verifying' and s.expires_at>clock_timestamp() and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) returning s.session_id`;
+		return rows.length === 1;
+	}
+	async callbackKeyIds() {
+		const rows = await this
+			.#sql`select distinct encrypted_callback->>'keyId' as key_id from platform.wecom_setup_sessions where encrypted_callback is not null`;
+		return rows.map((row) => String(row.key_id));
+	}
+
+	async bindings(kind: "wecom_bot" | "wecom_app" = "wecom_bot") {
 		const rows = await this.#sql<
 			Row[]
-		>`select s.* from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',s.session_id)) order by s.session_id`;
+		>`select s.* from platform.wecom_setup_sessions s join platform.agents a on a.id=s.agent_id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision where s.kind=${kind} and s.status='active' and c.configuration->'channels' @> jsonb_build_array(jsonb_build_object('kind',s.kind,'bindingReference',s.session_id)) order by s.session_id`;
 		return rows.map(record);
 	}
 }

@@ -1,4 +1,7 @@
-import { WecomSetupCredentialsV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	WecomApplicationCredentialsV1Schema,
+	WecomSetupCredentialsV1Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	type createWecomSetupV1,
 	WecomSetupError,
@@ -11,27 +14,45 @@ export function registerWecomSetupRoutesV1(
 	dependencies: {
 		readonly identity: IdentityAdapter;
 		readonly setup: ReturnType<typeof createWecomSetupV1>;
+		readonly callbackUrl?: (sessionId: string) => string | undefined;
+		readonly application?: boolean;
 	},
 ) {
-	app.get("/api/v1/agents/:agentId/wecom-bot", async (context) => {
-		const metadata = requestMetadata(context.req.raw);
-		const identity = await resolveIdentity(
-			dependencies.identity,
-			context.req.raw,
-			metadata.traceId,
-		);
-		try {
-			return context.json(
-				await dependencies.setup.current(
+	app.get(
+		dependencies.application
+			? "/api/v1/agents/:agentId/wecom-app"
+			: "/api/v1/agents/:agentId/wecom-bot",
+		async (context) => {
+			const metadata = requestMetadata(context.req.raw);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			try {
+				const current = await dependencies.setup.current(
 					context.req.param("agentId"),
 					identity.userId,
-				),
-			);
-		} catch {
-			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
-		}
-	});
-	const base = "/api/v1/agents/:agentId/wecom-setup";
+					...(dependencies.application ? ["wecom_app" as const] : []),
+				);
+				return context.json(
+					dependencies.application &&
+						"sessionId" in current &&
+						current.sessionId
+						? {
+								...current,
+								callbackUrl: dependencies.callbackUrl?.(current.sessionId),
+							}
+						: current,
+				);
+			} catch {
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+			}
+		},
+	);
+	const base = dependencies.application
+		? "/api/v1/agents/:agentId/wecom-app-setup"
+		: "/api/v1/agents/:agentId/wecom-setup";
 	for (const [method, suffix, operation] of [
 		["POST", "", "begin"],
 		["GET", "/:sessionId", "read"],
@@ -51,14 +72,41 @@ export function registerWecomSetupRoutesV1(
 			if (!agentId)
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 			try {
-				if (operation === "begin")
-					return context.json({
-						...(await dependencies.setup.begin(agentId, identity.userId)),
-						qrAvailable: false,
-						qrUnavailableReason: "authorization_correlation_unverified",
-					});
+				if (operation === "begin") {
+					const session = await dependencies.setup.begin(
+						agentId,
+						identity.userId,
+						dependencies.application ? "wecom_app" : "wecom_bot",
+					);
+					return context.json(
+						dependencies.application
+							? {
+									...session,
+									callbackUrl: dependencies.callbackUrl?.(session.sessionId),
+								}
+							: {
+									...session,
+									qrAvailable: false,
+									qrUnavailableReason: "authorization_correlation_unverified",
+								},
+					);
+				}
 				if (!sessionId)
 					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+				if (operation === "submit" && dependencies.application) {
+					const { value } = await parseJson(
+						request,
+						WecomApplicationCredentialsV1Schema,
+						metadata.traceId,
+					);
+					return context.json({
+						...(await dependencies.setup.submitApplication(
+							{ ...value, agentId, sessionId },
+							identity.userId,
+						)),
+						callbackUrl: dependencies.callbackUrl?.(sessionId),
+					});
+				}
 				if (operation === "submit") {
 					const { value } = await parseJson(
 						request,
@@ -72,12 +120,15 @@ export function registerWecomSetupRoutesV1(
 						),
 					);
 				}
+				const result = await dependencies.setup[operation](
+					agentId,
+					identity.userId,
+					sessionId,
+				);
 				return context.json(
-					await dependencies.setup[operation](
-						agentId,
-						identity.userId,
-						sessionId,
-					),
+					dependencies.application
+						? { ...result, callbackUrl: dependencies.callbackUrl?.(sessionId) }
+						: result,
 				);
 			} catch (error) {
 				if (error instanceof HttpProtocolError) throw error;

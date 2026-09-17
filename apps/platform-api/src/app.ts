@@ -35,6 +35,9 @@ export interface PlatformAppDependencies {
 	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
 	readonly wecomSetup?: Parameters<typeof registerWecomSetupRoutesV1>[1];
+	readonly wecomApplicationSetup?: Parameters<
+		typeof registerWecomSetupRoutesV1
+	>[1];
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -72,6 +75,11 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	registerRetiredManagementRoutes(app);
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
+	if (dependencies.wecomApplicationSetup)
+		registerWecomSetupRoutesV1(app, {
+			...dependencies.wecomApplicationSetup,
+			application: true,
+		});
 	if (dependencies.wecom) registerWecomRoutesV1(app, dependencies.wecom);
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);

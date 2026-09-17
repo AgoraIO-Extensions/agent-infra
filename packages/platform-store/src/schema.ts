@@ -1440,8 +1440,15 @@ export const wecomSetupSessions = platformSchema.table(
 		status: text("status").notNull(),
 		botId: text("bot_id"),
 		encryptedCredential: jsonb("encrypted_credential"),
+		kind: text("kind").notNull().default("wecom_bot"),
+		application: jsonb("application"),
+		encryptedCallback: jsonb("encrypted_callback"),
+		callbackVerifiedAt: timestamp("callback_verified_at", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
+		check("wecom_setup_kind", sql`${table.kind} in ('wecom_bot','wecom_app')`),
 		check(
 			"wecom_setup_status",
 			sql`${table.status} in ('awaiting_input','verifying','active','auth_failed','conflict','cancelled','expired')`,

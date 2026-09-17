@@ -978,10 +978,19 @@ URL、日志或审计。Agent、模型和 Runtime 均不得获得渠道凭证。
 
 自建应用单独校验企业 ID、应用 ID、应用 Secret 和接收消息的 Token、EncodingAESKey、TLS 回调地址。
 应用主动发送凭证不能代替接收消息配置；启用自建应用或显式机器人回调模式时才要求可达的 TLS 回调。
-回调 Token、EncodingAESKey 是 API 校验/解密入站消息所必需的独立材料，由部署的可信绑定解析器按获准绑定
-受限注入 API，不从 Worker-only 密文库解密，也不通过 API–Worker RPC 获取。
-API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解密私钥；回调校验材料亦不得进入用户查询、
-日志或 Agent Pod。部署注入仅提供协议验证能力，不替代 Core 中的绑定与业务授权。
+Owner 自助提交应用与回调凭证，服务端生成渠道引用及固定可信 HTTPS origin 下的回调 URL；
+不要求 Owner 输入内部引用，也不要求运维逐应用配置凭证。Owner 在企微后台显式配置回调，平台不自动覆盖。
+回调 Token、EncodingAESKey 以回调专用密文保存在 Platform DB，由 API 的独立回调 keyring 解密；
+应用 Secret 继续使用 Worker-only 密文边界。两类密钥、用途与读取入口分离，不能交叉解密，
+密文认证绑定 Agent、渠道、配置会话及版本，不能投射到 Agent Pod。部署只提供服务各自的 keyring
+与可信公开 origin。既有部署解析器可继续解析旧绑定，新自助配置不得回退到旧解析器或隐式迁移绑定。
+API 不获得 Bot Secret、应用发送 Secret 或历史回复路由的解密私钥，不通过 API–Worker RPC 获取凭证；
+回调校验材料不得进入用户查询、日志或审计。密钥配置及轮换由平台部署管理，Owner 无需处理平台密钥。
+候选配置复用一次性配置会话，应用身份与回调验证分别记录；只有两项验证成功且当前 Owner、Agent、
+原配置版本、会话期限仍有效时，才通过原配置事务激活。仅通过回调挑战不能标记真实文本收发已验收。
+验证中不接受该候选的业务消息；失败、取消、过期或版本失效保留原绑定并清除候选密文。
+解绑或成功替换后，旧引用与旧回调不再获得业务授权；轮换期间保留仍被有效密文引用的解密 key，
+跨服务挂载、密文用途混用或缺失当前解密 key 必须拒绝，不能回退明文。
 
 #### 14.2.2 传输与执行
 
@@ -1161,7 +1170,7 @@ Evaluation 是 `platform-core` 内部模块，API 提供管理与查询，Store 
 - Contract 测试执行 [Contract Schema authority](#64-contract-schema-authority) 定义的单向生成、漂移、merge-base breaking-change、consumer contract 和发布边界；数据库/领域类型不能绕过映射直接成为 wire contract。
 - IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、部署加密公钥/Worker-only 解密 keyring 和 KubernetesRuntimeAdapter 运行同一 Interface 的 Fake 与部署实现 conformance；缺失、非法或不可用结果都验证 fail closed。
 - IdentityAdapter 负向测试覆盖签发方、audience、签发/过期时间、context ID、keyVersion、部署身份绑定和重放；调用方提交的身份字段、过期/重复信封或身份依赖不可用都不能形成授权。
-- Platform Secret 负向测试覆盖 API 进程无解密私钥、非 CSPRNG/错误长度、重用 DEK/nonce、DEK fingerprint 冲突、失败重试复用加密材料、非 canonical AAD、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingAlgorithmVersion`/`wrappingKeyVersion`、AEAD 认证失败、原地更新被引用的 Kubernetes Secret、候选 Workload 引用错误版本化名称、Worker 在创建 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 Agent/Secret/config revision/Workload UID/generation/fence 任一 stale 值试图激活候选版本；任何路径都不能泄露明文、改变旧 Workload 的 active Secret、错误提升 active 或提前回收旧版本。
+- Platform Secret 负向测试覆盖 API 进程无 Platform Secret 解密私钥（回调专用 keyring 仅按 §14.2.1 使用）、非 CSPRNG/错误长度、重用 DEK/nonce、DEK fingerprint 冲突、失败重试复用加密材料、非 canonical AAD、跨 Agent/Secret ID 调换 ciphertext 或 wrapped DEK、错误 `wrappingAlgorithmVersion`/`wrappingKeyVersion`、AEAD 认证失败、原地更新被引用的 Kubernetes Secret、候选 Workload 引用错误版本化名称、Worker 在创建 Kubernetes Secret 前后或观测 Workload 前后崩溃，以及 Agent/Secret/config revision/Workload UID/generation/fence 任一 stale 值试图激活候选版本；任何路径都不能泄露明文、改变旧 Workload 的 active Secret、错误提升 active 或提前回收旧版本。
 - Model Contract 负向测试覆盖目录外 Base URL、credential 被当作普通字段读取/返回、credential 跨 Agent 复用、模型或 reasoning 未获 Owner 允许，以及 Runtime capability 验证失败；浏览器与普通使用者响应中不得出现 API Key 或 Secret 明文。
 - Agent Runtime Contract 和 Conformance Suite 实现 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)，工程 Spec 不重复维护用例清单。
 - Agent 配置契约验证标准模板拒绝 Registry 未声明的 env/Secret、Owner 输入不能覆盖平台模型配置、自定义镜像接受非保留前缀的任意 K/V。
@@ -1299,7 +1308,7 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 | --- | --- |
 | TypeScript 缺少 `controller-runtime` 同等级框架 | Worker 与 API 分离，控制器保持单一职责，以 Platform DB 修订号和 Kubernetes 幂等 apply 为核心；使用受支持版本的 `kind` 做完整生命周期测试 |
 | 部署产品渗入开源领域边界 | Identity、OCI Registry、模型目录、对象存储和 Kubernetes 路由通过窄 Adapter 接入，核心只保存稳定 ID、准入结果和业务状态 |
-| Secret 外部服务成为强制依赖 | 项目使用随机 DEK、版本化 AEAD 和公钥封装；API 只能加密、Worker 独占解密私钥，候选修订通过可恢复两阶段协议激活 |
+| Secret 外部服务成为强制依赖 | 项目使用随机 DEK、版本化 AEAD 和公钥封装；Platform Secret、企微发送凭证及回复路由由 Worker 独占解密能力；API 的回调专用 keyring 仅按 §14.2.1 使用，候选修订通过可恢复两阶段协议激活 |
 | OpenConnector 尚未原生满足公司多用户隔离 | 上游 Runtime 不直接暴露；只复用固定 allowlist Kernel，由 Connection Grant、repository policy 和跨用户攻击测试建立边界 |
 | 长任务跨进程和断线后状态丢失 | 受理/等待/取消与原执行持久化，SSE 按游标恢复，未知结果不盲重放 |
 | 模型/工具采集与审计被混为尽力日志 | 真实操作边界采集；必要审计先持久化，遥测导出故障独立报告 |

@@ -45,10 +45,15 @@ const requiredOperations = [
 	"getWecomReceipt",
 	"abandonUnknownWecomDelivery",
 	"getWecomBotConnection",
+	"getWecomAppConnection",
+	"getWecomApplicationSetup",
 	"beginWecomSetup",
+	"beginWecomApplicationSetup",
 	"getWecomSetup",
 	"submitWecomCredentials",
+	"submitWecomApplicationCredentials",
 	"cancelWecomSetup",
+	"cancelWecomApplicationSetup",
 ];
 
 const validApplication = {

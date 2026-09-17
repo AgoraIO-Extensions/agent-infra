@@ -69,7 +69,7 @@ async function fixture(
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
-		if (pathname.endsWith("/wecom-bot")) {
+		if (pathname.endsWith("/wecom-bot") || pathname.endsWith("/wecom-app")) {
 			await route.fulfill({ json: { status: "not_configured" } });
 			return;
 		}
@@ -385,8 +385,6 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		"password",
 	);
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
-	await page.getByRole("checkbox", { name: "修改自建应用绑定" }).check();
-	await page.getByLabel("自建应用配置标识").fill("approved-app-fixture");
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
 	await page.getByRole("button", { name: "Save configuration" }).click();
@@ -404,13 +402,6 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
 		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
-		channels: [
-			{
-				kind: "wecom_app",
-				enabled: true,
-				bindingReference: "approved-app-fixture",
-			},
-		],
 	});
 	await page.goto("/agents/agent-pilot-1");
 	await capture(page, info, "lifecycle");
@@ -538,7 +529,10 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	await page.getByLabel("Secret", { exact: true }).fill("synthetic-bot-secret");
 	await page.getByRole("checkbox", { name: /我已知悉/ }).check();
 	await capture(page, info, "wecom-manual");
-	await page.getByRole("button", { name: "验证并绑定" }).click();
+	await page
+		.getByRole("region", { name: "智能机器人配置" })
+		.getByRole("button", { name: "验证并绑定" })
+		.click();
 	await expect(page.getByLabel("Secret", { exact: true })).toHaveValue("");
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
 	expect(saved).toEqual({
@@ -549,4 +543,80 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	});
 	await expect(page.getByLabel("智能机器人配置标识")).toHaveCount(0);
 	await capture(page, info, "wecom-connected");
+});
+
+test("Owner self-configures an application with a generated callback URL", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	let submitted = false;
+	let completed = false;
+	const session = {
+		sessionId: "app-setup",
+		agentId: "agent-pilot-1",
+		configurationRevision: 1,
+		expiresAt: new Date(Date.now() + 300000).toISOString(),
+		callbackUrl: "https://platform.test/callbacks/wecom/app-setup",
+	};
+	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-app/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({
+				json: {
+					status: submitted
+						? completed
+							? "callback"
+							: "verifying"
+						: "not_configured",
+					...(submitted
+						? { sessionId: session.sessionId, callbackUrl: session.callbackUrl }
+						: {}),
+				},
+			});
+		if (path.endsWith("/wecom-app-setup"))
+			return route.fulfill({
+				json: { ...session, state: "state", status: "awaiting_input" },
+			});
+		if (path.endsWith("/credentials")) {
+			expect(route.request().postDataJSON()).toEqual({
+				state: "state",
+				corporationId: "corp",
+				applicationId: "7",
+				secret: "synthetic-app-secret",
+				token: "synthetic-token",
+				encodingAesKey: "a".repeat(43),
+			});
+			submitted = true;
+		}
+		return route.fulfill({
+			json: { ...session, status: completed ? "active" : "verifying" },
+		});
+	});
+	await page.goto("/agents/agent-pilot-1");
+	await page.getByRole("link", { name: "Owner settings" }).click();
+	const section = page.getByRole("region", { name: "自建应用配置" });
+	for (const [label, value] of [
+		["企业 ID", "corp"],
+		["应用 ID", "7"],
+		["应用 Secret", "synthetic-app-secret"],
+		["Token", "synthetic-token"],
+		["EncodingAESKey", "a".repeat(43)],
+	])
+		await section.getByLabel(label, { exact: true }).fill(value);
+	await section.getByRole("button", { name: "验证并绑定" }).click();
+	for (const label of ["应用 Secret", "Token", "EncodingAESKey"])
+		await expect(section.getByLabel(label, { exact: true })).toHaveValue("");
+	await expect(section.getByLabel("接收消息 URL")).toHaveValue(
+		session.callbackUrl,
+	);
+	await page.reload();
+	await expect(section.getByLabel("接收消息 URL")).toHaveValue(
+		session.callbackUrl,
+	);
+	await capture(page, info, "wecom-app-callback-pending");
+	completed = true;
+	await expect(
+		section.getByText("已配置回调模式", { exact: true }),
+	).toBeVisible();
+	await expect(section.getByLabel("自建应用配置标识")).toHaveCount(0);
 });

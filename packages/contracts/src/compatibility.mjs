@@ -898,6 +898,32 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #440 adds the exact Owner-scoped application setup contract.
+function isWecomApplicationSetupOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/agents/{agentId}/wecom-app",
+		"/api/v1/agents/{agentId}/wecom-app-setup",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials",
+		"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"c98d85e7438ab2c255b50b0b3bab1fc9b9c8069dd542cb87c89e487010617557"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return (
+		sameValue(previous, normalized) ||
+		isWecomReceiptOpenApiAddition(previous, normalized)
+	);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -908,7 +934,8 @@ function findBreakingChanges(previous, current) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
-			!isWecomReceiptOpenApiAddition(previous, current)
+			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomApplicationSetupOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}
