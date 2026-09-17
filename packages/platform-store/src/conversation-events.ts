@@ -9,6 +9,8 @@ import {
 	type ConversationEventWritePlanV1,
 	type ConversationNormalizedEventV1,
 	type ConversationPersistedEventPayloadV1,
+	type FileRecordV1,
+	isConfirmedResultFileV1,
 	type PersistedRuntimeConversationEventV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -30,6 +32,9 @@ interface ConversationRow {
 
 interface ExecutionRow {
 	readonly execution_id: string;
+	readonly actor_id: string;
+	readonly agent_id: string;
+	readonly channel_id: string;
 	readonly conversation_id: string;
 	readonly session_generation: string | number;
 	readonly delivery_fence: string | number;
@@ -545,7 +550,7 @@ async function readExecution(
 	executionId: string,
 ): Promise<ExecutionRow | undefined> {
 	const rows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, session_generation, delivery_fence,
+		select execution_id, conversation_id, actor_id, agent_id, channel_id, session_generation, delivery_fence,
 			last_event_sequence
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
@@ -647,6 +652,29 @@ export class PostgresConversationEventTransactionV1
 				return unavailable();
 			}
 			const plan = validatePlan(decision, persistedRequest, state);
+			if (plan.event.event.type === "result.file") {
+				const [row] = await transaction<{ record: FileRecordV1 }[]>`
+                    select record from platform.files
+                    where file_id = ${plan.event.event.fileId}
+                      and conversation_id = ${plan.event.conversationId}
+                `;
+				if (
+					!execution ||
+					!isConfirmedResultFileV1(
+						row?.record ?? null,
+						{
+							actorId: execution.actor_id,
+							agentId: execution.agent_id,
+							channelId: execution.channel_id,
+							conversationId: execution.conversation_id,
+							executionId: execution.execution_id,
+							sessionGeneration: safeInteger(execution.session_generation, 1),
+						},
+						plan.event.event,
+					)
+				)
+					unavailable();
+			}
 
 			await transaction`
 					insert into platform.conversation_events

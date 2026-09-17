@@ -725,6 +725,15 @@ async function claimWork(
 		if (updated.length !== 1) throw new StaleDispatchLease();
 		currentExecutionFence = nextFence;
 	}
+	const inputFiles = message
+		? await transaction<{ file_id: string }[]>`
+        select file_id from platform.files
+        where conversation_id = ${conversation.id}
+          and record->>'messageId' = ${payload.messageId}
+          and record->>'kind' = 'attachment' and record->>'status' = 'available'
+        order by file_id
+    `
+		: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		itemId: outbox.id,
@@ -752,7 +761,12 @@ async function claimWork(
 		reasoningLevel: execution.reasoning_level,
 		hostSessionRef: conversation.host_session_ref,
 		runtimeCursor: execution.last_runtime_cursor,
-		input: message ? { text: message.text, attachments: [] } : null,
+		input: message
+			? {
+					text: message.text,
+					attachments: inputFiles.map((file) => file.file_id),
+				}
+			: null,
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
 	};

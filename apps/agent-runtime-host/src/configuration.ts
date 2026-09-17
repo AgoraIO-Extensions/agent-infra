@@ -24,7 +24,7 @@ export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
 export function readRuntimeModelConfigurationV3(
 	environment: NodeJS.ProcessEnv,
-	driver: "codex" | "claude" | "acp",
+	driver: "codex" | "claude" | "acp" | "pi",
 ) {
 	try {
 		const value = RuntimeModelConfigurationV3Schema.parse(

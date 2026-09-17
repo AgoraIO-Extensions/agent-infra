@@ -20,5 +20,5 @@ export function runCommand(command, args, options) {
 		options.onFailure?.(result.stderr);
 		throw new Error(`${options.name} failed with exit status ${result.status}`);
 	}
-	return result.stdout.trim();
+	return options.trimOutput === false ? result.stdout : result.stdout.trim();
 }

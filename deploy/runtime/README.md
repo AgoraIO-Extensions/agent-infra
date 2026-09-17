@@ -127,7 +127,6 @@ Digest、source label、non-root/只读根/可写挂载，以及同一镜像运�
 传入 `--image-digest`、`--source-commit` 声明完成验证。完整模板的文件和 Connection
 验收仍由其独立任务负责。
 
-
 ## Generic ACP 与 OpenCode 核心验证
 
 OpenCode 静态绑定 `AGENT_INFRA_RUNTIME_DRIVER=acp`，由同一个 Generic ACP Driver 消费
@@ -170,3 +169,34 @@ OpenCode 真实模型验收须分别运行 `--negative-target workspace` 和
 `--negative-target memory`，保存两份通过报告。每份都从独立测试状态完成双用户
 正向读写、原 Session 重启恢复、上下文检查及指定目标的双向负向调用。分开运行可避免
 前一次工具拒绝影响模型对另一测试目标的调用选择；缺少任一报告均不能声明隔离验收通过。
+
+## Pi RPC 核心 Driver
+
+Pi 静态绑定 `AGENT_INFRA_RUNTIME_DRIVER=pi`，消费与 Claude、Generic ACP 相同的
+Messages V3 配置。版本、源码和 CLI bundle 校验值以
+[pi-release.json](../../packages/agent-runtime/src/pi-release.json) 为准；采用方式与许可证见
+[第三方来源](../../packages/agent-runtime/THIRD_PARTY_NOTICES.md)。镜像构建和 Driver 启动均
+核对来源；不修改上游 Pi。
+
+每个 Conversation/generation 使用独立的 `pi-driver` 持久目录、配置、workspace 和
+确定的 `native/session.jsonl`。相同选择的连续 Turn 复用持续 RPC；选择改变或通道失效时
+先退役原进程，再加载原 session file，并复验 provider/model/thinking。真实模型凭证
+只留在 Host 的共享 Messages 传输中，原生进程只获得短期本地传输凭证。
+
+`prompt` 与 `abort` ACK 不代表完成或停止。终态由 `agent_end`、`get_state`、
+`get_messages` 核实，原生 session file 同步落盘后才发布。恢复时以提交前持久 checkpoint
+核对历史前缀、唯一新 user 消息和明确终止原因；无法证明的执行保留 `unknown`，不重投。
+已确认终态同时持久保存原生历史 checkpoint；重启前读取官方 session context，拒绝
+完整行截断、上下文替换或缺失。已保存的事件游标稳定重放，损坏文件不被新 Session 替换。
+
+原生工具仅开放 read/write/edit，复用官方工具的 filesystem operations，在路径解析及
+文件名 fallback 之后由镜像内可信扩展校验实际访问目标；启动必须收到该策略的
+就绪信号。显式关闭项目授权、扩展/技能/模板/上下文自动发现以及自动重试和压缩。
+`.memory/MEMORY.md` 仅从当前 workspace 读取。supplement、文件传输、结果文件和
+Connection capability 保持关闭；本项交付不代表完整模板整装通过。
+
+共享真实模型探针使用 `messages-conformance.mjs --runtime pi`，无需 `--executable`。
+协议回归为 `pi-runtime-driver.test.ts`；`pi-native.test.ts` 与共享
+`opencode-native.test.ts` 使用真实 Pi CLI 和合成 Messages 服务，不能替代真实模型验收。
+CI 在固定 Linux 镜像中运行同一 conformance，并沿用 non-root、只读根文件系统和明确
+可写挂载；完整验收须绑定干净源码、镜像 Digest、实际模型及双用户/重启证据。

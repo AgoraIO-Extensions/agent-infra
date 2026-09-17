@@ -5,11 +5,12 @@ import { vi } from "vitest";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
 import type { RuntimeDriverCommand } from "./driver.js";
 import { openOpenCodeRuntime } from "./opencode-bootstrap.js";
+import { openPiRuntime } from "./pi-bootstrap.js";
 
 export async function openMessagesRuntimeDriverConformanceFixture(
 	path: string,
 	loseFirstResult = false,
-	runtime: "claude" | "opencode" = "claude",
+	runtime: "claude" | "opencode" | "pi" = "claude",
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
@@ -19,55 +20,74 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 		reasoningLevel: string;
 	}[] = [];
 	const responses = new Set<ServerResponse>();
-	const server = createServer((request, response) => {
-		let body = "";
-		request.on("data", (chunk) => {
-			body += chunk;
-		});
-		request.on("end", () => {
-			const value = JSON.parse(body);
-			calls++;
-			selections.push({
-				schemaVersion: 1,
-				modelOptionId:
-					value.model === "claude-opus-5"
-						? "model-option-primary"
-						: "model-option-alternate",
-				reasoningLevel: value.output_config.effort,
+	const servers = ["primary", "alternate"].map((id) =>
+		createServer((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => {
+				body += chunk;
 			});
-			response.writeHead(200, { "content-type": "text/event-stream" });
-			response.write(
-				encode({
-					type: "message_start",
-					message: {
-						id: `msg_${calls}`,
-						type: "message",
-						role: "assistant",
-						model: value.model,
-						content: [],
-						stop_reason: null,
-						stop_sequence: null,
-						usage: { input_tokens: 10, output_tokens: 0 },
-					},
-				}),
-			);
-			responses.add(response);
-			response.on("close", () => responses.delete(response));
-		});
+			request.on("end", () => {
+				const value = JSON.parse(body);
+				if (
+					request.headers.authorization !==
+						`Bearer synthetic-${id}-credential` ||
+					value.model !==
+						(id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6")
+				) {
+					response.writeHead(403).end();
+					return;
+				}
+				calls++;
+				selections.push({
+					schemaVersion: 1,
+					modelOptionId:
+						value.model === "claude-opus-5"
+							? "model-option-primary"
+							: "model-option-alternate",
+					reasoningLevel: value.output_config.effort,
+				});
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(
+					encode({
+						type: "message_start",
+						message: {
+							id: `msg_${calls}`,
+							type: "message",
+							role: "assistant",
+							model: value.model,
+							content: [],
+							stop_reason: null,
+							stop_sequence: null,
+							usage: { input_tokens: 10, output_tokens: 0 },
+						},
+					}),
+				);
+				responses.add(response);
+				response.on("close", () => responses.delete(response));
+			});
+		}),
+	);
+	await Promise.all(
+		servers.map(
+			(server) =>
+				new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+		),
+	);
+	const ports = servers.map((server) => {
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error();
+		return address.port;
 	});
-	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const address = server.address();
-	if (!address || typeof address === "string") throw new Error();
 	const options = {
 		path,
 		configVersion: "conformance-1",
 		defaultModelOptionId: "model-option-primary",
 		defaultReasoningLevel: "high",
-		modelOptions: ["primary", "alternate"].map((id) => ({
+		modelOptions: ["primary", "alternate"].map((id, index) => ({
 			modelOptionId: `model-option-${id}`,
 			model: id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6",
 			reasoningLevels: ["low", "high"],
-			endpoint: `http://127.0.0.1:${address.port}`,
+			endpoint: `http://127.0.0.1:${ports[index]}`,
 			credential: `synthetic-${id}-credential`,
 			authentication: "bearer" as const,
 		})),
@@ -75,11 +95,13 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	const open = () =>
 		runtime === "claude"
 			? ClaudeRuntimeDriver.open(options)
-			: openOpenCodeRuntime({
-					...options,
-					executable:
-						process.env.OPENCODE_EXECUTABLE ?? "/opt/opencode/opencode",
-				});
+			: runtime === "pi"
+				? openPiRuntime(options)
+				: openOpenCodeRuntime({
+						...options,
+						executable:
+							process.env.OPENCODE_EXECUTABLE ?? "/opt/opencode/opencode",
+					});
 	let raw = await open();
 	const commands: { command: RuntimeDriverCommand; ref: string }[] = [];
 	function decorate() {
@@ -182,8 +204,12 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			if (closed) return;
 			closed = true;
 			await raw.close();
-			server.closeAllConnections();
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await Promise.all(
+				servers.map(async (server) => {
+					server.closeAllConnections();
+					await new Promise<void>((resolve) => server.close(() => resolve()));
+				}),
+			);
 		},
 	};
 	return fixture;

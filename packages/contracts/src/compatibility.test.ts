@@ -32,8 +32,15 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
-	it("tracks every published browser OpenAPI version", async () => {
+	it("tracks published browser, file and readiness contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
+		for (const path of [
+			"json-schema/files.v1.schema.json",
+			"openapi/files.v1.openapi.json",
+			"json-schema/runtime-readiness.v1.schema.json",
+			"openapi/runtime-readiness.v1.openapi.json",
+		])
+			expect(source).toContain(`"packages/contracts/artifacts/${path}"`);
 		expect(source).toContain(
 			'"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json"',
 		);
@@ -276,6 +283,58 @@ describe("contract compatibility command", () => {
 				const changed = structuredClone(current);
 				mutate(changed);
 				await writeFile(currentPath, JSON.stringify(changed), "utf8");
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts only the exact file addition and rejects altered authorization, limits and old operations", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths))
+			if (path.includes("/files")) delete previous.paths[path];
+		for (const name of Object.keys(previous.components.schemas))
+			if (name.startsWith("File")) delete previous.components.schemas[name];
+		delete previous.components.schemas.MessageCommandRequestV1.properties
+			.attachments;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-files-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changedPath = structuredClone(current);
+			delete changedPath.paths[
+				"/api/v1/conversations/{conversationId}/files/{fileId}/content"
+			].get.parameters;
+			const changedScope = structuredClone(current);
+			delete changedScope.components.schemas.FileAccessClaimsV1.properties
+				.actorId;
+			const changedLimit = structuredClone(current);
+			changedLimit.components.schemas.MessageCommandRequestV1.properties.attachments.maxItems = 64;
+			const required = structuredClone(current);
+			required.components.schemas.MessageCommandRequestV1.required.push(
+				"attachments",
+			);
+			const oldOperation = structuredClone(current);
+			delete oldOperation.paths[
+				"/api/v1/conversations/{conversationId}/messages"
+			].post;
+			for (const changed of [
+				changedPath,
+				changedScope,
+				changedLimit,
+				required,
+				oldOperation,
+			]) {
+				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);
 			}
 		} finally {

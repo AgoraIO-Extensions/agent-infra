@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+	bindInputFileV1,
 	type ConversationCommandDecisionV1,
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionConversationStateV1,
@@ -19,6 +20,7 @@ import {
 	type ConversationStopWritePlanV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	type FileRecordV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
@@ -2157,6 +2159,27 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
+			}
+			for (const fileId of request.command.attachments ?? []) {
+				const [row] = await transaction<{ record: FileRecordV1 }[]>`
+                    select record from platform.files where file_id = ${fileId} and conversation_id = ${conversation.conversationId}
+                `;
+				const file = bindInputFileV1(
+					row?.record ?? null,
+					{
+						actorId: conversation.actorId,
+						agentId: conversation.agentId,
+						channelId: conversation.channelId,
+						conversationId: conversation.conversationId,
+					},
+					{
+						messageId: plan.message.messageId,
+						executionId: plan.message.executionId,
+						sessionGeneration: plan.conversation.sessionGeneration,
+					},
+					plan.message.createdAt,
+				);
+				await transaction`update platform.files set record = ${transaction.json(file as unknown as JsonValue)}, updated_at = ${plan.message.createdAt} where file_id = ${fileId}`;
 			}
 			await transaction`
 				insert into platform.conversation_messages

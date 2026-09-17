@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import {
 	type ConfigurationRoutesDependencies,
@@ -9,6 +8,10 @@ import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
+import {
+	type FileRoutesDependenciesV1,
+	registerFileRoutesV1,
+} from "./http/file-routes.js";
 import {
 	type ManagementRouteDependencies,
 	registerManagementRoutes,
@@ -26,6 +29,7 @@ export interface PlatformAppDependencies {
 		request: Request,
 		work: () => Promise<void>,
 	) => Promise<void>;
+	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -63,7 +67,11 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	registerRetiredManagementRoutes(app);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
-	registerConversationRoutes(app, dependencies.conversation);
+	registerConversationRoutes(app, {
+		...dependencies.conversation,
+		files: dependencies.files,
+	});
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
+	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	return app;
 }

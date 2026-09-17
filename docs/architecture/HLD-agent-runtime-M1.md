@@ -286,6 +286,8 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 - 关联遵循工程 Spec §13.2：受信工具采集在调用前绑定原 Execution/操作/尝试，只从同一次经认证的 Connection 请求/响应取得 Connection 服务端生成的原调用引用，并在 Connection 自身授权下核实主体、操作及原记录与本次请求一致。采集证据随 8.5 的事实可靠保存，平台只接收关联引用和核实状态，不接收 Connection 客户端凭据或调用记录副本。Runtime 摘要、自报 callId、模型转交的真实引用、签名或任意相同字符串都不能独立建立绑定；同主体/Agent 的其他 Execution 调用也不得被重绑。响应丢失时仅沿原操作查询核实，不重发工具操作；缺失/未知如实展示。两侧分别在受控 API/页面查询，关联不授予权限；Connection 的引用返回/核实接口及 OAuth/LDAP/Grant 协议由其 HLD 维护。
 - `self-managed` 使用平台身份入口时，自定义 Agent 服务端只信任 Auth Gateway 传递的短期签名上下文并负责校验；浏览器身份字段不能改变最终身份。该上下文不创建 Platform Conversation、Execution 或 Execution Grant。
 
+执行期文件访问由可信 Worker 经 Platform 文件服务签发独立对象级授权，RuntimeHost 消费 `FileAccessGrantV1` 并通过平台认证数据面传输；旧 Execution Grant 仅保留输入附件读取范围。结果必须在对象确认和文件记录提交后才能引用。签发、audience、当前授权、代次、重放及撤权以 [工程 Spec 文件条款](SPEC-agent-infra-M1-engineering-architecture.md#154-文件) 为唯一权威；Driver 不持有对象存储凭证。
+
 ## 10. Runtime 安全约束
 
 Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、部署解密私钥、Kubernetes 或原始凭证权限作为运行前提。
