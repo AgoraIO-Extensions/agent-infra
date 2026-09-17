@@ -5,6 +5,8 @@ export const githubRepositoryLifecycleActionIds = [
 	"github.create_repository",
 	"github.update_repository",
 	"github.add_repository_collaborator",
+	"github.fork_repository",
+	"github.sync_fork_branch_with_upstream",
 	"github.remove_repository_collaborator",
 	"github.delete_repository",
 ];
@@ -13,6 +15,8 @@ export async function runGitHubRepositoryLifecycle({
 	environment,
 	fetch,
 	runId,
+	sleep = (milliseconds) =>
+		new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }) {
 	if (environment.CONNECTION_GITHUB_E2E_ENABLED !== "true")
 		throw new Error("CONNECTION_GITHUB_E2E_ENABLED must be true");
@@ -31,6 +35,7 @@ export async function runGitHubRepositoryLifecycle({
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
 	}
 	const owner = "AGORAconnectionE2E";
+	const forkOwner = "AgoraConnectionE2EORG";
 	const name =
 		`connection-e2e-${runId.replace(/[^A-Za-z0-9-]/g, "-").toLowerCase()}`.slice(
 			0,
@@ -40,6 +45,9 @@ export async function runGitHubRepositoryLifecycle({
 	let creationStarted = false;
 	let owned = false;
 	let collaboratorMutationStarted = false;
+	let forkCreationStarted = false;
+	let forkOwned = false;
+	let forkDeleted = false;
 	let deleted = false;
 	let failure;
 	const cleanupFailures = [];
@@ -74,6 +82,20 @@ export async function runGitHubRepositoryLifecycle({
 		try {
 			await execute("github.get_repository", { owner, repo: name }, true);
 			throw new Error("fixture repository already exists");
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				!error.message.includes("Provider resource was not found")
+			)
+				throw error;
+		}
+		try {
+			await execute(
+				"github.get_repository",
+				{ owner: forkOwner, repo: name },
+				true,
+			);
+			throw new Error("fixture fork already exists");
 		} catch (error) {
 			if (
 				!(error instanceof Error) ||
@@ -135,9 +157,141 @@ export async function runGitHubRepositoryLifecycle({
 			collaborator.invitation?.invitee?.login !== "connectionE2E2"
 		)
 			throw new Error("repository collaborator invitation did not match");
+		forkCreationStarted = true;
+		const fork = await execute("github.fork_repository", {
+			defaultBranchOnly: true,
+			idempotencyKey: `${runId}:repository-fork`,
+			name,
+			organization: forkOwner,
+			owner,
+			repo: name,
+		});
+		if (
+			fork?.name !== name ||
+			fork.owner?.login !== forkOwner ||
+			String(fork.owner?.id) !== "329053903" ||
+			fork.private !== true ||
+			fork.fork !== true ||
+			fork.description !== `${marker}:updated` ||
+			fork.parent?.full_name !== `${owner}/${name}`
+		)
+			throw new Error("fork ownership marker does not match");
+		forkOwned = true;
+		for (let attempt = 0; attempt < 6; attempt += 1) {
+			try {
+				const branch = await execute(
+					"github.get_branch",
+					{ branch: "main", owner: forkOwner, repo: name },
+					true,
+				);
+				if (branch?.name !== "main")
+					throw new Error("fork default branch did not match");
+				break;
+			} catch (error) {
+				if (
+					attempt === 5 ||
+					!(error instanceof Error) ||
+					!error.message.includes("Provider resource was not found")
+				)
+					throw error;
+				await sleep(2_000);
+			}
+		}
+		await execute("github.create_or_update_file", {
+			branch: "main",
+			contentBase64: Buffer.from(marker).toString("base64"),
+			idempotencyKey: `${runId}:repository-fork-source-update`,
+			message: marker,
+			owner,
+			path: "connection-e2e-sync-marker.txt",
+			repo: name,
+		});
+		const sync = await execute("github.sync_fork_branch_with_upstream", {
+			branch: "main",
+			idempotencyKey: `${runId}:repository-fork-sync`,
+			owner: forkOwner,
+			repo: name,
+		});
+		if (sync?.base_branch !== "main")
+			throw new Error("fork synchronization did not match");
 	} catch (error) {
 		failure = error;
 	} finally {
+		if (forkCreationStarted && !forkOwned) {
+			try {
+				const current = await execute(
+					"github.get_repository",
+					{ owner: forkOwner, repo: name },
+					true,
+				);
+				if (
+					current?.name === name &&
+					current.owner?.login === forkOwner &&
+					String(current.owner?.id) === "329053903" &&
+					current.private === true &&
+					current.fork === true &&
+					current.description === `${marker}:updated` &&
+					current.parent?.full_name === `${owner}/${name}`
+				)
+					forkOwned = true;
+				else
+					recordCleanupFailure(
+						new Error("fork cleanup ownership marker does not match"),
+					);
+			} catch (error) {
+				if (
+					!(error instanceof Error) ||
+					!error.message.includes("Provider resource was not found")
+				)
+					recordCleanupFailure(error);
+			}
+		}
+		if (forkOwned) {
+			try {
+				const current = await execute(
+					"github.get_repository",
+					{ owner: forkOwner, repo: name },
+					true,
+				);
+				if (
+					current?.name !== name ||
+					current.owner?.login !== forkOwner ||
+					String(current.owner?.id) !== "329053903" ||
+					current.private !== true ||
+					current.fork !== true ||
+					current.description !== `${marker}:updated` ||
+					current.parent?.full_name !== `${owner}/${name}`
+				)
+					recordCleanupFailure(
+						new Error("fork delete ownership marker does not match"),
+					);
+				else {
+					await execute("github.delete_repository", {
+						idempotencyKey: `${runId}:repository-fork-delete`,
+						owner: forkOwner,
+						repo: name,
+					});
+					forkDeleted = true;
+				}
+				if (forkDeleted)
+					try {
+						await execute(
+							"github.get_repository",
+							{ owner: forkOwner, repo: name },
+							true,
+						);
+						recordCleanupFailure(new Error("fork remained after deletion"));
+					} catch (error) {
+						if (
+							!(error instanceof Error) ||
+							!error.message.includes("Provider resource was not found")
+						)
+							recordCleanupFailure(error);
+					}
+			} catch (error) {
+				recordCleanupFailure(error);
+			}
+		}
 		if (creationStarted && !owned) {
 			try {
 				const current = await execute(
