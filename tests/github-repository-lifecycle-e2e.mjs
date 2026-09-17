@@ -4,6 +4,8 @@ import { assertSingleAccount, mcpClient } from "./github-review-e2e.mjs";
 export const githubRepositoryLifecycleActionIds = [
 	"github.create_repository",
 	"github.update_repository",
+	"github.add_repository_collaborator",
+	"github.remove_repository_collaborator",
 	"github.delete_repository",
 ];
 
@@ -37,6 +39,8 @@ export async function runGitHubRepositoryLifecycle({
 	const marker = `connection-e2e:${runId}`;
 	let creationStarted = false;
 	let owned = false;
+	let collaboratorMutationStarted = false;
+	let deleted = false;
 	let failure;
 	let cleanupFailure;
 	const calls = [];
@@ -53,6 +57,16 @@ export async function runGitHubRepositoryLifecycle({
 		return projection.result;
 	};
 	try {
+		const reviewer = await execute(
+			"github.get_user",
+			{ username: "connectionE2E2" },
+			true,
+		);
+		if (
+			String(reviewer?.id) !== "329435106" ||
+			reviewer.login !== "connectionE2E2"
+		)
+			throw new Error("reviewer GitHub identity does not match");
 		try {
 			await execute("github.get_repository", { owner, repo: name }, true);
 			throw new Error("fixture repository already exists");
@@ -104,6 +118,19 @@ export async function runGitHubRepositoryLifecycle({
 			updated.description !== updatedMarker
 		)
 			throw new Error("repository update did not match");
+		collaboratorMutationStarted = true;
+		const collaborator = await execute("github.add_repository_collaborator", {
+			idempotencyKey: `${runId}:repository-collaborator-add`,
+			owner,
+			permission: "pull",
+			repo: name,
+			username: "connectionE2E2",
+		});
+		if (
+			collaborator?.invited !== true ||
+			collaborator.invitation?.invitee?.login !== "connectionE2E2"
+		)
+			throw new Error("repository collaborator invitation did not match");
 	} catch (error) {
 		failure = error;
 	} finally {
@@ -149,13 +176,26 @@ export async function runGitHubRepositoryLifecycle({
 					cleanupFailure = new Error(
 						"repository delete ownership marker does not match",
 					);
-				} else
+				} else {
+					if (collaboratorMutationStarted)
+						try {
+							await execute("github.remove_repository_collaborator", {
+								idempotencyKey: `${runId}:repository-collaborator-remove`,
+								owner,
+								repo: name,
+								username: "connectionE2E2",
+							});
+						} catch (error) {
+							cleanupFailure = error;
+						}
 					await execute("github.delete_repository", {
 						idempotencyKey: `${runId}:repository-delete`,
 						owner,
 						repo: name,
 					});
-				if (!cleanupFailure)
+					deleted = true;
+				}
+				if (deleted) {
 					try {
 						await execute("github.get_repository", { owner, repo: name }, true);
 						cleanupFailure = new Error("repository remained after deletion");
@@ -166,6 +206,7 @@ export async function runGitHubRepositoryLifecycle({
 						)
 							cleanupFailure = error;
 					}
+				}
 			} catch (error) {
 				cleanupFailure = error;
 			}
