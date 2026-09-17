@@ -32,6 +32,8 @@ probe 静态声明不能替代当前进程保护安装或最终镜像的负向�
 6. `patches/0006-current-model-switch-compaction.patch`：local 模型切换前置压缩使用本次
    有效模型，覆盖 CompHashChanged 与 ModelDownshift；保留原窗口判断、历史处理和
    压缩算法，以及 remote 和 TokenBudget 路径。
+7. `patches/0007-release-test-home-root.patch`：测试初始化可从显式的私有根目录创建
+   CODEX_HOME，避免 release 测试在枚举阶段触发系统临时目录限制；生产 arg0 检查不变。
 
 上游 Apache-2.0 的 [LICENSE](UPSTREAM-LICENSE) 与 [NOTICE](UPSTREAM-NOTICE) 保持不变。
 没有修改共享 Cargo registry 或外部 `rmcp 3.1.3` 源码。
@@ -51,7 +53,7 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 
 ## 验证与验收边界
 
-必须按序应用全部六份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
+必须按序应用全部七份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
 lock、Schema、corpus 和 coverage。manifest/lock 可解析、格式化通过或静态 probe
 声明均不能代替原生类型检查、聚焦测试和实际进程保护验证。
 
@@ -109,6 +111,11 @@ CLI version 和静态 native probe 也必须与固定输入匹配；这不证明
 `codex-network-proxy`、`codex-git-utils`、`codex-http-client` 的库测试。
 测试复用同一 release target 和 bwrap SHA，两个执行线程，保留 2 GiB 资源保护；
 测试前后复核源码和候选 binary，失败会使 workflow 失败。
+`tests` 在 task-owned output 下创建权限为 0700 的独立目录，通过
+`CODEX_TEST_HOME_ROOT` 供测试初始化使用 `tempdir_in` 创建子目录；该根必须位于
+源码树和系统临时目录之外。builder 在成功、失败或中断后清理本次目录，不依赖
+测试 ctor 在 abort 后析构。不设置该变量时保留上游测试初始化行为；不修改 TMPDIR、
+release 模式或生产 arg0 的系统临时目录限制。
 已上传包仍明确为未验收候选；聚焦测试记录随 diagnostics 保存，不替代完整原生矩阵。
 测试依赖与 `cfg(test)` 可能增加构建空间；实际测试结果按同一 run/attempt 的 diagnostics 回读。
 

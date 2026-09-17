@@ -447,26 +447,33 @@ class Builder:
         env = os.environ.copy()
         env["CODEX_BWRAP_SHA256"] = record["bwrapSha256"].removeprefix("sha256:")
         commands = []
-        # Core enables vendored OpenSSL for musl. Select both existing test crates
-        # so Connection tests inherit that feature, then preserve each test scope.
-        for name, crate, selection in (
-            ("connection", "codex-rmcp-client", "test(native_connection)"),
-            ("barrier", "codex-core", "test(native_connection_bootstrap) | test(native_operation_barrier)"),
-            ("network-proxy", "codex-network-proxy", "all()"),
-            ("git-utils", "codex-git-utils", "all()"),
-            ("http-client", "codex-http-client", "all()"),
-            ("model-switch-compaction", "codex-core", "test(suite::compact::)"),
-        ):
-            targets = ["--test", "all"] if name == "model-switch-compaction" else ["--lib"]
-            packages = (["codex-core"] if name == "model-switch-compaction" else
-                        ["codex-rmcp-client", "codex-core", "codex-network-proxy",
-                         "codex-git-utils", "codex-http-client"])
-            package_args = [argument for package in packages for argument in ("-p", package)]
-            command = ["just", "test", *package_args, "--locked", *targets,
-                       "--target", TARGET, "--release", "--test-threads", "2",
-                       "--no-tests=fail", "-E", f"package(={crate}) & ({selection})"]
-            commands.append(command)
-            self.run(f"native-tests-{name}", command, cwd=self.source, env=env)
+        test_home_parent = self.output.resolve()
+        require(not test_home_parent.is_relative_to(self.source.resolve())
+                and not test_home_parent.is_relative_to(Path(tempfile.gettempdir()).resolve()),
+                "Test homes must be outside native source and system temp")
+        # Release arg0 rejects system-temp homes. Keep test homes private and let
+        # the builder remove them even when a native test ctor aborts.
+        with tempfile.TemporaryDirectory(prefix="native-test-homes-", dir=test_home_parent) as test_homes:
+            env["CODEX_TEST_HOME_ROOT"] = test_homes
+            # Core supplies vendored OpenSSL for musl; preserve each test scope.
+            for name, crate, selection in (
+                ("connection", "codex-rmcp-client", "test(native_connection)"),
+                ("barrier", "codex-core", "test(native_connection_bootstrap) | test(native_operation_barrier)"),
+                ("network-proxy", "codex-network-proxy", "all()"),
+                ("git-utils", "codex-git-utils", "all()"),
+                ("http-client", "codex-http-client", "all()"),
+                ("model-switch-compaction", "codex-core", "test(suite::compact::)"),
+            ):
+                targets = ["--test", "all"] if name == "model-switch-compaction" else ["--lib"]
+                packages = (["codex-core"] if name == "model-switch-compaction" else
+                            ["codex-rmcp-client", "codex-core", "codex-network-proxy",
+                             "codex-git-utils", "codex-http-client"])
+                package_args = [argument for package in packages for argument in ("-p", package)]
+                command = ["just", "test", *package_args, "--locked", *targets,
+                           "--target", TARGET, "--release", "--test-threads", "2",
+                           "--no-tests=fail", "-E", f"package(={crate}) & ({selection})"]
+                commands.append(command)
+                self.run(f"native-tests-{name}", command, cwd=self.source, env=env)
         require(self.inputs() == inputs
                 and native_source_tree(self.vendor, self.source) == record["sourceTree"],
                 "Native test source changed")

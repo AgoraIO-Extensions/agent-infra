@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "work-in-progress; current-model local switch compaction source added; native compilation, integration tests and real provider compatibility pending; no new release binary",
+  "status": "work-in-progress; current-model local switch compaction and release test-home root source added; exact native compilation, integration tests and real provider compatibility pending; no new release binary",
   "upstream": {
     "repository": "https://github.com/openai/codex.git",
     "commit": "41e22fee981a63b3698df7ed36bad393cda24715",
@@ -33,7 +33,7 @@
       "nativeHooksTests": "just test -p codex-hooks --locked --lib native_barrier_tests; 11 passed, 175 skipped; includes real command spawn/terminal and queued async hook drain/cancellation",
       "nativeCoreLint": "just fix -p codex-core --locked --lib, then just clippy -p codex-core --locked --lib; final check passed including upstream recipe --tests",
       "nativeHooksLint": "just fix -p codex-hooks --locked --lib; passed including upstream recipe --tests",
-      "scope": "historical Rust 1.95.0 evidence for patches 0001 and 0002 only; excludes current patches 0003 through 0006"
+      "scope": "historical Rust 1.95.0 evidence for patches 0001 and 0002 only; excludes current patches 0003 through 0007"
     }
   },
   "releaseLockRepair": {
@@ -3192,6 +3192,10 @@
     {
       "path": "patches/0006-current-model-switch-compaction.patch",
       "sha256": "sha256:6f5b7e3d27d04e0659aa7c6f61102a324f6f776b4ecb403a84e8d283d54076a0"
+    },
+    {
+      "path": "patches/0007-release-test-home-root.patch",
+      "sha256": "sha256:081ad14e7230fe1330ef12153b961d6237d1e41e28a7955d496fbd1309cc3155"
     }
   ],
   "sourceFiles": [
@@ -3608,6 +3612,10 @@
       "sha256": "sha256:e8b379eaa492bf59d35187de269afd1c4f55d85e0322f6fea32803a3fec1a380"
     },
     {
+      "path": "codex-rs/test-binary-support/lib.rs",
+      "sha256": "sha256:c9493f5db6b615f279d0c45227b620aa41e77450ab7d0a35720b0ab5b3024311"
+    },
+    {
       "path": "codex-rs/utils/pty/src/lib.rs",
       "sha256": "sha256:0d470d48ee2e08faf2a5b69af06808bb2303c58639c1132730897e25bfada0c7"
     },
@@ -3643,7 +3651,8 @@
     "cross-process original evidence recovery source is implemented; native binary/isolation/GET-only/restart and full original-outbox PG/ACK proof not yet completed",
     "exact Linux aarch64 build and owning-crate network-proxy/git-utils/http-client tests on real DNS, preserving the existing Connection and native barrier gates",
     "fresh exact Linux artifact/source SBOM and installed Cargo.lock Trivy scans with zero blockers, zero scanner errors and zero exceptions; full native C/C++ coverage remains separate",
-    "patch 0006 owning-crate compaction integration tests and exact Linux candidate; real current-model history compatibility, differing windows/downshift, removed previous option, cancellation and unknown recovery per Runtime HLD 11"
+    "patch 0006 owning-crate compaction integration tests and exact Linux candidate; real current-model history compatibility, differing windows/downshift, removed previous option, cancellation and unknown recovery per Runtime HLD 11",
+    "patch 0007 release-mode integration test enumeration and all six native test groups on the exact candidate head; private home selection does not relax production arg0 guards"
   ],
   "currentLocks": {
     "cargoSha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff",
@@ -3658,10 +3667,10 @@
     "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
   },
   "currentValidation": {
-    "format": "just fmt on the complete patched source with Rust 1.96.0 passed; all 108 recorded source hashes remain unchanged",
+    "format": "just fmt on the complete patched source with Rust 1.96.0 passed; prior 108 source hashes unchanged and new test-binary-support file recorded",
     "metadata": "current offline locked no-deps metadata passed; parsing only",
     "bazelLock": "just bazel-lock-update passed with the final Cargo manifests",
-    "sourceExport": "Patches 0001 through 0005 applied to an independent exact upstream checkout, then patch 0006 verified against pristine versions of its two previously unchanged files; all 108 recorded source file hashes verified; native acceptance remains pending",
+    "sourceExport": "Prior patches 0001 through 0006 and all 108 frozen source files verified; patch 0007 applied independently to its pristine upstream file and matched the final bytes; all 109 source hashes verified; native acceptance remains pending",
     "nativeCompilation": "Darwin network-proxy, git-utils and http-client compiled for focused tests; exact Linux native producer pending",
     "nativeTests": "Darwin HTTP client: 85 passed with custom CA and 85 passed with CA unset; nested io certificate classification regression red then green; full current Linux Connection/barrier/network-proxy/git-utils/http-client gates pending",
     "nativeLint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
@@ -3682,6 +3691,13 @@
       "sourceTests": "Existing local switch and settings expectations updated; encrypted history and input-order regression added; Rust integration tests not yet run",
       "nativeCompilation": "pending",
       "realProviderCompatibility": "pending",
+      "releaseAcceptance": false
+    },
+    "releaseTestHomeRoot": {
+      "scope": "Test-only optional absolute CODEX_TEST_HOME_ROOT selects tempdir_in; builder owns a private root outside native source and system temp and cleans it on success, failure or interruption",
+      "builderTests": "Existing candidate guard tests extended with real temporary-directory permissions and cleanup checks; mocked native commands preserve all six release scopes and fail-closed evidence",
+      "productionArg0Unchanged": true,
+      "nativeIntegrationTests": "not rerun; current release integration test enumeration and assertions pending",
       "releaseAcceptance": false
     }
   },
