@@ -415,6 +415,24 @@ function ActiveConversation({
 	refreshAgent: () => void;
 }) {
 	const [selectedExecution, setSelectedExecution] = useState<string>();
+	const executionTrigger = useRef<HTMLButtonElement>(null);
+	const returnExecutionFocus = useRef(false);
+	const conversationTitle = useRef<HTMLHeadingElement>(null);
+	useLayoutEffect(() => {
+		if (selectedExecution || !returnExecutionFocus.current) return;
+		returnExecutionFocus.current = false;
+		const trigger = executionTrigger.current;
+		executionTrigger.current = null;
+		if (trigger?.isConnected && !trigger.disabled) trigger.focus();
+		else conversationTitle.current?.focus();
+	}, [selectedExecution]);
+	function openExecution(executionId: string) {
+		executionTrigger.current =
+			document.activeElement instanceof HTMLButtonElement
+				? document.activeElement
+				: null;
+		setSelectedExecution(executionId);
+	}
 	const reader = useConversationTimeline({
 		conversationId,
 		identityKey,
@@ -546,7 +564,9 @@ function ActiveConversation({
 				className="chat-thread space-y-5"
 			>
 				<div className="chat-status flex flex-wrap items-center justify-between gap-2">
-					<h2 className="font-medium">{conversation?.title || "新会话"}</h2>
+					<h2 ref={conversationTitle} tabIndex={-1} className="font-medium">
+						{conversation?.title || "新会话"}
+					</h2>
 					<Button
 						variant="ghost"
 						disabled={timeline.status === "loading"}
@@ -582,7 +602,7 @@ function ActiveConversation({
 					<ConversationMessages
 						history={timeline.history}
 						events={timeline.events}
-						onExecution={setSelectedExecution}
+						onExecution={openExecution}
 						onRegenerate={regenerate}
 						canRegenerate={!blocked && !commandLocked && !active}
 						onResend={(text) => {
@@ -599,7 +619,7 @@ function ActiveConversation({
 							variant="ghost"
 							onClick={() => {
 								void reader.refresh();
-								if (latestExecution) setSelectedExecution(latestExecution);
+								if (latestExecution) openExecution(latestExecution);
 							}}
 						>
 							核实原执行状态
@@ -775,7 +795,10 @@ function ActiveConversation({
 					loading={reader.execution.isFetching}
 					failed={reader.execution.isError}
 					onRetry={() => void reader.execution.refetch()}
-					onClose={() => setSelectedExecution(undefined)}
+					onClose={() => {
+						returnExecutionFocus.current = true;
+						setSelectedExecution(undefined);
+					}}
 				/>
 			)}
 		</>

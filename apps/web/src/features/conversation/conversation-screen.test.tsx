@@ -135,6 +135,57 @@ function userMessage(text = "Private question") {
 }
 
 describe("functional conversation screen", () => {
+	it.each(["timeline", "unknown", "removed-unknown"] as const)(
+		"restores focus after closing execution details opened from %s",
+		async (entry) => {
+			let completed = false;
+			const statusEvent = () => ({
+				...event(completed ? 2 : 1),
+				schemaVersion: 1 as const,
+				type: "execution.status" as const,
+				payload: {
+					status: completed ? ("completed" as const) : ("unknown" as const),
+				},
+			});
+			const { streams, requests } = setup((request) =>
+				new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+					? Response.json({
+							...history("conversation-1", [statusEvent()]),
+							conversation: {
+								...history().conversation,
+								status: completed ? "ready" : "active",
+							},
+							messages: [userMessage()],
+						})
+					: undefined,
+			);
+			const trigger = await screen.findByRole("button", {
+				name: entry === "timeline" ? "执行详情" : "核实原执行状态",
+			});
+			trigger.focus();
+			fireEvent.click(trigger);
+			const heading = await screen.findByRole("heading", { name: "执行详情" });
+			await waitFor(() => expect(document.activeElement).toBe(heading));
+			if (entry === "removed-unknown") {
+				completed = true;
+				act(() => streams.at(-1)?.send(statusEvent()));
+				await waitFor(() => expect(trigger.isConnected).toBe(false));
+			} else {
+				expect(trigger.isConnected).toBe(true);
+			}
+			const back = screen.getByRole("button", { name: "返回对话" });
+			back.focus();
+			fireEvent.click(back);
+			const target =
+				entry === "removed-unknown"
+					? screen.getByRole("heading", { name: "Test conversation" })
+					: trigger;
+			expect(target.isConnected).toBe(true);
+			await waitFor(() => expect(document.activeElement).toBe(target));
+			expect(requests.every((request) => request.method === "GET")).toBe(true);
+		},
+	);
+
 	it("restores a regenerated execution with no answer text from persisted status and stops that execution", async () => {
 		const completed = {
 			...event(1),
