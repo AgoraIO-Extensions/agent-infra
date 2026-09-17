@@ -144,7 +144,7 @@ export async function runGitHubRepositoryLifecycle({
 					current?.name !== name ||
 					current.owner?.login !== owner ||
 					current.private !== true ||
-					!current.description?.startsWith(marker)
+					![marker, `${marker}:updated`].includes(current.description)
 				) {
 					cleanupFailure = new Error(
 						"repository delete ownership marker does not match",

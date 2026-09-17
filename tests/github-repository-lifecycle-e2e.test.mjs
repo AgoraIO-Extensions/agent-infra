@@ -39,7 +39,26 @@ test("repository lifecycle creates, updates, and deletes one private test reposi
 	);
 });
 
-function lifecycleFetch(calls) {
+test("repository lifecycle refuses to delete a repository with only a marker prefix", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { foreignDescriptionOnCleanup: true }),
+			runId: "repo-run",
+		}),
+		/repository delete ownership marker does not match/,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.delete_repository").length,
+		0,
+	);
+});
+
+function lifecycleFetch(calls, config = {}) {
 	let exists = false;
 	let description = "";
 	let id = 0;
@@ -84,7 +103,13 @@ function lifecycleFetch(calls) {
 		} else if (action === "github.delete_repository") {
 			exists = false;
 			result = { acknowledged: true };
-		} else result = repository(input.repo, description);
+		} else
+			result = repository(
+				input.repo,
+				config.foreignDescriptionOnCleanup
+					? "connection-e2e:repo-run:updated-foreign"
+					: description,
+			);
 		return response(request.id, {
 			action,
 			actionVersionId: `${action}@v7`,
