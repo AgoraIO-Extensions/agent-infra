@@ -3199,7 +3199,7 @@
     },
     {
       "path": "patches/0008-native-compaction-test-fixtures.patch",
-      "sha256": "sha256:ba1dd727e03cbfafafb68ce4fbcfc565009940a147f231ce98fd44b374ad5e25"
+      "sha256": "sha256:f0e29b33eedcf26babaed525883eb71689f769df4535e618eabc35798c217059"
     }
   ],
   "sourceFiles": [
