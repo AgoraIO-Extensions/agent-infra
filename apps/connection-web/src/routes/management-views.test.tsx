@@ -8,6 +8,72 @@ import { SharedScopeSection } from "../pages/shared-connections-page";
 afterEach(cleanup);
 
 describe("Connection 管理交互", () => {
+	it("批量选择当前筛选结果并清空 Grant 能力", () => {
+		const onReview = vi.fn();
+		render(
+			<PreviewContent
+				busy={false}
+				onConfirm={vi.fn()}
+				onReview={onReview}
+				reviewed={false}
+				value={{
+					idempotencyKey: "idempotency-preview",
+					preview: {
+						actions: [
+							{
+								description: "读取仓库",
+								effect: "READ",
+								id: "github.get_repository@v8",
+								name: "github.get_repository",
+								requiredScopes: ["repo"],
+							},
+							{
+								description: "创建议题",
+								effect: "WRITE",
+								id: "github.create_issue@v8",
+								name: "github.create_issue",
+								requiredScopes: ["repo"],
+							},
+							{
+								description: "更新议题",
+								effect: "WRITE",
+								id: "github.update_issue@v8",
+								name: "github.update_issue",
+								requiredScopes: ["repo"],
+							},
+						],
+						confirmationToken: "confirmation-token",
+						consumer: { id: "consumer-codex", name: "Codex" },
+						effectSummary: ["READ", "WRITE"],
+						expiresAt: "2026-09-17T12:00:00.000Z",
+						previewId: "preview-id",
+						requiredScopes: ["repo"],
+						targetConnection: {
+							displayName: "GitHub",
+							externalAccount: "AGORAconnectionE2E",
+							id: "connection-id",
+						},
+					},
+				}}
+			/>,
+		);
+
+		expect(screen.getByText("已选择 1 / 共 3 项")).toBeTruthy();
+		fireEvent.change(screen.getByRole("combobox", { name: "能力类型" }), {
+			target: { value: "WRITE" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "选择当前结果" }));
+		expect(screen.getByText("已选择 3 / 共 3 项")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "清空" }));
+		expect(screen.getByText("已选择 0 / 共 3 项")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "选择当前结果" }));
+		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
+		expect(onReview).toHaveBeenCalledWith([
+			"github.create_issue@v8",
+			"github.update_issue@v8",
+		]);
+	});
+
 	it("授权确认显示账号、Consumer、外部效果和所需 scope", () => {
 		const onConfirm = vi.fn();
 		render(
