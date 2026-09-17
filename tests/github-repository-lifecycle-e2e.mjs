@@ -13,6 +13,7 @@ export const githubRepositoryLifecycleActionIds = [
 	"github.rerun_workflow",
 	"github.disable_workflow",
 	"github.enable_workflow",
+	"github.delete_release_asset",
 	"github.remove_repository_collaborator",
 	"github.delete_repository",
 ];
@@ -281,24 +282,29 @@ export async function runGitHubRepositoryLifecycle({
 		});
 		if (sync?.base_branch !== "main")
 			throw new Error("fork synchronization did not match");
+		const releaseTag = `${name}-asset`;
+		const assetName = `${releaseTag}.txt`;
 		const workflows = [
 			{
 				file: "connection-e2e-cancel.yml",
 				name: "Connection E2E Cancel",
-				run: "sleep 300",
+				yaml: "name: Connection E2E Cancel\non:\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: sleep 300\n",
 			},
 			{
 				file: "connection-e2e-failure.yml",
 				name: "Connection E2E Failure",
-				run: "exit 1",
+				yaml: "name: Connection E2E Failure\non:\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n",
+			},
+			{
+				file: "connection-e2e-asset.yml",
+				name: "Connection E2E Asset",
+				yaml: `name: Connection E2E Asset\non:\n  workflow_dispatch:\npermissions:\n  contents: write\njobs:\n  asset:\n    runs-on: ubuntu-24.04\n    steps:\n      - env:\n          ASSET: ${assetName}\n          GH_TOKEN: \${{ github.token }}\n          NOTES: ${marker}\n          TAG: ${releaseTag}\n        run: |\n          printf '%s\\n' "$NOTES" > "$ASSET"\n          gh release create "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$NOTES"\n`,
 			},
 		];
 		for (const workflow of workflows)
 			await execute("github.create_or_update_file", {
 				branch: "main",
-				contentBase64: Buffer.from(
-					`name: ${workflow.name}\non:\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: ${workflow.run}\n`,
-				).toString("base64"),
+				contentBase64: Buffer.from(workflow.yaml).toString("base64"),
 				idempotencyKey: `${runId}:workflow:${workflow.file}`,
 				message: marker,
 				owner,
@@ -411,6 +417,82 @@ export async function runGitHubRepositoryLifecycle({
 			(workflow) => workflow?.state === "active",
 			"workflow was not enabled",
 		);
+		const assetWorkflow = await poll(
+			"github.get_workflow",
+			{ owner, repo: name, workflowId: workflows[2].file },
+			(workflow) => workflow?.state === "active",
+			"asset workflow was not indexed",
+		);
+		const assetDispatchStarted = new Date().toISOString();
+		const assetDispatch = await execute("github.dispatch_workflow", {
+			idempotencyKey: `${runId}:workflow:asset:dispatch`,
+			inputs: {},
+			owner,
+			ref: "main",
+			repo: name,
+			workflowId: workflows[2].file,
+		});
+		if (assetDispatch?.dispatched !== true)
+			throw new Error("asset workflow dispatch did not match");
+		const assetRun = await findDispatchedRun(
+			assetWorkflow.id,
+			assetDispatchStarted,
+		);
+		await poll(
+			"github.get_workflow_run",
+			{ owner, repo: name, runId: assetRun.id },
+			(run) => run?.status === "completed" && run.conclusion === "success",
+			"asset workflow did not succeed",
+		);
+		const releases = await execute(
+			"github.list_releases",
+			{ owner, perPage: 20, repo: name },
+			true,
+		);
+		const matchingReleases = releases?.releases?.filter(
+			(release) =>
+				release.tag_name === releaseTag && release.name === releaseTag,
+		);
+		if (matchingReleases?.length !== 1)
+			throw new Error("release asset fixture discovery did not match");
+		const release = matchingReleases[0];
+		const assets = await execute(
+			"github.list_release_assets",
+			{ owner, perPage: 20, releaseId: release.id, repo: name },
+			true,
+		);
+		const matchingAssets = assets?.assets?.filter(
+			(asset) => asset.name === assetName,
+		);
+		if (matchingAssets?.length !== 1)
+			throw new Error("release asset fixture did not match");
+		const asset = matchingAssets[0];
+		await execute("github.delete_release_asset", {
+			assetId: asset.id,
+			idempotencyKey: `${runId}:release-asset-delete`,
+			owner,
+			repo: name,
+		});
+		try {
+			await execute(
+				"github.get_release_asset",
+				{ assetId: asset.id, owner, repo: name },
+				true,
+			);
+			throw new Error("release asset remained after deletion");
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				!error.message.includes("Provider resource was not found")
+			)
+				throw error;
+		}
+		await execute("github.delete_release", {
+			idempotencyKey: `${runId}:release-delete`,
+			owner,
+			releaseId: release.id,
+			repo: name,
+		});
 	} catch (error) {
 		failure = error;
 	} finally {

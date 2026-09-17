@@ -26,7 +26,7 @@ jobs:
     if: vars.CONNECTION_GITHUB_E2E_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/connection' && inputs.suite == 'repository'
     environment: connection-e2e
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout trusted dispatch commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

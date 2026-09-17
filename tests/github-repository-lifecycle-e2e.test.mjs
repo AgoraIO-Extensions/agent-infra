@@ -39,6 +39,7 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 		"github.rerun_workflow@v7",
 		"github.disable_workflow@v7",
 		"github.enable_workflow@v7",
+		"github.delete_release_asset@v7",
 		"github.remove_repository_collaborator@v7",
 		"github.delete_repository@v7",
 	]);
@@ -97,6 +98,7 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 			"github.rerun_workflow",
 			"github.disable_workflow",
 			"github.enable_workflow",
+			"github.dispatch_workflow",
 		],
 	);
 	assert.ok(
@@ -109,6 +111,15 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 	assert.equal(workflowActions[1].input.runId, 801);
 	assert.equal(workflowActions[3].input.runId, 802);
 	assert.equal(workflowActions[4].input.runId, 802);
+	const assetDelete = calls.find(
+		({ action }) => action === "github.delete_release_asset",
+	);
+	assert.deepEqual(assetDelete.input, {
+		assetId: 902,
+		idempotencyKey: "repo-run:release-asset-delete",
+		owner: "AGORAconnectionE2E",
+		repo: "connection-e2e-repo-run",
+	});
 });
 
 test("repository lifecycle waits a bounded number of times for the fork branch", async () => {
@@ -199,6 +210,30 @@ test("repository lifecycle fails closed on ambiguous workflow run discovery and 
 	);
 });
 
+test("repository lifecycle refuses ambiguous release assets and cleans repositories", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { ambiguousReleaseAssets: true }),
+			runId: "repo-run",
+		}),
+		/release asset fixture did not match/,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.delete_release_asset")
+			.length,
+		0,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.delete_repository").length,
+		2,
+	);
+});
+
 test("repository lifecycle removes the collaborator and repository after an invitation mismatch", async () => {
 	const calls = [];
 	await assert.rejects(
@@ -274,6 +309,7 @@ function lifecycleFetch(calls, config = {}) {
 	const workflowIds = {
 		"connection-e2e-cancel.yml": 701,
 		"connection-e2e-failure.yml": 702,
+		"connection-e2e-asset.yml": 703,
 	};
 	const workflowStates = new Map(
 		Object.entries(workflowIds).map(([file, workflowId]) => [
@@ -283,6 +319,8 @@ function lifecycleFetch(calls, config = {}) {
 	);
 	const workflowRuns = new Map();
 	let lastDispatchedWorkflow;
+	let releaseExists = false;
+	let assetExists = false;
 	return async (_url, options) => {
 		const request = JSON.parse(options.body);
 		const { arguments: args, name } = request.params;
@@ -311,6 +349,12 @@ function lifecycleFetch(calls, config = {}) {
 			action === "github.get_repository" &&
 			(input.owner === "AgoraConnectionE2EORG" ? !forkExists : !exists)
 		)
+			return Response.json({
+				error: { code: -32001, message: "Provider resource was not found" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
+		if (action === "github.get_release_asset" && !assetExists)
 			return Response.json({
 				error: { code: -32001, message: "Provider resource was not found" },
 				id: request.id,
@@ -386,11 +430,17 @@ function lifecycleFetch(calls, config = {}) {
 		} else if (action === "github.dispatch_workflow") {
 			const workflowId = workflowIds[input.workflowId];
 			lastDispatchedWorkflow = workflowId;
+			if (workflowId === workflowIds["connection-e2e-asset.yml"]) {
+				releaseExists = true;
+				assetExists = true;
+			}
 			workflowRuns.set(workflowId + 100, {
 				conclusion:
 					workflowId === workflowIds["connection-e2e-cancel.yml"]
 						? null
-						: "failure",
+						: workflowId === workflowIds["connection-e2e-asset.yml"]
+							? "success"
+							: "failure",
 				event: "workflow_dispatch",
 				head_branch: "main",
 				id: workflowId + 100,
@@ -434,6 +484,38 @@ function lifecycleFetch(calls, config = {}) {
 			result = { acknowledged: true };
 		} else if (action === "github.enable_workflow") {
 			workflowStates.get(input.workflowId).state = "active";
+			result = { acknowledged: true };
+		} else if (action === "github.list_releases") {
+			result = {
+				releases: releaseExists
+					? [
+							{
+								id: 901,
+								name: "connection-e2e-repo-run-asset",
+								tag_name: "connection-e2e-repo-run-asset",
+							},
+						]
+					: [],
+			};
+		} else if (action === "github.list_release_assets") {
+			const asset = {
+				id: 902,
+				name: "connection-e2e-repo-run-asset.txt",
+			};
+			result = {
+				assets: assetExists
+					? config.ambiguousReleaseAssets
+						? [asset, { ...asset, id: 903 }]
+						: [asset]
+					: [],
+			};
+		} else if (action === "github.delete_release_asset") {
+			assetExists = false;
+			result = { acknowledged: true };
+		} else if (action === "github.get_release_asset") {
+			result = { id: 902, name: "connection-e2e-repo-run-asset.txt" };
+		} else if (action === "github.delete_release") {
+			releaseExists = false;
 			result = { acknowledged: true };
 		} else if (action === "github.delete_repository") {
 			if (input.owner === "AgoraConnectionE2EORG") forkExists = false;
