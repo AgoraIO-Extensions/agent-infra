@@ -2676,23 +2676,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ORDER BY root.id
 				FOR UPDATE OF active_grant
 			`;
-			const [existing] = await sql<
-				{ credential_version_id: string | null; id: string }[]
-			>`
-					SELECT account.id, credential.id AS credential_version_id
-					FROM connection_accounts account
-					LEFT JOIN connection_credential_versions credential
-						ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
+			const [existing] = await sql<{ id: string }[]>`
+					SELECT account.id FROM connection_accounts account
 					WHERE owner_type = 'PERSONAL'
 						AND account.owner_principal_id = ${input.principalId}
 						AND account.provider_id = ${input.providerId}
 						AND account.external_account = ${input.externalAccount}
-					FOR UPDATE OF account, credential
+					FOR UPDATE OF account
 				`;
+			const [activeCredential] = existing
+				? await sql<{ id: string }[]>`
+					SELECT id FROM connection_credential_versions
+					WHERE connection_id = ${existing.id} AND status = 'ACTIVE'
+					FOR UPDATE
+				`
+				: [];
 			if (
 				input.expectedConnectionId &&
 				(existing?.id !== input.expectedConnectionId ||
-					existing.credential_version_id !== input.expectedCredentialVersionId)
+					activeCredential?.id !== input.expectedCredentialVersionId)
 			) {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
@@ -2785,14 +2787,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND account.status = 'ACTIVE'
 		`;
 		if (!row) forbidden();
-		if (this.publishedProviderReleaseIds.get(row.provider_id) === row.provider_release_id) {
+		if (
+			this.publishedProviderReleaseIds.get(row.provider_id) ===
+			row.provider_release_id
+		) {
 			throw new ConnectionError(
 				"INVALID_REQUEST",
 				"Provider Connection is already current",
 			);
 		}
 		const grantedScopes = Array.isArray(row.scope_json)
-			? row.scope_json.filter((value): value is string => typeof value === "string")
+			? row.scope_json.filter(
+					(value): value is string => typeof value === "string",
+				)
 			: [];
 		if (grantedScopes.length === 0) forbidden();
 		return {
