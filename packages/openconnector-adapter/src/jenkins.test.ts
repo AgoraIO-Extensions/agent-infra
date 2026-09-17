@@ -16,7 +16,9 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.notEqual(first.provider, second.provider);
 	assert.notEqual(first.providerReleaseId, second.providerReleaseId);
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
+	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v2");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v2");
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
@@ -78,6 +80,59 @@ test("Jenkins rejects path injection before provider access", async () => {
 		/jobFullName is invalid/,
 	);
 	assert.equal(called, false);
+});
+
+test("Jenkins returns bounded unredacted progressive console output", async () => {
+	const requests: Request[] = [];
+	const secretLikeText = "token=not-redacted\n";
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async (input, init) => {
+			requests.push(new Request(input, init));
+			return new Response(secretLikeText, {
+				headers: { "x-more-data": "false", "x-text-size": "19" },
+			});
+		},
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_console",
+		credential: { accessToken: credential },
+		input: { buildNumber: 901, jobFullName: "EP/build_all", start: 0 },
+	});
+	assert.deepEqual(result, {
+		moreData: false,
+		nextStart: 19,
+		text: secretLikeText,
+		truncated: false,
+	});
+	assert.equal(
+		requests[0]?.url,
+		"http://114.94.148.35:8010/job/EP/job/build_all/901/logText/progressiveText?start=0",
+	);
+});
+
+test("Jenkins truncates a console page at 256 KiB", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("x".repeat(256 * 1024 + 1), {
+				headers: { "x-more-data": "false", "x-text-size": "262145" },
+			}),
+	);
+	const result = (await adapter.execute({
+		action: "jenkins-release.get_build_console",
+		credential: { accessToken: credential },
+		input: { buildNumber: 901, jobFullName: "EP/build_all", start: 10 },
+	})) as {
+		moreData: boolean;
+		nextStart: number;
+		text: string;
+		truncated: boolean;
+	};
+	assert.equal(Buffer.byteLength(result.text), 256 * 1024);
+	assert.equal(result.nextStart, 10 + 256 * 1024);
+	assert.equal(result.moreData, true);
+	assert.equal(result.truncated, true);
 });
 
 test("Jenkins credential validation fails closed on auth errors and redirects", async () => {

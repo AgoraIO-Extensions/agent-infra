@@ -7,6 +7,7 @@ import type {
 import { jenkinsExecutorDigest } from "./jenkins-integrity.ts";
 
 const credentialScope = "jenkins.read";
+const maxConsoleBytes = 256 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
 const sourceCommit = "connection-native";
@@ -60,6 +61,17 @@ const actionSpecs = [
 		required: ["jobFullName", "buildNumber"],
 	},
 	{
+		description:
+			"按字节游标读取 Jenkins Build console log，内容不脱敏，单次最多返回 256 KiB。",
+		name: "get_build_console",
+		properties: {
+			buildNumber: { minimum: 1, type: "integer" },
+			jobFullName: { minLength: 1, type: "string" },
+			start: { minimum: 0, type: "integer" },
+		},
+		required: ["jobFullName", "buildNumber", "start"],
+	},
+	{
 		description: "按 Queue item ID 获取 Jenkins 排队状态。",
 		name: "get_queue_item",
 		properties: { queueItemId: { minimum: 1, type: "integer" } },
@@ -74,7 +86,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v1`,
+			id: `${profile.providerId}.${action.name}@v2`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -97,7 +109,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v1`,
+		providerReleaseId: `${profile.providerId}-connection-v2`,
 		sourceCommit,
 	} as const;
 }
@@ -171,6 +183,12 @@ export class JenkinsAdapter
 					credential,
 					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/api/json`,
 				);
+			case "get_build_console":
+				return this.requestConsole(
+					credential,
+					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/logText/progressiveText?start=${nonNegativeInteger(input.input, "start")}`,
+					nonNegativeInteger(input.input, "start"),
+				);
 			case "get_queue_item":
 				return this.requestJson(
 					credential,
@@ -235,6 +253,64 @@ export class JenkinsAdapter
 			clearTimeout(timeout);
 		}
 	}
+
+	private async requestConsole(
+		credential: JenkinsCredential,
+		path: string,
+		start: number,
+	) {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+		try {
+			const response = await this.fetcher(
+				new URL(path, this.profile.apiOrigin),
+				{
+					headers: {
+						accept: "text/plain",
+						authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
+					},
+					redirect: "manual",
+					signal: controller.signal,
+				},
+			);
+			if (response.status === 401 || response.status === 403) {
+				throw invalidCredential("Jenkins credential was rejected");
+			}
+			if (response.status >= 300 && response.status < 400) {
+				throw providerError("Jenkins request redirected");
+			}
+			if (!response.ok) {
+				throw providerError(
+					`Jenkins request failed with HTTP ${response.status}`,
+				);
+			}
+			const { bytes: returned, truncated } = await readLimitedBytes(
+				response,
+				maxConsoleBytes,
+			);
+			const reportedNext = Number(response.headers.get("x-text-size"));
+			return {
+				moreData:
+					truncated ||
+					response.headers.get("x-more-data")?.toLowerCase() === "true",
+				nextStart:
+					!truncated &&
+					Number.isSafeInteger(reportedNext) &&
+					reportedNext >= start
+						? reportedNext
+						: start + returned.byteLength,
+				text: new TextDecoder().decode(returned),
+				truncated,
+			};
+		} catch (error) {
+			if (error instanceof Error && error.name === "AbortError") {
+				throw providerError("Jenkins request timed out");
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
 }
 
 type JenkinsCredential = { apiToken: string; username: string };
@@ -270,6 +346,43 @@ function positiveInteger(input: JsonObject, name: string) {
 		throw providerError(`Jenkins ${name} must be a positive integer`);
 	}
 	return Number(value);
+}
+
+function nonNegativeInteger(input: JsonObject, name: string) {
+	const value = input[name];
+	if (!Number.isSafeInteger(value) || Number(value) < 0) {
+		throw providerError(`Jenkins ${name} must be a non-negative integer`);
+	}
+	return Number(value);
+}
+
+async function readLimitedBytes(response: Response, limit: number) {
+	if (!response.body) return { bytes: new Uint8Array(), truncated: false };
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	let truncated = false;
+	while (size <= limit) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		const remaining = limit - size;
+		if (value.byteLength > remaining) {
+			chunks.push(value.subarray(0, remaining));
+			size += remaining;
+			truncated = true;
+			await reader.cancel();
+			break;
+		}
+		chunks.push(value);
+		size += value.byteLength;
+	}
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return { bytes, truncated };
 }
 
 function stringValue(input: JsonObject, name: string) {

@@ -109,8 +109,13 @@ Owner 于 2026-09-17 明确接受该 origin 暂无 TLS 的残余风险，仅允�
 `connection-local` supervised pilot 通过已批准白名单直连；不得使用代理、扩大到其他 HTTP origin
 或描述为广泛生产可用，并须在 Provider 提供 HTTPS 后迁移。两个 profile 都要求
 `GET /whoAmI/api/json` 返回 `authenticated=true`、非匿名且包含 `name`，以 `name` 作为账号身份。首批
-Action 只读取当前用户、顶层 Job、指定 Job、Build 和 Queue item；console log、artifact 内容和所有
-构建写操作不纳入。后续 Jenkins 实例必须新增经过 Provider Onboarding 的静态 deployment profile。
+Action 只读取当前用户、顶层 Job、指定 Job、Build、Queue item 和 Build console log。Console log
+使用固定 progressive endpoint 与非负 `start` 字节游标，单次最多返回 256 KiB、`nextStart`、
+`moreData` 和 `truncated`。Connection Owner 于 2026-09-17 明确要求不做日志内容脱敏，并接受日志
+可能进入 Consumer/模型上下文及既有调用结果保留边界的风险；该例外不允许任意 URL、请求头、artifact
+内容或构建写操作。后续 Jenkins 实例必须新增经过 Provider Onboarding 的静态 deployment profile。
+增加 console log 时发布新的 `jenkins-release-connection-v2` 和 `@v2` ActionVersion，不修改已发布
+v1 catalog；既有 v1 Connection/Grant 不自动扩权，用户必须连接并确认 v2 Action 集合。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
