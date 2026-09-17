@@ -57,14 +57,14 @@ test("GitHub read conformance emits sanitized evidence for every runnable scenar
 	assert.deepEqual(evidence.failures, []);
 	assert.deepEqual(evidence.skipped, [
 		{
-			actionVersionId: "github.get_pull_request_review@v7",
+			actionVersionId: "github.get_pull_request_review@v8",
 			reason: "SKIPPED_MISSING_SECOND_ACTOR",
 		},
 	]);
 	assert.ok(
 		evidence.calls.every(
 			(call) =>
-				call.actionVersionId.endsWith("@v7") &&
+				call.actionVersionId.endsWith("@v8") &&
 				call.inputHash.match(/^[a-f0-9]{64}$/) &&
 				call.status === "SUCCEEDED",
 		),
@@ -116,7 +116,7 @@ test("GitHub read conformance reports all reads after a fixture mismatch", async
 		(error) => {
 			assert.deepEqual(error.evidence.failures, [
 				{
-					actionVersionId: "github.list_commit_comments@v7",
+					actionVersionId: "github.list_commit_comments@v8",
 					error: "github.list_commit_comments fixture does not match",
 				},
 			]);
@@ -437,7 +437,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 			return mcpResponse(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v7`,
+					actionVersionId: `${args.actionId}@v8`,
 					effect:
 						args.actionId.startsWith("github.get_") ||
 						args.actionId.startsWith("github.list_")
@@ -572,7 +572,7 @@ test("GitHub conformance completes the marked issue and comment lifecycle", asyn
 	);
 	assert.deepEqual(result, {
 		actionVersions: Object.fromEntries(
-			guides.map((action) => [action, `${action}@v7`]),
+			guides.map((action) => [action, `${action}@v8`]),
 		),
 		calls: actions.slice(1).map((entry, index) => ({
 			actionId: entry.action,
@@ -615,7 +615,7 @@ test("GitHub conformance never retries a started comment deletion", async () => 
 			return mcpResponse(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v7`,
+					actionVersionId: `${args.actionId}@v8`,
 					effect:
 						args.actionId.startsWith("github.get_") ||
 						args.actionId.startsWith("github.list_")
@@ -733,7 +733,7 @@ function actionGuide(id, actionId) {
 	return mcpResponse(id, {
 		action: {
 			actionId,
-			actionVersionId: `${actionId}@v7`,
+			actionVersionId: `${actionId}@v8`,
 			effect: ["check", "compare", "get", "list", "search"].includes(verb)
 				? "READ"
 				: "WRITE",

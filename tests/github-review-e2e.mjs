@@ -66,7 +66,7 @@ export async function runGitHubReviewConformance({
 	);
 	if (
 		dismissGuide?.action?.actionVersionId !==
-			"github.dismiss_pull_request_review@v7" ||
+			"github.dismiss_pull_request_review@v8" ||
 		dismissGuide.action.effect !== "WRITE"
 	) {
 		throw new Error(
@@ -92,7 +92,7 @@ export async function runGitHubReviewConformance({
 		const guide = await reviewer.call("get_action_guide", { actionId }, true);
 		if (
 			guide?.action?.actionId !== actionId ||
-			guide?.action?.actionVersionId !== `${actionId}@v7` ||
+			guide?.action?.actionVersionId !== `${actionId}@v8` ||
 			guide.action.effect !== actionEffects[actionId]
 		) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -109,7 +109,7 @@ export async function runGitHubReviewConformance({
 			actionEffects[actionId] === "READ",
 		);
 		const actionVersionId = approvedVersions.get(actionId);
-		if (actionVersionId !== `${actionId}@v7`) {
+		if (actionVersionId !== `${actionId}@v8`) {
 			throw new Error(`${actionId} has no approved ActionVersion`);
 		}
 		if (projection.actionVersionId !== actionVersionId) {
@@ -330,7 +330,7 @@ export async function runGitHubReviewConformance({
 			},
 		);
 		if (
-			dismissed.actionVersionId !== "github.dismiss_pull_request_review@v7" ||
+			dismissed.actionVersionId !== "github.dismiss_pull_request_review@v8" ||
 			dismissed.result?.id !== reviewId ||
 			dismissed.result?.state !== "DISMISSED"
 		) {
@@ -447,10 +447,10 @@ export async function runGitHubReviewConformance({
 	if (failure) throw failure;
 
 	return {
-		actionVersionIds: githubReviewActionIds.map((id) => `${id}@v7`),
+		actionVersionIds: githubReviewActionIds.map((id) => `${id}@v8`),
 		calls,
 		cleanup: "SUCCEEDED",
-		primaryActionVersionIds: ["github.dismiss_pull_request_review@v7"],
+		primaryActionVersionIds: ["github.dismiss_pull_request_review@v8"],
 		pullNumber,
 		runId,
 	};

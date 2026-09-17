@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
 	ConnectionApplicationService,
@@ -40,6 +41,77 @@ async function authorizeCurrentConsumer(
 }
 
 describe("PostgreSQL Connection business authority", () => {
+	integrationTest(
+		"disables the incompatible GitHub OAuth v7 release and check actions",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const releaseId =
+				"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7";
+			const actionIds = [
+				"github.rerequest_check_run@v7",
+				"github.rerequest_check_suite@v7",
+			];
+			try {
+				await sql`
+					INSERT INTO connection_provider_releases (
+						id, provider, source_commit, deployment_profile, auth_profile,
+						executor_digest, catalog_checksum, status
+					) VALUES (
+						${releaseId}, 'github', '0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674',
+						'{}'::jsonb, '{}'::jsonb, ${`sha256:${"a".repeat(64)}`},
+						${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED'
+					)
+					ON CONFLICT (id) DO UPDATE SET status = 'PUBLISHED'
+				`;
+				for (const actionId of actionIds) {
+					const actionName = actionId.slice(0, actionId.indexOf("@"));
+					await sql`
+						INSERT INTO connection_action_versions (
+							id, provider_release_id, name, description, effect,
+							input_schema, required_scopes, status
+						) VALUES (
+							${actionId}, ${releaseId}, ${actionName},
+							'GitHub App-only check rerequest', 'WRITE', '{}'::jsonb,
+							'["workflow"]'::jsonb, 'PUBLISHED'
+						)
+						ON CONFLICT (id) DO UPDATE SET status = 'PUBLISHED'
+					`;
+				}
+
+				const migration = await readFile(
+					resolve(
+						import.meta.dirname,
+						"../../../migrations/connection/0028_github_oauth_v8.sql",
+					),
+					"utf8",
+				);
+				await sql.unsafe(migration);
+
+				const [release] = await sql<{ status: string }[]>`
+					SELECT status FROM connection_provider_releases WHERE id = ${releaseId}
+				`;
+				const actions = await sql<{ id: string; status: string }[]>`
+					SELECT id, status FROM connection_action_versions
+					WHERE id IN ${sql(actionIds)} ORDER BY id
+				`;
+				expect(release?.status).toBe("DISABLED");
+				expect(actions).toEqual(
+					actionIds.sort().map((id) => ({ id, status: "DISABLED" })),
+				);
+			} finally {
+				await sql`DELETE FROM connection_action_versions WHERE id IN ${sql(actionIds)}`;
+				await sql`DELETE FROM connection_provider_releases WHERE id = ${releaseId}`;
+				await sql.end();
+			}
+		},
+		30_000,
+	);
+
 	integrationTest(
 		"caches a verified GitHub login without changing the external account",
 		async () => {

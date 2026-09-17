@@ -34,7 +34,7 @@ export async function runGitHubPullRequestCollaboration({
 	for (const actionId of githubPullRequestCollaborationActionIds) {
 		const guide = await primary.call("get_action_guide", { actionId }, true);
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v7` ||
+			guide?.action?.actionVersionId !== `${actionId}@v8` ||
 			guide.action.effect !== "WRITE"
 		) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -61,7 +61,7 @@ export async function runGitHubPullRequestCollaboration({
 	const refCreationAttempts = new Map();
 	const execute = async (client, actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
-		if (projection.actionVersionId !== `${actionId}@v7`)
+		if (projection.actionVersionId !== `${actionId}@v8`)
 			throw new Error(`${actionId} executed an unapproved ActionVersion`);
 		if (githubPullRequestCollaborationActionIds.includes(actionId)) {
 			calls.push({
@@ -401,7 +401,7 @@ export async function runGitHubPullRequestCollaboration({
 	if (failure) throw failure;
 	return {
 		actionVersionIds: githubPullRequestCollaborationActionIds.map(
-			(actionId) => `${actionId}@v7`,
+			(actionId) => `${actionId}@v8`,
 		),
 		calls,
 		cleanup: "SUCCEEDED",

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { githubV7VerificationEvidence } from "../packages/openconnector-adapter/src/verification/github-v7.ts";
-import { githubV7ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v7-read-scenarios.ts";
+import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
+import { githubV8ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v8-read-scenarios.ts";
 
 const target = {
 	externalAccount: "328682695",
@@ -85,11 +85,11 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 		);
 	}
 
-	const runnable = githubV7ReadScenarios.filter(
+	const runnable = githubV8ReadScenarios.filter(
 		(scenario) => scenario.execution === "LIVE",
 	);
 	const repositoryScenario = runnable.find(
-		(scenario) => scenario.actionVersionId === "github.get_repository@v7",
+		(scenario) => scenario.actionVersionId === "github.get_repository@v8",
 	);
 	if (!repositoryScenario)
 		throw new Error("repository preflight scenario is missing");
@@ -99,7 +99,7 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 	];
 	const calls = [];
 	const failures = [];
-	const skipped = githubV7ReadScenarios
+	const skipped = githubV8ReadScenarios
 		.filter((scenario) => scenario.execution !== "LIVE")
 		.map((scenario) => ({
 			actionVersionId: scenario.actionVersionId,
@@ -153,7 +153,7 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 	const evidence = {
 		calls,
 		failures,
-		providerReleaseId: githubV7VerificationEvidence.providerReleaseId,
+		providerReleaseId: githubConnectionCatalog.providerReleaseId,
 		runId,
 		skipped,
 	};
@@ -472,7 +472,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	const actionVersions = {};
 	for (const [actionId, effect] of Object.entries(actionEffects)) {
 		const guide = await call("get_action_guide", { actionId }, true);
-		const approvedVersion = `${actionId}@v7`;
+		const approvedVersion = `${actionId}@v8`;
 		if (guide?.action?.actionVersionId !== approvedVersion) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
 		}

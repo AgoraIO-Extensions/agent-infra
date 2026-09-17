@@ -28,20 +28,20 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 		runId: "repo-run",
 	});
 	assert.deepEqual(evidence.actionVersionIds, [
-		"github.create_repository@v7",
-		"github.update_repository@v7",
-		"github.add_repository_collaborator@v7",
-		"github.fork_repository@v7",
-		"github.sync_fork_branch_with_upstream@v7",
-		"github.dispatch_workflow@v7",
-		"github.cancel_workflow_run@v7",
-		"github.rerun_failed_jobs@v7",
-		"github.rerun_workflow@v7",
-		"github.disable_workflow@v7",
-		"github.enable_workflow@v7",
-		"github.delete_release_asset@v7",
-		"github.remove_repository_collaborator@v7",
-		"github.delete_repository@v7",
+		"github.create_repository@v8",
+		"github.update_repository@v8",
+		"github.add_repository_collaborator@v8",
+		"github.fork_repository@v8",
+		"github.sync_fork_branch_with_upstream@v8",
+		"github.dispatch_workflow@v8",
+		"github.cancel_workflow_run@v8",
+		"github.rerun_failed_jobs@v8",
+		"github.rerun_workflow@v8",
+		"github.disable_workflow@v8",
+		"github.enable_workflow@v8",
+		"github.delete_release_asset@v8",
+		"github.remove_repository_collaborator@v8",
+		"github.delete_repository@v8",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	const collaboratorPreflight = calls.findIndex(
@@ -338,7 +338,7 @@ function lifecycleFetch(calls, config = {}) {
 			return response(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v7`,
+					actionVersionId: `${args.actionId}@v8`,
 					effect: "WRITE",
 				},
 			});
@@ -363,7 +363,7 @@ function lifecycleFetch(calls, config = {}) {
 		if (action === "github.get_user")
 			return response(request.id, {
 				action,
-				actionVersionId: `${action}@v7`,
+				actionVersionId: `${action}@v8`,
 				callId: `call-${++id}`,
 				result: { id: 329435106, login: "connectionE2E2" },
 				status: "SUCCEEDED",
@@ -537,7 +537,7 @@ function lifecycleFetch(calls, config = {}) {
 			);
 		return response(request.id, {
 			action,
-			actionVersionId: `${action}@v7`,
+			actionVersionId: `${action}@v8`,
 			callId: `call-${++id}`,
 			result,
 			status: "SUCCEEDED",

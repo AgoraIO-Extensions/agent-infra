@@ -101,7 +101,7 @@ export async function runGitHubLowRiskWriteConformance({
 		const actionId = `github.${name}`;
 		const guide = await call("get_action_guide", { actionId });
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v7` ||
+			guide?.action?.actionVersionId !== `${actionId}@v8` ||
 			guide.action.effect !== "WRITE"
 		)
 			throw new Error(`${actionId} contract does not match`);
@@ -128,7 +128,7 @@ export async function runGitHubLowRiskWriteConformance({
 		}
 		if (record)
 			calls.push({
-				actionVersionId: `${actionId}@v7`,
+				actionVersionId: `${actionId}@v8`,
 				callId: result.callId,
 				inputHash: hash(args),
 				status: result.status,
