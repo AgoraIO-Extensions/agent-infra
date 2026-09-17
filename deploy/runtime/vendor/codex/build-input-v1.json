@@ -3413,7 +3413,7 @@
     },
     {
       "path": "codex-rs/core/tests/suite/compact/native_hook_fixture.rs",
-      "sha256": "sha256:8fe8279f46fc8e2466900d7b5c5a626498a6f392dda1929e6e4db6a4cd5ed653"
+      "sha256": "sha256:196d57f97b1fffe23b1d6146b36e203d0b230e8ab135f185ca4e7c34dd4ee1e7"
     },
     {
       "path": "codex-rs/exec-server/src/client/http_response_body_stream.rs",
