@@ -4,6 +4,8 @@ import { assertSingleAccount, mcpClient } from "./github-review-e2e.mjs";
 export const githubRepositoryLifecycleActionIds = [
 	"github.create_repository",
 	"github.update_repository",
+	"github.add_repository_collaborator",
+	"github.remove_repository_collaborator",
 	"github.delete_repository",
 ];
 
@@ -37,8 +39,14 @@ export async function runGitHubRepositoryLifecycle({
 	const marker = `connection-e2e:${runId}`;
 	let creationStarted = false;
 	let owned = false;
+	let collaboratorMutationStarted = false;
+	let deleted = false;
 	let failure;
-	let cleanupFailure;
+	const cleanupFailures = [];
+	const recordCleanupFailure = (error) =>
+		cleanupFailures.push(
+			error instanceof Error ? error : new Error("unknown cleanup failure"),
+		);
 	const calls = [];
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
@@ -53,6 +61,16 @@ export async function runGitHubRepositoryLifecycle({
 		return projection.result;
 	};
 	try {
+		const collaboratorTarget = await execute(
+			"github.get_user",
+			{ username: "connectionE2E2" },
+			true,
+		);
+		if (
+			String(collaboratorTarget?.id) !== "329435106" ||
+			collaboratorTarget.login !== "connectionE2E2"
+		)
+			throw new Error("collaborator GitHub identity does not match");
 		try {
 			await execute("github.get_repository", { owner, repo: name }, true);
 			throw new Error("fixture repository already exists");
@@ -104,6 +122,19 @@ export async function runGitHubRepositoryLifecycle({
 			updated.description !== updatedMarker
 		)
 			throw new Error("repository update did not match");
+		collaboratorMutationStarted = true;
+		const collaborator = await execute("github.add_repository_collaborator", {
+			idempotencyKey: `${runId}:repository-collaborator-add`,
+			owner,
+			permission: "pull",
+			repo: name,
+			username: "connectionE2E2",
+		});
+		if (
+			collaborator?.invited !== true ||
+			collaborator.invitation?.invitee?.login !== "connectionE2E2"
+		)
+			throw new Error("repository collaborator invitation did not match");
 	} catch (error) {
 		failure = error;
 	} finally {
@@ -122,15 +153,15 @@ export async function runGitHubRepositoryLifecycle({
 				)
 					owned = true;
 				else
-					cleanupFailure = new Error(
-						"repository cleanup ownership marker does not match",
+					recordCleanupFailure(
+						new Error("repository cleanup ownership marker does not match"),
 					);
 			} catch (error) {
 				if (
 					!(error instanceof Error) ||
 					!error.message.includes("Provider resource was not found")
 				)
-					cleanupFailure = error;
+					recordCleanupFailure(error);
 			}
 		}
 		if (owned) {
@@ -146,34 +177,50 @@ export async function runGitHubRepositoryLifecycle({
 					current.private !== true ||
 					![marker, `${marker}:updated`].includes(current.description)
 				) {
-					cleanupFailure = new Error(
-						"repository delete ownership marker does not match",
+					recordCleanupFailure(
+						new Error("repository delete ownership marker does not match"),
 					);
-				} else
+				} else {
+					if (collaboratorMutationStarted)
+						try {
+							await execute("github.remove_repository_collaborator", {
+								idempotencyKey: `${runId}:repository-collaborator-remove`,
+								owner,
+								repo: name,
+								username: "connectionE2E2",
+							});
+						} catch (error) {
+							recordCleanupFailure(error);
+						}
 					await execute("github.delete_repository", {
 						idempotencyKey: `${runId}:repository-delete`,
 						owner,
 						repo: name,
 					});
-				if (!cleanupFailure)
+					deleted = true;
+				}
+				if (deleted) {
 					try {
 						await execute("github.get_repository", { owner, repo: name }, true);
-						cleanupFailure = new Error("repository remained after deletion");
+						recordCleanupFailure(
+							new Error("repository remained after deletion"),
+						);
 					} catch (error) {
 						if (
 							!(error instanceof Error) ||
 							!error.message.includes("Provider resource was not found")
 						)
-							cleanupFailure = error;
+							recordCleanupFailure(error);
 					}
+				}
 			} catch (error) {
-				cleanupFailure = error;
+				recordCleanupFailure(error);
 			}
 		}
 	}
-	if (cleanupFailure)
+	if (cleanupFailures.length > 0)
 		throw new Error(
-			`${failure instanceof Error ? `${failure.message}; ` : ""}cleanup failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : "unknown"}`,
+			`${failure instanceof Error ? `${failure.message}; ` : ""}cleanup failed: ${cleanupFailures.map(({ message }) => message).join("; ")}`,
 		);
 	if (failure) throw failure;
 	return {

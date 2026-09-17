@@ -17,7 +17,7 @@ test("repository lifecycle requires a credential before networking", async () =>
 	assert.equal(requests, 0);
 });
 
-test("repository lifecycle creates, updates, and deletes one private test repository", async () => {
+test("repository lifecycle creates, updates, removes its collaborator, and deletes one private test repository", async () => {
 	const calls = [];
 	const evidence = await runGitHubRepositoryLifecycle({
 		environment: {
@@ -30,9 +30,36 @@ test("repository lifecycle creates, updates, and deletes one private test reposi
 	assert.deepEqual(evidence.actionVersionIds, [
 		"github.create_repository@v7",
 		"github.update_repository@v7",
+		"github.add_repository_collaborator@v7",
+		"github.remove_repository_collaborator@v7",
 		"github.delete_repository@v7",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
+	const collaboratorPreflight = calls.findIndex(
+		({ action }) => action === "github.get_user",
+	);
+	assert.ok(collaboratorPreflight >= 0);
+	assert.ok(
+		collaboratorPreflight <
+			calls.findIndex(({ action }) => action === "github.create_repository"),
+	);
+	assert.equal(
+		calls.filter(
+			({ action }) => action === "github.add_repository_collaborator",
+		).length,
+		1,
+	);
+	assert.equal(
+		calls.find(({ action }) => action === "github.add_repository_collaborator")
+			?.input.permission,
+		"pull",
+	);
+	assert.equal(
+		calls.filter(
+			({ action }) => action === "github.remove_repository_collaborator",
+		).length,
+		1,
+	);
 	assert.equal(
 		calls.filter(({ action }) => action === "github.delete_repository").length,
 		1,
@@ -55,6 +82,68 @@ test("repository lifecycle refuses to delete a repository with only a marker pre
 	assert.equal(
 		calls.filter(({ action }) => action === "github.delete_repository").length,
 		0,
+	);
+});
+
+test("repository lifecycle removes the collaborator and repository after an invitation mismatch", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { inviteeLogin: "unexpected-user" }),
+			runId: "repo-run",
+		}),
+		/repository collaborator invitation did not match/,
+	);
+	const actions = calls.map(({ action }) => action);
+	assert.ok(
+		actions.indexOf("github.add_repository_collaborator") <
+			actions.indexOf("github.remove_repository_collaborator"),
+	);
+	assert.ok(
+		actions.indexOf("github.remove_repository_collaborator") <
+			actions.indexOf("github.delete_repository"),
+	);
+});
+
+test("repository lifecycle confirms repository deletion after collaborator cleanup fails", async () => {
+	const calls = [];
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch(calls, { failCollaboratorRemoval: true }),
+			runId: "repo-run",
+		}),
+		/cleanup failed: .*remove_repository_collaborator/,
+	);
+	assert.equal(
+		calls.filter(({ action }) => action === "github.get_repository").length,
+		3,
+	);
+});
+
+test("repository lifecycle reports collaborator and repository cleanup failures", async () => {
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch([], {
+				failCollaboratorRemoval: true,
+				failRepositoryDeletion: true,
+			}),
+			runId: "repo-run",
+		}),
+		(error) =>
+			error.message.includes("remove_repository_collaborator") &&
+			error.message.includes("delete_repository"),
 	);
 });
 
@@ -92,6 +181,29 @@ function lifecycleFetch(calls, config = {}) {
 				id: request.id,
 				jsonrpc: "2.0",
 			});
+		if (action === "github.get_user")
+			return response(request.id, {
+				action,
+				actionVersionId: `${action}@v7`,
+				callId: `call-${++id}`,
+				result: { id: 329435106, login: "connectionE2E2" },
+				status: "SUCCEEDED",
+			});
+		if (
+			action === "github.remove_repository_collaborator" &&
+			config.failCollaboratorRemoval
+		)
+			return Response.json({
+				error: { code: -32001, message: "collaborator removal failed" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
+		if (action === "github.delete_repository" && config.failRepositoryDeletion)
+			return Response.json({
+				error: { code: -32001, message: "repository deletion failed" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
 		let result;
 		if (action === "github.create_repository") {
 			exists = true;
@@ -100,6 +212,15 @@ function lifecycleFetch(calls, config = {}) {
 		} else if (action === "github.update_repository") {
 			description = input.description;
 			result = repository(input.repo, description);
+		} else if (action === "github.add_repository_collaborator") {
+			result = {
+				invitation: {
+					invitee: { login: config.inviteeLogin ?? "connectionE2E2" },
+				},
+				invited: true,
+			};
+		} else if (action === "github.remove_repository_collaborator") {
+			result = { acknowledged: true };
 		} else if (action === "github.delete_repository") {
 			exists = false;
 			result = { acknowledged: true };
