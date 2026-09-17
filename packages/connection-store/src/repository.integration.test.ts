@@ -64,7 +64,7 @@ describe("PostgreSQL Connection business authority", () => {
 					) VALUES (
 						${releaseId}, 'github', '0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674',
 						'{}'::jsonb, '{}'::jsonb, ${`sha256:${"a".repeat(64)}`},
-						${`sha256:${"b".repeat(64)}`}, 'PUBLISHED'
+						${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED'
 					)
 					ON CONFLICT (id) DO UPDATE SET status = 'PUBLISHED'
 				`;
