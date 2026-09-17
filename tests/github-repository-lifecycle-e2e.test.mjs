@@ -35,12 +35,12 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 		"github.delete_repository@v7",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
-	const userPreflight = calls.findIndex(
+	const collaboratorPreflight = calls.findIndex(
 		({ action }) => action === "github.get_user",
 	);
-	assert.ok(userPreflight >= 0);
+	assert.ok(collaboratorPreflight >= 0);
 	assert.ok(
-		userPreflight <
+		collaboratorPreflight <
 			calls.findIndex(({ action }) => action === "github.create_repository"),
 	);
 	assert.equal(

@@ -61,16 +61,16 @@ export async function runGitHubRepositoryLifecycle({
 		return projection.result;
 	};
 	try {
-		const reviewer = await execute(
+		const collaboratorTarget = await execute(
 			"github.get_user",
 			{ username: "connectionE2E2" },
 			true,
 		);
 		if (
-			String(reviewer?.id) !== "329435106" ||
-			reviewer.login !== "connectionE2E2"
+			String(collaboratorTarget?.id) !== "329435106" ||
+			collaboratorTarget.login !== "connectionE2E2"
 		)
-			throw new Error("reviewer GitHub identity does not match");
+			throw new Error("collaborator GitHub identity does not match");
 		try {
 			await execute("github.get_repository", { owner, repo: name }, true);
 			throw new Error("fixture repository already exists");
