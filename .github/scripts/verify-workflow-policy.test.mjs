@@ -243,6 +243,11 @@ test("runs the Reviewer v2 health probe read-only without enabling the E2E gate"
 	);
 	assert.equal(job.steps[0].with.ref, "${{ github.sha }}");
 	assert.equal(job.steps[2].env.CONNECTION_E2E_REVIEWER_TOKEN, "${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}");
+	assert.equal(job.steps[2].shell, "bash");
+	assert.equal(
+		job.steps[2].run,
+		"set -o pipefail\nnode tests/github-review-health.mjs | tee connection-github-review-health-result.json\n",
+	);
 	assert.doesNotMatch(job.steps[2].run, /CONNECTION_GITHUB_E2E_ENABLED|github-review-e2e/);
 });
 
