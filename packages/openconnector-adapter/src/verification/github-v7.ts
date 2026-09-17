@@ -135,7 +135,34 @@ export const githubV7ReviewerVerificationEvidence = {
 	runId: "35092020126-1",
 } as const satisfies LiveVerificationEvidence;
 
+export const githubV7RepositoryLifecycleVerificationEvidence = {
+	actionVersionIds: [
+		"github.create_repository@v7",
+		"github.update_repository@v7",
+		"github.add_repository_collaborator@v7",
+		"github.fork_repository@v7",
+		"github.sync_fork_branch_with_upstream@v7",
+		"github.dispatch_workflow@v7",
+		"github.cancel_workflow_run@v7",
+		"github.rerun_failed_jobs@v7",
+		"github.rerun_workflow@v7",
+		"github.disable_workflow@v7",
+		"github.enable_workflow@v7",
+		"github.delete_release_asset@v7",
+		"github.remove_repository_collaborator@v7",
+		"github.delete_repository@v7",
+	],
+	cleanup: "SUCCEEDED",
+	containerId: "1369705971",
+	externalAccount: "328682695",
+	provider: "github",
+	providerReleaseId:
+		"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7",
+	runId: "35189503119-1",
+} as const satisfies LiveVerificationEvidence;
+
 export const githubV7VerificationEvidenceRecords = [
 	githubV7VerificationEvidence,
 	githubV7ReviewerVerificationEvidence,
+	githubV7RepositoryLifecycleVerificationEvidence,
 ] as const;

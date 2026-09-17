@@ -14,6 +14,7 @@ import {
 	testResourceMarker,
 } from "./test-project.ts";
 import {
+	githubV7RepositoryLifecycleVerificationEvidence,
 	githubV7ReviewerVerificationEvidence,
 	githubV7VerificationEvidence,
 	githubV7VerificationEvidenceRecords,
@@ -164,7 +165,7 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds account-scoped evidence to 129 actions", () => {
+test("GitHub verification matrix binds account-scoped evidence to 143 actions", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
 		githubV7VerificationEvidenceRecords,
@@ -172,12 +173,9 @@ test("GitHub verification matrix binds account-scoped evidence to 129 actions", 
 	assert.equal(matrix.length, 145);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
-		129,
+		143,
 	);
-	assert.equal(
-		matrix.filter((item) => item.status === "UNVERIFIED").length,
-		16,
-	);
+	assert.equal(matrix.filter((item) => item.status === "UNVERIFIED").length, 2);
 	assert.equal(
 		matrix.filter(
 			(item) => item.effect === "READ" && item.status === "LIVE_VERIFIED",
@@ -196,6 +194,21 @@ test("GitHub verification matrix binds account-scoped evidence to 129 actions", 
 					item.evidence?.cleanup === "SUCCEEDED" &&
 					item.evidence.runId === "35092020126-1" &&
 					item.evidence.externalAccount === "329435106",
+			),
+	);
+	const repositoryLifecycleActionVersionIds = new Set<string>(
+		githubV7RepositoryLifecycleVerificationEvidence.actionVersionIds,
+	);
+	assert.ok(
+		matrix
+			.filter((item) =>
+				repositoryLifecycleActionVersionIds.has(item.actionVersionId),
+			)
+			.every(
+				(item) =>
+					item.evidence?.cleanup === "SUCCEEDED" &&
+					item.evidence.runId === "35189503119-1" &&
+					item.evidence.externalAccount === "328682695",
 			),
 	);
 
