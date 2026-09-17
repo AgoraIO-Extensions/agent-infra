@@ -347,6 +347,10 @@ async function boundedBody(request: Request): Promise<string> {
 
 export { createWecomChannelAdmissionV1 } from "./admission.js";
 export {
+	createWecomCallbackCipherV1,
+	type WecomCallbackKeysV1,
+} from "./callback-credentials.js";
+export {
 	createWecomReplyEncryptorV1,
 	type WecomReplyRouteV1,
 } from "./reply.js";

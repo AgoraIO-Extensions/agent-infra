@@ -276,6 +276,7 @@ export interface WecomSendPortV1 {
 		readonly scope: WecomScopeV1;
 		readonly replyHandle: string;
 		readonly text: string;
+		readonly isCurrent?: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
 }
 export function createWecomDeliveryV1(dependencies: {
@@ -329,6 +330,20 @@ export function createWecomDeliveryV1(dependencies: {
 				status = await dependencies.sender.send({
 					scope: claim.scope,
 					replyHandle: claim.replyHandle,
+					isCurrent: async () => {
+						const latest = await dependencies.authorization.authorize(
+							claim.scope,
+							"use",
+							claim.taskBoundary,
+						);
+						return (
+							latest.outcome === "allowed" &&
+							latest.authority.actor.actorId === claim.actorId &&
+							latest.authority.channelRevision === claim.channelRevision &&
+							Date.parse(claim.replyExpiresAt) >
+								(dependencies.now?.() ?? new Date()).getTime()
+						);
+					},
 					text,
 				});
 			} catch {

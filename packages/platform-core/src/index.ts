@@ -75,6 +75,7 @@ export type { WecomConnectionFenceV1 } from "./wecom-channel.js";
 export * from "./wecom-channel.js";
 export {
 	createWecomSetupV1,
+	type WecomApplicationCredentialsV1,
 	WecomSetupError,
 	type WecomSetupRecordV1,
 	type WecomSetupStatusV1,

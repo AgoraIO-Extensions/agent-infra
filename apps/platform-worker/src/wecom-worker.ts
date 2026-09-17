@@ -76,6 +76,12 @@ export function createPlatformWecomWorkerV1(
 					if (!route) return "failed";
 					if (route.websocket) return connections.sender.send(input);
 				}
+				if (
+					setup &&
+					input.scope.kind === "wecom_app" &&
+					(await setup.ownsApplication(input.scope.bindingReference))
+				)
+					return setup.applicationSender.send(input);
 				return options.sender.send(input);
 			},
 		},

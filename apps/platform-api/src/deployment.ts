@@ -32,6 +32,7 @@ export interface ProductionPlatformApiInputV1
 	readonly encryptionKeys: unknown;
 	/** Enable only when the paired Worker deployment provides wecom.setup and connections. */
 	readonly wecomSetupEnabled?: boolean;
+	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
 	readonly wecomIdentity?: WecomIdentityPortV1;
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
@@ -43,6 +44,8 @@ export interface ProductionPlatformApiInputV1
 export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
+	if (input.wecomApplicationSetup && input.wecomSetupEnabled !== true)
+		throw new Error("WeCom setup must be enabled");
 	let resourceProfile: ProductionPlatformApiInputV1["resourceProfile"];
 	try {
 		OciImageReferenceV1Schema.parse(
@@ -82,7 +85,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 		identity: input.identity,
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
 		...(input.wecomSetupEnabled === true
-			? { wecomCredentialEncryptionKeys: input.encryptionKeys }
+			? {
+					wecomCredentialEncryptionKeys: input.encryptionKeys,
+					...(input.wecomApplicationSetup
+						? { wecomApplicationSetup: input.wecomApplicationSetup }
+						: {}),
+				}
 			: {}),
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,

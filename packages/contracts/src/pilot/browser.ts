@@ -557,11 +557,103 @@ export const WecomSetupCredentialsV1Schema = z.strictObject({
 	secret: z.string().min(1).max(1024).meta({ writeOnly: true }),
 	takeoverConfirmed: z.literal(true),
 });
+export const WecomApplicationCredentialsV1Schema = z.strictObject({
+	state: z.string().min(1).max(1024),
+	corporationId: z.string().min(1).max(1024),
+	applicationId: z.string().regex(/^[1-9][0-9]{0,14}$/),
+	secret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+	token: z.string().min(1).max(1024).meta({ writeOnly: true }),
+	encodingAesKey: z
+		.string()
+		.regex(/^[A-Za-z0-9+/]{43}$/)
+		.meta({ writeOnly: true }),
+});
+export const WecomApplicationSetupProjectionV1Schema =
+	WecomSetupProjectionV1Schema.extend({ callbackUrl: z.url() });
 const wecomSetupPath = z.strictObject({
 	agentId: pathId(),
 	sessionId: pathId(),
 });
 export const pilotBrowserHttpOpenApiPathsV1 = {
+	"/api/v1/agents/{agentId}/wecom-app": {
+		get: {
+			operationId: "getWecomAppConnection",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner bot connection status",
+					z.strictObject({
+						sessionId: OpaqueIdV1Schema.optional(),
+						callbackUrl: z.url().optional(),
+						status: z.enum([
+							"not_configured",
+							"callback",
+							"verifying",
+							"connected",
+							"disconnected",
+							"auth_failed",
+						]),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup": {
+		post: {
+			operationId: "beginWecomApplicationSetup",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration session",
+					WecomApplicationSetupProjectionV1Schema.extend({
+						state: z.string(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}": {
+		get: {
+			operationId: "getWecomApplicationSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration status",
+					WecomApplicationSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/credentials": {
+		post: {
+			operationId: "submitWecomApplicationCredentials",
+			requestParams: { path: wecomSetupPath },
+			requestBody: requiredJsonRequestBody(WecomApplicationCredentialsV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Candidate pending Worker validation",
+					WecomApplicationSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-app-setup/{sessionId}/cancel": {
+		post: {
+			operationId: "cancelWecomApplicationSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Cancelled configuration session",
+					WecomApplicationSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v1/agents/{agentId}/wecom-bot": {
 		get: {
 			operationId: "getWecomBotConnection",

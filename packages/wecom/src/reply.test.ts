@@ -163,3 +163,72 @@ it.each(["short-tag", "short-iv", "short-key", "noncanonical"])(
 		);
 	},
 );
+it("rechecks authorization after a slow app token lookup and before sending", async () => {
+	const appScope = { ...scope, kind: "wecom_app" as const };
+	let current = true;
+	let posted = false;
+	const token = Promise.withResolvers<string>();
+	const requested = Promise.withResolvers<void>();
+	const sender = createWecomSenderV1({
+		resolveConfiguration: async () => ({
+			agentId: scope.agentId,
+			bindingReference: scope.bindingReference,
+			kind: "wecom_app",
+			credentialVersion: "v1",
+			corporationId: "corp",
+			applicationId: "7",
+		}),
+		revealReply: async () => ({
+			...route,
+			scope: appScope,
+			recipientId: scope.senderId,
+		}),
+		getApplicationAccessToken: async () => {
+			requested.resolve();
+			return token.promise;
+		},
+		fetch: async () => {
+			posted = true;
+			return Response.json({ errcode: 0 });
+		},
+	});
+	const sending = sender.send({
+		scope: appScope,
+		replyHandle: "opaque",
+		text: "fixture",
+		isCurrent: async () => current,
+	});
+	await requested.promise;
+	current = false;
+	token.resolve("fixture-access");
+	expect(await sending).toBe("failed");
+	expect(posted).toBe(false);
+});
+it("records authorization dependency failure before POST as failed, not unknown", async () => {
+	let posted = false;
+	const sender = createWecomSenderV1({
+		resolveConfiguration: async () => ({
+			agentId: scope.agentId,
+			bindingReference: scope.bindingReference,
+			kind: "wecom_bot",
+			credentialVersion: "v1",
+		}),
+		revealReply: async () => route,
+		getApplicationAccessToken: async () => "unused",
+		fetch: async () => {
+			posted = true;
+			return Response.json({ errcode: 0 });
+		},
+	});
+	expect(
+		await sender.send({
+			scope,
+			replyHandle: "opaque",
+			text: "fixture",
+			isCurrent: () => {
+				throw new Error("dependency unavailable");
+			},
+		}),
+	).toBe("failed");
+	expect(posted).toBe(false);
+});

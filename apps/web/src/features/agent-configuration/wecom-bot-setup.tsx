@@ -4,10 +4,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+	beginWecomApplicationSetup,
 	beginWecomSetup,
+	cancelWecomApplicationSetup,
 	cancelWecomSetup,
+	getWecomAppConnection,
+	getWecomApplicationSetup,
 	getWecomBotConnection,
 	getWecomSetup,
+	submitWecomApplicationCredentials,
 	submitWecomCredentials,
 } from "../../pilot/generated/sdk.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
@@ -23,10 +28,16 @@ const labels = {
 export function WecomBotSetup({
 	agentId,
 	onUnbind,
+	application = false,
 }: {
 	agentId: string;
+	application?: boolean;
 	onUnbind: (body: AgentConfigurationUpdateRequestV2Writable) => void;
 }) {
+	const [corporationId, setCorporationId] = useState("");
+	const [token, setToken] = useState("");
+	const [encodingAesKey, setEncodingAesKey] = useState("");
+	const [callbackUrl, setCallbackUrl] = useState("");
 	const [botId, setBotId] = useState("");
 	const [secret, setSecret] = useState("");
 	const [confirmed, setConfirmed] = useState(false);
@@ -46,7 +57,9 @@ export function WecomBotSetup({
 			const attempt = generation.current;
 			const sequence = ++refreshSequence.current;
 			try {
-				const result = await getWecomBotConnection({
+				const result = await (application
+					? getWecomAppConnection
+					: getWecomBotConnection)({
 					path: { agentId },
 					responseStyle: "fields",
 					throwOnError: false,
@@ -56,6 +69,21 @@ export function WecomBotSetup({
 					sequence === refreshSequence.current
 				) {
 					const next = result.data?.status;
+					if (
+						application &&
+						result.data &&
+						"sessionId" in result.data &&
+						result.data.sessionId
+					) {
+						if (result.data.callbackUrl)
+							setCallbackUrl(result.data.callbackUrl);
+						if (next === "verifying" && !session.current) {
+							session.current = result.data.sessionId;
+							setBusy(true);
+							void poll(attempt);
+						}
+					}
+
 					setStatus(next);
 					if (next === "verifying" || next === "disconnected")
 						connectionTimer.current = setTimeout(() => {
@@ -70,7 +98,7 @@ export function WecomBotSetup({
 					setStatus(undefined);
 			}
 		},
-		[agentId],
+		[agentId, application],
 	);
 	useEffect(() => {
 		void refresh();
@@ -83,7 +111,9 @@ export function WecomBotSetup({
 	async function poll(attempt: number) {
 		if (attempt !== generation.current || !session.current) return;
 		try {
-			const current = await getWecomSetup({
+			const current = await (application
+				? getWecomApplicationSetup
+				: getWecomSetup)({
 				path: { agentId, sessionId: session.current },
 				responseStyle: "fields",
 				throwOnError: false,
@@ -118,11 +148,25 @@ export function WecomBotSetup({
 	}
 	async function submit() {
 		if (busy) return;
-		if (!botId.trim() || !secret || !confirmed) {
-			setError("请填写 Bot ID、Secret，并确认连接影响。");
+		if (
+			!botId.trim() ||
+			!secret ||
+			(application
+				? !corporationId.trim() || !token || !encodingAesKey
+				: !confirmed)
+		) {
+			setError(
+				application
+					? "请填写企业 ID、应用 ID、Secret、Token 和 EncodingAESKey。"
+					: "请填写 Bot ID、Secret，并确认连接影响。",
+			);
 			return;
 		}
 		let credential = secret;
+		let callbackToken = token;
+		let callbackKey = encodingAesKey;
+		setToken("");
+		setEncodingAesKey("");
 		setSecret("");
 		setError("");
 		setBusy(true);
@@ -131,7 +175,9 @@ export function WecomBotSetup({
 		setStatus("verifying");
 		const attempt = generation.current;
 		try {
-			const started = await beginWecomSetup({
+			const started = await (application
+				? beginWecomApplicationSetup
+				: beginWecomSetup)({
 				path: { agentId },
 				responseStyle: "fields",
 				throwOnError: false,
@@ -139,17 +185,33 @@ export function WecomBotSetup({
 			if (attempt !== generation.current) return;
 			if (!started.data) throw new Error();
 			session.current = started.data.sessionId;
-			const submitted = await submitWecomCredentials({
-				path: { agentId, sessionId: started.data.sessionId },
-				body: {
-					state: started.data.state,
-					botId: botId.trim(),
-					secret: credential,
-					takeoverConfirmed: true,
-				},
-				responseStyle: "fields",
-				throwOnError: false,
-			});
+			if ("callbackUrl" in started.data)
+				setCallbackUrl(String(started.data.callbackUrl));
+			const submitted = application
+				? await submitWecomApplicationCredentials({
+						path: { agentId, sessionId: started.data.sessionId },
+						body: {
+							state: started.data.state,
+							corporationId: corporationId.trim(),
+							applicationId: botId.trim(),
+							secret: credential,
+							token: callbackToken,
+							encodingAesKey: callbackKey,
+						},
+						responseStyle: "fields",
+						throwOnError: false,
+					})
+				: await submitWecomCredentials({
+						path: { agentId, sessionId: started.data.sessionId },
+						body: {
+							state: started.data.state,
+							botId: botId.trim(),
+							secret: credential,
+							takeoverConfirmed: true,
+						},
+						responseStyle: "fields",
+						throwOnError: false,
+					});
 			if (attempt !== generation.current) return;
 			const statusCode = submitted.response?.status;
 			if (
@@ -175,6 +237,8 @@ export function WecomBotSetup({
 			}
 		} finally {
 			credential = "";
+			callbackToken = "";
+			callbackKey = "";
 		}
 		if (session.current) await poll(attempt);
 	}
@@ -182,7 +246,9 @@ export function WecomBotSetup({
 		const id = session.current;
 		if (!id) return;
 		try {
-			const result = await cancelWecomSetup({
+			const result = await (application
+				? cancelWecomApplicationSetup
+				: cancelWecomSetup)({
 				path: { agentId, sessionId: id },
 				responseStyle: "fields",
 				throwOnError: false,
@@ -193,6 +259,7 @@ export function WecomBotSetup({
 			session.current = undefined;
 			setBusy(false);
 			setSecret("");
+			setCallbackUrl("");
 			setError("");
 			await refresh();
 		} catch {
@@ -202,32 +269,43 @@ export function WecomBotSetup({
 
 	return (
 		<section
-			aria-label="智能机器人配置"
+			aria-label={application ? "自建应用配置" : "智能机器人配置"}
 			className="space-y-4 rounded-lg border border-slate-200 p-4"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 className="font-semibold">智能机器人</h3>
+				<h3 className="font-semibold">
+					{application ? "自建应用" : "智能机器人"}
+				</h3>
 				<p aria-live="polite" className="text-sm">
 					{status ? labels[status] : "连接状态暂不可用"}
 				</p>
 			</div>
-			<div className="flex flex-wrap gap-3">
-				<Button
-					type="button"
-					variant="outline"
-					onClick={() => setError("扫码授权暂不可用，请使用下方手动配置。")}
-				>
-					扫码授权
-				</Button>
-				<p className="self-center text-slate-600 text-sm">
-					也可填写已有机器人的 Bot ID 和 Secret，无需公网回调。
+			{!application ? (
+				<div className="flex flex-wrap gap-3">
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setError("扫码授权暂不可用，请使用下方手动配置。")}
+					>
+						扫码授权
+					</Button>
+					<p className="self-center text-slate-600 text-sm">
+						也可填写已有机器人的 Bot ID 和 Secret，无需公网回调。
+					</p>
+				</div>
+			) : (
+				<p className="text-slate-600 text-sm">
+					填写凭证后，将平台生成的 URL
+					配置到企微接收消息设置。应用认证和回调验证均通过后生效；平台不会自动覆盖现有回调。
 				</p>
-			</div>
+			)}
 			<div className="grid gap-4 sm:grid-cols-2">
 				<div className="space-y-2">
-					<Label htmlFor="wecom-bot-id">Bot ID</Label>
+					<Label htmlFor={application ? "wecom-app-id" : "wecom-bot-id"}>
+						{application ? "应用 ID" : "Bot ID"}
+					</Label>
 					<Input
-						id="wecom-bot-id"
+						id={application ? "wecom-app-id" : "wecom-bot-id"}
 						value={botId}
 						disabled={busy}
 						onChange={(e) => setBotId(e.target.value)}
@@ -235,9 +313,13 @@ export function WecomBotSetup({
 					/>
 				</div>
 				<div className="space-y-2">
-					<Label htmlFor="wecom-bot-secret">Secret</Label>
+					<Label
+						htmlFor={application ? "wecom-app-secret" : "wecom-bot-secret"}
+					>
+						{application ? "应用 Secret" : "Secret"}
+					</Label>
 					<Input
-						id="wecom-bot-secret"
+						id={application ? "wecom-app-secret" : "wecom-bot-secret"}
 						type="password"
 						value={secret}
 						disabled={busy}
@@ -246,14 +328,58 @@ export function WecomBotSetup({
 					/>
 				</div>
 			</div>
-			<Label className="flex min-h-11 items-center gap-3 text-sm">
-				<Checkbox
-					checked={confirmed}
-					disabled={busy}
-					onCheckedChange={(value) => setConfirmed(value)}
-				/>
-				我已知悉：连接此机器人可能断开它在其他服务中的现有连接。
-			</Label>
+			{application ? (
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div>
+						<Label htmlFor="wecom-corporation-id">企业 ID</Label>
+						<Input
+							id="wecom-corporation-id"
+							value={corporationId}
+							disabled={busy}
+							onChange={(e) => setCorporationId(e.target.value)}
+							autoComplete="off"
+						/>
+					</div>
+					<div>
+						<Label htmlFor="wecom-app-token">Token</Label>
+						<Input
+							id="wecom-app-token"
+							type="password"
+							value={token}
+							disabled={busy}
+							onChange={(e) => setToken(e.target.value)}
+							autoComplete="new-password"
+						/>
+					</div>
+					<div>
+						<Label htmlFor="wecom-app-aes">EncodingAESKey</Label>
+						<Input
+							id="wecom-app-aes"
+							type="password"
+							value={encodingAesKey}
+							disabled={busy}
+							onChange={(e) => setEncodingAesKey(e.target.value)}
+							autoComplete="new-password"
+						/>
+					</div>
+				</div>
+			) : (
+				<Label className="flex min-h-11 items-center gap-3 text-sm">
+					<Checkbox
+						checked={confirmed}
+						disabled={busy}
+						onCheckedChange={(value) => setConfirmed(value)}
+					/>
+					我已知悉：连接此机器人可能断开它在其他服务中的现有连接。
+				</Label>
+			)}
+			{application && callbackUrl ? (
+				<div>
+					<Label htmlFor="wecom-app-callback">接收消息 URL</Label>
+					<Input id="wecom-app-callback" readOnly value={callbackUrl} />
+					<p className="text-sm">请在企微后台保存此 URL，完成回调验证。</p>
+				</div>
+			) : null}
 			<p className="text-slate-600 text-sm">
 				群消息和回复对群成员可见，每位发送者的会话上下文独立。Secret
 				提交后清空。
@@ -302,11 +428,16 @@ export function WecomBotSetup({
 						onClick={() =>
 							onUnbind({
 								schemaVersion: 2,
-								channels: [{ kind: "wecom_bot", enabled: false }],
+								channels: [
+									{
+										kind: application ? "wecom_app" : "wecom_bot",
+										enabled: false,
+									},
+								],
 							})
 						}
 					>
-						解除机器人绑定
+						{application ? "解除应用绑定" : "解除机器人绑定"}
 					</Button>
 				) : null}
 			</div>
