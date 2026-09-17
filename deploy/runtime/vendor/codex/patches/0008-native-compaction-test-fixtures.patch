@@ -297,7 +297,12 @@ new file mode 100644
 +                    assert!(value.chars().count() <= 256 && !value.chars().any(char::is_control));
 +                }
 +                canonical_uuid(&identity["attemptRef"]);
-+                std::assert_eq!(identity["toolName"], format!("hook_command:{event}"));
++                let wire_event = match event {
++                    "PreCompact" => "pre-compact",
++                    "PostCompact" => "post-compact",
++                    _ => panic!("unexpected compact hook event"),
++                };
++                std::assert_eq!(identity["toolName"], format!("hook_command:{wire_event}"));
 +                std::assert_eq!(identity.as_object().expect("native identity").len(), 5);
 +            }
 +            let mut expected = json!({
