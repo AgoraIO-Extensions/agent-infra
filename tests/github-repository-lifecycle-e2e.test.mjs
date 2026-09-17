@@ -50,6 +50,11 @@ test("repository lifecycle creates, updates, removes its collaborator, and delet
 		1,
 	);
 	assert.equal(
+		calls.find(({ action }) => action === "github.add_repository_collaborator")
+			?.input.permission,
+		"pull",
+	);
+	assert.equal(
 		calls.filter(
 			({ action }) => action === "github.remove_repository_collaborator",
 		).length,
@@ -123,6 +128,25 @@ test("repository lifecycle confirms repository deletion after collaborator clean
 	);
 });
 
+test("repository lifecycle reports collaborator and repository cleanup failures", async () => {
+	await assert.rejects(
+		runGitHubRepositoryLifecycle({
+			environment: {
+				CONNECTION_E2E_TOKEN: "token",
+				CONNECTION_GITHUB_E2E_ENABLED: "true",
+			},
+			fetch: lifecycleFetch([], {
+				failCollaboratorRemoval: true,
+				failRepositoryDeletion: true,
+			}),
+			runId: "repo-run",
+		}),
+		(error) =>
+			error.message.includes("remove_repository_collaborator") &&
+			error.message.includes("delete_repository"),
+	);
+});
+
 function lifecycleFetch(calls, config = {}) {
 	let exists = false;
 	let description = "";
@@ -171,6 +195,12 @@ function lifecycleFetch(calls, config = {}) {
 		)
 			return Response.json({
 				error: { code: -32001, message: "collaborator removal failed" },
+				id: request.id,
+				jsonrpc: "2.0",
+			});
+		if (action === "github.delete_repository" && config.failRepositoryDeletion)
+			return Response.json({
+				error: { code: -32001, message: "repository deletion failed" },
 				id: request.id,
 				jsonrpc: "2.0",
 			});

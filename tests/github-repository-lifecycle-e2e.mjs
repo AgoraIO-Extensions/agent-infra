@@ -42,7 +42,11 @@ export async function runGitHubRepositoryLifecycle({
 	let collaboratorMutationStarted = false;
 	let deleted = false;
 	let failure;
-	let cleanupFailure;
+	const cleanupFailures = [];
+	const recordCleanupFailure = (error) =>
+		cleanupFailures.push(
+			error instanceof Error ? error : new Error("unknown cleanup failure"),
+		);
 	const calls = [];
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
@@ -149,15 +153,15 @@ export async function runGitHubRepositoryLifecycle({
 				)
 					owned = true;
 				else
-					cleanupFailure = new Error(
-						"repository cleanup ownership marker does not match",
+					recordCleanupFailure(
+						new Error("repository cleanup ownership marker does not match"),
 					);
 			} catch (error) {
 				if (
 					!(error instanceof Error) ||
 					!error.message.includes("Provider resource was not found")
 				)
-					cleanupFailure = error;
+					recordCleanupFailure(error);
 			}
 		}
 		if (owned) {
@@ -173,8 +177,8 @@ export async function runGitHubRepositoryLifecycle({
 					current.private !== true ||
 					![marker, `${marker}:updated`].includes(current.description)
 				) {
-					cleanupFailure = new Error(
-						"repository delete ownership marker does not match",
+					recordCleanupFailure(
+						new Error("repository delete ownership marker does not match"),
 					);
 				} else {
 					if (collaboratorMutationStarted)
@@ -186,7 +190,7 @@ export async function runGitHubRepositoryLifecycle({
 								username: "connectionE2E2",
 							});
 						} catch (error) {
-							cleanupFailure = error;
+							recordCleanupFailure(error);
 						}
 					await execute("github.delete_repository", {
 						idempotencyKey: `${runId}:repository-delete`,
@@ -198,23 +202,25 @@ export async function runGitHubRepositoryLifecycle({
 				if (deleted) {
 					try {
 						await execute("github.get_repository", { owner, repo: name }, true);
-						cleanupFailure = new Error("repository remained after deletion");
+						recordCleanupFailure(
+							new Error("repository remained after deletion"),
+						);
 					} catch (error) {
 						if (
 							!(error instanceof Error) ||
 							!error.message.includes("Provider resource was not found")
 						)
-							cleanupFailure = error;
+							recordCleanupFailure(error);
 					}
 				}
 			} catch (error) {
-				cleanupFailure = error;
+				recordCleanupFailure(error);
 			}
 		}
 	}
-	if (cleanupFailure)
+	if (cleanupFailures.length > 0)
 		throw new Error(
-			`${failure instanceof Error ? `${failure.message}; ` : ""}cleanup failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : "unknown"}`,
+			`${failure instanceof Error ? `${failure.message}; ` : ""}cleanup failed: ${cleanupFailures.map(({ message }) => message).join("; ")}`,
 		);
 	if (failure) throw failure;
 	return {
