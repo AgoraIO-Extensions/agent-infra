@@ -1,0 +1,493 @@
+diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/compact.rs
+--- a/codex-rs/core/tests/suite/compact.rs
++++ b/codex-rs/core/tests/suite/compact.rs
+@@ -26,6 +26,8 @@
+ use codex_protocol::protocol::AskForApproval;
+ use codex_protocol::protocol::EventMsg;
+ use codex_protocol::protocol::HookEventName;
++use codex_protocol::protocol::HookOutputEntry;
++use codex_protocol::protocol::HookOutputEntryKind;
+ use codex_protocol::protocol::HookRunStatus;
+ use codex_protocol::protocol::ItemCompletedEvent;
+ use codex_protocol::protocol::ItemStartedEvent;
+@@ -75,6 +77,9 @@
+ use std::sync::Arc;
+ use tempfile::TempDir;
+ use wiremock::MockServer;
++
++mod native_hook_fixture;
++
+ // --- Test helpers -----------------------------------------------------------
+ 
+ pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
+@@ -790,10 +795,18 @@
+     Ok(())
+ }
+ 
+-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-async fn manual_pre_compact_block_decision_does_not_block_compaction() {
++#[test]
++fn manual_pre_compact_block_decision_does_not_block_compaction() {
+     skip_if_no_network!();
+-
++    native_hook_fixture::run(
++        "suite::compact::manual_pre_compact_block_decision_does_not_block_compaction",
++        native_hook_fixture::Admission::Permit,
++        "PreCompact",
++        manual_pre_compact_block_scenario(),
++    );
++}
++
++async fn manual_pre_compact_block_scenario() {
+     let server = start_mock_server().await;
+     let first_turn = sse(vec![
+         ev_assistant_message("m0", FIRST_REPLY),
+@@ -837,6 +850,13 @@
+     })
+     .await;
+     assert_eq!(completed.run.status, HookRunStatus::Failed);
++    assert_eq!(
++        completed.run.entries,
++        vec![HookOutputEntry {
++            kind: HookOutputEntryKind::Error,
++            text: "hook returned invalid PreCompact hook JSON output".to_string(),
++        }],
++    );
+     wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+ 
+@@ -857,10 +877,18 @@
+     assert!(input.get("implementation").is_none());
+ }
+ 
+-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
++#[test]
++fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
+     skip_if_no_network!();
+-
++    native_hook_fixture::run(
++        "suite::compact::compact_hooks_respect_matchers_and_post_runs_after_compaction",
++        native_hook_fixture::Admission::Permit,
++        "PostCompact",
++        matching_compact_hooks_scenario(),
++    );
++}
++
++async fn matching_compact_hooks_scenario() {
+     let server = start_mock_server().await;
+     let first_turn = sse(vec![
+         ev_assistant_message("m0", FIRST_REPLY),
+@@ -894,6 +922,17 @@
+ 
+     codex.submit(Op::Compact).await.expect("trigger compact");
+     wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
++    let completed = wait_for_event_match(&codex, |ev| match ev {
++        EventMsg::HookCompleted(completed)
++            if completed.run.event_name == HookEventName::PostCompact =>
++        {
++            Some(completed.clone())
++        }
++        _ => None,
++    })
++    .await;
++    assert_eq!(completed.run.status, HookRunStatus::Completed);
++    assert!(completed.run.entries.is_empty());
+     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+ 
+     assert_eq!(request_log.requests().len(), 2);
+@@ -2393,13 +2432,13 @@
+     .await;
+     let model_provider = non_openai_model_provider(&server);
+     let test = test_codex()
+-        .with_model("gpt-5.4")
+         .with_model_info_override("gpt-5.4", |model| {
+             model.comp_hash = Some("hash-a".to_string());
+         })
+         .with_model_info_override("gpt-5.2", |model| {
+             model.comp_hash = Some("hash-b".to_string());
+         })
++        .with_model("gpt-5.4")
+         .with_config(move |config| {
+             config.model_provider = model_provider;
+             set_test_compact_prompt(config);
+@@ -2407,6 +2446,9 @@
+         .build_with_auto_env(&server)
+         .await?;
+     test.submit_text_turn(before_switch).await?;
++    let initial_requests = request_log.requests();
++    assert_eq!(initial_requests.len(), 1);
++    assert_eq!(initial_requests[0].body_json()["model"], "gpt-5.4");
+     test.codex
+         .start_or_steer_turn(
+             TurnInputRequest::user_input(vec![UserInput::Text {
+diff --git a/codex-rs/core/tests/suite/compact/native_hook_fixture.rs b/codex-rs/core/tests/suite/compact/native_hook_fixture.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/core/tests/suite/compact/native_hook_fixture.rs
+@@ -0,0 +1,365 @@
++//! Exercise compact hooks through the real private admission channel in a fresh process.
++use super::*;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum Admission {
++    Permit,
++    Missing,
++    Deny,
++}
++
++#[cfg(unix)]
++pub(super) fn run(
++    name: &str,
++    admission: Admission,
++    event: &str,
++    scenario: impl std::future::Future<Output = ()>,
++) {
++    unix::run(name, admission, event, scenario);
++}
++
++#[cfg(not(unix))]
++pub(super) fn run(
++    _name: &str,
++    _admission: Admission,
++    _event: &str,
++    _scenario: impl std::future::Future<Output = ()>,
++) {
++    panic!("native hook admission requires an anonymous Unix socket");
++}
++
++#[cfg(unix)]
++mod unix {
++    use super::Admission;
++    use serde_json::Value;
++    use serde_json::json;
++    use std::collections::HashSet;
++    use std::fs::File;
++    use std::future::Future;
++    use std::io::Read;
++    use std::io::Seek;
++    use std::io::SeekFrom;
++    use std::io::Write;
++    use std::os::fd::AsRawFd;
++    use std::os::unix::net::UnixStream;
++    use std::os::unix::process::CommandExt;
++    use std::process::Child;
++    use std::process::Command;
++    use std::process::Stdio;
++    use std::time::Duration;
++    use std::time::Instant;
++    use std::time::SystemTime;
++    use std::time::UNIX_EPOCH;
++    use uuid::Uuid;
++
++    const CHILD_MARKER: &str = "AGENT_INFRA_COMPACT_HOOK_TEST";
++    const TIMEOUT: Duration = Duration::from_secs(20);
++    const MAX_FRAME_BYTES: usize = 16_384;
++
++    // Files avoid pipe backpressure; the guard reaps the child even when frame assertions panic.
++    struct ChildGuard {
++        child: Child,
++        stdout: File,
++        stderr: File,
++    }
++
++    impl ChildGuard {
++        fn output(&mut self) -> String {
++            let mut output = String::new();
++            for file in [&mut self.stdout, &mut self.stderr] {
++                if file.seek(SeekFrom::Start(0)).is_ok() {
++                    let mut bytes = Vec::new();
++                    let _ = file.take(65_536).read_to_end(&mut bytes);
++                    output.push_str(&String::from_utf8_lossy(&bytes));
++                }
++            }
++            output
++        }
++    }
++
++    impl Drop for ChildGuard {
++        fn drop(&mut self) {
++            let _ = self.child.kill();
++            let _ = self.child.wait();
++            if std::thread::panicking() {
++                eprintln!("isolated native hook child output:\n{}", self.output());
++            }
++        }
++    }
++
++    pub(super) fn run(
++        name: &str,
++        admission: Admission,
++        event: &str,
++        scenario: impl Future<Output = ()>,
++    ) {
++        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
++            assert_eq!(marker.to_str(), Some(name), "unexpected isolated scenario");
++            assert_eq!(
++                codex_core::initialize_native_operation_barrier(),
++                admission != Admission::Missing,
++                "the real native bootstrap must match this scenario",
++            );
++            if admission != Admission::Missing {
++                // SAFETY: inspect the descriptor owned by the production bootstrap.
++                let flags = unsafe { libc::fcntl(3, libc::F_GETFD) };
++                assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
++            }
++            tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .enable_all()
++                .build()
++                .expect("create isolated hook runtime")
++                .block_on(scenario);
++            return;
++        }
++
++        let (child_socket, mut driver) =
++            UnixStream::pair().expect("create anonymous fixture socket");
++        let fd = child_socket.as_raw_fd();
++        let stdout = tempfile::tempfile().expect("create child stdout spool");
++        let stderr = tempfile::tempfile().expect("create child stderr spool");
++        let mut command = Command::new(std::env::current_exe().expect("locate integration binary"));
++        command
++            .args(["--exact", name, "--nocapture", "--test-threads=1"])
++            .env(CHILD_MARKER, name)
++            .stdout(Stdio::from(stdout.try_clone().expect("clone stdout spool")))
++            .stderr(Stdio::from(stderr.try_clone().expect("clone stderr spool")));
++        // SAFETY: only async-signal-safe descriptor operations run after fork. The
++        // parent's fd 3 is never replaced; bootstrap restores CLOEXEC before work.
++        unsafe {
++            command.pre_exec(move || {
++                if admission == Admission::Missing {
++                    libc::close(3);
++                } else if libc::dup2(fd, 3) < 0 || libc::fcntl(3, libc::F_SETFD, 0) < 0 {
++                    return Err(std::io::Error::last_os_error());
++                }
++                Ok(())
++            });
++        }
++        let mut child = ChildGuard {
++            child: command.spawn().expect("spawn isolated native hook child"),
++            stdout,
++            stderr,
++        };
++        drop(child_socket);
++        let deadline = Instant::now() + TIMEOUT;
++        let expected_phases: &[&str] = match admission {
++            Admission::Permit => &["intent", "started", "outcome"],
++            Admission::Deny => &["intent"],
++            Admission::Missing => &[],
++        };
++        let mut identity = Value::Null;
++        let permit = Uuid::new_v4();
++        let mut request_ids = HashSet::new();
++        let mut phase_index = 0;
++        while let Some(request) = read_frame(&mut driver, deadline) {
++            let phase = expected_phases
++                .get(phase_index)
++                .expect("unexpected native operation or receipt");
++            let request_id = canonical_uuid(&request["requestId"]);
++            assert!(request_ids.insert(request_id), "request IDs must be fresh");
++            let occurred_at = request["occurredAt"].as_u64().expect("native timestamp");
++            assert!(occurred_at > 0 && occurred_at <= 9_007_199_254_740_991);
++            if *phase == "intent" {
++                identity = request["identity"].clone();
++                for field in ["sessionId", "turnId", "callId", "toolName"] {
++                    let value = identity[field].as_str().expect("native identity string");
++                    assert!(!value.is_empty() && value.len() <= 1024);
++                    assert!(value.chars().count() <= 256 && !value.chars().any(char::is_control));
++                }
++                canonical_uuid(&identity["attemptRef"]);
++                assert_eq!(identity["toolName"], format!("hook_command:{event}"));
++                assert_eq!(identity.as_object().expect("native identity").len(), 5);
++            }
++            let mut expected = json!({
++                "schemaVersion": 1, "requestId": request_id, "phase": phase,
++                "identity": identity, "occurredAt": occurred_at,
++            });
++            if *phase != "intent" {
++                expected["permitId"] = json!(permit);
++            }
++            if *phase == "outcome" {
++                expected["outcome"] = json!("completed");
++            }
++            assert_eq!(
++                request, expected,
++                "receipt must belong to this exact attempt"
++            );
++            let mut response = json!({
++                "schemaVersion": 1, "requestId": request_id, "phase": phase,
++                "identity": identity, "decision": "ack",
++            });
++            if *phase == "intent" {
++                match admission {
++                    Admission::Permit => {
++                        response["decision"] = json!("permit");
++                        response["permitId"] = json!(permit);
++                        let now = SystemTime::now()
++                            .duration_since(UNIX_EPOCH)
++                            .expect("valid clock");
++                        response["expiresAt"] =
++                            json!(u64::try_from(now.as_millis()).expect("clock fits") + 5000);
++                        response["sourceOwner"] = json!({
++                            "rootThreadId": identity["sessionId"], "rootTurnId": identity["turnId"],
++                        });
++                    }
++                    Admission::Deny => {
++                        response["decision"] = json!("deny");
++                        response["reason"] = json!("authorization_denied");
++                    }
++                    Admission::Missing => unreachable!("missing channel cannot carry intent"),
++                }
++            }
++            // Validate and record this phase before acknowledging it to the child.
++            phase_index += 1;
++            driver
++                .set_write_timeout(Some(deadline.saturating_duration_since(Instant::now())))
++                .expect("bound native receipt write");
++            let mut frame = serde_json::to_vec(&response).expect("encode receipt");
++            frame.push(b'\n');
++            driver.write_all(&frame).expect("send native receipt");
++        }
++        assert_eq!(
++            phase_index,
++            expected_phases.len(),
++            "missing native lifecycle receipt"
++        );
++        loop {
++            if let Some(status) = child.child.try_wait().expect("poll isolated child") {
++                let output = child.output();
++                assert!(status.success(), "isolated child failed: {output}");
++                assert!(
++                    output.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
++                    "the exact child test must execute once: {output}",
++                );
++                break;
++            }
++            assert!(
++                Instant::now() < deadline,
++                "isolated native hook child timed out"
++            );
++            std::thread::sleep(Duration::from_millis(10));
++        }
++    }
++
++    fn canonical_uuid(value: &Value) -> Uuid {
++        let text = value.as_str().expect("UUID field is a string");
++        let uuid = Uuid::parse_str(text).expect("valid protocol UUID");
++        assert_eq!(uuid.hyphenated().to_string(), text);
++        uuid
++    }
++
++    fn read_frame(driver: &mut UnixStream, deadline: Instant) -> Option<Value> {
++        let mut frame = Vec::new();
++        loop {
++            assert!(frame.len() < MAX_FRAME_BYTES, "oversized native frame");
++            let remaining = deadline.saturating_duration_since(Instant::now());
++            assert!(!remaining.is_zero(), "native fixture deadline elapsed");
++            driver
++                .set_read_timeout(Some(remaining))
++                .expect("bound native frame read");
++            let mut byte = [0];
++            if driver.read(&mut byte).expect("read native frame") == 0 {
++                assert!(frame.is_empty(), "truncated native frame");
++                return None;
++            }
++            frame.push(byte[0]);
++            if byte[0] == b'\n' {
++                return Some(serde_json::from_slice(&frame).expect("decode native frame"));
++            }
++        }
++    }
++}
++
++#[test_case::test_case(Admission::Missing, "PreCompact", "pre_missing"; "pre_missing")]
++#[test_case::test_case(Admission::Missing, "PostCompact", "post_missing"; "post_missing")]
++#[test_case::test_case(Admission::Deny, "PreCompact", "pre_denied"; "pre_denied")]
++#[test_case::test_case(Admission::Deny, "PostCompact", "post_denied"; "post_denied")]
++fn compact_hook_requires_native_admission(admission: Admission, event: &str, case: &str) {
++    skip_if_no_network!();
++    run(
++        &format!(
++            "suite::compact::native_hook_fixture::compact_hook_requires_native_admission::{case}"
++        ),
++        admission,
++        event,
++        rejected_hook_scenario(event),
++    );
++}
++
++async fn rejected_hook_scenario(event: &str) {
++    let server = start_mock_server().await;
++    let requests = mount_sse_sequence(
++        &server,
++        vec![
++            sse(vec![
++                ev_assistant_message("m0", FIRST_REPLY),
++                ev_completed("r0"),
++            ]),
++            sse(vec![
++                ev_assistant_message("m1", SUMMARY_TEXT),
++                ev_completed("r1"),
++            ]),
++        ],
++    )
++    .await;
++    let (write_hook, event_name, log): (fn(&Path), _, _) = match event {
++        "PreCompact" => (
++            write_unsupported_blocking_pre_compact_hook,
++            HookEventName::PreCompact,
++            "pre_compact_block_log.jsonl",
++        ),
++        "PostCompact" => (
++            write_matching_compact_hooks,
++            HookEventName::PostCompact,
++            "post_compact_manual_log.jsonl",
++        ),
++        _ => panic!("unexpected compact hook"),
++    };
++    let model_provider = non_openai_model_provider(&server);
++    let test = test_codex()
++        .with_pre_build_hook(write_hook)
++        .with_config(move |config| {
++            config.model_provider = model_provider;
++            trust_discovered_hooks(config);
++            set_test_compact_prompt(config);
++        })
++        .build_with_auto_env(&server)
++        .await
++        .expect("create negative hook conversation");
++    test.submit_text_turn("before denied hook")
++        .await
++        .expect("complete initial turn");
++    test.codex
++        .submit(Op::Compact)
++        .await
++        .expect("submit compact");
++    let completed = wait_for_event_match(&test.codex, |ev| match ev {
++        EventMsg::HookCompleted(completed) if completed.run.event_name == event_name => {
++            Some(completed.clone())
++        }
++        _ => None,
++    })
++    .await;
++    assert_eq!(completed.run.status, HookRunStatus::Failed);
++    assert_eq!(
++        completed.run.entries,
++        vec![HookOutputEntry {
++            kind: HookOutputEntryKind::Error,
++            text: "NATIVE_OPERATION_BARRIER_UNAVAILABLE".to_string(),
++        }]
++    );
++    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
++    assert_eq!(requests.requests().len(), 2);
++    assert!(
++        !test.codex_home_path().join(log).exists(),
++        "denied hook must never execute"
++    );
++    assert!(
++        !test
++            .codex_home_path()
++            .join("pre_compact_auto_log.jsonl")
++            .exists()
++    );
++}

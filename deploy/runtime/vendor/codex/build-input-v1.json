@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "work-in-progress; current-model local switch compaction and release test-home root source added; exact native compilation, integration tests and real provider compatibility pending; no new release binary",
+  "status": "work-in-progress; current-model switch and native compact hook admission test fixtures added; exact native compilation, integration tests and real provider compatibility pending; no new release binary",
   "upstream": {
     "repository": "https://github.com/openai/codex.git",
     "commit": "41e22fee981a63b3698df7ed36bad393cda24715",
@@ -33,7 +33,7 @@
       "nativeHooksTests": "just test -p codex-hooks --locked --lib native_barrier_tests; 11 passed, 175 skipped; includes real command spawn/terminal and queued async hook drain/cancellation",
       "nativeCoreLint": "just fix -p codex-core --locked --lib, then just clippy -p codex-core --locked --lib; final check passed including upstream recipe --tests",
       "nativeHooksLint": "just fix -p codex-hooks --locked --lib; passed including upstream recipe --tests",
-      "scope": "historical Rust 1.95.0 evidence for patches 0001 and 0002 only; excludes current patches 0003 through 0007"
+      "scope": "historical Rust 1.95.0 evidence for patches 0001 and 0002 only; excludes current patches 0003 through 0008"
     }
   },
   "releaseLockRepair": {
@@ -3196,6 +3196,10 @@
     {
       "path": "patches/0007-release-test-home-root.patch",
       "sha256": "sha256:081ad14e7230fe1330ef12153b961d6237d1e41e28a7955d496fbd1309cc3155"
+    },
+    {
+      "path": "patches/0008-native-compaction-test-fixtures.patch",
+      "sha256": "sha256:338c40b7440e91df4100f7bf10194143b207be9a06896ef750c22cb79f6551c5"
     }
   ],
   "sourceFiles": [
@@ -3405,7 +3409,11 @@
     },
     {
       "path": "codex-rs/core/tests/suite/compact.rs",
-      "sha256": "sha256:cdd38f29014d27a04d5c92dd8304a78894c016883f0167dcd5970a9043ac5873"
+      "sha256": "sha256:0dcbe7d9f108d15ab9da946b7921c5a1028fef21c3f23619aa24dd6b38f51330"
+    },
+    {
+      "path": "codex-rs/core/tests/suite/compact/native_hook_fixture.rs",
+      "sha256": "sha256:d4f430d9e1001fad6cc5f909f4ae6456b8d81987d90cdd302e9463cb41d8d65d"
     },
     {
       "path": "codex-rs/exec-server/src/client/http_response_body_stream.rs",
@@ -3652,7 +3660,8 @@
     "exact Linux aarch64 build and owning-crate network-proxy/git-utils/http-client tests on real DNS, preserving the existing Connection and native barrier gates",
     "fresh exact Linux artifact/source SBOM and installed Cargo.lock Trivy scans with zero blockers, zero scanner errors and zero exceptions; full native C/C++ coverage remains separate",
     "patch 0006 owning-crate compaction integration tests and exact Linux candidate; real current-model history compatibility, differing windows/downshift, removed previous option, cancellation and unknown recovery per Runtime HLD 11",
-    "patch 0007 release-mode integration test enumeration and all six native test groups on the exact candidate head; private home selection does not relax production arg0 guards"
+    "patch 0007 release-mode integration test enumeration and all six native test groups on the exact candidate head; private home selection does not relax production arg0 guards",
+    "patch 0008: preserve all 46 compact integration cases and run four new missing-channel/explicit-deny hook negatives through isolated children; exact native compilation, focused groups and real runtime acceptance pending"
   ],
   "currentLocks": {
     "cargoSha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff",
@@ -3667,10 +3676,10 @@
     "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
   },
   "currentValidation": {
-    "format": "just fmt on the complete patched source with Rust 1.96.0 passed; prior 108 source hashes unchanged and new test-binary-support file recorded",
+    "format": "just fmt passed on the complete patched source with Rust 1.96.0; only the owned compact.rs and new test fixture differ from the previous frozen inventory",
     "metadata": "current offline locked no-deps metadata passed; parsing only",
     "bazelLock": "just bazel-lock-update passed with the final Cargo manifests",
-    "sourceExport": "Prior patches 0001 through 0006 and all 108 frozen source files verified; patch 0007 applied independently to its pristine upstream file and matched the final bytes; all 109 source hashes verified; native acceptance remains pending",
+    "sourceExport": "All eight patches applied in order to their exact immutable upstream file bytes and matched all 110 source hashes; all 108 other prior source files and patches 0001 through 0007 unchanged; native acceptance remains pending",
     "nativeCompilation": "Darwin network-proxy, git-utils and http-client compiled for focused tests; exact Linux native producer pending",
     "nativeTests": "Darwin HTTP client: 85 passed with custom CA and 85 passed with CA unset; nested io certificate classification regression red then green; full current Linux Connection/barrier/network-proxy/git-utils/http-client gates pending",
     "nativeLint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
@@ -3699,6 +3708,14 @@
       "productionArg0Unchanged": true,
       "nativeIntegrationTests": "not rerun; current release integration test enumeration and assertions pending",
       "releaseAcceptance": false
+    },
+    "nativeCompactionTestFixtures": {
+      "scope": "Test-only initial model selection and isolated child anonymous FD3 hook admission fixtures; production sources unchanged",
+      "assertions": "Retain all prior compact assertions; verify first actual request model and exact hook attempt receipts; add four missing-channel/explicit-deny negatives",
+      "nativeCompilation": "not run",
+      "nativeIntegrationTests": "not run; original 46 case identities retained in source, four negative cases added",
+      "releaseAcceptance": false,
+      "sourceValidation": "just fmt, sparse exact-upstream sequential patch application and all 110 source hashes passed; candidate guard Node tests 2 passed"
     }
   },
   "dependencyUpdate": {
