@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
 	AgentConfigurationAccessTargetV1,
@@ -726,6 +727,8 @@ export class PostgresApplicationRevisionTransactionV1
 		if (
 			current.agentId !== plan.application.agentId ||
 			current.revision !== plan.expected.configurationRevision ||
+			(plan.configuration?.nextRevision === current.revision &&
+				!isDeepStrictEqual(plan.configuration.configuration, current)) ||
 			sourceReference(current) !== configurationRow.sourceReference ||
 			(!plan.configuration?.accessUpdate &&
 				(!sameValue(ownerIds, plan.management.state.ownerIds) ||

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
 	type AgentConfigurationAccessAuthorityV1,
 	type AgentConfigurationAuthorizationAdmissionPortV1,
@@ -111,13 +113,18 @@ export class FakeAgentConfigurationTransactionV1
 			plan.agentId !== this.#configuration.agentId ||
 			plan.baseRevision !== this.#configuration.revision ||
 			plan.expectedAuthorizationRevision !== this.#authorizationRevision ||
-			(plan.accessUpdate !== null &&
+			(plan.expectedManagementRevision !== null &&
 				(this.#managementState === null ||
 					this.#managementState.agentId !== plan.agentId ||
-					this.#managementState.revision !==
-						plan.accessUpdate.expectedRevision))
+					this.#managementState.revision !== plan.expectedManagementRevision))
 		) {
 			return { outcome: "stale" };
+		}
+		if (
+			plan.nextRevision === plan.baseRevision &&
+			!isDeepStrictEqual(plan.configuration, this.#configuration)
+		) {
+			throw new Error("Access update cannot change the runtime configuration");
 		}
 		const configuration = structuredClone(plan.configuration);
 		const lastPlan = structuredClone(plan);
@@ -146,7 +153,7 @@ export class FakeAgentConfigurationTransactionV1
 		this.#lastPlan = lastPlan;
 		this.#idempotency = idempotency;
 		this.#commitCount += 1;
-		this.#outboxCount += 1;
+		if (plan.outboxIntent !== null) this.#outboxCount += 1;
 		this.#auditCount += 1;
 		return { outcome: "committed", result: structuredClone(plan.result) };
 	}

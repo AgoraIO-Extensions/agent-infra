@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 
 import type {
@@ -263,6 +264,27 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					return { outcome: "stale" as const };
 				}
+				let applicationId: string | undefined;
+				if (plan.expectedManagementRevision !== null) {
+					const [application] = await transaction
+						.select({
+							id: agentApplications.id,
+							managementRevision: agentApplications.managementRevision,
+						})
+						.from(agentApplications)
+						.where(eq(agentApplications.agentId, plan.agentId))
+						.for("update")
+						.limit(1);
+					if (
+						!application ||
+						application.managementRevision !==
+							plan.expectedManagementRevision ||
+						plan.accessUpdate?.expectedRevision === Number.MAX_SAFE_INTEGER
+					) {
+						return { outcome: "stale" as const };
+					}
+					applicationId = application.id;
+				}
 				const [previous] = await transaction
 					.select({ configuration: agentConfigurationRevisions.configuration })
 					.from(agentConfigurationRevisions)
@@ -279,31 +301,11 @@ export class PostgresAgentConfigurationTransactionV1
 				);
 				if (
 					previousConfiguration.agentId !== plan.agentId ||
-					previousConfiguration.revision !== plan.baseRevision
+					previousConfiguration.revision !== plan.baseRevision ||
+					(plan.nextRevision === plan.baseRevision &&
+						!isDeepStrictEqual(configuration, previousConfiguration))
 				) {
 					throw new AgentConfigurationStoreError();
-				}
-
-				let applicationId: string | undefined;
-				if (plan.accessUpdate) {
-					const [application] = await transaction
-						.select({
-							id: agentApplications.id,
-							managementRevision: agentApplications.managementRevision,
-						})
-						.from(agentApplications)
-						.where(eq(agentApplications.agentId, plan.agentId))
-						.for("update")
-						.limit(1);
-					if (
-						!application ||
-						application.managementRevision !==
-							plan.accessUpdate.expectedRevision ||
-						plan.accessUpdate.expectedRevision === Number.MAX_SAFE_INTEGER
-					) {
-						return { outcome: "stale" as const };
-					}
-					applicationId = application.id;
 				}
 
 				if (

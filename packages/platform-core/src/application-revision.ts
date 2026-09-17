@@ -718,16 +718,17 @@ export function snapshotApplicationRevisionWritePlanV1(
 			if (
 				configuration.agentId !== application.agentId ||
 				configuration.baseRevision !== expected.configurationRevision ||
-				configuration.nextRevision !== expected.configurationRevision + 1 ||
+				configuration.expectedManagementRevision !==
+					expected.managementRevision ||
 				configuration.expectedAuthorizationRevision !==
 					expected.authorizationRevision ||
 				configuration.nextAuthorizationRevision !==
 					top.nextAuthorizationRevision ||
 				result.configurationRevision !== configuration.nextRevision ||
 				configuration.idempotency.key !== idempotency.key ||
-				configuration.outboxIntent.traceId !== application.traceId ||
-				configuration.outboxIntent.requestId !== application.requestId ||
-				configuration.outboxIntent.occurredAt.getTime() !==
+				configuration.auditEvent.traceId !== application.traceId ||
+				configuration.auditEvent.requestId !== application.requestId ||
+				configuration.auditEvent.occurredAt.getTime() !==
 					management.transition.occurredAt.getTime() ||
 				configuration.auditEvent.actorId !== application.applicantId
 			) {
