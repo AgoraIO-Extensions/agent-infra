@@ -1379,6 +1379,7 @@ describe("Agent configuration policy", () => {
 				...command,
 				idempotencyKey: "atomic-access-01",
 				changes: {
+					environment: [{ name: "LOG_LEVEL", value: "debug" }],
 					coOwnerIds: ["owner_02"],
 					availability: [
 						{ kind: "organization", organizationId: "org_platform" },
@@ -1451,7 +1452,51 @@ describe("Agent configuration policy", () => {
 		});
 	});
 
-	it("commits Owner and availability changes as one atomic access fragment", async () => {
+	it("keeps runtime configuration for availability-only changes", async () => {
+		const harness = createHarness({
+			admissions: {
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "owner_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority,
+					},
+				],
+			},
+			transactionState: {
+				managementState: accessState,
+				authorizationRevision: "authorization_9",
+			},
+		});
+		await expect(
+			harness.useCase.update(
+				{
+					...command,
+					changes: { availability: [{ kind: "user", userId: "owner_02" }] },
+				},
+				actor,
+			),
+		).resolves.toMatchObject({ revision: 7, changedFields: ["availability"] });
+		expect(harness.transaction.snapshot()).toMatchObject({
+			configuration: agentConfigurationConformanceRecordV1,
+			managementState: {
+				revision: 12,
+				ownerIds: ["owner_01"],
+				availability: [{ kind: "user", userId: "owner_02" }],
+			},
+			commitCount: 1,
+			outboxCount: 0,
+			auditCount: 1,
+			lastPlan: {
+				nextRevision: 7,
+				outboxIntent: null,
+				auditEvent: { action: "agent.access.updated" },
+			},
+		});
+	});
+
+	it("revises runtime configuration for Owner and availability while retaining the access audit", async () => {
 		const authorizations = [
 			{
 				agentId: "agent_01",
@@ -1485,7 +1530,14 @@ describe("Agent configuration policy", () => {
 			accessResult,
 		);
 		const snapshot = harness.transaction.snapshot();
-		expect(snapshot.commitCount).toBe(1);
+		expect(snapshot).toMatchObject({
+			configuration: { ...agentConfigurationConformanceRecordV1, revision: 8 },
+			managementState: { revision: 12 },
+			commitCount: 1,
+			idempotencyCount: 1,
+			auditCount: 1,
+			outboxCount: 1,
+		});
 		expect(snapshot.lastPlan).toMatchObject({
 			baseRevision: 7,
 			nextRevision: 8,
@@ -1500,9 +1552,7 @@ describe("Agent configuration policy", () => {
 				],
 			},
 			auditEvent: { action: "agent.access.updated" },
-			outboxIntent: {
-				payload: { changedFields: ["availability", "owners"] },
-			},
+			outboxIntent: { operation: "agent.configuration.revised.v1" },
 		});
 		expect(snapshot.lastPlan?.accessUpdate).not.toHaveProperty("auditEvent");
 
@@ -1529,7 +1579,9 @@ describe("Agent configuration policy", () => {
 			combined.useCase.update(combinedCommand, actor),
 		).resolves.toEqual(combinedResult);
 		expect(combined.transaction.snapshot()).toMatchObject({
+			configuration: { revision: 8 },
 			commitCount: 1,
+			outboxCount: 1,
 			lastPlan: {
 				accessUpdate: { ownerIds: ["owner_01", "owner_02"] },
 				auditEvent: {
@@ -1607,6 +1659,76 @@ describe("Agent configuration policy", () => {
 			lastPlan: null,
 		});
 	});
+
+	it.each([true, false])(
+		"keeps model admission for a mixed access/model change (admitted=%s)",
+		async (admitted) => {
+			const harness = createHarness({
+				transactionState: { managementState: accessState },
+				admissions: {
+					authorizations: [
+						{
+							agentId: "agent_01",
+							actorId: "owner_01",
+							authorizationRevision: "authorization_9",
+							accessAuthority,
+						},
+					],
+					models: admitted
+						? agentConfigurationConformanceAdmissionsV1.models
+						: [],
+				},
+			});
+			const update = harness.useCase.update(
+				{
+					...command,
+					changes: {
+						coOwnerIds: ["owner_02"],
+						modelConfiguration: {
+							options: [
+								{
+									optionId: "model_primary",
+									endpointId: "endpoint_01",
+									modelId: "gpt-5",
+									reasoningLevels: ["low", "medium"],
+									replaceCredential: false,
+								},
+							],
+							defaultOptionId: "model_primary",
+							defaultReasoningLevel: "medium",
+						},
+					},
+				},
+				actor,
+			);
+			if (admitted) {
+				await expect(update).resolves.toMatchObject({
+					revision: 8,
+					changedFields: ["modelConfiguration", "owners"],
+				});
+				expect(harness.transaction.snapshot()).toMatchObject({
+					outboxCount: 1,
+					auditCount: 1,
+					commitCount: 1,
+					managementState: { revision: 12, ownerIds: ["owner_01", "owner_02"] },
+					configuration: {
+						revision: 8,
+						modelConfiguration: { defaultReasoningLevel: "medium" },
+					},
+				});
+			} else {
+				await expect(update).rejects.toMatchObject({ code: "not_admitted" });
+				expect(harness.transaction.snapshot()).toMatchObject({
+					outboxCount: 0,
+					auditCount: 0,
+					commitCount: 0,
+					idempotencyCount: 0,
+					managementState: accessState,
+					configuration: agentConfigurationConformanceRecordV1,
+				});
+			}
+		},
+	);
 
 	it("derives Owner replacement from the trusted access authority", async () => {
 		const rescueState = {

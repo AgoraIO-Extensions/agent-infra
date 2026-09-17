@@ -27,16 +27,18 @@ export async function advanceAgentConfigurationRevision(
 	plan: AgentConfigurationWritePlanV1,
 	configuration: AgentConfigurationRecordV2,
 ): Promise<boolean> {
-	await transaction.insert(agentConfigurationRevisions).values({
-		agentId: plan.agentId,
-		revision: plan.nextRevision,
-		sourceReference:
-			configuration.source.kind === "standard"
-				? configuration.source.templateId
-				: configuration.source.imageDigest,
-		configuration,
-		createdAt: plan.outboxIntent.occurredAt,
-	});
+	if (plan.nextRevision !== plan.baseRevision) {
+		await transaction.insert(agentConfigurationRevisions).values({
+			agentId: plan.agentId,
+			revision: plan.nextRevision,
+			sourceReference:
+				configuration.source.kind === "standard"
+					? configuration.source.templateId
+					: configuration.source.imageDigest,
+			configuration,
+			createdAt: plan.auditEvent.occurredAt,
+		});
+	}
 	const advanced = await transaction
 		.update(agents)
 		.set({
@@ -88,18 +90,20 @@ export async function insertAgentConfigurationEffects(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
 ): Promise<void> {
-	await transaction.insert(outboxItems).values({
-		id: randomUUID(),
-		scopeType: "agent",
-		scopeId: plan.agentId,
-		operation: plan.outboxIntent.operation,
-		payload: { ...plan.outboxIntent.payload },
-		traceId: plan.outboxIntent.traceId,
-		requestId: plan.outboxIntent.requestId,
-		availableAt: plan.outboxIntent.occurredAt,
-		createdAt: plan.outboxIntent.occurredAt,
-		updatedAt: plan.outboxIntent.occurredAt,
-	});
+	if (plan.outboxIntent !== null) {
+		await transaction.insert(outboxItems).values({
+			id: randomUUID(),
+			scopeType: "agent",
+			scopeId: plan.agentId,
+			operation: plan.outboxIntent.operation,
+			payload: { ...plan.outboxIntent.payload },
+			traceId: plan.outboxIntent.traceId,
+			requestId: plan.outboxIntent.requestId,
+			availableAt: plan.outboxIntent.occurredAt,
+			createdAt: plan.outboxIntent.occurredAt,
+			updatedAt: plan.outboxIntent.occurredAt,
+		});
+	}
 	await transaction.insert(auditEvents).values({
 		id: randomUUID(),
 		traceId: plan.auditEvent.traceId,

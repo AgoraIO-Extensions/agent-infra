@@ -9,6 +9,10 @@ import {
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
 import {
+	type FileRoutesDependenciesV1,
+	registerFileRoutesV1,
+} from "./http/file-routes.js";
+import {
 	type ManagementRouteDependencies,
 	registerManagementRoutes,
 } from "./http/management-routes.js";
@@ -35,6 +39,7 @@ export interface PlatformAppDependencies {
 	readonly wecom?: WecomRoutesDependenciesV1;
 	readonly wecomReceipts?: WecomReceiptRoutesDependenciesV1;
 	readonly wecomSetup?: Parameters<typeof registerWecomSetupRoutesV1>[1];
+	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -77,7 +82,11 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
-	registerConversationRoutes(app, dependencies.conversation);
+	registerConversationRoutes(app, {
+		...dependencies.conversation,
+		files: dependencies.files,
+	});
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
+	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	return app;
 }

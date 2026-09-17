@@ -416,6 +416,7 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 核实恢复复用原执行的查询/恢复入口，只查询原记录，不建立第二调度循环或 Platform Connection 代理。完整丢失原调用回执时保持 unknown/unverified；模型转交、相同参数或查询到另一真实引用不能补齐原响应证据。关联状态更新保留原 operation/attempt、工具终态与计数，不能触发工具重发。
 
 原业务 native 进程退出后，受保护的原 journal 可将调用前保存的非秘密主体/Agent/Execution/generation/客户端绑定、原实际请求以及同次认证响应证据，经私有 FD3 交给同一派生 binary 的原执行只读恢复进程。该进程适用相同的进程内存、FD 与文件隔离，只使用原主体当前独立凭据访问固定 identity 与原调用记录，不创建业务 Session/Turn、MCP session 或工具调用。恢复由已有授权的原执行查询/恢复工作触发，公共关联仍沿原 outbox、事件游标、持久事务和 ACK 交付；受第 7.3 节代次屏障确认限制。缺失调用前绑定或原响应不得以当前身份或其他真实引用补造。
+执行期文件访问由可信 Worker 经 Platform 文件服务签发独立对象级授权，RuntimeHost 消费 `FileAccessGrantV1` 并通过平台认证数据面传输；旧 Execution Grant 仅保留输入附件读取范围。结果必须在对象确认和文件记录提交后才能引用。签发、audience、当前授权、代次、重放及撤权以 [工程 Spec 文件条款](SPEC-agent-infra-M1-engineering-architecture.md#154-文件) 为唯一权威；Driver 不持有对象存储凭证。
 
 ## 10. Runtime 安全约束
 

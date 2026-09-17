@@ -269,6 +269,7 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly agentId: string;
 	readonly baseRevision: number;
 	readonly nextRevision: number;
+	readonly expectedManagementRevision: number | null;
 	readonly expectedAuthorizationRevision: string;
 	readonly nextAuthorizationRevision: string;
 	readonly configuration: AgentConfigurationRecordV2;
@@ -290,7 +291,7 @@ export interface AgentConfigurationWritePlanV1 {
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly occurredAt: Date;
-	};
+	} | null;
 	readonly auditEvent: {
 		readonly action: "agent.configuration.revised" | "agent.access.updated";
 		readonly actorId: string;
@@ -1892,6 +1893,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			"agentId",
 			"baseRevision",
 			"nextRevision",
+			"expectedManagementRevision",
 			"expectedAuthorizationRevision",
 			"nextAuthorizationRevision",
 			"configuration",
@@ -1916,24 +1918,6 @@ export function snapshotAgentConfigurationWritePlanV1(
 			"key",
 			"requestDigest",
 		]);
-		const outbox = configurationPlanObject(values.outboxIntent, [
-			"operation",
-			"payload",
-			"traceId",
-			"requestId",
-			"occurredAt",
-		]);
-		const payload = configurationPlanObject(outbox.payload, [
-			"schemaVersion",
-			"agentId",
-			"baseRevision",
-			"configurationRevision",
-			"changedFields",
-		]);
-		const payloadChangedFields = snapshotAgentManagementDenseArray(
-			payload.changedFields,
-			8,
-		);
 		const audit = configurationPlanObject(values.auditEvent, [
 			"action",
 			"actorId",
@@ -1949,12 +1933,14 @@ export function snapshotAgentConfigurationWritePlanV1(
 			audit.changedFields,
 			8,
 		);
-		const outboxOccurredAt = configurationPlanDate(outbox.occurredAt);
 		const auditOccurredAt = configurationPlanDate(audit.occurredAt);
 		const accessFields = result.changedFields.filter(
 			(field) => field === "owners" || field === "availability",
 		);
 		const accessOnly = accessFields.length === result.changedFields.length;
+		const runtimeUnchanged = result.changedFields.every(
+			(field) => field === "availability",
+		);
 		const expectedAction = accessOnly
 			? "agent.access.updated"
 			: "agent.configuration.revised";
@@ -1965,8 +1951,14 @@ export function snapshotAgentConfigurationWritePlanV1(
 			result.changedFields.includes("actions") ||
 			!Number.isSafeInteger(values.baseRevision) ||
 			(values.baseRevision as number) < 1 ||
-			values.baseRevision === Number.MAX_SAFE_INTEGER ||
-			values.nextRevision !== (values.baseRevision as number) + 1 ||
+			!Number.isSafeInteger(values.nextRevision) ||
+			values.nextRevision !==
+				(values.baseRevision as number) + (runtimeUnchanged ? 0 : 1) ||
+			(values.expectedManagementRevision !== null &&
+				(!Number.isSafeInteger(values.expectedManagementRevision) ||
+					(values.expectedManagementRevision as number) < 0)) ||
+			(accessUpdate !== null &&
+				accessUpdate.expectedRevision !== values.expectedManagementRevision) ||
 			!isText(values.expectedAuthorizationRevision, idMaxBytes) ||
 			!isText(values.nextAuthorizationRevision, idMaxBytes) ||
 			configuration.agentId !== agentId ||
@@ -1976,32 +1968,76 @@ export function snapshotAgentConfigurationWritePlanV1(
 			!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotency.key) ||
 			typeof idempotency.requestDigest !== "string" ||
 			!/^[a-f0-9]{64}$/.test(idempotency.requestDigest) ||
-			outbox.operation !== "agent.configuration.revised.v1" ||
-			payload.schemaVersion !== 1 ||
-			payload.agentId !== agentId ||
-			payload.baseRevision !== values.baseRevision ||
-			payload.configurationRevision !== values.nextRevision ||
-			!sameValue(payloadChangedFields, result.changedFields) ||
-			!isText(outbox.traceId, idMaxBytes) ||
-			!isText(outbox.requestId, idMaxBytes) ||
 			audit.action !== expectedAction ||
 			!isText(audit.actorId, idMaxBytes) ||
 			audit.agentId !== agentId ||
 			audit.subjectType !== "agent" ||
 			audit.subjectId !== agentId ||
 			!sameValue(auditChangedFields, result.changedFields) ||
-			audit.traceId !== outbox.traceId ||
-			audit.requestId !== outbox.requestId ||
-			auditOccurredAt.getTime() !== outboxOccurredAt.getTime() ||
+			!isText(audit.traceId, idMaxBytes) ||
+			!isText(audit.requestId, idMaxBytes) ||
 			accessFields.length > 0 !== (accessUpdate !== null)
 		) {
 			throw new Error();
+		}
+		let outboxIntent: AgentConfigurationWritePlanV1["outboxIntent"] = null;
+		if (runtimeUnchanged) {
+			if (values.outboxIntent !== null) throw new Error();
+		} else {
+			const outbox = configurationPlanObject(values.outboxIntent, [
+				"operation",
+				"payload",
+				"traceId",
+				"requestId",
+				"occurredAt",
+			]);
+			const payload = configurationPlanObject(outbox.payload, [
+				"schemaVersion",
+				"agentId",
+				"baseRevision",
+				"configurationRevision",
+				"changedFields",
+			]);
+			const payloadChangedFields = snapshotAgentManagementDenseArray(
+				payload.changedFields,
+				8,
+			);
+			const occurredAt = configurationPlanDate(outbox.occurredAt);
+			if (
+				outbox.operation !== "agent.configuration.revised.v1" ||
+				payload.schemaVersion !== 1 ||
+				payload.agentId !== agentId ||
+				payload.baseRevision !== values.baseRevision ||
+				payload.configurationRevision !== values.nextRevision ||
+				!sameValue(payloadChangedFields, result.changedFields) ||
+				outbox.traceId !== audit.traceId ||
+				outbox.requestId !== audit.requestId ||
+				occurredAt.getTime() !== auditOccurredAt.getTime()
+			) {
+				throw new Error();
+			}
+			outboxIntent = {
+				operation: "agent.configuration.revised.v1",
+				payload: {
+					schemaVersion: 1,
+					agentId,
+					baseRevision: values.baseRevision as number,
+					configurationRevision: values.nextRevision as number,
+					changedFields: result.changedFields,
+				},
+				traceId: audit.traceId,
+				requestId: audit.requestId,
+				occurredAt,
+			};
 		}
 		return {
 			schemaVersion: 1,
 			agentId,
 			baseRevision: values.baseRevision as number,
 			nextRevision: values.nextRevision as number,
+			expectedManagementRevision: values.expectedManagementRevision as
+				| number
+				| null,
 			expectedAuthorizationRevision: values.expectedAuthorizationRevision,
 			nextAuthorizationRevision: values.nextAuthorizationRevision,
 			configuration,
@@ -2011,19 +2047,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 				key: idempotency.key,
 				requestDigest: idempotency.requestDigest,
 			},
-			outboxIntent: {
-				operation: "agent.configuration.revised.v1",
-				payload: {
-					schemaVersion: 1,
-					agentId,
-					baseRevision: values.baseRevision as number,
-					configurationRevision: values.nextRevision as number,
-					changedFields: result.changedFields,
-				},
-				traceId: outbox.traceId,
-				requestId: outbox.requestId,
-				occurredAt: outboxOccurredAt,
-			},
+			outboxIntent,
 			auditEvent: {
 				action: expectedAction,
 				actorId: audit.actorId,
@@ -2031,8 +2055,8 @@ export function snapshotAgentConfigurationWritePlanV1(
 				subjectType: "agent",
 				subjectId: agentId,
 				changedFields: result.changedFields,
-				traceId: outbox.traceId,
-				requestId: outbox.requestId,
+				traceId: audit.traceId,
+				requestId: audit.requestId,
 				occurredAt: auditOccurredAt,
 			},
 		};
@@ -2855,7 +2879,14 @@ function createAgentConfigurationUseCaseV1Internal(
 		} catch {
 			throw new AgentConfigurationError("persistence_failed");
 		}
-		const nextRevision = current.revision + 1;
+		const accessOnly = changedFields.every(
+			(field) => field === "owners" || field === "availability",
+		);
+		// Owner changes must re-run preflight because active Secrets bind to Owners.
+		const runtimeUnchanged = changedFields.every(
+			(field) => field === "availability",
+		);
+		const nextRevision = current.revision + (runtimeUnchanged ? 0 : 1);
 		if (!Number.isSafeInteger(nextRevision)) {
 			throw new AgentConfigurationError("persistence_failed");
 		}
@@ -2880,6 +2911,8 @@ function createAgentConfigurationUseCaseV1Internal(
 			agentId: command.agentId,
 			baseRevision: current.revision,
 			nextRevision,
+			expectedManagementRevision:
+				authorization.accessAuthority?.state.revision ?? null,
 			expectedAuthorizationRevision: readDecision.record.authorizationRevision,
 			nextAuthorizationRevision: authorization.authorizationRevision,
 			configuration,
@@ -2889,27 +2922,25 @@ function createAgentConfigurationUseCaseV1Internal(
 				key: command.idempotencyKey,
 				requestDigest: digest,
 			},
-			outboxIntent: {
-				operation: "agent.configuration.revised.v1",
-				payload: {
-					schemaVersion: 1,
-					agentId: command.agentId,
-					baseRevision: current.revision,
-					configurationRevision: nextRevision,
-					changedFields,
-				},
-				traceId: command.traceId,
-				requestId: command.requestId,
-				occurredAt,
-			},
+			outboxIntent: runtimeUnchanged
+				? null
+				: {
+						operation: "agent.configuration.revised.v1",
+						payload: {
+							schemaVersion: 1,
+							agentId: command.agentId,
+							baseRevision: current.revision,
+							configurationRevision: nextRevision,
+							changedFields,
+						},
+						traceId: command.traceId,
+						requestId: command.requestId,
+						occurredAt,
+					},
 			auditEvent: {
-				action:
-					accessUpdate !== null &&
-					changedFields.every(
-						(field) => field === "owners" || field === "availability",
-					)
-						? "agent.access.updated"
-						: "agent.configuration.revised",
+				action: accessOnly
+					? "agent.access.updated"
+					: "agent.configuration.revised",
 				actorId: actorContext.actorId,
 				agentId: command.agentId,
 				subjectType: "agent",

@@ -166,7 +166,7 @@ function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
 }
 
 describe("OCI ImageRegistryAdapter V1", () => {
-	it("resolves an approved Tag to an immutable Digest and sanitized candidate", async () => {
+	it("admits an approved image without Base Image ancestry as an immutable sanitized candidate", async () => {
 		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
 			endpoint: "https://registry.example",
@@ -1273,6 +1273,21 @@ describe("OCI ImageRegistryAdapter V1", () => {
 	});
 
 	it.each([
+		[
+			"Base Image ancestry without a Runtime Manifest",
+			{
+				os: "linux",
+				architecture: "amd64",
+				config: {
+					Labels: {
+						"org.opencontainers.image.base.name":
+							"registry.example/agents/custom-agent-base",
+						"org.opencontainers.image.base.digest": `sha256:${"a".repeat(64)}`,
+					},
+				},
+			},
+			"RUNTIME_MANIFEST_MISSING",
+		],
 		[
 			"missing Runtime Manifest label",
 			{

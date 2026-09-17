@@ -73,6 +73,25 @@ const connection = new AgentSideConnection(
 		},
 		prompt: async () => {
 			count++;
+			if (process.env.ACP_TEST_MODE === "foreign-notifications") {
+				for (const update of [
+					{
+						sessionUpdate: "agent_message_chunk",
+						content: { type: "text", text: "foreign-session-canary" },
+					},
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "foreign-tool",
+						title: "Foreign tool",
+						kind: "read",
+						status: "completed",
+					},
+				])
+					await connection.sessionUpdate({
+						sessionId: "foreign-session",
+						update,
+					});
+			}
 			if (process.env.ACP_TEST_MODE === "malformed") {
 				for (const frame of [
 					{ private: "synthetic-secret-marker" },
@@ -118,3 +137,6 @@ const connection = new AgentSideConnection(
 	}),
 	ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
 );
+
+// Exercise native peers that remain alive after their Host closes stdin.
+if (process.env.NATIVE_PEER_KEEP_ALIVE === "true") setInterval(() => {}, 1000);

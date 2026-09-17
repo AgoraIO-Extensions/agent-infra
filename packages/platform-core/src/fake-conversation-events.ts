@@ -8,9 +8,15 @@ import {
 	createConversationEventUseCaseV1,
 	type PersistedRuntimeConversationEventV1,
 } from "./conversation-events.js";
+import {
+	type FileRecordV1,
+	type FileScopeV1,
+	isConfirmedResultFileV1,
+} from "./file-authority.js";
 
 export interface FakeConversationEventsOptionsV1
 	extends ConversationEventUseCaseOptionsV1 {
+	readonly fileScope?: FileScopeV1;
 	readonly conversationId: string;
 	readonly executionId: string;
 	readonly sessionGeneration: number;
@@ -32,6 +38,10 @@ function isWritePlan(
 
 export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 	readonly #events: StoredEvent[] = [];
+	private readonly files = new Map<string, FileRecordV1>();
+	seedFile(file: FileRecordV1) {
+		this.files.set(file.fileId, structuredClone(file));
+	}
 	readonly #interface: ConversationEventUseCaseV1;
 	#failNextCommit = false;
 	#lastConversationCursor = 0;
@@ -46,6 +56,21 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 				);
 				const decision = decide(this.#state(existing));
 				if (!isWritePlan(decision)) return decision;
+				if (
+					decision.event.event.type === "result.file" &&
+					(!options.fileScope ||
+						!isConfirmedResultFileV1(
+							this.files.get(decision.event.event.fileId) ?? null,
+							{
+								...options.fileScope,
+								executionId: options.executionId,
+								sessionGeneration: options.sessionGeneration,
+							},
+							decision.event.event,
+						))
+				)
+					throw new Error("Unconfirmed result file");
+
 				if (this.#failNextCommit) {
 					this.#failNextCommit = false;
 					throw new Error("Injected Fake Conversation event commit failure");

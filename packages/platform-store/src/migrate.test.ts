@@ -114,6 +114,60 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
+	it.each(["file-authority", "configuration-v2"] as const)(
+		"upgrades the existing %s migration history without losing either schema",
+		async (history) => {
+			const database = await startPostgresTestDatabase("migration-branches");
+			const client = postgres(database.databaseUrl, { max: 1 });
+			try {
+				await client.unsafe(`CREATE SCHEMA platform_migrations;
+					CREATE TABLE platform_migrations.history
+					(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+				const legacy =
+					history === "file-authority"
+						? migrations.slice(0, 14)
+						: migrations.slice(0, 15);
+				for (const migration of legacy) {
+					for (const statement of migration.sql) await client.unsafe(statement);
+					await client`insert into platform_migrations.history (hash, created_at)
+						values (${migration.hash}, ${migration.folderMillis})`;
+				}
+				const previousHistory =
+					await client`select * from platform_migrations.history order by id`;
+				await builtStore.migratePlatformDatabase({
+					databaseUrl: database.databaseUrl,
+				});
+				const upgraded = await readPlatformCatalog(client);
+				expect(
+					upgraded.columns.filter((column) => column.table_name === "files"),
+				).not.toHaveLength(0);
+				expect(
+					upgraded.checks.find(
+						(check) =>
+							check.constraint_name === "agent_configuration_identity_matches",
+					)?.definition,
+				).toContain("'2'::jsonb");
+				const upgradedHistory =
+					await client`select * from platform_migrations.history order by id`;
+				expect(upgradedHistory.slice(0, previousHistory.length)).toEqual(
+					previousHistory,
+				);
+				expect(upgradedHistory).toHaveLength(migrations.length);
+				await builtStore.migratePlatformDatabase({
+					databaseUrl: database.databaseUrl,
+				});
+				expect(await readPlatformCatalog(client)).toEqual(upgraded);
+				expect(
+					await client`select * from platform_migrations.history order by id`,
+				).toEqual(upgradedHistory);
+			} finally {
+				await client.end();
+				await database.stop();
+			}
+		},
+		120_000,
+	);
+
 	it("applies, replays, and enforces the authored infrastructure schema", async () => {
 		await Promise.all([
 			builtStore.migratePlatformDatabase({ databaseUrl }),

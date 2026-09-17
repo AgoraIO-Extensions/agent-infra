@@ -366,6 +366,97 @@ export type ExecutionProcessSummaryV1 = {
     summary: string;
 };
 
+export type FileAccessClaimsV1 = {
+    accessId: string;
+    actorId: string;
+    agentId: string;
+    audience: 'platform_files';
+    channelId: string;
+    conversationId: string;
+    execution: {
+        executionId: string;
+        grantId: string;
+        sessionGeneration: number;
+    } | null;
+    expiresAt: string;
+    fileId: string;
+    issuedAt: string;
+    issuer: string;
+    maxBytes: number;
+    operation: 'read' | 'write';
+    purpose: 'file_access';
+    schemaVersion: 1;
+};
+
+export type FileAccessGrantV1 = {
+    format: 'compact-jws';
+    schemaVersion: 1;
+    token: string;
+};
+
+export type FileAccessRequestV1 = {
+    operation: 'read' | 'write';
+    schemaVersion: 1;
+};
+
+export type FileAccessResponseV1 = {
+    accessId: string;
+    expiresAt: string;
+    file: FileProjectionV1;
+    grant: FileAccessGrantV1;
+    path: string;
+    schemaVersion: 1;
+};
+
+export type FileCompleteRequestV1 = {
+    accessId: string;
+    schemaVersion: 1;
+};
+
+export type FileDescriptorV1 = {
+    mediaType: string;
+    name: string;
+    sha256: string;
+    sizeBytes: number;
+};
+
+export type FileExchangeRequestV1 = {
+    accessIdempotencyKey?: string;
+    executionGrant: FileAccessGrantV1;
+    fileId: string;
+    operation: 'read';
+    schemaVersion: 1;
+} | {
+    accessIdempotencyKey?: string;
+    descriptor: FileDescriptorV1;
+    executionGrant: FileAccessGrantV1;
+    operation: 'result';
+    schemaVersion: 1;
+};
+
+export type FileIntentRequestV1 = {
+    descriptor: FileDescriptorV1;
+    schemaVersion: 1;
+};
+
+export type FileLimitsV1 = {
+    expiresAt: string;
+    maxBytes: number;
+    mediaTypes: Array<string>;
+    revision: string;
+    schemaVersion: 1;
+};
+
+export type FileProjectionV1 = {
+    createdAt: string;
+    descriptor: FileDescriptorV1;
+    expiresAt: string;
+    fileId: string;
+    kind: 'attachment' | 'result';
+    schemaVersion: 1;
+    status: 'pending' | 'available' | 'failed' | 'expired' | 'deleting' | 'deleted';
+};
+
 export type HeartbeatSignalV1 = {
     kind: 'control';
     occurredAt: string;
@@ -374,6 +465,7 @@ export type HeartbeatSignalV1 = {
 };
 
 export type MessageCommandRequestV1 = {
+    attachments?: Array<string>;
     schemaVersion: 1;
     text: string;
 };
@@ -1882,6 +1974,134 @@ export type GetExecutionDetailResponses = {
 };
 
 export type GetExecutionDetailResponse = GetExecutionDetailResponses[keyof GetExecutionDetailResponses];
+
+export type CreateFileUploadData = {
+    body: FileIntentRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files';
+};
+
+export type CreateFileUploadResponses = {
+    /**
+     * Success
+     */
+    201: FileProjectionV1;
+};
+
+export type CreateFileUploadResponse = CreateFileUploadResponses[keyof CreateFileUploadResponses];
+
+export type ReadFileLimitsData = {
+    body?: never;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files/limits';
+};
+
+export type ReadFileLimitsResponses = {
+    /**
+     * Success
+     */
+    200: FileLimitsV1;
+};
+
+export type ReadFileLimitsResponse = ReadFileLimitsResponses[keyof ReadFileLimitsResponses];
+
+export type IssueFileAccessData = {
+    body: FileAccessRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        conversationId: string;
+        fileId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/access';
+};
+
+export type IssueFileAccessResponses = {
+    /**
+     * Success
+     */
+    200: FileAccessResponseV1;
+};
+
+export type IssueFileAccessResponse = IssueFileAccessResponses[keyof IssueFileAccessResponses];
+
+export type CompleteFileUploadData = {
+    body: FileCompleteRequestV1;
+    headers: {
+        'X-Platform-File-Grant': string;
+    };
+    path: {
+        conversationId: string;
+        fileId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/complete';
+};
+
+export type CompleteFileUploadResponses = {
+    /**
+     * Success
+     */
+    200: FileProjectionV1;
+};
+
+export type CompleteFileUploadResponse = CompleteFileUploadResponses[keyof CompleteFileUploadResponses];
+
+export type DownloadFileContentData = {
+    body?: never;
+    headers: {
+        'X-Platform-File-Grant': string;
+    };
+    path: {
+        conversationId: string;
+        fileId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/content';
+};
+
+export type DownloadFileContentResponses = {
+    /**
+     * Authenticated file bytes
+     */
+    200: Blob | File;
+};
+
+export type DownloadFileContentResponse = DownloadFileContentResponses[keyof DownloadFileContentResponses];
+
+export type UploadFileContentData = {
+    body: Blob | File;
+    headers: {
+        'X-Platform-File-Grant': string;
+        'Content-Length': number;
+    };
+    path: {
+        conversationId: string;
+        fileId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/content';
+};
+
+export type UploadFileContentResponses = {
+    /**
+     * Bytes uploaded; completion is still required
+     */
+    204: void;
+};
+
+export type UploadFileContentResponse = UploadFileContentResponses[keyof UploadFileContentResponses];
 
 export type SubmitMessageData = {
     body: MessageCommandRequestV1;

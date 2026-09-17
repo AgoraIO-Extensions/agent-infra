@@ -10,6 +10,13 @@ const store = vi.hoisted(() => ({
 	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
+const fileCleanup = vi.hoisted(() => ({
+	runOnce: vi.fn<() => Promise<boolean>>(),
+	close: vi.fn<() => Promise<void>>(),
+}));
+vi.mock("./file-worker.js", () => ({
+	createPlatformFileReconciliationWorkerV1: () => fileCleanup,
+}));
 vi.mock("@agent-infra/platform-store", () => ({
 	openPostgresWorkloadReconciliationStoreV1: () => {
 		store.opened();
@@ -46,6 +53,8 @@ function fixture() {
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	fileCleanup.runOnce.mockReset().mockResolvedValue(true);
+	fileCleanup.close.mockReset().mockResolvedValue();
 	store.opened.mockReset();
 	store.runNext.mockReset().mockResolvedValue("idle");
 	store.close.mockReset().mockResolvedValue();
@@ -53,6 +62,29 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it("continues file cleanup when successive workload reconciliation attempts fail", async () => {
+		store.runNext.mockRejectedValue(new Error("workload unavailable"));
+		const worker = createPlatformWorkloadWorkerV1({
+			...fixture(),
+			files: {
+				storage: {
+					scan: async () => ({ objects: [], cursor: null }),
+					remove: async () => {},
+				},
+				batchSize: 1,
+				orphanGraceMs: 1,
+			},
+		});
+		try {
+			await expect(worker.tick()).rejects.toThrow("workload unavailable");
+			await expect(worker.tick()).rejects.toThrow("workload unavailable");
+			expect(fileCleanup.runOnce).toHaveBeenCalledTimes(2);
+		} finally {
+			await worker.stop();
+		}
+		expect(fileCleanup.close).toHaveBeenCalledOnce();
+	});
+
 	it("rejects a deployment module missing template bindings before opening the Store", async () => {
 		const { templateModelBindings: _bindings, ...options } = fixture();
 		vi.stubGlobal("workloadDeploymentTestFactory", () => options);

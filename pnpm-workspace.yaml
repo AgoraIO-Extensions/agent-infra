@@ -2,7 +2,9 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
+  "@google/genai": false
   esbuild: true
+  protobufjs: false
   sharp: true
 overrides:
   "@kubernetes/client-node@2.0.0>ws": 8.21.3

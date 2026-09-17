@@ -19,9 +19,10 @@ it("upgrades an existing V1 database without rewriting historical JSONB and cons
 				"../../../migrations/platform",
 			),
 		});
-		const migration = migrations[13];
+		const configurationMigrationIndex = 14;
+		const migration = migrations[configurationMigrationIndex];
 		if (!migration) throw new Error("Missing configuration migration");
-		for (const previous of migrations.slice(0, 13)) {
+		for (const previous of migrations.slice(0, configurationMigrationIndex)) {
 			for (const statement of previous.sql)
 				if (statement.trim()) await sql.unsafe(statement);
 		}

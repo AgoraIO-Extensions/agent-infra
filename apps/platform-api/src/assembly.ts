@@ -22,6 +22,10 @@ import {
 } from "@agent-infra/platform-store";
 import { createWecomChannelAdmissionV1 } from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
+import {
+	assemblePlatformFilesV1,
+	type PlatformFileDeploymentV1,
+} from "./file-assembly.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import {
@@ -47,6 +51,7 @@ export interface PlatformApiAssemblyInput {
 	readonly wecom?: WecomApiDeploymentV1;
 	readonly wecomCredentialEncryptionKeys?: unknown;
 	readonly wecomIdentity?: WecomIdentityPortV1;
+	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
@@ -250,6 +255,55 @@ export function assemblePlatformApi(
 			};
 		},
 	};
+	const files = input.files
+		? assemblePlatformFilesV1({
+				databaseUrl: input.databaseUrl,
+				deployment: input.files,
+				identity: input.identity,
+				conversationAuthorization,
+				async readCurrentLimits(identity, scope, kind) {
+					const configuration = await configurationQuery.read({
+						agentId: scope.agentId,
+						actorId: identity.userId,
+						organizationIds: identity.organizationIds,
+						isAdministrator: identity.roles.includes("system_admin"),
+						intent: "discover",
+					});
+					if (configuration.outcome !== "found") return null;
+					const agent = await managementQuery.getAgent(
+						{
+							kind: "user",
+							userId: identity.userId,
+							organizationIds: identity.organizationIds,
+						},
+						scope.agentId,
+					);
+					if (!agent) return null;
+					const projection = await presentAgent({
+						agentId: scope.agentId,
+						traceId: randomUUID(),
+						configuration: configuration.configuration,
+						management: agent.management,
+					});
+					if (
+						!(kind === "attachment"
+							? projection.capabilities.attachments
+							: projection.capabilities.resultFiles)
+					)
+						return null;
+					const revision = configuration.configuration.revision;
+					const declared = await input.files?.readLimits({
+						agentId: scope.agentId,
+						channelId: scope.channelId,
+						configurationRevision: revision,
+						kind,
+					});
+					return declared?.configurationRevision === revision
+						? declared.declarations
+						: null;
+				},
+			})
+		: undefined;
 	const dependencies: PlatformAppDependencies = {
 		...(wecomReceipts
 			? {
@@ -268,6 +322,7 @@ export function assemblePlatformApi(
 		...(wecom
 			? { wecom: { ...wecom.dependencies, identity: input.identity } }
 			: {}),
+		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: input.identity,
 			foundation,
@@ -313,6 +368,7 @@ export function assemblePlatformApi(
 		...(wecomReceipts ? [wecomReceipts] : []),
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),
+		...(files ? [files] : []),
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,

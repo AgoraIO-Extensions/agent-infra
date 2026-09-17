@@ -9,6 +9,7 @@ const dockerfiles = new Map([
 	["platform-api", "apps/platform-api/Dockerfile"],
 	["platform-worker", "apps/platform-worker/Dockerfile"],
 	["connection-api", "apps/connection-api/Dockerfile"],
+	["custom-agent-base", "deploy/images/custom-agent-base/Dockerfile"],
 ]);
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
@@ -51,6 +52,7 @@ test("deployment images select an explicit non-root runtime user", async () => {
 		["platform-api", "node"],
 		["platform-worker", "node"],
 		["connection-api", "node"],
+		["custom-agent-base", "node"],
 	]);
 
 	for (const [service, path] of dockerfiles) {

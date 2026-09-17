@@ -32,8 +32,15 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
-	it("tracks every published browser OpenAPI version", async () => {
+	it("tracks published browser, file and readiness contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
+		for (const path of [
+			"json-schema/files.v1.schema.json",
+			"openapi/files.v1.openapi.json",
+			"json-schema/runtime-readiness.v1.schema.json",
+			"openapi/runtime-readiness.v1.openapi.json",
+		])
+			expect(source).toContain(`"packages/contracts/artifacts/${path}"`);
 		expect(source).toContain(
 			'"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json"',
 		);
@@ -424,78 +431,66 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toContain(reason);
 	});
 
-	it("rejects retyped OpenAPI component schemas", () => {
-		const result = compare("openapi-retyped", "openapi-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI contract");
+	it("accepts only the exact file addition and rejects altered authorization, limits and old operations", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths))
+			if (path.includes("/files")) delete previous.paths[path];
+		for (const name of Object.keys(previous.components.schemas))
+			if (name.startsWith("File")) delete previous.components.schemas[name];
+		delete previous.components.schemas.MessageCommandRequestV1.properties
+			.attachments;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-files-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changedPath = structuredClone(current);
+			delete changedPath.paths[
+				"/api/v1/conversations/{conversationId}/files/{fileId}/content"
+			].get.parameters;
+			const changedScope = structuredClone(current);
+			delete changedScope.components.schemas.FileAccessClaimsV1.properties
+				.actorId;
+			const changedLimit = structuredClone(current);
+			changedLimit.components.schemas.MessageCommandRequestV1.properties.attachments.maxItems = 64;
+			const required = structuredClone(current);
+			required.components.schemas.MessageCommandRequestV1.required.push(
+				"attachments",
+			);
+			const oldOperation = structuredClone(current);
+			delete oldOperation.paths[
+				"/api/v1/conversations/{conversationId}/messages"
+			].post;
+			for (const changed of [
+				changedPath,
+				changedScope,
+				changedLimit,
+				required,
+				oldOperation,
+			]) {
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it.each([
-		"openapi-operation-removed",
-		"openapi-request-media-removed",
-		"openapi-response-removed",
-		"openapi-parameter-removed",
-		"openapi-required-body-added",
-	])("rejects %s HTTP contract changes", (fixture) => {
-		const previous =
-			fixture.startsWith("openapi-parameter") ||
-			fixture === "openapi-required-body-added"
-				? "openapi-parameter-base"
-				: "openapi-base";
-		const result = compare(fixture, previous);
+		["removed", "removed"],
+		["narrowed", "narrowed"],
+		["retyped", "retyped"],
+	])("rejects %s schema changes", (fixture, reason) => {
+		const result = compare(fixture);
 		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI contract");
-	});
-
-	it("rejects introduced const, enum, union, and reference narrowings", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of ["const", "enum", "oneOf", "$ref", "type"]) {
-			expect(result.stderr).toContain(keyword);
-		}
-	});
-
-	it("rejects adding an array item constraint", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("narrowed $defs.ArrayV1[] items");
-	});
-
-	it("rejects adding numeric and collection constraints", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of [
-			"exclusiveMinimum",
-			"exclusiveMaximum",
-			"multipleOf",
-			"uniqueItems",
-		]) {
-			expect(result.stderr).toContain(keyword);
-		}
-	});
-
-	it("rejects adding an additional-property schema", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain(
-			"narrowed $defs.RecordV1 additionalProperties",
-		);
-	});
-
-	it("rejects composition, tuple, contains, and property-name narrowings", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of [
-			"allOf",
-			"not",
-			"prefixItems",
-			"contains",
-			"minContains",
-			"maxContains",
-			"propertyNames",
-		]) {
-			expect(result.stderr).toContain(keyword);
-		}
+		expect(result.stderr).toContain(reason);
 	});
 
 	it("rejects adding an overlapping oneOf option", () => {
