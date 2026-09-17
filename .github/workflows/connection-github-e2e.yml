@@ -167,6 +167,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install pnpm
+        run: npm install --global pnpm@11.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Run deterministic Connection GitHub conformance
         env:
           CONNECTION_E2E_REVIEWER_TOKEN: ${{ secrets.CONNECTION_E2E_REVIEWER_TOKEN_V2 }}

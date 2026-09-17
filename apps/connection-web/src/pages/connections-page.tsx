@@ -835,7 +835,33 @@ export function PreviewContent(props: {
 						<option value="WRITE">写入</option>
 					</select>
 				</div>
-				<p className="scope-summary">已选择 {selected.size} 项</p>
+				<div className="row-actions">
+					<button
+						className="button button-secondary"
+						type="button"
+						onClick={() =>
+							setSelected(
+								(current) =>
+									new Set([
+										...current,
+										...visibleActions.map((action) => action.id),
+									]),
+							)
+						}
+					>
+						选择当前结果
+					</button>
+					<button
+						className="button button-secondary"
+						type="button"
+						onClick={() => setSelected(new Set())}
+					>
+						清空
+					</button>
+				</div>
+				<p className="scope-summary">
+					已选择 {selected.size} / 共 {props.value.preview.actions.length} 项
+				</p>
 				<ul className="permission-list">
 					{visibleActions.map((action) => (
 						<li key={action.id}>

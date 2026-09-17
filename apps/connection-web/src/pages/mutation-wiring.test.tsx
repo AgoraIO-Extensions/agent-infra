@@ -313,7 +313,7 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "查看授权差异" });
-		expect(screen.getByText("已选择 1 项")).toBeTruthy();
+		expect(screen.getByText("已选择 1 / 共 2 项")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
 		await screen.findByRole("button", { name: "确认授权" });
 		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
