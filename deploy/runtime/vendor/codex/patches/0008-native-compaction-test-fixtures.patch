@@ -222,8 +222,8 @@ new file mode 100644
 +        scenario: impl Future<Output = ()>,
 +    ) {
 +        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
-+            assert_eq!(marker.to_str(), Some(name), "unexpected isolated scenario");
-+            assert_eq!(
++            std::assert_eq!(marker.to_str(), Some(name), "unexpected isolated scenario");
++            std::assert_eq!(
 +                codex_core::initialize_native_operation_barrier(),
 +                admission != Admission::Missing,
 +                "the real native bootstrap must match this scenario",
@@ -297,8 +297,8 @@ new file mode 100644
 +                    assert!(value.chars().count() <= 256 && !value.chars().any(char::is_control));
 +                }
 +                canonical_uuid(&identity["attemptRef"]);
-+                assert_eq!(identity["toolName"], format!("hook_command:{event}"));
-+                assert_eq!(identity.as_object().expect("native identity").len(), 5);
++                std::assert_eq!(identity["toolName"], format!("hook_command:{event}"));
++                std::assert_eq!(identity.as_object().expect("native identity").len(), 5);
 +            }
 +            let mut expected = json!({
 +                "schemaVersion": 1, "requestId": request_id, "phase": phase,
@@ -310,7 +310,7 @@ new file mode 100644
 +            if *phase == "outcome" {
 +                expected["outcome"] = json!("completed");
 +            }
-+            assert_eq!(
++            std::assert_eq!(
 +                request, expected,
 +                "receipt must belong to this exact attempt"
 +            );
@@ -348,7 +348,7 @@ new file mode 100644
 +            frame.push(b'\n');
 +            driver.write_all(&frame).expect("send native receipt");
 +        }
-+        assert_eq!(
++        std::assert_eq!(
 +            phase_index,
 +            expected_phases.len(),
 +            "missing native lifecycle receipt"
@@ -374,7 +374,7 @@ new file mode 100644
 +    fn canonical_uuid(value: &Value) -> Uuid {
 +        let text = value.as_str().expect("UUID field is a string");
 +        let uuid = Uuid::parse_str(text).expect("valid protocol UUID");
-+        assert_eq!(uuid.hyphenated().to_string(), text);
++        std::assert_eq!(uuid.hyphenated().to_string(), text);
 +        uuid
 +    }
 +
@@ -470,8 +470,8 @@ new file mode 100644
 +        _ => None,
 +    })
 +    .await;
-+    assert_eq!(completed.run.status, HookRunStatus::Failed);
-+    assert_eq!(
++    std::assert_eq!(completed.run.status, HookRunStatus::Failed);
++    std::assert_eq!(
 +        completed.run.entries,
 +        vec![HookOutputEntry {
 +            kind: HookOutputEntryKind::Error,
@@ -479,7 +479,7 @@ new file mode 100644
 +        }]
 +    );
 +    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-+    assert_eq!(requests.requests().len(), 2);
++    std::assert_eq!(requests.requests().len(), 2);
 +    assert!(
 +        !test.codex_home_path().join(log).exists(),
 +        "denied hook must never execute"
