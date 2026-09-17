@@ -17,6 +17,9 @@ import {
 	BitbucketServerAdapter,
 	bitbucketServerConnectionCatalog,
 	githubConnectionCatalog,
+	JenkinsAdapter,
+	jenkinsReleaseConnectionCatalog,
+	jenkinsReleaseProfile,
 	OpenConnectorGitHubAdapter,
 	OpenConnectorGitHubOAuthAdapter,
 } from "@agent-infra/openconnector-adapter";
@@ -64,6 +67,7 @@ export async function createConnectionRuntime(
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
 		confluenceServerConnectionCatalog,
+		jenkinsReleaseConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog);
 	}
@@ -77,6 +81,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog,
 			jiraServerConnectionCatalog,
 			confluenceServerConnectionCatalog,
+			jenkinsReleaseConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
@@ -130,17 +135,19 @@ export async function createConnectionRuntime(
 		jiraFetch,
 		atlassianTokenProvider,
 	);
+	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jiraFetch);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
+		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 	});
 	const service = new ConnectionApplicationService(
 		repository,
 		executors,
 		new OpenConnectorGitHubOAuthAdapter(config.github),
-		{ bitbucket, confluence, jira },
+		{ bitbucket, confluence, [jenkins.providerId]: jenkins, jira },
 	);
 	const app = createConnectionApp({
 		accessTokens: oauth,
@@ -159,6 +166,7 @@ export async function createConnectionRuntime(
 					bitbucketServerConnectionCatalog,
 					jiraServerConnectionCatalog,
 					confluenceServerConnectionCatalog,
+					jenkinsReleaseConnectionCatalog,
 				],
 				githubRedirectUri: config.github.redirectUri,
 				service,
@@ -172,6 +180,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
+			jenkinsReleaseConnectionCatalog.provider,
 		],
 	});
 	return {

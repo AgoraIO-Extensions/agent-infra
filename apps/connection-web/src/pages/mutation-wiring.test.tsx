@@ -353,6 +353,30 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("连接页调用 Jenkins deployment credential API", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "连接 Jenkins Release" }),
+		);
+		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
+			target: { value: "jenkins-user" },
+		});
+		fireEvent.change(screen.getByLabelText("Jenkins API Token"), {
+			target: { value: "jenkins-api-token" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			apiToken: "jenkins-api-token",
+			providerId: "jenkins-release",
+			username: "jenkins-user",
+		});
+	});
+
 	it("连接页调用 Confluence Server credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });

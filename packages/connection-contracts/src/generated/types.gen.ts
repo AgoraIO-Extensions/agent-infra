@@ -147,6 +147,10 @@ export type ProviderCredentialRequest = {
     providerId: 'confluence' | 'jira';
     username: string;
     password: string;
+} | {
+    providerId: 'jenkins-release';
+    username: string;
+    apiToken: string;
 };
 
 export type ConnectionCreated = {

@@ -966,10 +966,15 @@ export function createConnectionOAuthApp(
 						const credential =
 							body.providerId === "bitbucket"
 								? body.accessToken
-								: JSON.stringify({
-										password: body.password,
-										username: body.username,
-									});
+								: body.providerId === "jenkins-release"
+									? JSON.stringify({
+											apiToken: body.apiToken,
+											username: body.username,
+										})
+									: JSON.stringify({
+											password: body.password,
+											username: body.username,
+										});
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,

@@ -221,7 +221,7 @@ export function ConnectionsView(props: {
 	if (!props.connections.length) {
 		return (
 			<EmptyState title="还没有 Connection">
-				连接 GitHub、公司 Bitbucket 或公司 Jira 账号后即可授权给你的客户端。
+				连接 GitHub、公司 Atlassian 或 Jenkins 账号后即可授权给你的客户端。
 			</EmptyState>
 		);
 	}
@@ -329,6 +329,7 @@ export function providerLabel(value: string) {
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
 			github: "GitHub",
+			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 		}[value] ?? value
 	);

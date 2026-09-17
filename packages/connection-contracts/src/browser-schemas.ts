@@ -32,6 +32,11 @@ export const providerCredentialRequestSchema = z.union([
 		providerId: z.enum(["confluence", "jira"]),
 		username: z.string().trim().min(1).max(256),
 	}),
+	z.strictObject({
+		apiToken: z.string().min(1).max(8_192),
+		providerId: z.literal("jenkins-release"),
+		username: z.string().trim().min(1).max(256),
+	}),
 ]);
 
 export const authorizationPreviewRequestSchema = z.strictObject({

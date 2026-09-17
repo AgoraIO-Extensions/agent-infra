@@ -20,6 +20,7 @@ import {
 } from "@agent-infra/openconnector-kernel";
 
 export * from "./bitbucket-server.ts";
+export * from "./jenkins.ts";
 
 import { githubExecutorDigest } from "./github-integrity.ts";
 

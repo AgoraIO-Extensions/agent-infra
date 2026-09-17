@@ -1015,6 +1015,19 @@ describe("Connection API", () => {
 					});
 					return { connectionId: "connection-jira" };
 				}
+				if (providerId === "jenkins-release") {
+					expect(accessToken).toBe(
+						JSON.stringify({
+							apiToken: "jenkins-api-token",
+							username: "jenkins-user",
+						}),
+					);
+					calls.push({
+						name: "connect-jenkins",
+						value: { principalId, providerId },
+					});
+					return { connectionId: "connection-jenkins-release" };
+				}
 				expect(accessToken).toBe("test-bitbucket-pat");
 				calls.push({
 					name: "connect-bitbucket",
@@ -1101,6 +1114,20 @@ describe("Connection API", () => {
 				},
 				method: "POST",
 			}),
+			await app.request("/api/v1/connection/provider-credentials", {
+				body: JSON.stringify({
+					apiToken: "jenkins-api-token",
+					providerId: "jenkins-release",
+					username: "jenkins-user",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-jenkins-connect",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
 			await app.request("/api/v1/connection/authorization-previews", {
 				body: JSON.stringify({
 					actionVersionIds: ["github.get_repository@v7"],
@@ -1146,7 +1173,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 204, 204,
+			200, 201, 201, 201, 201, 201, 204, 204,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -1157,7 +1184,10 @@ describe("Connection API", () => {
 		expect(await apiResponses[2]?.json()).toEqual({
 			connectionId: "connection-jira",
 		});
-		expect(await apiResponses[3]?.json()).toMatchObject({
+		expect(await apiResponses[3]?.json()).toEqual({
+			connectionId: "connection-jenkins-release",
+		});
+		expect(await apiResponses[4]?.json()).toMatchObject({
 			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
 			preview: { previewId: "preview-1" },
 		});
@@ -1181,6 +1211,13 @@ describe("Connection API", () => {
 				value: {
 					principalId: "principal-user",
 					providerId: "jira",
+				},
+			},
+			{
+				name: "connect-jenkins",
+				value: {
+					principalId: "principal-user",
+					providerId: "jenkins-release",
 				},
 			},
 			{

@@ -79,8 +79,27 @@
 | 内部网站 | Confluence | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
+| 内部网站 | Jenkins | 纳入（只读） | 每个公司 Jenkins deployment 使用独立 Provider ID 和 ProviderRelease，共享审核过的只读 Adapter；pilot runtime 仅开放 `jenkins-release` |
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
+
+公司存在多个 Jenkins deployment。由于 Consumer declaration 和 AuthorizationRoot 都以
+`providerId` 为授权唯一维度，每个 Jenkins deployment 必须使用独立稳定 Provider ID、
+ProviderRelease、固定 origin、Credential 和 Grant；不能共用 `providerId=jenkins`，也不能通过
+环境变量或 Action 参数选择 endpoint。各 deployment 复用同一个参数化 Adapter 实现。
+`jenkins-ci` 固定 origin `https://jenkins-ci.agoralab.co`，但其公司 OAuth 网关尚无 Connection
+机器认证契约，因此只保留独立 catalog/profile，不进入 runtime supported providers。
+
+`jenkins-release` 固定 origin `http://114.94.148.35:8010`，复用 Rehoboam 已验证的 Jenkins
+username/password Basic Auth 语义，但不读取 Rehoboam 配置、不复用共享凭证或 base64 存储；每个用户
+仍在 Connection 页面输入自己的 username 和 Jenkins API Token，由 Connection 加密保存；不接受
+Jenkins 登录密码。Connection
+Owner 于 2026-09-17 明确接受该 origin 暂无 TLS 的残余风险，仅允许 LA3
+`connection-local` supervised pilot 通过已批准白名单直连；不得使用代理、扩大到其他 HTTP origin
+或描述为广泛生产可用，并须在 Provider 提供 HTTPS 后迁移。两个 profile 都要求
+`GET /whoAmI/api/json` 返回 `authenticated=true`、非匿名且包含 `name`，以 `name` 作为账号身份。首批
+Action 只读取当前用户、顶层 Job、指定 Job、Build 和 Queue item；console log、artifact 内容和所有
+构建写操作不纳入。后续 Jenkins 实例必须新增经过 Provider Onboarding 的静态 deployment profile。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
@@ -165,7 +184,7 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 除 4.3 节明确批准的受监督 HCI pilot 外，身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | Confluence/Jira 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 除 4.3 节已接受风险的具名 pilot 外，Credential 和 Provider 执行业务路由不启动；缺少正式 Adapter 时始终启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
@@ -187,7 +206,7 @@ Connection Owner 于 2026-09-01 在 [#301](https://github.com/AgoraIO-Extensions
 - HCI API 可以注册 LDAP browser session、Connection OAuth/PAT、Direct MCP、Provider、Consent、
   Grant 和管理路由。所有 Principal、Connection、Credential、Grant、Call、Effect 和审计仍以
   Connection PostgreSQL 为唯一权威；Consumer 不能获得 Provider credential。
-- 当前固定的 GitHub、Bitbucket、Jira 和 Confluence ProviderRelease 可以在该 pilot 数据库内标记
+- 当前固定的 GitHub、Bitbucket、Jira、Confluence 和只读 `jenkins-ci` ProviderRelease 可以在该 pilot 数据库内标记
   `PUBLISHED`，仅用于受监督验收；没有真实 tenant、scope、错误、限流和幂等证据的 Provider 或
   WRITE Action 不得被描述为广泛生产可用。
 - 已明确接受当前 Agora `ldap://` direct bind、缺少 LDAP active attribute、进程注入的单一
@@ -476,7 +495,7 @@ connection-api -> connection-core ports -> openconnector-adapter -> pinned OpenC
 | OC-09 | 强制 Secret 与网络边界 | KMS/Egress + Adapter；只有上游无法注入 controlled fetch 或会泄露 Secret 时才评估补丁 | Credential 仅在执行边界注入；endpoint、redirect、DNS/TLS、响应大小、SSRF 和 Secret canary 验收通过，无网络旁路 | WP4、WP7、WP11 |
 | OC-10 | 建立审计、事件与恢复控制 | Core/Store/Operations；不进入 OpenConnector | audit/outbox 同事务，主体绑定查询、脱敏、保留、recovery generation、PITR mutation close 和恢复 runbook 通过 | WP8、WP11 |
 | OC-11 | 建立独立 Connection 产品入口 | `agent-infra` Web/API；不进入 OpenConnector | 账号、授权、调用记录、Consumer、Catalog 和审计页面只调用 Connection 契约，不依赖 Platform 或展示 Credential | WP9 |
-| OC-12 | 逐 Provider 完成企业适配 | 优先用 ProviderRelease 配置和 Adapter；硬编码 endpoint/auth/schema 且无法包装时才评估 Provider 补丁 | GitHub、Confluence、Jira、Bitbucket 及获批后的 Outlook 分别完成 deployment、认证、scope、identity、错误、限流、幂等、对账和真实账号 E2E | WP10 |
+| OC-12 | 逐 Provider 完成企业适配 | 优先用 ProviderRelease 配置和 Adapter；硬编码 endpoint/auth/schema 且无法包装时才评估 Provider 补丁 | GitHub、Confluence、Jira、Bitbucket、逐 deployment 的只读 Jenkins 及获批后的 Outlook 分别完成 deployment、认证、scope、identity、错误、限流、幂等、对账和真实账号 E2E | WP10 |
 | OC-13 | 建立升级与生产验收 | 构建/CI/Operations；不进入 OpenConnector | 每次升级生成 source/Catalog/API/security/digest diff，并通过 conformance、crash、负载、HA、PITR、SLO 和回滚门禁 | WP10、WP11 |
 
 #### 10.5.4 Fork 准入与允许范围
@@ -2438,7 +2457,7 @@ Recovery: open | read-only | quarantined
 | Phase 1：领域底座 | 建立独立数据库、身份、Consumer、Catalog、Account 和 Credential | WP1-WP4 | migration、领域状态机、进程内 test double 和负向隔离通过；test double 不进入运行产物 |
 | Phase 2：授权与接入 | 打通 Direct MCP、Delegated HTTP 和 Connection Web 授权 | WP5-WP6 | 两个入口收敛到相同 AuthorizedInvocation，越权矩阵为零 |
 | Phase 3：可靠执行 | 实现 Call、Effect、egress、幂等、对账和审计 | WP7-WP8 | crash-window 测试无重复效果，UNCERTAIN 可查询和收敛 |
-| Phase 4：真实闭环 | 完成 Connection 页面、初期 Provider 范围和运维面 | WP9-WP10 | GitHub 完成完整验收；Confluence、Jira、Bitbucket 完成获批 Action 的真实账号 E2E |
+| Phase 4：真实闭环 | 完成 Connection 页面、初期 Provider 范围和运维面 | WP9-WP10 | GitHub 完成完整验收；Confluence、Jira、Bitbucket 和逐 deployment 的只读 Jenkins 完成获批 Action 的真实账号 E2E |
 | Phase 5：生产加固 | 完成容量、安全、升级、备份和恢复演练 | WP11 | go-live 证据包获 Product、Security、SRE 和 Connection Owner 签署 |
 
 阶段是依赖顺序，不要求每个阶段单独发布。未关闭对应门禁时可以实现 Fake 和只读路径，但不能以 feature flag 绕过 Credential、egress、Effect Ledger 或 recovery gate。
@@ -2479,7 +2498,7 @@ flowchart LR
 | WP7 Execution 与 Egress | Connection Owner/SRE | Invocation、Call、Effect、Dispatch、proxy、reconcile | 每个 crash window 经过 kill/restart；重复非幂等外部效果为零 |
 | WP8 Audit 与 Recovery | SRE/DBA/Security | outbox、审计、Recovery Control、PITR runbook | restore 演练保持 mutation closed，直到 continuity 或 Provider coverage 证据通过 |
 | WP9 Connection Web | Connection Owner/Product | 独立 `apps/connection-web`、中文账号/授权/调用/Consumer/Catalog/审计页面和生成 Browser Client | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential；不依赖 Agora Agent Platform Web |
-| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
+| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；每个 Jenkins deployment 完成获批只读 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
 | WP11 生产加固 | SRE/Security | HA、容量、SLO、升级、回滚、DR 和 on-call | load/soak、N/N-1、backup/PITR、Secret 和安全评审通过，无未接受 P0 风险 |
 
 每个 WP 使用自己的 Issue 和验收证据；不能继续复用本 HLD 的 primary Issue 作为实现总包。实现 PR 必须遵循开发工作流 Spec 的 Issue-first 规则。

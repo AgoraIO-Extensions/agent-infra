@@ -9,7 +9,7 @@
 	},
 	"scripts": {
 		"check-types": "tsc --noEmit",
-		"test": "node scripts/verify-bitbucket-provenance.mjs && node scripts/verify-jira-provenance.mjs && node scripts/verify-confluence-provenance.mjs && node --test",
+		"test": "node scripts/verify-bitbucket-provenance.mjs && node scripts/verify-jira-provenance.mjs && node scripts/verify-confluence-provenance.mjs && node scripts/verify-jenkins-integrity.mjs && node --test",
 		"verify:jira:upstream": "node scripts/verify-jira-upstream.mjs",
 		"verify:bitbucket:upstream": "node scripts/verify-bitbucket-upstream.mjs"
 	},

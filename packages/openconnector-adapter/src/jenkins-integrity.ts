@@ -1,0 +1,2 @@
+export const jenkinsExecutorDigest =
+	"sha256:54a09086673fb7907201f782754d32b8651213d46c11d2acf30e1faf6737fb32";

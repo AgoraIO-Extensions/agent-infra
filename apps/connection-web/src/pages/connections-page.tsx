@@ -51,6 +51,9 @@ export function ConnectionsPage() {
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
+	const [jenkinsOpen, setJenkinsOpen] = useState(false);
+	const [jenkinsPending, setJenkinsPending] = useState(false);
+	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
@@ -59,6 +62,7 @@ export function ConnectionsPage() {
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
+		if (provider === "jenkins-release") setJenkinsOpen(true);
 	}, []);
 	const overview = useQuery({
 		queryKey: ["connections"],
@@ -128,6 +132,27 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
+	const connectJenkins = async (credential: {
+		apiToken: string;
+		username: string;
+	}) => {
+		setJenkinsPending(true);
+		setJenkinsError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				providerId: "jenkins-release",
+				...credential,
+			});
+			setJenkinsOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setJenkinsError(
+				error instanceof Error ? error : new Error("Jenkins Release 连接失败"),
+			);
+		} finally {
+			setJenkinsPending(false);
+		}
+	};
 	const preview = useMutation({
 		mutationFn: connectionApi.createAuthorizationPreview,
 		onSuccess: (value, variables) =>
@@ -192,6 +217,14 @@ export function ConnectionsPage() {
 						<Button
 							variant="secondary"
 							type="button"
+							onClick={() => setJenkinsOpen(true)}
+						>
+							<SlidersHorizontal aria-hidden="true" size={17} />
+							连接 Jenkins Release
+						</Button>
+						<Button
+							variant="secondary"
+							type="button"
 							onClick={() => setConfluenceOpen(true)}
 						>
 							<BookOpen aria-hidden="true" size={17} />
@@ -228,6 +261,7 @@ export function ConnectionsPage() {
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
+			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{data ? (
@@ -266,6 +300,8 @@ export function ConnectionsPage() {
 									setJiraOpen(true);
 								} else if (connection?.providerId === "confluence") {
 									setConfluenceOpen(true);
+								} else if (connection?.providerId === "jenkins-release") {
+									setJenkinsOpen(true);
 								} else {
 									beginOAuth();
 								}
@@ -470,6 +506,72 @@ export function ConnectionsPage() {
 						{confirm.isError ? <PageError error={confirm.error} /> : null}
 					</DialogContent>
 				) : null}
+			</Dialog>
+
+			<Dialog
+				open={jenkinsOpen}
+				onOpenChange={(open) => {
+					setJenkinsOpen(open);
+					if (!open) setJenkinsError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接 Jenkins Release</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const form = new FormData(event.currentTarget);
+							const username = form.get("username");
+							const apiToken = form.get("apiToken");
+							if (
+								typeof username === "string" &&
+								typeof apiToken === "string"
+							) {
+								event.currentTarget.reset();
+								void connectJenkins({ apiToken, username });
+							}
+						}}
+					>
+						<label htmlFor="jenkins-release-username">Jenkins 用户名</label>
+						<input
+							autoComplete="username"
+							defaultValue={overview.data?.account.email ?? ""}
+							id="jenkins-release-username"
+							maxLength={256}
+							name="username"
+							required
+							type="text"
+						/>
+						<label htmlFor="jenkins-release-api-token">Jenkins API Token</label>
+						<input
+							autoComplete="off"
+							id="jenkins-release-api-token"
+							maxLength={8192}
+							name="apiToken"
+							required
+							type="password"
+						/>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={jenkinsPending}>
+								<SlidersHorizontal aria-hidden="true" size={17} />
+								{jenkinsPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
 			</Dialog>
 
 			<Dialog

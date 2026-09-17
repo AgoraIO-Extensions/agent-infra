@@ -28,7 +28,7 @@ Principal；Connection 在服务端解析该 Principal 的 Consumer、访问凭�
 
 | 概念 | 产品含义 |
 | --- | --- |
-| Provider | Jira、GitHub、Outlook 等外部平台 |
+| Provider | Jira、GitHub、Jenkins、Outlook 等外部平台；同品牌但授权和 endpoint 独立的 deployment 作为独立 Provider |
 | Action | Provider 对外提供的一项受控能力，例如创建 Pull Request |
 | Principal | Connection Account 中识别的员工或受管理服务主体；由受信身份源的稳定 subject 映射 |
 | Consumer | 使用 Connection 的客户端或服务，例如 Codex、Claude App、Cursor、Agent Platform 或 CI/CD |
@@ -318,6 +318,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
 | 私有 Provider | 员工可用公司 Bitbucket Server PAT、Jira Server 凭证和 Confluence Server 凭证建立个人 Connection；同一 Consumer 的 GitHub、Bitbucket、Jira 与 Confluence 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
+| 多 Jenkins deployment | 每个公司 Jenkins 实例作为独立 Provider 建立 Connection 和授权，可同时连接；M1 pilot 仅开放 `jenkins-release` 的 Job、Build 和 Queue 状态读取，不触发或停止构建 |
 | 多 Credential | 同一 Connection 可完成 refresh/rotation 并保留版本历史，新调用只使用 current 版本 |
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |
 | 授权与撤销 | 用户可以授权或撤销 Consumer/Actor；其他 Consumer 的独立授权不受影响 |
