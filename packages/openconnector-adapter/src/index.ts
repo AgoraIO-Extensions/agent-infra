@@ -24,6 +24,10 @@ export * from "./bitbucket-server.ts";
 import { githubExecutorDigest } from "./github-integrity.ts";
 
 const githubSourceCommit = "0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674";
+const githubAppOnlyActions = new Set([
+	"github.rerequest_check_run",
+	"github.rerequest_check_suite",
+]);
 
 /**
  * Connection's catalog projection is generated from the OpenConnector kernel.
@@ -48,16 +52,18 @@ export const githubConnectionCatalog = {
 	},
 	executorDigest: githubExecutorDigest,
 	provider: "github",
-	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v7`,
+	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v8`,
 	sourceCommit: githubSourceCommit,
-	actions: githubActions.map((action) => ({
-		description: action.description,
-		effect: connectionEffect(action.name),
-		id: `${action.id}@v7`,
-		inputSchema: connectionInputSchema(action.inputSchema),
-		name: action.id,
-		requiredScopes: [...action.requiredScopes],
-	})),
+	actions: githubActions
+		.filter((action) => !githubAppOnlyActions.has(action.id))
+		.map((action) => ({
+			description: action.description,
+			effect: connectionEffect(action.name),
+			id: `${action.id}@v8`,
+			inputSchema: connectionInputSchema(action.inputSchema),
+			name: action.id,
+			requiredScopes: [...action.requiredScopes],
+		})),
 } as const;
 
 const defaultPublishedGitHubActions: readonly GitHubActionName[] =

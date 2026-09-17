@@ -23,7 +23,7 @@ test("Reviewer v2 health probe verifies account and repository through exact rea
 				get_action_guide: {
 					action: {
 						actionId: request.params.arguments.actionId,
-						actionVersionId: `${request.params.arguments.actionId}@v7`,
+						actionVersionId: `${request.params.arguments.actionId}@v8`,
 						effect: "READ",
 					},
 				},
@@ -31,14 +31,14 @@ test("Reviewer v2 health probe verifies account and repository through exact rea
 					request.params.arguments.actionId === "github.get_current_user"
 						? {
 								action: "github.get_current_user",
-								actionVersionId: "github.get_current_user@v7",
+								actionVersionId: "github.get_current_user@v8",
 								callId: "call-user",
 								result: { id: 329435106, login: "connectionE2E2" },
 								status: "SUCCEEDED",
 							}
 						: {
 								action: "github.get_repository",
-								actionVersionId: "github.get_repository@v7",
+								actionVersionId: "github.get_repository@v8",
 								callId: "call-repo",
 								result: {
 									default_branch: "main",
@@ -59,8 +59,8 @@ test("Reviewer v2 health probe verifies account and repository through exact rea
 
 	assert.deepEqual(result, {
 		actionVersionIds: [
-			"github.get_current_user@v7",
-			"github.get_repository@v7",
+			"github.get_current_user@v8",
+			"github.get_repository@v8",
 		],
 		account: "connectionE2E2",
 		repository: "AgoraConnectionE2EORG/connector-conformance",

@@ -29,10 +29,10 @@ test("commit and reaction conformance mutates only run-owned resources and clean
 		runId: "commit-run",
 	});
 	assert.deepEqual(evidence.actionVersionIds, [
-		"github.create_commit_status@v7",
-		"github.create_commit_comment@v7",
-		"github.create_issue_reaction@v7",
-		"github.create_issue_comment_reaction@v7",
+		"github.create_commit_status@v8",
+		"github.create_commit_comment@v8",
+		"github.create_issue_reaction@v8",
+		"github.create_issue_comment_reaction@v8",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.deepEqual(
@@ -117,7 +117,7 @@ function lifecycleFetch(calls, config = {}) {
 			structuredContent = {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v7`,
+					actionVersionId: `${args.actionId}@v8`,
 					effect: "WRITE",
 				},
 			};
@@ -133,7 +133,7 @@ function lifecycleFetch(calls, config = {}) {
 			if (action === "github.create_or_update_file") branchAdvanced = true;
 			structuredContent = {
 				action,
-				actionVersionId: `${action}@v7`,
+				actionVersionId: `${action}@v8`,
 				callId: `call-${++id}`,
 				result: providerResult(action, input, {
 					actionCount,

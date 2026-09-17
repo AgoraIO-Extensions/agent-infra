@@ -13,14 +13,9 @@ import {
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
-import {
-	githubV7RepositoryLifecycleVerificationEvidence,
-	githubV7ReviewerVerificationEvidence,
-	githubV7VerificationEvidence,
-	githubV7VerificationEvidenceRecords,
-} from "./verification/github-v7.ts";
-import { githubV7LowRiskWriteScenarios } from "./verification/github-v7-low-risk-write-scenarios.ts";
-import { githubV7ReadScenarios } from "./verification/github-v7-read-scenarios.ts";
+import { githubV8VerificationEvidenceRecords } from "./verification/github-v8.ts";
+import { githubV8LowRiskWriteScenarios } from "./verification/github-v8-low-risk-write-scenarios.ts";
+import { githubV8ReadScenarios } from "./verification/github-v8-read-scenarios.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -29,7 +24,7 @@ const catalogs = [
 	confluenceServerConnectionCatalog,
 ] as const;
 
-test("GitHub v7 low-risk writes have an exact isolated cleanup scenario", () => {
+test("GitHub v8 low-risk writes have an exact isolated cleanup scenario", () => {
 	const approved = [
 		"create_ref",
 		"update_ref",
@@ -59,15 +54,15 @@ test("GitHub v7 low-risk writes have an exact isolated cleanup scenario", () => 
 		"update_release",
 		"delete_release",
 	]
-		.map((name) => `github.${name}@v7`)
+		.map((name) => `github.${name}@v8`)
 		.sort();
-	const actionVersionIds = githubV7LowRiskWriteScenarios.map(
+	const actionVersionIds = githubV8LowRiskWriteScenarios.map(
 		(scenario) => scenario.actionVersionId,
 	);
 	assert.equal(actionVersionIds.length, 27);
 	assert.equal(new Set(actionVersionIds).size, actionVersionIds.length);
 	assert.deepEqual([...actionVersionIds].sort(), approved);
-	for (const scenario of githubV7LowRiskWriteScenarios) {
+	for (const scenario of githubV8LowRiskWriteScenarios) {
 		const action = githubConnectionCatalog.actions.find(
 			(item) => item.id === scenario.actionVersionId,
 		);
@@ -80,19 +75,19 @@ test("GitHub v7 low-risk writes have an exact isolated cleanup scenario", () => 
 	}
 });
 
-test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
+test("GitHub v8 read scenarios exactly cover the catalog read actions", () => {
 	const catalogReads = githubConnectionCatalog.actions
 		.filter((action) => action.effect === "READ")
 		.map((action) => action.id)
 		.sort();
-	const scenarioIds = githubV7ReadScenarios
+	const scenarioIds = githubV8ReadScenarios
 		.map((scenario) => scenario.actionVersionId)
 		.sort();
 
 	assert.equal(catalogReads.length, 78);
-	assert.equal(new Set(scenarioIds).size, githubV7ReadScenarios.length);
+	assert.equal(new Set(scenarioIds).size, githubV8ReadScenarios.length);
 	assert.deepEqual(scenarioIds, catalogReads);
-	for (const scenario of githubV7ReadScenarios) {
+	for (const scenario of githubV8ReadScenarios) {
 		assert.ok(
 			["ACCOUNT", "ORGANIZATION", "REPOSITORY"].includes(scenario.boundary),
 		);
@@ -106,12 +101,12 @@ test("GitHub v7 read scenarios exactly cover the catalog read actions", () => {
 		}
 	}
 	assert.deepEqual(
-		githubV7ReadScenarios
+		githubV8ReadScenarios
 			.filter((scenario) => scenario.execution !== "LIVE")
 			.map((scenario) => scenario.actionVersionId),
-		["github.get_pull_request_review@v7"],
+		["github.get_pull_request_review@v8"],
 	);
-	for (const scenario of githubV7ReadScenarios.filter(
+	for (const scenario of githubV8ReadScenarios.filter(
 		(item) => item.execution === "LIVE",
 	)) {
 		const action = githubConnectionCatalog.actions.find(
@@ -165,76 +160,54 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub verification matrix binds account-scoped evidence to 143 actions", () => {
+test("GitHub OAuth v8 starts fail closed until its 143 actions have exact evidence", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
-		githubV7VerificationEvidenceRecords,
+		githubV8VerificationEvidenceRecords,
 	);
-	assert.equal(matrix.length, 145);
+	assert.equal(matrix.length, 143);
 	assert.equal(
 		matrix.filter((item) => item.status === "LIVE_VERIFIED").length,
+		0,
+	);
+	assert.equal(
+		matrix.filter((item) => item.status === "UNVERIFIED").length,
 		143,
 	);
-	assert.equal(matrix.filter((item) => item.status === "UNVERIFIED").length, 2);
 	assert.equal(
 		matrix.filter(
 			(item) => item.effect === "READ" && item.status === "LIVE_VERIFIED",
 		).length,
-		78,
+		0,
 	);
-	const reviewerActionVersionIds = new Set<string>(
-		githubV7ReviewerVerificationEvidence.actionVersionIds,
-	);
-	assert.ok(
-		matrix
-			.filter((item) => reviewerActionVersionIds.has(item.actionVersionId))
-			.every(
-				(item) =>
-					item.actionVersionId.endsWith("@v7") &&
-					item.evidence?.cleanup === "SUCCEEDED" &&
-					item.evidence.runId === "35092020126-1" &&
-					item.evidence.externalAccount === "329435106",
-			),
-	);
-	const repositoryLifecycleActionVersionIds = new Set<string>(
-		githubV7RepositoryLifecycleVerificationEvidence.actionVersionIds,
-	);
-	const repositoryLifecycleMatrix = matrix.filter((item) =>
-		repositoryLifecycleActionVersionIds.has(item.actionVersionId),
-	);
-	assert.equal(repositoryLifecycleMatrix.length, 14);
-	assert.deepEqual(
-		new Set(repositoryLifecycleMatrix.map((item) => item.actionVersionId)),
-		repositoryLifecycleActionVersionIds,
-	);
-	assert.ok(
-		repositoryLifecycleMatrix.every(
-			(item) =>
-				item.evidence?.cleanup === "SUCCEEDED" &&
-				item.evidence.runId === "35189503119-1" &&
-				item.evidence.externalAccount === "328682695" &&
-				item.evidence.providerReleaseId ===
-					"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v7",
-		),
-	);
+	assert.ok(matrix.every((item) => item.actionVersionId.endsWith("@v8")));
+
+	const validEvidence: LiveVerificationEvidence = {
+		actionVersionIds: [githubConnectionCatalog.actions[0]?.id ?? ""],
+		cleanup: "SUCCEEDED",
+		containerId: "1369705971",
+		externalAccount: "328682695",
+		provider: "github",
+		providerReleaseId: githubConnectionCatalog.providerReleaseId,
+		runId: "v8-run-1",
+	};
 
 	const bumpedCatalog = {
 		...githubConnectionCatalog,
 		actions: githubConnectionCatalog.actions.map((action) =>
-			action.name === "github.get_repository"
-				? { ...action, id: "github.get_repository@v8" }
+			action.id === validEvidence.actionVersionIds[0]
+				? { ...action, id: "github.get_repository@v9" }
 				: action,
 		),
 	};
 	assert.throws(
-		() =>
-			capabilityVerificationMatrix(bumpedCatalog, githubV7VerificationEvidence),
+		() => capabilityVerificationMatrix(bumpedCatalog, validEvidence),
 		/unknown ActionVersions/,
 	);
 	for (const evidence of [
-		{ ...githubV7VerificationEvidence, cleanup: "FAILED" as const },
-		{ ...githubV7VerificationEvidence, provider: "foreign" },
-		{ ...githubV7VerificationEvidence, providerReleaseId: "github-stale" },
+		{ ...validEvidence, cleanup: "FAILED" as const },
+		{ ...validEvidence, provider: "foreign" },
+		{ ...validEvidence, providerReleaseId: "github-stale" },
 	]) {
 		assert.throws(
 			() => capabilityVerificationMatrix(githubConnectionCatalog, evidence),
@@ -242,11 +215,9 @@ test("GitHub verification matrix binds account-scoped evidence to 143 actions", 
 		);
 	}
 
-	const mutableActionVersionIds = [
-		...githubV7VerificationEvidence.actionVersionIds,
-	];
+	const mutableActionVersionIds = [...validEvidence.actionVersionIds];
 	const mutableEvidence: LiveVerificationEvidence = {
-		...githubV7VerificationEvidence,
+		...validEvidence,
 		actionVersionIds: mutableActionVersionIds,
 	};
 	const immutableMatrix = capabilityVerificationMatrix(
@@ -259,7 +230,7 @@ test("GitHub verification matrix binds account-scoped evidence to 143 actions", 
 		(item) => item.status === "LIVE_VERIFIED",
 	)?.evidence;
 	assert.equal(retainedEvidence?.cleanup, "SUCCEEDED");
-	assert.equal(retainedEvidence?.actionVersionIds.length, 121);
+	assert.equal(retainedEvidence?.actionVersionIds.length, 1);
 	assert.ok(Object.isFrozen(retainedEvidence));
 	assert.ok(Object.isFrozen(retainedEvidence?.actionVersionIds));
 });
