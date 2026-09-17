@@ -44,6 +44,14 @@ _Avoid_: Credential Rotation、Consumer 授权
 用户为同一 Provider Connection 提交新 Credential 并替换 current CredentialVersion 的过程。
 _Avoid_: Provider Connection Upgrade、重新授权客户端
 
+**Connection Control Plane**:
+持有 Connection 唯一身份、授权、Credential、Call/Effect 和审计权威的区域部署；M1 固定为 GZ3 单主。
+_Avoid_: Provider Egress、区域副本
+
+**Provider Egress**:
+不持有领域权威状态、只执行受控 Provider 请求并返回 receipt 的网络安全边界；首个远端实例是 LA3 GitHub Egress。
+_Avoid_: Connection Control Plane、通用代理、Provider 副本
+
 **Verification Evidence**:
 绑定 exact ProviderRelease、ActionVersion、隔离测试边界和终态结果的脱敏验证证明。
 _Avoid_: 测试计划、Mock 成功、其他 ActionVersion 的历史结果

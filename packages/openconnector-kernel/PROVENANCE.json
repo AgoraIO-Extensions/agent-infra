@@ -5,13 +5,21 @@
 		"version": "1.3.4",
 		"artifact": "archive/openconnector/oomol-lab-open-connector-1.3.4.tgz",
 		"artifactSha256": "a7cf39cd73ca10fd3965611c02887c7d552c906fa0620db9e47a52600db12cba",
-		"copiedFilesSha256": "e5c68a129da8d4a64a70275e634ac1cc1d9786e07b09d554e006d84148006856"
+		"copiedFilesSha256": "84b6d6c1a40c7f091e6cde8a3f5df2d36417035dd274f04f53765ff88bb85185"
 	},
 	"policy": "Controlled source copy of the GitHub provider kernel. The upstream runtime server, SQLite store, provider loader, and credential store are intentionally excluded. Changes must be reviewed against the pinned source before upgrading.",
 	"modifications": [
 		{
+			"file": "src/core/types.ts",
+			"reason": "Allow Connection to inject a deployment-selected provider egress transport."
+		},
+		{
+			"file": "src/oauth/oauth-token.ts",
+			"reason": "Route OAuth token exchange through the same controlled regional egress transport."
+		},
+		{
 			"file": "src/providers/provider-runtime.ts",
-			"reason": "Normalize an ArrayBuffer to Uint8Array for the Node 24 BlobPart type."
+			"reason": "Use an injected transport behind existing SSRF guards and normalize an ArrayBuffer to Uint8Array for the Node 24 BlobPart type."
 		}
 	],
 	"copiedFiles": [

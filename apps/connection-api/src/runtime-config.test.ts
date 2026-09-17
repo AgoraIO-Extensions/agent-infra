@@ -107,6 +107,26 @@ describe("Connection runtime configuration", () => {
 		}
 	});
 
+	it("requires a primary GitHub egress before configuring READ fallback", () => {
+		const config = fullConnectionRuntimeConfig({
+			...accountBase,
+			GITHUB_EGRESS_PROXY_URL: "https://github-egress.la3.example",
+			GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+		});
+		expect(config.githubEgressProxyUrl).toBe(
+			"https://github-egress.la3.example/",
+		);
+		expect(config.githubReadFallbackProxyUrl).toBe(
+			"http://103.101.125.158:28062/",
+		);
+		expect(() =>
+			fullConnectionRuntimeConfig({
+				...accountBase,
+				GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+			}),
+		).toThrow(/requires GITHUB_EGRESS_PROXY_URL/);
+	});
+
 	it("rejects a Jira token endpoint outside the fixed company service", () => {
 		expect(() =>
 			fullConnectionRuntimeConfig({

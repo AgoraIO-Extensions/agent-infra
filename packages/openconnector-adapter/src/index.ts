@@ -85,11 +85,18 @@ type GitHubOAuthAdapterOptions = {
 	authorizationUrl?: string;
 	tokenUrl?: string;
 	publishedActions?: readonly GitHubActionName[];
+	fetcher?: typeof fetch;
 };
 
 export class OpenConnectorGitHubAdapter
 	implements GitHubExecutor, GitHubReconciler
 {
+	private readonly fetcher?: typeof fetch;
+
+	constructor(fetcher?: typeof fetch) {
+		this.fetcher = fetcher;
+	}
+
 	async execute(input: {
 		action: GitHubActionName;
 		credential: CredentialForExecution;
@@ -99,6 +106,7 @@ export class OpenConnectorGitHubAdapter
 			input.action,
 			toKernelInput(input.input),
 			input.credential,
+			this.fetcher,
 		);
 	}
 
@@ -120,6 +128,7 @@ export class OpenConnectorGitHubAdapter
 				state: "open",
 			},
 			input.credential,
+			this.fetcher,
 		);
 		const pullRequests = result.pull_requests;
 		if (!Array.isArray(pullRequests)) return undefined;
@@ -184,11 +193,13 @@ export class OpenConnectorGitHubOAuthAdapter implements GitHubOAuthProvider {
 			tokenRequestFormat: auth.tokenRequestFormat,
 			tokenUrl: this.options.tokenUrl ?? auth.tokenUrl,
 			createError: (message) => new Error(message),
+			fetcher: this.options.fetcher,
 		});
 		const user = await runKernelAction(
 			"github.getCurrentUser",
 			{},
 			{ accessToken: credential.accessToken },
+			this.options.fetcher,
 		);
 		const externalAccount =
 			user.id === undefined || user.id === null ? undefined : String(user.id);
@@ -224,6 +235,7 @@ async function runKernelAction(
 	action: GitHubActionName | "github.listPullRequests",
 	input: Record<string, unknown>,
 	credential: CredentialForExecution,
+	fetcher?: typeof fetch,
 ): Promise<Record<string, unknown>> {
 	const kernelActionName = toKernelActionName(action);
 	const actionDefinition = githubActions.find(
@@ -242,6 +254,7 @@ async function runKernelAction(
 		getCredential: async (service) =>
 			service === "github" ? toKernelCredential(credential) : undefined,
 	};
+	if (fetcher) context.fetcher = fetcher;
 	const result = await executeAction(
 		actionDefinition,
 		executor,

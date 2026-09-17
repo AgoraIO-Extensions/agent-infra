@@ -299,6 +299,8 @@ export type TransitFileWriter = TransitFileStore;
 export interface ExecutionContext {
   /** Resolve the credential currently configured for a provider service id. */
   getCredential(service: string): Promise<ResolvedCredential | undefined>;
+  /** Optional deployment-selected transport used behind the provider egress guards. */
+  fetcher?: typeof fetch;
   /** Optional local temporary file storage for actions that produce downloadable files. */
   transitFiles?: TransitFileWriter;
   /** Optional cancellation signal propagated from the HTTP request or runner. */

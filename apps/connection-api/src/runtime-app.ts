@@ -101,24 +101,31 @@ export async function createConnectionRuntime(
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
-	const github = new OpenConnectorGitHubAdapter();
-	const proxyDispatcher = config.bitbucketProxyUrl
-		? new ProxyAgent(config.bitbucketProxyUrl)
+	const proxyFetch = (proxyUrl: string) => {
+		const dispatcher = new ProxyAgent(proxyUrl);
+		return ((input: RequestInfo | URL, init?: RequestInit) =>
+			undiciFetch(
+				input as never,
+				{ ...init, dispatcher } as never,
+			)) as unknown as typeof fetch;
+	};
+	const githubPrimaryFetch = config.githubEgressProxyUrl
+		? proxyFetch(config.githubEgressProxyUrl)
+		: undefined;
+	const githubFetch =
+		githubPrimaryFetch && config.githubReadFallbackProxyUrl
+			? createReadFallbackFetch(
+					githubPrimaryFetch,
+					proxyFetch(config.githubReadFallbackProxyUrl),
+				)
+			: githubPrimaryFetch;
+	const github = new OpenConnectorGitHubAdapter(githubFetch);
+	const bitbucketProxyFetch = config.bitbucketProxyUrl
+		? proxyFetch(config.bitbucketProxyUrl)
 		: undefined;
 	const bitbucketFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
-		...(proxyDispatcher === undefined
-			? {}
-			: {
-					fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
-						undiciFetch(
-							input as never,
-							{
-								...init,
-								dispatcher: proxyDispatcher,
-							} as never,
-						)) as unknown as typeof fetch,
-				}),
+		...(bitbucketProxyFetch ? { fetch: bitbucketProxyFetch } : {}),
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
@@ -146,7 +153,10 @@ export async function createConnectionRuntime(
 	const service = new ConnectionApplicationService(
 		repository,
 		executors,
-		new OpenConnectorGitHubOAuthAdapter(config.github),
+		new OpenConnectorGitHubOAuthAdapter({
+			...config.github,
+			fetcher: githubFetch,
+		}),
 		{ bitbucket, confluence, [jenkins.providerId]: jenkins, jira },
 	);
 	const app = createConnectionApp({
@@ -186,5 +196,22 @@ export async function createConnectionRuntime(
 	return {
 		app,
 		recovery: new ConnectionRecoveryService(repository, executors),
+	};
+}
+
+export function createReadFallbackFetch(
+	primary: typeof fetch,
+	fallback: typeof fetch,
+): typeof fetch {
+	return async (input, init) => {
+		try {
+			return await primary(input, init);
+		} catch (error) {
+			const method = (
+				init?.method ?? (input instanceof Request ? input.method : "GET")
+			).toUpperCase();
+			if (method !== "GET" && method !== "HEAD") throw error;
+			return fallback(input, init);
+		}
 	};
 }

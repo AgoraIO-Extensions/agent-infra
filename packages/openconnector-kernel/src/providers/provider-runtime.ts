@@ -780,11 +780,18 @@ export function defineProviderExecutors<TContext>(input: ProviderExecutorDefinit
   for (const [name, handler] of Object.entries(input.handlers)) {
     executors[`${input.service}.${name}`] = async (actionInput, executionContext): Promise<ExecutionResult> => {
       try {
+		const requestFetch = executionContext.fetcher
+		  ? createProviderFetch({
+		      fetch: executionContext.fetcher,
+		      allowPrivateNetwork: input.allowPrivateNetwork,
+		      skipDnsValidation: input.skipDnsValidation,
+		    })
+		  : egressFetch;
         return {
           ok: true,
           output: await handler(
             actionInput as Record<string, unknown>,
-            await input.createContext(executionContext, egressFetch),
+		    await input.createContext(executionContext, requestFetch),
           ),
         };
       } catch (error) {

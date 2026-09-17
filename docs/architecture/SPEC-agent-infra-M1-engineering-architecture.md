@@ -121,6 +121,7 @@ flowchart LR
 | `platform-api` | 身份入口、Agent 管理、权限、对话、SSE、企微回调、Agent Tool Gateway | 否 |
 | `platform-worker` | Agent Workload 调谐、模板升级、消息投递、outbox 处理 | 否 |
 | `connection-api` | 唯一 Consumer MCP/HTTP 入口；Connection OAuth、LDAP 身份、Principal/Consumer 授权、Provider/Action、凭证、Action 执行和审计 | 否 |
+| `connection-provider-egress` | 无状态 Provider 网络执行边界；首期 LA3 实例只允许 GitHub，通过 mTLS、bound dispatch assertion 和 take-once admission 接收 GZ3 control plane 请求 | 否 |
 | `agent pod` | Hermes、Codex、组合模板或完全自定义 Agent 的实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件和平台审计 | 是 |
 | `connection database` | 所有部署的 Principal、identity mapping、OAuth session、Consumer、Grant、Provider、Action、外部账号、Credential、调用和审计 | 是 |
@@ -131,6 +132,11 @@ Connection Web 的独立部署与同源路由决策见
 `platform-api` 与 `platform-worker` 使用同一平台领域模块，但以不同进程部署。Connection 使用独立
 数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。本机部署也
 连接同一 Connection account authority；可选 local edge 不保存账号、Credential 或授权状态。
+
+Connection control plane 与 connection database 单主部署在 GZ3。LA3 不部署第二套 Connection DB、
+Identity、Grant 或用户入口，只部署 GitHub Provider Egress。区域职责、READ fallback 与 WRITE
+`UNCERTAIN` 边界见
+[Connection GZ3 控制面与 LA3 GitHub Egress ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 
 ### 4.2 不拆分的部署单元
 
@@ -146,6 +152,7 @@ agent-infra/
     platform-api/            Hono HTTP、SSE、企微和 Tool Gateway
     platform-worker/         调谐、投递和 outbox
     connection-api/          Connection MCP、HTTP 与 Action 执行
+    connection-provider-egress/  无状态 Provider Egress 进程入口
   packages/
     platform-core/           Agent 平台领域规则与用例
     connection-core/         Connection 领域规则与用例

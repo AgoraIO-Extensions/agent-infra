@@ -2,6 +2,8 @@ type RuntimeEnvironment = Record<string, string | undefined>;
 
 export type ConnectionApiRuntimeConfig = {
 	bitbucketProxyUrl?: string;
+	githubEgressProxyUrl?: string;
+	githubReadFallbackProxyUrl?: string;
 	databaseUrl: string;
 	directConsumer: { id: string; name: string };
 	identityKey: Uint8Array;
@@ -143,14 +145,14 @@ function optionalHttps(environment: RuntimeEnvironment, name: string) {
 	return value ? requireHttps(value, name) : undefined;
 }
 
-function optionalProxyUrl(environment: RuntimeEnvironment) {
-	const value = environment.BITBUCKET_SERVER_PROXY_URL;
+function optionalProxyUrl(environment: RuntimeEnvironment, name: string) {
+	const value = environment[name];
 	if (!value) return undefined;
 	let url: URL;
 	try {
 		url = new URL(value);
 	} catch {
-		throw new Error("BITBUCKET_SERVER_PROXY_URL must be an HTTP proxy origin");
+		throw new Error(`${name} must be an HTTP proxy origin`);
 	}
 	if (
 		(url.protocol !== "http:" && url.protocol !== "https:") ||
@@ -160,7 +162,7 @@ function optionalProxyUrl(environment: RuntimeEnvironment) {
 		url.search ||
 		url.hash
 	) {
-		throw new Error("BITBUCKET_SERVER_PROXY_URL must be an HTTP proxy origin");
+		throw new Error(`${name} must be an HTTP proxy origin`);
 	}
 	return url.toString();
 }
@@ -200,9 +202,29 @@ export function connectionApiRuntimeConfig(
 		"CONNECTION_PUBLIC_BASE_URL",
 	);
 	const resourceUrl = new URL("/mcp", publicBaseUrl).toString();
-	const bitbucketProxyUrl = optionalProxyUrl(environment);
+	const bitbucketProxyUrl = optionalProxyUrl(
+		environment,
+		"BITBUCKET_SERVER_PROXY_URL",
+	);
+	const githubEgressProxyUrl = optionalProxyUrl(
+		environment,
+		"GITHUB_EGRESS_PROXY_URL",
+	);
+	const githubReadFallbackProxyUrl = optionalProxyUrl(
+		environment,
+		"GITHUB_READ_FALLBACK_PROXY_URL",
+	);
+	if (githubReadFallbackProxyUrl && !githubEgressProxyUrl) {
+		throw new Error(
+			"GITHUB_READ_FALLBACK_PROXY_URL requires GITHUB_EGRESS_PROXY_URL",
+		);
+	}
 	return {
 		...(bitbucketProxyUrl === undefined ? {} : { bitbucketProxyUrl }),
+		...(githubEgressProxyUrl === undefined ? {} : { githubEgressProxyUrl }),
+		...(githubReadFallbackProxyUrl === undefined
+			? {}
+			: { githubReadFallbackProxyUrl }),
 		databaseUrl: requirePostgres(requireValue(environment, "DATABASE_URL")),
 		directConsumer: {
 			id: requireValue(environment, "CONNECTION_DIRECT_CONSUMER_ID"),

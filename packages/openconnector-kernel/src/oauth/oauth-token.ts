@@ -17,6 +17,7 @@ export interface OAuthTokenRequestOptions {
   tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post" | "none";
   tokenRequestFormat?: "form" | "json";
   tokenUrl: string;
+  fetcher?: typeof fetch;
 }
 
 interface AuthorizationCodeTokenRequest extends OAuthTokenRequestOptions {
@@ -88,7 +89,7 @@ async function requestToken(input: TokenRequest): Promise<Extract<ResolvedCreden
 
   let response: Response;
   try {
-    response = await providerFetch(input.tokenUrl, {
+	response = await (input.fetcher ?? providerFetch)(input.tokenUrl, {
       method: "POST",
       headers,
       body,
