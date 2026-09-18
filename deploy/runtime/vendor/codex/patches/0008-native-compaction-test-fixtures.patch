@@ -18,12 +18,12 @@ diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/co
 +mod native_hook_fixture;
 +
  // --- Test helpers -----------------------------------------------------------
- 
+
  pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
 @@ -790,10 +795,18 @@
      Ok(())
  }
- 
+
 -#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 -async fn manual_pre_compact_block_decision_does_not_block_compaction() {
 +#[test]
@@ -55,11 +55,11 @@ diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/co
 +    );
      wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
      wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
- 
+
 @@ -857,10 +877,18 @@
      assert!(input.get("implementation").is_none());
  }
- 
+
 -#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 -async fn compact_hooks_respect_matchers_and_post_runs_after_compaction() {
 +#[test]
@@ -79,7 +79,7 @@ diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/co
      let first_turn = sse(vec![
          ev_assistant_message("m0", FIRST_REPLY),
 @@ -894,6 +922,17 @@
- 
+
      codex.submit(Op::Compact).await.expect("trigger compact");
      wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
 +    let completed = wait_for_event_match(&codex, |ev| match ev {
@@ -94,7 +94,7 @@ diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/co
 +    assert_eq!(completed.run.status, HookRunStatus::Completed);
 +    assert!(completed.run.entries.is_empty());
      wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
- 
+
      assert_eq!(request_log.requests().len(), 2);
 @@ -2393,13 +2432,13 @@
      .await;
