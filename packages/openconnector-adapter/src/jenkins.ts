@@ -9,7 +9,7 @@ import { jenkinsExecutorDigest } from "./jenkins-integrity.ts";
 const credentialScope = "jenkins.read";
 const maxConsoleBytes = 256 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
-const requestTimeoutMs = 15_000;
+const requestTimeoutMs = 30_000;
 const sourceCommit = "connection-native";
 
 type JsonObject = Record<string, unknown>;
@@ -86,7 +86,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v3`,
+			id: `${profile.providerId}.${action.name}@v4`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -109,7 +109,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v3`,
+		providerReleaseId: `${profile.providerId}-connection-v4`,
 		sourceCommit,
 	} as const;
 }
@@ -204,56 +204,42 @@ export class JenkinsAdapter
 		path: string,
 		credentialProbe = false,
 	) {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
-		try {
-			const response = await this.fetcher(
-				new URL(path, this.profile.apiOrigin),
-				{
-					headers: {
-						accept: "application/json",
-						authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
-					},
-					redirect: "manual",
-					signal: controller.signal,
+		const response = await this.fetchRead(
+			new URL(path, this.profile.apiOrigin),
+			{
+				headers: {
+					accept: "application/json",
+					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 				},
+				redirect: "manual",
+			},
+		);
+		if (response.status === 401 || response.status === 403) {
+			throw invalidCredential("Jenkins credential was rejected");
+		}
+		if (response.status >= 300 && response.status < 400) {
+			throw credentialProbe
+				? invalidCredential("Jenkins credential validation redirected")
+				: providerError("Jenkins request redirected");
+		}
+		if (!response.ok) {
+			throw providerError(
+				`Jenkins request failed with HTTP ${response.status}`,
+				{ providerStatus: response.status },
 			);
-			if (response.status === 401 || response.status === 403) {
-				throw invalidCredential("Jenkins credential was rejected");
-			}
-			if (response.status >= 300 && response.status < 400) {
-				throw credentialProbe
-					? invalidCredential("Jenkins credential validation redirected")
-					: providerError("Jenkins request redirected");
-			}
-			if (!response.ok) {
-				throw providerError(
-					`Jenkins request failed with HTTP ${response.status}`,
-					{ providerStatus: response.status },
-				);
-			}
-			const declaredLength = Number(response.headers.get("content-length"));
-			if (declaredLength > maxResponseBytes) {
-				throw providerError("Jenkins response is too large");
-			}
-			const text = await response.text();
-			if (Buffer.byteLength(text) > maxResponseBytes) {
-				throw providerError("Jenkins response is too large");
-			}
-			try {
-				return JSON.parse(text) as JsonObject;
-			} catch {
-				throw providerError("Jenkins returned an invalid JSON response");
-			}
-		} catch (error) {
-			if (error instanceof Error && error.name === "AbortError") {
-				throw providerError("Jenkins request timed out", {
-					providerUnavailable: true,
-				});
-			}
-			throw error;
-		} finally {
-			clearTimeout(timeout);
+		}
+		const declaredLength = Number(response.headers.get("content-length"));
+		if (declaredLength > maxResponseBytes) {
+			throw providerError("Jenkins response is too large");
+		}
+		const text = await response.text();
+		if (Buffer.byteLength(text) > maxResponseBytes) {
+			throw providerError("Jenkins response is too large");
+		}
+		try {
+			return JSON.parse(text) as JsonObject;
+		} catch {
+			throw providerError("Jenkins returned an invalid JSON response");
 		}
 	}
 
@@ -262,60 +248,75 @@ export class JenkinsAdapter
 		path: string,
 		start: number,
 	) {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
-		try {
-			const response = await this.fetcher(
-				new URL(path, this.profile.apiOrigin),
-				{
-					headers: {
-						accept: "text/plain",
-						authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
-					},
-					redirect: "manual",
-					signal: controller.signal,
+		const response = await this.fetchRead(
+			new URL(path, this.profile.apiOrigin),
+			{
+				headers: {
+					accept: "text/plain",
+					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 				},
-			);
-			if (response.status === 401 || response.status === 403) {
-				throw invalidCredential("Jenkins credential was rejected");
-			}
-			if (response.status >= 300 && response.status < 400) {
-				throw providerError("Jenkins request redirected");
-			}
-			if (!response.ok) {
-				throw providerError(
-					`Jenkins request failed with HTTP ${response.status}`,
-					{ providerStatus: response.status },
-				);
-			}
-			const { bytes: returned, truncated } = await readLimitedBytes(
-				response,
-				maxConsoleBytes,
-			);
-			const reportedNext = Number(response.headers.get("x-text-size"));
-			return {
-				moreData:
-					truncated ||
-					response.headers.get("x-more-data")?.toLowerCase() === "true",
-				nextStart:
-					!truncated &&
-					Number.isSafeInteger(reportedNext) &&
-					reportedNext >= start
-						? reportedNext
-						: start + returned.byteLength,
-				text: new TextDecoder().decode(returned),
-				truncated,
-			};
-		} catch (error) {
-			if (error instanceof Error && error.name === "AbortError") {
-				throw providerError("Jenkins request timed out", {
-					providerUnavailable: true,
-				});
-			}
-			throw error;
-		} finally {
-			clearTimeout(timeout);
+				redirect: "manual",
+			},
+		);
+		if (response.status === 401 || response.status === 403) {
+			throw invalidCredential("Jenkins credential was rejected");
 		}
+		if (response.status >= 300 && response.status < 400) {
+			throw providerError("Jenkins request redirected");
+		}
+		if (!response.ok) {
+			throw providerError(
+				`Jenkins request failed with HTTP ${response.status}`,
+				{ providerStatus: response.status },
+			);
+		}
+		const { bytes: returned, truncated } = await readLimitedBytes(
+			response,
+			maxConsoleBytes,
+		);
+		const reportedNext = Number(response.headers.get("x-text-size"));
+		return {
+			moreData:
+				truncated ||
+				response.headers.get("x-more-data")?.toLowerCase() === "true",
+			nextStart:
+				!truncated &&
+				Number.isSafeInteger(reportedNext) &&
+				reportedNext >= start
+					? reportedNext
+					: start + returned.byteLength,
+			text: new TextDecoder().decode(returned),
+			truncated,
+		};
+	}
+
+	private async fetchRead(input: URL, init: RequestInit) {
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+			try {
+				return await this.fetcher(input, {
+					...init,
+					signal: controller.signal,
+				});
+			} catch (error) {
+				const transportFailure =
+					error instanceof Error &&
+					(error.name === "AbortError" || error.name === "TypeError");
+				if (transportFailure && attempt === 0) continue;
+				if (transportFailure) {
+					throw providerError("Jenkins request transport failed", {
+						providerUnavailable: true,
+					});
+				}
+				throw error;
+			} finally {
+				clearTimeout(timeout);
+			}
+		}
+		throw providerError("Jenkins request transport failed", {
+			providerUnavailable: true,
+		});
 	}
 }
 

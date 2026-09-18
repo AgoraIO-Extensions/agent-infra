@@ -16,9 +16,9 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.notEqual(first.provider, second.provider);
 	assert.notEqual(first.providerReleaseId, second.providerReleaseId);
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
-	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v3");
+	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v4");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
-	assert.equal(second.providerReleaseId, "jenkins-release-connection-v3");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v4");
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
@@ -153,20 +153,25 @@ test("Jenkins credential validation fails closed on auth errors and redirects", 
 });
 
 test("Jenkins exposes bounded Provider failure metadata", async () => {
-	const missing = new JenkinsAdapter(
-		jenkinsReleaseProfile,
-		async () => new Response("missing", { status: 404 }),
-	);
+	let missingRequests = 0;
+	const missing = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		missingRequests += 1;
+		return new Response("missing", { status: 404 });
+	});
 	await assert.rejects(
 		missing.execute({
 			action: "jenkins-release.get_queue_item",
 			credential: { accessToken: credential },
 			input: { queueItemId: 3831811 },
 		}),
-		(error: Error & { providerStatus?: number }) => error.providerStatus === 404,
+		(error: Error & { providerStatus?: number }) =>
+			error.providerStatus === 404,
 	);
+	assert.equal(missingRequests, 1);
 
+	let transportRequests = 0;
 	const timedOut = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		transportRequests += 1;
 		throw Object.assign(new Error("aborted"), { name: "AbortError" });
 	});
 	await assert.rejects(
@@ -178,4 +183,5 @@ test("Jenkins exposes bounded Provider failure metadata", async () => {
 		(error: Error & { providerUnavailable?: boolean }) =>
 			error.providerUnavailable === true,
 	);
+	assert.equal(transportRequests, 2);
 });
