@@ -112,7 +112,9 @@ describe("Connection 管理交互", () => {
 		expect(screen.getByText("Codex")).toBeTruthy();
 		expect(screen.getByText("写入")).toBeTruthy();
 		expect(screen.getByText("所需 scope：repo、workflow")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "确认授权" }));
+		const confirmButton = screen.getByRole("button", { name: "确认授权" });
+		expect(confirmButton.closest(".authorization-summary")).toBeTruthy();
+		fireEvent.click(confirmButton);
 		expect(onConfirm).toHaveBeenCalledOnce();
 	});
 

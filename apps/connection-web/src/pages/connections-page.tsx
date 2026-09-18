@@ -912,9 +912,17 @@ export function PreviewContent(props: {
 	}
 	return (
 		<div className="compact content-stack">
-			<div className="account-switch">
-				<strong>{props.value.preview.targetConnection.externalAccount}</strong>
-				<span>{props.value.preview.consumer.name}</span>
+			<div className="account-switch authorization-summary">
+				<div>
+					<strong>
+						{props.value.preview.targetConnection.externalAccount}
+					</strong>
+					<span>{props.value.preview.consumer.name}</span>
+				</div>
+				<Button type="button" disabled={props.busy} onClick={props.onConfirm}>
+					<Check aria-hidden="true" size={17} />
+					{props.busy ? "正在确认" : "确认授权"}
+				</Button>
 			</div>
 			<ul className="permission-list">
 				{props.value.preview.actions.map((action) => (
@@ -935,12 +943,6 @@ export function PreviewContent(props: {
 					</li>
 				))}
 			</ul>
-			<div className="dialog-actions">
-				<Button type="button" disabled={props.busy} onClick={props.onConfirm}>
-					<Check aria-hidden="true" size={17} />
-					{props.busy ? "正在确认" : "确认授权"}
-				</Button>
-			</div>
 		</div>
 	);
 }
