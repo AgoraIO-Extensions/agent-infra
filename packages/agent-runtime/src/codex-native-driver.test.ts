@@ -3747,6 +3747,7 @@ it.each([
 	"process",
 	"previous",
 	"reused-request",
+	"phase-request",
 ] as const)(
 	"rejects recovery %s substitution before committing evidence",
 	async (mismatch) => {
@@ -3791,6 +3792,7 @@ it.each([
 						},
 					};
 				if (mismatch === "attempt") update.identity.attemptRef = randomUUID();
+				if (mismatch === "phase-request") update.requestId = start.requestId;
 				await expect(
 					process.evidence(update, process.signal),
 				).rejects.toThrow();

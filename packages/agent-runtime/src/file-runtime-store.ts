@@ -1011,7 +1011,7 @@ export class FileRuntimeStore {
 		if (
 			claims.purpose === "business" &&
 			(authority.stopped ||
-				(authority.control && authority.control.reason !== "recovery") ||
+				authority.control !== undefined ||
 				authority.authorizationRecordId !== claims.authorizationRecordId)
 		)
 			runtimeAuthorizationDenied();
@@ -1119,7 +1119,7 @@ export class FileRuntimeStore {
 			if (
 				claims.purpose === "business" &&
 				(authority.stopped ||
-					(authority.control && authority.control.reason !== "recovery") ||
+					authority.control !== undefined ||
 					authority.authorizationRecordId !== claims.authorizationRecordId)
 			)
 				runtimeAuthorizationDenied();
@@ -1176,7 +1176,7 @@ export class FileRuntimeStore {
 			if (
 				claims.purpose === "business" &&
 				(authority.stopped ||
-					(authority.control && authority.control.reason !== "recovery") ||
+					authority.control !== undefined ||
 					authority.authorizationRecordId !== claims.authorizationRecordId)
 			)
 				runtimeAuthorizationDenied();
@@ -1215,7 +1215,7 @@ export class FileRuntimeStore {
 			!authority?.authorizationRecordId ||
 			session.generationBarrier ||
 			authority.stopped ||
-			(authority.control && authority.control.reason !== "recovery") ||
+			authority.control !== undefined ||
 			authority.expiresAt <= now ||
 			authority.issuedAt > now ||
 			authority.executionDeliveryFence !==
@@ -1297,7 +1297,7 @@ export class FileRuntimeStore {
 		if (
 			!authority?.authorizationRecordId ||
 			authority.stopped ||
-			(authority.control && authority.control.reason !== "recovery") ||
+			authority.control !== undefined ||
 			authority.expiresAt <= now ||
 			authority.issuedAt > now ||
 			authority.executionDeliveryFence !==

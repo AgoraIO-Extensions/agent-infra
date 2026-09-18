@@ -189,12 +189,16 @@ export function applyRuntimeAuthority(
 	if (claims.purpose === "business") {
 		if (
 			(current?.stopped && claims.allowedCommands[0] !== "turn.stop") ||
-			(current?.control && current.control.reason !== "recovery")
+			(current?.control &&
+				(current.control.reason !== "recovery" ||
+					(current.authorizationRecordId === claims.authorizationRecordId &&
+						mode !== "renew")))
 		)
 			runtimeAuthorizationDenied();
 		if (
 			current?.authorizationRecordId &&
-			current.authorizationRecordId !== claims.authorizationRecordId
+			current.authorizationRecordId !== claims.authorizationRecordId &&
+			current.control?.reason !== "recovery"
 		)
 			runtimeAuthorizationDenied();
 		if (
@@ -233,6 +237,14 @@ export function applyRuntimeAuthority(
 			authority.expiresAt = 0;
 		}
 	} else {
+		if (
+			current?.control?.reason === "recovery" &&
+			(current.authorizationRecordId !== claims.authorizationRecordId ||
+				mode === "renew")
+		) {
+			delete authority.control;
+			delete authority.controlDeliveryFence;
+		}
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
 		if (mode !== "query") {

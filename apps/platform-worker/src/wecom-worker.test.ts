@@ -1,4 +1,5 @@
 import type { WecomSendPortV1 } from "@agent-infra/platform-core";
+import type { WecomWebSocketConfigurationV1 } from "@agent-infra/wecom/worker";
 import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,15 @@ const mocks = vi.hoisted(() => ({
 	connectionsTick: vi.fn(async () => {}),
 	connectionsClose: vi.fn(async () => {}),
 	setupClose: vi.fn(async () => {}),
+	connectionBindings: undefined as
+		| (() => Promise<readonly WecomWebSocketConfigurationV1[]>)
+		| undefined,
+	deploymentBindings: vi.fn(
+		async (): Promise<readonly WecomWebSocketConfigurationV1[]> => [],
+	),
+	setupBindings: vi.fn(
+		async (): Promise<readonly WecomWebSocketConfigurationV1[]> => [],
+	),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWecomChannelV1: class {
@@ -28,21 +38,85 @@ vi.mock("@agent-infra/platform-core", () => ({
 }));
 
 vi.mock("./wecom-connections.js", () => ({
-	createPlatformWecomConnectionsV1: () => ({
-		tick: mocks.connectionsTick,
-		close: mocks.connectionsClose,
-	}),
+	createPlatformWecomConnectionsV1: (options: {
+		bindings: () => Promise<readonly WecomWebSocketConfigurationV1[]>;
+	}) => {
+		mocks.connectionBindings = options.bindings;
+		return {
+			tick: mocks.connectionsTick,
+			close: mocks.connectionsClose,
+		};
+	},
 }));
 vi.mock("./wecom-setup.js", () => ({
 	createWecomSetupWorkerV1: () => ({
 		tick: async () => {},
 		close: mocks.setupClose,
+		bindings: mocks.setupBindings,
 	}),
 }));
 
 import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 
 afterEach(() => vi.resetAllMocks());
+
+it("merges setup bindings by botId and lets setup take precedence", async () => {
+	const deployment = [
+		{
+			botId: "bot-1",
+			agentId: "agent-1",
+			bindingReference: "deployment",
+			credentialVersion: "v1",
+			secret: "deployment-secret",
+		},
+		{
+			botId: "bot-2",
+			agentId: "agent-2",
+			bindingReference: "deployment-2",
+			credentialVersion: "v1",
+			secret: "deployment-secret-2",
+		},
+	];
+	const setup = {
+		botId: "bot-1",
+		agentId: "agent-1",
+		bindingReference: "setup",
+		credentialVersion: "v2",
+		secret: "setup-secret",
+	};
+	mocks.deploymentBindings.mockResolvedValue(deployment);
+	mocks.setupBindings.mockResolvedValue([setup]);
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+		connections: {
+			bindings: mocks.deploymentBindings,
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+		},
+		setup: {
+			decryptor: {
+				decrypt: async () => {
+					throw new Error("unused");
+				},
+			},
+			directory: { resolveUser: async () => null },
+		},
+	});
+	try {
+		await expect(mocks.connectionBindings?.()).resolves.toEqual([
+			setup,
+			deployment[1],
+		]);
+	} finally {
+		await worker.close();
+	}
+});
+
 it.each([false, true])(
 	"bounds a reply batch and settles every claim before returning, rejection=%s",
 	async (reject) => {

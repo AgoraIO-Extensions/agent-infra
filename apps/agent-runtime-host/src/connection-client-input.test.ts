@@ -240,6 +240,29 @@ describe("independent Connection credential delivery", () => {
 		).rejects.toThrow();
 		expect(env.resolveOriginalBinding).not.toHaveBeenCalled();
 	});
+
+	it("does not resolve credentials when the optional profile is absent", async () => {
+		const env = await fixture();
+		const input = createIndependentConnectionClientInput({
+			dataDirectory: env.directory,
+			profile: undefined as never,
+			resolveOriginalBinding: env.resolveOriginalBinding,
+		});
+		const controller = new AbortController();
+		const read = {
+			signal: controller.signal,
+			expiresAt: 1_900_000_000_000,
+			assertCurrent: () => binding,
+			commit: async <T>(write: () => Promise<T>) => write(),
+		};
+		await expect(
+			input.resolveReadOnlyClient?.(binding.scope, read, controller.signal),
+		).resolves.toBeUndefined();
+		await expect(
+			input.resolveOriginalClient?.(binding.scope, controller.signal),
+		).resolves.toBeUndefined();
+		expect(env.resolveOriginalBinding).not.toHaveBeenCalled();
+	});
 });
 
 describe("query-only independent Connection input", () => {

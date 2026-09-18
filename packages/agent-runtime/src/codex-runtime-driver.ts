@@ -4463,6 +4463,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (replay.fingerprint !== fingerprint) protocolInvalid();
 					return { nativeSessionRef, executionId: execution.executionId };
 				}
+				if (
+					[
+						attempt.intentRequestId,
+						attempt.startedRequestId,
+						attempt.outcomeRequestId,
+						...receipts.map((receipt) => receipt.requestId),
+					].includes(request.requestId)
+				)
+					protocolInvalid();
 				if (this.connectionRecoveryClosed(state, nativeSessionRef))
 					unavailable();
 				if (recovery) {

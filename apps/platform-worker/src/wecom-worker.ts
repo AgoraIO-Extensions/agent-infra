@@ -56,10 +56,17 @@ export function createPlatformWecomWorkerV1(
 		? createPlatformWecomConnectionsV1({
 				...options.connections,
 				holderId: connectionHolderId,
-				bindings: async () => [
-					...(await deployment.bindings()),
-					...((await setup?.bindings()) ?? []),
-				],
+				bindings: async () => {
+					const merged = new Map(
+						(await deployment.bindings()).map((binding) => [
+							binding.botId,
+							binding,
+						]),
+					);
+					for (const binding of (await setup?.bindings()) ?? [])
+						merged.set(binding.botId, binding);
+					return [...merged.values()];
+				},
 				databaseUrl: options.databaseUrl,
 				receive: channel.receive,
 			})

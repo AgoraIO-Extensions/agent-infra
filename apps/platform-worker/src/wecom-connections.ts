@@ -151,6 +151,10 @@ export function createPlatformWecomConnectionsV1(
 						})
 						.catch(() => {
 							connection.close("ownership_lost");
+						})
+						.finally(() => {
+							if (statuses.get(claim.botId) === next)
+								statuses.delete(claim.botId);
 						});
 					statuses.set(claim.botId, next);
 				},

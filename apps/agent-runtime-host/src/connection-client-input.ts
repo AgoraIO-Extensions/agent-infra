@@ -164,6 +164,7 @@ export function createIndependentConnectionClientInput(options: {
 		resolveReadOnlyClient: async (reference, read, signal) => {
 			assertRuntimeProcessProtection();
 			signal.throwIfAborted();
+			if (!options.profile) return undefined;
 			const binding = read.assertCurrent();
 			if (
 				binding.scope.agentId !== reference.agentId ||
@@ -184,6 +185,7 @@ export function createIndependentConnectionClientInput(options: {
 		resolveOriginalClient: async (reference, signal) => {
 			assertRuntimeProcessProtection();
 			signal.throwIfAborted();
+			if (!options.profile) return undefined;
 			const binding = await options.resolveOriginalBinding(reference);
 			signal.throwIfAborted();
 			const input = await readIndependentInput(
