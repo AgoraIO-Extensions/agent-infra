@@ -52,6 +52,8 @@ Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射
 
 Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Principal 撤销或 recovery generation 不匹配时，敏感操作 fail closed。
 
+登录入口按 Principal、来源和部署环境实施限速、指数退避和并发上限；失败响应使用统一的状态、时序和消息，不区分账号不存在、密码错误或 Principal 已撤销。连续失败触发短期冻结和安全审计，恢复也必须经过服务端受控流程。
+
 ### 5.2 Consumer 与 Instance
 
 每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
@@ -113,7 +115,7 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 | `github.list_my_repositories` | READ | 只允许受控仓库范围 |
 | `github.create_pull_request` | WRITE | 绑定稳定 repository/head/base 和幂等约束 |
 
-只使用专用测试账号和一个受控 private 仓库。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
+只使用专用测试账号和一个受控 private 仓库。repository allowlist 必须绑定 GitHub immutable numeric repository ID 及固定 owner，不能只按名称或 `owner/repo` 字符串匹配；仓库重命名、转移、ID 不一致或身份无法确认时，WRITE Action 拒绝执行。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
 
 ## 10. 明确失败与未知结果
 

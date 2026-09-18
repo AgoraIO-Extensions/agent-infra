@@ -23,7 +23,7 @@ GitHub 原生依赖是执行图权威，Issue 的 `Blocked by` 和本图只投�
 | 层次 | 唯一验收入口与 Owner | 准入和环境 | 完成证据与可复现条件 |
 | --- | --- | --- | --- |
 | L1 主系统本地可测 | [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194)，@LichKing-2234 | §3 的未完成集合交付；本地 PostgreSQL、kind、正式 Web/API/Worker/RuntimeHost 装配、合成身份和 schema-conformant Fake Connection | #194 的四条完整旅程、准确源码与镜像、执行命令和脱敏 artifact；同时回读 #403 已合入的持久化修复及 #415/#404/#405/#406 的最终版本证据。仅组件测试、healthz 或 Fake Driver 不证明真实 Codex 装配 |
-| L2 双系统真实 GitHub 内部 Pilot | [#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)；总验收 Owner 由 #150 确认 | L1 通过，Connection readiness、ACK 资源真实验证和环境/参与者准备记录齐备；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | #435 保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、Connection HLD §§9–13 和 #149，完成真实观察与全部具名签收 |
+| L2 双系统真实 GitHub 内部 Pilot | [#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)；总验收 Owner 由 #150 确认 | L1 通过，Connection readiness、ACK 资源真实验证和环境/参与者准备记录齐备；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | #435 保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、Connection HLD §§5–13 和 #149，完成真实观察与全部具名签收 |
 | L3 完整 M1 上线 | #150 负责毕业 §6 的实施及最终验收票；总验收 Owner 建议 @LichKing-2234，待确认 | L2 通过，完整 PRD 场景全部获得唯一实施票、Owner、上线环境和安全/运维资源窗口 | 最终验收票逐行映射 Platform PRD §14、Connection PRD 的适用要求及工程 Spec §24；每行有版本、自动验证、真实环境验证和人工结论，无失败或未验证硬门禁 |
 
 总验收 Owner 负责收齐证据并记录最终结论，不代签其他角色。
@@ -65,7 +65,7 @@ flowchart TB
     CONN["独立 Connection runtime：Direct MCP/OAuth/Grant/Action/审计"] --> READY["#395：待 HCI 真实环境 readiness"]
     DOC --> CONN
     CONN -.-> PILOT
-    LOCAL -.-> PILOT["L2 联合验收：新 primary Issue 待确认"]
+    LOCAL -.-> PILOT["L2 #435 联合验收：等待准入条件"]
     READY -.-> PILOT
     ACK["#171 ACK 资源准备：open，待真实环境证据"] -.-> PILOT
     OPS["#177 参与者 / Runbook：待人工确认"] -.-> PILOT
@@ -180,7 +180,7 @@ Owner 只能作出下列一项明确选择：
 | 受影响 Issue 段落 | 仅在 Owner 决策后的提议变更 | 不在本 PR 中执行 |
 | --- | --- | --- |
 | [#149 Resolution：`### Pilot 范围`](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) 与 `### 真实使用观察` | 若确认推荐结论，将 3–5 名正向执行员工/参与者修订为两个正向执行 Principal/专用账号；保留 5 个工作日和不少于 10 次任务 | 不改写已关闭决议，不降低观察或任务要求 |
-| [#150：`## 已确认的收口范围` 与 `## 2026-09-07 汇合审查`](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 记录 Owner 的选择，并使 L2 草案只引用已对齐的执行主体、观察期和任务要求 | 不把本计划提案当作已确认结论或创建执行授权 |
+| [#150：`## 已确认的收口范围` 与 `## 2026-09-07 汇合审查`](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 记录 Owner 的选择，并使 L2 计划只引用已对齐的执行主体、观察期和任务要求 | 不把本计划提案当作已确认结论或创建执行授权 |
 
 决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可创建 §5.2 的联合验收票并安排
 参与者与窗口。
@@ -196,7 +196,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 签收和事故响应角色，以及任务、PR、`callId`、Execution 与 Workload 计数必须分别记录；任一类别
 不自动满足另一类别。此处不记录姓名、日期、数值 ID、已批准运行值或 Go/No-Go 结论。
 
-### 5.2 唯一新增联合验收票草案
+### 5.2 唯一联合验收票状态
 
 现有 #194 只负责 Fake，#395 只负责 Connection readiness，#171 只负责 ACK 资源准备；
 参与者准备和 Go/No-Go 由 #177 负责。#171 的资源型 Wayfinder 分类不要求新增实现契约，
@@ -209,7 +209,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。其执行仍等待 §5.1 的范围确认，
 不承接旧 #398/#186 的实现。
 
-| 契约章节 | 待创建正文 |
+| 契约章节 | #435 验收正文 |
 | --- | --- |
 | Problem | Fake 主系统与 Connection-side readiness 不能证明真实双系统授权、写操作、恢复和观察期通过 |
 | Scope | 以正式运行装配验证两系统、ACK/HCI 网络与身份映射；执行权威真实矩阵和确认后的观察期；复用组件证据；不实现缺失产品能力、不部署未批准环境 |
@@ -221,7 +221,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | Validation | 自动矩阵命令、预期结果、真实 GitHub PR/call 关联、环境故障与回滚、观察记录、签收链接和仓库完整验证；所有记录脱敏，不保存 Token、assertion、密码或普通会话正文 |
 | Blocked by | #194、#395、#171、#177 的实际通过记录和 #150 的规划决定；不依赖旧 #398/#186，也不依赖 #402 的父票关闭 |
 
-仅在上述决策确认、票正文和原生边回读一致后，该草案才能成为最终执行入口。
+仅在上述决策确认、票正文和原生边回读一致后，#435 才能成为最终执行入口。
 规划票 #150 不反向依赖这张实施票，避免“规划等待实施、实施等待规划”的环。
 规划、资源和实施条目先按工作流分类；不得把 Wayfinder/资源票冒充 Implementation Issue
 接入 AFK Execution Graph。真实验收由人工或受监督 Codex 逐项检查资源与签收准入。
