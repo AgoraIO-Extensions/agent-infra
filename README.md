@@ -50,7 +50,7 @@ pnpm connection:production:up
 ```
 
 bootstrap 只执行正式 migration；API 在完整配置、migration 和 catalog 校验通过后启动同一个正式
-Runtime factory。当前公开地址 `https://agent-connector.la3.agoralab.co` 仅按 #301 作为受监督 HCI
+Runtime factory。当前公开地址 `https://agent-connector.gz3.agoralab.co` 按 #601 作为 GZ3 control plane
 pilot，不代表其他环境或客户端已经通过生产门禁。详见
 [Connection 生产部署](docs/architecture/connection-production.md)。
 

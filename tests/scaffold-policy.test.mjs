@@ -155,7 +155,7 @@ test("Connection Web preserves every same-origin API route family", async () => 
 	assert.match(nginx, /location = \/connection/);
 	assert.match(
 		installPage,
-		/codex mcp add connection --url https:\/\/agent-connector\.la3\.agoralab\.co\/mcp/,
+		/codex mcp add connection --url https:\/\/agent-connector\.gz3\.agoralab\.co\/mcp/,
 	);
 	assert.match(
 		installPage,

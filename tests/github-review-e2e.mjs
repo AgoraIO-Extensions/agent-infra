@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-const endpoint = "https://agent-connector.la3.agoralab.co/mcp";
+const endpoint = "https://agent-connector.gz3.agoralab.co/mcp";
 const target = {
 	owner: "AgoraConnectionE2EORG",
 	repository: "connector-conformance",

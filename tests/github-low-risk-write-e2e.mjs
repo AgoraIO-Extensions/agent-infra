@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-const endpoint = "https://agent-connector.la3.agoralab.co/mcp";
+const endpoint = "https://agent-connector.gz3.agoralab.co/mcp";
 const repository = {
 	owner: "AgoraConnectionE2EORG",
 	repo: "connector-conformance",

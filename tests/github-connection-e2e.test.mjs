@@ -311,8 +311,8 @@ test("GitHub conformance rejects a mismatched repository before mutation", async
 	);
 	assert.deepEqual(calls, ["list_connections", "github.get_repository"]);
 	assert.deepEqual(urls, [
-		"https://agent-connector.la3.agoralab.co/mcp",
-		"https://agent-connector.la3.agoralab.co/mcp",
+		"https://agent-connector.gz3.agoralab.co/mcp",
+		"https://agent-connector.gz3.agoralab.co/mcp",
 	]);
 });
 

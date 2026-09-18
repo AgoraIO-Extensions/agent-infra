@@ -3,7 +3,7 @@
 `connection-api` 是唯一 Connection control plane，`connection-web` 是独立的无状态中文 React
 入口。PostgreSQL 是唯一权威存储；OpenConnector
 Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301)
-批准 `https://agent-connector.la3.agoralab.co` 的受监督 HCI pilot 使用完整 Connection runtime；
+批准 `https://agent-connector.gz3.agoralab.co` 的 GZ3 control plane 使用完整 Connection runtime；
 该批准不关闭 HLD 中面向其他环境、客户端或广泛生产支持的门禁。
 
 ## 前置条件

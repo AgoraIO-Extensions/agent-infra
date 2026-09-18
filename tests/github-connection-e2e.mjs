@@ -9,7 +9,7 @@ const target = {
 	repository: "connector-conformance",
 	repositoryId: 1369705971,
 };
-const connectionEndpoint = "https://agent-connector.la3.agoralab.co/mcp";
+const connectionEndpoint = "https://agent-connector.gz3.agoralab.co/mcp";
 const requestTimeoutMs = 30_000;
 const actionEffects = {
 	"github.get_repository": "READ",
