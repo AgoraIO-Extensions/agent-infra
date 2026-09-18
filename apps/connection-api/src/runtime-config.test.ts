@@ -75,6 +75,24 @@ describe("Connection runtime configuration", () => {
 		).toThrow(/exact loopback/);
 	});
 
+	it("selects only a fixed Jenkins release network route", () => {
+		expect(connectionApiRuntimeConfig(accountBase).jenkinsReleaseRoute).toBe(
+			"public",
+		);
+		expect(
+			connectionApiRuntimeConfig({
+				...accountBase,
+				JENKINS_RELEASE_ROUTE: "internal",
+			}).jenkinsReleaseRoute,
+		).toBe("internal");
+		expect(() =>
+			connectionApiRuntimeConfig({
+				...accountBase,
+				JENKINS_RELEASE_ROUTE: "http://attacker.example",
+			}),
+		).toThrow(/must be internal or public/);
+	});
+
 	it("builds the full runtime from the same account authority", () => {
 		const config = fullConnectionRuntimeConfig(accountBase);
 		expect(config.credentialKey).toHaveLength(32);

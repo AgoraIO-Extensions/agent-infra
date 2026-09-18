@@ -97,11 +97,14 @@ ProviderRelease、Credential、Connection、Grant 与真实 App-owned Check E2E�
 公司存在多个 Jenkins deployment。由于 Consumer declaration 和 AuthorizationRoot 都以
 `providerId` 为授权唯一维度，每个 Jenkins deployment 必须使用独立稳定 Provider ID、
 ProviderRelease、固定 origin、Credential 和 Grant；不能共用 `providerId=jenkins`，也不能通过
-环境变量或 Action 参数选择 endpoint。各 deployment 复用同一个参数化 Adapter 实现。
+环境变量或 Action 参数提交任意 endpoint。各 deployment 复用同一个参数化 Adapter 实现。
 `jenkins-ci` 固定 origin `https://jenkins-ci.agoralab.co`，但其公司 OAuth 网关尚无 Connection
 机器认证契约，因此只保留独立 catalog/profile，不进入 runtime supported providers。
 
-`jenkins-release` 固定 origin `http://114.94.148.35:8010`，复用 Rehoboam 已验证的 Jenkins
+`jenkins-release` 对应同一 Jenkins deployment，正式环境固定 public origin
+`http://114.94.148.35:8010`，本地开发固定 internal origin `http://10.80.1.129:8080`。启动配置只允许
+`JENKINS_RELEASE_ROUTE=public|internal` 二选一，不接受 URL；Provider ID、ProviderRelease、Credential
+和 Grant identity 不随网络路由变化。该规则复用 Rehoboam 已验证的 Jenkins
 username/password Basic Auth 语义，但不读取 Rehoboam 配置、不复用共享凭证或 base64 存储；每个用户
 仍在 Connection 页面输入自己的 username 和 Jenkins API Token，由 Connection 加密保存；不接受
 Jenkins 登录密码。Connection

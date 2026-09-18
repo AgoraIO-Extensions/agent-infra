@@ -142,7 +142,19 @@ export async function createConnectionRuntime(
 		jiraFetch,
 		atlassianTokenProvider,
 	);
-	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jiraFetch);
+	const jenkinsRouteFetch =
+		config.jenkinsReleaseRoute === "internal"
+			? createFixedOriginFetch(
+					jenkinsReleaseProfile.apiOrigin,
+					"http://10.80.1.129:8080",
+				)
+			: undefined;
+	const jenkinsFetch = createGuardedFetch({
+		allowPrivateNetwork: false,
+		...(jenkinsRouteFetch ? { fetch: jenkinsRouteFetch } : {}),
+		maxRedirects: 0,
+	});
+	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jenkinsFetch);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		[githubConnectionCatalog.providerReleaseId]: github,
@@ -213,5 +225,23 @@ export function createReadFallbackFetch(
 			if (method !== "GET" && method !== "HEAD") throw error;
 			return fallback(input, init);
 		}
+	};
+}
+
+export function createFixedOriginFetch(
+	fromOrigin: string,
+	toOrigin: string,
+	baseFetch: typeof fetch = fetch,
+): typeof fetch {
+	const expectedOrigin = new URL(fromOrigin).origin;
+	const targetOrigin = new URL(toOrigin);
+	return async (input, init) => {
+		const request = new Request(input, init);
+		const sourceUrl = new URL(request.url);
+		if (sourceUrl.origin !== expectedOrigin) {
+			throw new Error("Provider request origin does not match the fixed route");
+		}
+		const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, targetOrigin);
+		return baseFetch(new Request(targetUrl, request));
 	};
 }

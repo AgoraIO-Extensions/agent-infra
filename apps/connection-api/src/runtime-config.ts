@@ -4,6 +4,7 @@ export type ConnectionApiRuntimeConfig = {
 	bitbucketProxyUrl?: string;
 	githubEgressProxyUrl?: string;
 	githubReadFallbackProxyUrl?: string;
+	jenkinsReleaseRoute: "internal" | "public";
 	databaseUrl: string;
 	directConsumer: { id: string; name: string };
 	identityKey: Uint8Array;
@@ -167,6 +168,14 @@ function optionalProxyUrl(environment: RuntimeEnvironment, name: string) {
 	return url.toString();
 }
 
+function jenkinsReleaseRoute(environment: RuntimeEnvironment) {
+	const value = environment.JENKINS_RELEASE_ROUTE || "public";
+	if (value !== "internal" && value !== "public") {
+		throw new Error("JENKINS_RELEASE_ROUTE must be internal or public");
+	}
+	return value;
+}
+
 function requireJiraTokenUrl(environment: RuntimeEnvironment) {
 	const tokenUrl = new URL(
 		requireHttps(
@@ -234,6 +243,7 @@ export function connectionApiRuntimeConfig(
 			requireValue(environment, "CONNECTION_IDENTITY_KEY"),
 			"CONNECTION_IDENTITY_KEY",
 		),
+		jenkinsReleaseRoute: jenkinsReleaseRoute(environment),
 		ldap: {
 			...(activeAttribute !== undefined && activeValue !== undefined
 				? { activeAttribute, activeValue }

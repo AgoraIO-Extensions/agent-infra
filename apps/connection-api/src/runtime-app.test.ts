@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createReadFallbackFetch } from "./runtime-app";
+import { createFixedOriginFetch, createReadFallbackFetch } from "./runtime-app";
 
 describe("GitHub regional egress fallback", () => {
 	it("falls back only for transport-failed READ requests", async () => {
@@ -39,5 +39,28 @@ describe("GitHub regional egress fallback", () => {
 		)("https://api.github.com/meta");
 		expect(response.status).toBe(503);
 		expect(fallback).not.toHaveBeenCalled();
+	});
+});
+
+describe("Jenkins deployment route", () => {
+	it("rewrites only the fixed public origin to the fixed internal origin", async () => {
+		const requests: Request[] = [];
+		const fetcher = createFixedOriginFetch(
+			"http://114.94.148.35:8010",
+			"http://10.80.1.129:8080",
+			async (input) => {
+				requests.push(new Request(input));
+				return new Response("ok");
+			},
+		);
+		await fetcher(
+			"http://114.94.148.35:8010/job/EP/job/build_all/901/api/json?tree=result",
+		);
+		expect(requests[0]?.url).toBe(
+			"http://10.80.1.129:8080/job/EP/job/build_all/901/api/json?tree=result",
+		);
+		await expect(
+			fetcher("http://attacker.example/api/json"),
+		).rejects.toThrow(/fixed route/);
 	});
 });
