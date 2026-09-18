@@ -91,7 +91,7 @@ flowchart TB
 | #404、#406 | #403（completed）；#415（open） |
 | #398 | `not_applicable`：旧 delegated contract 已被独立 Connection Direct MCP/API 契约替代，不作为当前实现入口 |
 | #399、#396、#390、#391、#392、#394、#397 | `outside_platform_plan`：独立 Connection 系统的历史实施图；不作为 Platform 原生前置，也不能证明当前 Direct MCP/API 已交付 |
-| #395 | `external_prerequisite`：独立 Connection readiness 入口；只有其通过记录绑定可回读的发布版本、Schema artifact 来源与校验值后，才满足 #435 的准入前置 |
+| #395 | `external_prerequisite`：仅当独立 Connection runtime 产出绑定发布版本、Schema artifact 来源与校验值的实际 readiness 证据，并由 #435 回读确认后，才满足准入；Issue 状态、历史 HCI 记录和旧依赖图不得单独作为通过依据 |
 | #171、#177 | #149（completed） |
 
 ### #171 ACK 资源准备边界
