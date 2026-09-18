@@ -85,7 +85,7 @@ flowchart TB
 | #186 | `not_applicable`：旧 Platform Tool Gateway 由独立 Direct MCP/API 替代 |
 | #190 | #181、#188、#189、#256、#257、#275、#276、#277、#278、#285、#286、#287、#288（均 completed） |
 | #192 | #251、#253、#321（completed）；#389、#400（open） |
-| #194 | #193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324、#403（completed）；#190、#192、#389、#404、#405、#406（open） |
+| #194 | #186、#193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324、#403（completed）；#190、#192、#389、#404、#405、#406（open） |
 | #389、#400、#403、#405 | 无 |
 | #415 | #403（completed） |
 | #404、#406 | #403（completed）；#415（open） |
@@ -213,7 +213,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
 其 readiness 通过不再由 Platform 计划中的历史票定义，而由独立 Direct MCP runtime 的版本化证据、Schema 校验和 HCI 记录定义；协调票 #402 只协调 Connection 子票。除 #435 外没有其他票拥有
 跨系统真实验收；#435 已创建但仍等待准入条件。
-因此 #435 已是唯一的跨系统真实验收 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
+因此 #435 已是唯一的跨系统真实验收 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。其启用仍受上文准入条件约束。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。其执行仍等待 §5.1 的范围确认，
 不承接旧 #398/#186 的实现。
 
@@ -225,7 +225,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | AC-2 | Connection PRD §10、HLD §§5–13 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、Grant/ConsumerInstance/Connection/Action/Credential 撤权、未知结果与清理全部有可回读结果；Platform 自身 policy 停止发起任务单独验收，且不作为 Connection 授权输入 |
 | AC-3 | #149 的完整申请创建、Owner 配置、真实 Codex、SSE/进程/Pod 恢复及 A/B/C 升级回滚，在本次组合版本通过；不得用预置 Agent、Fake Connection 或不同版本组件报告替代 |
 | AC-4 | 经范围确认的参与者完成 #149 规定的观察；每人任务、总任务数、工作日与故障处置有脱敏记录；任一硬门禁失败立即 No-Go，修复后重验受影响组合 |
-| AC-5 | 五方具名签收、最终 Go/No-Go 和允许的成功声明在票内回读；测试 PR/branch/Token 清理由测试资源 Owner 按 HLD 执行，保留 Call/Effect/Dispatch/审计 |
+| AC-5 | 由已授权的验收责任角色回读最终 Go/No-Go 和允许的成功声明；测试 PR/branch/Token 清理由测试资源 Owner 按 HLD 执行，保留 Call/Effect/Dispatch/审计 |
 | Validation | 自动矩阵命令、预期结果、真实 GitHub PR/call 关联、环境故障与回滚、观察记录、签收链接和仓库完整验证；所有记录脱敏，不保存 Token、assertion、密码或普通会话正文 |
 | Blocked by | #194、#395、#171、#177 的实际通过记录和 #150 的规划决定；不依赖旧 #398/#186，也不依赖 #402 的父票关闭 |
 
@@ -247,7 +247,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | 自定义 Agent、Base Image、自有入口与 Generic ACP 平台入口；Platform PRD §5、§14 | #150；自定义 Agent 准入与入口验收票，消费既有 Registry/Workload 实现 | 可继承 Base Image、真实样例镜像、两种身份入口与升级回滚矩阵 |
 | 公司共享 Connection 的真实组织范围；Connection PRD §11 | #150；共享 Connection 范围确认后毕业真实组织授权/管理员验收票 | 真实组织/账号、管理员资格、跨组织负向和授权复核 |
 | LDAP 离职状态与正式停权 | [#388](https://github.com/AgoraIO-Extensions/agent-infra/issues/388) 保持唯一调研入口，不作为当前受监督 Pilot 前置 | 权威 active-state、责任人和停权时效；不是“条目仍存在”证明在职 |
-| 正式 LDAP TLS/时序、KMS/Secret、唯一受控 egress、容量、HA/PITR、值班与推广；HLD §§5、14，工程 Spec §§17、19、21、24 | #150；生产化契约与资源决定后按可独立验收边界毕业加固票，最终 M1 上线验收另有唯一入口 | Security/SRE/DBA、产品 Owner、资源和发布窗口；关闭具名明文 LDAP 例外 |
+| 正式 LDAP TLS/时序、KMS/Secret、唯一受控 egress、容量、HA/PITR、值班与推广；HLD §§5、12、14，工程 Spec §§17、19、21、24 | #150；生产化契约与资源决定后按可独立验收边界毕业加固票，最终 M1 上线验收另有唯一入口 | Security/SRE/DBA、产品 Owner、资源和发布窗口；关闭具名明文 LDAP 例外 |
 
 Bitbucket/Jira/Confluence/Outlook 等按 Connection PRD §11 留待独立产品批次；Direct MCP、
 PAT 和 Connection OAuth Server 已属于当前独立系统边界，不自动变成本次完整 M1 的新增必交 Provider。
