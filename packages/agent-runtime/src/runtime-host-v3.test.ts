@@ -15,6 +15,10 @@ import {
 	submitV3Fixture,
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
+import {
+	applyRuntimeAuthority,
+	type RuntimeExecutionAuthority,
+} from "./runtime-authorization.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 const directories: string[] = [];
@@ -1406,6 +1410,62 @@ describe("Runtime V3 durable authorization", () => {
 				guard(accepted.hostSessionRef, env.store),
 			),
 		).rejects.toThrow();
+	});
+
+	it("clears a prior stop lock when applying trusted recovery authority", () => {
+		const authorities: Record<string, RuntimeExecutionAuthority> = {};
+		const stop = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "stop",
+						id: "stop-fixture",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+				},
+				"turn.stop",
+			).grant,
+		).claims;
+		applyRuntimeAuthority(authorities, stop, "prepare");
+		expect(authorities["execution-fixture"]?.stopped).toBe(true);
+
+		const recovery = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "execution",
+						id: "execution-fixture",
+						deliveryFence: 2,
+						executionDeliveryFence: 2,
+					},
+				},
+				"session.status",
+				{ purpose: "control", reason: "recovery" },
+			).grant,
+		).claims;
+		applyRuntimeAuthority(authorities, recovery, "query");
+		expect(authorities["execution-fixture"]).not.toHaveProperty("stopped");
+
+		const business = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "execution",
+						id: "execution-fixture",
+						deliveryFence: 3,
+						executionDeliveryFence: 3,
+					},
+				},
+				"turn.submit",
+			).grant,
+		).claims;
+		expect(() =>
+			applyRuntimeAuthority(authorities, business, "prepare"),
+		).not.toThrow();
 	});
 
 	it("does not deliver a queued event after a persisted revocation", async () => {

@@ -391,11 +391,15 @@ export function createWecomAuthorizationV1(dependencies: {
 			if (
 				!boundary ||
 				(originalBoundary !== undefined &&
-					!isTaskAuthorizationCurrentV1({
-						boundary: originalBoundary,
-						user: actor,
-						agent: management,
-					})) ||
+					(originalBoundary.channelId !== wecomChannelIdV1(scope) ||
+						originalBoundary.agentId !== scope.agentId ||
+						originalBoundary.agentAuthorizationRevision !==
+							state.authorizationRevision ||
+						!isTaskAuthorizationCurrentV1({
+							boundary: originalBoundary,
+							user: actor,
+							agent: management,
+						}))) ||
 				!(await dependencies.identity.activeUsers(management.ownerIds)).some(
 					(id) => management.ownerIds.includes(id),
 				)

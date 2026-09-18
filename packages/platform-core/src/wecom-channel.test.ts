@@ -212,7 +212,8 @@ it("requires the current company identity, active Owner, binding and Agent avail
 			},
 		},
 	});
-	expect(await auth.authorize(message)).toMatchObject({
+	const initial = await auth.authorize(message);
+	expect(initial).toMatchObject({
 		outcome: "allowed",
 		authority: {
 			actor: {
@@ -221,6 +222,19 @@ it("requires the current company identity, active Owner, binding and Agent avail
 			},
 		},
 	});
+	if (initial.outcome !== "allowed") throw new Error("Expected authorization");
+	for (const patch of [
+		{ channelId: "wecom_bot:replacement" },
+		{ agentId: "agent-2" },
+		{ agentAuthorizationRevision: "rev-0" },
+	]) {
+		expect(
+			await auth.authorize(message, "use", {
+				...initial.authority.actor.taskBoundary,
+				...patch,
+			}),
+		).toMatchObject({ outcome: "denied" });
+	}
 	expect(
 		await auth.authorize({ ...message, bindingReference: "other" }),
 	).toMatchObject({ outcome: "denied" });

@@ -201,11 +201,14 @@ export function applyRuntimeAuthority(
 			reason: claims.reason,
 		};
 		if (
-			claims.allowedCommands[0] === "turn.stop" ||
-			claims.reason !== "recovery"
-		)
+			claims.reason === "recovery" &&
+			claims.allowedCommands[0] !== "turn.stop"
+		) {
+			delete authority.stopped;
+		} else {
 			authority.stopped = true;
-		if (claims.reason !== "recovery") authority.expiresAt = 0;
+			authority.expiresAt = 0;
+		}
 	} else {
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
