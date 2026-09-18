@@ -47,6 +47,7 @@ export async function startAuthentikPlatformApi(input: {
 	let server: ReturnType<typeof serve>;
 	try {
 		server = serve({
+			hostname: "127.0.0.1",
 			port: input.port,
 			fetch: async (request) =>
 				(await browser.handleRequest(request)) ?? app.fetch(request),

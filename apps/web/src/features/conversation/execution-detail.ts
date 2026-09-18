@@ -59,6 +59,9 @@ export async function loadExecutionDetail({
 		signal,
 		responseStyle: "fields",
 		throwOnError: false,
+	}).catch(() => {
+		signal.throwIfAborted();
+		throw new ConversationReadError({ kind: "network" });
 	});
 	// Query owns cancellation. A transport that ignores its signal must not
 	// publish data or trigger a permission callback after a selection changes.
