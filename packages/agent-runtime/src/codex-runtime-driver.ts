@@ -3154,6 +3154,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...(options.launchPath ? { launchPath: options.launchPath } : {}),
 					model: containedConfiguration.model,
 					reasoningEffort: containedConfiguration.reasoningEffort,
+					...(connectionClient
+						? {
+								connectionProfile: connectionClient.profile,
+								nativeConnectionBootstrap: (request, requestSignal) => {
+									if (!driver) unavailable();
+									return driver
+										.connectionClient(probeKey)
+										.bootstrap(request, requestSignal);
+								},
+							}
+						: {}),
 					...(modelTransport
 						? { modelAccess: modelTransport.modelAccessFor(probeKey) }
 						: {}),
@@ -3177,15 +3188,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					deadline,
 				);
 				signal.throwIfAborted();
-				await rpc.request(
-					"config/read",
-					{ includeLayers: false },
-					(value) =>
-						assertContainedConfiguration(value, containedConfiguration),
-					false,
-					false,
-					deadline,
-				);
+				await assertContainedNativeConfiguration(rpc);
 				signal.throwIfAborted();
 				return configuredCapabilities;
 			} finally {
