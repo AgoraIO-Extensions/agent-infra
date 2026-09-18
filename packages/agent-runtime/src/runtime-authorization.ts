@@ -24,6 +24,8 @@ export interface RuntimeOriginalExecutionRef {
 export interface RuntimeExecutionAuthority {
 	workerId: string;
 	executionDeliveryFence: number;
+	/** The latest operation fence that installed a control authority. */
+	controlDeliveryFence?: number;
 	authorizationRecordId?: string;
 	issuedAt: number;
 	expiresAt: number;
@@ -92,6 +94,7 @@ export function validStoredExecutionAuthority(
 			[
 				"workerId",
 				"executionDeliveryFence",
+				"controlDeliveryFence",
 				"authorizationRecordId",
 				"issuedAt",
 				"expiresAt",
@@ -107,6 +110,9 @@ export function validStoredExecutionAuthority(
 		authority.workerId.length > 0 &&
 		Number.isSafeInteger(authority.executionDeliveryFence) &&
 		authority.executionDeliveryFence > 0 &&
+		(authority.controlDeliveryFence === undefined ||
+			(Number.isSafeInteger(authority.controlDeliveryFence) &&
+				authority.controlDeliveryFence > 0)) &&
 		Number.isSafeInteger(authority.issuedAt) &&
 		authority.issuedAt >= 0 &&
 		Number.isSafeInteger(authority.expiresAt) &&
@@ -167,8 +173,10 @@ export function applyRuntimeAuthority(
 				current.control !== undefined &&
 				claims.operation.executionDeliveryFence ===
 					current.executionDeliveryFence &&
-				current.control.controlRecordId !== claims.controlRecordId &&
-				claims.reason !== "generation_isolation"))
+				claims.operation.deliveryFence <=
+					(current.controlDeliveryFence ??
+						current.executionDeliveryFence) &&
+				current.control.controlRecordId !== claims.controlRecordId))
 	)
 		runtimeAuthorizationDenied();
 	if (claims.purpose === "business") {
@@ -207,6 +215,7 @@ export function applyRuntimeAuthority(
 			controlRecordId: claims.controlRecordId,
 			reason: claims.reason,
 		};
+		authority.controlDeliveryFence = claims.operation.deliveryFence;
 		if (
 			claims.reason === "recovery" &&
 			claims.allowedCommands[0] !== "turn.stop"

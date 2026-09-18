@@ -227,6 +227,7 @@ it("the probe recovers without input, stops only its Conversation, and preserves
 				...original.lookup.operation,
 				kind: "stop",
 				id: "synthetic-stop",
+				deliveryFence: original.lookup.operation.deliveryFence + 1,
 			},
 		},
 		"turn.stop",
