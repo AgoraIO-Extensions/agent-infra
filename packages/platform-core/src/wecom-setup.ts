@@ -33,6 +33,9 @@ export interface WecomSetupStoreV1 {
 		readonly session: WecomSetupRecordV1;
 		readonly botId: string;
 		readonly encryptedCredential: unknown;
+		/** Revisions observed immediately before the asynchronous encryption step. */
+		readonly expectedConfigurationRevision: number;
+		readonly expectedAuthorizationRevision: string;
 		readonly connectionStatus?:
 			| "verifying"
 			| "connected"
@@ -178,6 +181,8 @@ export function createWecomSetupV1(options: {
 					session,
 					botId: input.botId,
 					encryptedCredential,
+					expectedConfigurationRevision: current.configuration.revision,
+					expectedAuthorizationRevision: current.authorizationRevision,
 				}))
 			)
 				throw new WecomSetupError("stale");

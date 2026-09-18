@@ -1,7 +1,7 @@
 import { type FileHandle, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeHostError } from "./errors.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
@@ -22,6 +22,11 @@ import {
 import { RuntimeHost } from "./runtime-host.js";
 
 const directories: string[] = [];
+beforeEach(() => {
+	// The fixture grants use a deterministic clock; authority application also
+	// performs the wall-clock expiry check before mutating durable state.
+	vi.setSystemTime(fixtureNow);
+});
 afterEach(async () => {
 	vi.useRealTimers();
 	await Promise.all(

@@ -90,6 +90,11 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 	}
 	async consume(input: Parameters<WecomSetupStoreV1["consume"]>[0]) {
 		const { session } = input;
+		if (
+			input.expectedConfigurationRevision !== session.configurationRevision ||
+			input.expectedAuthorizationRevision !== session.authorizationRevision
+		)
+			return false;
 		const credential = validatePlatformSecretRecordV1(
 			input.encryptedCredential,
 		);
@@ -118,7 +123,9 @@ export class PostgresWecomSetupV1 implements WecomSetupStoreV1 {
 			const rows =
 				await sql`update platform.wecom_setup_sessions s set bot_id=${input.botId},encrypted_credential=${sql.json(credential as unknown as postgres.JSONValue)},status='verifying'
     from platform.agents a where s.session_id=${session.sessionId} and s.agent_id=${session.agentId} and s.actor_id=${session.actorId} and s.state_digest=${session.stateDigest} and s.status='awaiting_input' and s.expires_at>clock_timestamp()
-    and a.id=s.agent_id and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
+    and a.id=s.agent_id and a.current_configuration_revision=${input.expectedConfigurationRevision} and a.authorization_revision=${input.expectedAuthorizationRevision}
+    and a.current_configuration_revision=s.configuration_revision and a.authorization_revision=s.authorization_revision
+    and exists(select 1 from platform.agent_configuration_revisions c where c.agent_id=a.id and c.revision=a.current_configuration_revision and c.configuration->>'agentId'=a.id and c.configuration->>'revision'=a.current_configuration_revision::text)
     and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=s.actor_id) returning s.session_id`;
 			if (!rows.length) return false;
 			await audit(sql, session, "wecom.credentials_submitted");

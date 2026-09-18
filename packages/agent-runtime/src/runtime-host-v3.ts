@@ -376,7 +376,11 @@ export class RuntimeHostV3 {
 		await this.abortRecovery(key);
 		await this.options.serialize(key, () => {
 			this.validate(request, "turn.stop", verification);
-			return this.options.store.authorizeRequestV3(claims);
+			return this.options.store.authorizeRequestV3(
+				claims,
+				"query",
+				(this.options.grantValidation.now ?? Date.now)(),
+			);
 		});
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
@@ -437,6 +441,7 @@ export class RuntimeHostV3 {
 				return this.options.store.recoverOperationV3(
 					claims,
 					request.originalOperationDigest,
+					(this.options.grantValidation.now ?? Date.now)(),
 				);
 			},
 		);
@@ -511,7 +516,11 @@ export class RuntimeHostV3 {
 		]);
 		await this.options.serialize(recoveryKey, async () => {
 			this.validate(request, "generation.cancel", verification);
-			await this.options.store.authorizeRequestV3(claims, "generation-cancel");
+			await this.options.store.authorizeRequestV3(
+				claims,
+				"generation-cancel",
+				(this.options.grantValidation.now ?? Date.now)(),
+			);
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(recoveryKey);
@@ -584,7 +593,11 @@ export class RuntimeHostV3 {
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.validate(request, "execution.renew", verification);
-				return this.options.store.authorizeRequestV3(claims, "renew");
+				return this.options.store.authorizeRequestV3(
+					claims,
+					"renew",
+					(this.options.grantValidation.now ?? Date.now)(),
+				);
 			},
 		);
 		return {
@@ -604,7 +617,11 @@ export class RuntimeHostV3 {
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.validate(request, "events.ack", verification);
-				await this.options.store.authorizeRequestV3(claims);
+				await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					(this.options.grantValidation.now ?? Date.now)(),
+				);
 				const session = this.options.store.checkAcknowledgableCursor(
 					claims,
 					request.confirmedCursor,
@@ -638,7 +655,11 @@ export class RuntimeHostV3 {
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.validate(request, "events.persist", verification);
-				return this.options.store.authorizeRequestV3(claims);
+				return this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					(this.options.grantValidation.now ?? Date.now)(),
+				);
 			},
 		);
 		const controller = new AbortController();

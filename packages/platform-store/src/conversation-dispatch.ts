@@ -18,6 +18,7 @@ import {
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
+	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
@@ -1634,22 +1635,24 @@ export class PostgresConversationDispatchStoreV1
 					isTurn(input.claim.operation) &&
 					state.execution.status === "submitted"
 				) {
-					let capacityDecision: ReturnType<
-						typeof decideConversationDispatchCapacityV1
-					>;
+					let workload: WorkloadReconciliationStateV1;
+					let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
 					try {
 						const decoded = decodePersistedWorkloadStateV1(
 							agent?.state,
 							input.claim.agentId,
 						);
 						if (!agent || !decoded || decoded.legacy) throw new Error();
-						const workload = decoded.state;
-						const desired = validateAgentWorkloadDesiredV1(
+						workload = decoded.state;
+						desired = validateAgentWorkloadDesiredV1(
 							workload.verified?.deployment,
 						);
-						const [occupancy] = await transaction<
-							{ processing: string; unknown: string }[]
-						>`
+					} catch {
+						throw new DispatchCapacityUnavailable("capacity_unavailable");
+					}
+					const [occupancy] = await transaction<
+						{ processing: string; unknown: string }[]
+					>`
 							select count(*) filter (where status = 'processing')::text as processing,
 								count(*) filter (where status = 'unknown' or exists (
 									select 1 from platform.conversation_generation_tombstones t
@@ -1659,6 +1662,10 @@ export class PostgresConversationDispatchStoreV1
 							from platform.conversation_executions where agent_id = ${input.claim.agentId}
 								and (status in ('processing', 'unknown') or exists (select 1 from platform.conversation_generation_tombstones t where t.execution_id = conversation_executions.execution_id and t.status = 'pending'))
 						`;
+					let capacityDecision: ReturnType<
+						typeof decideConversationDispatchCapacityV1
+					>;
+					try {
 						// The Core decision consumes this locked snapshot, before any occupied state is written.
 						capacityDecision = decideConversationDispatchCapacityV1({
 							agentId: input.claim.agentId,
@@ -1686,7 +1693,8 @@ export class PostgresConversationDispatchStoreV1
 								unknown: requireSafeCounter(occupancy?.unknown),
 							},
 						});
-					} catch {
+					} catch (error) {
+						if (error instanceof DispatchCapacityUnavailable) throw error;
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
 					}
 					if (capacityDecision !== "admit")

@@ -163,7 +163,14 @@ export function applyRuntimeAuthority(
 	authorities: Record<string, RuntimeExecutionAuthority>,
 	claims: RuntimeExecutionGrantClaimsV2,
 	mode: "prepare" | "query" | "renew",
+	now = Date.now(),
 ) {
+	if (
+		!Number.isSafeInteger(now) ||
+		claims.issuedAt > now ||
+		claims.expiresAt <= now
+	)
+		runtimeAuthorizationDenied();
 	const current = authorities[claims.executionId];
 	if (
 		current &&

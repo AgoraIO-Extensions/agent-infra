@@ -851,6 +851,7 @@ export class FileRuntimeStore {
 	recoverOperationV3(
 		claims: RuntimeExecutionGrantClaimsV2,
 		originalOperationDigest: string,
+		now = Date.now(),
 	) {
 		return this.file.update((state) => {
 			assertStoreState(state);
@@ -891,7 +892,7 @@ export class FileRuntimeStore {
 			)
 				runtimeAuthorizationDenied();
 			session.executionAuthorities ??= {};
-			applyRuntimeAuthority(session.executionAuthorities, claims, "query");
+			applyRuntimeAuthority(session.executionAuthorities, claims, "query", now);
 			session.highestFences[scope] = fence;
 			if (operation) operation.deliveryFence = fence;
 			return { session: structuredClone(session), found: !!operation };
@@ -901,6 +902,7 @@ export class FileRuntimeStore {
 	authorizeRequestV3(
 		claims: RuntimeExecutionGrantClaimsV2,
 		mode: "query" | "renew" | "generation-cancel" = "query",
+		now = Date.now(),
 	) {
 		return this.file.update((state) => {
 			assertStoreState(state);
@@ -969,6 +971,7 @@ export class FileRuntimeStore {
 				session.executionAuthorities,
 				claims,
 				mode === "generation-cancel" ? "query" : mode,
+				now,
 			);
 			if (mode === "generation-cancel") {
 				// The isolation claim advances the original Turn's fence without recovering it.
