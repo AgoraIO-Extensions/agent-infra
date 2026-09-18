@@ -1,7 +1,6 @@
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 export type ConnectionApiRuntimeConfig = {
-	bitbucketProxyUrl?: string;
 	githubEgressProxyUrl?: string;
 	githubReadFallbackProxyUrl?: string;
 	jenkinsReleaseRoute: "internal" | "public";
@@ -212,10 +211,6 @@ export function connectionApiRuntimeConfig(
 		"CONNECTION_PUBLIC_BASE_URL",
 	);
 	const resourceUrl = new URL("/mcp", publicBaseUrl).toString();
-	const bitbucketProxyUrl = optionalProxyUrl(
-		environment,
-		"BITBUCKET_SERVER_PROXY_URL",
-	);
 	const githubEgressProxyUrl = optionalProxyUrl(
 		environment,
 		"GITHUB_EGRESS_PROXY_URL",
@@ -230,7 +225,6 @@ export function connectionApiRuntimeConfig(
 		);
 	}
 	return {
-		...(bitbucketProxyUrl === undefined ? {} : { bitbucketProxyUrl }),
 		...(githubEgressProxyUrl === undefined ? {} : { githubEgressProxyUrl }),
 		...(githubReadFallbackProxyUrl === undefined
 			? {}

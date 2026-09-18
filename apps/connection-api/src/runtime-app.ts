@@ -120,12 +120,8 @@ export async function createConnectionRuntime(
 				)
 			: githubPrimaryFetch;
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
-	const bitbucketProxyFetch = config.bitbucketProxyUrl
-		? proxyFetch(config.bitbucketProxyUrl)
-		: undefined;
 	const bitbucketFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
-		...(bitbucketProxyFetch ? { fetch: bitbucketProxyFetch } : {}),
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);

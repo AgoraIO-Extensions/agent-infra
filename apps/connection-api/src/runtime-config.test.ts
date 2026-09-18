@@ -119,43 +119,22 @@ describe("Connection runtime configuration", () => {
 		);
 	});
 
-	it("accepts only a credential-free Bitbucket proxy origin", () => {
-		expect(
-			fullConnectionRuntimeConfig({
-				...accountBase,
-				BITBUCKET_SERVER_PROXY_URL: "http://103.101.125.158:28062",
-			}).bitbucketProxyUrl,
-		).toBe("http://103.101.125.158:28062/");
-		for (const value of [
-			"socks5://proxy.example:1080",
-			"http://user:secret@proxy.example:8080",
-			"http://proxy.example:8080/path",
-		]) {
-			expect(() =>
-				fullConnectionRuntimeConfig({
-					...accountBase,
-					BITBUCKET_SERVER_PROXY_URL: value,
-				}),
-			).toThrow(/BITBUCKET_SERVER_PROXY_URL/);
-		}
-	});
-
 	it("requires a primary GitHub egress before configuring READ fallback", () => {
 		const config = fullConnectionRuntimeConfig({
 			...accountBase,
 			GITHUB_EGRESS_PROXY_URL: "https://github-egress.la3.example",
-			GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+			GITHUB_READ_FALLBACK_PROXY_URL: "http://proxy.example:8080",
 		});
 		expect(config.githubEgressProxyUrl).toBe(
 			"https://github-egress.la3.example/",
 		);
 		expect(config.githubReadFallbackProxyUrl).toBe(
-			"http://103.101.125.158:28062/",
+			"http://proxy.example:8080/",
 		);
 		expect(() =>
 			fullConnectionRuntimeConfig({
 				...accountBase,
-				GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+				GITHUB_READ_FALLBACK_PROXY_URL: "http://proxy.example:8080",
 			}),
 		).toThrow(/requires GITHUB_EGRESS_PROXY_URL/);
 	});
