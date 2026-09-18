@@ -375,14 +375,21 @@ export class RuntimeHostV3 {
 		const request = parseRequest(RuntimeStopRequestV3Schema, value);
 		const claims = this.validate(request, "turn.stop", verification);
 		const key = this.options.store.sessionQueueKey(request);
+		const recoveryGenerationKey = JSON.stringify([
+			key,
+			request.sessionGeneration,
+			request.executionId,
+		]);
 		await this.abortRecovery(key);
 		await this.options.serialize(key, () => {
 			this.validate(request, "turn.stop", verification);
-			return this.options.store.authorizeRequestV3(
+			const result = this.options.store.authorizeRequestV3(
 				claims,
 				"query",
 				(this.options.grantValidation.now ?? Date.now)(),
 			);
+			this.closedRecoveryGenerations.add(recoveryGenerationKey);
+			return result;
 		});
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),

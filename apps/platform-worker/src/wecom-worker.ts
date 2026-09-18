@@ -82,13 +82,17 @@ export function createPlatformWecomWorkerV1(
 	});
 	return {
 		async reconcile() {
-			void setup?.tick().catch(() => {
+			if (setup) {
 				try {
-					options.connections?.observeIngress?.("unavailable");
+					await setup.tick();
 				} catch {
-					/* Observation only. */
+					try {
+						options.connections?.observeIngress?.("unavailable");
+					} catch {
+						/* Observation only. */
+					}
 				}
-			});
+			}
 			await connections?.tick();
 		},
 		async dispatch() {
