@@ -271,6 +271,27 @@ export function createConversationRuntimeV2(
 		);
 		if (finalTarget.workerId !== options.signing.workerId)
 			denied("RUNTIME_WORKER_BINDING_INVALID");
+		state = await stateFor(context, signal);
+		const postTargetRoute = await current(context, state, command, signal);
+		if (postTargetRoute.authority.purpose !== finalRoute.authority.purpose) {
+			if (postTargetRoute.authority.purpose === "control")
+				await control(context, postTargetRoute.authority.reason, signal);
+			unavailable("RUNTIME_ROUTE_STALE");
+		}
+		if (
+			postTargetRoute.record.configurationRevision !==
+				finalRoute.record.configurationRevision ||
+			!isDeepStrictEqual(
+				postTargetRoute.record.agent,
+				finalRoute.record.agent,
+			) ||
+			!isDeepStrictEqual(
+				postTargetRoute.record.workload,
+				finalRoute.record.workload,
+			)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		authority = postTargetRoute.authority;
 		if (state.stopPending && authority.purpose === "business") {
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");

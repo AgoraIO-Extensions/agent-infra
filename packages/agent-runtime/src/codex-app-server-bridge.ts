@@ -43,6 +43,7 @@ import {
 import release from "./codex-release.json" with { type: "json" };
 
 const defaultTimeoutMs = 5_000;
+const recoveryShutdownTimeoutMs = defaultTimeoutMs;
 const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
 const maximumFrameBytes = 65_536;
@@ -55,6 +56,52 @@ const sha256Pattern = /^sha256:[a-f0-9]{64}$/;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const schemaArtifactName = "codex_app_server_protocol.v2.schemas.json";
 const isolatedRuntimeDirectoryPrefix = "agent-runtime-codex-home-";
+
+async function settleWithin(promise: Promise<void>, timeoutMs: number) {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		await Promise.race([
+			promise,
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, timeoutMs);
+				timer.unref();
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+async function waitForChildExit(
+	exited: Promise<void>,
+	signal: AbortSignal,
+	timeoutMs: number,
+): Promise<"exited" | "aborted" | "timed_out"> {
+	if (signal.aborted) return "aborted";
+	let timer: NodeJS.Timeout | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise((resolve) => {
+			let settled = false;
+			const finish = (result: "exited" | "aborted" | "timed_out") => {
+				if (settled) return;
+				settled = true;
+				resolve(result);
+			};
+			onAbort = () => finish("aborted");
+			signal.addEventListener("abort", onAbort, { once: true });
+			timer = setTimeout(() => finish("timed_out"), timeoutMs);
+			timer.unref();
+			void exited.then(
+				() => finish("exited"),
+				() => finish("exited"),
+			);
+		});
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+	}
+}
 
 export interface CodexAppServerProvenanceV2 {
 	readonly protocolVersion: 2;
@@ -255,17 +302,30 @@ export async function runCodexConnectionRecovery(options: {
 		);
 		options.signal.addEventListener("abort", abort, { once: true });
 		if (options.signal.aborted) abort();
-		await exited;
+		const exitResult = await waitForChildExit(
+			exited,
+			options.signal,
+			recoveryShutdownTimeoutMs,
+		);
+		if (exitResult !== "exited") {
+			failed = true;
+			callbacks.close();
+			abort();
+			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+			if (exitResult === "aborted") options.signal.throwIfAborted();
+			throw unavailable();
+		}
 		callbacks.close();
-		await callbacks.finished;
+		await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
 		options.signal.throwIfAborted();
 		if (failed || !complete() || process.exitCode !== 0) throw unavailable();
 	} finally {
 		options.signal.removeEventListener("abort", abort);
 		callbacks?.close();
 		abort();
-		await exited;
-		await callbacks?.finished;
+		if (exited) await settleWithin(exited, recoveryShutdownTimeoutMs);
+		if (callbacks)
+			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
 		await removeIsolatedDirectory(policy.directory);
 	}
 }

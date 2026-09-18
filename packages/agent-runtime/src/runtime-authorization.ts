@@ -117,6 +117,7 @@ export function validStoredExecutionAuthority(
 		authority.issuedAt >= 0 &&
 		Number.isSafeInteger(authority.expiresAt) &&
 		authority.expiresAt >= 0 &&
+		(authority.expiresAt === 0 || authority.expiresAt > authority.issuedAt) &&
 		(authority.authorizationRecordId === undefined ||
 			(typeof authority.authorizationRecordId === "string" &&
 				authority.authorizationRecordId.length > 0)) &&

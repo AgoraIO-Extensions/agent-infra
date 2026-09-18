@@ -1651,7 +1651,11 @@ export class PostgresConversationDispatchStoreV1
 							{ processing: string; unknown: string }[]
 						>`
 							select count(*) filter (where status = 'processing')::text as processing,
-								count(*) filter (where status <> 'processing')::text as unknown
+								count(*) filter (where status = 'unknown' or exists (
+									select 1 from platform.conversation_generation_tombstones t
+									where t.execution_id = conversation_executions.execution_id
+										and t.status = 'pending'
+								))::text as unknown
 							from platform.conversation_executions where agent_id = ${input.claim.agentId}
 								and (status in ('processing', 'unknown') or exists (select 1 from platform.conversation_generation_tombstones t where t.execution_id = conversation_executions.execution_id and t.status = 'pending'))
 						`;

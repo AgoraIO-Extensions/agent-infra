@@ -143,11 +143,16 @@ export class RuntimeHostV3 {
 		const recover = this.options.driver.recoverOriginalEvidence;
 		const nativeSessionRef = session.nativeSessionRef;
 		const key = this.options.store.sessionQueueKey(request);
+		const recoveryGenerationKey = JSON.stringify([
+			key,
+			request.sessionGeneration,
+			request.executionId,
+		]);
 		if (
 			!recover ||
 			!nativeSessionRef ||
 			session.generationBarrier ||
-			this.closedRecoveryGenerations.has(key) ||
+			this.closedRecoveryGenerations.has(recoveryGenerationKey) ||
 			(claims.purpose === "control" && claims.reason === "generation_isolation")
 		)
 			return;
@@ -170,7 +175,10 @@ export class RuntimeHostV3 {
 		timer.unref();
 		const assertCurrent = () => {
 			active.throwIfAborted();
-			if (this.closedRecoveryGenerations.has(key) || now() >= expiresAt)
+			if (
+				this.closedRecoveryGenerations.has(recoveryGenerationKey) ||
+				now() >= expiresAt
+			)
 				nativeRequired();
 			this.validate(request, claims.allowedCommands[0], verification);
 			return this.options.store.assertOriginalEvidenceBinding(
@@ -199,7 +207,8 @@ export class RuntimeHostV3 {
 				this.options.serialize(key, async () => {
 					active.throwIfAborted();
 					this.validate(request, claims.allowedCommands[0], verification);
-					if (this.closedRecoveryGenerations.has(key)) nativeRequired();
+					if (this.closedRecoveryGenerations.has(recoveryGenerationKey))
+						nativeRequired();
 					await this.options.store.latchOriginalEvidenceQuery(
 						queryClaims,
 						request.requestId,
@@ -495,10 +504,15 @@ export class RuntimeHostV3 {
 		const request = parseRequest(RuntimeGenerationCancelRequestV3Schema, value);
 		const claims = this.validate(request, "generation.cancel", verification);
 		const recoveryKey = this.options.store.sessionQueueKey(request);
+		const recoveryGenerationKey = JSON.stringify([
+			recoveryKey,
+			request.sessionGeneration,
+			request.executionId,
+		]);
 		await this.options.serialize(recoveryKey, async () => {
 			this.validate(request, "generation.cancel", verification);
 			await this.options.store.authorizeRequestV3(claims, "generation-cancel");
-			this.closedRecoveryGenerations.add(recoveryKey);
+			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(recoveryKey);
 		return this.options.serialize(
