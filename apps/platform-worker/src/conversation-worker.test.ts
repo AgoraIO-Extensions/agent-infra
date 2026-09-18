@@ -165,6 +165,20 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
 	});
+	it("awaits Runtime cleanup before settling worker shutdown", async () => {
+		mocks.find.mockResolvedValue([]);
+		const runtimeClosed = Promise.withResolvers<void>();
+		mocks.runtimeClose.mockReturnValueOnce(runtimeClosed.promise);
+		const worker = createPlatformConversationWorkerV2(options);
+		const stopping = worker.stop();
+		await Promise.resolve();
+		expect(mocks.storeClose).not.toHaveBeenCalled();
+		runtimeClosed.resolve();
+		await stopping;
+		expect(mocks.runtimeClose).toHaveBeenCalledTimes(1);
+		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
+		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
+	});
 });
 
 it("starts WeCom dispatch independently of failed or unsettled discovery", async () => {

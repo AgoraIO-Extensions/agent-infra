@@ -460,6 +460,37 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("unknown");
 	});
 
+	it("rejects a found recovery that introduces a Runtime Host reference", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Unexpected dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "introduced-host",
+					executionId: request.executionId,
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				yield* [];
+				throw new Error("Unexpected event drain");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: null }),
+		);
+		const { useCase, events } = setup({ store, runtimeHost });
+		expect(await dispatch(useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
+		expect(events.persisted).toHaveLength(0);
+	});
+
 	it("rejects metadata recovery when Runtime status contradicts the committed execution", async () => {
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch() {

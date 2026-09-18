@@ -972,6 +972,9 @@ function parseRuntimeStatusResponse(
 		input.schemaVersion !== 2 ||
 		(claim.hostSessionRef !== null &&
 			input.hostSessionRef !== claim.hostSessionRef) ||
+		(input.outcome === "found" &&
+			(claim.hostSessionRef === null ||
+				input.hostSessionRef !== claim.hostSessionRef)) ||
 		input.executionId !== claim.executionId
 	) {
 		return unavailable();

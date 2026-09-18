@@ -230,9 +230,10 @@ export function createPlatformConversationWorkerV2(
 			clearTimeout(timer);
 			clearTimeout(connectionTimer);
 			controller.abort();
-			runtime.close();
+			const runtimeClose = Promise.resolve().then(() => runtime.close());
 			closing = (async () => {
 				await Promise.allSettled([
+					runtimeClose,
 					polling,
 					wecomPolling,
 					connectionPolling,

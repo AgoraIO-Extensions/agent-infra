@@ -241,12 +241,17 @@ export function createConversationRuntimeV2(
 			)
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
+		authority = afterRoute.authority;
 		// Directory, route and control persistence all cross asynchronous boundaries.
 		// Recheck the authorization and route immediately before minting any wire grant.
 		state = await stateFor(context, signal);
 		const finalRoute = await current(context, state, command, signal);
+		if (finalRoute.authority.purpose !== authority.purpose) {
+			if (finalRoute.authority.purpose === "control")
+				await control(context, finalRoute.authority.reason, signal);
+			unavailable("RUNTIME_ROUTE_STALE");
+		}
 		if (
-			afterRoute.authority.purpose !== finalRoute.authority.purpose ||
 			afterRoute.record.configurationRevision !==
 				finalRoute.record.configurationRevision ||
 			!isDeepStrictEqual(afterRoute.record.agent, finalRoute.record.agent) ||
