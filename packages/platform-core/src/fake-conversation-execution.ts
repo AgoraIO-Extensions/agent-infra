@@ -891,7 +891,6 @@ export class FakeConversationExecutionV1
 		if (!execution || !isActiveExecution(execution)) {
 			throw new Error("Execution is not active");
 		}
-		execution.status = "completed";
 		if (delivery) {
 			const conversation = this.#conversations.get(execution.conversationId);
 			const outbox = this.#outbox.find(
@@ -906,6 +905,7 @@ export class FakeConversationExecutionV1
 				throw new Error("Missing Fake runtime delivery");
 			this.#executions[this.#executions.indexOf(execution)] = {
 				...execution,
+				status: "completed",
 				deliveryFence: delivery.deliveryFence,
 			};
 			this.#conversations.set(execution.conversationId, {
@@ -913,7 +913,9 @@ export class FakeConversationExecutionV1
 				hostSessionRef: delivery.hostSessionRef,
 			});
 			outbox.status = delivery.outboxStatus;
+			return;
 		}
+		execution.status = "completed";
 	}
 
 	snapshot() {

@@ -131,6 +131,29 @@ describe("Conversation Worker discovery and shutdown", () => {
 		await worker.stop();
 		expect(mocks.dispatch).not.toHaveBeenCalled();
 	});
+	it("retains the cursor before an item deferred by capacity", async () => {
+		mocks.find
+			.mockResolvedValueOnce([
+				{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+				{ itemId: "turn-b", operation: "conversation.turn.submit.v1" },
+			])
+			.mockResolvedValueOnce([
+				{ itemId: "turn-b", operation: "conversation.turn.submit.v1" },
+			]);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2(options);
+		try {
+			expect(await worker.tick()).toBe(1);
+			expect(await worker.tick()).toBe(1);
+			const secondCall = mocks.find.mock.calls[1];
+			expect(secondCall?.[0]).toEqual({
+				limit: 256,
+				afterItemId: "turn-a",
+			});
+		} finally {
+			await worker.stop();
+		}
+	});
 	it("closes every database resource even when one close rejects", async () => {
 		mocks.find.mockResolvedValue([]);
 		mocks.storeClose.mockRejectedValueOnce(

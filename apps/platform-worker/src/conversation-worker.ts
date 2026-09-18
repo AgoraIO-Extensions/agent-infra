@@ -144,16 +144,22 @@ export function createPlatformConversationWorkerV2(
 			...(afterItemId ? { afterItemId } : {}),
 		});
 		let launched = 0;
+		let deferred = false;
 		for (const item of items) {
 			if (stopped || signal.aborted) break;
-			afterItemId = item.itemId;
-			if (running.has(item.itemId)) continue;
+			if (running.has(item.itemId)) {
+				deferred = true;
+				continue;
+			}
 			const control = item.operation === "conversation.turn.stop.v1";
 			const count = [...running.values()].filter(
 				(entry) => entry.control === control,
 			).length;
 			// A busy streaming Turn cannot consume the capacity needed to stop it.
-			if (count >= (control ? 2 : maximum)) continue;
+			if (count >= (control ? 2 : maximum)) {
+				deferred = true;
+				continue;
+			}
 			const promise = dispatch
 				.dispatch({
 					schemaVersion: 1,
@@ -169,6 +175,7 @@ export function createPlatformConversationWorkerV2(
 				.finally(() => running.delete(item.itemId));
 			running.set(item.itemId, { control, promise });
 			launched += 1;
+			if (!deferred) afterItemId = item.itemId;
 		}
 		return launched;
 	}

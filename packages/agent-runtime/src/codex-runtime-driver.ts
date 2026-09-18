@@ -6874,13 +6874,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (recoveryPending) operation.admissionRecoveryPending = true;
 		});
 		if (!recoveryPending) {
-			this.finalModelAdmissionConfirmations.set(
-				operationKey(command),
-				confirmation.then(
-					() => true,
-					() => false,
-				),
+			const key = operationKey(command);
+			const confirmationResult = confirmation.then(
+				() => true,
+				() => false,
 			);
+			this.finalModelAdmissionConfirmations.set(key, confirmationResult);
+			try {
+				await confirmation;
+			} finally {
+				if (
+					this.finalModelAdmissionConfirmations.get(key) === confirmationResult
+				)
+					this.finalModelAdmissionConfirmations.delete(key);
+			}
+			return;
 		}
 		await confirmation;
 	}
