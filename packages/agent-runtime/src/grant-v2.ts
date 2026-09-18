@@ -151,9 +151,11 @@ export function validateRuntimeExecutionGrantV2(
 		if (claims.purpose === "control" && request.input !== undefined)
 			runtimeAuthorizationDenied();
 		if (claims.purpose === "business") {
-			const requested = new Set(request.input?.attachments ?? []);
+			const requestedAttachments = request.input?.attachments ?? [];
+			const requested = new Set(requestedAttachments);
 			if (
-				claims.attachments.length !== requested.size ||
+				requested.size !== requestedAttachments.length ||
+				claims.attachments.length !== requestedAttachments.length ||
 				claims.attachments.some((entry) => !requested.has(entry.attachmentId))
 			)
 				runtimeAuthorizationDenied();

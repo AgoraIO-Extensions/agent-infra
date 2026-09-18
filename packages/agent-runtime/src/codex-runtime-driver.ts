@@ -772,6 +772,7 @@ function isNativeSourceRecord(
 			value.reservation.childThreadId
 	)
 		return false;
+	if (value.bind !== undefined && value.bindPending !== undefined) return false;
 	if (value.bind !== undefined) {
 		if (
 			!value.reserveAuthorized ||

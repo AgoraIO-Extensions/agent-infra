@@ -104,4 +104,22 @@ describe("Runtime V2 grant trust boundary", () => {
 			}),
 		).toThrow();
 	});
+
+	it("rejects duplicate attachment IDs in the request", () => {
+		const request = signV3Fixture(submitV3Fixture(), "turn.submit");
+		expect(() =>
+			validateRuntimeExecutionGrantV2(
+				{
+					...request,
+					input: {
+						text: "synthetic input",
+						attachments: ["attachment-1", "attachment-1"],
+					},
+				},
+				"turn.submit",
+				verifyRuntimeV2Fixture(request.grant),
+				options,
+			),
+		).toThrow();
+	});
 });
