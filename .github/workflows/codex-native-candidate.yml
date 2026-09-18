@@ -29,7 +29,7 @@ jobs:
     env:
       CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
       CANDIDATE_SOURCE: ${{ github.workspace }}/codex-source
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: "3"
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       RUSTUP_TOOLCHAIN: 1.96.0
@@ -84,6 +84,8 @@ jobs:
             ~/.cargo/git
             ${{ runner.temp }}/codex-native-target
           key: codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-${{ hashFiles('codex-source/codex-rs/Cargo.lock', 'deploy/runtime/vendor/codex/build-input-v1.json', 'deploy/runtime/vendor/codex/build-linux-aarch64.py', 'deploy/runtime/vendor/codex/apply-source.py', 'deploy/runtime/vendor/codex/patches/**') }}
+          restore-keys: |
+            codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-
 
       - name: Build candidate binaries and bundle
         run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh build
