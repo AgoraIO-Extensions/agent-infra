@@ -628,9 +628,11 @@ export class RuntimeHostV3 {
 			},
 		);
 		const controller = new AbortController();
-		const bounded = signal
-			? AbortSignal.any([controller.signal, signal])
-			: controller.signal;
+		const bounded = AbortSignal.any([
+			controller.signal,
+			this.lifetime.signal,
+			...(signal ? [signal] : []),
+		]);
 		const expires = () =>
 			controller.abort(
 				new RuntimeHostError(
