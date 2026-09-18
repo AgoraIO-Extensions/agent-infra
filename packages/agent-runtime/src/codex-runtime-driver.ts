@@ -3120,19 +3120,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						}
 					: {}),
 			});
-		const assertContainedNativeConfiguration = async (rpc: CodexRpc) => {
+		const assertContainedConfigurationFor = async (
+			rpc: CodexRpc,
+			expected: Parameters<typeof assertContainedConfiguration>[1],
+		) => {
 			await rpc.request("config/read", { includeLayers: false }, (value) => {
-				assertContainedConfiguration(value, {
-					...containedConfiguration,
-					...(connectionClient
-						? { connectionProfile: connectionClient.profile }
-						: {}),
-				});
+				assertContainedConfiguration(value, expected);
 			});
 			if (modelTransport) {
 				await assertPinnedModelProfiles(rpc, modelOptions);
 			}
 		};
+		const conversationContainedConfiguration = {
+			...containedConfiguration,
+			...(connectionClient
+				? { connectionProfile: connectionClient.profile }
+				: {}),
+		};
+		const assertContainedNativeConfiguration = (rpc: CodexRpc) =>
+			assertContainedConfigurationFor(rpc, conversationContainedConfiguration);
 		const probeNative = async (signal: AbortSignal) => {
 			signal.throwIfAborted();
 			// Dedicated temporary native HOME; never pass a real Conversation key or Store.
@@ -3154,17 +3160,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...(options.launchPath ? { launchPath: options.launchPath } : {}),
 					model: containedConfiguration.model,
 					reasoningEffort: containedConfiguration.reasoningEffort,
-					...(connectionClient
-						? {
-								connectionProfile: connectionClient.profile,
-								nativeConnectionBootstrap: (request, requestSignal) => {
-									if (!driver) unavailable();
-									return driver
-										.connectionClient(probeKey)
-										.bootstrap(request, requestSignal);
-								},
-							}
-						: {}),
 					...(modelTransport
 						? { modelAccess: modelTransport.modelAccessFor(probeKey) }
 						: {}),
@@ -3188,7 +3183,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					deadline,
 				);
 				signal.throwIfAborted();
-				await assertContainedNativeConfiguration(rpc);
+				await assertContainedConfigurationFor(rpc, containedConfiguration);
 				signal.throwIfAborted();
 				return configuredCapabilities;
 			} finally {
