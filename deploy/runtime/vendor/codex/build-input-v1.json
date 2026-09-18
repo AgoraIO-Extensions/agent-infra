@@ -3199,7 +3199,7 @@
     },
     {
       "path": "patches/0008-native-compaction-test-fixtures.patch",
-      "sha256": "sha256:f0e29b33eedcf26babaed525883eb71689f769df4535e618eabc35798c217059"
+      "sha256": "sha256:722e50d4720701e68975381af307f0a170d4bffa73c448cc2d17b69faf7f12e3"
     }
   ],
   "sourceFiles": [
@@ -3413,7 +3413,7 @@
     },
     {
       "path": "codex-rs/core/tests/suite/compact/native_hook_fixture.rs",
-      "sha256": "sha256:196d57f97b1fffe23b1d6146b36e203d0b230e8ab135f185ca4e7c34dd4ee1e7"
+      "sha256": "sha256:8fe8279f46fc8e2466900d7b5c5a626498a6f392dda1929e6e4db6a4cd5ed653"
     },
     {
       "path": "codex-rs/exec-server/src/client/http_response_body_stream.rs",
