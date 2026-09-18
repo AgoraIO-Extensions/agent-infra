@@ -139,7 +139,7 @@ export function createAuthentikBrowserAdapter(
 		)
 			return null;
 		prune();
-		if (url.host !== origin.host || request.url.length > 8192)
+		if (url.origin !== origin.origin || request.url.length > 8192)
 			return response(400);
 		if (url.pathname === "/auth/logout") {
 			if (request.method === "GET") return logoutConfirmation();

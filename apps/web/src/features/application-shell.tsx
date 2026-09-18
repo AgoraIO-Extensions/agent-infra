@@ -208,10 +208,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				<div id="main-content" tabIndex={-1} className="min-w-0 flex-1">
 					{session.state.kind === "ready" ? (
 						<AuthenticatedContent
-							// The projection has no server session-generation field. Use its
-							// complete stable content so identical refetches keep the cache,
-							// while an authoritative same-user session change remounts it.
-							key={JSON.stringify(session.state.session)}
+							// The API supplies an opaque generation derived from the authenticated
+							// session. Keep the projection fallback for older deployments.
+							key={
+								session.state.sessionGeneration ??
+								JSON.stringify(session.state.session)
+							}
 							session={session.state.session}
 						>
 							{children}

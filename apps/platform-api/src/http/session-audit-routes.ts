@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
 	BrowserSessionProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
@@ -39,6 +41,21 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
+}
+
+function sessionGeneration(request: Request, authorizationRevision: string) {
+	const cookies = (request.headers.get("cookie") ?? "")
+		.split(";")
+		.map((value) => value.trim())
+		.filter(
+			(value) => value && !/^__Host-[^=]*(?:csrf|login|challenge)/i.test(value),
+		)
+		.join(";");
+	return createHash("sha256")
+		.update(
+			`${request.headers.get("authorization") ?? ""}\n${cookies}\n${authorizationRevision}`,
+		)
+		.digest("base64url");
 }
 
 function mapAuditError(error: unknown, traceId: string): never {
@@ -150,6 +167,10 @@ export function registerSessionAuditRoutes(
 		if (!projection.success) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}
+		context.header(
+			"X-Platform-Session-Generation",
+			sessionGeneration(context.req.raw, identity.authorizationRevision),
+		);
 		return context.json(projection.data);
 	});
 

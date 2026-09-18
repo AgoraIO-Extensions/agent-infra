@@ -20,7 +20,11 @@ vi.mock("@tanstack/react-router", () => ({
 	),
 }));
 const clients: QueryClient[] = [];
-const identity = (userId: string, admin = false) => ({
+const identity = (
+	userId: string,
+	admin = false,
+	sessionGeneration?: string,
+) => ({
 	kind: "ready",
 	session: {
 		schemaVersion: 1,
@@ -30,6 +34,7 @@ const identity = (userId: string, admin = false) => ({
 			roles: admin ? ["employee", "system_admin"] : ["employee"],
 		},
 	},
+	...(sessionGeneration ? { sessionGeneration } : {}),
 });
 afterEach(() => {
 	cleanup();
@@ -141,6 +146,32 @@ describe("application session boundary", () => {
 						entry.user === "owner" &&
 						entry.client !== old &&
 						entry.cached === undefined,
+				),
+			).toBe(true),
+		);
+		expect(old?.getQueryData(["private"])).toBeUndefined();
+	});
+	it("uses the server session generation when the projection is unchanged", async () => {
+		const observed: QueryClient[] = [];
+		function Probe() {
+			observed.push(useQueryClient());
+			return <p>受保护内容</p>;
+		}
+		const client = setup(identity("owner", false, "generation-1"), <Probe />);
+		await screen.findByText("受保护内容");
+		const old = observed.at(-1);
+		old?.setQueryData(["private"], "old-session-secret");
+		await act(async () => {
+			client.setQueryData(
+				["browser-session"],
+				identity("owner", false, "generation-2"),
+			);
+		});
+		await waitFor(() =>
+			expect(
+				observed.some(
+					(value) =>
+						value !== old && value.getQueryData(["private"]) === undefined,
 				),
 			).toBe(true),
 		);
