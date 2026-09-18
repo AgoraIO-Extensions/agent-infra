@@ -19,6 +19,7 @@ const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumEventBytes = 1024 * 1024;
 const maximumStreamBytes = 16 * 1024 * 1024;
 const maximumStreamEvents = 8_192;
+const maximumConversationAccessEntries = 1_024;
 const requestTimeoutMs = 120_000;
 const sanitizedFailureBody = JSON.stringify({
 	error: { message: "Model request failed" },
@@ -1387,6 +1388,8 @@ export async function openCodexModelTransport(
 				throw new Error("RUNTIME_STARTUP_FAILED");
 			let access = processAccess.get(conversationKey);
 			if (!access) {
+				if (processAccess.size >= maximumConversationAccessEntries)
+					throw new Error("RUNTIME_MODEL_ACCESS_CAPACITY");
 				const credential = randomBytes(32).toString("base64url");
 				access = {
 					credential,

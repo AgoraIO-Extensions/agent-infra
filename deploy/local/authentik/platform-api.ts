@@ -60,6 +60,7 @@ export async function startAuthentikPlatformApi(input: {
 			});
 		});
 	} catch (error) {
+		browser.close();
 		await assembly.close();
 		throw error;
 	}
@@ -70,7 +71,9 @@ export async function startAuthentikPlatformApi(input: {
 			closing ??= new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
 				if ("closeAllConnections" in server) server.closeAllConnections();
-			}).finally(() => assembly.close());
+			})
+				.finally(() => browser.close())
+				.finally(() => assembly.close());
 			return closing;
 		},
 	};

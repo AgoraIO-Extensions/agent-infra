@@ -122,6 +122,8 @@ export function createAuthentikBrowserAdapter(
 			for (const [key, value] of map)
 				if (value.expires <= Date.now()) map.delete(key);
 	}
+	const cleanupTimer = setInterval(prune, 60_000);
+	cleanupTimer.unref?.();
 	const identityAdapter = {
 		async resolve(request: Request) {
 			prune();
@@ -249,5 +251,13 @@ export function createAuthentikBrowserAdapter(
 			result.headers.append("Set-Cookie", setCookie(CHALLENGE, "", 0));
 		}
 	}
-	return { identityAdapter, handleRequest };
+	return {
+		identityAdapter,
+		handleRequest,
+		close() {
+			clearInterval(cleanupTimer);
+			sessions.clear();
+			challenges.clear();
+		},
+	};
 }

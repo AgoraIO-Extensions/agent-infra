@@ -714,11 +714,9 @@ async function claimWork(
 		readonly leaseDurationMs: number;
 	},
 ): Promise<ConversationDispatchClaimDecisionV1> {
-	const [hint] = await transaction<
-		{ scope_id: string }[]
-	>`select scope_id from platform.outbox_items where id = ${input.itemId} and scope_type = 'conversation'`;
-	if (!hint) return { outcome: "stale" };
-	const conversation = await lockConversation(transaction, hint.scope_id);
+	const outbox = await lockOutbox(transaction, input.itemId);
+	if (outbox?.scope_type !== "conversation") return { outcome: "stale" };
+	const conversation = await lockConversation(transaction, outbox.scope_id);
 	if (!conversation) return { outcome: "stale" };
 	const isolation = await readGenerationIsolation(
 		transaction,
@@ -726,8 +724,6 @@ async function claimWork(
 		requireSafeCounter(conversation.session_generation, 1),
 	);
 	const isolationWork = isolation?.item_id === input.itemId;
-	const outbox = await lockOutbox(transaction, input.itemId);
-	if (!outbox) return { outcome: "stale" };
 	if (!isolationWork && outbox.status === "succeeded")
 		return { outcome: "succeeded" };
 	if (!isolationWork && outbox.status === "failed")
@@ -990,12 +986,12 @@ async function ownedState(
 	claim: ConversationDispatchClaimV1,
 	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
+	const outbox = await lockOutbox(transaction, claim.itemId);
+	if (!outbox) return undefined;
 	const conversation = await lockConversation(
 		transaction,
 		claim.conversationId,
 	);
-	const outbox = await lockOutbox(transaction, claim.itemId);
-	if (!outbox) return undefined;
 	const execution = await lockExecution(
 		transaction,
 		claim.conversationId,
