@@ -587,10 +587,14 @@ export async function startLocalBrowserGateway(
 
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
-		server.listen(config.port ?? 3511, "127.0.0.1", () => {
-			server.off("error", reject);
-			resolve();
-		});
+		server.listen(
+			config.port ?? 3511,
+			config.browserHostname ?? "127.0.0.1",
+			() => {
+				server.off("error", reject);
+				resolve();
+			},
+		);
 	});
 	const address = server.address();
 	if (!address || typeof address === "string")
