@@ -84,6 +84,9 @@ importers:
       '@agent-infra/connection-identity':
         specifier: workspace:*
         version: link:../../packages/connection-identity
+      '@agent-infra/connection-provider-egress':
+        specifier: workspace:*
+        version: link:../connection-provider-egress
       '@agent-infra/connection-store':
         specifier: workspace:*
         version: link:../../packages/connection-store

@@ -24,6 +24,7 @@
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
+		"@agent-infra/connection-provider-egress": "workspace:*",
 		"@agent-infra/connection-contracts": "workspace:*",
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/connection-identity": "workspace:*",
