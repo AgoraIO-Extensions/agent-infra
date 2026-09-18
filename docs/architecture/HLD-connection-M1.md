@@ -119,8 +119,8 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 
 - 只有能够证明请求未被 Provider 接受的确定性业务或协议拒绝，Connection 才返回脱敏终态失败并记录 `PROVIDER_FAILED` 或等价稳定错误。
 - 超时、连接中断、响应丢失、无法确认提交语义的 `5xx`，或 Connection 无法保存 Provider 终态时，进入 `RESULT_PENDING/UNCERTAIN`。
-- 未知 WRITE 不自动重试，不重新创建 POST；只沿原 `callId` 对账。
-- 对账最多运行配置的期限；唯一匹配的结果可确认成功，冲突或超时进入人工处理/最终未知状态。
+- 未知 WRITE 不自动重试，不重新创建 POST；首次提交前生成并持久化高熵关联标记及 repository、head、base、ActionVersion 和参数摘要，只沿原 `callId` 对账。
+- 对账最多运行配置的期限；仅当 Provider 结果包含原关联标记、全部不可变请求字段一致且候选唯一时才能自动确认成功，零候选、多个候选、标记缺失、字段冲突或超时均进入人工处理/最终未知状态。
 - `NEEDS_MANUAL_REVIEW`、`UNRESOLVED`、Provider revoke 和管理员处理均保留审计。
 
 ## 11. 审计与跨系统关联
