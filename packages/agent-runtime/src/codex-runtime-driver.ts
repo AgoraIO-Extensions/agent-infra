@@ -2642,6 +2642,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				currentClient: value,
 			};
 		};
+		let recoveryProcessCompleted = false;
 		try {
 			await this.launchConnectionRecovery({
 				...(this.recoveryLaunchPath
@@ -2682,6 +2683,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					);
 				},
 			});
+			recoveryProcessCompleted = true;
 		} catch {
 			// Native or Connection unavailability cannot create a new Tool outcome.
 			signal.throwIfAborted();
@@ -2689,6 +2691,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} finally {
 			current = undefined;
 		}
+		if (!recoveryProcessCompleted) return;
 		await change(({ journal }) => {
 			if (
 				journal.connectionRecovery?.recoveryRequestId ===

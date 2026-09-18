@@ -259,12 +259,24 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		authority = finalRoute.authority;
+		const finalTarget = await bounded(
+			options.resolveRuntimeHost({
+				agentId: context.claim.agentId,
+				signal,
+				workload: finalRoute.record.workload,
+				purpose: finalRoute.authority.purpose,
+				command,
+			}),
+			signal,
+		);
+		if (finalTarget.workerId !== options.signing.workerId)
+			denied("RUNTIME_WORKER_BINDING_INVALID");
 		if (state.stopPending && authority.purpose === "business") {
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
 		const client = createWorkerRuntimeHostClientV3({
-			...target,
+			...finalTarget,
 			fetch: options.fetch,
 		});
 		const base = {

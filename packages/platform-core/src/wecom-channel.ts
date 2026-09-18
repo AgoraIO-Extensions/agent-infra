@@ -158,8 +158,17 @@ export function createWecomChannelV1(dependencies: {
 			if (
 				authority.actor.agentId !== message.agentId ||
 				authority.actor.channelId !== wecomChannelIdV1(message)
-			)
+			) {
+				await dependencies.store.reject(
+					digest([message.kind, message.providerId, message.eventId]),
+					"denied",
+					{
+						agentId: message.agentId,
+						actorId: authority.actor.actorId,
+					},
+				);
 				return { outcome: "denied" };
+			}
 			const eventKey = digest([
 				message.kind,
 				message.providerId,
