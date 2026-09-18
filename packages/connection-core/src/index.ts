@@ -1624,6 +1624,16 @@ export class ConnectionApplicationService {
 			if (
 				typeof error === "object" &&
 				error !== null &&
+				(error as { providerUnavailable?: boolean }).providerUnavailable === true
+			) {
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Provider is unavailable",
+				);
+			}
+			if (
+				typeof error === "object" &&
+				error !== null &&
 				(error as { providerStatus?: number }).providerStatus === 404
 			) {
 				throw new ConnectionError(

@@ -940,6 +940,26 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("maps structured Provider availability and not-found failures", async () => {
+		for (const [failure, code] of [
+			[Object.assign(new Error("timeout"), { providerUnavailable: true }), "PROVIDER_UNAVAILABLE"],
+			[Object.assign(new Error("missing"), { providerStatus: 404 }), "PROVIDER_RESOURCE_NOT_FOUND"],
+		] as const) {
+			const repository = new MemoryRepository();
+			const service = new ConnectionApplicationService(repository, {
+				execute: async () => {
+					throw failure;
+				},
+			});
+			await expect(
+				service.invokeDirect("direct", "github.getRepository", {
+					repository: "acme/widgets",
+				}),
+			).rejects.toMatchObject({ code });
+			expect(repository.calls[0]?.status).toBe("FAILED");
+		}
+	});
+
 	it("records deterministic write rejection without entering reconciliation", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {

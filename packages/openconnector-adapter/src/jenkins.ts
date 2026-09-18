@@ -9,7 +9,7 @@ import { jenkinsExecutorDigest } from "./jenkins-integrity.ts";
 const credentialScope = "jenkins.read";
 const maxConsoleBytes = 256 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
-const requestTimeoutMs = 8_000;
+const requestTimeoutMs = 15_000;
 const sourceCommit = "connection-native";
 
 type JsonObject = Record<string, unknown>;
@@ -86,7 +86,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v2`,
+			id: `${profile.providerId}.${action.name}@v3`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -109,7 +109,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v2`,
+		providerReleaseId: `${profile.providerId}-connection-v3`,
 		sourceCommit,
 	} as const;
 }
@@ -229,6 +229,7 @@ export class JenkinsAdapter
 			if (!response.ok) {
 				throw providerError(
 					`Jenkins request failed with HTTP ${response.status}`,
+					{ providerStatus: response.status },
 				);
 			}
 			const declaredLength = Number(response.headers.get("content-length"));
@@ -246,7 +247,9 @@ export class JenkinsAdapter
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
-				throw providerError("Jenkins request timed out");
+				throw providerError("Jenkins request timed out", {
+					providerUnavailable: true,
+				});
 			}
 			throw error;
 		} finally {
@@ -282,6 +285,7 @@ export class JenkinsAdapter
 			if (!response.ok) {
 				throw providerError(
 					`Jenkins request failed with HTTP ${response.status}`,
+					{ providerStatus: response.status },
 				);
 			}
 			const { bytes: returned, truncated } = await readLimitedBytes(
@@ -304,7 +308,9 @@ export class JenkinsAdapter
 			};
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
-				throw providerError("Jenkins request timed out");
+				throw providerError("Jenkins request timed out", {
+					providerUnavailable: true,
+				});
 			}
 			throw error;
 		} finally {
@@ -390,8 +396,11 @@ function stringValue(input: JsonObject, name: string) {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function providerError(message: string) {
-	return new Error(message);
+function providerError(
+	message: string,
+	metadata: { providerStatus?: number; providerUnavailable?: boolean } = {},
+) {
+	return Object.assign(new Error(message), metadata);
 }
 
 function invalidCredential(message: string) {

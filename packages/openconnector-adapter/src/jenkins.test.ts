@@ -16,9 +16,9 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.notEqual(first.provider, second.provider);
 	assert.notEqual(first.providerReleaseId, second.providerReleaseId);
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
-	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v2");
+	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v3");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
-	assert.equal(second.providerReleaseId, "jenkins-release-connection-v2");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v3");
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
@@ -150,4 +150,32 @@ test("Jenkins credential validation fails closed on auth errors and redirects", 
 				error.providerCredentialInvalid === true,
 		);
 	}
+});
+
+test("Jenkins exposes bounded Provider failure metadata", async () => {
+	const missing = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () => new Response("missing", { status: 404 }),
+	);
+	await assert.rejects(
+		missing.execute({
+			action: "jenkins-release.get_queue_item",
+			credential: { accessToken: credential },
+			input: { queueItemId: 3831811 },
+		}),
+		(error: Error & { providerStatus?: number }) => error.providerStatus === 404,
+	);
+
+	const timedOut = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		throw Object.assign(new Error("aborted"), { name: "AbortError" });
+	});
+	await assert.rejects(
+		timedOut.execute({
+			action: "jenkins-release.get_job",
+			credential: { accessToken: credential },
+			input: { jobFullName: "EP/build_all" },
+		}),
+		(error: Error & { providerUnavailable?: boolean }) =>
+			error.providerUnavailable === true,
+	);
 });
