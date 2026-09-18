@@ -23,7 +23,7 @@ GitHub 原生依赖是执行图权威，Issue 的 `Blocked by` 和本图只投�
 | 层次 | 唯一验收入口与 Owner | 准入和环境 | 完成证据与可复现条件 |
 | --- | --- | --- | --- |
 | L1 主系统本地可测 | [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194)，@LichKing-2234 | §3 的未完成集合交付；本地 PostgreSQL、kind、正式 Web/API/Worker/RuntimeHost 装配、合成身份和 schema-conformant Fake Connection | #194 的四条完整旅程、准确源码与镜像、执行命令和脱敏 artifact；同时回读 #403 已合入的持久化修复及 #415/#404/#405/#406 的最终版本证据。仅组件测试、healthz 或 Fake Driver 不证明真实 Codex 装配 |
-| L2 双系统真实 GitHub 内部 Pilot | §5 的唯一联合验收 primary Issue 待建立；总验收 Owner 建议 @LichKing-2234，待 #150 确认 | L1 通过，#395 Connection readiness、#171 的 ACK 资源真实验证证据和 #177 的环境/参与者准备记录齐备；§4 合约互验和 §5 人数冲突先收口；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | 新验收票保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、HLD §§15–16 和 #149，完成真实观察与全部具名签收 |
+| L2 双系统真实 GitHub 内部 Pilot | [#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)；总验收 Owner 由 #150 确认 | L1 通过，Connection readiness、ACK 资源真实验证和环境/参与者准备记录齐备；Platform Worker/Agent 在 ACK，Connection 在具名 LA3 HCI | #435 保存两系统版本、镜像、迁移、配置版本、受控账号/仓库和 `callId`/PR 证据；逐项回读两份 PRD、Connection HLD §§9–13 和 #149，完成真实观察与全部具名签收 |
 | L3 完整 M1 上线 | #150 负责毕业 §6 的实施及最终验收票；总验收 Owner 建议 @LichKing-2234，待确认 | L2 通过，完整 PRD 场景全部获得唯一实施票、Owner、上线环境和安全/运维资源窗口 | 最终验收票逐行映射 Platform PRD §14、Connection PRD 的适用要求及工程 Spec §24；每行有版本、自动验证、真实环境验证和人工结论，无失败或未验证硬门禁 |
 
 总验收 Owner 负责收齐证据并记录最终结论，不代签其他角色。
@@ -37,6 +37,8 @@ L2 必须分别有 Platform Owner、Connection Owner、Security、SRE 和 Pilot 
 
 ## 3. 当前依赖与最小未完成集合
 
+本计划早期快照中的 `#398 → #186` delegated 依赖已被独立 Direct MCP/API 架构替代。下方保留的旧票、旧 Schema 和旧 Gateway 文字只用于历史迁移审计，不构成当前执行图或实现授权；当前 Connection 权威以 Connection PRD/HLD 及独立运行系统为准。
+
 状态必须分开记录：**规划已定**表示决策完成；**实现完成**表示有 main 合并产物；
 **本地验证**和**真实环境验证**分别需要对应版本的可复现证据；
 **待人工确认**用于设计、资源、风险接受或验收签收。Issue closed 本身不证明后三项。
@@ -44,7 +46,7 @@ L2 必须分别有 Platform Owner、Connection Owner、Security、SRE 和 Pilot 
 ```mermaid
 flowchart TB
     D["规划已定：#149 / #152 / #178"] -.-> PLAN["#150 汇合：待确认"]
-    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> G["#186 Platform Tool Gateway / assertion：未完成"]
+    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> DIRECT["Direct MCP/API：Connection 独立交付"]
     BASE --> K["#190 Kubernetes 调谐：未完成"]
     UI["#389 shadcn/ui：未完成"] --> W["#192 对话 Web：未完成"]
     DESIGN["#400 原型：待人工确认"] --> W
@@ -53,21 +55,13 @@ flowchart TB
     STATUS --> BOOT["#406 Codex 镜像装配：未完成"]
     SCAN["#405 扫描：未完成"] --> LOCAL["L1 #194：待本地验证"]
     BASE --> LOCAL
-    G --> LOCAL
     K --> LOCAL
     W --> LOCAL
     UI --> LOCAL
     PERSIST --> LOCAL
     ISO --> LOCAL
     BOOT --> LOCAL
-    DOC["#393 权威文档：已合入 #408"] --> CONTRACT["#398 Connection contracts：未完成"]
-    BASE --> CONTRACT
-    CONTRACT --> STORE["#399 Core / Store：未完成"]
-    DOC --> STORE
-    CONTRACT --> PROVIDER["#396 GitHub：未完成"]
-    DOC --> PROVIDER
-    CONTRACT --> LOGIN["#390 LDAP：未完成"]
-    STORE --> LOGIN
+    DOC["#432 Direct MCP 文档：Connection 独立交付"] --> DIRECT
     DOC --> LOGIN
     CONTRACT --> VERIFY["#391 verifier：未完成"]
     STORE --> VERIFY
@@ -109,21 +103,16 @@ flowchart TB
 | Issue | 当前直接原生前置 |
 | --- | --- |
 | #150 | #152、#178（均 completed） |
-| #186 | #252、#275、#276、#277、#278、#285、#286、#287、#288、#320（completed）；#398（open） |
+| #186 | `not_applicable`：旧 Platform Tool Gateway 由独立 Direct MCP/API 替代 |
 | #190 | #181、#188、#189、#256、#257、#275、#276、#277、#278、#285、#286、#287、#288（均 completed） |
 | #192 | #251、#253、#321（completed）；#389、#400（open） |
-| #194 | #193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324、#403（completed）；#186、#190、#192、#389、#404、#405、#406（open） |
+| #194 | #193、#285、#286、#287、#288、#317、#318、#319、#320、#321、#322、#323、#324、#403（completed）；#190、#192、#389、#404、#405、#406（open） |
 | #389、#400、#403、#405 | 无 |
 | #415 | #403（completed） |
 | #404、#406 | #403（completed）；#415（open） |
-| #398 | #252、#393（均 completed） |
-| #399、#396 | #393（completed）、#398 |
-| #390 | #393（completed）、#398、#399 |
-| #391 | #252（completed）、#398、#399 |
-| #392 | #391、#396、#398、#399 |
-| #394 | #396、#398、#399 |
-| #397 | #390、#392、#394、#396、#398、#399 |
-| #395 | #390、#391、#392、#394、#396、#397 |
+| #398 | `not_applicable`：Connection Direct MCP/API 已由独立系统交付 |
+| #399、#396、#390、#391、#392、#394、#397 | `outside_platform_plan`：独立 Connection 系统的历史实施图；不作为 Platform 或 #435 的原生前置 |
+| #395 | `outside_platform_plan`：独立 Connection readiness 票；不作为 Platform 或 #435 的原生前置 |
 | #171、#177 | #149（completed） |
 
 ### #171 ACK 资源准备边界
@@ -137,68 +126,44 @@ Implementation AC 需要再建立文档或实现契约才可继续资源准备�
 RBAC、网络隔离、存储、DNS/TLS 和入口证据仍缺失。L2 只消费这些可回读的实际环境证据，
 不能以 #171 开放、标签、resource handoff 或本地 kind 结果代替。
 
-### Connection HCI 历史证据与当前实施
+### Connection HCI 历史证据与独立系统回读
 
 [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 保持 open，作为待替代的
 历史 HCI 证据，不是已交付的 Connection readiness，也不承接当前联合验收。根据
 [#402 的协调验收](https://github.com/AgoraIO-Extensions/agent-infra/issues/402)，旧 HCI Issue、
 历史分支、tag 和开放 PR 只能在替代内容合入后关闭；本计划不授权关闭、重启或部署 #301。
 
-当前 Connection 实施仍由 @guoxianzhe 负责：[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)
-是 open 的 HCI readiness 票，尚未交付，直接受 #390、#391、#392、#394、#396、#397 六张
-open 实施票阻塞；[#402](https://github.com/AgoraIO-Extensions/agent-infra/issues/402) 仍是 open 的
-十票协调入口，不是 primary Implementation Issue、代码 PR 或跨系统验收入口。两者的当前进展
-不能由 #301 的保留状态推断，也不能把 #301 计为已完成。
+[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395) 和
+[#402](https://github.com/AgoraIO-Extensions/agent-infra/issues/402) 是独立 Connection
+系统的历史 readiness/协调入口，不是 Platform primary Implementation Issue、代码 PR 或跨系统
+验收入口。线上 Direct MCP/API 的可消费性以独立系统回读为准；不能由这些 Issue 的 open 状态、
+Issue #301 的保留状态或历史依赖图推断当前 runtime 是否已交付。
 
-Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 仍按 Connection PRD §14
-排除在首个 GitHub Pilot 与当前 #395 范围外。本计划不恢复这些历史范围，也不授予任何
-Connection 实现、退休或 HCI 部署权限。
+Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 已由独立 Connection
+系统交付；本计划只记录其与 Platform 联合验收的边界，不复制 Connection 实现、授权或审计。
 
-L1 的最小未完成闭包是 **#186、#190、#192、#194、#389、#398、#400、#404、#405、#406、#415**。
+L1 的最小未完成闭包是 **#190、#192、#194、#389、#400、#404、#405、#406、#415**；Connection 独立系统不计入 Platform L1 闭包。
 其中 #400 经 #192 间接阻塞 #194，不能只看 #194 的直接依赖而漏掉人工设计确认。
 独立回读确认：#186 在 `2026-09-07T13:07:51Z` 已将 #398 同时写入正文和
 原生 `blocked_by`；这是当前执行图的已落盘状态，不是本计划提出的候选边。L1 因此也消费
-Connection 新契约，但不等待 Connection runtime 或 #402 全部完成。#398 仍为 open，
-由 @guoxianzhe 唯一交付；本计划不重复建票、接管 Connection 或授权 #186 实现。
+Connection 新契约，但不等待 Connection runtime 或 #402 全部完成。#398 与 #186
+保留为历史迁移索引；本计划不重复建票、接管 Connection 或授权旧 Gateway 实现。
 组件迁移 #389 与原型 #400 独立推进；#403 已完成持久化修复，#415 是 #404 与 #406 当前未完成的原生前置；#190/#322 不增加 Codex 修正票依赖。
 本地验收 #194 复用组件完整矩阵，只新增自身四条整装旅程，不复制 #404 的原生数据隔离矩阵。
 
-当前代码证据包括 [delegated Schema](../../packages/contracts/src/pilot/delegated.ts)、
-[RuntimeHost 正式入口](../../apps/agent-runtime-host/src/index.ts)、
+当前代码证据包括 [RuntimeHost 正式入口](../../apps/agent-runtime-host/src/index.ts)、
 [Worker 装配](../../apps/platform-worker/src/index.ts) 和
 [本地 topology 测试](../../tests/local-topology.mjs)。
-它们分别证明已有契约、Fake-only 环境入口、组件装配与本地测试入口；
-不能证明 #186/#190 完成、正式 Codex 镜像已启动或 ACK/HCI 联合通过。
+线上 Connection Direct MCP 入口及其 OAuth metadata 另行证明入口可消费；这些证据不能证明
+Platform 与 Connection 的联合 Pilot、正式 Codex 镜像或 ACK/HCI 联合通过。
 
-## 4. Delegated 合约汇合
+## 4. 旧 delegated 路线处置
 
-适用 HLD 条款为 §§5–7、9–10、14–16；工程 Spec §§6.4、9.3、13、15.3、19.2。
-文档交付 #393/#408 已将新决策写入权威文档。下一步必须先由 #398 明确 wire 兼容策略、
-Platform 和 Connection 消费方完成评审，再进入真实签发、#391/#392 的生产路径实现。
-当前 #186 的 Fake 工作也已原生依赖 #398，但这条依赖本身不扩大其 Scope/AC。
-不得只把字段放进 fixture、环境变量或部署说明绕过门禁。
+`#398 → #186` 是早期 delegated 执行图，当前标记为 `not_applicable`。独立 Connection 现在通过 Direct MCP/API 提供 OAuth、Consumer/Actor Grant、Catalog、Provider Action、调用、未知结果和审计；Platform 不代理调用、不签发 Connection 授权、不读取 Connection DB。
 
-| 差异或交接 | 唯一现有 Issue 边界 | 通过证据 |
-| --- | --- | --- |
-| 现有 #252 `ExecutionGrantClaimsV1Schema` 绑定 Runtime Execution，但没有独立 delegated Principal evidence、Consumer/Instance、一次性 `jti`、参数摘要、deadline、recovery generation 和 policy fence 绑定 | #398 是唯一的通用 wire contract owner，发布版本化 Schema、生成产物、consumer Fake 和 tests；Platform 与 Connection 消费方评审，不重开 #252 或另写第二套 DTO | 同一生成产物上的签发/验签双方正负 contract tests、版本与兼容性评审；Runtime Execution Grant 不能被直接宣称为已满足新 assertion |
-| Platform 当前授权、稳定身份映射、签发与 `callId`，以及撤权先停止签发/关闭 route、持久同步 fence、确认后恢复 | [#156](https://github.com/AgoraIO-Extensions/agent-infra/issues/156) 已将 Platform policy、assertion 和 `callId` 边界交给 #186。#186 的 Fake Connection 是 schema-conformant 外部测试替代；剩余真实 HTTP / policy-fence command 增量只能作为 #186 的既有 Scope/AC 澄清，经 #398 消费方评审后决定，不创建第二个 Gateway、issuer、auth 或 DTO owner | 与 #391 的相同 claim/参数/幂等绑定互验；Connection 不可用时 route 保持 fail closed，恢复先同步 fence；Platform 不读取 Connection DB |
-| Connection 验签、workload-to-Actor、同事务 `jti`/Call、dispatch 前 current Grant/fence 和未知写结果 | #391 保持 verifier，#399 保持持久权威，#392 保持 dispatch/reconcile/revoke；policy-fence command 的接收、持久化和 dispatch-time 覆盖须由 Connection Owner 在这些既有边界中明确，不假定 #391 已拥有 handler；均消费 #398 | PostgreSQL 并发、篡改、相同重放、撤权竞态与响应丢失证据；不能用 #186 的 Fake 回包替代 |
-| Catalog 与 Owner 配置、独立 Connection Web 的 OAuth/Grant 双确认 | #398 定义公开契约，#394 实现 Catalog，#397 实现 Connection 管理页面；Platform 消费方评审 | `catalog:read` 不能调用 Action；Runtime 不选 Connection；两个产品入口独立；缺失 Platform 消费实现先由 #150 确认归属，不能由 #194 顺手实现 |
+旧 `ExecutionGrant`、delegated assertion、Platform Tool Gateway、PlatformPolicyFence 和旧 Fake 只保留迁移审计与负向回归用途。不得据此恢复旧 Gateway、issuer、policy fence 或第二套 Connection DTO。
 
-上述差异是已证实的契约消费缺口，不是已证明运行中的越权漏洞。
-原生边 #398 -> #186 已在 #186 的 `2026-09-07T13:07:51Z` 更新中落盘，且当前正文与
-原生关系一致；本计划只记录这一耐久的当前状态，不删除、重写或新增该边。该边本身不修改
-现有 #186 的 Scope/AC。Fake Connection 表示 schema-conformant 外部测试替代，不表示可以继续使用
-过期 wire contract，也不构成新 Gateway/issuer/auth/DTO 的授权。
-
-### 4.1 现有 Issue 的待评审增量
-
-现有 #186 是 #156 确定的唯一 Platform policy/assertion/`callId` 边界，#398 是唯一通用 wire
-contract 边界。剩余的人为 Scope 选择仅限真实 HTTP 与 policy-fence command 增量：先由 #398
-提供同一版本的 Schema、生成产物、consumer Fake 和测试，再由 Platform 与 Connection Owner
-决定这些增量如何写入 #186、#391、#399、#392 的既有 Scope/AC。不得创建竞争性 Platform
-Gateway、issuer、auth 或 DTO Issue，也不得把尚未通过消费方评审的增量宣称为已交付。
-在上述既有 Issue 澄清与消费方评审完成前，L2 不具备可授权执行图。
+Platform 与 Connection 的真实关联由联合验收入口 `#435` 负责：Platform 绑定自身 Execution、工具操作和 attempt，再从同一次受信 Direct MCP 请求/响应取得 Connection 生成的调用引用。两侧分别授权查询；缺失或无法核实的关联保持未核实。
 
 ## 5. 真实 Pilot 的新增门禁
 
@@ -211,7 +176,7 @@ Gateway、issuer、auth 或 DTO Issue，也不得把尚未通过消费方评审�
 | 证据 | 当前文字 | 对 L2 的约束 |
 | --- | --- | --- |
 | [Platform PRD §9](https://github.com/AgoraIO-Extensions/agent-infra/blob/4e6e1fa456f1712b81d9cc4ac4ad765106ecd811/docs/prd/PRD-agent-platform-M1.md#L262) | 首个受监督 Connection Pilot 仅使用 Codex、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库 | 正向 Connection 执行只有两个测试用户/账号 |
-| [Connection PRD §13](https://github.com/AgoraIO-Extensions/agent-infra/blob/4e6e1fa456f1712b81d9cc4ac4ad765106ecd811/docs/prd/PRD-connection-M1.md#L169-L184) | 两个 LDAP 测试用户分别绑定两个专用 GitHub 账号；唯一成功声明固定为两个 Principal/账号 | 不允许第三个正向 Principal、账号或成功声明 |
+| [Connection PRD §10](../prd/PRD-connection-M1.md#10-首个-github-pilot-验收) | 两个 LDAP 测试用户分别绑定两个专用 GitHub 账号；唯一成功声明固定为两个 Principal/账号 | 不允许第三个正向 Principal、账号或成功声明 |
 | [#149 Resolution 的 Pilot 范围与真实使用观察](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) | 3–5 名内部员工；3–5 名参与者持续 5 个工作日，每人至少一次真实 Codex + GitHub PR，总计不少于 10 次任务 | 人数与 PRD 冲突；5 个工作日和不少于 10 次任务本身不冲突 |
 | [#177 的 `## Question`](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) | 准备 3–5 名正向参与者，并确认参与者、5 个工作日窗口和不少于 10 次真实任务 | 资源票不能自行扩大 PRD 所限的正向执行主体 |
 | [#150 的已确认收口范围与 2026-09-07 汇合审查](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 参与人数、工作日观察和任务要求引用 #149 | 该引用不能在未决状态下选择性覆盖两份 PRD |
@@ -237,7 +202,6 @@ Owner 只能作出下列一项明确选择：
 | 受影响 Issue 段落 | 仅在 Owner 决策后的提议变更 | 不在本 PR 中执行 |
 | --- | --- | --- |
 | [#149 Resolution：`### Pilot 范围`](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) 与 `### 真实使用观察` | 若确认推荐结论，将 3–5 名正向执行员工/参与者修订为两个正向执行 Principal/专用账号；保留 5 个工作日和不少于 10 次任务 | 不改写已关闭决议，不降低观察或任务要求 |
-| [#177：`## Question`](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) 的第一项和最后一项 | 将“3–5 名正向参与者”改为两个正向执行 Principal/账号；matrix 另列签收角色和负向身份 | 不关闭 #177，不填写 roster、窗口或任务日期 |
 | [#150：`## 已确认的收口范围` 与 `## 2026-09-07 汇合审查`](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 记录 Owner 的选择，并使 L2 草案只引用已对齐的执行主体、观察期和任务要求 | 不把本计划提案当作已确认结论或创建执行授权 |
 
 决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可创建 §5.2 的联合验收票并安排
@@ -265,19 +229,19 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 跨系统真实验收。
 因此只提出一个新 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。
-创建及原生依赖落盘仍等待 §4 的 #186/#398 既有边界澄清与消费方评审，以及 §5.1 的范围确认。
+创建及原生依赖落盘仍等待 §5.1 的范围确认；#435 是跨系统真实验收入口，不承接旧 #398/#186 的实现。
 
 | 契约章节 | 待创建正文 |
 | --- | --- |
 | Problem | Fake 主系统与 Connection-side readiness 不能证明真实双系统授权、写操作、恢复和观察期通过 |
 | Scope | 以正式运行装配验证两系统、ACK/HCI 网络与身份映射；执行权威真实矩阵和确认后的观察期；复用组件证据；不实现缺失产品能力、不部署未批准环境 |
 | AC-1 | 输入证据全部绑定本次 main commit、两系统镜像、migration、配置版本和具名环境；#194/#395 有对应通过记录，#171 的 ACK 资源实际验证与 #177 的准备记录已回读，错误或缺失输入拒绝开始 |
-| AC-2 | Connection PRD §13、HLD §§15–16 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、双层撤权、未知结果与清理全部有可回读结果 |
+| AC-2 | Connection PRD §10、HLD §§9–13 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、双层撤权、未知结果与清理全部有可回读结果 |
 | AC-3 | #149 的完整申请创建、Owner 配置、真实 Codex、SSE/进程/Pod 恢复及 A/B/C 升级回滚，在本次组合版本通过；不得用预置 Agent、Fake Connection 或不同版本组件报告替代 |
 | AC-4 | 经范围确认的参与者完成 #149 规定的观察；每人任务、总任务数、工作日与故障处置有脱敏记录；任一硬门禁失败立即 No-Go，修复后重验受影响组合 |
 | AC-5 | 五方具名签收、最终 Go/No-Go 和允许的成功声明在票内回读；测试 PR/branch/Token 清理由测试资源 Owner 按 HLD 执行，保留 Call/Effect/Dispatch/审计 |
 | Validation | 自动矩阵命令、预期结果、真实 GitHub PR/call 关联、环境故障与回滚、观察记录、签收链接和仓库完整验证；所有记录脱敏，不保存 Token、assertion、密码或普通会话正文 |
-| Blocked by | #194、#395，以及 #186 的既有 Scope/AC 澄清、#398 版本化契约与相应消费方评审；#171/#177 的通过记录在 AC-1 显式验收，#150 先完成规划决定；不依赖 #402 的父票关闭 |
+| Blocked by | #194、#395、#171、#177 的实际通过记录和 #150 的规划决定；不依赖旧 #398/#186，也不依赖 #402 的父票关闭 |
 
 仅在上述决策确认、票正文和原生边回读一致后，该草案才能成为最终执行入口。
 规划票 #150 不反向依赖这张实施票，避免“规划等待实施、实施等待规划”的环。
@@ -295,12 +259,12 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | 平台托管企微及按发送者隔离；Platform PRD §10、§14 | #150；企微 Channel 接入与真实验收票 | 企业应用/回调资源、身份映射、参与者、群聊负向矩阵 |
 | 附件、结果文件及历史；Platform PRD §12、§14，已由 #165 明确延后 | #150；文件/对象存储契约决策后毕业端到端文件能力票 | bucket/role、短期 URL、扫描、保留、容量和多用户原生隔离证据 |
 | 自定义 Agent、Base Image、自有入口与 Generic ACP 平台入口；Platform PRD §5、§14 | #150；自定义 Agent 准入与入口验收票，消费既有 Registry/Workload 实现 | 可继承 Base Image、真实样例镜像、两种身份入口与升级回滚矩阵 |
-| 公司共享 Connection 的真实组织范围；Connection PRD §7.2、§11、§14 | #150；共享 Connection 范围确认后毕业真实组织授权/管理员验收票 | 真实组织/账号、管理员资格、跨组织负向和授权复核 |
+| 公司共享 Connection 的真实组织范围；Connection PRD §11 | #150；共享 Connection 范围确认后毕业真实组织授权/管理员验收票 | 真实组织/账号、管理员资格、跨组织负向和授权复核 |
 | LDAP 离职状态与正式停权 | [#388](https://github.com/AgoraIO-Extensions/agent-infra/issues/388) 保持唯一调研入口，不作为当前受监督 Pilot 前置 | 权威 active-state、责任人和停权时效；不是“条目仍存在”证明在职 |
 | 正式 LDAP TLS/时序、KMS/Secret、唯一受控 egress、容量、HA/PITR、值班与推广；HLD §§5、14，工程 Spec §§17、19、21、24 | #150；生产化契约与资源决定后按可独立验收边界毕业加固票，最终 M1 上线验收另有唯一入口 | Security/SRE/DBA、产品 Owner、资源和发布窗口；关闭具名明文 LDAP 例外 |
 
-Bitbucket/Jira/Confluence/Outlook、Direct MCP/PAT/Connection OAuth Server 等按
-Connection PRD §14 留待独立产品批次，不自动变成本次完整 M1 的新增必交 Provider。
+Bitbucket/Jira/Confluence/Outlook 等按 Connection PRD §11 留待独立产品批次；Direct MCP、
+PAT 和 Connection OAuth Server 已属于当前独立系统边界，不自动变成本次完整 M1 的新增必交 Provider。
 Platform PRD §15 的 Eval、Skill Hub、统一 Sandbox、多 Agent、删除、API/Webhook/定时任务
 和主动通知仍在 Roadmap，不纳入上述 M1 票。
 
@@ -313,8 +277,8 @@ Platform PRD §15 的 Eval、Skill Hub、统一 Sandbox、多 Agent、删除、A
 
 | 工作包 | DRI / 现有入口 | 估期所需输入 |
 | --- | --- | --- |
-| L1 五条流和六项修正及新契约 | @LichKing-2234 负责十张 Platform 票，@guoxianzhe 负责 #398 | 各票剩余实施/测试量与实际并发能力；#398 消费方评审、#400 人工设计、#415 后 #404/#406、#405 报告与修复分支 |
-| Connection contract-first DAG | @guoxianzhe，#402 下九张未完成实施票 | #398 消费方签收，再估 Store/Provider、身份/verifier、Effect/Catalog、Web、HCI 的关键路径 |
+| L1 五条流和六项修正及新契约 | @LichKing-2234 负责 Platform 票 | 各票剩余实施/测试量与实际并发能力；#400 人工设计、#415 后 #404/#406、#405 报告与修复分支 |
+| Connection readiness | 独立 Connection 系统 Owner | 只回读独立系统的发布版本、HCI readiness 和授权/审计证据，不在 Platform 计划中估算或拆票 |
 | 跨系统资源与验收 | #171/#177 的 @LichKing-2234；#395 的 @guoxianzhe | ACK/HCI 联通、身份映射、专用账号、模型配额、五方可用时间和 §5.1 决定 |
 | 完整 M1 剩余交付 | #150；#388 当前未分配 | §6 逐项形成完整 primary Issue、DRI、上线验证资源后才排期 |
 
@@ -324,7 +288,7 @@ L2 从 L1、Connection readiness、资源和合约确认的完成窗口取最晚
 共享 DRI 的任务必须按其实际容量排队，人工评审和失败修复单独计入。
 
 本次回读发现 #171/#177 仍是 Todo 却投影为 08-31 至 09-04，
-调谐与 Gateway #186/#190 为 10-09 至 10-22，#192 为 09-25 至 10-08，#194 为 10-23 至 11-05，
+历史调谐/Gateway #186/#190 记录为 10-09 至 10-22，#192 为 09-25 至 10-08，#194 为 10-23 至 11-05，
 规划票 #150 为 09-28 至 10-02。这些日期没有新的工作量或窗口依据，已清除未发生的 Start 和 Target。
 本次 #150 记录实际规划开始日 2026-09-07，Status 为 In Progress，Target 留空；其他票只按真实活动更新
 Status，不能因原生无 blocker、assignee 已有或父票关闭而标记 In Progress/Done。
@@ -339,14 +303,14 @@ Platform 现有票保留 `M1 - Agent Platform Pilot` milestone；#402 及其未�
 
 规划票 #150 只有在以下事项全部记录后才可关闭，文档 PR 合入本身不替代这些条件：
 
-- §4 的 #186 既有 Platform 边界、#398 通用 wire contract 及真实 HTTP/policy-fence 增量完成消费方评审；不得建立竞争性实现票。
+- §4 的历史迁移处置已被评审；不得恢复 #186 Gateway、#398 delegated contract 或建立竞争性实现票。
 - §5.1 的产品范围差异完成权威文档评审，L2/L3 总验收 Owner 与必要签收责任得到确认。
 - 唯一联合验收票有完整正文、稳定 AC、原生 dependencies 和 milestone；完整 M1 待毕业范围有唯一归属及待估原因。
 - 对应开放票的 Status、Start/Target、Milestone 按证据投影；真实日期缺少依据时为空。
 - 再次读取 #150、涉及票正文、原生边和 Project；检查投影一致、无漏票、无重复交付、无环、无虚假完成。
 
 本轮已回读 §7 的 Project 日期、Status 和 milestone 更新；本 PR 未修改原生依赖。
-最终快照已吸收并发新增的 #398 -> #186，以及 #403 已完成、#415 为 #404/#406 当前原生前置的状态，24 张相关票的正文和原生边一致，L1 未完成闭包为十一票。
+最终快照已吸收并发新增的 #398 -> #186 历史边，以及 #403 已完成、#415 为 #404/#406 当前原生前置的状态；Platform L1 闭包只保留本系统未完成票，Connection 由独立系统和 #435 负责真实关联验收。
 执行图尚未最终收口的原因是 §4/§5 的待决项，不能将这些投影修正记为完整规划通过。
 
 可复现回读入口：
