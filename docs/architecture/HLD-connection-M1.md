@@ -33,7 +33,7 @@ flowchart LR
 
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
 
-Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer 的 OAuth Authorization Code + PKCE 安装流程或获准 PAT 访问。每个 ConsumerInstance 必须绑定安装级公钥；OAuth access token 必须通过 DPoP、mTLS 或等价机制绑定该公钥，PAT 必须是该安装独立的高熵凭据。签发、兑换和每次调用时都必须验证安装持有权、ConsumerInstance 绑定及撤销状态，调用方不得仅提交或选择 ConsumerInstance 标识。Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，无法验证安装绑定或唯一解析主体时，在签发凭据和每次调用前均拒绝。Connection 必须在每次调用时验证 token/PAT 的签名或 hash、issuer、audience、scope、有效期、Principal、Consumer、ConsumerInstance、Actor（如适用）及 recovery generation，并在 ConsumerInstance 或授权撤销后拒绝旧凭据。
+Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer 的 OAuth Authorization Code + PKCE 安装流程或获准 PAT 访问。每个 ConsumerInstance 必须绑定安装级公钥；OAuth access token 必须通过部署明确选定且可互操作验证的 sender-constrained 方案绑定该公钥；MCP/API 默认使用 DPoP，仅在明确配置并验证客户端证书时使用 mTLS；授权码兑换、刷新和每次调用都必须验证安装私钥持有权，不得接受未绑定安装的 bearer access token。PAT 必须是该安装独立的高熵凭据，签发和每次调用都必须验证已注册 ConsumerInstance 的安装绑定及撤销状态，调用方不得仅提交或选择 ConsumerInstance 标识。Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，无法验证安装绑定或唯一解析主体时，在签发凭据和每次调用前均拒绝。Connection 必须在每次调用时验证 token/PAT 的签名或 hash、issuer、audience、scope、有效期、Principal、Consumer、ConsumerInstance、Actor（如适用）及 recovery generation，并在 ConsumerInstance 或授权撤销后拒绝旧凭据。
 
 ## 4. 部署与模块
 
@@ -119,7 +119,7 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 | `github.list_my_repositories` | READ | 只允许受控仓库范围 |
 | `github.create_pull_request` | WRITE | 绑定稳定 repository/head/base 和幂等约束 |
 
-只使用专用测试账号和一个受控 private 仓库。repository allowlist 必须绑定 GitHub immutable numeric repository ID 及固定 owner，不能只按名称或 `owner/repo` 字符串匹配；仓库重命名、转移、ID 不一致或身份无法确认时，WRITE Action 拒绝执行。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
+只使用专用测试账号和一个受控 private 仓库。repository allowlist 必须绑定 GitHub immutable numeric repository ID 及固定 owner，不能只按名称或 `owner/repo` 字符串匹配；仓库重命名、转移、ID 不一致或身份无法确认时，WRITE Action 拒绝执行。GitHub OAuth 只允许固定的最小 scope（`read:user`、`repo`）；不得请求或接受 `user:email`、`workflow`、`delete_repo` 等额外权限。Connection 必须在 OAuth 回调、Token 刷新和每次 Provider 调用前校验实际 scope；scope 缺失或扩大时 fail closed。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
 
 ## 10. 明确失败与未知结果
 
