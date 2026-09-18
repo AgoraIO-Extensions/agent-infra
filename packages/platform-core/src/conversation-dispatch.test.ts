@@ -460,6 +460,50 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("unknown");
 	});
 
+	it("rejects metadata recovery when Runtime status contradicts the committed execution", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Unexpected dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: request.hostSessionRef,
+					executionId: request.executionId,
+					outcome: "found",
+					status: "failed",
+				};
+			},
+			async *events() {
+				yield* [];
+				throw new Error("Unexpected event drain");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "completed",
+				hostSessionRef: "host-original",
+				runtimeCursor: "cursor-committed",
+				metadataRecovery: {
+					id: "metadata-recovery-1",
+					requestedAt: 1,
+					originalStatus: "succeeded",
+				},
+			}),
+		);
+		const { useCase, events } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(events.persisted).toHaveLength(0);
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_STATUS_CONFLICT");
+	});
+
 	it.each(["capacity_wait", "capacity_unavailable"] as const)(
 		"preserves unreserved submitted work when preparation reports %s",
 		async (capacity) => {

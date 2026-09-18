@@ -1908,6 +1908,29 @@ export function createConversationDispatchUseCaseV1(
 							"RUNTIME_ACCEPTANCE_UNKNOWN",
 							true,
 						);
+					const expectedStatus = (() => {
+						switch (claim.executionStatus) {
+							case "completed":
+							case "failed":
+							case "cancelled":
+								return claim.executionStatus;
+							default:
+								return unavailable();
+						}
+					})();
+					if (result.status !== expectedStatus) {
+						if (!(await recoveryHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						const finished = await dependencies.store.finish({
+							claim,
+							status: "failed",
+							transition: {},
+							errorCode: "RUNTIME_STATUS_CONFLICT",
+						});
+						return finished
+							? { schemaVersion: 1, outcome: "rejected" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
 					if (!(await recoveryHeartbeat.stop()))
 						return { schemaVersion: 1, outcome: "stale" };
 				} catch {
