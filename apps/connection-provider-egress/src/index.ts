@@ -5,6 +5,7 @@ export type {
 	WorkloadAuthenticator,
 } from "./app";
 export { createProviderEgressApp } from "./app";
+export { createMtlsBoundFetch, mtlsWorkloadAuthenticator } from "./mtls";
 export type { JsonValue, SignedEnvelopeV1 } from "./protocol";
 export {
 	canonicalJsonV1,
