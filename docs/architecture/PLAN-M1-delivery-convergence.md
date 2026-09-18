@@ -88,9 +88,9 @@ flowchart TB
 | #389、#400、#403、#405 | 无 |
 | #415 | #403（completed） |
 | #404、#406 | #403（completed）；#415（open） |
-| #398 | `not_applicable`：Connection Direct MCP/API 已由独立系统交付 |
-| #399、#396、#390、#391、#392、#394、#397 | `outside_platform_plan`：独立 Connection 系统的历史实施图；不作为 Platform 或 #435 的原生前置 |
-| #395 | `outside_platform_plan`：独立 Connection readiness 票，不属于 Platform 实施图；其实际通过记录仍是 #435 的准入前置 |
+| #398 | `not_applicable`：旧 delegated contract 已被独立 Connection Direct MCP/API 契约替代，不作为当前实现入口 |
+| #399、#396、#390、#391、#392、#394、#397 | `outside_platform_plan`：独立 Connection 系统的历史实施图；不作为 Platform 原生前置，也不能证明当前 Direct MCP/API 已交付 |
+| #395 | `external_prerequisite`：独立 Connection readiness 入口；只有其通过记录绑定可回读的发布版本、Schema artifact 来源与校验值后，才满足 #435 的准入前置 |
 | #171、#177 | #149（completed） |
 
 ### #171 ACK 资源准备边界
@@ -210,8 +210,8 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 也不自身证明 ACK 资源已就绪。
 [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 是待替代的历史 HCI 证据，
 按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
-且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。没有现有票拥有
-跨系统真实验收。
+且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。除 #435 外没有其他票拥有
+跨系统真实验收；#435 已创建但仍等待准入条件。
 因此 #435 已是唯一的跨系统真实验收 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。其执行仍等待 §5.1 的范围确认，
 不承接旧 #398/#186 的实现。
