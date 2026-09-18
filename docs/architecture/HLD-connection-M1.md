@@ -120,7 +120,7 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 | `github.list_my_repositories` | READ | 只允许受控仓库范围 |
 | `github.create_pull_request` | WRITE | 绑定稳定 repository/head/base 和幂等约束 |
 
-只使用专用测试账号和一个受控 private 仓库。repository allowlist 必须绑定 GitHub immutable numeric repository ID 及固定 owner，不能只按名称或 `owner/repo` 字符串匹配；仓库重命名、转移、ID 不一致或身份无法确认时，WRITE Action 拒绝执行。GitHub OAuth 只允许固定的最小 scope（`read:user`、`repo`）；不得请求或接受 `user:email`、`workflow`、`delete_repo` 等额外权限。Connection 必须在 OAuth 回调、Token 刷新和每次 Provider 调用前校验实际 scope；scope 缺失或扩大时 fail closed。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
+只使用专用测试账号和一个受控 private 仓库。repository allowlist 必须绑定 GitHub immutable numeric repository ID 及固定 owner，不能只按名称或 `owner/repo` 字符串匹配；仓库重命名、转移、ID 不一致或身份无法确认时，WRITE Action 拒绝执行。GitHub OAuth 必须使用 repository-scoped 授权；若具名部署只能使用经典 `repo` scope，则启动门禁必须证明两个专用测试账号没有其他 private repository，并持续以 immutable numeric repository ID allowlist 限定调用目标。不得请求或接受 `user:email`、`workflow`、`delete_repo` 等额外权限。Connection 必须在 OAuth 回调、Token 刷新和每次 Provider 调用前校验实际 scope；scope 缺失或扩大时 fail closed。OAuth scope、repository numeric ID、Action Schema 和 Provider endpoint 固定并可回读。其他 Provider/Action 不进入首个 Pilot。
 
 ## 10. 明确失败与未知结果
 
