@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { FileRuntimeStore } from "@agent-infra/agent-runtime";
@@ -46,8 +46,15 @@ async function readMountedFile(
 		fail();
 	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
+		// Re-resolve and compare the path after opening. Parsing always uses the
+		// already-open descriptor, so a later replacement cannot change the bytes.
+		const openedTarget = await realpath(path);
+		const pathInfo = await lstat(path);
 		const info = await handle.stat();
 		if (
+			openedTarget !== target ||
+			pathInfo.dev !== info.dev ||
+			pathInfo.ino !== info.ino ||
 			!info.isFile() ||
 			info.size === 0 ||
 			info.size > maximumBytes ||

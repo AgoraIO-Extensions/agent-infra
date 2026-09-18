@@ -5320,8 +5320,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				waiting.abort();
 			}
 		}
-		if (!prepared.replay && request.phase === "source-terminal")
-			await this.cancelModelTurn?.({ ...request.source, conversationKey });
+		if (!prepared.replay && request.phase === "source-terminal") {
+			try {
+				await this.cancelModelTurn?.({ ...request.source, conversationKey });
+			} catch {
+				// The native terminal receipt remains authoritative even if model cleanup
+				// is already closed or otherwise unavailable.
+			}
+		}
 		signal.throwIfAborted();
 		const saved = await this.update((state) => {
 			signal.throwIfAborted();
