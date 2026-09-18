@@ -42,11 +42,7 @@ export function ConversationMessages({
 	const liveExecutions = [
 		...new Set(
 			events
-				.filter(
-					(item) =>
-						item.type === "text.delta" &&
-						!renderedExecutions.has(item.executionId),
-				)
+				.filter((item) => !renderedExecutions.has(item.executionId))
 				.map((item) => item.executionId),
 		),
 	];

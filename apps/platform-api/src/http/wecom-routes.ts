@@ -116,10 +116,13 @@ export function registerWecomRoutesV1(
 			)
 				return context.text("Not found", 404);
 			let message: WecomMessageV1;
+			let replyRequest: Request;
 			try {
+				const callbackRequest = context.req.raw.clone();
+				replyRequest = context.req.raw.clone();
 				const callback = await dependencies.adapter.receive(
 					configuration,
-					context.req.raw,
+					callbackRequest,
 				);
 				if (callback.type === "challenge") return context.text(callback.text);
 				message = callback.message;
@@ -133,14 +136,14 @@ export function registerWecomRoutesV1(
 				if (result.outcome === "denied")
 					return dependencies.adapter.passiveReply(
 						configuration,
-						context.req.raw,
+						replyRequest,
 						message,
 						"暂无权限使用此 Agent",
 					);
 				if (result.outcome === "unavailable")
 					return dependencies.adapter.passiveReply(
 						configuration,
-						context.req.raw,
+						replyRequest,
 						message,
 						"Agent 当前不可用，请稍后重试",
 					);

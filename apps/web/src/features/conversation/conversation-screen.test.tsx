@@ -159,9 +159,11 @@ describe("functional conversation screen", () => {
 						})
 					: undefined,
 			);
-			const trigger = await screen.findByRole("button", {
-				name: entry === "timeline" ? "执行详情" : "核实原执行状态",
-			});
+			const trigger =
+				entry === "timeline"
+					? (await screen.findAllByRole("button", { name: "执行详情" }))[0]
+					: await screen.findByRole("button", { name: "核实原执行状态" });
+			if (!trigger) throw new Error("Missing execution detail trigger");
 			trigger.focus();
 			fireEvent.click(trigger);
 			const heading = await screen.findByRole("heading", { name: "执行详情" });
@@ -680,5 +682,28 @@ describe("functional conversation screen", () => {
 				),
 			).toBe(true),
 		);
+	});
+
+	it("renders executions that only have lifecycle events", async () => {
+		const status = {
+			...event(1),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "failed" as const },
+		};
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? Response.json({
+						...history("conversation-1", [status]),
+						conversation: {
+							...history().conversation,
+							status: "active",
+						},
+						messages: [userMessage()],
+					})
+				: undefined,
+		);
+		await screen.findByText("执行失败");
+		expect(screen.getAllByRole("button", { name: "执行详情" })).toHaveLength(2);
 	});
 });
