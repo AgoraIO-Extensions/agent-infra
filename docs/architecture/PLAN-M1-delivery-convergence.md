@@ -112,11 +112,12 @@ RBAC、网络隔离、存储、DNS/TLS 和入口证据仍缺失。L2 只消费�
 [#402 的协调验收](https://github.com/AgoraIO-Extensions/agent-infra/issues/402)，旧 HCI Issue、
 历史分支、tag 和开放 PR 只能在替代内容合入后关闭；本计划不授权关闭、重启或部署 #301。
 
-[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395) 和
-[#402](https://github.com/AgoraIO-Extensions/agent-infra/issues/402) 是独立 Connection
-系统的历史 readiness/协调入口，不是 Platform primary Implementation Issue、代码 PR 或跨系统
-验收入口。线上 Direct MCP/API 的可消费性以独立系统回读为准；不能由这些 Issue 的 open 状态、
-Issue #301 的保留状态或历史依赖图推断当前 runtime 是否已交付。
+[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395) 是独立 Connection
+系统的当前 readiness 证据入口，#435 只消费其针对本次 Direct MCP runtime、版本化 Schema
+和具名环境的实际通过记录；它不是 Platform primary Implementation Issue、代码 PR 或跨系统
+验收入口。#402 仅作为历史协调入口，不作为 #435 的通过条件。线上 Direct MCP/API 的可消费性
+以独立系统回读为准；不能由 Issue 状态、Issue #301 的保留状态或历史依赖图推断当前 runtime
+是否已交付。
 
 Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 由独立 Connection
 系统负责；是否已交付且可供本次 Pilot 使用，以 #435 AC-1 要求的独立系统版本证据和
