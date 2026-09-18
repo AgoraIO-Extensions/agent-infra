@@ -27,7 +27,7 @@ import {
 	currentExecution,
 	isTerminal,
 } from "./conversation-screen-state.js";
-import { ConversationReadError, httpFailure } from "./execution-detail.js";
+import { ConversationReadError, responseFailure } from "./execution-detail.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
 import { useConversationHistory } from "./use-conversation-history.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
@@ -82,7 +82,9 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 			});
 			signal.throwIfAborted();
 			if (!result.data || result.response?.status !== 200)
-				throw new ConversationReadError(httpFailure(result.response?.status));
+				throw new ConversationReadError(
+					responseFailure(result.error, result.response?.status),
+				);
 			const parsed = AgentProjectionV2Schema.safeParse(result.data);
 			if (!parsed.success || parsed.data.agentId !== agentId)
 				throw new ConversationReadError({ kind: "invalid" });
@@ -543,13 +545,17 @@ function ActiveConversation({
 		Boolean(draft.trim());
 	function send() {
 		if (!canSend) return;
-		action.current = "message";
-		if (command.submitText(draft)) setNotice("");
+		if (command.submitText(draft)) {
+			action.current = "message";
+			setNotice("");
+		}
 	}
 	function regenerate(messageId: string) {
 		if (blocked || commandLocked || active) return;
-		action.current = "regenerate";
-		if (command.regenerate(messageId)) setNotice("");
+		if (command.regenerate(messageId)) {
+			action.current = "regenerate";
+			setNotice("");
+		}
 	}
 	if (denied) return <p role="alert">访问权限已失效。</p>;
 	return (
@@ -745,11 +751,13 @@ function ActiveConversation({
 								className="self-end"
 								disabled={!option?.reasoningLevels.includes(currentReasoning)}
 								onClick={() => {
-									action.current = "selection";
-									command.selectModel({
-										modelOptionId: currentModelId,
-										reasoningLevel: currentReasoning,
-									});
+									if (
+										command.selectModel({
+											modelOptionId: currentModelId,
+											reasoningLevel: currentReasoning,
+										})
+									)
+										action.current = "selection";
 								}}
 							>
 								保存模型选择
@@ -769,8 +777,7 @@ function ActiveConversation({
 										blocked || commandLocked || stopping === latestExecution
 									}
 									onClick={() => {
-										action.current = "stop";
-										command.stop();
+										if (command.stop()) action.current = "stop";
 									}}
 								>
 									<Square aria-hidden="true" />

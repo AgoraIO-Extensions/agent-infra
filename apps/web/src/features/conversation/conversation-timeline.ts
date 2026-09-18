@@ -15,7 +15,6 @@ import type {
 import {
 	ConversationReadError,
 	type ConversationReadFailure,
-	httpFailure,
 	responseFailure,
 } from "./execution-detail.js";
 
@@ -191,7 +190,15 @@ export function createConversationTimeline({
 					streamRequest.headers.delete("Last-Event-ID");
 					const response = await fetcher(streamRequest);
 					if (!response.ok) {
-						throw new ConversationReadError(httpFailure(response.status));
+						let error: unknown;
+						try {
+							error = await response.json();
+						} catch {
+							error = undefined;
+						}
+						throw new ConversationReadError(
+							responseFailure(error, response.status),
+						);
 					}
 					if (!response.body)
 						throw new ConversationReadError({ kind: "invalid" });

@@ -36,7 +36,7 @@ export function currentExecution(
 	history: ConversationDetailProjectionV2 | null,
 	events: readonly PersistedConversationEventV2[],
 	acceptedExecution?: string,
-) {
+): { executionId: string | undefined; status: ExecutionStatus | undefined } {
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	for (const message of messages) {
@@ -51,10 +51,10 @@ export function currentExecution(
 	// A new receipt remains authoritative until its persisted execution status is
 	// observed. This also prevents an older active event from taking over while
 	// the accepted execution is represented only by its user message.
-	if (acceptedExecution)
+	if (acceptedExecution && !statuses.has(acceptedExecution))
 		return {
 			executionId: acceptedExecution,
-			status: statuses.get(acceptedExecution) ?? "submitted",
+			status: "submitted",
 		};
 	const active = [...statuses].findLast(([, status]) => !isTerminal(status));
 	if (active) return { executionId: active[0], status: active[1] };
