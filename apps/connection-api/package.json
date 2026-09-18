@@ -19,6 +19,7 @@
 	"dependencies": {
 		"@hono/node-server": "^2.0.12",
 		"hono": "^4.12.32",
+		"@agent-infra/provider-egress-contracts": "workspace:*",
 		"undici": "7.29.0"
 	},
 	"devDependencies": {

@@ -20,6 +20,41 @@ export type SignedEnvelopeV1 = {
 	version: 1;
 };
 
+export type DispatchAssertionClaimsV1 = {
+	actionVersionId: string;
+	audience: "connection-provider-egress";
+	callId: string;
+	certificateThumbprint: string;
+	connectionId: string;
+	credentialHash: string;
+	credentialVersionId: string;
+	dispatchId: string;
+	effect: "READ" | "WRITE";
+	effectId: string | null;
+	environment: string;
+	expiresAt: number;
+	hopId: string;
+	issuedAt: number;
+	issuer: string;
+	jti: string;
+	method: "GET";
+	notBefore: number;
+	origin: "https://api.github.com";
+	pathTemplate: "/user";
+	providerReleaseId: string;
+	recoveryGeneration: string;
+	requestHash: string;
+	version: 1;
+};
+
+export type ProviderRequestPlanV1 = {
+	actionVersionId: string;
+	method: "GET";
+	origin: "https://api.github.com";
+	path: "/user";
+	version: 1;
+};
+
 export function canonicalJsonV1(value: JsonValue): string {
 	if (
 		value === null ||
@@ -33,9 +68,7 @@ export function canonicalJsonV1(value: JsonValue): string {
 			throw new Error("Canonical JSON rejects non-finite numbers");
 		return JSON.stringify(value);
 	}
-	if (Array.isArray(value)) {
-		return `[${value.map(canonicalJsonV1).join(",")}]`;
-	}
+	if (Array.isArray(value)) return `[${value.map(canonicalJsonV1).join(",")}]`;
 	return `{${Object.keys(value)
 		.sort()
 		.map(

@@ -2,9 +2,6 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig({
 	entry: ["./src/index.ts"],
-	deps: {
-		alwaysBundle: ["@agent-infra/provider-egress-contracts"],
-	},
 	format: "esm",
 	outDir: "./dist",
 	clean: true,

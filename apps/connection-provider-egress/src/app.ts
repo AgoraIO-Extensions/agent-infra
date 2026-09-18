@@ -1,47 +1,21 @@
 import type { KeyObject } from "node:crypto";
-import { Hono } from "hono";
-
 import {
 	canonicalJsonV1,
+	type DispatchAssertionClaimsV1,
 	type JsonValue,
+	type ProviderRequestPlanV1,
 	type SignedEnvelopeV1,
 	sha256,
 	signEnvelopeV1,
 	verifyEnvelopeV1,
-} from "./protocol";
+} from "@agent-infra/provider-egress-contracts";
+import { Hono } from "hono";
 
 const audience = "connection-provider-egress";
 const maxAssertionLifetimeSeconds = 60;
 const maxCredentialBytes = 16 * 1024;
 const maxDispatchBodyBytes = 64 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
-
-type DispatchClaimsV1 = {
-	actionVersionId: string;
-	audience: string;
-	certificateThumbprint: string;
-	credentialHash: string;
-	dispatchId: string;
-	effect: "READ" | "WRITE";
-	environment: string;
-	expiresAt: number;
-	hopId: string;
-	issuedAt: number;
-	issuer: string;
-	jti: string;
-	notBefore: number;
-	planHash: string;
-	providerReleaseId: string;
-	version: 1;
-};
-
-export type ProviderRequestPlanV1 = {
-	actionVersionId: string;
-	method: "GET";
-	origin: "https://api.github.com";
-	path: "/user";
-	version: 1;
-};
 
 type DispatchBody = {
 	assertion: SignedEnvelopeV1;
@@ -110,7 +84,7 @@ export function createProviderEgressApp(
 			) {
 				throw new Error("Dispatch credential is invalid");
 			}
-			if (claims.planHash !== sha256(canonicalJsonV1(body.plan))) {
+			if (claims.requestHash !== sha256(canonicalJsonV1(body.plan))) {
 				throw new Error("Dispatch plan hash mismatch");
 			}
 			if (claims.credentialHash !== sha256(body.credential)) {
@@ -170,32 +144,40 @@ export function createProviderEgressApp(
 	return app;
 }
 
-function parseClaims(value: JsonValue): DispatchClaimsV1 {
+function parseClaims(value: JsonValue): DispatchAssertionClaimsV1 {
 	if (!value || Array.isArray(value) || typeof value !== "object") {
 		throw new Error("Dispatch assertion payload is invalid");
 	}
 	const expectedKeys = [
 		"actionVersionId",
 		"audience",
+		"callId",
 		"certificateThumbprint",
+		"connectionId",
 		"credentialHash",
+		"credentialVersionId",
 		"dispatchId",
 		"effect",
+		"effectId",
 		"environment",
 		"expiresAt",
 		"hopId",
 		"issuedAt",
 		"issuer",
 		"jti",
+		"method",
 		"notBefore",
-		"planHash",
+		"origin",
+		"pathTemplate",
 		"providerReleaseId",
+		"recoveryGeneration",
+		"requestHash",
 		"version",
 	];
 	if (Object.keys(value).sort().join(",") !== expectedKeys.sort().join(",")) {
 		throw new Error("Dispatch assertion claims are invalid");
 	}
-	return value as unknown as DispatchClaimsV1;
+	return value as unknown as DispatchAssertionClaimsV1;
 }
 
 async function readDispatchBody(request: Request): Promise<DispatchBody> {
@@ -227,7 +209,7 @@ async function readDispatchBody(request: Request): Promise<DispatchBody> {
 }
 
 function validateClaims(
-	claims: DispatchClaimsV1,
+	claims: DispatchAssertionClaimsV1,
 	certificateThumbprint: string,
 	dependencies: ProviderEgressDependencies,
 	now: number,
@@ -246,6 +228,9 @@ function validateClaims(
 		!claims.dispatchId ||
 		!claims.hopId ||
 		claims.providerReleaseId !== "github-connection-v8" ||
+		claims.method !== "GET" ||
+		claims.origin !== "https://api.github.com" ||
+		claims.pathTemplate !== "/user" ||
 		claims.effect !== "READ"
 	) {
 		throw new Error("Dispatch assertion claims are invalid");
@@ -299,7 +284,7 @@ async function readLimitedResponse(response: Response) {
 
 function signReceipt(
 	dependencies: ProviderEgressDependencies,
-	claims: DispatchClaimsV1,
+	claims: DispatchAssertionClaimsV1,
 	result:
 		| { bodyHash: string; httpStatus: number; type: "COMPLETED" }
 		| { type: "UNKNOWN" },

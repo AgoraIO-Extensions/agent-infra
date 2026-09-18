@@ -1,13 +1,14 @@
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
-
-import { createProviderEgressApp, type ProviderRequestPlanV1 } from "./app";
 import {
 	canonicalJsonV1,
+	type ProviderRequestPlanV1,
 	sha256,
 	signEnvelopeV1,
 	verifyEnvelopeV1,
-} from "./protocol";
+} from "@agent-infra/provider-egress-contracts";
+import { describe, expect, it, vi } from "vitest";
+
+import { createProviderEgressApp } from "./app";
 
 const nowSeconds = 1_800_000_000;
 const assertionKeys = generateKeyPairSync("ed25519");
@@ -26,19 +27,27 @@ function assertion(overrides: Record<string, unknown> = {}) {
 		{
 			actionVersionId: plan.actionVersionId,
 			audience: "connection-provider-egress",
+			callId: "call-1",
 			certificateThumbprint: "sha256:workload-cert",
+			connectionId: "connection-1",
 			credentialHash: sha256(credential),
+			credentialVersionId: "credential-1",
 			dispatchId: "dispatch-1",
 			effect: "READ",
+			effectId: null,
 			environment: "test",
 			expiresAt: nowSeconds + 30,
 			hopId: "hop-1",
 			issuedAt: nowSeconds,
 			issuer: "connection-control-plane",
 			jti: "jti-1",
+			method: "GET",
 			notBefore: nowSeconds - 1,
-			planHash: sha256(canonicalJsonV1(plan)),
+			origin: "https://api.github.com",
+			pathTemplate: "/user",
 			providerReleaseId: "github-connection-v8",
+			recoveryGeneration: "generation-1",
+			requestHash: sha256(canonicalJsonV1(plan)),
 			version: 1,
 			...overrides,
 		},
@@ -174,14 +183,5 @@ describe("Connection Provider Egress", () => {
 		expect(
 			verifyEnvelopeV1(result.receipt, receiptKeys.publicKey),
 		).toMatchObject({ type: "UNKNOWN" });
-	});
-});
-
-describe("Provider Egress canonicalization", () => {
-	it("sorts object keys recursively and rejects non-finite numbers", () => {
-		expect(canonicalJsonV1({ b: 2, a: { d: 4, c: 3 } })).toBe(
-			'{"a":{"c":3,"d":4},"b":2}',
-		);
-		expect(() => canonicalJsonV1(Number.NaN)).toThrow(/non-finite/);
 	});
 });

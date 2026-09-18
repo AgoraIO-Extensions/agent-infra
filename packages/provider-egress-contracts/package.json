@@ -1,8 +1,11 @@
 {
-	"name": "@agent-infra/connection-provider-egress",
+	"name": "@agent-infra/provider-egress-contracts",
 	"private": true,
 	"type": "module",
 	"main": "dist/index.mjs",
+	"exports": {
+		".": "./src/index.ts"
+	},
 	"files": [
 		"dist"
 	],
@@ -10,10 +13,6 @@
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run src"
-	},
-	"dependencies": {
-		"@agent-infra/provider-egress-contracts": "workspace:*",
-		"hono": "^4.12.32"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

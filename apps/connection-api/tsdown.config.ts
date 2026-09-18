@@ -5,9 +5,11 @@ export default defineConfig({
 		"./src/bootstrap-admin.ts",
 		"./src/bootstrap-production.ts",
 		"./src/index.ts",
+		"./src/provider-egress-control.ts",
 	],
 	deps: {
 		alwaysBundle: [
+			"@agent-infra/provider-egress-contracts",
 			"@agent-infra/connection-core",
 			"@agent-infra/connection-identity",
 			"@agent-infra/connection-store",
