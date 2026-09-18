@@ -116,6 +116,15 @@ export function useConversationCommands({
 		return start({ kind: "message", body: { schemaVersion: 1, text } });
 	}
 	const visible = scope.active && scope.lastAttemptId === mutation.variables;
+	const revoke = useCallback(() => {
+		if (!scope.active) return;
+		scope.denied = true;
+		scope.attempt?.controller.abort();
+		scope.attempt = undefined;
+		scope.lastAttemptId = undefined;
+		mutation.reset();
+		removeOwnMutations();
+	}, [scope, mutation.reset, removeOwnMutations]);
 	return {
 		isPending: visible && mutation.isPending,
 		isDenied: scope.denied,
@@ -125,15 +134,7 @@ export function useConversationCommands({
 			scope.attempt !== undefined &&
 			!scope.attempt.pending,
 		result: visible ? mutation.data : undefined,
-		revoke: () => {
-			if (!scope.active) return;
-			scope.denied = true;
-			scope.attempt?.controller.abort();
-			scope.attempt = undefined;
-			scope.lastAttemptId = undefined;
-			mutation.reset();
-			removeOwnMutations();
-		},
+		revoke,
 		create: () => start({ kind: "create", body: { schemaVersion: 1 } }),
 		submitText,
 		supplement: submitText,

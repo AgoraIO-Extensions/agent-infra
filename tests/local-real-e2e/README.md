@@ -55,7 +55,8 @@ HMR WebSocket 不转发，修改 Web 后重新加载页面。
 登录前工具用服务端 token 查询正式 `/api/v1/session`，仅成功后建立最多一小时的
 HttpOnly、Secure、SameSite=Strict opaque 会话。切换或退出撤销旧会话并整页跳转到
 `/agents`。退出、切换或会话到期会结束该会话已有的 API/SSE 连接。真实身份仍由 API 和
-Worker 在操作时重新解析。
+Worker 在操作时重新解析。已认证 API 的写请求还会消耗会话绑定的一次性 CSRF cookie，
+并在响应中轮换下一枚 token。
 
 申请仍必须填写模型配置。开发用的模板、模型端点、模型、推理档位和合成模型凭证必须
 来自同一受控部署；此工具不注入、改写或替换业务请求，也不替用户提交申请。不要把真实

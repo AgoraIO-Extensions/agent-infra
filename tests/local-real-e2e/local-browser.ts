@@ -21,6 +21,7 @@ export interface LocalBrowserConfiguration {
 
 const sessionCookie = "__Host-agent-infra-local-session";
 const csrfCookie = "__Host-agent-infra-local-csrf";
+const apiCsrfCookie = "__Host-agent-infra-local-api-csrf";
 const sessionLifetimeMs = 60 * 60 * 1_000;
 const challengeLifetimeMs = 10 * 60 * 1_000;
 const requestHeaders = [
@@ -204,16 +205,18 @@ function html(value: string) {
 	});
 }
 
-function failure(response: ServerResponse, status: number) {
+function failure(response: ServerResponse, status: number, setCookie?: string) {
 	if (response.headersSent) {
 		response.destroy();
 		return;
 	}
-	response.writeHead(status, {
+	const headers: Record<string, string> = {
 		"Content-Type": "application/json; charset=utf-8",
 		"Cache-Control": "no-store",
 		"X-Content-Type-Options": "nosniff",
-	});
+	};
+	if (setCookie) headers["Set-Cookie"] = setCookie;
+	response.writeHead(status, headers);
 	response.end(
 		JSON.stringify({
 			schemaVersion: 1,
@@ -323,6 +326,7 @@ function proxy(
 	origin: string,
 	token?: string,
 	activeRequests?: Set<() => void>,
+	setCookie?: string,
 ) {
 	const target = new URL(request.url ?? "/", origin);
 	const headers: Record<string, string> = {};
@@ -332,15 +336,33 @@ function proxy(
 	}
 	if (token) headers.authorization = `Bearer ${token}`;
 	const send = target.protocol === "https:" ? requestHttps : requestHttp;
+	let bodyTimer: ReturnType<typeof setTimeout> | undefined;
+	const clearBodyTimer = () => {
+		if (bodyTimer !== undefined) clearTimeout(bodyTimer);
+		bodyTimer = undefined;
+	};
+	const fail = () => failure(response, 502, setCookie);
 	const upstream = send(
 		target,
 		{ method: request.method, headers },
 		(received) => {
 			clearTimeout(timer);
+			const contentType = received.headers["content-type"];
+			const isEventStream =
+				typeof contentType === "string" &&
+				/^text\/event-stream(?:;|$)/i.test(contentType);
+			const refreshBodyTimer = () => {
+				if (isEventStream) return;
+				clearBodyTimer();
+				bodyTimer = setTimeout(
+					() => received.destroy(new Error("LOCAL_UPSTREAM_UNAVAILABLE")),
+					15_000,
+				);
+			};
 			const status = received.statusCode ?? 502;
 			if (status >= 300 && status < 400 && status !== 304) {
 				received.resume();
-				failure(response, 502);
+				failure(response, 502, setCookie);
 				return;
 			}
 			const forwarded: Record<string, string | string[]> = {
@@ -351,9 +373,17 @@ function proxy(
 				const value = received.headers[name];
 				if (value !== undefined) forwarded[name] = value;
 			}
+			if (setCookie) forwarded["Set-Cookie"] = setCookie;
 			response.writeHead(status, forwarded);
 			response.flushHeaders();
-			received.on("error", () => response.destroy());
+			received.on("data", refreshBodyTimer);
+			received.on("end", clearBodyTimer);
+			received.on("close", clearBodyTimer);
+			received.on("error", () => {
+				clearBodyTimer();
+				response.destroy();
+			});
+			refreshBodyTimer();
 			received.pipe(response);
 		},
 	);
@@ -361,7 +391,7 @@ function proxy(
 		() => upstream.destroy(new Error("LOCAL_UPSTREAM_UNAVAILABLE")),
 		15_000,
 	);
-	upstream.on("error", () => failure(response, 502));
+	upstream.on("error", fail);
 	upstream.on("close", () => clearTimeout(timer));
 	const cancel = () => {
 		upstream.destroy();
@@ -388,6 +418,7 @@ export async function startLocalBrowserGateway(
 		string,
 		{
 			token: string;
+			csrf: string;
 			expiresAt: number;
 			expiry: ReturnType<typeof setTimeout>;
 			activeRequests: Set<() => void>;
@@ -496,10 +527,14 @@ export async function startLocalBrowserGateway(
 				return;
 			}
 			const challenge = readCookie(request, csrfCookie);
+			const challengeExpiresAt = challenge
+				? challenges.get(challenge)
+				: undefined;
 			const submitted = form.get("csrf") ?? "";
 			if (
 				!challenge ||
-				!challenges.has(challenge) ||
+				challengeExpiresAt === undefined ||
+				challengeExpiresAt <= Date.now() ||
 				!/^[a-f0-9]{64}$/.test(submitted) ||
 				!timingSafeEqual(Buffer.from(challenge), Buffer.from(submitted)) ||
 				form.getAll("csrf").length !== 1 ||
@@ -531,6 +566,7 @@ export async function startLocalBrowserGateway(
 					if (!/^[A-Za-z0-9_-]{32,256}$/.test(token)) throw new Error();
 					await verifyUpstreamSession(config.apiOrigin, token);
 					const issued = randomBytes(32).toString("hex");
+					const apiCsrf = randomBytes(32).toString("hex");
 					newSession = issued;
 					const expiry = setTimeout(
 						() => removeSession(issued),
@@ -539,6 +575,7 @@ export async function startLocalBrowserGateway(
 					expiry.unref();
 					sessions.set(issued, {
 						token,
+						csrf: apiCsrf,
 						expiresAt: Date.now() + sessionLifetimeMs,
 						expiry,
 						activeRequests: new Set(),
@@ -558,6 +595,11 @@ export async function startLocalBrowserGateway(
 						newSession ?? "",
 						newSession ? sessionLifetimeMs / 1_000 : 0,
 					),
+					cookie(
+						apiCsrfCookie,
+						newSession ? (sessions.get(newSession)?.csrf ?? "") : "",
+						newSession ? sessionLifetimeMs / 1_000 : 0,
+					),
 					cookie(csrfCookie, "", 0),
 				],
 			});
@@ -569,12 +611,27 @@ export async function startLocalBrowserGateway(
 				failure(response, 401);
 				return;
 			}
+			let setCookie: string | undefined;
+			if (!["GET", "HEAD"].includes(method)) {
+				const submitted = readCookie(request, apiCsrfCookie);
+				if (!submitted || submitted !== session.csrf) {
+					failure(response, 403);
+					return;
+				}
+				session.csrf = randomBytes(32).toString("hex");
+				setCookie = cookie(
+					apiCsrfCookie,
+					session.csrf,
+					sessionLifetimeMs / 1_000,
+				);
+			}
 			proxy(
 				request,
 				response,
 				config.apiOrigin,
 				session.token,
 				session.activeRequests,
+				setCookie,
 			);
 			return;
 		}

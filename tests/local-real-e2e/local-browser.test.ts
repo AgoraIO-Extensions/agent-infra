@@ -485,7 +485,12 @@ test("proxy sends only server-selected authorization and allowed headers, never 
 	);
 	assert.equal(response.status, 200);
 	assert.equal(JSON.parse(response.body).account, "owner");
-	assert.equal(response.headers["set-cookie"], undefined);
+	assert.equal(
+		response.headers["set-cookie"]?.some((value) =>
+			value.includes("upstream=secret"),
+		),
+		false,
+	);
 	assert.equal(response.headers["access-control-allow-origin"], undefined);
 	const upstream = input.received.at(-1);
 	assert(upstream);
@@ -501,6 +506,42 @@ test("proxy sends only server-selected authorization and allowed headers, never 
 	])
 		assert.equal(upstream.headers[name], undefined);
 	assert.equal(upstream.body, '{"message":"fixture"}');
+	const rotatedApiCsrf = response.headers["set-cookie"]?.find((value) =>
+		value.startsWith("__Host-agent-infra-local-api-csrf="),
+	);
+	assert(rotatedApiCsrf);
+	assert.equal(
+		(
+			await send(input.origin, "/api/write", {
+				method: "POST",
+				headers: {
+					Cookie: cookies(authenticated),
+					Origin: input.origin,
+					"Content-Type": "application/json",
+				},
+				body: '{"message":"replay"}',
+			})
+		).status,
+		403,
+	);
+	const session = cookies(authenticated)
+		.split("; ")
+		.find((value) => value.startsWith("__Host-agent-infra-local-session="));
+	assert(session);
+	assert.equal(
+		(
+			await send(input.origin, "/api/write", {
+				method: "POST",
+				headers: {
+					Cookie: `${session}; ${rotatedApiCsrf.split(";")[0]}`,
+					Origin: input.origin,
+					"Content-Type": "application/json",
+				},
+				body: '{"message":"rotated"}',
+			})
+		).status,
+		200,
+	);
 	await send(input.origin, "/assets/app.js", { headers });
 	assert.equal(input.webReceived.at(-1)?.authorization, undefined);
 	assert.equal(input.webReceived.at(-1)?.cookie, undefined);
