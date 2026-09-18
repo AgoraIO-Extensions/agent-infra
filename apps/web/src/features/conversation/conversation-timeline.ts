@@ -121,7 +121,7 @@ export function createConversationTimeline({
 			throwOnError: false,
 		});
 		if (current !== session || request.signal.aborted) return;
-		if (!result.data) {
+		if (!result.data || result.response?.status !== 200) {
 			fail(session, httpFailure(result.response?.status));
 			return;
 		}

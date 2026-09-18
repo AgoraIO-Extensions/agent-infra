@@ -44,6 +44,23 @@ afterEach(() => {
 });
 
 describe("Conversation generated-client data consumer", () => {
+	it("rejects a schema-valid history body from a non-200 response", async () => {
+		const { reader } = setup((request) =>
+			route(request) === "history"
+				? Response.json(history(), { status: 503 })
+				: sse().response,
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "unavailable",
+				failure: { kind: "service", status: 503 },
+			}),
+		);
+		expect(reader.getSnapshot().history).toBeNull();
+		expect(reader.getSnapshot().events).toEqual([]);
+	});
+
 	it("refreshes the authoritative projection after a receipt and resumes from the new cursor", async () => {
 		const first = sse();
 		const second = sse();

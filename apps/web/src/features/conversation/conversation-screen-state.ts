@@ -40,22 +40,21 @@ export function currentExecution(
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	for (const message of messages) {
-		if (message.role === "assistant" && message.executionId)
-			statuses.set(message.executionId, message.status);
+		if (message.executionId) statuses.set(message.executionId, message.status);
 	}
 	for (const event of events) {
 		if (event.type !== "execution.status") continue;
 		statuses.delete(event.executionId);
 		statuses.set(event.executionId, event.payload.status);
 	}
-	// A new receipt bridges the interval before its execution appears in a read.
-	// Once observed, it must not shadow a newer persisted execution indefinitely.
-	if (
-		acceptedExecution &&
-		!events.some((event) => event.executionId === acceptedExecution) &&
-		!messages.some((message) => message.executionId === acceptedExecution)
-	)
-		return { executionId: acceptedExecution, status: "submitted" as const };
+	// A new receipt remains authoritative until its persisted execution status is
+	// observed. This also prevents an older active event from taking over while
+	// the accepted execution is represented only by its user message.
+	if (acceptedExecution)
+		return {
+			executionId: acceptedExecution,
+			status: statuses.get(acceptedExecution) ?? "submitted",
+		};
 	const active = [...statuses].findLast(([, status]) => !isTerminal(status));
 	if (active) return { executionId: active[0], status: active[1] };
 	const executionId =
