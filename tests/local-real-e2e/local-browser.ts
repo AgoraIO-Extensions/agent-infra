@@ -24,6 +24,8 @@ const csrfCookie = "__Host-agent-infra-local-csrf";
 const apiCsrfCookie = "__Host-agent-infra-local-api-csrf";
 const sessionLifetimeMs = 60 * 60 * 1_000;
 const challengeLifetimeMs = 10 * 60 * 1_000;
+const maximumProxyBodyBytes = 2 * 1024 * 1024;
+const proxyUploadTimeoutMs = 15_000;
 const requestHeaders = [
 	"accept",
 	"accept-language",
@@ -329,6 +331,15 @@ function proxy(
 	setCookie?: string,
 ) {
 	const target = new URL(request.url ?? "/", origin);
+	const contentLength = Number(request.headers["content-length"] ?? 0);
+	if (
+		!Number.isFinite(contentLength) ||
+		contentLength < 0 ||
+		contentLength > maximumProxyBodyBytes
+	) {
+		failure(response, 413, setCookie);
+		return;
+	}
 	const headers: Record<string, string> = {};
 	for (const name of requestHeaders) {
 		const value = request.headers[name];
@@ -337,9 +348,22 @@ function proxy(
 	if (token) headers.authorization = `Bearer ${token}`;
 	const send = target.protocol === "https:" ? requestHttps : requestHttp;
 	let bodyTimer: ReturnType<typeof setTimeout> | undefined;
+	let uploadTimer: ReturnType<typeof setTimeout> | undefined;
 	const clearBodyTimer = () => {
 		if (bodyTimer !== undefined) clearTimeout(bodyTimer);
 		bodyTimer = undefined;
+	};
+	const clearUploadTimer = () => {
+		if (uploadTimer !== undefined) clearTimeout(uploadTimer);
+		uploadTimer = undefined;
+	};
+	const refreshUploadTimer = () => {
+		clearUploadTimer();
+		uploadTimer = setTimeout(() => {
+			request.destroy(new Error("LOCAL_REQUEST_BODY_TIMEOUT"));
+			upstream.destroy(new Error("LOCAL_REQUEST_BODY_TIMEOUT"));
+			fail();
+		}, proxyUploadTimeoutMs);
 	};
 	const fail = () => failure(response, 502, setCookie);
 	const upstream = send(
@@ -398,11 +422,29 @@ function proxy(
 		response.destroy();
 	};
 	activeRequests?.add(cancel);
-	request.on("aborted", () => upstream.destroy());
+	let bodyBytes = 0;
+	request.on("data", (chunk: Buffer) => {
+		bodyBytes += chunk.length;
+		if (bodyBytes > maximumProxyBodyBytes) {
+			clearUploadTimer();
+			request.destroy(new Error("LOCAL_REQUEST_BODY_TOO_LARGE"));
+			upstream.destroy(new Error("LOCAL_REQUEST_BODY_TOO_LARGE"));
+			failure(response, 413, setCookie);
+			return;
+		}
+		refreshUploadTimer();
+	});
+	request.on("end", clearUploadTimer);
+	request.on("aborted", () => {
+		clearUploadTimer();
+		upstream.destroy();
+	});
 	response.on("close", () => {
+		clearUploadTimer();
 		activeRequests?.delete(cancel);
 		if (!response.writableFinished) upstream.destroy();
 	});
+	refreshUploadTimer();
 	request.pipe(upstream);
 }
 

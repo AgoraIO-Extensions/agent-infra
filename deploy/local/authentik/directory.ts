@@ -59,6 +59,9 @@ function integer(value: unknown): number {
 		unavailable();
 	return value;
 }
+function pageLink(value: unknown): number {
+	return value === null ? 0 : integer(value);
+}
 function unique(values: string[]): string[] {
 	if (new Set(values).size !== values.length) unavailable();
 	return values.sort();
@@ -189,8 +192,8 @@ export function createAuthentikDirectory(
 				pages < 1 ||
 				pages > 100 ||
 				integer(pagination.current) !== page ||
-				integer(pagination.previous) !== (page === 1 ? 0 : page - 1) ||
-				integer(pagination.next) !== (page === pages ? 0 : page + 1) ||
+				pageLink(pagination.previous) !== (page === 1 ? 0 : page - 1) ||
+				pageLink(pagination.next) !== (page === pages ? 0 : page + 1) ||
 				(expectedCount !== undefined && count !== expectedCount) ||
 				(expectedPages !== undefined && pages !== expectedPages) ||
 				!Array.isArray(body.results) ||
