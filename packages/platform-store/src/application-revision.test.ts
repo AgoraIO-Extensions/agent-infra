@@ -888,7 +888,7 @@ describe("PostgreSQL application revision transaction", () => {
 						outboxIntent: {
 							...structuredClone(plan.configuration.outboxIntent),
 							payload: {
-								...structuredClone(plan.configuration.outboxIntent.payload),
+								...structuredClone(plan.configuration.outboxIntent?.payload),
 								plaintext: "database-secret",
 							},
 						},

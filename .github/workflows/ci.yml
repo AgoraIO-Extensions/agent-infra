@@ -141,7 +141,7 @@ jobs:
             src/claude-native.test.ts src/claude-runtime-driver.test.ts \
             src/runtime-driver-conformance.test.ts --cache=false
 
-      - name: Verify Generic ACP and OpenCode conformance in the pinned Linux image
+      - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
         run: |
           docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -150,6 +150,7 @@ jobs:
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \
+            src/pi-native.test.ts src/pi-runtime-driver.test.ts src/pi-policy.test.ts \
             src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
       - name: Build applications
@@ -184,6 +185,20 @@ jobs:
         run: >-
           node deploy/release/runtime-probe.mjs --scan-build
           .vulnerability-scan/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
+
+      - name: Verify Custom Base Image inheritance
+        run: >-
+          node deploy/release/custom-base-image.mjs
+          "agent-infra-ci/custom-agent-base:$SCAN_COMMIT"
+          "$RUNNER_TEMP/custom-base-image.json"
+
+      - name: Preserve Custom Base Image evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: custom-base-image-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/custom-base-image.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Preserve Codex runtime image evidence
         if: ${{ !cancelled() && steps.runtime_probe.outcome == 'success' }}

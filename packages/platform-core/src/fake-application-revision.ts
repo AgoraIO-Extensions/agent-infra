@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import { decodeAgentConfigurationRecordV2 } from "./agent-configuration.js";
 import {
 	ApplicationRevisionError,
@@ -164,6 +166,12 @@ export class FakeApplicationRevisionTransactionV1
 		}
 		if (
 			plan.management.transition.from !== this.#state.management.status ||
+			(plan.configuration?.nextRevision ===
+				this.#state.configuration.revision &&
+				!isDeepStrictEqual(
+					plan.configuration.configuration,
+					this.#state.configuration,
+				)) ||
 			((plan.configuration === null ||
 				plan.configuration.accessUpdate === null) &&
 				(!sameValue(
@@ -249,7 +257,7 @@ export class FakeApplicationRevisionTransactionV1
 			]);
 
 			this.#failBefore("outbox");
-			draft.outboxCount += plan.configuration ? 2 : 1;
+			draft.outboxCount += plan.configuration?.outboxIntent ? 2 : 1;
 
 			this.#failBefore("audit");
 			draft.auditCount += plan.configuration ? 2 : 1;

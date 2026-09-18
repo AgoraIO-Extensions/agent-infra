@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CommandAgentLifecycleResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DecideAgentApplicationResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentApplicationResponses, GetAgentData, GetAgentErrors, GetAgentResponses, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentApplicationsResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPendingAgentApplicationsResponses, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentApplicationResponses, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateAgentConfigurationResponses, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors, WithdrawAgentApplicationResponses } from './types.gen';
+import type { AbandonUnknownWecomDeliveryData, AbandonUnknownWecomDeliveryErrors, AbandonUnknownWecomDeliveryResponses, BeginWecomSetupData, BeginWecomSetupErrors, BeginWecomSetupResponses, CancelWecomSetupData, CancelWecomSetupErrors, CancelWecomSetupResponses, CommandAgentLifecycleData, CommandAgentLifecycleErrors, CommandAgentLifecycleResponses, CompleteFileUploadData, CompleteFileUploadResponses, CreateAgentApplicationData, CreateAgentApplicationErrors, CreateAgentApplicationResponses, CreateConversationData, CreateConversationErrors, CreateConversationResponses, CreateFileUploadData, CreateFileUploadResponses, DecideAgentApplicationData, DecideAgentApplicationErrors, DecideAgentApplicationResponses, DownloadFileContentData, DownloadFileContentResponses, GetAgentApplicationData, GetAgentApplicationErrors, GetAgentApplicationResponses, GetAgentData, GetAgentErrors, GetAgentResponses, GetConversationData, GetConversationErrors, GetConversationResponses, GetCurrentSessionData, GetCurrentSessionErrors, GetCurrentSessionResponses, GetExecutionDetailData, GetExecutionDetailErrors, GetExecutionDetailResponses, GetWecomBotConnectionData, GetWecomBotConnectionErrors, GetWecomBotConnectionResponses, GetWecomReceiptData, GetWecomReceiptErrors, GetWecomReceiptResponses, GetWecomSetupData, GetWecomSetupErrors, GetWecomSetupResponses, IssueFileAccessData, IssueFileAccessResponses, ListAgentApplicationsData, ListAgentApplicationsErrors, ListAgentApplicationsResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListPendingAgentApplicationsData, ListPendingAgentApplicationsErrors, ListPendingAgentApplicationsResponses, ListPlatformAuditData, ListPlatformAuditErrors, ListPlatformAuditResponses, ListWecomReceiptsData, ListWecomReceiptsErrors, ListWecomReceiptsResponses, ReadFileLimitsData, ReadFileLimitsResponses, RegenerateAnswerData, RegenerateAnswerErrors, RegenerateAnswerResponses, StopExecutionData, StopExecutionErrors, StopExecutionResponses, StreamConversationEventsData, StreamConversationEventsErrors, StreamConversationEventsResponse, StreamConversationEventsResponses, SubmitMessageData, SubmitMessageErrors, SubmitMessageResponses, SubmitWecomCredentialsData, SubmitWecomCredentialsErrors, SubmitWecomCredentialsResponses, UpdateAgentApplicationData, UpdateAgentApplicationErrors, UpdateAgentApplicationResponses, UpdateAgentConfigurationData, UpdateAgentConfigurationErrors, UpdateAgentConfigurationResponses, UpdateConversationModelSelectionData, UpdateConversationModelSelectionErrors, UpdateConversationModelSelectionResponses, UploadFileContentData, UploadFileContentResponses, WithdrawAgentApplicationData, WithdrawAgentApplicationErrors, WithdrawAgentApplicationResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -110,6 +110,47 @@ export const getConversation = <ThrowOnError extends boolean = false>(options: O
 export const streamConversationEvents = <ThrowOnError extends boolean = false>(options: Options<StreamConversationEventsData, ThrowOnError, StreamConversationEventsResponse>): Promise<ServerSentEventsResult<StreamConversationEventsResponses>> => (options.client ?? client).sse.get<StreamConversationEventsResponses, StreamConversationEventsErrors, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}/events', ...options });
 
 export const getExecutionDetail = <ThrowOnError extends boolean = false>(options: Options<GetExecutionDetailData, ThrowOnError>): RequestResult<GetExecutionDetailResponses, GetExecutionDetailErrors, ThrowOnError> => (options.client ?? client).get<GetExecutionDetailResponses, GetExecutionDetailErrors, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}/executions/{executionId}', ...options });
+
+export const createFileUpload = <ThrowOnError extends boolean = false>(options: Options<CreateFileUploadData, ThrowOnError>): RequestResult<CreateFileUploadResponses, unknown, ThrowOnError> => (options.client ?? client).post<CreateFileUploadResponses, unknown, ThrowOnError>({
+    url: '/api/v1/conversations/{conversationId}/files',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const readFileLimits = <ThrowOnError extends boolean = false>(options: Options<ReadFileLimitsData, ThrowOnError>): RequestResult<ReadFileLimitsResponses, unknown, ThrowOnError> => (options.client ?? client).get<ReadFileLimitsResponses, unknown, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}/files/limits', ...options });
+
+export const issueFileAccess = <ThrowOnError extends boolean = false>(options: Options<IssueFileAccessData, ThrowOnError>): RequestResult<IssueFileAccessResponses, unknown, ThrowOnError> => (options.client ?? client).post<IssueFileAccessResponses, unknown, ThrowOnError>({
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/access',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const completeFileUpload = <ThrowOnError extends boolean = false>(options: Options<CompleteFileUploadData, ThrowOnError>): RequestResult<CompleteFileUploadResponses, unknown, ThrowOnError> => (options.client ?? client).post<CompleteFileUploadResponses, unknown, ThrowOnError>({
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/complete',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const downloadFileContent = <ThrowOnError extends boolean = false>(options: Options<DownloadFileContentData, ThrowOnError>): RequestResult<DownloadFileContentResponses, unknown, ThrowOnError> => (options.client ?? client).get<DownloadFileContentResponses, unknown, ThrowOnError>({ url: '/api/v1/conversations/{conversationId}/files/{fileId}/content', ...options });
+
+export const uploadFileContent = <ThrowOnError extends boolean = false>(options: Options<UploadFileContentData, ThrowOnError>): RequestResult<UploadFileContentResponses, unknown, ThrowOnError> => (options.client ?? client).put<UploadFileContentResponses, unknown, ThrowOnError>({
+    bodySerializer: null,
+    url: '/api/v1/conversations/{conversationId}/files/{fileId}/content',
+    ...options,
+    headers: {
+        'Content-Type': '*/*',
+        ...options.headers
+    }
+});
 
 export const submitMessage = <ThrowOnError extends boolean = false>(options: Options<SubmitMessageData, ThrowOnError>): RequestResult<SubmitMessageResponses, SubmitMessageErrors, ThrowOnError> => (options.client ?? client).post<SubmitMessageResponses, SubmitMessageErrors, ThrowOnError>({
     url: '/api/v1/conversations/{conversationId}/messages',

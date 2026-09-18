@@ -118,6 +118,17 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
 
+  custom-agent-base:
+    profiles: ["runtime"]
+    build:
+      context: .
+      dockerfile: deploy/images/custom-agent-base/Dockerfile
+    read_only: true
+    network_mode: none
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /workspace:size=16m,uid=1000,gid=1000,mode=0700
+
 volumes:
   local-topology-object-storage:
   local-topology-postgres:

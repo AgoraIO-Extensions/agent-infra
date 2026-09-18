@@ -76,6 +76,15 @@ jobs:
       - name: Verify fixed V8 prebuilt inputs
         run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh v8
 
+      - name: Restore Cargo build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/codex-native-target
+          key: codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-${{ hashFiles('codex-source/codex-rs/Cargo.lock', 'deploy/runtime/vendor/codex/build-input-v1.json', 'deploy/runtime/vendor/codex/build-linux-aarch64.py', 'deploy/runtime/vendor/codex/apply-source.py', 'deploy/runtime/vendor/codex/patches/**') }}
+
       - name: Build candidate binaries and bundle
         run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh build
 
@@ -104,6 +113,16 @@ jobs:
 
       - name: Run focused native Connection and barrier tests
         run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh tests
+
+      - name: Save Cargo build cache
+        if: ${{ always() }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/codex-native-target
+          key: codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-${{ hashFiles('codex-source/codex-rs/Cargo.lock', 'deploy/runtime/vendor/codex/build-input-v1.json', 'deploy/runtime/vendor/codex/build-linux-aarch64.py', 'deploy/runtime/vendor/codex/apply-source.py', 'deploy/runtime/vendor/codex/patches/**') }}
 
       - name: Upload bounded build diagnostics
         if: ${{ always() }}

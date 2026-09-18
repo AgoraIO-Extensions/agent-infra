@@ -1,6 +1,6 @@
 {
-  "id": "5eef51f3-8666-4b08-84df-1d760d459a5b",
-  "prevId": "988a718c-29a9-4628-89d2-f9f29da167ae",
+  "id": "988a718c-29a9-4628-89d2-f9f29da167ae",
+  "prevId": "b0ec01c6-35d5-42d5-b041-9a6df3df3136",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3051,85 +3051,6 @@
       },
       "isRLSEnabled": false
     },
-    "platform.wecom_connections": {
-      "name": "wecom_connections",
-      "schema": "platform",
-      "columns": {
-        "bot_id": {
-          "name": "bot_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "agent_id": {
-          "name": "agent_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_reference": {
-          "name": "binding_reference",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "holder_id": {
-          "name": "holder_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "fence": {
-          "name": "fence",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lease_until": {
-          "name": "lease_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "wecom_connections_agent_id_agents_id_fk": {
-          "name": "wecom_connections_agent_id_agents_id_fk",
-          "tableFrom": "wecom_connections",
-          "tableTo": "agents",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "wecom_connection_fence_safe": {
-          "name": "wecom_connection_fence_safe",
-          "value": "\"platform\".\"wecom_connections\".\"fence\" between 1 and 9007199254740991"
-        },
-        "wecom_connection_status": {
-          "name": "wecom_connection_status",
-          "value": "\"platform\".\"wecom_connections\".\"status\" in ('verifying','connected','disconnected','auth_failed')"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "platform.wecom_receipts": {
       "name": "wecom_receipts",
       "schema": "platform",
@@ -3237,18 +3158,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "connection_bot_id": {
-          "name": "connection_bot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "connection_fence": {
-          "name": "connection_fence",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -3286,121 +3195,6 @@
         "wecom_delivery_status": {
           "name": "wecom_delivery_status",
           "value": "\"platform\".\"wecom_receipts\".\"delivery_status\" in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "platform.wecom_setup_sessions": {
-      "name": "wecom_setup_sessions",
-      "schema": "platform",
-      "columns": {
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "agent_id": {
-          "name": "agent_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "actor_id": {
-          "name": "actor_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "configuration_revision": {
-          "name": "configuration_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "authorization_revision": {
-          "name": "authorization_revision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state_digest": {
-          "name": "state_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bot_id": {
-          "name": "bot_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "encrypted_credential": {
-          "name": "encrypted_credential",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "wecom_setup_pending": {
-          "name": "wecom_setup_pending",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wecom_setup_sessions_agent_id_agents_id_fk": {
-          "name": "wecom_setup_sessions_agent_id_agents_id_fk",
-          "tableFrom": "wecom_setup_sessions",
-          "tableTo": "agents",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "wecom_setup_status": {
-          "name": "wecom_setup_status",
-          "value": "\"platform\".\"wecom_setup_sessions\".\"status\" in ('awaiting_input','verifying','active','auth_failed','conflict','cancelled','expired')"
         }
       },
       "isRLSEnabled": false
@@ -3486,6 +3280,325 @@
         "workload_reconciliation_identity": {
           "name": "workload_reconciliation_identity",
           "value": "jsonb_typeof(\"platform\".\"workload_reconciliations\".\"state\") = 'object' and \"platform\".\"workload_reconciliations\".\"state\" @> jsonb_build_object('schemaVersion', 1, 'agentId', \"platform\".\"workload_reconciliations\".\"agent_id\", 'revision', \"platform\".\"workload_reconciliations\".\"revision\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.file_reconciliation": {
+      "name": "file_reconciliation",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "platform.file_accesses": {
+      "name": "file_accesses",
+      "schema": "platform",
+      "columns": {
+        "access_id": {
+          "name": "access_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_id": {
+          "name": "file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "record": {
+          "name": "record",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "file_access_expiry_idx": {
+          "name": "file_access_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_access_idempotency_unique": {
+          "name": "file_access_idempotency_unique",
+          "columns": [
+            {
+              "expression": "file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "file_accesses_file_id_files_file_id_fk": {
+          "name": "file_accesses_file_id_files_file_id_fk",
+          "tableFrom": "file_accesses",
+          "tableTo": "files",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "file_id"
+          ],
+          "columnsTo": [
+            "file_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "file_accesses_conversation_id_conversations_id_fk": {
+          "name": "file_accesses_conversation_id_conversations_id_fk",
+          "tableFrom": "file_accesses",
+          "tableTo": "conversations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "conversation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "file_access_record_binding": {
+          "name": "file_access_record_binding",
+          "value": "\"platform\".\"file_accesses\".\"record\"->>'accessId' = \"platform\".\"file_accesses\".\"access_id\" AND \"platform\".\"file_accesses\".\"record\"->>'fileId' = \"platform\".\"file_accesses\".\"file_id\" AND \"platform\".\"file_accesses\".\"record\"->>'conversationId' = \"platform\".\"file_accesses\".\"conversation_id\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.files": {
+      "name": "files",
+      "schema": "platform",
+      "columns": {
+        "file_id": {
+          "name": "file_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "record": {
+          "name": "record",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "file_actor_idempotency_unique": {
+          "name": "file_actor_idempotency_unique",
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_conversation_idx": {
+          "name": "file_conversation_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_object_ref_unique": {
+          "name": "file_object_ref_unique",
+          "columns": [
+            {
+              "expression": "(\"record\"->>'objectRef')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_pending_reconciliation_idx": {
+          "name": "file_pending_reconciliation_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"platform\".\"files\".\"record\"->>'status' = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_message_idx": {
+          "name": "file_message_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "(\"record\"->>'messageId')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "files_conversation_id_conversations_id_fk": {
+          "name": "files_conversation_id_conversations_id_fk",
+          "tableFrom": "files",
+          "tableTo": "conversations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "conversation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "file_record_binding": {
+          "name": "file_record_binding",
+          "value": "\"platform\".\"files\".\"record\"->>'fileId' = \"platform\".\"files\".\"file_id\" AND \"platform\".\"files\".\"record\"->>'conversationId' = \"platform\".\"files\".\"conversation_id\" AND \"platform\".\"files\".\"record\"->>'actorId' = \"platform\".\"files\".\"actor_id\" AND \"platform\".\"files\".\"record\"->>'idempotencyKey' = \"platform\".\"files\".\"idempotency_key\""
+        },
+        "file_state_valid": {
+          "name": "file_state_valid",
+          "value": "\"platform\".\"files\".\"record\"->>'status' IN ('pending','available','failed','expired','deleting','deleted')"
         }
       },
       "isRLSEnabled": false

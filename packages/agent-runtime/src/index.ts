@@ -15,5 +15,7 @@ export * from "./grant.js";
 export * from "./grant-v2.js";
 export * from "./opencode-bootstrap.js";
 export * from "./opencode-installation.js";
+export * from "./pi-bootstrap.js";
+export * from "./pi-installation.js";
 export * from "./readiness.js";
 export * from "./runtime-host.js";

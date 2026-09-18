@@ -3,6 +3,7 @@ import {
 	type ConversationEventUseCaseV1,
 	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
+	type FileRecordV1,
 } from "@agent-infra/platform-core";
 import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
@@ -41,6 +42,7 @@ afterAll(async () => {
 });
 
 async function seedConformanceConversation(): Promise<void> {
+	await client`delete from platform.files where conversation_id = ${conformanceConversationId}`;
 	await client`
 		delete from platform.conversation_events
 		where conversation_id = ${conformanceConversationId}
@@ -73,6 +75,34 @@ async function seedConformanceConversation(): Promise<void> {
 			 'turn_event_fixture', 'unknown', 3, 5,
 			 'authorization_event_fixture', now(), now())
 	`;
+	const file: FileRecordV1 = {
+		fileId: "file_fixture",
+		objectRef: "00000000-0000-4000-8000-000000000001",
+		kind: "result",
+		idempotencyKey: "result_fixture",
+		actorId: "actor_event_fixture",
+		agentId: "agent_event_fixture",
+		channelId: "channel_event_fixture",
+		conversationId: conformanceConversationId,
+		executionId: conformanceExecutionId,
+		messageId: null,
+		sessionGeneration: 3,
+		status: "available",
+		descriptor: {
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: 16,
+			sha256: "0".repeat(64),
+		},
+		objectVersion: "version_fixture",
+		etag: "etag_fixture",
+		createdAt: "2026-09-04T00:00:00Z",
+		updatedAt: "2026-09-04T00:00:00Z",
+		expiresAt: "2026-09-04T01:00:00Z",
+		revision: 1,
+	};
+	await client`insert into platform.files (file_id, actor_id, conversation_id, idempotency_key, record, updated_at)
+        values (${file.fileId}, ${file.actorId}, ${file.conversationId}, ${file.idempotencyKey}, ${client.json(file as unknown as Parameters<typeof client.json>[0])}, now())`;
 }
 
 async function armEventCommitFailure(): Promise<void> {
@@ -1245,4 +1275,52 @@ describe("PostgreSQL Conversation event transaction", () => {
 			await second.close();
 		}
 	});
+});
+
+it("rejects unconfirmed, forged metadata and cross-scope result files before advancing history", async () => {
+	await seedConformanceConversation();
+	const [fileRow] = await client<
+		{ record: FileRecordV1 }[]
+	>`select record from platform.files where file_id = 'file_fixture'`;
+	if (!fileRow) throw new Error("Missing result fixture");
+	const original = fileRow.record;
+	const runtime = openEvents("file_event_authority");
+	const command = {
+		...eventInput(conformanceConversationId, conformanceExecutionId),
+		event: {
+			type: "result.file" as const,
+			fileId: "file_fixture",
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: 16,
+		},
+	};
+	try {
+		for (const change of [
+			{ status: "pending" },
+			{ status: "deleted" },
+			{ kind: "attachment" },
+			{ actorId: "other" },
+			{ agentId: "other" },
+			{ channelId: "other" },
+			{ executionId: "other" },
+			{ sessionGeneration: 4 },
+			{ descriptor: { ...original.descriptor, name: "forged.txt" } },
+			{ descriptor: { ...original.descriptor, mediaType: "image/png" } },
+			{ descriptor: { ...original.descriptor, sizeBytes: 17 } },
+		]) {
+			await client`update platform.files set actor_id = ${change.actorId ?? original.actorId}, record = ${client.json({ ...original, ...change } as unknown as Parameters<typeof client.json>[0])} where file_id = 'file_fixture'`;
+			await expect(runtime.events.persist(command)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		}
+		const [state] =
+			await client`select last_conversation_cursor from platform.conversations where id = ${conformanceConversationId}`;
+		expect(Number(state?.last_conversation_cursor)).toBe(0);
+		await client`update platform.files set actor_id = ${original.actorId}, record = ${client.json(original as unknown as Parameters<typeof client.json>[0])} where file_id = 'file_fixture'`;
+		expect((await runtime.events.persist(command)).outcome).toBe("accepted");
+		expect((await runtime.events.persist(command)).outcome).toBe("replayed");
+	} finally {
+		await runtime.close();
+	}
 });

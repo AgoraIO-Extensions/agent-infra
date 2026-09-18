@@ -13,6 +13,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { imageDockerfiles, sha256 } from "../../.github/scripts/vulnerability-policy.mjs";
+import { scanCustomBaseImage, verifyCustomBaseImage } from "./custom-base-image.mjs";
+
 import { runCommand } from "./run-command.mjs";
 import {
 	assertCleanRuntimeProbeSource,
@@ -81,6 +84,13 @@ const images = [
 		],
 	},
 ];
+
+const customBaseImage = {
+	key: "customBase",
+	name: "custom-agent-base",
+	dockerfile: imageDockerfiles["custom-agent-base"],
+	command: ["node", "--version"],
+};
 
 function fail(message) {
 	throw new Error(message);
@@ -240,6 +250,10 @@ async function buildImage({
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
 	const reference = `${repository}:${commitSha}-${platformTag}`;
+	const labels = image.key === "customBase" ? [
+		"--label", `org.opencontainers.image.revision=${commitSha}`,
+		"--label", `agent-infra.lockfile-sha256=${sha256(await readFile(join(contextPath, "pnpm-lock.yaml")))}`,
+	] : [];
 	const digests = [];
 	let archivePath;
 	for (const pass of [1, 2]) {
@@ -265,6 +279,7 @@ async function buildImage({
 							`codex-native=${resolve(process.env.AGENT_INFRA_CODEX_BUILD_CONTEXT ?? join(repositoryRoot, "deploy/runtime/vendor/codex"))}`,
 						]
 					: []),
+				...labels,
 				"--provenance=false",
 				"--sbom=false",
 				"--no-cache",
@@ -425,12 +440,14 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 
 async function main() {
 	const [manifestArgument, ...extra] = process.argv.slice(2);
-	if (!manifestArgument || extra.length > 0) {
-		fail("usage: build-images.mjs <image-manifest.json>");
+	const customBase = extra.length === 1 && extra[0] === "--custom-base-image";
+	if (!manifestArgument || (extra.length > 0 && !customBase)) {
+		fail("usage: build-images.mjs <image-manifest.json> [--custom-base-image]");
 	}
+	const selectedImages = customBase ? [customBaseImage] : images;
 	const manifestPath = resolve(manifestArgument);
 	const runtimeProbePath = `${manifestPath}.runtime-probe.json`;
-	if (!(await unavailable(runtimeProbePath))) {
+	if (!customBase && !(await unavailable(runtimeProbePath))) {
 		fail("runtime probe evidence already exists");
 	}
 	if (!(await unavailable(manifestPath))) {
@@ -484,7 +501,7 @@ async function main() {
 	try {
 		const contextPath = await createBuildContext({ git, commitSha, temp });
 		const buildResults = {};
-		for (const image of images) {
+		for (const image of selectedImages) {
 			buildResults[image.key] = await buildImage({
 				image,
 				commitSha,
@@ -497,8 +514,20 @@ async function main() {
 				git,
 			});
 		}
+		let baseEvidence;
+		if (customBase) {
+			const dockerfile = await readFile(join(contextPath, customBaseImage.dockerfile));
+			const parentImage = /^FROM\s+(\S+)/m.exec(dockerfile.toString())?.[1];
+			if (!/@sha256:[a-f0-9]{64}$/.test(parentImage ?? "")) fail("Base Image parent must use a Digest");
+			baseEvidence = {
+				parentImage,
+				dockerfileSha256: sha256(dockerfile),
+				localInheritance: await verifyCustomBaseImage(buildResults.customBase.reference, { contextPath }),
+				scan: await scanCustomBaseImage(buildResults.customBase.reference, `${manifestPath}.scan`),
+			};
+		}
 		const builtImages = {};
-		for (const image of images) {
+		for (const image of selectedImages) {
 			builtImages[image.key] = publishImage({
 				image,
 				builtImage: buildResults[image.key],
@@ -508,15 +537,23 @@ async function main() {
 			});
 		}
 		assertCheckout(git, commitSha);
-		await writeFile(
-			runtimeProbePath,
-			`${JSON.stringify(buildResults.runtimeHost.runtimeProbe, null, 2)}\n`,
-			{ flag: "wx" },
-		);
+		if (customBase) {
+			const image = builtImages.customBase;
+			baseEvidence.inheritance = await verifyCustomBaseImage(`${image.repository}@${image.digest}`, {
+				published: true, contextPath,
+			});
+			assertCheckout(git, commitSha);
+		} else {
+			await writeFile(
+				runtimeProbePath,
+				`${JSON.stringify(buildResults.runtimeHost.runtimeProbe, null, 2)}\n`,
+				{ flag: "wx" },
+			);
+		}
 		await writeFile(
 			manifestPath,
 			`${JSON.stringify(
-				{ schemaVersion: 1, commitSha, platform, images: builtImages },
+				{ schemaVersion: 1, commitSha, platform, images: builtImages, ...(customBase ? { customBase: baseEvidence } : {}) },
 				null,
 				2,
 			)}\n`,

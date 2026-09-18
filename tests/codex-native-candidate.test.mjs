@@ -255,6 +255,8 @@ class CandidateGates(unittest.TestCase):
         builder.vendor = self.vendor
         builder.source = self.source
         builder.head = self.head
+        builder.output = self.root / 'runner-owned-output'
+        builder.output.mkdir()
         inputs = {'build-input-v1.json': 'fixed'}
         builder.inputs = lambda: inputs.copy()
         tree = candidate.native_source_tree(self.vendor, self.source)
@@ -262,15 +264,29 @@ class CandidateGates(unittest.TestCase):
                   'bwrapSha256': 'sha256:' + 'a' * 64, 'binaries': {'bwrap': 'sha256:' + 'a' * 64}}
         candidate.save(builder.candidate / 'candidate.json', record)
         commands = []
+        test_roots = set()
+        failure = RuntimeError('native test failed')
         def run(name, command, cwd, env):
             commands.append(command)
             self.assertEqual(cwd, self.source)
             self.assertEqual(env['CODEX_BWRAP_SHA256'], 'a' * 64)
+            test_root = Path(env['CODEX_TEST_HOME_ROOT'])
+            test_roots.add(test_root)
+            self.assertTrue(test_root.is_absolute())
+            self.assertEqual(test_root.parent, builder.output.resolve())
+            self.assertEqual(test_root.stat().st_mode & 0o777, 0o700)
+            self.assertFalse(test_root.is_relative_to(self.source.resolve()))
+            self.assertFalse(test_root.is_relative_to(Path(tempfile.gettempdir()).resolve()))
+            # Simulate a native ctor leaving its home behind after abort.
+            (test_root / 'unfinished-test-home').mkdir(exist_ok=True)
             # Focused runs need Core's target-specific vendored OpenSSL feature.
+            expected_packages = (['codex-core'] if name == 'native-tests-model-switch-compaction' else
+                                 ['codex-rmcp-client', 'codex-core', 'codex-network-proxy',
+                                  'codex-git-utils', 'codex-http-client'])
             self.assertEqual([command[index + 1] for index, value in enumerate(command) if value == '-p'],
-                             ['codex-rmcp-client', 'codex-core', 'codex-network-proxy',
-                              'codex-git-utils', 'codex-http-client'])
+                             expected_packages)
             self.assertIn('--no-tests=fail', command)
+            self.assertIn('--release', command)
             self.assertEqual(command[command.index('--target') + 1], candidate.TARGET)
             expected_selection = {
                 'native-tests-connection': 'package(=codex-rmcp-client) & (test(native_connection))',
@@ -278,17 +294,45 @@ class CandidateGates(unittest.TestCase):
                 'native-tests-network-proxy': 'package(=codex-network-proxy) & (all())',
                 'native-tests-git-utils': 'package(=codex-git-utils) & (all())',
                 'native-tests-http-client': 'package(=codex-http-client) & (all())',
+                'native-tests-model-switch-compaction': 'package(=codex-core) & (test(suite::compact::))',
             }
             self.assertEqual(command[command.index('-E') + 1], expected_selection[name])
-            if name == 'native-tests-http-client':
-                raise RuntimeError('native test failed')
+            if name == 'native-tests-model-switch-compaction':
+                self.assertNotIn('--lib', command)
+                self.assertEqual(command[command.index('--test') + 1], 'all')
+                if failure is not None:
+                    raise failure
+            else:
+                self.assertIn('--lib', command)
         builder.run = run
         def version(command, cwd):
             return 'just 1.51.0' if command[0] == 'just' else 'cargo-nextest 0.9.103 (fixture)'
-        with patch.object(candidate, 'capture', side_effect=version), patch.object(candidate, 'verify_bundle'):
-            with self.assertRaisesRegex(RuntimeError, 'native test failed'):
-                builder.tests()
-        self.assertEqual(len(commands), 5)
+        # Model the runner's /home/runner/_temp separately from system /tmp.
+        system_temp = self.root / 'system-temp'
+        system_temp.mkdir()
+        with patch.object(candidate, 'capture', side_effect=version), patch.object(candidate, 'verify_bundle'), patch.object(candidate.tempfile, 'gettempdir', return_value=str(system_temp)):
+            for failure in (RuntimeError('native test failed'), KeyboardInterrupt('interrupted'), None):
+                commands.clear()
+                test_roots.clear()
+                if failure is None:
+                    builder.tests()
+                    proof = builder.diag / 'native-tests.json'
+                    self.assertFalse(json.loads(proof.read_text())['nativeAcceptance'])
+                    proof.unlink()
+                else:
+                    with self.assertRaises(type(failure)):
+                        builder.tests()
+                self.assertEqual(len(commands), 6)
+                self.assertEqual(len(test_roots), 1)
+                self.assertTrue(all(not root.exists() for root in test_roots))
+                self.assertFalse((builder.diag / 'native-tests.json').exists())
+            for unsafe_output in (self.source, system_temp):
+                builder.output = unsafe_output
+                commands.clear()
+                with self.assertRaisesRegex(RuntimeError, 'Test homes must be outside'):
+                    builder.tests()
+                self.assertEqual(commands, [])
+        commands.clear()
         self.assertFalse((builder.diag / 'native-tests.json').exists())
         record['head'] = '0' * 40
         candidate.save(builder.candidate / 'candidate.json', record)

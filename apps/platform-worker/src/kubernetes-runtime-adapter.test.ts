@@ -3734,12 +3734,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			const pvc = structuredClone(
 				f.resources.get(key),
 			) as V1PersistentVolumeClaim;
-			if (
-				!pvc?.metadata ||
-				!pvc.metadata.labels ||
-				!pvc.metadata.annotations ||
-				!pvc.spec
-			)
+			if (!pvc?.metadata?.labels || !pvc.metadata?.annotations || !pvc.spec)
 				throw new Error();
 			if (mutation === "missing") f.resources.delete(key);
 			else {

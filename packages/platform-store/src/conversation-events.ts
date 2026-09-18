@@ -10,6 +10,8 @@ import {
 	type ConversationNormalizedEventV1,
 	type ConversationOperationFactV2,
 	type ConversationPersistedEventPayloadV1,
+	type FileRecordV1,
+	isConfirmedResultFileV1,
 	type PersistedRuntimeConversationEventV1,
 	parseConversationOperationEventV2,
 	parseConversationOperationFactV2,
@@ -785,6 +787,29 @@ export class PostgresConversationEventTransactionV1
 					persistedRequest.command.operationMetadataOnly,
 				);
 				await insertOperationAudit(transaction, plan, execution);
+			}
+			if (plan.event.event.type === "result.file") {
+				const [row] = await transaction<{ record: FileRecordV1 }[]>`
+                    select record from platform.files
+                    where file_id = ${plan.event.event.fileId}
+                      and conversation_id = ${plan.event.conversationId}
+                `;
+				if (
+					!execution ||
+					!isConfirmedResultFileV1(
+						row?.record ?? null,
+						{
+							actorId: execution.actor_id,
+							agentId: execution.agent_id,
+							channelId: execution.channel_id,
+							conversationId: execution.conversation_id,
+							executionId: execution.execution_id,
+							sessionGeneration: safeInteger(execution.session_generation, 1),
+						},
+						plan.event.event,
+					)
+				)
+					unavailable();
 			}
 
 			await transaction`

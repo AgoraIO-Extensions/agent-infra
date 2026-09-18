@@ -40,7 +40,6 @@ import type {
 import { ConversationQueryError } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-
 import {
 	HttpProtocolError,
 	parseIdempotencyKey,
@@ -49,6 +48,7 @@ import {
 	type RequestMetadata,
 	requestMetadata,
 } from "./common.js";
+import type { FileRoutesDependenciesV1 } from "./file-routes.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -107,6 +107,7 @@ export interface ConversationQuery {
 }
 
 export interface ConversationRoutesDependencies {
+	readonly files?: FileRoutesDependenciesV1;
 	readonly identity: IdentityAdapter;
 	readonly authorization: ConversationAuthorization;
 	readonly commands: (
@@ -806,11 +807,28 @@ export function registerConversationRoutes(
 				MessageCommandRequestV1Schema,
 				metadata.traceId,
 			);
+			if (body.attachments?.length) {
+				if (!dependencies.files)
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				try {
+					const port = dependencies.files.authorization(context.req.raw);
+					await dependencies.files.service.authorizeInputs(
+						context.req.param("conversationId"),
+						body.attachments,
+						port,
+					);
+				} catch {
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				}
+			}
 			const decision = await dependencies.commands(identity).accept({
 				schemaVersion: 1,
 				command: "message",
 				conversationId: context.req.param("conversationId"),
 				text: body.text,
+				...(body.attachments === undefined
+					? {}
+					: { attachments: body.attachments }),
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,

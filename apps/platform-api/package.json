@@ -23,6 +23,7 @@
 		"@agent-infra/secret-store": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "^4.12.32",
+		"@agent-infra/object-storage": "workspace:*",
 		"@agent-infra/wecom": "workspace:*"
 	},
 	"devDependencies": {

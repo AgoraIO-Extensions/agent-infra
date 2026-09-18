@@ -76,7 +76,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
 	await client`truncate platform.task_control_records, platform.task_authorization_records,
-		platform.conversation_events,
+		platform.file_accesses, platform.files, platform.conversation_events,
 		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items,
 		platform.idempotency_records, platform.conversation_stops,
@@ -1602,4 +1602,121 @@ describe("PostgreSQL Conversation command transaction", () => {
 			await transaction.close();
 		}
 	});
+});
+
+it("atomically binds confirmed input files with their Message and preserves binding on replay", async () => {
+	const { transaction, useCase } = createConversation();
+	const { createFileAuthorityV1 } = await import("@agent-infra/platform-core");
+	const { PostgresFileStoreV1 } = await import("./files.ts");
+	const files = new PostgresFileStoreV1(databaseUrl);
+	try {
+		await useCase.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create-files",
+			requestId: "create-files",
+			traceId: "create-files",
+		});
+		const scope = {
+			actorId: authority.actorId,
+			agentId: authority.agentId,
+			channelId: authority.channelId,
+			conversationId: "conversation_id_1",
+		};
+		const descriptor = {
+			name: "fixture.txt",
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256: "0".repeat(64),
+		};
+		const service = createFileAuthorityV1({
+			store: files,
+			intentTtlMs: 60000,
+			accessTtlMs: 10000,
+			issuer: "platform",
+			keyVersion: "key",
+			storage: {
+				inspect: async () => ({
+					...descriptor,
+					version: "version",
+					etag: "etag",
+				}),
+			},
+		});
+		const auth = {
+			authorize: async () => ({
+				...scope,
+				execution: null,
+				limits: {
+					revision: "limits",
+					expiresAt: "2099-01-01T00:00:00Z",
+					maxBytes: 10,
+					mediaTypes: ["text/plain"],
+				},
+			}),
+		};
+		const file = await service.createUpload(
+			{
+				conversationId: scope.conversationId,
+				descriptor,
+				idempotencyKey: "input",
+			},
+			auth,
+		);
+		const command = {
+			schemaVersion: 1 as const,
+			command: "message" as const,
+			conversationId: scope.conversationId,
+			text: "bounded fixture",
+			attachments: [file.fileId],
+			idempotencyKey: "message-files",
+			requestId: "message-files",
+			traceId: "message-files",
+		};
+		await expect(useCase.accept(command)).rejects.toBeDefined();
+		expect(
+			(await client`select message_id from platform.conversation_messages`)
+				.length,
+		).toBe(0);
+		const access = await service.issueAccess(
+			{
+				conversationId: scope.conversationId,
+				fileId: file.fileId,
+				operation: "write",
+				idempotencyKey: "access",
+			},
+			auth,
+		);
+		await service.complete(
+			{
+				conversationId: scope.conversationId,
+				fileId: file.fileId,
+				accessId: access.accessId,
+			},
+			auth,
+		);
+		const accepted = await useCase.accept(command);
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected attachment acceptance");
+		expect(await useCase.accept(command)).toEqual({
+			outcome: "replayed",
+			result: accepted.result,
+		});
+		const bound = await service.getFile(
+			{ conversationId: scope.conversationId, fileId: file.fileId },
+			auth,
+		);
+		expect(bound.messageId).toBe(accepted.result.messageId);
+		expect(bound.executionId).toBe(accepted.result.executionId);
+		await expect(
+			useCase.accept({ ...command, idempotencyKey: "rebind" }),
+		).rejects.toBeDefined();
+		expect(
+			(await client`select message_id from platform.conversation_messages`)
+				.length,
+		).toBe(1);
+	} finally {
+		await files.close();
+		await transaction.close();
+	}
 });

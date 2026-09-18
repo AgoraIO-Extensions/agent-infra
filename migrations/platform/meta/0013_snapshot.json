@@ -1,5 +1,5 @@
 {
-  "id": "920667f3-270e-442d-8b0c-52abf0e834b4",
+  "id": "83866bc0-4d58-4e28-957a-53a9f914efec",
   "prevId": "81b75bfe-868c-4726-bdd9-16a125464adf",
   "version": "7",
   "dialect": "postgresql",
@@ -421,7 +421,7 @@
         },
         "agent_configuration_identity_matches": {
           "name": "agent_configuration_identity_matches",
-          "value": "\"platform\".\"agent_configuration_revisions\".\"configuration\" IS NULL OR (\n\t\t\t\tjsonb_typeof(\"platform\".\"agent_configuration_revisions\".\"configuration\") = 'object'\n\t\t\t\tand \"platform\".\"agent_configuration_revisions\".\"configuration\" ? 'schemaVersion'\n                and \"platform\".\"agent_configuration_revisions\".\"configuration\"->'schemaVersion' in ('1'::jsonb, '2'::jsonb)\n                and \"platform\".\"agent_configuration_revisions\".\"configuration\" @> jsonb_build_object(\n\t\t\t\t\t'agentId', \"platform\".\"agent_configuration_revisions\".\"agent_id\",\n\t\t\t\t\t'revision', \"platform\".\"agent_configuration_revisions\".\"revision\"\n\t\t\t\t)\n\t\t\t)"
+          "value": "\"platform\".\"agent_configuration_revisions\".\"configuration\" IS NULL OR (\n\t\t\t\tjsonb_typeof(\"platform\".\"agent_configuration_revisions\".\"configuration\") = 'object'\n\t\t\t\tand \"platform\".\"agent_configuration_revisions\".\"configuration\" @> jsonb_build_object(\n\t\t\t\t\t'schemaVersion', 1,\n\t\t\t\t\t'agentId', \"platform\".\"agent_configuration_revisions\".\"agent_id\",\n\t\t\t\t\t'revision', \"platform\".\"agent_configuration_revisions\".\"revision\"\n\t\t\t\t)\n\t\t\t)"
         }
       },
       "isRLSEnabled": false
@@ -1891,6 +1891,31 @@
       },
       "isRLSEnabled": false
     },
+    "platform.file_reconciliation": {
+      "name": "file_reconciliation",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "platform.idempotency_records": {
       "name": "idempotency_records",
       "schema": "platform",
@@ -2350,6 +2375,300 @@
         "persisted_event_cursor_non_negative": {
           "name": "persisted_event_cursor_non_negative",
           "value": "\"platform\".\"persisted_events\".\"stream_cursor\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.file_accesses": {
+      "name": "file_accesses",
+      "schema": "platform",
+      "columns": {
+        "access_id": {
+          "name": "access_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_id": {
+          "name": "file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "record": {
+          "name": "record",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "file_access_expiry_idx": {
+          "name": "file_access_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_access_idempotency_unique": {
+          "name": "file_access_idempotency_unique",
+          "columns": [
+            {
+              "expression": "file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "file_accesses_file_id_files_file_id_fk": {
+          "name": "file_accesses_file_id_files_file_id_fk",
+          "tableFrom": "file_accesses",
+          "tableTo": "files",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "file_id"
+          ],
+          "columnsTo": [
+            "file_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "file_accesses_conversation_id_conversations_id_fk": {
+          "name": "file_accesses_conversation_id_conversations_id_fk",
+          "tableFrom": "file_accesses",
+          "tableTo": "conversations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "conversation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "file_access_record_binding": {
+          "name": "file_access_record_binding",
+          "value": "\"platform\".\"file_accesses\".\"record\"->>'accessId' = \"platform\".\"file_accesses\".\"access_id\" AND \"platform\".\"file_accesses\".\"record\"->>'fileId' = \"platform\".\"file_accesses\".\"file_id\" AND \"platform\".\"file_accesses\".\"record\"->>'conversationId' = \"platform\".\"file_accesses\".\"conversation_id\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.files": {
+      "name": "files",
+      "schema": "platform",
+      "columns": {
+        "file_id": {
+          "name": "file_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "record": {
+          "name": "record",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "file_actor_idempotency_unique": {
+          "name": "file_actor_idempotency_unique",
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_conversation_idx": {
+          "name": "file_conversation_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_object_ref_unique": {
+          "name": "file_object_ref_unique",
+          "columns": [
+            {
+              "expression": "(\"record\"->>'objectRef')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_pending_reconciliation_idx": {
+          "name": "file_pending_reconciliation_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"platform\".\"files\".\"record\"->>'status' = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "file_message_idx": {
+          "name": "file_message_idx",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "(\"record\"->>'messageId')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "files_conversation_id_conversations_id_fk": {
+          "name": "files_conversation_id_conversations_id_fk",
+          "tableFrom": "files",
+          "tableTo": "conversations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "conversation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "file_record_binding": {
+          "name": "file_record_binding",
+          "value": "\"platform\".\"files\".\"record\"->>'fileId' = \"platform\".\"files\".\"file_id\" AND \"platform\".\"files\".\"record\"->>'conversationId' = \"platform\".\"files\".\"conversation_id\" AND \"platform\".\"files\".\"record\"->>'actorId' = \"platform\".\"files\".\"actor_id\" AND \"platform\".\"files\".\"record\"->>'idempotencyKey' = \"platform\".\"files\".\"idempotency_key\""
+        },
+        "file_state_valid": {
+          "name": "file_state_valid",
+          "value": "\"platform\".\"files\".\"record\"->>'status' IN ('pending','available','failed','expired','deleting','deleted')"
         }
       },
       "isRLSEnabled": false
