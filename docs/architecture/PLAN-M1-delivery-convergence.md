@@ -122,9 +122,10 @@ Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 由独立 
 #395 的实际通过记录为准。本计划只记录其与 Platform 联合验收的边界，不复制 Connection
 实现、授权或审计。
 
-L1 消费的 Direct MCP contract 由独立 Connection 系统发布版本化、不可变的 HTTP/MCP Schema
-artifact，Connection Owner @guoxianzhe 负责版本和兼容说明；#435 AC-1 固定该 artifact 的
-版本、来源和校验值，#194 的 schema-conformant Fake 只能从该 artifact 生成或校验。该消费约束
+L1 消费的 Direct MCP contract 由独立 Connection 系统在 #194 开始前发布版本化、不可变的 HTTP/MCP Schema
+artifact，Connection Owner @guoxianzhe 负责版本和兼容说明；#194 的输入证据必须固定该 artifact 的
+版本、来源和校验值，其 schema-conformant Fake 只能从该固定 artifact 生成或校验；#435 AC-1
+只回读并验证联合验收使用的是同一 artifact，不承担首次固定。该消费约束
 不恢复 #398，也不建立 Platform 侧第二套 Connection DTO。
 
 L1 的最小未完成闭包是 **#190、#192、#194、#389、#400、#404、#405、#406、#415**；Connection 独立系统不计入 Platform L1 闭包。

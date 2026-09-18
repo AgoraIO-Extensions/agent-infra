@@ -57,7 +57,7 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
 
-Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
+Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
 作为 GitHub OAuth Client 时，Provider callback 使用独立的一次性、短期、高熵服务端 state，原子绑定发起 BrowserSession、Principal、Provider、原始事务和精确受控回跳地址；callback 不依赖 BrowserSession Cookie、CSRF token、Origin 或 Fetch Metadata。Callback 只能完成原 Provider OAuth 事务，不创建 Grant，不接受调用方提交的 Principal、Connection 归属或任意跳转地址；state 缺失、重复、过期或绑定不一致时 fail closed。
 
@@ -70,7 +70,7 @@ Catalog 是只读投影，只包含 Provider、immutable ActionVersion、输入/
 Grant 绑定：
 
 - 当前 Principal；
-- Consumer 与 ConsumerInstance/Actor；
+- Consumer 与始终绑定的 ConsumerInstance；Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，Actor 不能替代 ConsumerInstance；
 - Connection；
 - 用户确认的精确 ActionVersion 集合；
 - 当前 Grant revision、签发和过期信息。
@@ -122,7 +122,7 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 
 - 只有能够证明请求未被 Provider 接受的确定性业务或协议拒绝，Connection 才返回脱敏终态失败并记录 `PROVIDER_FAILED` 或等价稳定错误。
 - 超时、连接中断、响应丢失、无法确认提交语义的 `5xx`，或 Connection 无法保存 Provider 终态时，进入 `RESULT_PENDING/UNCERTAIN`。
-- 未知 WRITE 不自动重试，不重新创建 POST；首次提交前生成并持久化高熵关联标记及 repository、head、base、ActionVersion 和参数摘要，只沿原 `callId` 对账。
+- 未知 WRITE 不自动重试，不重新创建 POST；首次提交前生成并持久化高熵关联标记及 repository、head、base、ActionVersion 和参数摘要，只沿原 `callId` 对账。对 GitHub `create_pull_request`，该标记必须作为脱敏的受控 provenance marker 写入首次请求的 PR body（或等价的 Provider 可回读字段），且必须在首次提交前持久化；不得写入凭证或其他敏感信息。
 - 对账最多运行配置的期限；仅当 Provider 结果包含原关联标记、全部不可变请求字段一致且候选唯一时才能自动确认成功，零候选、多个候选、标记缺失、字段冲突或超时均进入人工处理/最终未知状态。
 - `NEEDS_MANUAL_REVIEW`、`UNRESOLVED`、Provider revoke 和管理员处理均保留审计。
 
@@ -140,7 +140,7 @@ Connection 审计保存 Principal、ConsumerInstance、Actor、Connection、Acti
 
 业务路由缺少 PostgreSQL、LDAP、Credential 加密密钥、OAuth 配置、Provider allowlist 或审计写入能力时 fail closed。部署不允许匿名降级、动态 Provider endpoint、Credential 通过请求传入、直连 OpenConnector Runtime Server 或跨库读取 Platform 状态。
 
-管理员 bootstrap 必须通过受信部署身份完成，使用一次性高熵凭据；服务端以原子事务执行单次消费并排除并发重复请求，成功或失败均写入脱敏审计。bootstrap 完成后永久关闭 bootstrap endpoint 和凭据，浏览器会话、普通 Principal、Provider 回调和重放请求均不能触发 bootstrap。
+管理员 bootstrap 必须通过受信部署身份完成，使用一次性高熵凭据；目标 Principal 必须从受保护的部署配置读取，调用方不得提交、覆盖或选择目标 Principal。服务端以原子事务执行单次消费并排除并发重复请求，成功或失败均写入脱敏审计。bootstrap 完成后永久关闭 bootstrap endpoint 和凭据，浏览器会话、普通 Principal、Provider 回调和重放请求均不能触发 bootstrap。
 
 日志、错误、测试 fixture、审计和结果不得包含密码、OAuth token、Provider Credential、Cookie、私钥、完整请求正文或模型内部思考。
 

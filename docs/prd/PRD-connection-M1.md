@@ -82,7 +82,7 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 - Connection 使用部署批准的公司 LDAP 建立 `issuer + stable uid` Principal；邮箱、显示名和登录名只用于展示。
 - LDAP 密码不保存、不记录、不进入 Token、Cookie、错误、审计或模型上下文。
 - OAuth 客户端注册、ConsumerInstance、token、Grant 和撤销均由 Connection 服务端解析和持久化。
-- Grant 绑定当前 Principal、Consumer、ConsumerInstance/Actor、Connection 和用户确认的精确 ActionVersion 集合。
+- Grant 始终绑定当前 Principal、Consumer、ConsumerInstance、Connection 和用户确认的精确 ActionVersion 集合；Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，不能以 Actor 取代 ConsumerInstance 绑定。
 - Provider OAuth 只建立或更新 Connection，不自动创建 Grant。
 - Owner 或 Consumer policy 不能替 Principal 创建、扩大或替换 Grant；能力扩张必须由授权主体在 Connection 中重新确认。
 - 拒绝响应不能泄露其他 Principal、Connection、Grant、Credential、调用或审计是否存在。
