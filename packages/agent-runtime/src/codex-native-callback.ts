@@ -430,7 +430,10 @@ export function serveCodexNativeCallbacks(
 						await Promise.race([write, interrupted]);
 					} catch (error) {
 						stream.destroy();
-						await write.catch(() => undefined);
+						// A custom Writable may never invoke its callback after destroy().
+						// Attach a rejection handler without waiting for that callback so
+						// interrupted shutdown remains bounded.
+						void write.catch(() => undefined);
 						throw error;
 					}
 				} finally {

@@ -835,10 +835,9 @@ function pendingNativeSources(journal: CodexEventJournal) {
 	return Object.values(journal.nativeSources ?? {}).filter(
 		(source) =>
 			!source.reserveDenied &&
+			!source.bindDenied &&
 			!source.notStarted &&
-			(!source.bind ||
-				source.bindDenied ||
-				(source.delivery === "started" && !source.terminal)),
+			(!source.bind || (source.delivery === "started" && !source.terminal)),
 	);
 }
 
@@ -3302,15 +3301,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			Object.values(session.journals ?? {}).find(
 				(value) => value.nativeTurnId === execution.nativeTurnId,
 			);
-		const fact =
-			journal &&
-			latestOperationAttemptFacts(journal.events).find(
-				(value) =>
-					value.operationRef === action.operationRef &&
-					value.attemptRef === action.attemptRef &&
-					value.kind === action.kind,
-			);
-		if (!fact || (fact.phase !== "intent" && fact.phase !== "started"))
+		const facts: RuntimeOperationFactV2[] =
+			journal?.events.flatMap((event) =>
+				event.type === "operation" &&
+				event.payload.operationRef === action.operationRef &&
+				event.payload.attemptRef === action.attemptRef &&
+				event.payload.kind === action.kind
+					? [event.payload]
+					: [],
+			) ?? [];
+		const fact = facts.at(-1);
+		const phase = fact?.phase;
+		const validSourceBind =
+			action.purpose === "source-bind" &&
+			facts.some((value) => value.phase === "started") &&
+			(phase === "intent" ||
+				phase === "started" ||
+				phase === "completed" ||
+				phase === "failed");
+		if (
+			!fact ||
+			(!validSourceBind && phase !== "intent" && phase !== "started")
+		)
 			runtimeAuthorizationDenied();
 	}
 
@@ -4911,6 +4923,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				return { nativeSessionRef, executionId: execution.executionId };
 			}
 			if (
+				request.phase === "started" &&
+				(!attempt.expiresAt || attempt.expiresAt <= Date.now())
+			)
+				protocolInvalid();
+			if (
 				[
 					attempt.intentRequestId,
 					attempt.startedRequestId,
@@ -5293,6 +5310,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						operationRef: prepared.parent.operationRef,
 						attemptRef: prepared.parent.attemptRef,
 						kind: "tool",
+						purpose: "source-bind",
 					}),
 				]);
 			} catch (error) {

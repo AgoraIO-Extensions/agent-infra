@@ -110,15 +110,26 @@ test("validates the official review output, including explicit zero findings", (
   }
 });
 
-test("finds changed lines when a large-file patch is unavailable", () => {
+test("finds changed lines when a large-file patch is unavailable", async () => {
   assert.deepEqual(
-    changedRightLinesFromTexts("keep\nold\nend\n", "keep\nnew\nend\n"),
+    await changedRightLinesFromTexts("keep\nold\nend\n", "keep\nnew\nend\n"),
     new Set([2]),
   );
   assert.deepEqual(
-    changedRightLinesFromTexts("first\nlast\n", "first\ninserted\nlast\n"),
+    await changedRightLinesFromTexts(
+      "first\nlast\n",
+      "first\ninserted\nlast\n",
+    ),
     new Set([2]),
   );
+  assert.deepEqual(
+    await changedRightLinesFromTexts(
+      "b\nc\na\nb",
+      "c\nb\nd\na\nc\na",
+    ),
+    new Set([2, 3, 5, 6]),
+  );
+  assert.deepEqual(await changedRightLinesFromTexts("a", ""), new Set());
 });
 
 test("publishes findings as native threads and verifies the exact head, body and comments", async () => {

@@ -161,62 +161,69 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	if (configuration) {
 		await verifyCodexPilotInstallation();
 	}
-	const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
-	await legacyMigration?.apply(store);
 	let assembledHost: RuntimeHost | undefined;
-	const driver = configuration
-		? await CodexRuntimeDriver.open({
-				...(connectionProfile
-					? {
-							connectionClient: createIndependentConnectionClientInput({
-								dataDirectory,
-								profile: connectionProfile,
-								// The committed Store is ready before Host startup recovery invokes native bootstrap.
-								resolveOriginalBinding: (reference) =>
-									store.resolveOriginalExecutionBinding(reference, Date.now),
-							}),
-						}
-					: {}),
-				authorizeExternalAction: async (action) => {
-					if (!assembledHost)
-						throw new RuntimeHostError(
-							"RUNTIME_GRANT_INVALID",
-							"Runtime authorization is not ready",
-							403,
-						);
-					await assembledHost.authorizeExternalAction(action);
-				},
-				launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
-				path: join(dataDirectory, "codex-driver.json"),
-				configVersion: configuration.configVersion,
-				defaultModelOptionId: configuration.defaultModelOptionId,
-				defaultReasoningLevel: configuration.defaultReasoningLevel,
-				modelOptions: configuration.modelOptions,
-			})
-		: messagesConfiguration
-			? binding === "acp"
-				? await openOpenCodeRuntime({
-						...messagesConfiguration,
-						path: join(dataDirectory, "acp-driver"),
-						executable:
-							environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
-							"/opt/opencode/bin/opencode",
-					})
-				: binding === "pi"
-					? await openPiRuntime({
-							...messagesConfiguration,
-							path: join(dataDirectory, "pi-driver"),
-						})
-					: await ClaudeRuntimeDriver.open({
-							...messagesConfiguration,
-							path: join(dataDirectory, "claude-driver"),
-						})
-			: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
+	let closeDriver: (() => Promise<void>) | undefined;
 	const close = async () => {
-		await assembledHost?.close();
-		if ("close" in driver) await driver.close();
+		try {
+			await assembledHost?.close();
+		} finally {
+			await closeDriver?.();
+		}
 	};
 	try {
+		const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
+		await legacyMigration?.apply(store);
+		const driver = configuration
+			? await CodexRuntimeDriver.open({
+					...(connectionProfile
+						? {
+								connectionClient: createIndependentConnectionClientInput({
+									dataDirectory,
+									profile: connectionProfile,
+									// The committed Store is ready before Host startup recovery invokes native bootstrap.
+									resolveOriginalBinding: (reference) =>
+										store.resolveOriginalExecutionBinding(reference, Date.now),
+								}),
+							}
+						: {}),
+					authorizeExternalAction: async (action) => {
+						if (!assembledHost)
+							throw new RuntimeHostError(
+								"RUNTIME_GRANT_INVALID",
+								"Runtime authorization is not ready",
+								403,
+							);
+						await assembledHost.authorizeExternalAction(action);
+					},
+					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
+					path: join(dataDirectory, "codex-driver.json"),
+					configVersion: configuration.configVersion,
+					defaultModelOptionId: configuration.defaultModelOptionId,
+					defaultReasoningLevel: configuration.defaultReasoningLevel,
+					modelOptions: configuration.modelOptions,
+				})
+			: messagesConfiguration
+				? binding === "acp"
+					? await openOpenCodeRuntime({
+							...messagesConfiguration,
+							path: join(dataDirectory, "acp-driver"),
+							executable:
+								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
+								"/opt/opencode/bin/opencode",
+						})
+					: binding === "pi"
+						? await openPiRuntime({
+								...messagesConfiguration,
+								path: join(dataDirectory, "pi-driver"),
+							})
+						: await ClaudeRuntimeDriver.open({
+								...messagesConfiguration,
+								path: join(dataDirectory, "claude-driver"),
+							})
+				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
+		closeDriver = async () => {
+			if ("close" in driver) await driver.close();
+		};
 		const host = await RuntimeHost.open({
 			...(readinessBinding
 				? {

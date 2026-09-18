@@ -17,7 +17,10 @@ export const RuntimeOperationBindingV2Schema = z.strictObject({
 export const RuntimeExecutionGrantV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
 	format: z.literal("runtime-execution-jws"),
-	token: z.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+	token: z
+		.string()
+		.max(262_144)
+		.regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
 });
 
 export const RuntimeBusinessCommandV2Schema = z.enum([

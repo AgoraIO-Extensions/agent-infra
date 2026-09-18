@@ -125,6 +125,11 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		);
 	}
 
+	async validateExternalAction() {
+		// The fake driver has no external operation journal. RuntimeHost still
+		// requires this hook so real Drivers cannot silently bypass ref validation.
+	}
+
 	async execute(command: RuntimeDriverCommand) {
 		let eventStreamKey: string | undefined;
 		const record = await this.file.update((state) => {

@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
-import { appendFile, readFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   collectChangedDiffLines,
   requireCurrentReviewTarget,
@@ -45,72 +55,45 @@ export function parsePrAgentReview(raw) {
   return findings;
 }
 
-/**
- * Return the line numbers on the new side that are added or replaced when two
- * file contents are compared. This is used when GitHub omits `patch` for a
- * large file in the pull-request files response.
- */
-export function changedRightLinesFromTexts(before, after) {
-  const oldLines = before.split("\n");
-  const newLines = after.split("\n");
-  const max = oldLines.length + newLines.length;
-  const trace = [];
-  let frontier = new Map([[1, 0]]);
+const execFileAsync = promisify(execFile);
 
-  for (let distance = 0; distance <= max; distance += 1) {
-    trace.push(frontier);
-    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
-      const down = frontier.get(diagonal + 1) ?? -1;
-      const right = frontier.get(diagonal - 1) ?? -1;
-      let oldIndex;
-      if (diagonal === -distance || (diagonal !== distance && right < down)) {
-        oldIndex = down;
-      } else {
-        oldIndex = right + 1;
-      }
-      let newIndex = oldIndex - diagonal;
-      while (
-        oldIndex < oldLines.length &&
-        newIndex < newLines.length &&
-        oldLines[oldIndex] === newLines[newIndex]
-      ) {
-        oldIndex += 1;
-        newIndex += 1;
-      }
-      frontier.set(diagonal, oldIndex);
-      if (oldIndex >= oldLines.length && newIndex >= newLines.length) {
-        const changed = new Set();
-        let currentOld = oldLines.length;
-        let currentNew = newLines.length;
-        for (let step = trace.length - 1; step > 0; step -= 1) {
-          const previous = trace[step - 1];
-          const currentDiagonal = currentOld - currentNew;
-          const downPrevious = previous.get(currentDiagonal + 1) ?? -1;
-          const rightPrevious = previous.get(currentDiagonal - 1) ?? -1;
-          const previousDiagonal =
-            currentDiagonal === -(step - 1) ||
-            (currentDiagonal !== step - 1 && rightPrevious < downPrevious)
-              ? currentDiagonal + 1
-              : currentDiagonal - 1;
-          const previousOld = previous.get(previousDiagonal) ?? 0;
-          const previousNew = previousOld - previousDiagonal;
-          while (currentOld > previousOld && currentNew > previousNew) {
-            currentOld -= 1;
-            currentNew -= 1;
-          }
-          if (currentOld === previousOld) {
-            currentNew -= 1;
-            changed.add(currentNew + 1);
-          } else {
-            currentOld -= 1;
-          }
-        }
-        return changed;
-      }
+/**
+ * Use Git's own zero-context hunk calculation so repeated lines and EOF
+ * insertions follow the same anchors as the pull-request diff.
+ */
+export async function changedRightLinesFromTexts(before, after) {
+  const directory = await mkdtemp(join(tmpdir(), "agent-infra-pr-diff-"));
+  const beforePath = join(directory, "before");
+  const afterPath = join(directory, "after");
+  try {
+    await Promise.all([
+      writeFile(beforePath, before, "utf8"),
+      writeFile(afterPath, after, "utf8"),
+    ]);
+    let stdout = "";
+    try {
+      ({ stdout } = await execFileAsync(
+        "git",
+        ["diff", "--no-index", "--unified=0", "--", beforePath, afterPath],
+        { maxBuffer: 64 * 1024 * 1024 },
+      ));
+    } catch (error) {
+      if (error?.code !== 1) throw error;
+      stdout = error.stdout ?? "";
     }
-    frontier = new Map(frontier);
+    const changed = new Set();
+    for (const line of stdout.split("\n")) {
+      const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      if (!match) continue;
+      const start = Number(match[1]);
+      const count = Number(match[2] ?? 1);
+      for (let offset = 0; offset < count; offset += 1)
+        changed.add(start + offset);
+    }
+    return changed;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
-  throw new Error("Unable to compare pull-request file contents");
 }
 
 function validateContext({
@@ -268,7 +251,10 @@ export async function publishPrAgentReview(context) {
         Buffer.from(value.replace(/\s/g, ""), "base64").toString("utf8");
       files.set(
         filename,
-        changedRightLinesFromTexts(decode(before.content), decode(after.content)),
+        await changedRightLinesFromTexts(
+          decode(before.content),
+          decode(after.content),
+        ),
       );
     }
   }

@@ -1285,7 +1285,6 @@ export class FileRuntimeStore {
 			!session?.authority ||
 			session.generationBarrier ||
 			(action.nativeSessionRef !== undefined &&
-				session.nativeSessionRef &&
 				session.nativeSessionRef !== action.nativeSessionRef)
 		)
 			runtimeAuthorizationDenied();

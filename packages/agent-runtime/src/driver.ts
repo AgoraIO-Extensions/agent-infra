@@ -28,6 +28,8 @@ export interface RuntimeExternalActionAuthorization {
 	readonly operationRef: string;
 	readonly attemptRef: string;
 	readonly kind: "model" | "tool";
+	/** Source binding may arrive after its parent operation has a terminal outcome. */
+	readonly purpose?: "source-bind";
 }
 
 export interface RuntimeOriginalEvidenceBinding {

@@ -608,12 +608,24 @@ async function readExistingEvent(
 		`;
 		const fact = parseConversationOperationEventV2(row.event_payload).fact;
 		const details = observed[0]?.details as Record<string, unknown> | undefined;
+		const authorizationRecords = await transaction<{ id: string }[]>`
+			select r.id
+			from platform.task_authorization_records r
+			join platform.audit_events a on a.target_id = r.execution_id
+				and a.target_type = 'execution'
+				and a.action = 'task.authorization.accepted'
+				and a.outcome = 'succeeded'
+				and a.details ->> 'authorizationRecordId' = r.id
+			where r.execution_id = ${executionId}
+		`;
 		if (
 			observed.length !== 1 ||
 			!details ||
 			details.schemaVersion !== 2 ||
 			details.eventId !== row.event_id ||
 			details.executor !== "platform_worker" ||
+			authorizationRecords.length !== 1 ||
+			details.authorizationRecordId !== authorizationRecords[0]?.id ||
 			JSON.stringify(parseConversationOperationFactV2(details.fact)) !==
 				JSON.stringify(fact)
 		)

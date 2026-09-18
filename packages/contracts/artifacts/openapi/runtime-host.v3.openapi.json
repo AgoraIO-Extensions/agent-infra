@@ -1292,6 +1292,7 @@
             "type": "number"
           },
           "token": {
+            "maxLength": 262144,
             "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
             "type": "string"
           }
@@ -2466,6 +2467,7 @@
             "$ref": "#/components/schemas/RuntimeExecutionGrantClaimsV2"
           },
           "token": {
+            "maxLength": 262144,
             "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
             "type": "string"
           }
