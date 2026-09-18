@@ -33,6 +33,8 @@ flowchart LR
 
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
 
+Direct MCP Client 只需配置 Connection endpoint，并通过 Connection OAuth 或获准 PAT 访问。Connection 必须在每次调用时验证 token/PAT 的签名或 hash、issuer、audience、scope、有效期、Principal、Consumer、ConsumerInstance、Actor（如适用）及 recovery generation，并在 ConsumerInstance 或授权撤销后拒绝旧凭据。
+
 ## 4. 部署与模块
 
 - `connection-web`：中文登录、Connection 管理和授权确认页面。
