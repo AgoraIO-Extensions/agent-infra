@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { connectionMcpEndpoint } from "./connection-endpoint.mjs";
 import {
 	runGitHubIssueConformance,
 	runGitHubReadConformance,
@@ -310,10 +311,7 @@ test("GitHub conformance rejects a mismatched repository before mutation", async
 		/repository ID does not match/,
 	);
 	assert.deepEqual(calls, ["list_connections", "github.get_repository"]);
-	assert.deepEqual(urls, [
-		"https://agent-connector.gz3.agoralab.co/mcp",
-		"https://agent-connector.gz3.agoralab.co/mcp",
-	]);
+	assert.deepEqual(urls, [connectionMcpEndpoint, connectionMcpEndpoint]);
 });
 
 test("GitHub conformance rejects an unmarked created issue before later mutation", async () => {

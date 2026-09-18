@@ -7,7 +7,7 @@
 Connection is a remote Streamable HTTP MCP server. When a user asks you to install Connection in Codex, explain the commands before running them. Installation and login require the user's explicit participation.
 
 ```bash
-codex mcp add connection --url https://agent-connector.gz3.agoralab.co/mcp
+codex mcp add connection --url __CONNECTION_ORIGIN__/mcp
 codex mcp login connection --scopes mcp --oauth-client-registration dcr
 ```
 
@@ -17,8 +17,8 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 
 ## Public URLs
 
-- Installation guide: https://agent-connector.gz3.agoralab.co/connection
-- Connection console: https://agent-connector.gz3.agoralab.co/connection/connections
-- MCP endpoint: https://agent-connector.gz3.agoralab.co/mcp
+- Installation guide: __CONNECTION_ORIGIN__/connection
+- Connection console: __CONNECTION_ORIGIN__/connection/connections
+- MCP endpoint: __CONNECTION_ORIGIN__/mcp
 
 Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.

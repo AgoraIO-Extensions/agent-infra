@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
 import { githubV8ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v8-read-scenarios.ts";
+import { connectionMcpEndpoint } from "./connection-endpoint.mjs";
 
 const target = {
 	externalAccount: "328682695",
@@ -9,7 +10,7 @@ const target = {
 	repository: "connector-conformance",
 	repositoryId: 1369705971,
 };
-const connectionEndpoint = "https://agent-connector.gz3.agoralab.co/mcp";
+const connectionEndpoint = connectionMcpEndpoint;
 const requestTimeoutMs = 30_000;
 const actionEffects = {
 	"github.get_repository": "READ",
