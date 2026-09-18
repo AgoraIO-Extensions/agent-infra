@@ -45,6 +45,74 @@ export function parsePrAgentReview(raw) {
   return findings;
 }
 
+/**
+ * Return the line numbers on the new side that are added or replaced when two
+ * file contents are compared. This is used when GitHub omits `patch` for a
+ * large file in the pull-request files response.
+ */
+export function changedRightLinesFromTexts(before, after) {
+  const oldLines = before.split("\n");
+  const newLines = after.split("\n");
+  const max = oldLines.length + newLines.length;
+  const trace = [];
+  let frontier = new Map([[1, 0]]);
+
+  for (let distance = 0; distance <= max; distance += 1) {
+    trace.push(frontier);
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const down = frontier.get(diagonal + 1) ?? -1;
+      const right = frontier.get(diagonal - 1) ?? -1;
+      let oldIndex;
+      if (diagonal === -distance || (diagonal !== distance && right < down)) {
+        oldIndex = down;
+      } else {
+        oldIndex = right + 1;
+      }
+      let newIndex = oldIndex - diagonal;
+      while (
+        oldIndex < oldLines.length &&
+        newIndex < newLines.length &&
+        oldLines[oldIndex] === newLines[newIndex]
+      ) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+      frontier.set(diagonal, oldIndex);
+      if (oldIndex >= oldLines.length && newIndex >= newLines.length) {
+        const changed = new Set();
+        let currentOld = oldLines.length;
+        let currentNew = newLines.length;
+        for (let step = trace.length - 1; step > 0; step -= 1) {
+          const previous = trace[step - 1];
+          const currentDiagonal = currentOld - currentNew;
+          const downPrevious = previous.get(currentDiagonal + 1) ?? -1;
+          const rightPrevious = previous.get(currentDiagonal - 1) ?? -1;
+          const previousDiagonal =
+            currentDiagonal === -(step - 1) ||
+            (currentDiagonal !== step - 1 && rightPrevious < downPrevious)
+              ? currentDiagonal + 1
+              : currentDiagonal - 1;
+          const previousOld = previous.get(previousDiagonal) ?? 0;
+          const previousNew = previousOld - previousDiagonal;
+          while (currentOld > previousOld && currentNew > previousNew) {
+            currentOld -= 1;
+            currentNew -= 1;
+          }
+          if (currentOld === previousOld) {
+            currentNew -= 1;
+            changed.add(currentNew + 1);
+          } else {
+            currentOld -= 1;
+          }
+        }
+        return changed;
+      }
+    }
+    frontier = new Map(frontier);
+  }
+  throw new Error("Unable to compare pull-request file contents");
+}
+
 function validateContext({
   repository,
   prNumber,
@@ -154,15 +222,55 @@ export async function publishPrAgentReview(context) {
   if (current.head.repo?.full_name !== repository)
     throw new Error("PR-Agent review target must be in the same repository");
   const files = new Map();
+  const missingPatches = new Set();
   // GitHub caps PR files at 3000; reaching the cap is not evidence of a complete list.
   for (let page = 1; page <= 30; page++) {
     const batch = await request(
       `/repos/${repository}/pulls/${prNumber}/files?per_page=100&page=${page}`,
     );
-    for (const file of batch)
-      files.set(file.filename, collectChangedDiffLines(file.patch).RIGHT);
+    for (const file of batch) {
+      if (typeof file.patch === "string") {
+        files.set(file.filename, collectChangedDiffLines(file.patch).RIGHT);
+      } else if (findings.some((finding) => finding.relevant_file.trim() === file.filename)) {
+        missingPatches.add(file.filename);
+      }
+    }
     if (batch.length < 100) break;
     if (page === 30) throw new Error("PR-Agent review file list is incomplete");
+  }
+  if (missingPatches.size > 0) {
+    const baseSha = current.base?.sha;
+    if (!/^[a-f0-9]{40}$/.test(baseSha ?? ""))
+      throw new Error("PR-Agent review base commit is invalid");
+    for (const filename of missingPatches) {
+      const path = filename
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
+      const [before, after] = await Promise.all([
+        request(
+          `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(baseSha)}`,
+        ),
+        request(
+          `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(expectedHead)}`,
+        ),
+      ]);
+      if (
+        before?.type !== "file" ||
+        before.encoding !== "base64" ||
+        typeof before.content !== "string" ||
+        after?.type !== "file" ||
+        after.encoding !== "base64" ||
+        typeof after.content !== "string"
+      )
+        throw new Error("PR-Agent review file contents are invalid");
+      const decode = (value) =>
+        Buffer.from(value.replace(/\s/g, ""), "base64").toString("utf8");
+      files.set(
+        filename,
+        changedRightLinesFromTexts(decode(before.content), decode(after.content)),
+      );
+    }
   }
   const comments = findings.map((finding) => {
     const path = finding.relevant_file.trim();

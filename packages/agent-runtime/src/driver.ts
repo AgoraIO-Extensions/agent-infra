@@ -56,6 +56,10 @@ export interface RuntimeOriginalEvidenceReadContext {
 }
 
 export interface RuntimeDriver {
+	/** Validate the action refs against the Driver's durable operation journal. */
+	validateExternalAction?(
+		action: RuntimeExternalActionAuthorization,
+	): Promise<void>;
 	recoverOriginalEvidence?(
 		reference: RuntimeOriginalEvidenceRecoveryRef,
 		read: RuntimeOriginalEvidenceReadContext,

@@ -12,7 +12,10 @@ import {
 	RuntimeOperationResultV2Schema,
 	type RuntimePrincipalV1,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeOriginalEvidenceBinding } from "./driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeOriginalEvidenceBinding,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -1217,13 +1220,18 @@ export class FileRuntimeStore {
 	}
 
 	async authorizeExternalAction(
-		action: {
-			nativeSessionRef: string;
-			executionId: string;
-			runtimeOperationId: string;
-		},
+		action: RuntimeExternalActionAuthorization,
 		readNow: () => number,
 	) {
+		if (
+			!action.nativeSessionRef ||
+			!action.executionId ||
+			!action.runtimeOperationId ||
+			!action.operationRef ||
+			!action.attemptRef ||
+			(action.kind !== "model" && action.kind !== "tool")
+		)
+			runtimeAuthorizationDenied();
 		await this.authorizedOriginalExecution(action, readNow);
 	}
 

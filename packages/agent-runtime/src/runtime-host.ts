@@ -375,6 +375,7 @@ export class RuntimeHost {
 		kind: "model" | "tool";
 	}) {
 		this.trustedHost();
+		await this.options.driver.validateExternalAction?.(action);
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,

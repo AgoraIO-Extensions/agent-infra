@@ -84,7 +84,10 @@ import type {
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
-import type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
+import {
+	type RuntimeOriginalExecutionRef,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 
 interface CodexAppServerTransport {
 	send(frame: CodexAppServerFrame): Promise<void>;
@@ -2484,7 +2487,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			processNonce = request.processNonce;
 			requests.add(request.requestId);
 			current = undefined;
-			const original = await change(({ journal }) => {
+			const selected = await change(({ journal }) => {
 				itemSignal.throwIfAborted();
 				const pass = journal.connectionRecovery;
 				if (!pass || pass.recoveryRequestId !== reference.recoveryRequestId)
@@ -2551,9 +2554,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						originalResponse,
 					});
 					if (!isCodexConnectionRecoveryOriginal(original)) continue;
-					pass.scannedAttemptRefs.push(attempt.attemptRef);
 					journal.connectionRecoveryCursor = attempt.attemptRef;
-					return original;
+					return { attemptRef: attempt.attemptRef, original };
 				}
 				pass.completed = true;
 				return undefined;
@@ -2564,7 +2566,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				requestId: request.requestId,
 				request,
 			};
-			if (!original) return { ...base, decision: "done" };
+			if (!selected) return { ...base, decision: "done" };
+			const { attemptRef, original } = selected;
+			const markScanned = async () => {
+				await change(({ journal }) => {
+					const pass = journal.connectionRecovery;
+					if (!pass || pass.recoveryRequestId !== reference.recoveryRequestId)
+						unavailable();
+					if (!pass.scannedAttemptRefs.includes(attemptRef))
+						pass.scannedAttemptRefs.push(attemptRef);
+				});
+			};
 			let value: unknown;
 			const waiting = new AbortController();
 			try {
@@ -2591,12 +2603,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			itemSignal.throwIfAborted();
 			locate(this.readState());
-			if (!isCodexConnectionClientConfiguration(value))
+			if (!isCodexConnectionClientConfiguration(value)) {
+				await markScanned();
 				return {
 					...base,
 					decision: "unavailable",
 					reason: "credential_unavailable",
 				};
+			}
 			if (
 				!isDeepStrictEqual(
 					value.originalBinding,
@@ -2607,19 +2621,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					value.connectionIdentity,
 					original.connectionOrigin.connectionIdentity,
 				)
-			)
+			) {
+				await markScanned();
 				return { ...base, decision: "unavailable", reason: "binding_mismatch" };
+			}
 			const expiresAt = Math.min(
 				initial.pass.deadlineAt,
 				read.expiresAt,
 				value.credential.expiresAt,
 			);
-			if (expiresAt <= Date.now())
+			if (expiresAt <= Date.now()) {
+				await markScanned();
 				return {
 					...base,
 					decision: "unavailable",
 					reason: "credential_expired",
 				};
+			}
+			await markScanned();
 			previousRecoveryId = randomUUID();
 			current = {
 				original,
@@ -3269,6 +3288,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.inFlightOperations.delete(key);
 			}
 		}
+	}
+
+	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
+		if (action.runtimeOperationId !== action.executionId)
+			runtimeAuthorizationDenied();
+		const state = this.readState();
+		const session = ownRecordValue(state.sessions, action.nativeSessionRef);
+		const execution =
+			session && ownRecordValue(session.executions, action.executionId);
+		const journal =
+			execution &&
+			Object.values(session.journals ?? {}).find(
+				(value) => value.nativeTurnId === execution.nativeTurnId,
+			);
+		const fact =
+			journal &&
+			latestOperationAttemptFacts(journal.events).find(
+				(value) =>
+					value.operationRef === action.operationRef &&
+					value.attemptRef === action.attemptRef &&
+					value.kind === action.kind,
+			);
+		if (!fact || (fact.phase !== "intent" && fact.phase !== "started"))
+			runtimeAuthorizationDenied();
 	}
 
 	private async executeSubmitTurn(command: CodexSubmitTurnCommand) {

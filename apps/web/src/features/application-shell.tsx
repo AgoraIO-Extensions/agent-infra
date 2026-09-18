@@ -17,6 +17,7 @@ import {
 	type ReactNode,
 	useContext,
 	useLayoutEffect,
+	useRef,
 	useState,
 } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -83,6 +84,29 @@ function AuthenticatedContent({
 
 export function ApplicationShell({ children }: { children: ReactNode }) {
 	const session = useBrowserSession();
+	const fallbackSessionEpoch = useRef<{
+		projection?: string;
+		ready: boolean;
+		key: string;
+	}>({ ready: false, key: crypto.randomUUID() });
+	if (session.state.kind === "ready") {
+		const projection = JSON.stringify(session.state.session);
+		if (
+			!fallbackSessionEpoch.current.ready ||
+			fallbackSessionEpoch.current.projection !== projection
+		) {
+			fallbackSessionEpoch.current = {
+				projection,
+				ready: true,
+				key: crypto.randomUUID(),
+			};
+		}
+	} else {
+		fallbackSessionEpoch.current = {
+			ready: false,
+			key: crypto.randomUUID(),
+		};
+	}
 	const pathname = useLocation({ select: (location) => location.pathname });
 	const [sheet, setSheet] = useState(false);
 	const user =
@@ -212,7 +236,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							// session. Keep the projection fallback for older deployments.
 							key={
 								session.state.sessionGeneration ??
-								JSON.stringify(session.state.session)
+								fallbackSessionEpoch.current.key
 							}
 							session={session.state.session}
 						>
