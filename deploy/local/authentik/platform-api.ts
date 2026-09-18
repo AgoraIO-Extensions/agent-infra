@@ -68,6 +68,7 @@ export async function startAuthentikPlatformApi(input: {
 		close() {
 			closing ??= new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
+				if ("closeAllConnections" in server) server.closeAllConnections();
 			}).finally(() => assembly.close());
 			return closing;
 		},

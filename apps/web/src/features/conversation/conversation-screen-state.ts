@@ -39,19 +39,27 @@ export function currentExecution(
 ): { executionId: string | undefined; status: ExecutionStatus | undefined } {
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
+	const persistedStatuses = new Set<string>();
 	for (const message of messages) {
-		if (message.role === "assistant" && message.executionId)
+		// A terminal user-message status describes delivery of that message, not
+		// the execution it started. Keep only its non-terminal state as a
+		// candidate; assistant messages carry the execution result itself.
+		if (
+			message.executionId &&
+			(message.role !== "user" || !isTerminal(message.status))
+		)
 			statuses.set(message.executionId, message.status);
 	}
 	for (const event of events) {
 		if (event.type !== "execution.status") continue;
+		persistedStatuses.add(event.executionId);
 		statuses.delete(event.executionId);
 		statuses.set(event.executionId, event.payload.status);
 	}
 	// A new receipt remains authoritative until its persisted execution status is
 	// observed. This also prevents an older active event from taking over while
 	// the accepted execution is represented only by its user message.
-	if (acceptedExecution && !statuses.has(acceptedExecution))
+	if (acceptedExecution && !persistedStatuses.has(acceptedExecution))
 		return {
 			executionId: acceptedExecution,
 			status: "submitted",

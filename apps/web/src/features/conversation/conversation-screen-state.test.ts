@@ -58,4 +58,41 @@ describe("current conversation execution", () => {
 			currentExecution(projection, projection.events, "execution-1"),
 		).toEqual({ executionId: "execution-2", status: "processing" });
 	});
+
+	it("keeps a newer user execution ahead of an older assistant execution", () => {
+		const projection = ConversationDetailProjectionV2Schema.parse({
+			...history("conversation-1"),
+			messages: [
+				{
+					messageId: "message-1",
+					role: "assistant",
+					text: "Older answer",
+					status: "processing",
+					executionId: "execution-1",
+					replyToMessageId: null,
+					answerVersion: 1,
+					isCurrentAnswer: true,
+					error: null,
+					createdAt: timestamp,
+				},
+				{
+					messageId: "message-2",
+					role: "user",
+					text: "New request",
+					status: "submitted",
+					executionId: "execution-2",
+					replyToMessageId: null,
+					answerVersion: null,
+					isCurrentAnswer: null,
+					error: null,
+					createdAt: timestamp,
+				},
+			],
+		});
+
+		expect(currentExecution(projection, projection.events)).toEqual({
+			executionId: "execution-2",
+			status: "submitted",
+		});
+	});
 });
