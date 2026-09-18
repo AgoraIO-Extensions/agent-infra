@@ -302,7 +302,7 @@ class Builder:
 
     def build(self):
         inputs = self.inputs()
-        require(os.environ.get("CARGO_BUILD_JOBS") == "2"
+        require(os.environ.get("CARGO_BUILD_JOBS") in {"2", "3"}
                 and os.environ.get("CARGO_INCREMENTAL") == "0", "Unexpected Cargo resource settings")
         for name, expected in V8_FILES.items():
             require(digest(self.v8 / name) == "sha256:" + expected, "V8 input changed")
