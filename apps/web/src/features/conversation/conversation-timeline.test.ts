@@ -1,4 +1,7 @@
-import { PersistedConversationEventV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	PersistedConversationEventV2Schema,
+	PilotProtocolErrorV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
 import {
@@ -59,6 +62,28 @@ describe("Conversation generated-client data consumer", () => {
 		);
 		expect(reader.getSnapshot().history).toBeNull();
 		expect(reader.getSnapshot().events).toEqual([]);
+	});
+
+	it("purges history for a schema-valid authorization error on a dependency response", async () => {
+		const error = PilotProtocolErrorV1Schema.parse({
+			schemaVersion: 1,
+			code: "AUTHORIZATION_REVOKED",
+			message: "Synthetic authorization failure",
+			retryable: false,
+			traceId: "trace-timeline",
+		});
+		const { reader } = setup((request) =>
+			route(request) === "history"
+				? Response.json(error, { status: 503 })
+				: sse().response,
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() => expect(reader.getSnapshot().status).toBe("denied"));
+		expect(reader.getSnapshot().failure).toEqual({
+			kind: "authorization",
+			status: 503,
+		});
+		expect(reader.getSnapshot().history).toBeNull();
 	});
 
 	it("refreshes the authoritative projection after a receipt and resumes from the new cursor", async () => {

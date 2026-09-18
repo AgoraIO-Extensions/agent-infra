@@ -1,4 +1,7 @@
-import { ExecutionDetailProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	ExecutionDetailProjectionV2Schema,
+	PilotProtocolErrorV1Schema,
+} from "@agent-infra/contracts/pilot";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { getExecutionDetailV2 } from "../../pilot/generated-v2/sdk.gen.js";
 
@@ -19,6 +22,24 @@ export function httpFailure(status?: number): ConversationReadFailure {
 		return { kind: "authorization", status };
 	if (status >= 500) return { kind: "service", status };
 	return { kind: status >= 400 ? "http" : "invalid", status };
+}
+
+export function responseFailure(
+	error: unknown,
+	status?: number,
+): ConversationReadFailure {
+	const parsed = PilotProtocolErrorV1Schema.safeParse(error);
+	if (
+		parsed.success &&
+		["AUTHENTICATION_REQUIRED", "AUTHORIZATION_REVOKED"].includes(
+			parsed.data.code,
+		)
+	)
+		return {
+			kind: "authorization",
+			...(status === undefined ? {} : { status }),
+		};
+	return httpFailure(status);
 }
 
 export async function loadExecutionDetail({
@@ -42,8 +63,10 @@ export async function loadExecutionDetail({
 	// Query owns cancellation. A transport that ignores its signal must not
 	// publish data or trigger a permission callback after a selection changes.
 	signal.throwIfAborted();
-	if (!result.data)
-		throw new ConversationReadError(httpFailure(result.response?.status));
+	if (!result.data || result.response?.status !== 200)
+		throw new ConversationReadError(
+			responseFailure(result.error, result.response?.status),
+		);
 	const parsed = ExecutionDetailProjectionV2Schema.safeParse(result.data);
 	if (
 		!parsed.success ||

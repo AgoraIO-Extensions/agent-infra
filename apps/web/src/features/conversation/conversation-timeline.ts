@@ -16,6 +16,7 @@ import {
 	ConversationReadError,
 	type ConversationReadFailure,
 	httpFailure,
+	responseFailure,
 } from "./execution-detail.js";
 
 export type ConversationTimelineState = {
@@ -122,7 +123,7 @@ export function createConversationTimeline({
 		});
 		if (current !== session || request.signal.aborted) return;
 		if (!result.data || result.response?.status !== 200) {
-			fail(session, httpFailure(result.response?.status));
+			fail(session, responseFailure(result.error, result.response?.status));
 			return;
 		}
 		const parsed = ConversationDetailProjectionV2Schema.safeParse(result.data);

@@ -1,3 +1,4 @@
+import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	onlineManager,
 	QueryClient,
@@ -91,6 +92,27 @@ afterEach(() => {
 });
 
 describe("Conversation execution detail Query ownership", () => {
+	it("purges cached execution detail on a schema-valid authorization error", async () => {
+		const stream = sse();
+		const error = PilotProtocolErrorV1Schema.parse({
+			schemaVersion: 1,
+			code: "AUTHORIZATION_REVOKED",
+			message: "Synthetic authorization failure",
+			retryable: false,
+			traceId: "trace-execution",
+		});
+		const { result } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			if (route(request) === "execution")
+				return Response.json(error, { status: 503 });
+			return Response.json(history());
+		});
+
+		await waitFor(() => expect(result.current.timeline.status).toBe("denied"));
+		expect(result.current.timeline.history).toBeNull();
+		expect(result.current.execution.data).toBeUndefined();
+	});
+
 	it("suspends a still-open stream on browser offline and resumes reads only on explicit reconnect", async () => {
 		const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
 		const first = sse();
