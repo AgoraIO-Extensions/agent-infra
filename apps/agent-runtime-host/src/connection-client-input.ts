@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -93,58 +93,75 @@ async function readIndependentInput(
 		)
 		.digest("hex");
 	try {
-		const directory = await lstat(inputDirectory);
-		if (
-			!directory.isDirectory() ||
-			directory.isSymbolicLink() ||
-			directory.uid !== process.getuid?.() ||
-			(directory.mode & 0o777) !== 0o700 ||
-			(await realpath(inputDirectory)) !== inputDirectory
-		)
-			return undefined;
-		const handle = await open(
-			join(inputDirectory, `${inputId}.json`),
-			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		const directory = await open(
+			inputDirectory,
+			constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
 		);
 		try {
-			const before = await handle.stat();
+			const directoryStat = await directory.stat();
 			if (
-				!before.isFile() ||
-				before.uid !== process.getuid?.() ||
-				![0o400, 0o600].includes(before.mode & 0o777) ||
-				before.size < 1 ||
-				before.size > maximumInputBytes
+				!directoryStat.isDirectory() ||
+				directoryStat.uid !== process.getuid?.() ||
+				(directoryStat.mode & 0o777) !== 0o700 ||
+				(await realpath(inputDirectory)) !== inputDirectory
 			)
 				return undefined;
-			const bytes = Buffer.alloc(before.size);
+			const directoryPath =
+				process.platform === "linux"
+					? `/proc/self/fd/${directory.fd}`
+					: inputDirectory;
+			const handle = await open(
+				join(directoryPath, `${inputId}.json`),
+				constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+			);
 			try {
-				const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-				const after = await handle.stat();
 				if (
-					bytesRead !== before.size ||
-					after.size !== before.size ||
-					after.mtimeMs !== before.mtimeMs
+					process.platform !== "linux" &&
+					(await realpath(inputDirectory)) !== inputDirectory
 				)
 					return undefined;
-				const input: unknown = JSON.parse(bytes.toString("utf8"));
+				const before = await handle.stat();
 				if (
-					!record(input) ||
-					Object.keys(input).sort().join(",") !== "agentId,client,principal" ||
-					!RuntimePrincipalV1Schema.safeParse(input.principal).success ||
-					!isDeepStrictEqual(input.principal, binding.principal) ||
-					input.agentId !== binding.scope.agentId ||
-					!record(input.client) ||
-					Object.keys(input.client).sort().join(",") !==
-						"connectionIdentity,credential,service"
+					!before.isFile() ||
+					before.uid !== process.getuid?.() ||
+					![0o400, 0o600].includes(before.mode & 0o777) ||
+					before.size < 1 ||
+					before.size > maximumInputBytes
 				)
 					return undefined;
-				// Canonical callback schema validates these nested values at the private lane.
-				return { originalBinding: binding, ...input.client };
+				const bytes = Buffer.alloc(before.size);
+				try {
+					const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+					const after = await handle.stat();
+					if (
+						bytesRead !== before.size ||
+						after.size !== before.size ||
+						after.mtimeMs !== before.mtimeMs
+					)
+						return undefined;
+					const input: unknown = JSON.parse(bytes.toString("utf8"));
+					if (
+						!record(input) ||
+						Object.keys(input).sort().join(",") !==
+							"agentId,client,principal" ||
+						!RuntimePrincipalV1Schema.safeParse(input.principal).success ||
+						!isDeepStrictEqual(input.principal, binding.principal) ||
+						input.agentId !== binding.scope.agentId ||
+						!record(input.client) ||
+						Object.keys(input.client).sort().join(",") !==
+							"connectionIdentity,credential,service"
+					)
+						return undefined;
+					// Canonical callback schema validates these nested values at the private lane.
+					return { originalBinding: binding, ...input.client };
+				} finally {
+					bytes.fill(0);
+				}
 			} finally {
-				bytes.fill(0);
+				await handle.close();
 			}
 		} finally {
-			await handle.close();
+			await directory.close();
 		}
 	} catch {
 		return undefined;

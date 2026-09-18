@@ -1617,8 +1617,10 @@ export class PostgresConversationDispatchStoreV1
 				from platform.agents a
 				left join platform.agent_applications ap on ap.agent_id = a.id
 				left join platform.workload_reconciliations w on w.agent_id = a.id
-				where a.id = ${input.claim.agentId}
-			`;
+					where a.id = ${input.claim.agentId}
+				`;
+				if (!agent)
+					throw new DispatchCapacityUnavailable("capacity_unavailable");
 				const state = await ownedState(transaction, input.claim);
 				if (!state) throw new StaleDispatchLease();
 				const pendingIsolation = await readGenerationIsolation(

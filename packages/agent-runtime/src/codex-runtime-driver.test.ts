@@ -1365,7 +1365,10 @@ describe("Codex Runtime Driver", () => {
 			else {
 				expect(facts.at(-1)?.payload).toMatchObject({
 					phase: "unknown",
-					failureCode: "recovery_unconfirmed",
+					failureCode:
+						fault === "before-result"
+							? "dependency_unavailable"
+							: "recovery_unconfirmed",
 				});
 				expect(
 					new Set(facts.map((event) => event.payload.operationRef)).size,
