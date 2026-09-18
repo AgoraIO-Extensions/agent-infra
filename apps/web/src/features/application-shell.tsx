@@ -208,7 +208,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				<div id="main-content" tabIndex={-1} className="min-w-0 flex-1">
 					{session.state.kind === "ready" ? (
 						<AuthenticatedContent
-							key={session.state.session.user.userId}
+							// dataUpdatedAt changes when the authoritative browser session is
+							// replaced, including a same-user re-login.
+							key={`${session.state.session.user.userId}:${session.dataUpdatedAt}`}
 							session={session.state.session}
 						>
 							{children}

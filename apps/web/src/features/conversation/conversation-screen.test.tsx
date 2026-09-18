@@ -372,6 +372,10 @@ describe("functional conversation screen", () => {
 		fireEvent.change(screen.getByRole("combobox", { name: "模型" }), {
 			target: { value: "option-b" },
 		});
+		expect(screen.getByRole("button", { name: "保存模型选择" })).toHaveProperty(
+			"type",
+			"button",
+		);
 		expect(
 			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
 				.disabled,

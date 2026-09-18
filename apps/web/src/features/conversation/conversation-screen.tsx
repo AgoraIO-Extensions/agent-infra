@@ -626,7 +626,9 @@ function ActiveConversation({
 				)}
 				{notice && (
 					<p role="status" className="text-sm">
-						{stopping && isTerminal(status) ? "原回复已结束。" : notice}
+						{stopping === latestExecution && isTerminal(status)
+							? "原回复已结束。"
+							: notice}
 					</p>
 				)}
 				<CommandNotice
@@ -738,6 +740,7 @@ function ActiveConversation({
 								</NativeSelect>
 							</div>
 							<Button
+								type="button"
 								variant="outline"
 								className="self-end"
 								disabled={!option?.reasoningLevels.includes(currentReasoning)}

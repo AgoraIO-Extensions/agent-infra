@@ -114,13 +114,25 @@ export function createConversationTimeline({
 		session.historyRequest = request;
 		session.needsHistory = true;
 		publish({ ...state, status: "loading", failure: null });
-		const result = await getConversationV2({
-			client,
-			path: { conversationId: session.conversationId },
-			signal: request.signal,
-			responseStyle: "fields",
-			throwOnError: false,
-		});
+		let result: Awaited<ReturnType<typeof getConversationV2>>;
+		try {
+			result = await getConversationV2({
+				client,
+				path: { conversationId: session.conversationId },
+				signal: request.signal,
+				responseStyle: "fields",
+				throwOnError: false,
+			});
+		} catch (error) {
+			if (current !== session || request.signal.aborted) return;
+			fail(
+				session,
+				error instanceof ConversationReadError
+					? error.failure
+					: { kind: "network" },
+			);
+			return;
+		}
 		if (current !== session || request.signal.aborted) return;
 		if (!result.data || result.response?.status !== 200) {
 			fail(session, responseFailure(result.error, result.response?.status));

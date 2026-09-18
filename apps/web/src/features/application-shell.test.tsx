@@ -112,6 +112,40 @@ describe("application session boundary", () => {
 			expect(screen.queryByRole("link", { name: "审批" })).toBeNull(),
 		);
 	});
+	it("recreates the feature cache when the same user gets a new session", async () => {
+		const observed: { user: string; cached: unknown; client: QueryClient }[] =
+			[];
+		function Probe() {
+			const { session } = useApplicationSession();
+			const cache = useQueryClient();
+			observed.push({
+				user: session.user.userId,
+				cached: cache.getQueryData(["private"]),
+				client: cache,
+			});
+			return <p>{session.user.userId}</p>;
+		}
+		const client = setup(identity("owner"), <Probe />);
+		await waitFor(() => expect(observed.length).toBeGreaterThan(0));
+		const old = observed.at(-1)?.client;
+		old?.setQueryData(["private"], "old-session-secret");
+		await act(async () => {
+			client.setQueryData(["browser-session"], identity("owner"), {
+				updatedAt: Date.now() + 1000,
+			});
+		});
+		await waitFor(() =>
+			expect(
+				observed.some(
+					(entry) =>
+						entry.user === "owner" &&
+						entry.client !== old &&
+						entry.cached === undefined,
+				),
+			).toBe(true),
+		);
+		expect(old?.getQueryData(["private"])).toBeUndefined();
+	});
 });
 describe("deployment links", () => {
 	it("accepts configured HTTPS or local paths and rejects executable or ambiguous URLs", () => {
