@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	claim: vi.fn(),
+	current: vi.fn(async () => true),
 	release: vi.fn(async () => {}),
 	connect: vi.fn(async () => {}),
 	terminal: null as string | null,
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWecomConnectionsV1: class {
 		claim = mocks.claim;
+		current = mocks.current;
 		release = mocks.release;
 		renew = async () => true;
 		close = mocks.storeClose;
@@ -48,6 +50,7 @@ beforeEach(() => {
 		fence: 1,
 		leaseUntil: new Date(Date.now() + 30000),
 	}));
+	mocks.current.mockResolvedValue(true);
 });
 afterEach(() => vi.useRealTimers());
 it.each(["timeout", "retry_exhausted", "auth_failed"])(
@@ -205,6 +208,48 @@ it("reconciles more than 100 bindings and responds when ingress persistence fail
 			replyHandle: "reply",
 			text: "Agent 当前不可用，请稍后重试",
 		});
+	} finally {
+		await worker.close();
+	}
+});
+
+it("does not reply after the connection lease is lost", async () => {
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({ outcome: "denied" }),
+	});
+	try {
+		await worker.tick();
+		mocks.current.mockResolvedValueOnce(false);
+		await mocks.receive?.({
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		});
+		expect(mocks.socketSend).not.toHaveBeenCalled();
 	} finally {
 		await worker.close();
 	}

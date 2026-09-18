@@ -122,6 +122,7 @@ export function createPlatformWecomConnectionsV1(
 						.receive(message, claim)
 						.catch(() => ({ outcome: "unavailable" as const }));
 					if (result.outcome === "denied" || result.outcome === "unavailable") {
+						if (!(await leases.current(claim))) return;
 						const status = await connection.sender.send({
 							scope: message,
 							replyHandle: message.replyHandle,
