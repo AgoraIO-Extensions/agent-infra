@@ -109,6 +109,8 @@ Connection 提供独立中文 Web，包含登录、个人 Connection、Consumer/
 
 Connection 审计回答 Principal、Consumer/Instance、Actor、Connection、ActionCall、Effect、Dispatch、Provider 结果、撤权和人工处理之间的关系。Platform 与 Connection 通过真实调用产生的关联引用关联记录；关联标识本身不授予访问权。
 
+Provider/Action、共享 Connection、审计和未知结果处理属于独立的管理员权限。LDAP 登录只建立 Principal，不自动授予管理员权限；管理员角色必须由部署批准的 bootstrap 配置或已授权管理员在 Connection 中授予，支持单独撤销和审计。每个管理请求由服务端重新校验当前管理员角色、租户范围和资源权限，普通 Principal 的拒绝响应不得泄露管理对象是否存在。
+
 ## 10. 首个 GitHub Pilot 验收
 
 | 场景 | 验收结果 |

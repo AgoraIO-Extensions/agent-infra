@@ -27,7 +27,8 @@ flowchart LR
     CA --> CD[(Connection DB)]
     CA --> K[Provider Adapter]
     K --> GH[GitHub]
-    AP[Agent Platform] -.->|自身执行事实/关联引用| CD
+    AP[Agent Platform] --> PD[(Platform DB)]
+    CA -.->|认证响应返回调用引用| AP
 ```
 
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
@@ -47,15 +48,15 @@ Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不�
 
 ### 5.1 Principal
 
-Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。
+Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。任何获准的明文 LDAP 例外都必须限定在隔离 Pilot 环境、显式配置并在启动门禁中拒绝进入正式环境。
 
 Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Principal 撤销或 recovery generation 不匹配时，敏感操作 fail closed。
 
 ### 5.2 Consumer 与 Instance
 
-每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间。
+每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
 
-Connection OAuth Authorization Code + PKCE 的 state、code、refresh token 和 revoke 均由 Connection 服务端一次性、短期、可审计地持久化。BrowserSession 只用于 Web 管理，不可调用 MCP Action。
+Connection OAuth Authorization Code + PKCE 的 state、code、refresh token 和 revoke 均由 Connection 服务端一次性、短期、可审计地持久化。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession cookie 必须设置 Secure、HttpOnly 和 SameSite；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
 Connection PAT 只对经过注册和批准的 Consumer 开放。PAT 不包含 Provider Credential，不绕过 Principal/Consumer/Grant/Action 检查。
 
@@ -116,8 +117,8 @@ Connection 不能回滚已提交的外部副作用。取消、撤权和重启只
 
 ## 10. 明确失败与未知结果
 
-- Provider 已返回明确 HTTP/协议失败：Connection 返回脱敏终态失败并记录 `PROVIDER_FAILED` 或等价稳定错误。
-- 传输中断、响应丢失或 Connection 无法保存 Provider 终态：进入 `RESULT_PENDING/UNCERTAIN`。
+- 只有能够证明请求未被 Provider 接受的确定性业务或协议拒绝，Connection 才返回脱敏终态失败并记录 `PROVIDER_FAILED` 或等价稳定错误。
+- 超时、连接中断、响应丢失、无法确认提交语义的 `5xx`，或 Connection 无法保存 Provider 终态时，进入 `RESULT_PENDING/UNCERTAIN`。
 - 未知 WRITE 不自动重试，不重新创建 POST；只沿原 `callId` 对账。
 - 对账最多运行配置的期限；唯一匹配的结果可确认成功，冲突或超时进入人工处理/最终未知状态。
 - `NEEDS_MANUAL_REVIEW`、`UNRESOLVED`、Provider revoke 和管理员处理均保留审计。

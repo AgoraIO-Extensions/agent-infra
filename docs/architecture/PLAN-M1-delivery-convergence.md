@@ -112,7 +112,7 @@ flowchart TB
 | #404、#406 | #403（completed）；#415（open） |
 | #398 | `not_applicable`：Connection Direct MCP/API 已由独立系统交付 |
 | #399、#396、#390、#391、#392、#394、#397 | `outside_platform_plan`：独立 Connection 系统的历史实施图；不作为 Platform 或 #435 的原生前置 |
-| #395 | `outside_platform_plan`：独立 Connection readiness 票；不作为 Platform 或 #435 的原生前置 |
+| #395 | `outside_platform_plan`：独立 Connection readiness 票，不属于 Platform 实施图；其实际通过记录仍是 #435 的准入前置 |
 | #171、#177 | #149（completed） |
 
 ### #171 ACK 资源准备边界
@@ -227,9 +227,9 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
 且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。没有现有票拥有
 跨系统真实验收。
-因此只提出一个新 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
-归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。
-创建及原生依赖落盘仍等待 §5.1 的范围确认；#435 是跨系统真实验收入口，不承接旧 #398/#186 的实现。
+因此 #435 已是唯一的跨系统真实验收 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
+归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。其执行仍等待 §5.1 的范围确认，
+不承接旧 #398/#186 的实现。
 
 | 契约章节 | 待创建正文 |
 | --- | --- |
