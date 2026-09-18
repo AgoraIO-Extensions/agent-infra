@@ -65,6 +65,7 @@ describe("Connection store migrations", () => {
 			"0026_pat_binding_sessions",
 			"0027_github_profile_labels",
 			"0028_github_oauth_v8",
+			"0029_provider_egress_admission",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));
@@ -141,6 +142,10 @@ describe("Connection store migrations", () => {
 			resolve(directory, "0016_grant_pause_states.sql"),
 			"utf8",
 		);
+		const providerEgressAdmission = await readFile(
+			resolve(directory, "0029_provider_egress_admission.sql"),
+			"utf8",
+		);
 		expect(authority).toContain("DEFERRABLE INITIALLY DEFERRED");
 		expect(effects).toContain("connection_enforce_status_transition");
 		expect(lease).toContain("ADD COLUMN IF NOT EXISTS lease_id TEXT");
@@ -195,5 +200,15 @@ describe("Connection store migrations", () => {
 		expect(grantPauseStates).toContain("'PAUSED_CONNECTION'");
 		expect(grantPauseStates).toContain("'PAUSED_CREDENTIAL'");
 		expect(grantPauseStates).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+		expect(providerEgressAdmission).toContain(
+			"call_id TEXT NOT NULL REFERENCES connection_calls(id) ON DELETE RESTRICT",
+		);
+		expect(providerEgressAdmission).toContain(
+			"(effect = 'READ' AND dispatch_id IS NULL)",
+		);
+		expect(providerEgressAdmission).toContain(
+			"(effect = 'WRITE' AND dispatch_id IS NOT NULL)",
+		);
+		expect(providerEgressAdmission).toContain("jti TEXT NOT NULL UNIQUE");
 	});
 });
