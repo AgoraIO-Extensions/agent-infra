@@ -109,7 +109,7 @@ Connection 提供独立中文 Web，包含登录、个人 Connection、Consumer/
 
 Connection 审计回答 Principal、Consumer/Instance、Actor、Connection、ActionCall、Effect、Dispatch、Provider 结果、撤权和人工处理之间的关系。Platform 与 Connection 通过真实调用产生的关联引用关联记录；关联标识本身不授予访问权。
 
-Provider/Action、共享 Connection、审计和未知结果处理属于独立的管理员权限。LDAP 登录只建立 Principal，不自动授予管理员权限；管理员角色必须由部署批准的 bootstrap 配置或已授权管理员在 Connection 中授予，支持单独撤销和审计。每个管理请求由服务端重新校验当前管理员角色、租户范围和资源权限，普通 Principal 的拒绝响应不得泄露管理对象是否存在。
+Provider/Action、共享 Connection、审计和未知结果处理属于独立的管理员权限。LDAP 登录只建立 Principal，不自动授予管理员权限；管理员角色必须由部署批准的 bootstrap 配置或已授权管理员在 Connection 中授予，支持单独撤销和审计。Bootstrap 只能由受信部署身份使用一次性高熵凭据触发，服务端原子消费并排除并发重复请求，完成后永久关闭入口；浏览器会话、普通 Principal、Provider 回调和重放请求均不能触发 Bootstrap。每个管理请求由服务端重新校验当前管理员角色、租户范围和资源权限，普通 Principal 的拒绝响应不得泄露管理对象是否存在。
 
 ## 10. 首个 GitHub Pilot 验收
 
@@ -122,6 +122,7 @@ Provider/Action、共享 Connection、审计和未知结果处理属于独立的
 | 幂等 | 同一请求重试复用原调用和 PR，不产生第二个 PR |
 | 隔离 | 任何主体不能发现或使用其他主体的 Connection、Grant、Credential 或调用记录 |
 | 撤权 | 撤销 Grant、断开 Connection、停用 Action 或撤销 Credential 后新调用立即失败 |
+| Provider 撤销 | 断开 Connection 或撤销 Credential 时创建可审计的 Provider revoke attempt；失败可重试并保留状态，直至成功或进入明确终态 |
 | 未知结果 | 响应丢失进入待确认，只沿原调用对账，不自动重发 |
 | Credential 边界 | 原始 Credential 不出现在 Client、Agent、Platform、日志、错误或审计 |
 | 真实关联 | Platform 侧若记录关联，必须来自同一次受信执行采集；缺失或无法核实则标记未核实 |

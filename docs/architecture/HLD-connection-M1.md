@@ -28,7 +28,6 @@ flowchart LR
     CA --> K[Provider Adapter]
     K --> GH[GitHub]
     AP[Agent Platform] --> PD[(Platform DB)]
-    CA -.->|认证响应返回调用引用| AP
 ```
 
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
@@ -58,7 +57,7 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
 
-Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession cookie 必须设置 Secure、HttpOnly 和 SameSite；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
+Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
 Connection PAT 只对经过注册和批准的 Consumer 开放。PAT 不包含 Provider Credential，不绕过 Principal/Consumer/Grant/Action 检查。
 
@@ -136,6 +135,8 @@ Connection 审计保存 Principal、ConsumerInstance、Actor、Connection、Acti
 ## 12. 安全与启动门禁
 
 业务路由缺少 PostgreSQL、LDAP、Credential 加密密钥、OAuth 配置、Provider allowlist 或审计写入能力时 fail closed。部署不允许匿名降级、动态 Provider endpoint、Credential 通过请求传入、直连 OpenConnector Runtime Server 或跨库读取 Platform 状态。
+
+管理员 bootstrap 必须通过受信部署身份完成，使用一次性高熵凭据；服务端以原子事务执行单次消费并排除并发重复请求，成功或失败均写入脱敏审计。bootstrap 完成后永久关闭 bootstrap endpoint 和凭据，浏览器会话、普通 Principal、Provider 回调和重放请求均不能触发 bootstrap。
 
 日志、错误、测试 fixture、审计和结果不得包含密码、OAuth token、Provider Credential、Cookie、私钥、完整请求正文或模型内部思考。
 

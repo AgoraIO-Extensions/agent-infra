@@ -117,8 +117,15 @@ RBAC、网络隔离、存储、DNS/TLS 和入口证据仍缺失。L2 只消费�
 验收入口。线上 Direct MCP/API 的可消费性以独立系统回读为准；不能由这些 Issue 的 open 状态、
 Issue #301 的保留状态或历史依赖图推断当前 runtime 是否已交付。
 
-Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 已由独立 Connection
-系统交付；本计划只记录其与 Platform 联合验收的边界，不复制 Connection 实现、授权或审计。
+Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 由独立 Connection
+系统负责；是否已交付且可供本次 Pilot 使用，以 #435 AC-1 要求的独立系统版本证据和
+#395 的实际通过记录为准。本计划只记录其与 Platform 联合验收的边界，不复制 Connection
+实现、授权或审计。
+
+L1 消费的 Direct MCP contract 由独立 Connection 系统发布版本化、不可变的 HTTP/MCP Schema
+artifact，Connection Owner @guoxianzhe 负责版本和兼容说明；#435 AC-1 固定该 artifact 的
+版本、来源和校验值，#194 的 schema-conformant Fake 只能从该 artifact 生成或校验。该消费约束
+不恢复 #398，也不建立 Platform 侧第二套 Connection DTO。
 
 L1 的最小未完成闭包是 **#190、#192、#194、#389、#400、#404、#405、#406、#415**；Connection 独立系统不计入 Platform L1 闭包。
 其中 #400 经 #192 间接阻塞 #194，不能只看 #194 的直接依赖而漏掉人工设计确认。
