@@ -116,8 +116,8 @@ Provider/Action、共享 Connection、审计和未知结果处理属于独立的
 | 场景 | 验收结果 |
 | --- | --- |
 | 测试主体 | 两个 LDAP Principal 分别绑定两个专用 GitHub 测试账号和同一受控 private 仓库 |
-| Direct MCP | 客户端只配置 Connection MCP endpoint，OAuth 登录成功并获得当前 ConsumerInstance token |
-| 两次确认 | GitHub OAuth 后仍须在 Connection 中确认具体 Consumer/Actor 和三项 Action |
+| Direct MCP | 客户端只配置 Connection MCP endpoint，OAuth 登录成功并获得绑定当前 ConsumerInstance 的 sender-constrained token；伪造或选择其他实例必须拒绝 |
+| 两次确认 | GitHub OAuth 后仍须在 Connection 中确认具体 Consumer/Actor 和三项 Action；伪造、跨实例、非唯一或已撤销 Actor 绑定必须拒绝 |
 | 真实调用 | 两名测试主体分别读取账号/仓库并创建真实 Pull Request |
 | 幂等 | 同一请求重试复用原调用和 PR，不产生第二个 PR |
 | 隔离 | 任何主体不能发现或使用其他主体的 Connection、Grant、Credential 或调用记录 |

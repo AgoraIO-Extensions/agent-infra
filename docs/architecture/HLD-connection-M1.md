@@ -89,7 +89,8 @@ sequenceDiagram
     participant D as Connection DB
     participant P as Provider
 
-    C->>A: OAuth access token + Action + arguments + idempotencyKey
+    C->>A: DPoP/mTLS-bound access token + proof + Action + arguments + idempotencyKey
+    A->>D: 验证 proof、token 绑定与 ConsumerInstance 安装密钥持有权
     A->>D: 解析 Principal/Consumer/Instance/Actor/Grant
     A->>D: 校验 ActionVersion、Credential、Provider、Schema、幂等
     A->>D: 持久化 ActionCall/Effect/Dispatch
