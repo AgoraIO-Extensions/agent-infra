@@ -362,7 +362,7 @@ test("candidate uses an isolated read-only exact PR checkout and fixed standard 
 	const job = workflow.jobs.candidate;
 	assert.equal(job["runs-on"], "ubuntu-24.04-arm");
 	assert.equal(job["timeout-minutes"], 180);
-	assert.equal(job.env.CARGO_BUILD_JOBS, "2");
+	assert.equal(job.env.CARGO_BUILD_JOBS, "3");
 	assert.equal(job.env.CARGO_INCREMENTAL, "0");
 	assert.equal(job.env.TARGET, "aarch64-unknown-linux-musl");
 	assert.equal(job.env.RUSTUP_TOOLCHAIN, "1.96.0");
