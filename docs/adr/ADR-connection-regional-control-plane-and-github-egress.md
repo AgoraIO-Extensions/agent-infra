@@ -6,7 +6,7 @@
 
 ## 决策
 
-Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计迁移到 GZ3。LA3 只部署无状态 `connection-provider-egress` 实例，首期仅允许审核后的 GitHub ProviderRelease 和固定 GitHub origin，不提供用户入口、数据库、长期 Credential 或任意代理能力。Provider Egress 是可部署到特殊网络区域的通用安全边界，但后续 Provider 必须逐个审核固定 origin、method、header、大小和 effect 语义，不能退化为 VPN 或任意代理。GZ3 通过 workload mTLS、短期 bound dispatch assertion 和 take-once admission 调用 LA3；GitHub READ 只有在可证明 pre-submit 失败时允许走 GZ3 固定 proxy fallback，WRITE 在提交状态未知时进入 `UNCERTAIN`，禁止跨路径盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台，因为多数公司 Provider 位于国内，而授权权威双写与跨路径写重试会扩大一致性和重复副作用风险。
+Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计迁移到 GZ3。LA3 只部署无状态 `connection-provider-egress` 实例，首期仅允许审核后的 GitHub ProviderRelease 和固定 GitHub origin，不提供用户入口、数据库、长期 Credential 或任意代理能力。Provider Egress 是可部署到特殊网络区域的通用安全边界，但后续 Provider 必须逐个审核固定 origin、method、header、大小和 effect 语义，不能退化为 VPN 或任意代理。GZ3 通过 workload mTLS、短期 bound dispatch assertion 和 take-once admission 调用 LA3；GitHub READ 只有在可证明 pre-submit 失败时允许走固定 `103.101.125.158:28062` proxy fallback，WRITE 在提交状态未知时进入 `UNCERTAIN`，禁止跨路径盲重试。该 proxy 只作为 GitHub 的备用 VPN 出口，不用于 GZ3 可直连的 Bitbucket。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台，因为多数公司 Provider 位于国内，而授权权威双写与跨路径写重试会扩大一致性和重复副作用风险。
 
 ## 证据
 
