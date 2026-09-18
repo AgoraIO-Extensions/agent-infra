@@ -5566,12 +5566,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			this.assertExecutionConfiguration(state, session, execution);
 		} catch (error) {
-			await record("failed", {
-				failureCode:
-					error instanceof RuntimeHostError && error.httpStatus === 403
-						? "authorization_denied"
-						: "authorization_unavailable",
-			});
+			if (!signal.aborted)
+				await record("failed", {
+					failureCode:
+						error instanceof RuntimeHostError && error.httpStatus === 403
+							? "authorization_denied"
+							: "authorization_unavailable",
+				});
 			throw error;
 		}
 		return {
