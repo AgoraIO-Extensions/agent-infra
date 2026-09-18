@@ -78,6 +78,7 @@ interface RuntimeStoreState {
 
 interface PrepareOperation {
 	authorization?: RuntimeExecutionGrantClaimsV2;
+	now?: number;
 	requestedHostSessionRef?: string;
 	binding: SessionBinding & { executionId: string; turnId: string };
 	operationId: string;
@@ -572,6 +573,7 @@ export class FileRuntimeStore {
 					session.executionAuthorities,
 					input.authorization,
 					"prepare",
+					input.now,
 				);
 			}
 			const operation = session.operations[input.operationId];

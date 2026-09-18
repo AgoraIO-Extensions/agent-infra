@@ -273,6 +273,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "turn.submit", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
+					now: (this.options.grantValidation.now ?? Date.now)(),
 					requestedHostSessionRef: request.hostSessionRef ?? undefined,
 					binding: request,
 					operationId: request.executionId,
@@ -328,6 +329,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "turn.supplement", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
+					now: (this.options.grantValidation.now ?? Date.now)(),
 					requestedHostSessionRef: request.hostSessionRef,
 					binding: request,
 					operationId: request.operation.id,
@@ -388,6 +390,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "turn.stop", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
+					now: (this.options.grantValidation.now ?? Date.now)(),
 					requestedHostSessionRef: request.hostSessionRef,
 					binding: request,
 					operationId: request.operation.id,
@@ -530,6 +533,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "generation.cancel", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
+					now: (this.options.grantValidation.now ?? Date.now)(),
 					requestedHostSessionRef: request.hostSessionRef,
 					binding: request,
 					operationId: request.operation.id,
