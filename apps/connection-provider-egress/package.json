@@ -3,7 +3,9 @@
 	"private": true,
 	"type": "module",
 	"main": "dist/index.mjs",
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
