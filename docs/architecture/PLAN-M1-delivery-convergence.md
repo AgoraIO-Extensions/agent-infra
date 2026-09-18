@@ -46,7 +46,7 @@ L2 必须分别有 Platform Owner、Connection Owner、Security、SRE 和 Pilot 
 ```mermaid
 flowchart TB
     D["规划已定：#149 / #152 / #178"] -.-> PLAN["#150 汇合：待确认"]
-    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> DIRECT["Direct MCP/API：Connection 独立交付"]
+    BASE["实现完成：#252 / Store / HTTP / Runtime / Delivery"] --> LOCAL["L1 #194：待本地验证"]
     BASE --> K["#190 Kubernetes 调谐：未完成"]
     UI["#389 shadcn/ui：未完成"] --> W["#192 对话 Web：未完成"]
     DESIGN["#400 原型：待人工确认"] --> W
@@ -54,14 +54,15 @@ flowchart TB
     STATUS --> ISO["#404 原生隔离：待真实进程验证"]
     STATUS --> BOOT["#406 Codex 镜像装配：未完成"]
     SCAN["#405 扫描：未完成"] --> LOCAL["L1 #194：待本地验证"]
-    BASE --> LOCAL
     K --> LOCAL
     W --> LOCAL
     UI --> LOCAL
     PERSIST --> LOCAL
     ISO --> LOCAL
     BOOT --> LOCAL
+    DIRECT["Direct MCP/API：Connection 独立交付"]
     DOC["#432 Direct MCP 文档：Connection 独立交付"] --> DIRECT
+    DIRECT --> CONN
     CONN["独立 Connection runtime：Direct MCP/OAuth/Grant/Action/审计"] --> READY["#395：待 HCI 真实环境 readiness"]
     DOC --> CONN
     CONN -.-> PILOT
@@ -190,11 +191,10 @@ Owner 只能作出下列一项明确选择：
 | [#149 Resolution：`### Pilot 范围`](https://github.com/AgoraIO-Extensions/agent-infra/issues/149#issuecomment-5420284511) 与 `### 真实使用观察` | 若确认推荐结论，将 3–5 名正向执行员工/参与者修订为两个正向执行 Principal/专用账号；保留 5 个工作日和不少于 10 次任务 | 不改写已关闭决议，不降低观察或任务要求 |
 | [#150：`## 已确认的收口范围` 与 `## 2026-09-07 汇合审查`](https://github.com/AgoraIO-Extensions/agent-infra/issues/150) | 记录 Owner 的选择，并使 L2 计划只引用已对齐的执行主体、观察期和任务要求 | 不把本计划提案当作已确认结论或创建执行授权 |
 
-决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可创建 §5.2 的联合验收票并安排
-参与者与窗口。
+决策、三个 Issue 段落和 #177 readiness matrix 回读一致后，才可启用并执行 §5.2 的联合验收票；#435 已创建但在这些准入条件满足前不得执行或安排参与者与窗口。
 
 资源与运行就绪矩阵由 [#177](https://github.com/AgoraIO-Extensions/agent-infra/issues/177) 持有；
-本决策只解决执行主体与观察口径，不修改 #177，也不确认其身份集成、参与者、窗口、
+本决策只解决执行主体与观察口径；在推荐结论下，#177 必须增加一项 reconciliation action，将正向参与者数量与两份 PRD 对齐为两个，并在 readiness matrix 中回读该修订；本计划不直接修改 #177，也不确认其身份集成、参与者、窗口、
 Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上述输入须在 #177 以脱敏、
 可回读的实际证据完成；未确认项不能作为 Pilot 通过证据。
 [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) 继续负责 ACK tenancy、Registry pull

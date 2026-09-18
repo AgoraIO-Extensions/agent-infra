@@ -27,6 +27,7 @@ flowchart LR
     CA --> CD[(Connection DB)]
     CA --> K[Provider Adapter]
     K --> GH[GitHub]
+    AR[Agent Platform MCP Client] --> CA
     AP[Agent Platform] --> PD[(Platform DB)]
 ```
 
@@ -102,7 +103,7 @@ Connection 只接受 Action ID、ActionVersion、参数和业务幂等键。Prin
 
 每次 ActionCall 保存 `requestId`、`idempotencyKey`、`callId`、ActionVersion、Principal、Consumer、ConsumerInstance、Actor、解析出的 Connection、参数摘要、状态和 trace correlation。`idempotencyKey` 必须在 `Principal + Consumer + ConsumerInstance + Actor` 命名空间内由数据库唯一约束原子串行化；定义 Actor 的 Consumer 必须解析出非空 Actor，未定义 Actor 的 Consumer 使用不可空且不可与真实 Actor 冲突的 consumer-level 稳定哨兵，禁止以可重复的 `NULL` 参与唯一键。仅当 ActionVersion、Connection、参数摘要及全部主体绑定完全一致时复用原调用，任一字段不同则拒绝且不得返回其他主体的调用信息。
 
-WRITE Action 先在同一事务持久化 Effect/Dispatch 意图，再在 Provider 访问前重新检查 Principal、Consumer、ConsumerInstance、Actor、Grant、Connection、Credential、Action、ProviderRelease、repository policy 和 deadline。该事务必须锁定上述对象的当前状态或使用覆盖其 revocation revision/fence 的 CAS，并原子地转换 Dispatch 状态；零行更新或 CAS 冲突必须拒绝且不得访问 Provider，从而使 Consumer 停用、Connection 断开及其他撤权与 Dispatch 形成确定提交顺序。
+所有需要访问 Provider 的 Action 都先持久化 Dispatch 意图；WRITE Action 还必须在同一事务中持久化 Effect。每次 Provider 访问前，Connection 都必须重新检查 Principal、Consumer、ConsumerInstance、Actor、Grant、Connection、Credential、Action、ProviderRelease、repository policy 和 deadline。该事务必须锁定上述对象的当前状态或使用覆盖其 revocation revision/fence 的 CAS，并原子地转换 Dispatch 状态；零行更新或 CAS 冲突必须拒绝且不得访问 Provider，从而使 Consumer 停用、Connection 断开及其他撤权与所有 Dispatch 形成确定提交顺序。
 
 Connection 不能回滚已提交的外部副作用。取消、撤权和重启只改变后续调用资格，不抹除既有 ActionCall、Effect、Dispatch 或审计。
 

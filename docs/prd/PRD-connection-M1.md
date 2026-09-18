@@ -57,13 +57,13 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 ### 3.3 Client/Agent 负责
 
 - 只提交 Action 和 Schema 合法参数。
-- 保存 Connection access token 的最小客户端状态，不把 Provider Credential 传给模型或任务输入。
+- 仅由 MCP Client 的受控凭据存储保存 Connection OAuth access token、refresh token 或 PAT；这些 Connection 调用凭据以及 Provider Credential 均不得进入模型上下文、任务输入、工具参数、日志或错误。客户端只向模型暴露脱敏的 Action 契约和执行结果。
 - 仅根据 Connection 返回的脱敏结果继续执行。
 
 ## 4. Direct MCP/API 入口
 
 - Direct MCP Client 只配置 Connection MCP endpoint，例如 `https://agent-connector.la3.agoralab.co/mcp`。
-- Connection OAuth 使用 Authorization Code + PKCE；OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience 和 scope。
+- Connection OAuth 使用 Authorization Code + PKCE；OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience 和 scope；ConsumerInstance 定义多个 Actor 时，token 或服务端受信 session 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。
 - Connection PAT 只适用于经过注册和批准的 Consumer，不能替代 OAuth 的主体隔离规则。
 - BrowserSession 只用于 Connection Web 管理操作，不能作为 MCP 调用凭据。
 - MCP、浏览器管理 API 和内部 HTTP API 共享同一 Connection application service 与授权权威。
