@@ -130,9 +130,9 @@ describe("application session boundary", () => {
 		const old = observed.at(-1)?.client;
 		old?.setQueryData(["private"], "old-session-secret");
 		await act(async () => {
-			client.setQueryData(["browser-session"], identity("owner"), {
-				updatedAt: Date.now() + 1000,
-			});
+			const next = identity("owner");
+			next.session.user.displayName = "owner-again";
+			client.setQueryData(["browser-session"], next);
 		});
 		await waitFor(() =>
 			expect(
