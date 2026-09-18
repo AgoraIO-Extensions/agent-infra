@@ -1214,24 +1214,34 @@ export async function openCodexModelTransport(
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
 		let outcomeReported = false;
+		let outcomeReport: Promise<void> | undefined;
 		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
-			// A persistence failure is not permission to overwrite the same operation
-			// with another outcome, or to dispatch a replacement request.
+			// A successfully persisted outcome is final. Concurrent callers share the
+			// in-flight write; a failed write is cleared so the catch path can retry.
 			if (outcomeReported) return;
-			outcomeReported = true;
+			if (outcomeReport) return outcomeReport;
 			if (outcome.phase !== "succeeded") revokeTurn(turnKey);
-			await journal?.finish({
-				...outcome,
-				finishedAt: new Date().toISOString(),
-				...(startedAt === undefined
-					? {}
-					: {
-							durationMs: Math.max(
-								0,
-								Math.round(performance.now() - startedAt),
-							),
-						}),
-			});
+			const pending = (async () => {
+				await journal?.finish({
+					...outcome,
+					finishedAt: new Date().toISOString(),
+					...(startedAt === undefined
+						? {}
+						: {
+								durationMs: Math.max(
+									0,
+									Math.round(performance.now() - startedAt),
+								),
+							}),
+				});
+				outcomeReported = true;
+			})();
+			outcomeReport = pending;
+			try {
+				await pending;
+			} finally {
+				if (outcomeReport === pending) outcomeReport = undefined;
+			}
 		};
 		try {
 			const admittedModel = await waitForAdmission(turnKey, controller.signal);

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 import {
 	BrowserSessionProjectionV1Schema,
@@ -44,15 +44,8 @@ export interface SessionAuditRoutesDependencies {
 	readonly audit: PlatformAuditQuery;
 }
 
-const fallbackSessionGenerationSalt = randomBytes(32).toString("base64url");
-
 function sessionGeneration(identity: IdentityContext) {
-	if (identity.sessionGeneration) return identity.sessionGeneration;
-	return createHash("sha256")
-		.update(
-			`${fallbackSessionGenerationSalt}\n${identity.authorizationRevision}`,
-		)
-		.digest("base64url");
+	return identity.sessionGeneration ?? randomBytes(32).toString("base64url");
 }
 
 function mapAuditError(error: unknown, traceId: string): never {

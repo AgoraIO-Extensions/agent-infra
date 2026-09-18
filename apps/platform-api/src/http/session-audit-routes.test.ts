@@ -82,6 +82,30 @@ describe("session and audit routes", () => {
 		expect(identityAdapter.resolve).toHaveBeenCalledOnce();
 	});
 
+	it("forwards trusted generations and rotates the fallback generation", async () => {
+		const trusted = "a".repeat(43);
+		const trustedApp = createApp({
+			...activeIdentity,
+			sessionGeneration: trusted,
+		});
+		expect(
+			(await trustedApp.app.request("/api/v1/session")).headers.get(
+				"x-platform-session-generation",
+			),
+		).toBe(trusted);
+
+		const fallback = createApp();
+		const first = await fallback.app.request("/api/v1/session");
+		const second = await fallback.app.request("/api/v1/session");
+		const firstGeneration = first.headers.get("x-platform-session-generation");
+		const secondGeneration = second.headers.get(
+			"x-platform-session-generation",
+		);
+		expect(firstGeneration).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(secondGeneration).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(secondGeneration).not.toBe(firstGeneration);
+	});
+
 	it("requires administrator scope and maps only public audit fields", async () => {
 		const { app, identityAdapter, audit } = createApp();
 		const response = await app.request("/api/v1/admin/audit?limit=25");
