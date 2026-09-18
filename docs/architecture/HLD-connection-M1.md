@@ -58,7 +58,7 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 ### 5.2 Consumer 与 Instance
 
-每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 由 Connection 创建独立 ConsumerInstance，并向该安装绑定不可导出的安装级公钥或一次性注册凭据；后续授权请求必须证明当前安装对该 ConsumerInstance 的持有权。客户端不得提交或选择其他已存在的 ConsumerInstance，无法验证安装绑定时必须拒绝授权。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
+每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 由 Connection 创建独立 ConsumerInstance，并向该安装绑定不可导出的安装级公钥或一次性注册凭据；后续授权请求必须证明当前安装对该 ConsumerInstance 的持有权。客户端不得提交或选择其他已存在的 ConsumerInstance，无法验证安装绑定时必须拒绝授权。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
@@ -99,7 +99,7 @@ sequenceDiagram
     A-->>C: 脱敏结果、错误和真实调用关联引用
 ```
 
-Connection 只接受 Action ID、ActionVersion、参数和业务幂等键。Principal、Consumer、ConsumerInstance 和 Actor 均由认证上下文解析；目标 Connection、外部账号和 Credential 必须由当前有效 Grant 的受信绑定唯一确定。创建或替换 Grant 时，Connection 必须以数据库唯一约束或等价的原子事务保证同一 Principal、Consumer、ConsumerInstance、Actor 和 ActionVersion 最多对应一个当前有效 Connection；切换 Connection 必须由 Principal 明确确认并原子终结旧绑定。若没有匹配 Grant、发现违反该不变量的多个匹配 Grant/Connection，或绑定状态不完整，调用必须在创建 ActionCall 和访问 Provider 前 fail closed，禁止按默认值、最近使用记录或调用方字段猜测目标。
+Connection 只接受 Action ID、ActionVersion、参数和业务幂等键，以及由已注册 ConsumerInstance 的安装级证明认证出的调用上下文。Principal、Consumer、ConsumerInstance 和 Actor 均由 Connection 服务端解析并验证；无法验证安装绑定、无法唯一解析 ConsumerInstance 或发现调用方提交的主体字段与认证上下文不一致时，必须在创建 ActionCall 和访问 Provider 前拒绝请求；目标 Connection、外部账号和 Credential 必须由当前有效 Grant 的受信绑定唯一确定。创建或替换 Grant 时，Connection 必须以数据库唯一约束或等价的原子事务保证同一 Principal、Consumer、ConsumerInstance、Actor 和 ActionVersion 最多对应一个当前有效 Connection；切换 Connection 必须由 Principal 明确确认并原子终结旧绑定。若没有匹配 Grant、发现违反该不变量的多个匹配 Grant/Connection，或绑定状态不完整，调用必须在创建 ActionCall 和访问 Provider 前 fail closed，禁止按默认值、最近使用记录或调用方字段猜测目标。
 
 ## 8. 幂等与线性化
 

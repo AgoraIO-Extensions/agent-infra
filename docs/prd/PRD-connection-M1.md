@@ -57,7 +57,7 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 ### 3.3 Client/Agent 负责
 
 - 只提交 Action 和 Schema 合法参数。
-- 仅由 MCP Client 的受控凭据存储保存 Connection OAuth access token、refresh token 或 PAT；这些 Connection 调用凭据以及 Provider Credential 均不得进入模型上下文、任务输入、工具参数、日志或错误。客户端只向模型暴露脱敏的 Action 契约和执行结果。
+- MCP Client 只能在受控凭据存储中保存绑定唯一 Principal、Consumer、ConsumerInstance、audience 和 scope 的 Connection OAuth access token、轮换 refresh token 或获准 PAT；凭据必须按安装隔离，不能跨 Principal、ConsumerInstance 或 Actor 导入、复用或共享。客户端必须尊重过期、撤销和 refresh-token 重放结果，并通过 Connection 重新获取短期 access token。这些 Connection 调用凭据以及 Provider Credential 均不得进入模型上下文、任务输入、工具参数、日志或错误；客户端只向模型暴露脱敏的 Action 契约和执行结果。
 - 仅根据 Connection 返回的脱敏结果继续执行。
 
 ## 4. Direct MCP/API 入口
