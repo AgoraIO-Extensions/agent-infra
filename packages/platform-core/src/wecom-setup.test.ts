@@ -10,11 +10,12 @@ it("binds a one-use setup to its Owner, Agent and configuration version before e
 	let encrypted = 0;
 	let revision = 1;
 	let selfManaged = false;
+	let exposeSetupBinding = false;
 	let now = new Date();
 	const usecase = createWecomSetupV1({
 		now: () => now,
 		authority: async (agentId, actorId) =>
-			actorId === "owner"
+			["owner", "other-owner"].includes(actorId)
 				? {
 						configuration: {
 							...(selfManaged
@@ -22,6 +23,17 @@ it("binds a one-use setup to its Owner, Agent and configuration version before e
 								: agentConfigurationConformanceRecordV1),
 							agentId,
 							revision,
+							...(exposeSetupBinding && record
+								? {
+										channels: [
+											{
+												kind: "wecom_bot" as const,
+												bindingReference: record.sessionId,
+											},
+										],
+										channelRevision: "setup-channel",
+									}
+								: {}),
 						},
 						authorizationRevision: "a1",
 					}
@@ -56,6 +68,10 @@ it("binds a one-use setup to its Owner, Agent and configuration version before e
 	await expect(usecase.begin("agent", "owner")).rejects.toThrow("unavailable");
 	selfManaged = false;
 	const setup = await usecase.begin("agent", "owner");
+	exposeSetupBinding = true;
+	await expect(usecase.current("agent", "other-owner")).rejects.toThrow(
+		"unavailable",
+	);
 	const input = {
 		agentId: "agent",
 		sessionId: setup.sessionId,

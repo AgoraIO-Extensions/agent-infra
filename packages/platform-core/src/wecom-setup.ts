@@ -111,7 +111,8 @@ export function createWecomSetupV1(options: {
 			if (!binding) return { status: "not_configured" as const };
 			const session = await options.store.read(binding.bindingReference);
 			if (!session) return { status: "callback" as const };
-			if (session.agentId !== agentId) throw new WecomSetupError("unavailable");
+			if (session.agentId !== agentId || session.actorId !== actorId)
+				throw new WecomSetupError("unavailable");
 			return { status: session.connectionStatus ?? "disconnected" };
 		},
 		async begin(agentId: string, actorId: string) {
