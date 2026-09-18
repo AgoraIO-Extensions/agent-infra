@@ -361,7 +361,7 @@ describe("Conversation HTTP routes", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "before-mixed-history" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(5);
 	});
 
 	it("does not silently discard or relabel V2 operation facts on the V1 event stream", async () => {
@@ -410,6 +410,7 @@ describe("Conversation HTTP routes", () => {
 		const input = await operationDependencies();
 		vi.mocked(input.authorization.authorize)
 			.mockReset()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "denied" });
@@ -878,12 +879,13 @@ describe("Conversation persisted SSE", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "event-before" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(3);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
 	});
 
 	it("stops before the next push when current access is revoked", async () => {
 		const authorize = vi
 			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "denied" });
 		const input = dependencies({ authorization: { authorize } });

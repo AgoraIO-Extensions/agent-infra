@@ -1,6 +1,18 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+function safeExternalUrl(href: string | undefined) {
+	if (!href) return undefined;
+	try {
+		const url = new URL(href);
+		return url.protocol === "https:" && !url.username && !url.password
+			? url.href
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Model output is untrusted text, including links and image destinations. */
 export function AssistantMarkdown({ children }: { children: string }) {
 	return (
@@ -8,14 +20,16 @@ export function AssistantMarkdown({ children }: { children: string }) {
 			<Markdown
 				remarkPlugins={[remarkGfm]}
 				components={{
-					a: ({ href, children }) =>
-						href && /^https?:\/\//i.test(href) ? (
-							<a href={href} target="_blank" rel="noopener noreferrer">
+					a: ({ href, children }) => {
+						const safeHref = safeExternalUrl(href);
+						return safeHref ? (
+							<a href={safeHref} target="_blank" rel="noopener noreferrer">
 								{children}
 							</a>
 						) : (
 							<span>{children}</span>
-						),
+						);
+					},
 					// Text-only Pilot: do not fetch model-supplied image URLs.
 					img: ({ alt }) => <span>[图片：{alt || "未提供说明"}]</span>,
 					pre: ({ children }) => (

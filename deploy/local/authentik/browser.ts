@@ -161,9 +161,12 @@ export function createAuthentikBrowserAdapter(
 		if (request.method !== "GET") return response(405);
 		if (url.pathname === "/auth/login") {
 			if (url.search) return response(400);
-			if (challenges.size >= MAX_ENTRIES) return response(503);
 			const previous = cookie(request, CHALLENGE);
 			if (previous) challenges.delete(previous);
+			if (challenges.size >= MAX_ENTRIES) {
+				const oldest = challenges.keys().next().value;
+				if (oldest) challenges.delete(oldest);
+			}
 			const key = random();
 			const challenge = {
 				state: random(),

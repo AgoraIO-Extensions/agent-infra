@@ -28,7 +28,7 @@ describe("assistant Markdown", () => {
 		const { container } = render(
 			<AssistantMarkdown>
 				{
-					'<script>alert(1)</script>\n\n<img src="https://tracker.example/pixel" onerror="alert(1)">\n\n[危险](javascript:alert%281%29) [本地](/api/logout) [协议相对](//tracker.example)\n\n![示意图](https://tracker.example/image.png)\n\n[来源](https://example.com/docs)'
+					'<script>alert(1)</script>\n\n<img src="https://tracker.example/pixel" onerror="alert(1)">\n\n[危险](javascript:alert%281%29) [本地](/api/logout) [协议相对](//tracker.example) [不安全](http://example.com) [凭证](https://user:pass@example.com)\n\n![示意图](https://tracker.example/image.png)\n\n[来源](https://example.com/docs)'
 				}
 			</AssistantMarkdown>,
 		);

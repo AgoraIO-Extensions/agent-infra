@@ -1022,31 +1022,23 @@ export function registerConversationRoutes(
 						async (stream) => {
 							let replay: ConversationReplayResultV1 = initialReplay;
 							let cursor = replay.resumeCursor;
-							let firstBatch = true;
 							while (!request.signal.aborted && !stream.aborted) {
 								const batch = replay;
-								// Initial access was checked before replay selection. Every
-								// subsequent batch, including a reload or an empty poll, must
-								// be authorized before any of its private events are written.
-								if (
-									!firstBatch ||
-									(batch.outcome === "events" && batch.events.length === 0)
-								) {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
-										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
-										}
-										return;
+								// Reauthorize immediately before every replay batch is written,
+								// including the initial non-empty batch selected above.
+								const authorization = await stillAuthorized(
+									dependencies,
+									request,
+									identity.userId,
+									conversationId,
+									metadata.traceId,
+								);
+								if (authorization !== "allowed") {
+									if (authorization === "revoked") {
+										await writeAuthorizationRevoked(stream, metadata.traceId);
 									}
+									return;
 								}
-								firstBatch = false;
 								if (batch.outcome === "reload") {
 									await writeSseMessage(
 										stream,

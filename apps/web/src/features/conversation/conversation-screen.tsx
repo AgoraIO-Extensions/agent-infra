@@ -81,7 +81,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				throwOnError: false,
 			});
 			signal.throwIfAborted();
-			if (!result.data)
+			if (!result.data || result.response?.status !== 200)
 				throw new ConversationReadError(httpFailure(result.response?.status));
 			const parsed = AgentProjectionV2Schema.safeParse(result.data);
 			if (!parsed.success || parsed.data.agentId !== agentId)
