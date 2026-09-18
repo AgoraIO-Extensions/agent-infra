@@ -374,8 +374,9 @@ flowchart TB
 
 M1 只有一个权威 Connection 业务部署单元 `connection-api`，单主位于 GZ3。MCP、HTTP、OAuth
 callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
-业务 Worker 服务。LA3 `connection-provider-egress` 是 GitHub 专用网络安全边界，不拥有领域状态、
-数据库、用户入口或长期 Credential，也不能作为任意代理。完整区域决策见
+业务 Worker 服务。LA3 `connection-provider-egress` 是首个 Provider Egress 实例，首期只开放 GitHub，
+不拥有领域状态、数据库、用户入口或长期 Credential，也不能作为任意代理。后续 Provider 必须逐个
+完成固定网络与 effect policy 审核，不因复用部署单元而自动获得出口。完整区域决策见
 [Connection GZ3 控制面与 LA3 GitHub Egress ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 
 GZ3 control plane 到 LA3 Egress 使用 workload mTLS 与短期 bound dispatch assertion。READ 只有在

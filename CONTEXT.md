@@ -49,7 +49,7 @@ _Avoid_: Provider Connection Upgrade、重新授权客户端
 _Avoid_: Provider Egress、区域副本
 
 **Provider Egress**:
-不持有领域权威状态、只执行受控 Provider 请求并返回 receipt 的网络安全边界；首个远端实例是 LA3 GitHub Egress。
+不持有领域权威状态、只执行受控 Provider 请求并返回 receipt 的网络安全边界；首个实例部署在 LA3，首期只开放 GitHub，后续 Provider 必须独立审核。
 _Avoid_: Connection Control Plane、通用代理、Provider 副本
 
 **Verification Evidence**:

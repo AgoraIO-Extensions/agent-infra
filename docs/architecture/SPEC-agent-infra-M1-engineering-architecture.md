@@ -121,7 +121,7 @@ flowchart LR
 | `platform-api` | 身份入口、Agent 管理、权限、对话、SSE、企微回调、Agent Tool Gateway | 否 |
 | `platform-worker` | Agent Workload 调谐、模板升级、消息投递、outbox 处理 | 否 |
 | `connection-api` | 唯一 Consumer MCP/HTTP 入口；Connection OAuth、LDAP 身份、Principal/Consumer 授权、Provider/Action、凭证、Action 执行和审计 | 否 |
-| `connection-provider-egress` | 无状态 Provider 网络执行边界；首期 LA3 实例只允许 GitHub，通过 mTLS、bound dispatch assertion 和 take-once admission 接收 GZ3 control plane 请求 | 否 |
+| `connection-provider-egress` | 可部署到特殊网络区域的无状态 Provider 网络执行边界；首期 LA3 实例只允许 GitHub，通过 mTLS、bound dispatch assertion 和 take-once admission 接收 GZ3 control plane 请求；后续 Provider 逐个审核且不得形成任意代理 | 否 |
 | `agent pod` | Hermes、Codex、组合模板或完全自定义 Agent 的实际运行环境 | 仅保存 Agent 自有运行数据 |
 | `platform database` | Agent、Owner、范围、审批、配置、会话、执行事件和平台审计 | 是 |
 | `connection database` | 所有部署的 Principal、identity mapping、OAuth session、Consumer、Grant、Provider、Action、外部账号、Credential、调用和审计 | 是 |
