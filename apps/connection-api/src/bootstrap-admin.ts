@@ -30,7 +30,7 @@ try {
 	const administrator = await repository.bootstrapConnectionAdministrator({
 		identityIssuer: config.ldap.issuer,
 		identitySubjectHash: deriveConnectionIdentitySubjectHash({
-			environment: config.publicBaseUrl,
+			realm: config.identityRealm,
 			identity: {
 				issuer: config.ldap.issuer,
 				subject: ldapSubjectArgument(process.argv.slice(2)),

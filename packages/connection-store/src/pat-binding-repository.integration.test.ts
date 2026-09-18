@@ -43,7 +43,7 @@ describe("PostgreSQL PAT binding", () => {
 					}),
 					isActive: async () => true,
 				},
-				identityEnvironment: "https://connection.example/",
+				identityRealm: "urn:agora:connection:test",
 				identityKey: Buffer.alloc(32, 31),
 				patBinding: {
 					repository: bindingRepository,

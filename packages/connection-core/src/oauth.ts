@@ -250,7 +250,7 @@ type OAuthServiceOptions = {
 	authorizationCodeTtlMs?: number;
 	consumer: { id: string; name: string };
 	directory: DirectoryAuthenticator;
-	identityEnvironment: string;
+	identityRealm: string;
 	identityKey: Uint8Array;
 	patConsumers?: Array<{ id: string; name: string }>;
 	patBinding?: {
@@ -427,13 +427,10 @@ class IdentityProtector {
 		}
 	}
 
-	subjectHash(
-		environment: string,
-		identity: { issuer: string; subject: string },
-	) {
+	subjectHash(realm: string, identity: { issuer: string; subject: string }) {
 		const canonical = JSON.stringify([
 			identitySubjectHashVersion,
-			environment.normalize("NFC"),
+			realm.normalize("NFC"),
 			identity.issuer.normalize("NFC"),
 			identity.subject.normalize("NFC"),
 		]);
@@ -455,12 +452,12 @@ class IdentityProtector {
 }
 
 export function deriveConnectionIdentitySubjectHash(input: {
-	environment: string;
+	realm: string;
 	identity: { issuer: string; subject: string };
 	key: Uint8Array;
 }) {
 	return new IdentityProtector(input.key).subjectHash(
-		input.environment,
+		input.realm,
 		input.identity,
 	);
 }
@@ -475,10 +472,10 @@ export class ConnectionOAuthService {
 
 	constructor(private readonly options: OAuthServiceOptions) {
 		if (
-			options.identityEnvironment.length < 1 ||
-			options.identityEnvironment.length > 512
+			options.identityRealm.length < 1 ||
+			options.identityRealm.length > 512
 		) {
-			throw new Error("Connection identity environment is invalid");
+			throw new Error("Connection identity realm is invalid");
 		}
 		this.accessTokenTtlMs = options.accessTokenTtlMs ?? defaultAccessTokenTtlMs;
 		this.authorizationCodeTtlMs =
@@ -595,7 +592,7 @@ export class ConnectionOAuthService {
 		);
 		const code = opaqueToken();
 		const identitySubjectHash = this.protector.subjectHash(
-			this.options.identityEnvironment,
+			this.options.identityRealm,
 			identity,
 		);
 		const authorization = await this.options.repository.approveAuthorization({
@@ -618,7 +615,7 @@ export class ConnectionOAuthService {
 			input.password,
 		);
 		const identitySubjectHash = this.protector.subjectHash(
-			this.options.identityEnvironment,
+			this.options.identityRealm,
 			identity,
 		);
 		const sessionToken = `conn_session_${opaqueToken()}`;
@@ -708,7 +705,7 @@ export class ConnectionOAuthService {
 		return {
 			authorizationUrl: new URL(
 				`/connection/pat-bindings/${encodeURIComponent(state)}`,
-				this.options.identityEnvironment,
+				this.options.resource,
 			).toString(),
 			bindingId,
 			expiresAt,

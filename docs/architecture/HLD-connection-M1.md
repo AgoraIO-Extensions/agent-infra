@@ -641,7 +641,7 @@ type Principal = {
 };
 ```
 
-- `identitySubjectHash` 使用按环境隔离的 keyed HMAC；每个环境使用独立 key，并对版本化 `canonical(environment, identityIssuer, identitySubject)` 计算摘要。M1 以 Connection issuer origin 作为 environment namespace，避免额外配置漂移。不能保存原始 bearer 或可枚举邮箱，也不能跨环境复用或导出 HMAC key。
+- `identitySubjectHash` 使用按 realm 隔离的 keyed HMAC；每个 realm 使用独立 key，并对版本化 `canonical(identityRealm, identityIssuer, identitySubject)` 计算摘要。`identityRealm` 是显式、不可变且与拓扑无关的标识，例如 `urn:agora:connection:prod`；域名、OAuth issuer origin、区域、集群、namespace 和数据库地址都不能参与 Principal 身份。正式部署必须显式配置 realm，缺失时拒绝启动。不能保存原始 bearer 或可枚举邮箱，也不能跨 realm 复用或导出 HMAC key。
 - USER 的 display name/email 只作为受限 profile projection，不作为 join/unique/auth key。
 - SERVICE Principal 只能通过管理员注册和 workload identity 建立，不能模拟 USER。
 - 每个敏感操作都要求未超过 freshness budget 的 Identity assertion；禁用事件同时提升本地 revision/fence。

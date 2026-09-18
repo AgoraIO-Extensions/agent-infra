@@ -17,7 +17,7 @@ const accountBase = {
 	CONNECTION_DIRECT_CONSUMER_ID: "consumer-codex",
 	CONNECTION_DIRECT_CONSUMER_NAME: "Codex",
 	CONNECTION_IDENTITY_KEY: Buffer.alloc(32, 7).toString("base64"),
-	CONNECTION_IDENTITY_ENVIRONMENT: "https://connection.example/",
+	CONNECTION_IDENTITY_REALM: "urn:agora:connection:test",
 	CONNECTION_PUBLIC_BASE_URL: "https://connection.example",
 	DATABASE_URL: "postgresql://connection:secret@database:5432/connection",
 	LDAP_DISPLAY_NAME_ATTRIBUTE: "sn",
@@ -44,7 +44,20 @@ describe("Connection runtime configuration", () => {
 		expect(config.publicBaseUrl).toBe("https://connection.example/");
 		expect(config.resourceUrl).toBe("https://connection.example/mcp");
 		expect(config.identityKey).toHaveLength(32);
-		expect(config.identityEnvironment).toBe("https://connection.example/");
+		expect(config.identityRealm).toBe("urn:agora:connection:test");
+	});
+
+	it("keeps the identity realm independent from the public deployment URL", () => {
+		expect(
+			connectionApiRuntimeConfig({
+				...accountBase,
+				CONNECTION_PUBLIC_BASE_URL: "https://connection.sh3.example",
+			}).identityRealm,
+		).toBe("urn:agora:connection:test");
+		const { CONNECTION_IDENTITY_REALM: _, ...withoutRealm } = accountBase;
+		expect(() => connectionApiRuntimeConfig(withoutRealm)).toThrow(
+			"CONNECTION_IDENTITY_REALM is required",
+		);
 	});
 
 	it("rejects insecure public URLs and malformed identity keys", () => {

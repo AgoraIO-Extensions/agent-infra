@@ -325,7 +325,8 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - `platform-api` 接入公司 OIDC 或现有身份网关。
 - `connection-api` 作为 OAuth Authorization Server，通过独立 Connection Web 的 HTTPS 登录页使用
   公司 LDAP 认证员工，
-  再以 LDAP issuer + 稳定 `uid` 映射 Principal；不能接受前端自行传入用户 ID。
+  再以显式稳定的 identity realm + LDAP issuer + 稳定 `uid` 映射 Principal；identity realm 不得从
+  域名、OAuth issuer origin、区域、集群、namespace 或数据库地址派生，且不能接受前端自行传入用户 ID。
 - LDAP 成功后，`connection-api` 建立 PostgreSQL-backed 浏览器会话。浏览器只持有 HttpOnly、
   Secure、SameSite Cookie，数据库只保存 session hash、Principal、identity issuer、有效期、
   recovery generation、最近访问和撤销状态。

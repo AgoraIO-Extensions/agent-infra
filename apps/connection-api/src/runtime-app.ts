@@ -94,7 +94,7 @@ export async function createConnectionRuntime(
 	const oauth = new ConnectionOAuthService({
 		consumer: config.directConsumer,
 		directory,
-		identityEnvironment: config.identityEnvironment,
+		identityRealm: config.identityRealm,
 		identityKey: config.identityKey,
 		patConsumers: [rehoboamAiConsumer],
 		patBinding: { repository: patBindingRepository },

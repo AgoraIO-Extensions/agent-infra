@@ -77,7 +77,7 @@ describe("SharedScope display names", () => {
 describe("Connection identity authority", () => {
 	it("derives a stable environment-bound LDAP subject hash for administrator bootstrap", () => {
 		const input = {
-			environment: "https://connection.example/",
+			realm: "urn:agora:connection:test",
 			identity: { issuer: "urn:company:ldap", subject: "employee-123" },
 			key: Buffer.alloc(32, 17),
 		};
@@ -87,7 +87,7 @@ describe("Connection identity authority", () => {
 		expect(
 			deriveConnectionIdentitySubjectHash({
 				...input,
-				environment: "https://other-connection.example/",
+				realm: "urn:agora:connection:other-test",
 			}),
 		).not.toBe(first);
 	});
