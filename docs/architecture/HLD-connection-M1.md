@@ -56,7 +56,7 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 创建独立 ConsumerInstance，可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间和过期时间；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
 
-Connection OAuth Authorization Code + PKCE 的 state、code、refresh token 和 revoke 均由 Connection 服务端一次性、短期、可审计地持久化。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession cookie 必须设置 Secure、HttpOnly 和 SameSite；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
+Connection OAuth 使用 Authorization Code + PKCE。`state` 必须一次性、短期且绑定 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri`；authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession cookie 必须设置 Secure、HttpOnly 和 SameSite；所有改变 Grant、Connection 或账号状态的请求必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
 Connection PAT 只对经过注册和批准的 Consumer 开放。PAT 不包含 Provider Credential，不绕过 Principal/Consumer/Grant/Action 检查。
 
@@ -93,11 +93,11 @@ sequenceDiagram
     A-->>C: 脱敏结果、错误和真实调用关联引用
 ```
 
-Connection 只接受 Action ID、ActionVersion、参数和业务幂等键。Principal、Consumer、Connection、外部账号和 Credential 均由服务端从认证上下文和当前状态解析。
+Connection 只接受 Action ID、ActionVersion、参数和业务幂等键。Principal、Consumer、ConsumerInstance 和 Actor 均由认证上下文解析；目标 Connection、外部账号和 Credential 必须由当前有效 Grant 的受信绑定唯一确定。若没有匹配 Grant、存在多个可匹配 Grant/Connection，或绑定状态不完整，调用必须在创建 ActionCall 和访问 Provider 前 fail closed，禁止按默认值、最近使用记录或调用方字段猜测目标。
 
 ## 8. 幂等与线性化
 
-每次 ActionCall 保存 `requestId`、`idempotencyKey`、`callId`、ActionVersion、主体绑定、参数摘要、状态和 trace correlation。相同幂等键与相同请求复用原调用；冲突请求拒绝。
+每次 ActionCall 保存 `requestId`、`idempotencyKey`、`callId`、ActionVersion、Principal、Consumer、ConsumerInstance、Actor、解析出的 Connection、参数摘要、状态和 trace correlation。`idempotencyKey` 必须在 `Principal + Consumer + ConsumerInstance + Actor` 命名空间内由数据库唯一约束原子串行化；仅当 ActionVersion、Connection、参数摘要及全部主体绑定完全一致时复用原调用，任一字段不同则拒绝且不得返回其他主体的调用信息。
 
 WRITE Action 先在同一事务持久化 Effect/Dispatch 意图，再在 Provider 访问前重新检查 Principal、ConsumerInstance、Actor、Grant、Credential、Action、ProviderRelease、repository policy 和 deadline。撤权与 Dispatch 转换使用同一 revision/CAS 或行锁，形成确定提交顺序。
 
