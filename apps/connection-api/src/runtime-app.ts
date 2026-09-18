@@ -94,7 +94,7 @@ export async function createConnectionRuntime(
 	const oauth = new ConnectionOAuthService({
 		consumer: config.directConsumer,
 		directory,
-		identityEnvironment: config.publicBaseUrl,
+		identityEnvironment: config.identityEnvironment,
 		identityKey: config.identityKey,
 		patConsumers: [rehoboamAiConsumer],
 		patBinding: { repository: patBindingRepository },
@@ -241,7 +241,10 @@ export function createFixedOriginFetch(
 		if (sourceUrl.origin !== expectedOrigin) {
 			throw new Error("Provider request origin does not match the fixed route");
 		}
-		const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, targetOrigin);
+		const targetUrl = new URL(
+			`${sourceUrl.pathname}${sourceUrl.search}`,
+			targetOrigin,
+		);
 		return baseFetch(new Request(targetUrl, request));
 	};
 }

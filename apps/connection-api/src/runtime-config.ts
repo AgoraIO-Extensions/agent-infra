@@ -8,6 +8,7 @@ export type ConnectionApiRuntimeConfig = {
 	databaseUrl: string;
 	directConsumer: { id: string; name: string };
 	identityKey: Uint8Array;
+	identityEnvironment: string;
 	ldap: {
 		activeAttribute?: string;
 		activeValue?: string;
@@ -242,6 +243,10 @@ export function connectionApiRuntimeConfig(
 		identityKey: key32(
 			requireValue(environment, "CONNECTION_IDENTITY_KEY"),
 			"CONNECTION_IDENTITY_KEY",
+		),
+		identityEnvironment: requireValue(
+			environment,
+			"CONNECTION_IDENTITY_ENVIRONMENT",
 		),
 		jenkinsReleaseRoute: jenkinsReleaseRoute(environment),
 		ldap: {
