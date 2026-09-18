@@ -98,6 +98,6 @@ export function buildAgentConfigurationRequest(
 		],
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(secrets.length === 0 ? {} : { secrets }),
-		...(draft.channels?.length ? { channels: draft.channels } : {}),
+		...(draft.channels === undefined ? {} : { channels: draft.channels }),
 	};
 }

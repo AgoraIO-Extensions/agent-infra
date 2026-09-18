@@ -170,34 +170,54 @@ function harness(reconnectDelayMs = 1) {
 		};
 		return legacyRecord;
 	}
-	const fetcher = vi.fn<typeof fetch>(async (url) =>
-		String(url).endsWith("/status")
-			? new Response(
-					JSON.stringify({
-						schemaVersion: 3,
-						outcome: "found",
-						hostSessionRef: "host",
-						executionId: "execution",
-						status: "running",
-					}),
-				)
-			: String(url).endsWith("/events/ack")
-				? new Response(
-						JSON.stringify({
-							schemaVersion: 3,
-							executionId: "execution",
-							confirmedCursor: state.runtimeCursor,
-						}),
-					)
-				: new Response(
-						JSON.stringify({
-							schemaVersion: 3,
-							hostSessionRef: "host",
-							operationId: "execution",
-							result: { outcome: "accepted", status: "running" },
-						}),
-					),
-	);
+	const fetcher = vi.fn<typeof fetch>(async (url) => {
+		const path = String(url);
+		if (path.endsWith("/status"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					outcome: "found",
+					hostSessionRef: "host",
+					executionId: "execution",
+					status: "running",
+				}),
+			);
+		if (path.endsWith("/events/ack"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					executionId: "execution",
+					confirmedCursor: state.runtimeCursor,
+				}),
+			);
+		if (path.endsWith("/authorizations/renew"))
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					executionId: "execution",
+					expiresAt: now + 30_000,
+				}),
+			);
+		if (
+			path.endsWith("/turns") ||
+			path.endsWith("/instructions") ||
+			path.endsWith("/stops") ||
+			path.endsWith("/generations/cancel")
+		)
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 3,
+					hostSessionRef: "host",
+					operationId: "execution",
+					result: { outcome: "accepted", status: "running" },
+				}),
+			);
+		if (path.endsWith("/events/stream"))
+			return new Response(null, {
+				headers: { "content-type": "text/event-stream" },
+			});
+		throw new Error(`Unexpected runtime request: ${path}`);
+	});
 	const resolver = vi.fn(async () => ({
 		baseUrl: "http://runtime.test",
 		serviceToken: "synthetic-transport-proof",

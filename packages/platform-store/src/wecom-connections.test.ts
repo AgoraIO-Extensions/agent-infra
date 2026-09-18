@@ -39,6 +39,7 @@ it("fences competing replicas and invalidates an owner after expiry or unbinding
 		).toBe("auth_failed");
 		await sql`update platform.agent_configuration_revisions set configuration=${sql.json({ schemaVersion: 2, agentId: "agent", revision: 1, channels: [] })} where agent_id='agent'`;
 		expect(await store.current(second)).toBe(false);
+		expect(await store.status(second, "connected")).toBe(false);
 	} finally {
 		await store.close();
 		await sql.end();

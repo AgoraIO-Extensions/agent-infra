@@ -7,7 +7,7 @@ export interface WecomConnectionClaimV1 extends WecomConnectionFenceV1 {
 	leaseUntil: Date;
 }
 function admissible(
-	sql: postgres.Sql,
+	sql: postgres.ISql,
 	input: { agentId: string; bindingReference: string; botId: string },
 ) {
 	return sql`((c.configuration->'channels' @> ${sql.json([{ kind: "wecom_bot", bindingReference: input.bindingReference }])}::jsonb
@@ -64,8 +64,20 @@ export class PostgresWecomConnectionsV1 {
 		status: Status,
 	): Promise<boolean> {
 		return this.#sql.begin(async (sql) => {
-			const rows =
-				await sql`update platform.wecom_connections set status=${status} where bot_id=${claim.botId} and holder_id=${claim.holderId} and fence=${claim.fence} and lease_until>clock_timestamp() returning agent_id`;
+			const rows = await sql`update platform.wecom_connections w
+					set status=${status}
+					from platform.agents a
+					join platform.agent_configuration_revisions c
+						on c.agent_id=a.id and c.revision=a.current_configuration_revision
+					where w.bot_id=${claim.botId}
+						and w.agent_id=${claim.agentId}
+						and w.binding_reference=${claim.bindingReference}
+						and a.id=w.agent_id
+						and w.holder_id=${claim.holderId}
+						and w.fence=${claim.fence}
+						and w.lease_until>clock_timestamp()
+						and ${admissible(sql, claim)}
+						returning w.agent_id`;
 			if (!rows.length) return false;
 			const eventId = randomUUID();
 			await sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)

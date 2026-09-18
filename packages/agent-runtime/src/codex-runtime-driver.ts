@@ -5426,6 +5426,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						this.registerModelTurn?.(admission, turn) !== true)
 				) {
 					this.abandonModelTurnAdmission?.(admission);
+					await this.update((state) => {
+						const resolved = locate(state);
+						const source = resolved.source;
+						if (!source || source.bind?.requestId !== receipt.requestId)
+							stateInvalid();
+						source.bindDenied = "authorization_unavailable";
+					});
 					unavailable();
 				}
 			} else unavailable();
