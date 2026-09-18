@@ -89,7 +89,7 @@ export async function performConversationCommand(
 		const options = {
 			client,
 			headers: { "Idempotency-Key": idempotencyKey },
-			signal,
+			signal: AbortSignal.any([signal]),
 			responseStyle: "fields" as const,
 			throwOnError: false as const,
 		};

@@ -28,8 +28,18 @@ export function useConversationCommands({
 }: ConversationCommandTarget & { identityKey: string; client?: Client }) {
 	const queryClient = useQueryClient();
 	const instanceId = useRef(crypto.randomUUID()).current;
-	const scope = useMemo(
-		() => ({
+	const previousScopeRef = useRef<{
+		active: boolean;
+		attempt?: Attempt;
+	}>(undefined);
+	const scope = useMemo(() => {
+		const previous = previousScopeRef.current;
+		if (previous) {
+			previous.active = false;
+			previous.attempt?.controller.abort();
+			previous.attempt = undefined;
+		}
+		const next = {
 			id: crypto.randomUUID(),
 			identityKey,
 			target: { agentId, conversationId },
@@ -38,9 +48,10 @@ export function useConversationCommands({
 			denied: false,
 			attempt: undefined as Attempt | undefined,
 			lastAttemptId: undefined as string | undefined,
-		}),
-		[identityKey, agentId, conversationId, client],
-	);
+		};
+		previousScopeRef.current = next;
+		return next;
+	}, [identityKey, agentId, conversationId, client]);
 	const mutationKey = useMemo(
 		() => ["conversation-command", instanceId, scope.id],
 		[instanceId, scope.id],
@@ -79,16 +90,20 @@ export function useConversationCommands({
 		},
 		onSettled: removeOwnMutations,
 	});
+	const resetMutationRef = useRef(mutation.reset);
+	const removeOwnMutationsRef = useRef(removeOwnMutations);
+	resetMutationRef.current = mutation.reset;
+	removeOwnMutationsRef.current = removeOwnMutations;
 	useLayoutEffect(() => {
 		scope.active = true;
-		mutation.reset();
+		resetMutationRef.current();
 		return () => {
 			scope.active = false;
 			scope.attempt?.controller.abort();
 			scope.attempt = undefined;
-			removeOwnMutations();
+			removeOwnMutationsRef.current();
 		};
-	}, [scope, mutation.reset, removeOwnMutations]);
+	}, [scope]);
 	function start(command: ConversationCommand) {
 		if (
 			!scope.active ||
