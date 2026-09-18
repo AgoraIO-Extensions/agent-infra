@@ -1419,17 +1419,44 @@ describe("Runtime V3 durable authorization", () => {
 				{
 					...base("host-fixture"),
 					operation: {
-						kind: "stop",
-						id: "stop-fixture",
+						kind: "execution",
+						id: "execution-fixture",
 						deliveryFence: 1,
 						executionDeliveryFence: 1,
 					},
 				},
-				"turn.stop",
+				"session.status",
+				{
+					purpose: "control",
+					reason: "stop",
+					claims: { controlRecordId: "first-control" },
+				},
 			).grant,
 		).claims;
 		applyRuntimeAuthority(authorities, stop, "prepare");
 		expect(authorities["execution-fixture"]?.stopped).toBe(true);
+		const conflicting = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "execution",
+						id: "execution-fixture",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+				},
+				"session.status",
+				{
+					purpose: "control",
+					reason: "recovery",
+					claims: { controlRecordId: "second-control" },
+				},
+			).grant,
+		).claims;
+		expect(() =>
+			applyRuntimeAuthority(authorities, conflicting, "query"),
+		).toThrow();
 
 		const recovery = verifyRuntimeV2Fixture(
 			signV3Fixture(

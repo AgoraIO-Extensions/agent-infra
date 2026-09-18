@@ -161,7 +161,14 @@ export function applyRuntimeAuthority(
 	if (
 		current &&
 		(current.workerId !== claims.workerId ||
-			claims.operation.executionDeliveryFence < current.executionDeliveryFence)
+			claims.operation.executionDeliveryFence <
+				current.executionDeliveryFence ||
+			(claims.purpose === "control" &&
+				current.control !== undefined &&
+				claims.operation.executionDeliveryFence ===
+					current.executionDeliveryFence &&
+				current.control.controlRecordId !== claims.controlRecordId &&
+				claims.reason !== "generation_isolation"))
 	)
 		runtimeAuthorizationDenied();
 	if (claims.purpose === "business") {

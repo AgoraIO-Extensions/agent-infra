@@ -1243,6 +1243,24 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.sent().body).not.toHaveProperty("actorId");
 		h.runtime.close();
 	});
+	it("rechecks authorization immediately before signing the runtime grant", async () => {
+		const h = harness();
+		const context = await h.authorize();
+		let reads = 0;
+		h.store.readRuntimeState.mockImplementation(async () => {
+			reads += 1;
+			if (reads === 3) h.setUser(null);
+			return h.state;
+		});
+		await expect(
+			h.runtime.runtimeHost.dispatch(h.request(context)),
+		).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+		expect(h.fetcher).not.toHaveBeenCalled();
+		expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "authorization_revoked" }),
+		);
+		h.runtime.close();
+	});
 	it("turns post-authorization revocation into body-free persisted control", async () => {
 		const h = harness();
 		const context = await h.authorize();
