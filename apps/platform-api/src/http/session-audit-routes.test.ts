@@ -19,7 +19,11 @@ const activeIdentity = {
 	authorizationRevision: "authorization-1",
 };
 
-function createApp(identity = activeIdentity) {
+function createApp(
+	identity: typeof activeIdentity & {
+		sessionGeneration?: string;
+	} = activeIdentity,
+) {
 	const app = new Hono();
 	app.onError((error, context) =>
 		error instanceof HttpProtocolError
