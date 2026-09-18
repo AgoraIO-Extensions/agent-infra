@@ -505,8 +505,8 @@ function ActiveConversation({
 			}
 			void reader.refresh();
 		} else if (result.kind === "selection-updated") {
-			setModelId(undefined);
-			setReasoning(undefined);
+			// Keep the confirmed values while the projection refreshes; falling back
+			// to the stale conversation would briefly show and submit the old choice.
 			setNotice("模型选择已保存，从下一条消息开始生效。");
 			void reader.refresh();
 		}
