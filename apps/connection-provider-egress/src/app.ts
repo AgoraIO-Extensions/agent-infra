@@ -29,6 +29,7 @@ export type EgressAdmission = {
 		dispatchId: string;
 		hopId: string;
 		jti: string;
+		leaseProofHash: string;
 	}): Promise<"ACCEPTED_NOW" | "REJECTED" | "REPLAYED">;
 };
 
@@ -96,6 +97,7 @@ export function createProviderEgressApp(
 				dispatchId: claims.dispatchId,
 				hopId: claims.hopId,
 				jti: claims.jti,
+				leaseProofHash: claims.leaseProofHash,
 			});
 			if (admission !== "ACCEPTED_NOW") {
 				return context.json({ admission, error: "DISPATCH_NOT_ADMITTED" }, 409);
@@ -165,6 +167,7 @@ function parseClaims(value: JsonValue): DispatchAssertionClaimsV1 {
 		"issuedAt",
 		"issuer",
 		"jti",
+		"leaseProofHash",
 		"method",
 		"notBefore",
 		"origin",

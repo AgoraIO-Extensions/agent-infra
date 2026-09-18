@@ -41,6 +41,7 @@ function assertion(overrides: Record<string, unknown> = {}) {
 			issuedAt: nowSeconds,
 			issuer: "connection-control-plane",
 			jti: "jti-1",
+			leaseProofHash: "sha256:lease",
 			method: "GET",
 			notBefore: nowSeconds - 1,
 			origin: "https://api.github.com",

@@ -21,6 +21,7 @@ describe("Control Plane to Provider Egress contract", () => {
 					dispatchId: string;
 					hopId: string;
 					jti: string;
+					leaseProofHash: string;
 			  }
 			| undefined;
 		let admitted = false;
@@ -34,6 +35,7 @@ describe("Control Plane to Provider Egress contract", () => {
 					dispatchId: value.dispatchId,
 					hopId: value.hopId,
 					jti: value.jti,
+					leaseProofHash: value.leaseProofHash,
 				};
 			},
 			admit: async (input: {
@@ -41,6 +43,7 @@ describe("Control Plane to Provider Egress contract", () => {
 				dispatchId: string;
 				hopId: string;
 				jti: string;
+				leaseProofHash: string;
 			}) => {
 				if (!prepared || canonicalJsonV1(input) !== canonicalJsonV1(prepared)) {
 					return "REJECTED" as const;
@@ -86,6 +89,7 @@ describe("Control Plane to Provider Egress contract", () => {
 						dispatchId: input.dispatchId,
 						hopId: input.hopId,
 						jti: input.jti,
+						leaseProofHash: input.leaseProofHash,
 					}),
 			},
 			assertionKeys: new Map([["assertion-key-1", assertionKeys.publicKey]]),

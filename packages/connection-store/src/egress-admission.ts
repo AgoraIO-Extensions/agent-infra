@@ -8,6 +8,7 @@ export type ProviderEgressHopIntent = {
 	effectDispatchId?: string;
 	hopId: string;
 	jti: string;
+	leaseProofHash: string;
 };
 
 export class PostgresProviderEgressAdmission {
@@ -26,9 +27,10 @@ export class PostgresProviderEgressAdmission {
 			INSERT INTO connection_provider_egress_hops (
 				hop_id, call_id, egress_dispatch_id, effect_dispatch_id,
 				effect, jti, assertion_hash, state
+				, lease_proof_hash
 			)
 			SELECT ${intent.hopId}, call.id, ${intent.dispatchId}, dispatch.id, action.effect,
-				${intent.jti}, ${intent.assertionHash}, 'PREPARED'
+				${intent.jti}, ${intent.assertionHash}, 'PREPARED', ${intent.leaseProofHash}
 			FROM connection_calls call
 			JOIN connection_action_versions action ON action.id = call.action_version_id
 			LEFT JOIN connection_effects effect ON effect.call_id = call.id
@@ -52,7 +54,7 @@ export class PostgresProviderEgressAdmission {
 			SELECT hop_id AS "hopId", call_id AS "callId",
 				egress_dispatch_id AS "dispatchId",
 				effect_dispatch_id AS "effectDispatchId", effect, jti,
-				assertion_hash AS "assertionHash"
+				assertion_hash AS "assertionHash", lease_proof_hash AS "leaseProofHash"
 			FROM connection_provider_egress_hops
 			WHERE hop_id = ${intent.hopId}
 		`;
@@ -63,7 +65,8 @@ export class PostgresProviderEgressAdmission {
 			(stored.effectDispatchId ?? undefined) !== intent.effectDispatchId ||
 			stored.effect !== intent.effect ||
 			stored.jti !== intent.jti ||
-			stored.assertionHash !== intent.assertionHash
+			stored.assertionHash !== intent.assertionHash ||
+			stored.leaseProofHash !== intent.leaseProofHash
 		) {
 			throw new Error(
 				"Provider Egress hop intent conflicts with durable state",
@@ -80,9 +83,14 @@ export class PostgresProviderEgressAdmission {
 	}): Promise<"ACCEPTED_NOW" | "REJECTED" | "REPLAYED"> {
 		return this.sql.begin(async (sql) => {
 			const existing = await sql<
-				{ assertion_hash: string; hop_id: string; jti: string }[]
+				{
+					assertion_hash: string;
+					hop_id: string;
+					jti: string;
+					lease_proof_hash: string;
+				}[]
 			>`
-				SELECT hop_id, jti, assertion_hash
+				SELECT hop_id, jti, assertion_hash, lease_proof_hash
 				FROM connection_egress_admissions
 				WHERE hop_id = ${input.hopId} OR jti = ${input.jti}
 			`;
@@ -91,7 +99,8 @@ export class PostgresProviderEgressAdmission {
 					(row) =>
 						row.hop_id === input.hopId &&
 						row.jti === input.jti &&
-						row.assertion_hash === input.assertionHash,
+						row.assertion_hash === input.assertionHash &&
+						row.lease_proof_hash === input.leaseProofHash,
 				)
 					? "REPLAYED"
 					: "REJECTED";
@@ -104,24 +113,27 @@ export class PostgresProviderEgressAdmission {
 					egress_dispatch_id: string;
 					effect: "READ" | "WRITE";
 					jti: string;
+					lease_proof_hash: string;
 					state: string;
 				}[]
 			>`
 				SELECT call_id, egress_dispatch_id, effect_dispatch_id,
-					effect, jti, assertion_hash, state
+					effect, jti, assertion_hash, lease_proof_hash, state
 				FROM connection_provider_egress_hops
 				WHERE hop_id = ${input.hopId}
 				FOR UPDATE
 			`;
 			if (hop?.state === "ADMITTED") {
 				const [admission] = await sql<
-					{ assertion_hash: string; jti: string }[]
+					{ assertion_hash: string; jti: string; lease_proof_hash: string }[]
 				>`
-					SELECT jti, assertion_hash FROM connection_egress_admissions
+					SELECT jti, assertion_hash, lease_proof_hash
+					FROM connection_egress_admissions
 					WHERE hop_id = ${input.hopId}
 				`;
 				return admission?.jti === input.jti &&
-					admission.assertion_hash === input.assertionHash
+					admission.assertion_hash === input.assertionHash &&
+					admission.lease_proof_hash === input.leaseProofHash
 					? "REPLAYED"
 					: "REJECTED";
 			}
@@ -129,6 +141,7 @@ export class PostgresProviderEgressAdmission {
 				hop?.state !== "PREPARED" ||
 				hop.jti !== input.jti ||
 				hop.assertion_hash !== input.assertionHash ||
+				hop.lease_proof_hash !== input.leaseProofHash ||
 				hop.egress_dispatch_id !== input.dispatchId
 			) {
 				return "REJECTED";

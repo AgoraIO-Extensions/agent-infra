@@ -37,6 +37,7 @@ export type DispatchAssertionClaimsV1 = {
 	issuedAt: number;
 	issuer: string;
 	jti: string;
+	leaseProofHash: string;
 	method: "GET";
 	notBefore: number;
 	origin: "https://api.github.com";

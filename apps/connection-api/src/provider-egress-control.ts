@@ -20,6 +20,7 @@ type HopStore = {
 		effectDispatchId?: string;
 		hopId: string;
 		jti: string;
+		leaseProofHash: string;
 	}): Promise<void>;
 	admit(input: {
 		assertionHash: string;
@@ -59,6 +60,7 @@ export function createProviderEgressAssertionIssuer(
 		const dispatchId = `egress-dispatch-${randomUUID()}`;
 		const hopId = `egress-hop-${randomUUID()}`;
 		const jti = `egress-jti-${randomUUID()}`;
+		const leaseProofHash = sha256(`egress-lease-${randomUUID()}`);
 		const claims: DispatchAssertionClaimsV1 = {
 			actionVersionId: input.actionVersionId,
 			audience: "connection-provider-egress",
@@ -76,6 +78,7 @@ export function createProviderEgressAssertionIssuer(
 			issuedAt,
 			issuer: options.issuer,
 			jti,
+			leaseProofHash,
 			method: input.plan.method,
 			notBefore: issuedAt - 1,
 			origin: input.plan.origin,
@@ -100,6 +103,7 @@ export function createProviderEgressAssertionIssuer(
 				: {}),
 			hopId,
 			jti,
+			leaseProofHash,
 		});
 		return { assertion, credential: input.credential, plan: input.plan };
 	};
