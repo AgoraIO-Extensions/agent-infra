@@ -236,6 +236,30 @@ describe("socket-bound independent Connection client", () => {
 			callRef: "callref-fixture-a",
 		});
 	});
+	it("bounds historical bootstrap slots", async () => {
+		const { client } = await fixture();
+		for (let index = 2; index <= 1_024; index++) {
+			const request = {
+				...bootstrapRequest(),
+				requestId: `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`,
+			};
+			expect(
+				(await client.bootstrap(request, new AbortController().signal))
+					.decision,
+			).toBe("permit");
+		}
+		const denied = await client.bootstrap(
+			{
+				...bootstrapRequest(),
+				requestId: "00000000-0000-4000-8000-000000001025",
+			},
+			new AbortController().signal,
+		);
+		expect(denied).toMatchObject({
+			decision: "unavailable",
+			reason: "credential_unavailable",
+		});
+	});
 	it("rejects expired credentials and redacts a loader error", async () => {
 		const config = originalConfiguration();
 		config.credential.expiresAt = time;

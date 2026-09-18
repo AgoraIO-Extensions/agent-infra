@@ -179,6 +179,18 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 	});
+	it("surfaces Runtime cleanup failures after closing every resource", async () => {
+		mocks.find.mockResolvedValue([]);
+		mocks.runtimeClose.mockRejectedValueOnce(
+			new Error("synthetic runtime failure"),
+		);
+		const worker = createPlatformConversationWorkerV2(options);
+		await expect(worker.stop()).rejects.toThrow("synthetic runtime failure");
+		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
+		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
+		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
+		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
+	});
 });
 
 it("starts WeCom dispatch independently of failed or unsettled discovery", async () => {

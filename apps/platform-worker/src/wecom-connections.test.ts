@@ -254,3 +254,45 @@ it("does not reply after the connection lease is lost", async () => {
 		await worker.close();
 	}
 });
+
+it("does not route application scopes through a bot socket", async () => {
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({ outcome: "denied" }),
+	});
+	try {
+		await worker.tick();
+		await expect(
+			worker.sender.send({
+				scope: {
+					agentId: "agent",
+					bindingReference: "binding",
+					kind: "wecom_app",
+					senderId: "sender",
+					peerId: "peer",
+					conversationType: "single",
+					threadId: null,
+				},
+				replyHandle: "reply",
+				text: "fixture",
+			}),
+		).resolves.toBe("failed");
+		expect(mocks.socketSend).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});

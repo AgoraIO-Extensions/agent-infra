@@ -172,7 +172,8 @@ export function createPlatformWecomConnectionsV1(
 			const entry = [...active.values()].find(
 				(e) =>
 					e.claim.agentId === input.scope.agentId &&
-					e.claim.bindingReference === input.scope.bindingReference,
+					e.claim.bindingReference === input.scope.bindingReference &&
+					input.scope.kind === "wecom_bot",
 			);
 			return entry ? entry.connection.sender.send(input) : "failed";
 		},

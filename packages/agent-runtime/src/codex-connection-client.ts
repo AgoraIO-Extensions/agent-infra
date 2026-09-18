@@ -99,6 +99,8 @@ function copyMetadata(slot: Slot): SlotMetadata {
 	});
 }
 
+const maximumHistoricalSlots = 1_024;
+
 export function validateCodexConnectionProfile(
 	value: unknown,
 ): CodexConnectionProfile {
@@ -237,6 +239,8 @@ export function createCodexConnectionClient(options: {
 			!isBootstrapResponse(response) ||
 			Buffer.byteLength(JSON.stringify(response)) + 1 > 16_384
 		)
+			return deny("credential_unavailable");
+		if (slots.size >= maximumHistoricalSlots)
 			return deny("credential_unavailable");
 		slot = copyMetadata(candidate);
 		slots.set(slot.slotId, slot);

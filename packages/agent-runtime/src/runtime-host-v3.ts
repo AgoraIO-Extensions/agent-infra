@@ -531,7 +531,6 @@ export class RuntimeHostV3 {
 				"generation-cancel",
 				(this.options.grantValidation.now ?? Date.now)(),
 			);
-			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(recoveryKey);
 		return this.options.serialize(
@@ -574,6 +573,10 @@ export class RuntimeHostV3 {
 					request,
 					request.operation.id,
 				);
+				// Keep the in-memory fast path aligned with the durable barrier. If
+				// preparation or activation fails, a retry must still be able to
+				// recover evidence in this process.
+				this.closedRecoveryGenerations.add(recoveryGenerationKey);
 				const response = await this.options.dispatch(
 					prepared.session.hostSessionRef,
 					prepared.operation,

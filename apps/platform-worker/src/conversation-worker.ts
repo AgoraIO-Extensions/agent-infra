@@ -232,21 +232,21 @@ export function createPlatformConversationWorkerV2(
 			controller.abort();
 			const runtimeClose = Promise.resolve().then(() => runtime.close());
 			closing = (async () => {
-				await Promise.allSettled([
+				const runningResults = await Promise.allSettled([
 					runtimeClose,
 					polling,
 					wecomPolling,
 					connectionPolling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
-				const results = await Promise.allSettled([
+				const closeResults = await Promise.allSettled([
 					...(wecom ? [wecom.close()] : []),
 					transaction.close(),
 					store.close(),
 					taskAuthorizationStore.close(),
 					legacyControlStore.close(),
 				]);
-				const failure = results.find(
+				const failure = [...runningResults, ...closeResults].find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected",
 				);
