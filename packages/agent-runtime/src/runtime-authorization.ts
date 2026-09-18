@@ -174,8 +174,7 @@ export function applyRuntimeAuthority(
 				claims.operation.executionDeliveryFence ===
 					current.executionDeliveryFence &&
 				claims.operation.deliveryFence <=
-					(current.controlDeliveryFence ??
-						current.executionDeliveryFence) &&
+					(current.controlDeliveryFence ?? current.executionDeliveryFence) &&
 				current.control.controlRecordId !== claims.controlRecordId))
 	)
 		runtimeAuthorizationDenied();

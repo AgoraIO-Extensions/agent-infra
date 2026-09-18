@@ -243,10 +243,33 @@ export class PostgresWecomChannelV1
 	async claim(): Promise<WecomDeliveryClaimV1 | null> {
 		let recovered = 0;
 		const claim = await this.#sql.begin(async (sql) => {
+			const staleConnections = await sql<
+				{ id: string; actor_id: string; scope: WecomScopeV1 }[]
+			>`update platform.wecom_receipts r
+			 set delivery_status='unknown',updated_at=now()
+			 where r.connection_bot_id is not null
+			   and r.delivery_status in ('pending','claimed')
+			   and not exists (
+					select 1
+					from platform.wecom_connections w
+					where w.bot_id=r.connection_bot_id
+					  and w.fence=r.connection_fence
+					  and w.lease_until>clock_timestamp()
+			   )
+			 returning r.id,r.actor_id,r.scope`;
+			recovered = staleConnections.length;
+			for (const row of staleConnections)
+				await audit(
+					sql,
+					row.id,
+					"unknown",
+					{ agentId: row.scope.agentId, actorId: row.actor_id },
+					"platform-worker",
+				);
 			const expired = await sql<
 				{ id: string; actor_id: string; scope: WecomScopeV1 }[]
 			>`update platform.wecom_receipts set delivery_status='unknown',updated_at=now() where id in (select id from platform.wecom_receipts where delivery_status='sending' and lease_until<=now() order by created_at limit 25 for update skip locked) returning id,actor_id,scope`;
-			recovered = expired.length;
+			recovered += expired.length;
 			for (const row of expired)
 				await audit(
 					sql,

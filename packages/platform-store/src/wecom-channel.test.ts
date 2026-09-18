@@ -388,3 +388,34 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 		await other.close();
 	}
 });
+
+it("seals a pending connection receipt as unknown after its connection lease expires", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
+	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+    values (${message.providerId},${message.agentId},${message.bindingReference},'worker-stale',10,now()+interval '30 seconds','connected')
+    on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
+	const owner = new PostgresWecomChannelV1({
+		...db,
+		connectionHolderId: "worker-stale",
+	});
+	try {
+		const accepted = await channel(owner).receive(
+			{
+				...message,
+				eventId: "stale-connection-event",
+				senderId: "stale-connection-sender",
+			},
+			{ botId: message.providerId, holderId: "worker-stale", fence: 10 },
+		);
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected WebSocket acceptance");
+		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id=${message.providerId}`;
+		expect(await owner.claim()).toBeNull();
+		expect(
+			await owner.read(accepted.receipt.receiptId, "stale-connection-sender"),
+		).toMatchObject({ deliveryStatus: "unknown" });
+	} finally {
+		await owner.close();
+	}
+});
