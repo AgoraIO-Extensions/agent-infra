@@ -374,17 +374,15 @@ flowchart TB
 
 M1 只有一个权威 Connection 业务部署单元 `connection-api`，单主位于 GZ3。MCP、HTTP、OAuth
 callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同进程角色运行；不增加独立
-业务 Worker 服务。LA3 `connection-provider-egress` 是首个 Provider Egress 实例，首期只开放 GitHub，
-不拥有领域状态、数据库、用户入口或长期 Credential，也不能作为任意代理。后续 Provider 必须逐个
-完成固定网络与 effect policy 审核，不因复用部署单元而自动获得出口。完整区域决策见
-[Connection GZ3 控制面与 LA3 GitHub Egress ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+业务 Worker 服务。国内 Provider 从 GZ3 直连；GitHub 服务端 OAuth 与 API 请求使用 GZ3 固定代理
+出口。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
+拓扑。完整区域决策见
+[Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 
-GZ3 control plane 到 LA3 Egress 使用 workload mTLS 与短期 bound dispatch assertion。READ 只有在
-LA3 明确 pre-submit 拒绝或连接建立前失败时，才可走 GZ3 固定 GitHub proxy fallback。WRITE 只有
-签名 `REJECTED_PRE_SUBMIT` 或 admission 状态证明未进入 `SUBMISSION_STARTED` 时才允许 fallback；
-response lost 或 admission 未知进入 `UNCERTAIN`。GitHub OAuth code exchange 失败且消费状态未知时
-重新发起登录，不跨路径盲重放 code。Connection DB 必须位于国内并由 GZ3 单主写入，禁止保留 LA3
-可写副本或跨区域授权双写。
+GitHub WRITE 通过固定代理提交后，response lost 仍进入 `UNCERTAIN`，不能切换路径盲重试。
+GitHub OAuth code exchange 失败且消费状态未知时重新发起登录，不重放 code。Connection DB 最终
+必须位于国内并由 GZ3 单主写入，禁止保留 LA3 可写副本或跨区域授权双写。未来重新启用 LA3
+Provider Egress 前，必须先满足 ADR 中的 workload mTLS 与 crash-window 门禁。
 
 本地开发可以在同一机器运行 API 和 PostgreSQL，但 LDAP、KMS 与 Provider
 业务路由在正式 Adapter 未配置时保持不启动；不能以本地模式跳过 Principal/Grant 校验。

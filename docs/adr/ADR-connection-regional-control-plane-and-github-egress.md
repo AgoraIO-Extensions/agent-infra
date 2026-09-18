@@ -1,12 +1,14 @@
-# ADR: Connection GZ3 控制面与 LA3 GitHub Egress
+# ADR: Connection GZ3 控制面与 GitHub 代理出口
 
 ## 状态
 
-已批准直接在隔离的 GZ3 production namespace 实现；接入生产流量前仍受 Issue #601 的国内 PostgreSQL、24 小时网络证据和 Security/SRE 评审约束。
+已批准直接在隔离的 GZ3 production namespace 实现。LA3 Provider Egress 因当前 HCI 不提供可用的 workload mTLS 入口而延期；接入广泛生产流量前仍受 Issue #601 的国内 PostgreSQL、代理稳定性证据和 Security/SRE 评审约束。
 
 ## 决策
 
-Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计迁移到 GZ3。LA3 只部署无状态 `connection-provider-egress` 实例，首期仅允许审核后的 GitHub ProviderRelease 和固定 GitHub origin，不提供用户入口、数据库、长期 Credential 或任意代理能力。Provider Egress 是可部署到特殊网络区域的通用安全边界，但后续 Provider 必须逐个审核固定 origin、method、header、大小和 effect 语义，不能退化为 VPN 或任意代理。GZ3 通过 workload mTLS、短期 bound dispatch assertion 和 take-once admission 调用 LA3；GitHub READ 只有在可证明 pre-submit 失败时允许走固定 `103.101.125.158:28062` proxy fallback，WRITE 在提交状态未知时进入 `UNCERTAIN`，禁止跨路径盲重试。该 proxy 只作为 GitHub 的备用 VPN 出口，不用于 GZ3 可直连的 Bitbucket。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台，因为多数公司 Provider 位于国内，而授权权威双写与跨路径写重试会扩大一致性和重复副作用风险。
+Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计部署在 GZ3。国内 Provider 从 GZ3 直连；GitHub 服务端 OAuth 与 API 请求固定通过 `103.101.125.158:28062` 代理，浏览器 authorize 页面仍由用户浏览器直接访问。该代理只用于 GitHub，不用于 GZ3 可直连的 Bitbucket、Jira、Confluence 或 Jenkins。GitHub WRITE 在请求提交后响应未知时仍进入 `UNCERTAIN`，禁止盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台。
+
+LA3 `connection-provider-egress` 的协议代码保留为未来 TODO，但不进入当前生产拓扑。只有 HCI 提供可审计的双向 workload mTLS、证书轮换、TLS passthrough 或等价可信入口，并完成 READ/WRITE crash-window 验收后，才能重新评审启用；不得以普通 HTTPS、共享 Token 或调用方可伪造的证书 Header 绕过门禁。
 
 ## 证据
 

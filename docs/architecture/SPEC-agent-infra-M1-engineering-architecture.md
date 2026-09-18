@@ -133,10 +133,11 @@ Connection Web 的独立部署与同源路由决策见
 数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。本机部署也
 连接同一 Connection account authority；可选 local edge 不保存账号、Credential 或授权状态。
 
-Connection control plane 与 connection database 单主部署在 GZ3。LA3 不部署第二套 Connection DB、
-Identity、Grant 或用户入口，只部署 GitHub Provider Egress。区域职责、READ fallback 与 WRITE
+Connection control plane 单主部署在 GZ3，connection database 后续迁入国内；迁移前仍保持唯一
+权威。LA3 当前不部署 Connection 组件。GitHub 服务端流量从 GZ3 通过固定代理出口，国内 Provider
+从 GZ3 直连；LA3 Provider Egress 仅作为满足 workload mTLS 门禁后的未来 TODO。区域职责与 WRITE
 `UNCERTAIN` 边界见
-[Connection GZ3 控制面与 LA3 GitHub Egress ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+[Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 
 ### 4.2 不拆分的部署单元
 
