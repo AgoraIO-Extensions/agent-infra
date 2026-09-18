@@ -121,7 +121,7 @@ RBAC、网络隔离、存储、DNS/TLS 和入口证据仍缺失。L2 只消费�
 
 Direct MCP、Connection PAT 和 Connection OAuth Authorization Server 由独立 Connection
 系统负责；是否已交付且可供本次 Pilot 使用，以 #435 AC-1 要求的独立系统版本证据和
-#395 的实际通过记录为准。本计划只记录其与 Platform 联合验收的边界，不复制 Connection
+`#395` 的实际通过记录为准。本计划只记录其与 Platform 联合验收的边界，不复制 Connection
 实现、授权或审计。
 
 L1 消费的 Direct MCP contract 由独立 Connection 系统发布版本化、不可变的 HTTP/MCP Schema
