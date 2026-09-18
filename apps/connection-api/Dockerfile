@@ -6,6 +6,7 @@ WORKDIR /app
 # with both legacy Docker builds and BuildKit.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/connection-api/package.json apps/connection-api/package.json
+COPY apps/connection-provider-egress/package.json apps/connection-provider-egress/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/connection-contracts/package.json packages/connection-contracts/package.json
 COPY packages/connection-core/package.json packages/connection-core/package.json
@@ -13,6 +14,7 @@ COPY packages/connection-identity/package.json packages/connection-identity/pack
 COPY packages/connection-store/package.json packages/connection-store/package.json
 COPY packages/openconnector-adapter/package.json packages/openconnector-adapter/package.json
 COPY packages/openconnector-kernel/package.json packages/openconnector-kernel/package.json
+COPY packages/provider-egress-contracts/package.json packages/provider-egress-contracts/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY apps/connection-api/src/bootstrap-production.ts apps/connection-api/src/bootstrap-production.ts
@@ -21,6 +23,7 @@ COPY apps/connection-api/src/index.ts apps/connection-api/src/index.ts
 COPY apps/connection-api/src/app.ts apps/connection-api/src/app.ts
 COPY apps/connection-api/src/oauth-routes.ts apps/connection-api/src/oauth-routes.ts
 COPY apps/connection-api/src/production-app.ts apps/connection-api/src/production-app.ts
+COPY apps/connection-api/src/provider-egress-control.ts apps/connection-api/src/provider-egress-control.ts
 COPY apps/connection-api/src/runtime-app.ts apps/connection-api/src/runtime-app.ts
 COPY apps/connection-api/src/runtime-config.ts apps/connection-api/src/runtime-config.ts
 COPY apps/connection-api/tsconfig.json apps/connection-api/tsconfig.json
@@ -47,6 +50,9 @@ COPY packages/openconnector-kernel/PROVENANCE.json packages/openconnector-kernel
 COPY packages/openconnector-kernel/LICENSE.txt packages/openconnector-kernel/LICENSE.txt
 COPY packages/openconnector-kernel/NOTICE.md packages/openconnector-kernel/NOTICE.md
 COPY packages/openconnector-kernel/scripts packages/openconnector-kernel/scripts
+COPY packages/provider-egress-contracts/src packages/provider-egress-contracts/src
+COPY packages/provider-egress-contracts/tsconfig.json packages/provider-egress-contracts/tsconfig.json
+COPY packages/provider-egress-contracts/tsdown.config.ts packages/provider-egress-contracts/tsdown.config.ts
 COPY migrations/connection migrations/connection
 
 ENV NODE_ENV=production
