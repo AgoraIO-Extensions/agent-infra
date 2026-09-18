@@ -1655,7 +1655,7 @@ Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_gra
 | `action_attempt` | attempt_id、call_id、ordinal、credential_version_id、executor_digest、status |
 | `logical_effect` | effect_id、call_id、effect_key、state、provider_idempotency_key_hash、provider_idempotency_key_ciphertext?、idempotency_key_kms_ref?、idempotency_key_codec_version? |
 | `effect_dispatch` | dispatch_id、effect_id、ordinal、state、request_hash、deadline |
-| `provider_egress_hop` | hop_id、call_id、dispatch_id?、effect、jti、assertion_hash、state、receipt refs；READ 直接绑定 Call 且 dispatch_id 为空，WRITE 必须绑定 EffectDispatch |
+| `provider_egress_hop` | hop_id、call_id、egress_dispatch_id、effect_dispatch_id?、effect、jti、assertion_hash、state、receipt refs；READ 直接绑定 Call 且 effect_dispatch_id 为空，WRITE 必须绑定 EffectDispatch |
 | `egress_admission` | hop_id、jti、assertion_hash、accepted_at、lease_proof_hash；unique hop_id/jti；FK hop_id -> provider_egress_hop ON DELETE RESTRICT |
 | `provider_receipt` | receipt_id、hop_id、type、signed_envelope、checksum、occurred_at |
 | `reconciliation_job` | id、effect_id、strategy、lease、next_at、status、evidence_ref |

@@ -204,10 +204,10 @@ describe("Connection store migrations", () => {
 			"call_id TEXT NOT NULL REFERENCES connection_calls(id) ON DELETE RESTRICT",
 		);
 		expect(providerEgressAdmission).toContain(
-			"(effect = 'READ' AND dispatch_id IS NULL)",
+			"(effect = 'READ' AND effect_dispatch_id IS NULL)",
 		);
 		expect(providerEgressAdmission).toContain(
-			"(effect = 'WRITE' AND dispatch_id IS NOT NULL)",
+			"(effect = 'WRITE' AND effect_dispatch_id IS NOT NULL)",
 		);
 		expect(providerEgressAdmission).toContain("jti TEXT NOT NULL UNIQUE");
 	});
