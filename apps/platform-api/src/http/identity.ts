@@ -18,6 +18,8 @@ export interface IdentityContext {
 	readonly organizationIds: readonly string[];
 	readonly roles: readonly ("employee" | "system_admin")[];
 	readonly authorizationRevision: string;
+	/** Opaque per-login generation supplied by the trusted identity service. */
+	readonly sessionGeneration?: string;
 }
 
 export interface IdentityAdapter {
@@ -130,6 +132,11 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 function parseIdentity(value: unknown): ResolvedIdentity {
+	const hasSessionGeneration =
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.hasOwn(value, "sessionGeneration");
 	const identity = record(value, [
 		"schemaVersion",
 		"userId",
@@ -138,6 +145,7 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		"organizationIds",
 		"roles",
 		"authorizationRevision",
+		...(hasSessionGeneration ? ["sessionGeneration"] : []),
 	]);
 	if (
 		identity.schemaVersion !== 1 ||
@@ -145,7 +153,10 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		!text(identity.displayName) ||
 		(identity.accountStatus !== "active" &&
 			identity.accountStatus !== "disabled") ||
-		!text(identity.authorizationRevision)
+		!text(identity.authorizationRevision) ||
+		(identity.sessionGeneration !== undefined &&
+			(!text(identity.sessionGeneration) ||
+				!/^[A-Za-z0-9_-]{43}$/.test(identity.sessionGeneration)))
 	) {
 		throw new Error();
 	}
@@ -164,6 +175,9 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		organizationIds: stringArray(identity.organizationIds),
 		roles: roles as ("employee" | "system_admin")[],
 		authorizationRevision: identity.authorizationRevision,
+		...(identity.sessionGeneration !== undefined
+			? { sessionGeneration: identity.sessionGeneration }
+			: {}),
 	};
 }
 

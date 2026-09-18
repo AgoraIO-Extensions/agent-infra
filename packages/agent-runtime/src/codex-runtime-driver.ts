@@ -248,6 +248,7 @@ interface CodexNativeSourceRecord {
 	reserve: CodexNativeSourceReceipt;
 	reserveAuthorized?: true;
 	reserveDenied?: "authorization_denied" | "authorization_unavailable";
+	bindPending?: CodexNativeSourceReceipt;
 	bind?: CodexNativeSourceReceipt;
 	bindDenied?: "authorization_denied" | "authorization_unavailable";
 	source?: CodexNativeSourceV1;
@@ -717,6 +718,7 @@ function isNativeSourceRecord(
 			"reserve",
 			"reserveAuthorized",
 			"reserveDenied",
+			"bindPending",
 			"bind",
 			"bindDenied",
 			"source",
@@ -731,7 +733,13 @@ function isNativeSourceRecord(
 		value.reservation.reservationId !== id
 	)
 		return false;
-	for (const field of ["reserve", "bind", "notStarted", "terminal"] as const) {
+	for (const field of [
+		"reserve",
+		"bindPending",
+		"bind",
+		"notStarted",
+		"terminal",
+	] as const) {
 		const receipt = value[field];
 		if (receipt === undefined && field !== "reserve") continue;
 		if (
@@ -779,6 +787,18 @@ function isNativeSourceRecord(
 		)
 			return false;
 		if (value.delivery === "steered" && value.bindDenied) return false;
+	} else if (value.bindPending !== undefined) {
+		if (
+			!value.reserveAuthorized ||
+			!value.source ||
+			(value.delivery !== "started" && value.delivery !== "steered") ||
+			value.reserveDenied ||
+			value.bindDenied ||
+			(value.delivery === "started" &&
+				(value.source as CodexNativeSourceV1).turnId !==
+					value.reservation.submissionId)
+		)
+			return false;
 	} else if (value.bindDenied !== undefined || value.delivery !== undefined)
 		return false;
 	if (value.notStarted !== undefined) {
@@ -793,7 +813,7 @@ function isNativeSourceRecord(
 			!allowed[value.notStartedStage]?.includes(value.notStartedReason) ||
 			!value.reserveAuthorized ||
 			value.reserveDenied ||
-			(value.bind && !value.bindDenied) ||
+			((value.bind || value.bindPending) && !value.bindDenied) ||
 			value.terminal
 		)
 			return false;
@@ -823,7 +843,12 @@ function isNativeSourceRecord(
 		)
 			return false;
 	} else if (value.nativeStatus !== undefined) return false;
-	if (value.source !== undefined && !value.bind && !value.notStarted)
+	if (
+		value.source !== undefined &&
+		!value.bind &&
+		!value.bindPending &&
+		!value.notStarted
+	)
 		return false;
 	return !(
 		value.reserveDenied &&
@@ -5118,6 +5143,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					for (const source of Object.values(journal.nativeSources ?? {}))
 						for (const value of [
 							source.reserve,
+							source.bindPending,
 							source.bind,
 							source.notStarted,
 							source.terminal,
@@ -5190,7 +5216,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					request.source.threadId,
 					request.source.turnId,
 				);
-				if (request.delivery === "started" && target) protocolInvalid();
+				if (request.delivery === "started" && target && !source.bindPending)
+					protocolInvalid();
 				if (
 					request.delivery === "steered" &&
 					(!target ||
@@ -5222,14 +5249,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			request.phase === "source-reserve"
 				? source?.reserve
 				: request.phase === "source-bind"
-					? source?.bind
+					? (source?.bind ?? source?.bindPending)
 					: request.phase === "source-not-started"
 						? source?.notStarted
 						: source?.terminal;
 		const decisionRecorded = (source: CodexNativeSourceRecord | undefined) =>
-			request.phase !== "source-reserve" ||
-			source?.reserveAuthorized === true ||
-			source?.reserveDenied !== undefined;
+			request.phase === "source-reserve"
+				? source?.reserveAuthorized === true ||
+					source?.reserveDenied !== undefined
+				: request.phase === "source-bind"
+					? source?.bind !== undefined || source?.bindDenied !== undefined
+					: true;
 
 		signal.throwIfAborted();
 		const prepared = await this.update((state) => {
@@ -5329,7 +5359,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 		}
 		signal.throwIfAborted();
-		const saved = await this.update((state) => {
+		let saved = await this.update((state) => {
 			signal.throwIfAborted();
 			if (this.closed) unavailable();
 			const resolved = locate(state);
@@ -5372,10 +5402,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (denied) source.reserveDenied = denied;
 				else source.reserveAuthorized = true;
 			} else if (request.phase === "source-bind") {
-				source.bind = receipt;
+				source.bindPending = receipt;
 				source.source = structuredClone(request.source);
 				source.delivery = request.delivery;
-				if (denied) source.bindDenied = denied;
+				if (denied) {
+					source.bind = source.bindPending;
+					delete source.bindPending;
+					source.bindDenied = denied;
+				}
 			} else if (request.phase === "source-not-started") {
 				source.notStarted = receipt;
 				source.notStartedStage = request.stage;
@@ -5404,38 +5438,65 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		) {
 			const current = locate(this.readState());
 			if (!isClosed(this.readState(), current)) {
-				const selection = this.operationSelection(
-					this.executionOperation(
-						this.readState(),
-						current.session,
-						current.execution,
-					),
-				);
-				if (!selection) unavailable();
-				const admission = this.beginModelTurnAdmission?.(
-					Date.now() + rpcRequestTimeoutMs,
-					selection.model,
-					request.source.threadId,
-					selection.effort,
-					conversationKey,
-				);
-				const turn = { ...request.source, conversationKey };
-				if (
-					admission &&
-					(this.recognizeModelTurn?.(admission, turn) !== true ||
-						this.registerModelTurn?.(admission, turn) !== true)
-				) {
-					this.abandonModelTurnAdmission?.(admission);
-					await this.update((state) => {
+				if (saved.source?.bindPending) {
+					const selection = this.operationSelection(
+						this.executionOperation(
+							this.readState(),
+							current.session,
+							current.execution,
+						),
+					);
+					if (!selection) unavailable();
+					const admission = this.beginModelTurnAdmission?.(
+						Date.now() + rpcRequestTimeoutMs,
+						selection.model,
+						request.source.threadId,
+						selection.effort,
+						conversationKey,
+					);
+					const turn = { ...request.source, conversationKey };
+					if (
+						admission &&
+						(this.recognizeModelTurn?.(admission, turn) !== true ||
+							this.registerModelTurn?.(admission, turn) !== true)
+					) {
+						this.abandonModelTurnAdmission?.(admission);
+						await this.update((state) => {
+							const resolved = locate(state);
+							const source = resolved.source;
+							if (
+								!source ||
+								source.bindPending?.requestId !== receipt.requestId
+							)
+								stateInvalid();
+							source.bind = source.bindPending;
+							delete source.bindPending;
+							source.bindDenied = "authorization_unavailable";
+						});
+						unavailable();
+					}
+					saved = await this.update((state) => {
 						const resolved = locate(state);
 						const source = resolved.source;
-						if (!source || source.bind?.requestId !== receipt.requestId)
+						if (!source || source.bindPending?.requestId !== receipt.requestId)
 							stateInvalid();
-						source.bindDenied = "authorization_unavailable";
+						source.bind = source.bindPending;
+						delete source.bindPending;
+						return resolved;
 					});
-					unavailable();
 				}
 			} else unavailable();
+		}
+		if (request.phase === "source-bind" && saved.source?.bindPending) {
+			saved = await this.update((state) => {
+				const resolved = locate(state);
+				const source = resolved.source;
+				if (!source || source.bindPending?.requestId !== receipt.requestId)
+					stateInvalid();
+				source.bind = source.bindPending;
+				delete source.bindPending;
+				return resolved;
+			});
 		}
 		this.notifyEventStream(
 			this.eventStreamKey(saved.nativeSessionRef, saved.execution.executionId),

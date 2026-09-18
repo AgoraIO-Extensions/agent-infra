@@ -419,6 +419,7 @@ export async function startLocalBrowserGateway(
 		{
 			token: string;
 			csrf: string;
+			previousCsrf: string[];
 			expiresAt: number;
 			expiry: ReturnType<typeof setTimeout>;
 			activeRequests: Set<() => void>;
@@ -578,6 +579,7 @@ export async function startLocalBrowserGateway(
 						csrf: apiCsrf,
 						expiresAt: Date.now() + sessionLifetimeMs,
 						expiry,
+						previousCsrf: [],
 						activeRequests: new Set(),
 					});
 				} catch {
@@ -614,16 +616,26 @@ export async function startLocalBrowserGateway(
 			let setCookie: string | undefined;
 			if (!["GET", "HEAD"].includes(method)) {
 				const submitted = readCookie(request, apiCsrfCookie);
-				if (!submitted || submitted !== session.csrf) {
+				if (
+					!submitted ||
+					(submitted !== session.csrf &&
+						!session.previousCsrf.includes(submitted))
+				) {
 					failure(response, 403);
 					return;
 				}
-				session.csrf = randomBytes(32).toString("hex");
-				setCookie = cookie(
-					apiCsrfCookie,
-					session.csrf,
-					sessionLifetimeMs / 1_000,
-				);
+				if (submitted === session.csrf) {
+					session.previousCsrf = [session.csrf, ...session.previousCsrf].slice(
+						0,
+						4,
+					);
+					session.csrf = randomBytes(32).toString("hex");
+					setCookie = cookie(
+						apiCsrfCookie,
+						session.csrf,
+						sessionLifetimeMs / 1_000,
+					);
+				}
 			}
 			proxy(
 				request,

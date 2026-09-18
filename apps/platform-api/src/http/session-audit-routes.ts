@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import {
 	BrowserSessionProjectionV1Schema,
@@ -20,6 +20,7 @@ import {
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	type IdentityContext,
 	resolveIdentity,
 } from "./identity.js";
 
@@ -43,17 +44,13 @@ export interface SessionAuditRoutesDependencies {
 	readonly audit: PlatformAuditQuery;
 }
 
-function sessionGeneration(request: Request, authorizationRevision: string) {
-	const cookies = (request.headers.get("cookie") ?? "")
-		.split(";")
-		.map((value) => value.trim())
-		.filter(
-			(value) => value && !/^__Host-[^=]*(?:csrf|login|challenge)/i.test(value),
-		)
-		.join(";");
+const fallbackSessionGenerationSalt = randomBytes(32).toString("base64url");
+
+function sessionGeneration(identity: IdentityContext) {
+	if (identity.sessionGeneration) return identity.sessionGeneration;
 	return createHash("sha256")
 		.update(
-			`${request.headers.get("authorization") ?? ""}\n${cookies}\n${authorizationRevision}`,
+			`${fallbackSessionGenerationSalt}\n${identity.authorizationRevision}`,
 		)
 		.digest("base64url");
 }
@@ -169,7 +166,7 @@ export function registerSessionAuditRoutes(
 		}
 		context.header(
 			"X-Platform-Session-Generation",
-			sessionGeneration(context.req.raw, identity.authorizationRevision),
+			sessionGeneration(identity),
 		);
 		return context.json(projection.data);
 	});

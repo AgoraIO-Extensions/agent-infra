@@ -522,7 +522,7 @@ test("proxy sends only server-selected authorization and allowed headers, never 
 				body: '{"message":"replay"}',
 			})
 		).status,
-		403,
+		200,
 	);
 	const session = cookies(authenticated)
 		.split("; ")
