@@ -210,7 +210,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 也不自身证明 ACK 资源已就绪。
 [#301](https://github.com/AgoraIO-Extensions/agent-infra/issues/301) 是待替代的历史 HCI 证据，
 按 #402 的条件保留至替代内容合入，不承接当前联合验收，也不能被当成已交付。#395 仍 open
-且受其六张原生实施票阻塞；协调票 #402 也保持 open，只协调 Connection 子票。除 #435 外没有其他票拥有
+其 readiness 通过不再由 Platform 计划中的历史票定义，而由独立 Direct MCP runtime 的版本化证据、Schema 校验和 HCI 记录定义；协调票 #402 只协调 Connection 子票。除 #435 外没有其他票拥有
 跨系统真实验收；#435 已创建但仍等待准入条件。
 因此 #435 已是唯一的跨系统真实验收 primary Issue：`test(pilot): validate Platform and Connection GitHub convergence`。
 归属 #150；建议 DRI @LichKing-2234，Connection reviewer @guoxianzhe。其执行仍等待 §5.1 的范围确认，
@@ -228,7 +228,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | Validation | 自动矩阵命令、预期结果、真实 GitHub PR/call 关联、环境故障与回滚、观察记录、签收链接和仓库完整验证；所有记录脱敏，不保存 Token、assertion、密码或普通会话正文 |
 | Blocked by | #194、#395、#171、#177 的实际通过记录和 #150 的规划决定；不依赖旧 #398/#186，也不依赖 #402 的父票关闭 |
 
-仅在上述决策确认、票正文和原生边回读一致后，#435 才能成为最终执行入口。
+创建 #435 已完成；仅在上述决策确认、票正文和原生边回读一致后，#435 才能启用执行。
 规划票 #150 不反向依赖这张实施票，避免“规划等待实施、实施等待规划”的环。
 规划、资源和实施条目先按工作流分类；不得把 Wayfinder/资源票冒充 Implementation Issue
 接入 AFK Execution Graph。真实验收由人工或受监督 Codex 逐项检查资源与签收准入。

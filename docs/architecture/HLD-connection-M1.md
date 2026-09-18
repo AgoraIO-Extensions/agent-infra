@@ -47,7 +47,7 @@ Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不�
 
 ### 5.1 Principal
 
-Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。若隔离 Pilot 获准使用明文 LDAP，必须固定到专用 private endpoint、批准的网络路径和明确的环境配置，禁止动态 endpoint、TLS downgrade 或 fallback，并在启动门禁中拒绝进入正式环境。
+Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。若具名 LA3 Pilot 获准使用明文 LDAP，必须固定到该具名环境的专用 private endpoint、批准的网络路径和明确的环境配置，并由具名 Security/SRE Owner 记录风险接受；禁止动态 endpoint、TLS downgrade 或 fallback，并在启动门禁中拒绝进入其他环境。
 
 Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Principal 撤销或 recovery generation 不匹配时，敏感操作 fail closed。
 
@@ -61,7 +61,7 @@ Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` �
 
 作为 GitHub OAuth Client 时，Provider callback 使用独立的一次性、短期、高熵服务端 state，原子绑定发起 BrowserSession、Principal、Provider、原始事务和精确受控回跳地址；callback 不依赖 BrowserSession Cookie、CSRF token、Origin 或 Fetch Metadata。Callback 只能完成原 Provider OAuth 事务，不创建 Grant，不接受调用方提交的 Principal、Connection 归属或任意跳转地址；state 缺失、重复、过期或绑定不一致时 fail closed。
 
-Connection PAT 只对经过注册和批准的 Consumer 开放。PAT 不包含 Provider Credential，不绕过 Principal/Consumer/Grant/Action 检查。
+Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必须绑定唯一 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；定义 Actor 的 Consumer 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。PAT 仅以 hash 持久化，支持单独轮换和撤销，并执行与 OAuth access token 相同的 Principal/Consumer/Instance/Actor/Grant/Action 检查；PAT 不包含 Provider Credential。
 
 ## 6. Catalog 与授权
 
@@ -102,7 +102,7 @@ Connection 只接受 Action ID、ActionVersion、参数和业务幂等键。Prin
 
 每次 ActionCall 保存 `requestId`、`idempotencyKey`、`callId`、ActionVersion、Principal、Consumer、ConsumerInstance、Actor、解析出的 Connection、参数摘要、状态和 trace correlation。`idempotencyKey` 必须在 `Principal + Consumer + ConsumerInstance + Actor` 命名空间内由数据库唯一约束原子串行化；定义 Actor 的 Consumer 必须解析出非空 Actor，未定义 Actor 的 Consumer 使用不可空且不可与真实 Actor 冲突的 consumer-level 稳定哨兵，禁止以可重复的 `NULL` 参与唯一键。仅当 ActionVersion、Connection、参数摘要及全部主体绑定完全一致时复用原调用，任一字段不同则拒绝且不得返回其他主体的调用信息。
 
-WRITE Action 先在同一事务持久化 Effect/Dispatch 意图，再在 Provider 访问前重新检查 Principal、ConsumerInstance、Actor、Grant、Credential、Action、ProviderRelease、repository policy 和 deadline。撤权与 Dispatch 转换使用同一 revision/CAS 或行锁，形成确定提交顺序。
+WRITE Action 先在同一事务持久化 Effect/Dispatch 意图，再在 Provider 访问前重新检查 Principal、Consumer、ConsumerInstance、Actor、Grant、Connection、Credential、Action、ProviderRelease、repository policy 和 deadline。该事务必须锁定上述对象的当前状态或使用覆盖其 revocation revision/fence 的 CAS，并原子地转换 Dispatch 状态；零行更新或 CAS 冲突必须拒绝且不得访问 Provider，从而使 Consumer 停用、Connection 断开及其他撤权与 Dispatch 形成确定提交顺序。
 
 Connection 不能回滚已提交的外部副作用。取消、撤权和重启只改变后续调用资格，不抹除既有 ActionCall、Effect、Dispatch 或审计。
 
