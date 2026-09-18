@@ -455,6 +455,11 @@ input::placeholder {
 	background: var(--danger-soft);
 	color: var(--danger);
 }
+.alert-success {
+	border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+	background: var(--accent-soft);
+	color: var(--accent);
+}
 .secret-callout {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;

@@ -16,7 +16,9 @@ const api = vi.hoisted(() => ({
 	connectProviderCredential: vi.fn(async () => ({
 		connectionId: "connection-bitbucket",
 	})),
-	upgradeProviderConnection: vi.fn(async (connectionId: string) => ({ connectionId })),
+	upgradeProviderConnection: vi.fn(async (connectionId: string) => ({
+		connectionId,
+	})),
 	createAuthorizationPreview: vi.fn(
 		async (input?: { actionVersionIds?: string[] }) => ({
 			idempotencyKey: "confirmation-idempotency-key",
@@ -93,6 +95,16 @@ const api = vi.hoisted(() => ({
 					providerId: "github",
 					requiresReconnect: true,
 					status: "DISCONNECTED",
+				},
+				{
+					actionVersionIds: ["jenkins-release.get_build@v2"],
+					displayName: "Jenkins Release",
+					externalAccount: "guoxianzhe",
+					id: "connection-jenkins",
+					ownerType: "PERSONAL" as const,
+					providerId: "jenkins-release",
+					requiresReconnect: true,
+					status: "ACTIVE",
 				},
 			],
 			consumers: [{ id: "consumer-codex", name: "Codex" }],
@@ -235,6 +247,28 @@ function calls(mock: unknown) {
 }
 
 describe("Connection 管理 mutation wiring", () => {
+	it("升级连接时显示进行中和成功反馈", async () => {
+		let finishUpgrade: ((value: { connectionId: string }) => void) | undefined;
+		api.upgradeProviderConnection.mockImplementationOnce(
+			(connectionId: string) =>
+				new Promise((resolve) => {
+					finishUpgrade = resolve;
+				}).then(() => ({ connectionId })),
+		);
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "Jenkins Release" });
+
+		fireEvent.click(screen.getByRole("button", { name: "升级连接" }));
+		const pending = await screen.findByRole("button", { name: "正在升级" });
+		expect((pending as HTMLButtonElement).disabled).toBe(true);
+		finishUpgrade?.({ connectionId: "connection-jenkins" });
+
+		expect(
+			(await screen.findByText("连接已升级，可以重新确认客户端授权。"))
+				.textContent,
+		).toBe("连接已升级，可以重新确认客户端授权。");
+	});
+
 	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
 		window.history.replaceState(
 			{},

@@ -54,6 +54,7 @@ export function ConnectionsPage() {
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
+	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
@@ -76,8 +77,11 @@ export function ConnectionsPage() {
 	});
 	const upgrade = useMutation({
 		mutationFn: connectionApi.upgradeProviderConnection,
-		onSuccess: () =>
-			queryClient.invalidateQueries({ queryKey: ["connections"] }),
+		onMutate: () => setUpgradeNotice(null),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
+		},
 	});
 	const connectBitbucket = async (accessToken: string) => {
 		setBitbucketPending(true);
@@ -270,6 +274,11 @@ export function ConnectionsPage() {
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
+			{upgradeNotice ? (
+				<p className="alert alert-success" role="status">
+					{upgradeNotice}
+				</p>
+			) : null}
 			{data ? (
 				<div className="content-stack">
 					<section className="data-section">
@@ -297,6 +306,9 @@ export function ConnectionsPage() {
 								}
 							}}
 							onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
+							upgradingConnectionId={
+								upgrade.isPending ? (upgrade.variables ?? null) : null
+							}
 							onReconnect={(connectionId) => {
 								const connection = data.connections.find(
 									(entry) => entry.id === connectionId,

@@ -218,6 +218,7 @@ export function ConnectionsView(props: {
 	onDisconnect: (connectionId: string) => void;
 	onReconnect: (connectionId: string) => void;
 	onUpgrade: (connectionId: string) => void;
+	upgradingConnectionId?: string | null;
 }) {
 	if (!props.connections.length) {
 		return (
@@ -229,6 +230,7 @@ export function ConnectionsView(props: {
 	return (
 		<div className="connection-list">
 			{props.connections.map((connection) => {
+				const upgrading = props.upgradingConnectionId === connection.id;
 				const versions = [
 					...new Set(
 						connection.actionVersionIds.flatMap((id) => {
@@ -267,6 +269,7 @@ export function ConnectionsView(props: {
 							{connection.requiresReconnect ? (
 								<button
 									className="button button-secondary"
+									disabled={upgrading}
 									type="button"
 									onClick={() =>
 										connection.providerId === "github"
@@ -275,7 +278,11 @@ export function ConnectionsView(props: {
 									}
 								>
 									<RefreshCw aria-hidden="true" size={16} />
-									{connection.providerId === "github" ? "重新连接" : "升级连接"}
+									{connection.providerId === "github"
+										? "重新连接"
+										: upgrading
+											? "正在升级"
+											: "升级连接"}
 								</button>
 							) : (
 								<button
