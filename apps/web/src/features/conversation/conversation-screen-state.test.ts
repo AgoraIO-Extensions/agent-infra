@@ -60,8 +60,13 @@ describe("current conversation execution", () => {
 	});
 
 	it("keeps a newer user execution ahead of an older assistant execution", () => {
+		const olderStatus = PersistedConversationEventV1Schema.parse({
+			...event(2),
+			type: "execution.status",
+			payload: { status: "processing" },
+		});
 		const projection = ConversationDetailProjectionV2Schema.parse({
-			...history("conversation-1"),
+			...history("conversation-1", [olderStatus]),
 			messages: [
 				{
 					messageId: "message-1",

@@ -57,11 +57,22 @@ export function currentExecution(
 		statuses.set(event.executionId, event.payload.status);
 	}
 	// A new receipt remains authoritative until its persisted execution status is
-	// observed. This also prevents an older active event from taking over while
-	// the accepted execution is represented only by its user message.
-	if (acceptedExecution && !persistedStatuses.has(acceptedExecution))
+	// observed. After a reload, reconstruct that pending state from the latest
+	// submitted user message so an older active event cannot take over.
+	const persistedAcceptedExecution = messages.findLast(
+		(message) =>
+			message.role === "user" &&
+			message.status === "submitted" &&
+			Boolean(message.executionId) &&
+			!persistedStatuses.has(message.executionId ?? ""),
+	)?.executionId;
+	const pendingExecution =
+		acceptedExecution && !persistedStatuses.has(acceptedExecution)
+			? acceptedExecution
+			: persistedAcceptedExecution;
+	if (pendingExecution)
 		return {
-			executionId: acceptedExecution,
+			executionId: pendingExecution,
 			status: "submitted",
 		};
 	const active = [...statuses].findLast(([, status]) => !isTerminal(status));
