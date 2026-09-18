@@ -66,6 +66,9 @@ describe("session and audit routes", () => {
 		});
 
 		expect(response.status).toBe(200);
+		expect(response.headers.get("x-platform-session-generation")).toMatch(
+			/^[A-Za-z0-9_-]{43}$/,
+		);
 		expect(
 			BrowserSessionProjectionV1Schema.parse(await response.json()),
 		).toEqual({

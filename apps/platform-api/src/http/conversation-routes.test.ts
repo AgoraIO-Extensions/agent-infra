@@ -361,7 +361,7 @@ describe("Conversation HTTP routes", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "before-mixed-history" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(5);
 	});
 
 	it("does not silently discard or relabel V2 operation facts on the V1 event stream", async () => {
@@ -410,6 +410,7 @@ describe("Conversation HTTP routes", () => {
 		const input = await operationDependencies();
 		vi.mocked(input.authorization.authorize)
 			.mockReset()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "denied" });
@@ -878,12 +879,13 @@ describe("Conversation persisted SSE", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "event-before" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(3);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
 	});
 
 	it("stops before the next push when current access is revoked", async () => {
 		const authorize = vi
 			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "denied" });
 		const input = dependencies({ authorization: { authorize } });
@@ -912,6 +914,89 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("authorization.revoked");
 		expect(body).not.toContain("private identity dependency detail");
 	});
+
+	it.each([
+		"identity revoked",
+		"access revoked",
+		"identity unavailable",
+		"authorization unavailable",
+	] as const)(
+		"closes an idle SSE stream after %s without a business event",
+		async (change) => {
+			vi.useFakeTimers();
+			const input = dependencies({ streamPollIntervalMs: 1 });
+			vi.mocked(input.query.replay).mockReset().mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-1",
+			});
+			const controller = new AbortController();
+			let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+			let reading: Promise<void> | undefined;
+			try {
+				const response = await testApp(input).app.request(
+					"/api/v2/conversations/conversation-1/events",
+					{ signal: controller.signal },
+				);
+				expect(response.status).toBe(200);
+				if (!response.body) throw new Error("missing SSE body");
+				reader = response.body.getReader();
+				const activeReader = reader;
+				const decoder = new TextDecoder();
+				let body = "";
+				let ended = false;
+				reading = (async () => {
+					while (true) {
+						const chunk = await activeReader.read();
+						if (chunk.done) {
+							ended = true;
+							return;
+						}
+						body += decoder.decode(chunk.value, { stream: true });
+					}
+				})();
+				await vi.advanceTimersByTimeAsync(5);
+				expect(ended).toBe(false);
+				expect(body).toBe("");
+
+				if (change === "identity revoked") {
+					vi.mocked(input.identity.resolve).mockResolvedValue(null);
+				} else if (change === "access revoked") {
+					vi.mocked(input.authorization.authorize).mockResolvedValue({
+						outcome: "denied",
+					});
+				} else if (change === "identity unavailable") {
+					vi.mocked(input.identity.resolve).mockRejectedValue(
+						new Error("private identity dependency detail"),
+					);
+				} else {
+					vi.mocked(input.authorization.authorize).mockResolvedValue({
+						outcome: "unavailable",
+					});
+				}
+
+				await vi.advanceTimersByTimeAsync(10);
+				expect(ended, "idle SSE must close after current access fails").toBe(
+					true,
+				);
+				if (change.endsWith("revoked")) {
+					expect(body).toContain('"type":"authorization.revoked"');
+					expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
+				} else {
+					expect(body).toBe("");
+				}
+				expect(body).not.toContain('"kind":"event"');
+				expect(body).not.toContain("user-1");
+				expect(body).not.toContain("private identity dependency detail");
+			} finally {
+				controller.abort();
+				await reader?.cancel();
+				await vi.advanceTimersByTimeAsync(1);
+				await reading;
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	it("rejects ambiguous replay selectors and non-enumerates initial access", async () => {
 		const ambiguous = await testApp().app.request(

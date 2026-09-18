@@ -1024,20 +1024,22 @@ export function registerConversationRoutes(
 							let cursor = replay.resumeCursor;
 							while (!request.signal.aborted && !stream.aborted) {
 								const batch = replay;
-								if (batch.outcome === "reload") {
-									const authorization = await stillAuthorized(
-										dependencies,
-										request,
-										identity.userId,
-										conversationId,
-										metadata.traceId,
-									);
-									if (authorization !== "allowed") {
-										if (authorization === "revoked") {
-											await writeAuthorizationRevoked(stream, metadata.traceId);
-										}
-										return;
+								// Reauthorize immediately before every replay batch is written,
+								// including the initial non-empty batch selected above.
+								const authorization = await stillAuthorized(
+									dependencies,
+									request,
+									identity.userId,
+									conversationId,
+									metadata.traceId,
+								);
+								if (authorization !== "allowed") {
+									if (authorization === "revoked") {
+										await writeAuthorizationRevoked(stream, metadata.traceId);
 									}
+									return;
+								}
+								if (batch.outcome === "reload") {
 									await writeSseMessage(
 										stream,
 										ConversationSseMessageV1Schema.parse({

@@ -37,7 +37,11 @@ export type PendingAgentApplicationsState =
 	| UnavailableState;
 
 export type BrowserSessionState =
-	| { kind: "ready"; session: BrowserSessionProjectionV1 }
+	| {
+			kind: "ready";
+			session: BrowserSessionProjectionV1;
+			sessionGeneration?: string;
+	  }
 	| UnavailableState;
 
 export type AgentApplicationDecision =
@@ -86,8 +90,17 @@ export async function loadBrowserSession(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
+	const generation = result.response?.headers.get(
+		"x-platform-session-generation",
+	);
 	return result.data
-		? { kind: "ready", session: result.data }
+		? {
+				kind: "ready",
+				session: result.data,
+				...(generation && /^[A-Za-z0-9_-]{43}$/.test(generation)
+					? { sessionGeneration: generation }
+					: {}),
+			}
 		: unavailable(result.error);
 }
 

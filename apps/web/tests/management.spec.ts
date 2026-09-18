@@ -463,7 +463,7 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(page.getByRole("link", { name: "Owner settings" })).toHaveCount(
 		0,
 	);
-	await expect(page.getByRole("button")).toHaveCount(0);
+	await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(page.getByRole("alert")).toHaveText(
 		"This configuration is unavailable.",
@@ -491,6 +491,33 @@ test("employee has no Owner or administrator controls, with loading and error st
 		"Please contact an administrator.",
 	);
 	await capture(page, info, "agents-unavailable");
+});
+
+test("mobile navigation traps focus and returns it on Escape", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "mobile", "Mobile Sheet behavior");
+	await fixture(page, "employee");
+	await page.goto("/agents");
+	const trigger = page.getByRole("button", { name: "打开导航" });
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "主导航" });
+	await expect(dialog).toBeVisible();
+	for (let index = 0; index < 8; index++) {
+		await page.keyboard.press("Tab");
+		await expect
+			.poll(() =>
+				dialog.evaluate((element) => element.contains(document.activeElement)),
+			)
+			.toBe(true);
+	}
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
+	await trigger.click();
+	await dialog.getByRole("link", { name: "我的 Agent", exact: true }).click();
+	await expect(page).toHaveURL(/\/my-agents$/);
+	await expect(dialog).not.toBeVisible();
 });
 
 test("Owner manually configures a bot without exposing its Secret or an internal reference", async ({
