@@ -40,7 +40,8 @@ export function currentExecution(
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	for (const message of messages) {
-		if (message.executionId) statuses.set(message.executionId, message.status);
+		if (message.role === "assistant" && message.executionId)
+			statuses.set(message.executionId, message.status);
 	}
 	for (const event of events) {
 		if (event.type !== "execution.status") continue;
