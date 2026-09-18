@@ -62,31 +62,9 @@ flowchart TB
     ISO --> LOCAL
     BOOT --> LOCAL
     DOC["#432 Direct MCP 文档：Connection 独立交付"] --> DIRECT
-    DOC --> LOGIN
-    CONTRACT --> VERIFY["#391 verifier：未完成"]
-    STORE --> VERIFY
-    BASE --> VERIFY
-    CONTRACT --> EFFECT["#392 Effect / revoke：未完成"]
-    STORE --> EFFECT
-    PROVIDER --> EFFECT
-    VERIFY --> EFFECT
-    CONTRACT --> CATALOG["#394 Catalog：未完成"]
-    STORE --> CATALOG
-    PROVIDER --> CATALOG
-    CONTRACT --> CWEB["#397 Connection Web：未完成"]
-    STORE --> CWEB
-    PROVIDER --> CWEB
-    LOGIN --> CWEB
-    EFFECT --> CWEB
-    CATALOG --> CWEB
-    CWEB --> READY["#395：待 HCI 真实环境 readiness"]
-    LOGIN --> READY
-    EFFECT --> READY
-    CATALOG --> READY
-    PROVIDER --> READY
-    VERIFY --> READY
-    CONTRACT --> G
-    G -.-> PILOT
+    CONN["独立 Connection runtime：Direct MCP/OAuth/Grant/Action/审计"] --> READY["#395：待 HCI 真实环境 readiness"]
+    DOC --> CONN
+    CONN -.-> PILOT
     LOCAL -.-> PILOT["L2 联合验收：新 primary Issue 待确认"]
     READY -.-> PILOT
     ACK["#171 ACK 资源准备：open，待真实环境证据"] -.-> PILOT
@@ -236,7 +214,7 @@ Registry/Digest、keyring、模型、观测、Runbook 或 Go/No-Go 输入。上�
 | Problem | Fake 主系统与 Connection-side readiness 不能证明真实双系统授权、写操作、恢复和观察期通过 |
 | Scope | 以正式运行装配验证两系统、ACK/HCI 网络与身份映射；执行权威真实矩阵和确认后的观察期；复用组件证据；不实现缺失产品能力、不部署未批准环境 |
 | AC-1 | 输入证据全部绑定本次 main commit、两系统镜像、migration、配置版本和具名环境；#194/#395 有对应通过记录，#171 的 ACK 资源实际验证与 #177 的准备记录已回读，错误或缺失输入拒绝开始 |
-| AC-2 | Connection PRD §10、HLD §§9–13 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、双层撤权、未知结果与清理全部有可回读结果 |
+| AC-2 | Connection PRD §10、HLD §§5–13 的三项 Action、独立 OAuth/Grant、真实 PR、双主体负向、篡改/重放、Grant/ConsumerInstance/Connection/Action/Credential 撤权、未知结果与清理全部有可回读结果 |
 | AC-3 | #149 的完整申请创建、Owner 配置、真实 Codex、SSE/进程/Pod 恢复及 A/B/C 升级回滚，在本次组合版本通过；不得用预置 Agent、Fake Connection 或不同版本组件报告替代 |
 | AC-4 | 经范围确认的参与者完成 #149 规定的观察；每人任务、总任务数、工作日与故障处置有脱敏记录；任一硬门禁失败立即 No-Go，修复后重验受影响组合 |
 | AC-5 | 五方具名签收、最终 Go/No-Go 和允许的成功声明在票内回读；测试 PR/branch/Token 清理由测试资源 Owner 按 HLD 执行，保留 Call/Effect/Dispatch/审计 |

@@ -48,7 +48,7 @@ Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不�
 
 ### 5.1 Principal
 
-Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。任何获准的明文 LDAP 例外都必须限定在隔离 Pilot 环境、显式配置并在启动门禁中拒绝进入正式环境。
+Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。若隔离 Pilot 获准使用明文 LDAP，必须固定到专用 private endpoint、批准的网络路径和明确的环境配置，禁止动态 endpoint、TLS downgrade 或 fallback，并在启动门禁中拒绝进入正式环境。
 
 Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Principal 撤销或 recovery generation 不匹配时，敏感操作 fail closed。
 

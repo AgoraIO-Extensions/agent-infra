@@ -93,7 +93,7 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 - 每次调用保存稳定 `requestId`、`idempotencyKey`、`callId`、ActionVersion、主体绑定、参数摘要、状态和 trace correlation。
 - 同一幂等键与同一请求返回原调用；同一幂等键与不同请求拒绝。
 - WRITE Action 在访问 Provider 前持久保存 Effect/Dispatch 意图，并重新校验当前 Grant、Credential、Action 和 repository policy。
-- Provider 返回明确非成功响应时，Connection 返回脱敏的终态失败；只有传输中断或提交结果无法确认时进入 `RESULT_PENDING/UNCERTAIN`。
+- 只有能够证明请求未被 Provider 接受的确定性业务或协议拒绝，Connection 才返回脱敏终态失败；超时、连接中断、响应丢失、无法确认提交语义的 `5xx` 或其他可能已提交副作用的响应进入 `RESULT_PENDING/UNCERTAIN`。
 - 未知写结果不自动重发；只沿原调用对账，管理员人工处理和最终未知状态均保留审计。
 
 ## 8. 凭证与隔离
