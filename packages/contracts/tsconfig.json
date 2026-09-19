@@ -1,5 +1,6 @@
 {
 	"extends": "@agent-infra/config/tsconfig.base.json",
+	"exclude": ["dist", "node_modules"],
 	"compilerOptions": {
 		"allowImportingTsExtensions": true,
 		"paths": {
