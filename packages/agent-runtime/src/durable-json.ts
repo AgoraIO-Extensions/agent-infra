@@ -38,6 +38,10 @@ export class DurableJsonFile<T> {
 		return this.read();
 	}
 
+	async close() {
+		await this.queue;
+	}
+
 	update<R>(change: (draft: T) => R | Promise<R>): Promise<R> {
 		const run = this.queue.then(async () => {
 			if (this.persistenceFailed)

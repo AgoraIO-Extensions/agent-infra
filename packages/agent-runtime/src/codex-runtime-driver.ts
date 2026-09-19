@@ -3496,6 +3496,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				return record;
 			}
 			const recognized = await this.waitForNativeTurnStarted(
+				nativeTurn.conversationKey,
 				nativeTurn.threadId,
 				nativeTurn.turnId,
 				admissionDeadline,
@@ -3533,7 +3534,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
 						await this.confirmModelAdmission(command, session.nativeSessionRef);
 						this.initialModelStatusPending.add(
-							this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
+							this.nativeTurnKey(
+								nativeTurn.conversationKey,
+								nativeTurn.threadId,
+								nativeTurn.turnId,
+							),
 						);
 						return record;
 					}
@@ -3560,7 +3565,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// narrow recovery path for a registration race.
 			if (this.waitForModelRequest) {
 				this.initialModelStatusPending.add(
-					this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
+					this.nativeTurnKey(
+						nativeTurn.conversationKey,
+						nativeTurn.threadId,
+						nativeTurn.turnId,
+					),
 				);
 			}
 			return record;
@@ -3573,7 +3582,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const cancelledKeys = new Set<string>();
 			for (const turn of [candidateModelTurn, pendingModelTurn]) {
 				if (!turn) continue;
-				const key = this.nativeTurnKey(turn.threadId, turn.turnId);
+				const key = this.nativeTurnKey(
+					turn.conversationKey,
+					turn.threadId,
+					turn.turnId,
+				);
 				if (cancelledKeys.has(key)) continue;
 				cancelledKeys.add(key);
 				await this.cancelModelTurn?.(turn);
@@ -3944,7 +3957,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			? latestModelOperationAttemptFact(journal.events)
 			: undefined;
 		const deferInitialStatus = this.initialModelStatusPending.delete(
-			this.nativeTurnKey(session.threadId, execution.nativeTurnId),
+			this.nativeTurnKey(
+				this.modelConversationKey(codexConversationKey(session)),
+				session.threadId,
+				execution.nativeTurnId,
+			),
 		);
 		// The initial status lookup can race the response body of a live model
 		// stream. Its durable intent/started fact already proves that this execution
@@ -4251,8 +4268,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							if (signal?.aborted) return;
 							cursor = event.cursor;
 							yield event;
-							// Finish the replay batch: completed may be followed only by
-							// metadata updates for an existing Connection fact.
+							// A terminal stream may close while an unverified Connection fact
+							// remains. Explicit recovery can append its metadata later.
 						}
 						pending = [];
 					}
@@ -4262,10 +4279,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								nativeSessionRef,
 								executionId,
 							)) &&
-						!driver.hasPendingConnectionMetadata(
-							nativeSessionRef,
-							executionId,
-						) &&
 						!waiter.wasNotified()
 					) {
 						return;
@@ -5568,6 +5581,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						recognizeTurn !== undefined ||
 						registerTurn !== undefined;
 					const turn = { ...request.source, conversationKey };
+					let admission: CodexModelTurnAdmission | undefined;
+					let lateClose = false;
 					if (hasAdmissionHook) {
 						if (!beginAdmission || !recognizeTurn || !registerTurn) {
 							await this.update((state) => {
@@ -5584,7 +5599,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							});
 							unavailable();
 						}
-						const admission = beginAdmission(
+						admission = beginAdmission(
 							Date.now() + rpcRequestTimeoutMs,
 							selection.model,
 							request.source.threadId,
@@ -5617,10 +5632,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						const source = resolved.source;
 						if (!source || source.bindPending?.requestId !== receipt.requestId)
 							stateInvalid();
-						source.bind = source.bindPending;
+						if (
+							isClosed(state, resolved) ||
+							!this.executionConfigurationMatches(
+								state,
+								resolved.session,
+								resolved.execution,
+							)
+						) {
+							lateClose = true;
+							source.bind = source.bindPending;
+							source.bindDenied = "authorization_unavailable";
+						} else {
+							source.bind = source.bindPending;
+						}
 						delete source.bindPending;
 						return resolved;
 					});
+					if (lateClose) {
+						if (admission) this.abandonModelTurnAdmission?.(admission);
+						this.revokeModelTurn?.(turn);
+					}
 				}
 			} else unavailable();
 		}
@@ -5993,7 +6025,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				});
 			}
 			if (recorded) {
-				this.recordNativeTurnStarted(started.threadId, started.nativeTurnId);
+				this.recordNativeTurnStarted(
+					recorded?.modelConversationKey,
+					started.threadId,
+					started.nativeTurnId,
+				);
 			}
 			if (recorded?.streamKey) this.notifyEventStream(recorded.streamKey);
 			return;
@@ -6049,6 +6085,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					: undefined;
 			});
 			this.recordNativeTurnCompleted(
+				owningSession
+					? this.modelConversationKey(codexConversationKey(owningSession))
+					: conversationKey === undefined
+						? undefined
+						: this.modelConversationKey(conversationKey),
 				completed.threadId,
 				completed.nativeTurnId,
 			);
@@ -6405,19 +6446,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return JSON.stringify([nativeSessionRef, executionId]);
 	}
 
-	private nativeTurnKey(threadId: string, nativeTurnId: string) {
-		return JSON.stringify([threadId, nativeTurnId]);
+	private nativeTurnKey(
+		conversationKey: string | undefined,
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		return JSON.stringify([conversationKey ?? null, threadId, nativeTurnId]);
 	}
 
-	private recordNativeTurnStarted(threadId: string, nativeTurnId: string) {
-		const key = this.nativeTurnKey(threadId, nativeTurnId);
+	private recordNativeTurnStarted(
+		conversationKey: string | undefined,
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		const key = this.nativeTurnKey(conversationKey, threadId, nativeTurnId);
 		this.observedNativeTurnStarts.add(key);
 		for (const wake of this.nativeTurnStartWaiters.get(key) ?? []) wake();
 		this.nativeTurnStartWaiters.delete(key);
 	}
 
-	private recordNativeTurnCompleted(threadId: string, nativeTurnId: string) {
-		const key = this.nativeTurnKey(threadId, nativeTurnId);
+	private recordNativeTurnCompleted(
+		conversationKey: string | undefined,
+		threadId: string,
+		nativeTurnId: string,
+	) {
+		const key = this.nativeTurnKey(conversationKey, threadId, nativeTurnId);
 		this.observedNativeTurnStarts.delete(key);
 		for (const wake of this.nativeTurnStartWaiters.get(key) ?? []) wake();
 		this.nativeTurnStartWaiters.delete(key);
@@ -6430,22 +6483,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (!execution) unavailable();
 		return execution.status !== "running";
-	}
-
-	private hasPendingConnectionMetadata(
-		nativeSessionRef: string,
-		executionId: string,
-	) {
-		const session = this.session(nativeSessionRef);
-		const execution = ownRecordValue(session.executions, executionId);
-		if (!execution) unavailable();
-		const journal = ownRecordValue(
-			session.journals ?? {},
-			execution.nativeTurnId,
-		);
-		return Object.values(journal?.nativeToolAttempts ?? {}).some(
-			(attempt) => attempt.connectionEvidence?.verification === "unverified",
-		);
 	}
 
 	private notifyEventStream(key: string) {
@@ -6682,6 +6719,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (!current) unavailable();
 			if (current.status !== "running") return current.status;
 			const started = await this.waitForNativeTurnStarted(
+				this.modelConversationKey(codexConversationKey(session)),
 				session.threadId,
 				execution.nativeTurnId,
 			);
@@ -6761,11 +6799,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async waitForNativeTurnStarted(
+		conversationKey: string | undefined,
 		threadId: string,
 		nativeTurnId: string,
 		deadline = Date.now() + rpcRequestTimeoutMs,
 	) {
-		const key = this.nativeTurnKey(threadId, nativeTurnId);
+		const key = this.nativeTurnKey(conversationKey, threadId, nativeTurnId);
 		if (this.observedNativeTurnStarts.has(key)) return true;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let wake: () => void = () => undefined;

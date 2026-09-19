@@ -163,15 +163,21 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	}
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
+	let openedStore: FileRuntimeStore | undefined;
 	const close = async () => {
 		try {
 			await assembledHost?.close();
 		} finally {
-			await closeDriver?.();
+			try {
+				await closeDriver?.();
+			} finally {
+				await openedStore?.close();
+			}
 		}
 	};
 	try {
 		const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
+		openedStore = store;
 		await legacyMigration?.apply(store);
 		const driver = configuration
 			? await CodexRuntimeDriver.open({

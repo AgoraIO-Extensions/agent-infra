@@ -484,6 +484,10 @@ export class FileRuntimeStore {
 		return new FileRuntimeStore(file);
 	}
 
+	async close() {
+		await this.file.close();
+	}
+
 	sessionQueueKey(binding: SessionBinding) {
 		return sessionBindingKey(binding);
 	}
