@@ -11,7 +11,6 @@ import {
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
-const jsonSchemaDocument = z.record(z.string().min(1), z.json());
 
 // The transport boundary is intentionally bounded and rejects credential or
 // caller-authority selectors before they can cross the Connection contract
@@ -68,7 +67,7 @@ const authoritySelectorKeyTerms = [
 ];
 const authoritySelectorKeySuffixes = ["id", "selector", "context"];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?!(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
+	`^(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
 );
 const unsafeArgumentValuePattern = new RegExp(
 	String.raw`^(?![\s\S]*(?:\b(?:${[
@@ -268,6 +267,24 @@ const directActionArgumentsRecordV1Schema = withDirectPayloadBudget(
 			.regex(credentialSafeKeyPattern)
 			.regex(authoritySelectorKeyPattern),
 		DirectActionArgumentsV1Schema,
+	),
+);
+
+const jsonSchemaDocumentPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
+	z.null(),
+	z.boolean(),
+	z.number().finite(),
+	z.string().max(DirectPayloadMaximumStringLengthV1),
+]);
+const jsonSchemaDocumentValueV1Schema = boundedDirectJsonSchema(
+	z.string().min(1).max(DirectPayloadMaximumStringLengthV1),
+	DirectPayloadMaximumDepthV1,
+	jsonSchemaDocumentPrimitiveV1Schema,
+);
+const jsonSchemaDocument = withDirectPayloadBudget(
+	boundedRecord(
+		z.string().min(1).max(DirectPayloadMaximumStringLengthV1),
+		jsonSchemaDocumentValueV1Schema,
 	),
 );
 
@@ -683,12 +700,8 @@ export const pilotDirectOpenApiPathsV1 = {
 					"Authentication required",
 					PilotProtocolErrorV1Schema,
 				),
-				"403": directJsonResponse(
-					"Grant is not owned by the authenticated Principal",
-					PilotProtocolErrorV1Schema,
-				),
 				"404": directJsonResponse(
-					"Grant is unavailable",
+					"Grant is unavailable to the authenticated Principal",
 					PilotProtocolErrorV1Schema,
 				),
 			},

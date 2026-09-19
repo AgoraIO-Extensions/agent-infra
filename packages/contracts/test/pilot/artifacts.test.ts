@@ -234,6 +234,24 @@ describe("Pilot standard artifacts", () => {
 				...directRequest,
 				action: {
 					...directRequest.action,
+					arguments: { targetConnectionId: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { selectedPrincipalId: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
 					arguments: {
 						username: "provider-user",
 						organizationName: "provider-org",
@@ -355,6 +373,37 @@ describe("Pilot standard artifacts", () => {
 				connectionId: "connection-1",
 				actionVersions: ["v1"],
 				status: "active",
+			}),
+		).toBe(false);
+		const directCatalogSchema = direct.DirectCatalogResponseV1;
+		if (!directCatalogSchema) throw new Error("Direct catalog schema missing");
+		const validateDirectCatalog = ajv.compile(directCatalogSchema);
+		const directCatalog = {
+			schemaVersion: 1,
+			catalogVersion: "catalog-1",
+			actions: [
+				{
+					providerId: "github",
+					actionId: "github.issue.read",
+					actionVersion: "v1",
+					inputSchema: { type: "object", properties: {} },
+					outputSchema: { type: "object", properties: {} },
+					effect: "READ",
+					requiredScopes: ["read:issues"],
+					status: "published",
+				},
+			],
+		};
+		expect(validateDirectCatalog(directCatalog)).toBe(true);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
+				actions: [
+					{
+						...directCatalog.actions[0],
+						inputSchema: { nested: [[[["too-deep"]]]] },
+					},
+				],
 			}),
 		).toBe(false);
 	});

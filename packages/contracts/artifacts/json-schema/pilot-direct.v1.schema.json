@@ -1,39 +1,6 @@
 {
   "$defs": {
     "DirectActionCatalogEntryV1": {
-      "$defs": {
-        "__schema0": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
-              },
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
       "additionalProperties": false,
       "properties": {
         "actionId": {
@@ -53,9 +20,384 @@
         },
         "inputSchema": {
           "additionalProperties": {
-            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxProperties": 1000,
+                "propertyNames": {
+                  "maxLength": 65536,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ],
+            "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
           },
+          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
+          "maxProperties": 1000,
           "propertyNames": {
+            "maxLength": 65536,
             "minLength": 1,
             "type": "string"
           },
@@ -63,9 +405,384 @@
         },
         "outputSchema": {
           "additionalProperties": {
-            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "maxLength": 65536,
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxProperties": 1000,
+                "propertyNames": {
+                  "maxLength": 65536,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ],
+            "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
           },
+          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
+          "maxProperties": 1000,
           "propertyNames": {
+            "maxLength": 65536,
             "minLength": 1,
             "type": "string"
           },
@@ -1232,7 +1949,7 @@
                                       "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                     },
                                     {
-                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                      "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                     }
                                   ],
                                   "maxLength": 65536,
@@ -1315,7 +2032,7 @@
                                       "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                     },
                                     {
-                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                      "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                     }
                                   ],
                                   "maxLength": 65536,
@@ -1333,7 +2050,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -1437,7 +2154,7 @@
                                       "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                     },
                                     {
-                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                      "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                     }
                                   ],
                                   "maxLength": 65536,
@@ -1520,7 +2237,7 @@
                                       "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                     },
                                     {
-                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                      "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                     }
                                   ],
                                   "maxLength": 65536,
@@ -1538,7 +2255,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -1556,7 +2273,7 @@
                           "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                         },
                         {
-                          "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                         }
                       ],
                       "maxLength": 65536,
@@ -1576,7 +2293,7 @@
                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                   },
                   {
-                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                   }
                 ],
                 "maxLength": 65536,
@@ -1760,7 +2477,7 @@
                                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                   },
                                   {
-                                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -1843,7 +2560,7 @@
                                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                   },
                                   {
-                                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -1861,7 +2578,7 @@
                               "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                             },
                             {
-                              "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                             }
                           ],
                           "maxLength": 65536,
@@ -1965,7 +2682,7 @@
                                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                   },
                                   {
-                                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -2048,7 +2765,7 @@
                                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                   },
                                   {
-                                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -2066,7 +2783,7 @@
                               "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                             },
                             {
-                              "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                             }
                           ],
                           "maxLength": 65536,
@@ -2084,7 +2801,7 @@
                         "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                       },
                       {
-                        "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                       }
                     ],
                     "maxLength": 65536,
@@ -2926,7 +3643,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3009,7 +3726,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3027,7 +3744,7 @@
                           "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                         },
                         {
-                          "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                         }
                       ],
                       "maxLength": 65536,
@@ -3131,7 +3848,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3214,7 +3931,7 @@
                                 "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                               },
                               {
-                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3232,7 +3949,7 @@
                           "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                         },
                         {
-                          "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                         }
                       ],
                       "maxLength": 65536,
@@ -3250,7 +3967,7 @@
                     "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                   },
                   {
-                    "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
                   }
                 ],
                 "maxLength": 65536,
@@ -3414,39 +4131,6 @@
       "type": "object"
     },
     "DirectCatalogResponseV1": {
-      "$defs": {
-        "__schema0": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
-              },
-              "type": "array"
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
-              },
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            }
-          ]
-        }
-      },
       "additionalProperties": false,
       "properties": {
         "actions": {
@@ -3470,9 +4154,384 @@
               },
               "inputSchema": {
                 "additionalProperties": {
-                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
                 },
+                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
+                "maxProperties": 1000,
                 "propertyNames": {
+                  "maxLength": 65536,
                   "minLength": 1,
                   "type": "string"
                 },
@@ -3480,9 +4539,384 @@
               },
               "outputSchema": {
                 "additionalProperties": {
-                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "maxLength": 65536,
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maxLength": 65536,
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 1000,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "maxLength": 65536,
+                                      "type": "string"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                {
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "maxLength": 65536,
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  "maxProperties": 1000,
+                                  "propertyNames": {
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxProperties": 1000,
+                            "propertyNames": {
+                              "maxLength": 65536,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxProperties": 1000,
+                      "propertyNames": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  ],
+                  "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
                 },
+                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
+                "maxProperties": 1000,
                 "propertyNames": {
+                  "maxLength": 65536,
                   "minLength": 1,
                   "type": "string"
                 },

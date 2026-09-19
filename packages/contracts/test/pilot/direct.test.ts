@@ -101,6 +101,19 @@ describe("Pilot Direct MCP/API contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: [
+					{
+						...catalog.actions[0],
+						inputSchema: {
+							nested: nestedArray(DirectPayloadMaximumDepthV1 + 1),
+						},
+					},
+				],
+			}).success,
+		).toBe(false);
 	});
 
 	it("rejects caller-selected authority and credential selectors", () => {
@@ -121,6 +134,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"accountId",
 			"caller",
 			"context",
+			"targetConnectionId",
+			"selectedPrincipalId",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -397,5 +412,12 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(pilotDirectOpenApiPathsV1["/api/v1/actions"].post?.operationId).toBe(
 			"executeConnectionAction",
 		);
+		const revokeResponses =
+			pilotDirectOpenApiPathsV1["/api/v1/grants/{grantId}/revoke"].post
+				?.responses;
+		expect(revokeResponses).not.toHaveProperty("403");
+		expect(revokeResponses?.["404"]).toMatchObject({
+			description: expect.stringContaining("authenticated Principal"),
+		});
 	});
 });
