@@ -207,6 +207,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "mF_9.B5f-4.1JqM" },
 			{ key: "AKIAIOSFODNN7EXAMPLE" },
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
+			{ authHeader: "Bearer credential" },
+			{ authValue: "credential" },
+			{ basicAuth: "credential" },
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -377,6 +380,23 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			validateDirectActionResultWithPublishedSchemaV1(success, () => true),
 		).toBe(true);
+		expect(
+			validateDirectActionResultWithPublishedSchemaV1(
+				{
+					...resultBase,
+					status: "failed",
+					updatedAt: "2026-09-19T10:00:02Z",
+					error: {
+						schemaVersion: 1,
+						traceId: "trace-other",
+						code: "PROVIDER_FAILED",
+						message: "Provider rejected the action",
+						retryable: false,
+					},
+				},
+				() => true,
+			),
+		).toBe(false);
 		expect(
 			DirectActionResultV1Schema.safeParse({
 				...success,

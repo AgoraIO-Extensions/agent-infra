@@ -27,6 +27,8 @@ type DirectJson =
 
 const credentialSafeKeyPattern =
 	/^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
+const credentialAuthKeyPattern =
+	/^(?!.*(?:[Aa][Uu][Tt][Hh](?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_-]?[Aa][Uu][Tt][Hh])).+$/;
 const caseInsensitiveRegexSource = (source: string) =>
 	source.replace(/[A-Za-z]/g, (letter) => {
 		const lower = letter.toLowerCase();
@@ -290,6 +292,7 @@ export const DirectJsonV1Schema = boundedDirectJsonSchema(
 		.min(1)
 		.max(DirectPayloadMaximumStringLengthV1)
 		.regex(credentialSafeKeyPattern)
+		.regex(credentialAuthKeyPattern)
 		.regex(outputAuthoritySelectorKeyPattern),
 	DirectPayloadMaximumDepthV1,
 );
@@ -299,6 +302,7 @@ export const DirectActionArgumentsV1Schema = boundedDirectJsonSchema(
 		.min(1)
 		.max(DirectPayloadMaximumStringLengthV1)
 		.regex(credentialSafeKeyPattern)
+		.regex(credentialAuthKeyPattern)
 		.regex(authoritySelectorKeyPattern),
 	DirectPayloadMaximumDepthV1,
 	directActionArgumentPrimitiveV1Schema,
@@ -311,6 +315,7 @@ const directActionArgumentsRecordV1Schema = withDirectPayloadBudget(
 			.min(1)
 			.max(DirectPayloadMaximumStringLengthV1)
 			.regex(credentialSafeKeyPattern)
+			.regex(credentialAuthKeyPattern)
 			.regex(authoritySelectorKeyPattern),
 		DirectActionArgumentsV1Schema,
 	),
@@ -653,11 +658,16 @@ export function validateDirectActionResultWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
 ) {
+	if (
+		!validateDirectPayloadWithPublishedSchemaV1(input, validatePublishedSchema)
+	) {
+		return false;
+	}
+	const parsed = DirectActionResultV1Schema.safeParse(input);
+	if (!parsed.success) return false;
 	return (
-		validateDirectPayloadWithPublishedSchemaV1(
-			input,
-			validatePublishedSchema,
-		) && DirectActionResultV1Schema.safeParse(input).success
+		parsed.data.status === "succeeded" ||
+		parsed.data.error.traceId === parsed.data.traceId
 	);
 }
 
