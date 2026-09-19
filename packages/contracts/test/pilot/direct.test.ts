@@ -229,6 +229,12 @@ describe("Pilot Direct MCP/API contracts", () => {
 				},
 			}).success,
 		).toBe(false);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
+			}).success,
+		).toBe(false);
 		expect(DirectPayloadMaximumNodeCountV1).toBeGreaterThan(
 			DirectPayloadMaximumCollectionSizeV1,
 		);

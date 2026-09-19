@@ -1074,6 +1074,7 @@
       },
       "DirectActionRequestV1": {
         "additionalProperties": false,
+        "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
         "properties": {
           "action": {
             "additionalProperties": false,

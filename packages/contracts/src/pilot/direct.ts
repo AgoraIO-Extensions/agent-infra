@@ -257,17 +257,19 @@ export const DirectGrantRevokeResponseV1Schema = z.strictObject({
 	revokedAt: Rfc3339TimestampV1Schema,
 });
 
-export const DirectActionRequestV1Schema = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	requestId: RequestIdV1Schema,
-	idempotencyKey: IdempotencyKeyV1Schema,
-	action: z.strictObject({
-		actionId: OpaqueIdV1Schema,
-		actionVersion: nonEmptyString(),
-		arguments: directActionArgumentsRecordV1Schema,
+export const DirectActionRequestV1Schema = withDirectPayloadBudget(
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		requestId: RequestIdV1Schema,
+		idempotencyKey: IdempotencyKeyV1Schema,
+		action: z.strictObject({
+			actionId: OpaqueIdV1Schema,
+			actionVersion: nonEmptyString(),
+			arguments: directActionArgumentsRecordV1Schema,
+		}),
+		traceId: TraceIdV1Schema,
 	}),
-	traceId: TraceIdV1Schema,
-});
+);
 
 const directResultShape = {
 	schemaVersion: SchemaVersionV1Schema,
@@ -438,6 +440,14 @@ export const DirectActionResultV1Schema = z.discriminatedUnion("status", [
 export type DirectPayloadValidatorV1 = (input: unknown) => unknown;
 export type DirectPublishedSchemaValidatorV1 = (input: unknown) => boolean;
 
+function isDirectPayloadWithinBudget(input: unknown) {
+	const size = inspectDirectPayload(input);
+	return (
+		size.nodes <= DirectPayloadMaximumNodeCountV1 &&
+		size.bytes <= DirectPayloadMaximumByteLengthV1
+	);
+}
+
 // JSON Schema and OpenAPI cannot express an aggregate recursive node/byte
 // budget. Consumers validating against a published artifact must compose its
 // validator with this helper so the runtime budget remains enforced.
@@ -445,6 +455,7 @@ export function validateDirectActionRequestWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
 ) {
+	if (!isDirectPayloadWithinBudget(input)) return false;
 	if (!validatePublishedSchema(input)) return false;
 	return DirectActionRequestV1Schema.safeParse(input).success;
 }

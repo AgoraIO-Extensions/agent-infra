@@ -13,6 +13,7 @@ import {
 	pilotDirectOpenApiPathsV1,
 	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
+	DirectPayloadMaximumByteLengthV1,
 	validateDirectActionRequestWithPublishedSchemaV1,
 } from "../../src/pilot/index.js";
 
@@ -252,12 +253,27 @@ describe("Pilot standard artifacts", () => {
 		// AJV enforces the published structural schema; the composed helper adds
 		// the aggregate budget that JSON Schema cannot express recursively.
 		expect(validateDirectRequest(nodeHeavyRequest)).toBe(true);
-		expect(
+			expect(
 			validateDirectActionRequestWithPublishedSchemaV1(
 				nodeHeavyRequest,
 				(input) => validateDirectRequest(input),
 			),
 		).toBe(false);
+		const oversizedMetadataRequest = {
+			...directRequest,
+			traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
+		};
+		let publishedValidatorCalled = false;
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				oversizedMetadataRequest,
+				(input) => {
+					publishedValidatorCalled = true;
+					return validateDirectRequest(input);
+				},
+			),
+		).toBe(false);
+		expect(publishedValidatorCalled).toBe(false);
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {
