@@ -428,6 +428,17 @@ describe("Pilot standard artifacts", () => {
 				actions: [
 					{
 						...directCatalog.actions[0],
+						inputSchema: { type: "not-a-json-schema-type" },
+					},
+				],
+			}),
+		).toBe(false);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
+				actions: [
+					{
+						...directCatalog.actions[0],
 						inputSchema: { nested: tooDeepSchema },
 					},
 				],

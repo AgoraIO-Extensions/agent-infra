@@ -29,16 +29,63 @@
               "type": "array"
             },
             {
-              "additionalProperties": {
-                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
-              },
-              "maxProperties": 1000,
-              "propertyNames": {
-                "maxLength": 65536,
-                "minLength": 1,
-                "type": "string"
-              },
-              "type": "object"
+              "allOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+                  },
+                  "maxProperties": 1000,
+                  "propertyNames": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "$schema": {
+                      "const": "https://json-schema.org/draft/2020-12/schema",
+                      "type": "string"
+                    },
+                    "type": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "null",
+                            "boolean",
+                            "object",
+                            "array",
+                            "number",
+                            "string",
+                            "integer"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "enum": [
+                              "null",
+                              "boolean",
+                              "object",
+                              "array",
+                              "number",
+                              "string",
+                              "integer"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 7,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
             }
           ]
         }
@@ -63,30 +110,124 @@
           "type": "string"
         },
         "inputSchema": {
-          "additionalProperties": {
-            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
-          },
-          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
-          "maxProperties": 1000,
-          "propertyNames": {
-            "maxLength": 65536,
-            "minLength": 1,
-            "type": "string"
-          },
-          "type": "object"
+          "allOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+              },
+              "maxProperties": 1000,
+              "propertyNames": {
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "additionalProperties": {},
+              "properties": {
+                "$schema": {
+                  "const": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "string"
+                },
+                "type": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "null",
+                        "boolean",
+                        "object",
+                        "array",
+                        "number",
+                        "string",
+                        "integer"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "null",
+                          "boolean",
+                          "object",
+                          "array",
+                          "number",
+                          "string",
+                          "integer"
+                        ],
+                        "type": "string"
+                      },
+                      "maxItems": 7,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          ],
+          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
         },
         "outputSchema": {
-          "additionalProperties": {
-            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
-          },
-          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
-          "maxProperties": 1000,
-          "propertyNames": {
-            "maxLength": 65536,
-            "minLength": 1,
-            "type": "string"
-          },
-          "type": "object"
+          "allOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+              },
+              "maxProperties": 1000,
+              "propertyNames": {
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "additionalProperties": {},
+              "properties": {
+                "$schema": {
+                  "const": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "string"
+                },
+                "type": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "null",
+                        "boolean",
+                        "object",
+                        "array",
+                        "number",
+                        "string",
+                        "integer"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "null",
+                          "boolean",
+                          "object",
+                          "array",
+                          "number",
+                          "string",
+                          "integer"
+                        ],
+                        "type": "string"
+                      },
+                      "maxItems": 7,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          ],
+          "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
         },
         "providerId": {
           "maxLength": 65536,
@@ -1821,7 +1962,7 @@
                                     "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                                   },
                                   {
-                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -1907,7 +2048,7 @@
                                     "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                                   },
                                   {
-                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -1928,7 +2069,7 @@
                               "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                             },
                             {
-                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                             }
                           ],
                           "maxLength": 65536,
@@ -2035,7 +2176,7 @@
                                     "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                                   },
                                   {
-                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -2121,7 +2262,7 @@
                                     "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                                   },
                                   {
-                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                                   }
                                 ],
                                 "maxLength": 65536,
@@ -2142,7 +2283,7 @@
                               "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                             },
                             {
-                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                              "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                             }
                           ],
                           "maxLength": 65536,
@@ -2163,7 +2304,7 @@
                         "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                       },
                       {
-                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                       }
                     ],
                     "maxLength": 65536,
@@ -3023,7 +3164,7 @@
                                 "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                               },
                               {
-                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3109,7 +3250,7 @@
                                 "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                               },
                               {
-                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3130,7 +3271,7 @@
                           "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                         },
                         {
-                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                         }
                       ],
                       "maxLength": 65536,
@@ -3237,7 +3378,7 @@
                                 "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                               },
                               {
-                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3323,7 +3464,7 @@
                                 "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                               },
                               {
-                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                                "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                               }
                             ],
                             "maxLength": 65536,
@@ -3344,7 +3485,7 @@
                           "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                         },
                         {
-                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                          "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                         }
                       ],
                       "maxLength": 65536,
@@ -3365,7 +3506,7 @@
                     "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
                   },
                   {
-                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?$).+$"
+                    "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[aA][cC][tT][oO][rR]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]))?$)(?!.*(?:[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[oO][wW][nN][eE][rR]|[sS][uU][bB][jJ][eE][cC][tT])[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE])$).+$"
                   }
                 ],
                 "maxLength": 65536,
@@ -3562,16 +3703,63 @@
               "type": "array"
             },
             {
-              "additionalProperties": {
-                "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
-              },
-              "maxProperties": 1000,
-              "propertyNames": {
-                "maxLength": 65536,
-                "minLength": 1,
-                "type": "string"
-              },
-              "type": "object"
+              "allOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                  },
+                  "maxProperties": 1000,
+                  "propertyNames": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "$schema": {
+                      "const": "https://json-schema.org/draft/2020-12/schema",
+                      "type": "string"
+                    },
+                    "type": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "null",
+                            "boolean",
+                            "object",
+                            "array",
+                            "number",
+                            "string",
+                            "integer"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "enum": [
+                              "null",
+                              "boolean",
+                              "object",
+                              "array",
+                              "number",
+                              "string",
+                              "integer"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 7,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
             }
           ]
         }
@@ -3601,30 +3789,124 @@
                 "type": "string"
               },
               "inputSchema": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
-                },
-                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
-                "maxProperties": 1000,
-                "propertyNames": {
-                  "maxLength": 65536,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "type": "object"
+                "allOf": [
+                  {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                    },
+                    "maxProperties": 1000,
+                    "propertyNames": {
+                      "maxLength": 65536,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": {},
+                    "properties": {
+                      "$schema": {
+                        "const": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "string"
+                      },
+                      "type": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "null",
+                              "boolean",
+                              "object",
+                              "array",
+                              "number",
+                              "string",
+                              "integer"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "items": {
+                              "enum": [
+                                "null",
+                                "boolean",
+                                "object",
+                                "array",
+                                "number",
+                                "string",
+                                "integer"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 7,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  }
+                ],
+                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
               },
               "outputSchema": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
-                },
-                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
-                "maxProperties": 1000,
-                "propertyNames": {
-                  "maxLength": 65536,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "type": "object"
+                "allOf": [
+                  {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                    },
+                    "maxProperties": 1000,
+                    "propertyNames": {
+                      "maxLength": 65536,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": {},
+                    "properties": {
+                      "$schema": {
+                        "const": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "string"
+                      },
+                      "type": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "null",
+                              "boolean",
+                              "object",
+                              "array",
+                              "number",
+                              "string",
+                              "integer"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "items": {
+                              "enum": [
+                                "null",
+                                "boolean",
+                                "object",
+                                "array",
+                                "number",
+                                "string",
+                                "integer"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 7,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  }
+                ],
+                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
               },
               "providerId": {
                 "maxLength": 65536,

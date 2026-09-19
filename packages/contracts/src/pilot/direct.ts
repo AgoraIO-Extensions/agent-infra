@@ -131,8 +131,23 @@ const outputAuthoritySelectorKeyTerms = [
 	"attachment",
 	"credential",
 ];
+const outputAuthoritySelectorSuffixOnlyTerms = [
+	"user",
+	"tenant",
+	"account",
+	"owner",
+	"subject",
+];
+const authoritySelectorSuffixes = [
+	"id",
+	"selector",
+	"context",
+	"ref",
+	"key",
+	"value",
+];
 const outputAuthoritySelectorKeyPattern = new RegExp(
-	`^(?!.*(?:${outputAuthoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${["id", "selector", "context"].map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
+	`^(?!.*(?:${outputAuthoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${authoritySelectorSuffixes.map(caseInsensitiveRegexSource).join("|")}))?$)(?!.*(?:${outputAuthoritySelectorSuffixOnlyTerms.map(caseInsensitiveRegexSource).join("|")})[_. /-]?(?:${authoritySelectorSuffixes.map(caseInsensitiveRegexSource).join("|")})$).+$`,
 );
 const unsafeArgumentValuePattern = new RegExp(
 	String.raw`^(?![\s\S]*(?:\b(?:${[
@@ -408,21 +423,55 @@ const jsonSchemaDocumentKeyV1Schema = z
 	.string()
 	.min(1)
 	.max(DirectPayloadMaximumStringLengthV1);
+const jsonSchemaTypeNameV1Schema = z.enum([
+	"null",
+	"boolean",
+	"object",
+	"array",
+	"number",
+	"string",
+	"integer",
+]);
+const jsonSchemaTypeV1Schema = z.union([
+	jsonSchemaTypeNameV1Schema,
+	z.array(jsonSchemaTypeNameV1Schema)
+		.min(1)
+		.max(7),
+]);
 const jsonSchemaDocumentValueV1Schema: z.ZodType<DirectJson> = z.lazy(() =>
 	z.union([
 		jsonSchemaDocumentPrimitiveV1Schema,
 		z
 			.array(jsonSchemaDocumentValueV1Schema)
 			.max(DirectPayloadMaximumCollectionSizeV1),
-		boundedRecord(
-			jsonSchemaDocumentKeyV1Schema,
-			jsonSchemaDocumentValueV1Schema,
+		z.intersection(
+			boundedRecord(
+				jsonSchemaDocumentKeyV1Schema,
+				jsonSchemaDocumentValueV1Schema,
+			),
+			z.looseObject({
+				$schema: z
+					.literal("https://json-schema.org/draft/2020-12/schema")
+					.optional(),
+				type: jsonSchemaTypeV1Schema.optional(),
+			}),
 		),
 	]),
 );
 const jsonSchemaMetaValidator = new Ajv2020({ strict: false });
 const jsonSchemaDocument = withDirectPayloadBudget(
-	boundedRecord(jsonSchemaDocumentKeyV1Schema, jsonSchemaDocumentValueV1Schema),
+	z.intersection(
+		boundedRecord(
+			jsonSchemaDocumentKeyV1Schema,
+			jsonSchemaDocumentValueV1Schema,
+		),
+		z.looseObject({
+			$schema: z
+				.literal("https://json-schema.org/draft/2020-12/schema")
+				.optional(),
+			type: jsonSchemaTypeV1Schema.optional(),
+		}),
+	),
 ).superRefine((value, context) => {
 	const dialect = value.$schema;
 	if (

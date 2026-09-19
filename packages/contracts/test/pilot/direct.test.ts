@@ -434,6 +434,23 @@ describe("Pilot Direct MCP/API contracts", () => {
 				output: { connectionId: "must-not-cross" },
 			}).success,
 		).toBe(false);
+		for (const field of [
+			"userId",
+			"user_id",
+			"tenantId",
+			"accountId",
+			"ownerId",
+			"subjectId",
+			"userRef",
+			"accountSelector",
+		]) {
+			expect(
+				DirectActionResultV1Schema.safeParse({
+					...success,
+					output: { [field]: "caller-selected" },
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			DirectActionResultV1Schema.safeParse({
 				...success,
