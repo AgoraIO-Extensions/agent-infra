@@ -2510,6 +2510,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					queryClient: CodexConnectionQueryMetadata;
 			  }
 			| undefined;
+		let markSelectedAttempt: (() => Promise<void>) | undefined;
 		const recovery = async (
 			request: CodexConnectionRecoveryRequest,
 			callbackSignal: AbortSignal,
@@ -2526,6 +2527,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			processNonce = request.processNonce;
 			requests.add(request.requestId);
 			current = undefined;
+			markSelectedAttempt = undefined;
 			const selected = await change(({ journal }) => {
 				itemSignal.throwIfAborted();
 				const pass = journal.connectionRecovery;
@@ -2616,6 +2618,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						pass.scannedAttemptRefs.push(attemptRef);
 				});
 			};
+			markSelectedAttempt = markScanned;
 			let value: unknown;
 			const waiting = new AbortController();
 			try {
@@ -2644,6 +2647,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			locate(this.readState());
 			if (!isCodexConnectionClientConfiguration(value)) {
 				await markScanned();
+				markSelectedAttempt = undefined;
 				return {
 					...base,
 					decision: "unavailable",
@@ -2662,6 +2666,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				)
 			) {
 				await markScanned();
+				markSelectedAttempt = undefined;
 				return { ...base, decision: "unavailable", reason: "binding_mismatch" };
 			}
 			const expiresAt = Math.min(
@@ -2671,13 +2676,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 			if (expiresAt <= Date.now()) {
 				await markScanned();
+				markSelectedAttempt = undefined;
 				return {
 					...base,
 					decision: "unavailable",
 					reason: "credential_expired",
 				};
 			}
-			await markScanned();
 			previousRecoveryId = randomUUID();
 			current = {
 				original,
@@ -2733,12 +2738,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						)
 					)
 						protocolInvalid();
-					return this.performNativeConnectionEvidence(
+					const evidence = await this.performNativeConnectionEvidence(
 						initial.conversationKey,
 						request,
 						AbortSignal.any([processSignal, callbackSignal]),
 						{ read, ...item },
 					);
+					await markSelectedAttempt?.();
+					markSelectedAttempt = undefined;
+					return evidence;
 				},
 			});
 			recoveryProcessCompleted = true;

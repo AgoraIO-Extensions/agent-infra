@@ -688,7 +688,7 @@ async function insertOperationAudit(
 	if (
 		fact.kind === "model" &&
 		(fact.model.modelOptionId !== execution.model_option_id ||
-			fact.model.reasoningLevel !== execution.reasoning_level)
+			fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
 	)
 		unavailable();
 	// This outcome describes reliable observation, never model/tool success.

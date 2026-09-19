@@ -1070,6 +1070,7 @@ export async function openCodexModelTransport(
 		rememberReady = ready,
 	) => {
 		if (ready && rememberReady) readyModelTurns.add(key);
+		if (!ready) readyModelTurns.delete(key);
 		const waiters = modelRequestWaiters.get(key);
 		if (!waiters) return;
 		modelRequestWaiters.delete(key);
@@ -1291,6 +1292,7 @@ export async function openCodexModelTransport(
 				revokeTurn(turnKey, startedAt === undefined);
 			const pending = (async () => {
 				if (!journal) {
+					readyModelTurns.delete(turnKey);
 					outcomeReported = true;
 					return;
 				}
@@ -1308,6 +1310,7 @@ export async function openCodexModelTransport(
 								}),
 					}),
 				);
+				readyModelTurns.delete(turnKey);
 				outcomeReported = true;
 			})();
 			outcomeReport = pending;
