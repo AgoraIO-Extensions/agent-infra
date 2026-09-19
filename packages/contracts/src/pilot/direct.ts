@@ -434,9 +434,7 @@ const jsonSchemaTypeNameV1Schema = z.enum([
 ]);
 const jsonSchemaTypeV1Schema = z.union([
 	jsonSchemaTypeNameV1Schema,
-	z.array(jsonSchemaTypeNameV1Schema)
-		.min(1)
-		.max(7),
+	z.array(jsonSchemaTypeNameV1Schema).min(1).max(7),
 ]);
 const jsonSchemaDocumentValueV1Schema: z.ZodType<DirectJson> = z.lazy(() =>
 	z.union([

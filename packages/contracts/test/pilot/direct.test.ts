@@ -79,7 +79,10 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			DirectCatalogResponseV1Schema.safeParse({
 				...catalog,
-				actions: [catalog.actions[0], { ...catalog.actions[0], effect: "WRITE" }],
+				actions: [
+					catalog.actions[0],
+					{ ...catalog.actions[0], effect: "WRITE" },
+				],
 			}).success,
 		).toBe(false);
 		for (const field of [
