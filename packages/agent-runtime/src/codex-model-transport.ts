@@ -1044,8 +1044,12 @@ export async function openCodexModelTransport(
 		admissionWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(model);
 	};
-	const settleModelRequestWaiters = (key: string, ready: boolean) => {
-		if (ready) readyModelTurns.add(key);
+	const settleModelRequestWaiters = (
+		key: string,
+		ready: boolean,
+		rememberReady = ready,
+	) => {
+		if (ready && rememberReady) readyModelTurns.add(key);
 		const waiters = modelRequestWaiters.get(key);
 		if (!waiters) return;
 		modelRequestWaiters.delete(key);
@@ -1168,9 +1172,9 @@ export async function openCodexModelTransport(
 		signal?: AbortSignal,
 	) => {
 		const key = nativeTurnKey(turn);
-		if (readyModelTurns.has(key)) return Promise.resolve(true);
 		if (revokedTurns.has(key) || closing || signal?.aborted)
 			return Promise.resolve(false);
+		if (readyModelTurns.has(key)) return Promise.resolve(true);
 		if (deadline <= Date.now()) return Promise.resolve(false);
 		return new Promise<boolean>((resolve) => {
 			const waiters = modelRequestWaiters.get(key) ?? new Set();
@@ -1378,7 +1382,10 @@ export async function openCodexModelTransport(
 				});
 				// A non-streaming response is still an accepted model request. Notify
 				// the Driver only after the durable failure fact is committed.
-				settleModelRequestWaiters(turnKey, true);
+				// Wake a Driver that is still waiting for the initial request so it can
+				// observe the durable failure, but never cache readiness for a revoked
+				// Turn or allow a later request to bypass its fence.
+				settleModelRequestWaiters(turnKey, true, false);
 				reject(
 					response,
 					upstream.status === 401 || upstream.status === 403

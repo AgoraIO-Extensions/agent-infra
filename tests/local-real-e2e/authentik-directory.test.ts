@@ -72,6 +72,11 @@ function fixture() {
 			? state.users
 			: state.groups.map((pk) => ({ pk }));
 		const results = all.slice(page - 1, page);
+		const pageUrl = (target: number) => {
+			const link = new URL(url);
+			link.searchParams.set("page", String(target));
+			return link.href;
+		};
 		if (state.duplicate && url.pathname.endsWith("/users/") && page === 2)
 			results[0] = at(state.users, 0);
 		return Response.json({
@@ -79,8 +84,8 @@ function fixture() {
 				count: all.length,
 				total_pages: Math.max(1, all.length),
 				current: page,
-				next: page < all.length ? page + 1 : null,
-				previous: page === 1 ? null : page - 1,
+				next: page < all.length ? pageUrl(page + 1) : null,
+				previous: page === 1 ? null : pageUrl(page - 1),
 				start_index: all.length ? page : 0,
 				end_index: all.length ? page : 0,
 			},

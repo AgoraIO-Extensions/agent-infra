@@ -59,8 +59,26 @@ function integer(value: unknown): number {
 		unavailable();
 	return value;
 }
-function pageLink(value: unknown): number {
-	return value === null ? 0 : integer(value);
+function pageLink(
+	value: unknown,
+	origin: string,
+	resource: "users" | "groups",
+): number {
+	if (value === null) return 0;
+	if (typeof value === "number") return integer(value);
+	const link = new URL(text(value));
+	const configured = new URL(origin);
+	if (
+		link.origin !== configured.origin ||
+		link.pathname !== `/api/v3/core/${resource}/` ||
+		link.username ||
+		link.password ||
+		link.hash
+	)
+		unavailable();
+	const page = link.searchParams.get("page");
+	if (!page || !/^[1-9][0-9]*$/u.test(page)) unavailable();
+	return integer(Number(page));
 }
 function unique(values: string[]): string[] {
 	if (new Set(values).size !== values.length) unavailable();
@@ -192,8 +210,10 @@ export function createAuthentikDirectory(
 				pages < 1 ||
 				pages > 100 ||
 				integer(pagination.current) !== page ||
-				pageLink(pagination.previous) !== (page === 1 ? 0 : page - 1) ||
-				pageLink(pagination.next) !== (page === pages ? 0 : page + 1) ||
+				pageLink(pagination.previous, config.origin, resource) !==
+					(page === 1 ? 0 : page - 1) ||
+				pageLink(pagination.next, config.origin, resource) !==
+					(page === pages ? 0 : page + 1) ||
 				(expectedCount !== undefined && count !== expectedCount) ||
 				(expectedPages !== undefined && pages !== expectedPages) ||
 				!Array.isArray(body.results) ||
