@@ -37,6 +37,6 @@
 		"kind": "derived",
 		"buildId": "agent-infra-0.153.0-arm64-25d8ebe99a39-run35460531562.1",
 		"sourceTree": "3534973977c758d189ab378830323e439e605082",
-		"buildInputSha256": "sha256:25d8ebe99a39d0a300b19a46f31a9631a3a2a6cf90672c5816dd8a429a92c45f"
+		"buildInputSha256": "sha256:3b5111408f510b493a6023f8b42461a887a46fb404d65124881eb160ee25c281"
 	}
 }
