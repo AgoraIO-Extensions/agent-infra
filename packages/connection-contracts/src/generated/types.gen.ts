@@ -148,7 +148,7 @@ export type ProviderCredentialRequest = {
     username: string;
     password: string;
 } | {
-    providerId: 'jenkins-ci' | 'jenkins-release';
+    providerId: 'jenkins-release';
     username: string;
     apiToken: string;
 };

@@ -412,28 +412,6 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
-	it("连接页为 Jenkins CI 使用独立 Provider ID", async () => {
-		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "客户端授权" });
-
-		fireEvent.click(screen.getByRole("button", { name: "连接 Jenkins CI" }));
-		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
-			target: { value: "jenkins-ci-user" },
-		});
-		fireEvent.change(screen.getByLabelText("Jenkins API Token"), {
-			target: { value: "jenkins-ci-api-token" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
-		await waitFor(() =>
-			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
-		);
-		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
-			apiToken: "jenkins-ci-api-token",
-			providerId: "jenkins-ci",
-			username: "jenkins-ci-user",
-		});
-	});
-
 	it("连接页调用 Confluence Server credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });

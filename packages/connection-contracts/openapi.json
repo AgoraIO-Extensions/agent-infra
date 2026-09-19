@@ -846,10 +846,7 @@
 						"additionalProperties": false,
 						"required": ["providerId", "username", "apiToken"],
 						"properties": {
-							"providerId": {
-								"type": "string",
-								"enum": ["jenkins-ci", "jenkins-release"]
-							},
+							"providerId": { "type": "string", "const": "jenkins-release" },
 							"username": {
 								"type": "string",
 								"minLength": 1,

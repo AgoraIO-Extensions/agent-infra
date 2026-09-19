@@ -34,7 +34,7 @@ export const providerCredentialRequestSchema = z.union([
 	}),
 	z.strictObject({
 		apiToken: z.string().min(1).max(8_192),
-		providerId: z.enum(["jenkins-ci", "jenkins-release"]),
+		providerId: z.literal("jenkins-release"),
 		username: z.string().trim().min(1).max(256),
 	}),
 ]);

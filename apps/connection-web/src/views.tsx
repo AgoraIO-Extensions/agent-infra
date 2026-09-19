@@ -353,7 +353,6 @@ export function providerLabel(value: string) {
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
 			github: "GitHub",
-			"jenkins-ci": "Jenkins CI",
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 		}[value] ?? value
