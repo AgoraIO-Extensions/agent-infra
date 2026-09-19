@@ -5583,7 +5583,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const source = resolved.source;
 				if (!source || source.bindPending?.requestId !== receipt.requestId)
 					stateInvalid();
-				source.bind = source.bindPending;
+				if (
+					isClosed(state, resolved) ||
+					!this.executionConfigurationMatches(
+						state,
+						resolved.session,
+						resolved.execution,
+					)
+				) {
+					source.bind = source.bindPending;
+					source.bindDenied = "authorization_unavailable";
+				} else {
+					source.bind = source.bindPending;
+				}
 				delete source.bindPending;
 				return resolved;
 			});

@@ -562,16 +562,21 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
 	).toBeVisible();
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
-	await page.getByLabel("Secret", { exact: true }).fill("synthetic-bot-secret");
+	const secret = "synthetic-bot-secret";
+	await page.getByLabel("Secret", { exact: true }).fill(secret);
 	await page.getByRole("checkbox", { name: /我已知悉/ }).check();
+	await page.getByLabel("Secret", { exact: true }).evaluate((element) => {
+		(element as HTMLInputElement).value = "";
+	});
 	await capture(page, info, "wecom-manual");
+	await page.getByLabel("Secret", { exact: true }).fill(secret);
 	await page.getByRole("button", { name: "验证并绑定" }).click();
 	await expect(page.getByLabel("Secret", { exact: true })).toHaveValue("");
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
 	expect(saved).toEqual({
 		state: "fixture-state",
 		botId: "fixture-bot",
-		secret: "synthetic-bot-secret",
+		secret,
 		takeoverConfirmed: true,
 	});
 	await expect(page.getByLabel("智能机器人配置标识")).toHaveCount(0);
