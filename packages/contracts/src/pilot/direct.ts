@@ -30,11 +30,88 @@ const credentialSafeKeyPattern =
 const authoritySelectorKeyPattern =
 	/^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$/;
 const unsafeArgumentValuePattern =
-	/^(?:bearer|credential(?:s)?|oauth(?:code|token)?|caller[-_ ]selected(?:[-_ ](?:connection|principal|grant|agent|account|session))?)$/i;
+	/^(?!.*(?:\b(?:bearer|credentials?|oauth(?:code|token)?)\b|(?:^|[\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\s*[:=]|(?:^|[\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$/i;
 
 export const DirectPayloadMaximumDepthV1 = 3;
 export const DirectPayloadMaximumStringLengthV1 = 65_536;
 export const DirectPayloadMaximumCollectionSizeV1 = 1_000;
+export const DirectPayloadMaximumNodeCountV1 = 10_000;
+export const DirectPayloadMaximumByteLengthV1 = 1_048_576;
+
+const directPayloadBudgetMetadata = {
+	description: `Direct payloads are limited to ${DirectPayloadMaximumNodeCountV1} total JSON nodes and ${DirectPayloadMaximumByteLengthV1} UTF-8 bytes.`,
+};
+
+type DirectPayloadSize = { nodes: number; bytes: number };
+
+const utf8ByteLength = (value: string) =>
+	new TextEncoder().encode(value).byteLength;
+
+function inspectDirectPayload(
+	value: unknown,
+	seen = new WeakSet<object>(),
+): DirectPayloadSize {
+	if (typeof value === "string") {
+		return { nodes: 1, bytes: utf8ByteLength(JSON.stringify(value)) };
+	}
+	if (value === null || typeof value !== "object") {
+		return {
+			nodes: 1,
+			bytes: utf8ByteLength(JSON.stringify(value) ?? "null"),
+		};
+	}
+	if (seen.has(value)) {
+		return {
+			nodes: DirectPayloadMaximumNodeCountV1 + 1,
+			bytes: DirectPayloadMaximumByteLengthV1 + 1,
+		};
+	}
+	seen.add(value);
+
+	let nodes = 1;
+	let bytes = 2;
+	const visit = (entry: unknown, keyBytes = 0) => {
+		bytes += keyBytes;
+		const child = inspectDirectPayload(entry, seen);
+		nodes += child.nodes;
+		bytes += child.bytes;
+	};
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			visit(entry);
+			if (nodes > DirectPayloadMaximumNodeCountV1) break;
+			if (bytes > DirectPayloadMaximumByteLengthV1) break;
+		}
+	} else {
+		for (const [key, entry] of Object.entries(value)) {
+			visit(entry, utf8ByteLength(JSON.stringify(key)) + 1);
+			if (nodes > DirectPayloadMaximumNodeCountV1) break;
+			if (bytes > DirectPayloadMaximumByteLengthV1) break;
+		}
+	}
+	seen.delete(value);
+	return { nodes, bytes };
+}
+
+function withDirectPayloadBudget<T extends z.ZodType<DirectJson>>(schema: T) {
+	return schema
+		.meta(directPayloadBudgetMetadata)
+		.superRefine((value, context) => {
+			const size = inspectDirectPayload(value);
+			if (size.nodes > DirectPayloadMaximumNodeCountV1) {
+				context.addIssue({
+					code: "custom",
+					message: "Direct payload contains too many JSON nodes",
+				});
+			}
+			if (size.bytes > DirectPayloadMaximumByteLengthV1) {
+				context.addIssue({
+					code: "custom",
+					message: "Direct payload exceeds the total byte budget",
+				});
+			}
+		});
+}
 
 const directJsonPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z.null(),
@@ -49,9 +126,10 @@ const directActionArgumentPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z
 		.string()
 		.max(DirectPayloadMaximumStringLengthV1)
-		.refine((value) => !unsafeArgumentValuePattern.test(value), {
-			message: "Direct action arguments cannot carry credentials or authority selectors",
-		}),
+		.regex(
+			unsafeArgumentValuePattern,
+			"Direct action arguments cannot carry credentials or authority selectors",
+		),
 ]);
 
 const boundedRecord = (key: z.ZodType<string>, value: z.ZodType<DirectJson>) =>
@@ -81,7 +159,7 @@ function boundedDirectJsonSchema(
 			boundedRecord(key, child),
 		]);
 	}
-	return schema;
+	return withDirectPayloadBudget(schema);
 }
 
 export const DirectJsonV1Schema = boundedDirectJsonSchema(
@@ -102,14 +180,17 @@ export const DirectActionArgumentsV1Schema = boundedDirectJsonSchema(
 	DirectPayloadMaximumDepthV1,
 	directActionArgumentPrimitiveV1Schema,
 );
-const directActionArgumentsRecordV1Schema = boundedRecord(
-	z
-		.string()
-		.min(1)
-		.max(DirectPayloadMaximumStringLengthV1)
-		.regex(credentialSafeKeyPattern)
-		.regex(authoritySelectorKeyPattern),
-	DirectActionArgumentsV1Schema,
+
+const directActionArgumentsRecordV1Schema = withDirectPayloadBudget(
+	boundedRecord(
+		z
+			.string()
+			.min(1)
+			.max(DirectPayloadMaximumStringLengthV1)
+			.regex(credentialSafeKeyPattern)
+			.regex(authoritySelectorKeyPattern),
+		DirectActionArgumentsV1Schema,
+	),
 );
 
 export const DirectActionEffectV1Schema = z.enum(["READ", "WRITE"]);

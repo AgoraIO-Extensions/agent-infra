@@ -5,8 +5,10 @@ import {
 	DirectActionRequestV1Schema,
 	DirectActionResultV1Schema,
 	DirectCatalogResponseV1Schema,
+	DirectPayloadMaximumByteLengthV1,
 	DirectPayloadMaximumCollectionSizeV1,
 	DirectPayloadMaximumDepthV1,
+	DirectPayloadMaximumNodeCountV1,
 	DirectPayloadMaximumStringLengthV1,
 	pilotDirectOpenApiPathsV1,
 	validateDirectActionResultV1,
@@ -107,6 +109,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ bearer: "credential" },
 			{ oauthCode: "credential" },
 			{ target: "caller-selected-connection" },
+			{ note: "token=embedded-secret" },
+			{ value: "sk-abcdefghijklmnopqrstuvwxyz" },
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -184,6 +188,42 @@ describe("Pilot Direct MCP/API contracts", () => {
 				action: { ...request.action, arguments: tooManyProperties },
 			}).success,
 		).toBe(false);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: {
+					...request.action,
+					arguments: Object.fromEntries(
+						Array.from({ length: 11 }, (_, group) => [
+							`group${group}`,
+							Object.fromEntries(
+								Array.from({ length: 1_000 }, (_, index) => [
+									`key${index}`,
+									true,
+								]),
+							),
+						]),
+					),
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: {
+					...request.action,
+					arguments: Object.fromEntries(
+						Array.from({ length: 20 }, (_, index) => [
+							`value${index}`,
+							"x".repeat(DirectPayloadMaximumByteLengthV1 / 20),
+						]),
+					),
+				},
+			}).success,
+		).toBe(false);
+		expect(DirectPayloadMaximumNodeCountV1).toBeGreaterThan(
+			DirectPayloadMaximumCollectionSizeV1,
+		);
 	});
 
 	it("correlates successful and unresolved results without exposing secrets", () => {

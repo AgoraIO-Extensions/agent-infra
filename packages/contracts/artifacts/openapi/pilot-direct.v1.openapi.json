@@ -1102,6 +1102,7 @@
                         },
                         {
                           "maxLength": 65536,
+                          "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                           "type": "string"
                         }
                       ]
@@ -1122,6 +1123,7 @@
                               },
                               {
                                 "maxLength": 65536,
+                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1142,6 +1144,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
+                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1160,6 +1163,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1181,6 +1185,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1222,6 +1227,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
+                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1240,6 +1246,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1261,6 +1268,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1320,6 +1328,7 @@
                               },
                               {
                                 "maxLength": 65536,
+                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1340,6 +1349,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
+                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1358,6 +1368,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1379,6 +1390,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1420,6 +1432,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
+                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1438,6 +1451,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1459,6 +1473,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
+                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1515,8 +1530,10 @@
                       },
                       "type": "object"
                     }
-                  ]
+                  ],
+                  "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
                 },
+                "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
                 "maxProperties": 1000,
                 "propertyNames": {
                   "allOf": [
@@ -2004,7 +2021,8 @@
                 },
                 "type": "object"
               }
-            ]
+            ],
+            "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
           },
           "requestId": {
             "minLength": 1,
