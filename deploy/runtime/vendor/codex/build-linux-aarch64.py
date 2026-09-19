@@ -398,7 +398,6 @@ class Builder:
         record["files"] = {str(path.relative_to(self.candidate)): digest(path)
                            for path in sorted(self.candidate.rglob("*")) if path.is_file()}
         record["builderSha256"] = {str(path.relative_to(self.repo)): digest(path) for path in (
-            self.repo / ".github/workflows/codex-native-candidate.yml",
             self.vendor / "build-linux-aarch64.sh", self.vendor / "build-linux-aarch64.py",
             self.vendor / "apply-source.py", self.repo / ".github/scripts/install-trivy.mjs",
             self.repo / ".github/scripts/vulnerability-policy.mjs")}

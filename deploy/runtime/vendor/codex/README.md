@@ -73,52 +73,12 @@ Collab V1 的组合流程及取消/终态顺序按 [coverage](coverage-v1.json) 
 TurnComplete 不证明后台进程已退出；list/terminate 和原 attempt outcome ACK
 共同决定执行占用，不能单靠 RPC 返回的 `terminated`。
 
-## Linux aarch64 候选构建
+## Linux aarch64 派生产物
 
-[独立 workflow](../../../../.github/workflows/codex-native-candidate.yml) 在 vendor 或构建入口
-相关 PR 上使用标准 `ubuntu-24.04-arm`，按 PR 的确切 head 和固定 upstream SHA 构建。
-它不改变现有 installer、Dockerfile 或 release pin；构建产物按下述候选验证要求交接。
+当前仓库只消费 `packages/agent-runtime/src/codex-release.json` 中已固定的
+候选包。普通 PR 不再触发独立的 native candidate 编译或聚焦原生测试；CI 只回读
+该固定 artifact 的来源、运行和哈希信息，并在镜像内执行已有的运行时验证。
 
-[构建入口](build-linux-aarch64.sh) 先通过 `paths` 固定目录，再按
-`prepare`、`musl`、`v8`、`build`、`seal`、`tests` 分步运行；
-`tests` 除现有执行屏障与依赖测试外，还运行 `codex-core` 的 `suite::compact::`
-集成套件，覆盖模型切换及原生压缩回归；合成响应不能代替真实模型历史兼容性验收。
-参数和专属目录由 workflow 固定。musl 和 V8 输出的 `GITHUB_ENV` 必须在后续 step 生效，
-不通过 shell source 解析；V8 脚本明确使用原生 checkout，避免 workspace 根目录歧义。
-构建保留 runner 默认 Cargo home，使用独立 target 目录、Rust 1.96.0、Zig 0.14.0、
-单一 musl release target、两个并发任务和关闭 incremental。每个外部构建阶段周期检查
-磁盘，低于 2 GiB 时终止该进程组；不清理其他目录，不自动改用付费 runner。
-
-先编译并 strip bwrap，把最终 SHA 编入随后构建的 `codex`、`codex-code-mode-host` 和
-`codex-responses-api-proxy`。候选包采用上游识别的 `bin/` 与 `codex-resources/` 布局，
-包含这四个 binary；不宣称是带 rg/zsh 等全部发行资源的正式上游包。
-缺少 helper、架构不符、bwrap 或其他 binary 哈希漂移，以及 source/head/lock/callback
-输入漂移都会失败。
-
-成功 artifact 用带 SHA 的 tar archive 保留 executable 权限，包内包含 `candidate.json`、
-四个最终 binary、legal、Cargo.lock 和标准
-CycloneDX `source.cdx.json`。manifest 绑定 PR head、run/attempt、upstream、补丁、lock、
-完整补丁后 source tree、Schema/corpus/coverage、工具版本、构建命令和最终文件 SHA。
-source tree 用临时 Git index 计算并在封包前复核，不改变 native checkout 的 HEAD 或 index。
-包内还保留 `builder-environment.json` 的有限 runner 信息及文件 SHA。
-SBOM 使用仓库固定 Trivy 安装器，只描述 Cargo.lock 源码依赖，
-不证明静态链接 C/C++ 或最终 binary 依赖覆盖完整。
-`nativeAcceptance: false` 保持显式；编译成功仍需原生测试、最终镜像和真实流程验收。
-CLI version 和静态 native probe 也必须与固定输入匹配；这不证明进程隔离已安装。
-
-封包上传后，固定 just 1.51.0 与 nextest 0.9.103 通过上游 `just test` 运行
-`codex-rmcp-client` 的 Connection、`codex-core` 的 bootstrap/barrier，以及
-`codex-network-proxy`、`codex-git-utils`、`codex-http-client` 的库测试。
-测试复用同一 release target 和 bwrap SHA，两个执行线程，保留 2 GiB 资源保护；
-测试前后复核源码和候选 binary，失败会使 workflow 失败。
-`tests` 在 task-owned output 下创建权限为 0700 的独立目录，通过
-`CODEX_TEST_HOME_ROOT` 供测试初始化使用 `tempdir_in` 创建子目录；该根必须位于
-源码树和系统临时目录之外。builder 在成功、失败或中断后清理本次目录，不依赖
-测试 ctor 在 abort 后析构。不设置该变量时保留上游测试初始化行为；不修改 TMPDIR、
-release 模式或生产 arg0 的系统临时目录限制。
-已上传包仍明确为未验收候选；聚焦测试记录随 diagnostics 保存，不替代完整原生矩阵。
-测试依赖与 `cfg(test)` 可能增加构建空间；实际测试结果按同一 run/attempt 的 diagnostics 回读。
-
-artifact 只保留一天；失败也保存限定构建日志、阶段状态、资源采样和 timing，
-不上传 Cargo target、registry、全部 symbols 或环境变量。构建空间和时长以对应
-run/attempt 的资源采样及 timing 为准。
+`build-linux-aarch64.py`、固定输入清单和补丁仍作为派生产物的审计材料保留。更新
+`codex-release.json` 前，必须在受控的发布操作中生成新的候选包并同步完整 provenance；
+本仓库的普通 PR 流程不会自动执行该构建。

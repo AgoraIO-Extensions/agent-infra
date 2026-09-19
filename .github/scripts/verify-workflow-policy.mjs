@@ -10,7 +10,6 @@ const REQUIRED_WORKFLOWS = [
   "ci.yml",
   "claude-issue-review.yml",
   "claude-pr-review.yml",
-  "codex-native-candidate.yml",
   "codex-worker.yml",
   "connection-github-e2e.yml",
   "gh-aw-issue-to-pr-pilot.lock.yml",
@@ -60,10 +59,6 @@ const RUN_NAME_CONTRACTS = {
       "github.event.workflow_run.pull_requests[0].number",
       "github.event_name",
     ],
-  },
-  "codex-native-candidate.yml": {
-    operation: "codex-native-candidate",
-    references: ["github.event.pull_request.number"],
   },
   "connection-github-e2e.yml": {
     operation: "connection-github-e2e",
@@ -122,10 +117,6 @@ const SOURCE_OUTCOME_CONTRACTS = {
   "codex-worker.yml": {
     needs: ["base-update", "authorization", "prepare", "implement", "publish"],
     operation: "codex-worker",
-  },
-  "codex-native-candidate.yml": {
-    needs: ["candidate"],
-    operation: "codex-native-candidate",
   },
   "ci.yml": {
     needs: ["ci", "workload-kind"],

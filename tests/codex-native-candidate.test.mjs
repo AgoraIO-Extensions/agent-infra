@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import YAML from "yaml";
 
 test("candidate rejects wrong head, source drift, missing helpers and changed bwrap", () => {
 	const result = spawnSync(
@@ -347,70 +345,4 @@ unittest.main()
 		{ encoding: "utf8", timeout: 30_000 },
 	);
 	assert.equal(result.status, 0, result.stderr || result.stdout);
-});
-
-test("candidate uses an isolated read-only exact PR checkout and fixed standard Arm runner", () => {
-	const expression = (body) => `\${{ ${body} }}`;
-	const workflow = YAML.parse(
-		readFileSync(".github/workflows/codex-native-candidate.yml", "utf8"),
-	);
-	assert.deepEqual(Object.keys(workflow.on), ["pull_request"]);
-	assert.deepEqual(workflow.permissions, { contents: "read" });
-	assert.ok(
-		workflow.on.pull_request.paths.includes("deploy/runtime/vendor/codex/**"),
-	);
-	const job = workflow.jobs.candidate;
-	assert.equal(job["runs-on"], "ubuntu-24.04-arm");
-	assert.equal(job["timeout-minutes"], 180);
-	assert.equal(job.env.CARGO_BUILD_JOBS, "3");
-	assert.equal(job.env.CARGO_INCREMENTAL, "0");
-	assert.equal(job.env.TARGET, "aarch64-unknown-linux-musl");
-	assert.equal(job.env.RUSTUP_TOOLCHAIN, "1.96.0");
-	for (const name of ["HOME", "CODEX_HOME", "CARGO_HOME"])
-		assert.equal(job.env[name], undefined);
-	assert.equal(
-		job.steps[0].with.ref,
-		expression("github.event.pull_request.head.sha"),
-	);
-	assert.equal(
-		job.steps[1].with.ref,
-		"41e22fee981a63b3698df7ed36bad393cda24715",
-	);
-	for (const step of job.steps) {
-		if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/);
-		if (step.uses?.startsWith("actions/checkout@"))
-			assert.equal(step.with["persist-credentials"], false);
-		if (step.uses?.startsWith("actions/upload-artifact@")) {
-			assert.equal(step.with["retention-days"], 1);
-			assert.match(
-				step.with.path,
-				/codex-native-candidate\/(artifact|diagnostics)\/$/,
-			);
-		}
-	}
-	// This immutable action hardcodes Rust 1.96.0 and accepts only target/components inputs.
-	// Its version-specific ref ignores with.toolchain; the installer pin must match the build version.
-	const rustInstallers = job.steps.filter((step) =>
-		step.uses?.startsWith("dtolnay/rust-toolchain@"),
-	);
-	assert.equal(rustInstallers.length, 1);
-	assert.equal(
-		rustInstallers[0].uses,
-		"dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d",
-	);
-	assert.deepEqual(rustInstallers[0].with, {
-		targets: job.env.TARGET,
-	});
-	const upload = job.steps.findIndex(
-		(step) => step.name === "Upload candidate bundle",
-	);
-	const nativeTests = job.steps.findIndex((step) =>
-		step.run?.endsWith("build-linux-aarch64.sh tests"),
-	);
-	assert.equal(job.steps[upload].if, expression("success()"));
-	assert.ok(upload < nativeTests && nativeTests < job.steps.length - 1);
-	assert.equal(job.steps[nativeTests]["continue-on-error"], undefined);
-	assert.equal(job.steps.at(-1).if, expression("always()"));
-	assert.deepEqual(workflow.jobs.outcome.needs, ["candidate"]);
-	assert.deepEqual(workflow.jobs.outcome.permissions, {});
 });
