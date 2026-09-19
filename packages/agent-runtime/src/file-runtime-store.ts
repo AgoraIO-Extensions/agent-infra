@@ -1147,8 +1147,11 @@ export class FileRuntimeStore {
 				!authority.deliveredCursors.includes(cursor) &&
 				!authority.acknowledgedCursors?.includes(cursor) &&
 				authority.confirmedCursor !== cursor
-			)
+			) {
+				if (authority.deliveredCursors.length >= maximumAcknowledgedCursors)
+					runtimeAuthorizationDenied();
 				authority.deliveredCursors.push(cursor);
+			}
 		});
 	}
 

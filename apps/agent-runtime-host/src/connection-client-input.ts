@@ -125,6 +125,7 @@ async function readIndependentInput(
 				if (
 					!before.isFile() ||
 					before.uid !== process.getuid?.() ||
+					before.nlink !== 1 ||
 					![0o400, 0o600].includes(before.mode & 0o777) ||
 					before.size < 1 ||
 					before.size > maximumInputBytes
@@ -149,6 +150,7 @@ async function readIndependentInput(
 						after.dev !== before.dev ||
 						after.ino !== before.ino ||
 						after.nlink !== before.nlink ||
+						after.nlink !== 1 ||
 						after.size !== before.size ||
 						after.mtimeMs !== before.mtimeMs ||
 						after.ctimeMs !== before.ctimeMs

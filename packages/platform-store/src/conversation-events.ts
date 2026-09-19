@@ -634,14 +634,46 @@ async function readExistingEvent(
 	return rows[0];
 }
 
-async function readOperationHistory(
+async function readOperationSuccessorFacts(
 	transaction: Transaction,
 	executionId: string,
+	nextInput: ConversationOperationFactV2,
 ): Promise<readonly ConversationOperationFactV2[]> {
+	const next = parseConversationOperationFactV2(nextInput);
 	const rows = await transaction<{ event_payload: unknown }[]>`
-		select event_payload from platform.conversation_events
-		where execution_id = ${executionId} and event_type = 'execution.operation' and source = 'runtime'
-		order by sequence
+		with candidates as (
+			select event_payload
+			from platform.conversation_events
+			where execution_id = ${executionId}
+				and event_type = 'execution.operation'
+				and source = 'runtime'
+				and event_payload->'fact'->>'operationRef' = ${next.operationRef}
+			order by sequence desc
+			limit 1
+		), conflicting_attempt as (
+			select event_payload
+			from platform.conversation_events
+			where execution_id = ${executionId}
+				and event_type = 'execution.operation'
+				and source = 'runtime'
+				and event_payload->'fact'->>'attemptRef' = ${next.attemptRef}
+				and event_payload->'fact'->>'operationRef' <> ${next.operationRef}
+			limit 1
+		), parent as (
+			select event_payload
+			from platform.conversation_events
+			where execution_id = ${executionId}
+				and event_type = 'execution.operation'
+				and source = 'runtime'
+				and ${next.parentOperationRef ?? null} is not null
+				and event_payload->'fact'->>'operationRef' = ${next.parentOperationRef ?? null}
+			limit 1
+		)
+		select event_payload from candidates
+		union all
+		select event_payload from conflicting_attempt
+		union all
+		select event_payload from parent
 	`;
 	return rows.map(
 		(row) => parseConversationOperationEventV2(row.event_payload).fact,
@@ -775,9 +807,10 @@ export class PostgresConversationEventTransactionV1
 				existingEvent: eventState(existing),
 				...(persistedRequest.command.event.type === "execution.operation"
 					? {
-							operationHistory: await readOperationHistory(
+							operationHistory: await readOperationSuccessorFacts(
 								transaction,
 								persistedRequest.command.executionId,
+								persistedRequest.command.event.fact,
 							),
 						}
 					: {}),

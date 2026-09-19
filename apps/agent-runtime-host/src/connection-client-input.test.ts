@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
 	chmod,
+	link,
 	mkdir,
 	mkdtemp,
 	realpath,
@@ -232,6 +233,9 @@ describe("independent Connection credential delivery", () => {
 		await chmod(env.file, 0o644);
 		await expect(env.read()).resolves.toBeUndefined();
 		await chmod(env.file, 0o600);
+		await link(env.file, `${env.file}.hardlink`);
+		await expect(env.read()).resolves.toBeUndefined();
+		await rm(`${env.file}.hardlink`);
 		await chmod(env.inputDirectory, 0o755);
 		await expect(env.read()).resolves.toBeUndefined();
 		await chmod(env.inputDirectory, 0o700);

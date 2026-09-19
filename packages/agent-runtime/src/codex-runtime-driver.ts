@@ -212,11 +212,14 @@ interface CodexNativeToolAttempt {
 
 /** Canonicalize only nonsecret operation/evidence fields, never bootstrap frames. */
 function canonicalCallbackValue(_key: string, value: unknown): unknown {
-	return isPlainRecord(value)
-		? Object.fromEntries(
-				Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
-			)
-		: value;
+	if (Array.isArray(value))
+		return value.map((entry) => canonicalCallbackValue("", entry));
+	if (!isPlainRecord(value)) return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([key, entry]) => [key, canonicalCallbackValue(key, entry)]),
+	);
 }
 
 function isConnectionMetadataSuccessor(
