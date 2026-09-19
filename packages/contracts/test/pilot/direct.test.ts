@@ -94,6 +94,14 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"grantId",
 			"credentialSelector",
 			"accessToken",
+			"userId",
+			"user_id",
+			"tenantId",
+			"principal",
+			"identityId",
+			"accountId",
+			"caller",
+			"context",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({

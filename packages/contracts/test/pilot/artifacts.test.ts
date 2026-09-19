@@ -13,6 +13,7 @@ import {
 	pilotDirectOpenApiPathsV1,
 	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
+	validateDirectActionRequestWithPublishedSchemaV1,
 } from "../../src/pilot/index.js";
 
 function generateJsonSchema(schemas: Record<string, z.ZodType>) {
@@ -226,6 +227,36 @@ describe("Pilot standard artifacts", () => {
 					arguments: { connectionId: "caller-selected" },
 				},
 			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { note: "token=embedded-secret" },
+				},
+			}),
+		).toBe(false);
+		const nodeHeavyArguments = Object.fromEntries(
+			Array.from({ length: 11 }, (_, group) => [
+				`group${group}`,
+				Object.fromEntries(
+					Array.from({ length: 1_000 }, (_, index) => [`key${index}`, true]),
+				),
+			]),
+		);
+		const nodeHeavyRequest = {
+			...directRequest,
+			action: { ...directRequest.action, arguments: nodeHeavyArguments },
+		};
+		// AJV enforces the published structural schema; the composed helper adds
+		// the aggregate budget that JSON Schema cannot express recursively.
+		expect(validateDirectRequest(nodeHeavyRequest)).toBe(true);
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				nodeHeavyRequest,
+				(input) => validateDirectRequest(input),
+			),
 		).toBe(false);
 	});
 
