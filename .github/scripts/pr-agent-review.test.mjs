@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  changedRightLinesFromTexts,
   parsePrAgentReview,
   publishPrAgentReview,
   verifyPrAgentPublication,
@@ -27,7 +28,10 @@ function api({
   failPost = false,
   wrongHead = false,
   dropComments = false,
+  missingPatch = false,
+  addedFile = false,
 } = {}) {
+  const baseSha = "b".repeat(40);
   let posted;
   const writes = [];
   const request = async (path, options = {}) => {
@@ -41,9 +45,22 @@ function api({
       return [
         {
           filename: "src/math.ts",
-          patch: "@@ -1 +1 @@\n-return a + b;\n+return a - b;",
+          ...(addedFile ? { status: "added" } : {}),
+          ...(missingPatch
+            ? {}
+            : { patch: "@@ -1 +1 @@\n-return a + b;\n+return a - b;" }),
         },
       ];
+    if (missingPatch && path.includes("/contents/src/math.ts?ref=")) {
+      const content = path.endsWith(baseSha)
+        ? "keep\nold\nend\n"
+        : "keep\nnew\nend\n";
+      return {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(content).toString("base64"),
+      };
+    }
     if (path.endsWith("/reviews/77/comments?per_page=100"))
       return dropComments
         ? []
@@ -74,6 +91,7 @@ function api({
     return {
       state: "open",
       head: { sha: head, repo: { full_name: "org/repo" } },
+      base: { sha: baseSha },
     };
   };
   return { request, writes };
@@ -92,6 +110,28 @@ test("validates the official review output, including explicit zero findings", (
   ]) {
     assert.throws(() => parsePrAgentReview(value), /PR-Agent/);
   }
+});
+
+test("finds changed lines when a large-file patch is unavailable", async () => {
+  assert.deepEqual(
+    await changedRightLinesFromTexts("keep\nold\nend\n", "keep\nnew\nend\n"),
+    new Set([2]),
+  );
+  assert.deepEqual(
+    await changedRightLinesFromTexts(
+      "first\nlast\n",
+      "first\ninserted\nlast\n",
+    ),
+    new Set([2]),
+  );
+  assert.deepEqual(
+    await changedRightLinesFromTexts(
+      "b\nc\na\nb",
+      "c\nb\nd\na\nc\na",
+    ),
+    new Set([2, 3, 5, 6]),
+  );
+  assert.deepEqual(await changedRightLinesFromTexts("a", ""), new Set());
 });
 
 test("publishes findings as native threads and verifies the exact head, body and comments", async () => {
@@ -121,6 +161,30 @@ test("publishes findings as native threads and verifies the exact head, body and
     }),
     false,
   );
+});
+
+test("anchors findings from GitHub content when a large-file patch is omitted", async () => {
+  const { request } = api({ missingPatch: true });
+  const receipt = await publishPrAgentReview({
+    ...context,
+    raw: JSON.stringify({
+      key_issues_to_review: [{ ...finding, start_line: 2, end_line: 2 }],
+    }),
+    request,
+  });
+  assert.equal(receipt.findingCount, 1);
+});
+
+test("anchors findings in a newly added file when GitHub omits its patch", async () => {
+  const { request } = api({ missingPatch: true, addedFile: true });
+  const receipt = await publishPrAgentReview({
+    ...context,
+    raw: JSON.stringify({
+      key_issues_to_review: [{ ...finding, start_line: 2, end_line: 2 }],
+    }),
+    request,
+  });
+  assert.equal(receipt.findingCount, 1);
 });
 
 test("publishes a clear no-findings conclusion", async () => {
