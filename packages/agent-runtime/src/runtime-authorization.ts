@@ -29,6 +29,8 @@ export interface RuntimeExecutionAuthority {
 	authorizationRecordId?: string;
 	issuedAt: number;
 	expiresAt: number;
+	/** A read-only query authority has no business lease or expiry. */
+	queryOnly?: true;
 	stopped?: true;
 	control?: {
 		controlRecordId: string;
@@ -98,6 +100,7 @@ export function validStoredExecutionAuthority(
 				"authorizationRecordId",
 				"issuedAt",
 				"expiresAt",
+				"queryOnly",
 				"control",
 				"stopped",
 				"confirmedCursor",
@@ -117,7 +120,12 @@ export function validStoredExecutionAuthority(
 		authority.issuedAt >= 0 &&
 		Number.isSafeInteger(authority.expiresAt) &&
 		authority.expiresAt >= 0 &&
-		(authority.expiresAt === 0 || authority.expiresAt > authority.issuedAt) &&
+		(authority.expiresAt === 0
+			? authority.stopped === true ||
+				authority.control?.reason === "recovery" ||
+				(authority.queryOnly === true && authority.issuedAt === 0)
+			: authority.expiresAt > authority.issuedAt) &&
+		(authority.queryOnly === undefined || authority.queryOnly === true) &&
 		(authority.authorizationRecordId === undefined ||
 			(typeof authority.authorizationRecordId === "string" &&
 				authority.authorizationRecordId.length > 0)) &&
@@ -214,9 +222,11 @@ export function applyRuntimeAuthority(
 		executionDeliveryFence: claims.operation.executionDeliveryFence,
 		issuedAt: 0,
 		expiresAt: 0,
+		...(mode === "query" ? { queryOnly: true as const } : {}),
 		deliveredCursors: [],
 	};
 	if (claims.purpose === "control") {
+		delete authority.queryOnly;
 		if (
 			authority.control?.controlRecordId === claims.controlRecordId &&
 			authority.control.reason !== claims.reason
@@ -248,6 +258,7 @@ export function applyRuntimeAuthority(
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
 		if (mode !== "query") {
+			delete authority.queryOnly;
 			if (claims.issuedAt < authority.issuedAt) runtimeAuthorizationDenied();
 			authority.authorizationRecordId = claims.authorizationRecordId;
 			authority.issuedAt = claims.issuedAt;

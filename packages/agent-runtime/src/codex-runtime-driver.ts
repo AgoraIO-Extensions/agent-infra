@@ -5537,33 +5537,57 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						),
 					);
 					if (!selection) unavailable();
-					const admission = this.beginModelTurnAdmission?.(
-						Date.now() + rpcRequestTimeoutMs,
-						selection.model,
-						request.source.threadId,
-						selection.effort,
-						conversationKey,
-					);
+					const beginAdmission = this.beginModelTurnAdmission;
+					const recognizeTurn = this.recognizeModelTurn;
+					const registerTurn = this.registerModelTurn;
+					const hasAdmissionHook =
+						beginAdmission !== undefined ||
+						recognizeTurn !== undefined ||
+						registerTurn !== undefined;
 					const turn = { ...request.source, conversationKey };
-					if (
-						admission &&
-						(this.recognizeModelTurn?.(admission, turn) !== true ||
-							this.registerModelTurn?.(admission, turn) !== true)
-					) {
-						this.abandonModelTurnAdmission?.(admission);
-						await this.update((state) => {
-							const resolved = locate(state);
-							const source = resolved.source;
-							if (
-								!source ||
-								source.bindPending?.requestId !== receipt.requestId
-							)
-								stateInvalid();
-							source.bind = source.bindPending;
-							delete source.bindPending;
-							source.bindDenied = "authorization_unavailable";
-						});
-						unavailable();
+					if (hasAdmissionHook) {
+						if (!beginAdmission || !recognizeTurn || !registerTurn) {
+							await this.update((state) => {
+								const resolved = locate(state);
+								const source = resolved.source;
+								if (
+									!source ||
+									source.bindPending?.requestId !== receipt.requestId
+								)
+									stateInvalid();
+								source.bind = source.bindPending;
+								delete source.bindPending;
+								source.bindDenied = "authorization_unavailable";
+							});
+							unavailable();
+						}
+						const admission = beginAdmission(
+							Date.now() + rpcRequestTimeoutMs,
+							selection.model,
+							request.source.threadId,
+							selection.effort,
+							conversationKey,
+						);
+						if (
+							admission === undefined ||
+							recognizeTurn(admission, turn) !== true ||
+							registerTurn(admission, turn) !== true
+						) {
+							if (admission) this.abandonModelTurnAdmission?.(admission);
+							await this.update((state) => {
+								const resolved = locate(state);
+								const source = resolved.source;
+								if (
+									!source ||
+									source.bindPending?.requestId !== receipt.requestId
+								)
+									stateInvalid();
+								source.bind = source.bindPending;
+								delete source.bindPending;
+								source.bindDenied = "authorization_unavailable";
+							});
+							unavailable();
+						}
 					}
 					saved = await this.update((state) => {
 						const resolved = locate(state);
@@ -5584,12 +5608,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (!source || source.bindPending?.requestId !== receipt.requestId)
 					stateInvalid();
 				if (
-					isClosed(state, resolved) ||
-					!this.executionConfigurationMatches(
-						state,
-						resolved.session,
-						resolved.execution,
-					)
+					request.delivery === "started" &&
+					(isClosed(state, resolved) ||
+						!this.executionConfigurationMatches(
+							state,
+							resolved.session,
+							resolved.execution,
+						))
 				) {
 					source.bind = source.bindPending;
 					source.bindDenied = "authorization_unavailable";
