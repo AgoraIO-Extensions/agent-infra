@@ -126,11 +126,8 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 	const isEvent = command === "events.persist" || command === "events.ack";
 	const controlReasonMismatch =
 		claims.purpose === "control" &&
-		((command === "turn.stop" &&
-			claims.reason !== "stop" &&
-			claims.reason !== "authorization_revoked") ||
-			(command === "generation.cancel" &&
-				claims.reason !== "generation_isolation"));
+		command === "generation.cancel" &&
+		claims.reason !== "generation_isolation";
 	if (
 		claims.issuer !== context.expectedIssuer ||
 		claims.workerId !== context.expectedWorkerId ||

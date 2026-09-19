@@ -116,11 +116,6 @@ describe("Runtime purpose separation", () => {
 			validateVerifiedRuntimeExecutionGrantClaimsV2(control, context),
 		).toEqual(control);
 		for (const invalid of [
-			{ allowedCommands: ["turn.stop" as const], reason: "recovery" as const },
-			{
-				allowedCommands: ["turn.stop" as const],
-				reason: "generation_isolation" as const,
-			},
 			{
 				allowedCommands: ["generation.cancel" as const],
 				reason: "recovery" as const,
@@ -138,6 +133,10 @@ describe("Runtime purpose separation", () => {
 			{
 				allowedCommands: ["turn.stop" as const],
 				reason: "authorization_revoked" as const,
+			},
+			{
+				allowedCommands: ["turn.stop" as const],
+				reason: "recovery" as const,
 			},
 			{
 				allowedCommands: ["generation.cancel" as const],
