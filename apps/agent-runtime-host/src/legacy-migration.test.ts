@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import {
 	chmod,
 	copyFile,
+	link,
 	mkdtemp,
 	readFile,
 	rm,
@@ -234,6 +235,14 @@ describe("deployment-signed Host legacy principal migration", () => {
 			load(env, {
 				...env.environment,
 				AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE: linked,
+			}),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
+		const hardlink = `${env.manifestPath}.hardlink`;
+		await link(env.manifestPath, hardlink);
+		await expect(
+			load(env, {
+				...env.environment,
+				AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE: hardlink,
 			}),
 		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		await chmod(env.publicKeyPath, 0o666);

@@ -537,7 +537,7 @@ describe("pinned derived Codex installation", () => {
 
 	it("rejects a directory writable by the runtime process", async () => {
 		await directoryModes(fixture.sandbox, 0o555);
-		await chmod(join(fixture.sandbox, "opt/codex/bin"), 0o755);
+		await chmod(join(fixture.sandbox, "opt/codex/bin"), 0o775);
 		vi.resetModules();
 		const { verifyCodexPilotInstallation } = await import(
 			"./codex-installation.js"

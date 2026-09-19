@@ -175,10 +175,8 @@ export function hasUnverifiedWorkloadSecretRecoveryV1(
 ): boolean {
 	return (version.secretRecoveries ?? []).some(
 		(candidate) =>
-			!(verified?.secretRecoveries ?? []).some(
-				(previous) =>
-					isDeepStrictEqual(previous.reference, candidate.reference) &&
-					previous.identity?.uid === candidate.identity?.uid,
+			!(verified?.secretRecoveries ?? []).some((previous) =>
+				isDeepStrictEqual(previous, candidate),
 			),
 	);
 }

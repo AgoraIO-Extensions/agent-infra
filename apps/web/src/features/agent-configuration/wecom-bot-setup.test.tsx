@@ -180,6 +180,59 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 	);
 	expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy();
 });
+it("ignores a late cancellation response after switching Agents", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const cancellation = Promise.withResolvers<Response>();
+	let cancelStarted!: () => void;
+	const cancelRequest = new Promise<void>((resolve) => {
+		cancelStarted = resolve;
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: Request) => {
+			const path = new URL(input.url).pathname;
+			if (path.endsWith("/wecom-bot"))
+				return Response.json({ status: "connected" });
+			if (path.endsWith("/wecom-setup"))
+				return Response.json({
+					sessionId: "setup",
+					agentId: "agent-a",
+					configurationRevision: 1,
+					expiresAt: new Date(Date.now() + 300000).toISOString(),
+					status: "awaiting_input",
+					state: "fixture",
+					qrAvailable: false,
+				});
+			if (path.endsWith("/credentials"))
+				return Response.json({ sessionId: "setup", status: "verifying" });
+			if (path.endsWith("/cancel")) {
+				cancelStarted();
+				return cancellation.promise;
+			}
+			return Response.json({ status: "verifying" });
+		}),
+	);
+	const rendered = render(
+		<WecomBotSetup agentId="agent-a" onUnbind={vi.fn()} />,
+	);
+	fireEvent.change(screen.getByLabelText("Bot ID"), {
+		target: { value: "bot" },
+	});
+	fireEvent.change(screen.getByLabelText("Secret"), {
+		target: { value: "fixture" },
+	});
+	fireEvent.click(screen.getByRole("checkbox"));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy(),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	await cancelRequest;
+	rendered.rerender(<WecomBotSetup agentId="agent-b" onUnbind={vi.fn()} />);
+	cancellation.resolve(Response.json({ status: "cancelled" }));
+	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
+	expect(screen.queryByRole("alert")).toBeNull();
+});
 it("clears a previously connected status when refresh fails", async () => {
 	let online = true;
 	vi.stubGlobal(

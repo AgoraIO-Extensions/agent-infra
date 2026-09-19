@@ -56,6 +56,7 @@ async function readMountedFile(
 			pathInfo.dev !== info.dev ||
 			pathInfo.ino !== info.ino ||
 			!info.isFile() ||
+			info.nlink !== 1 ||
 			info.size === 0 ||
 			info.size > maximumBytes ||
 			(info.mode & 0o022) !== 0
@@ -74,6 +75,16 @@ async function readMountedFile(
 			length += read.bytesRead;
 		}
 		if (length === 0 || length > maximumBytes) fail();
+		const after = await handle.stat();
+		if (
+			after.dev !== info.dev ||
+			after.ino !== info.ino ||
+			after.nlink !== info.nlink ||
+			after.size !== info.size ||
+			after.mtimeMs !== info.mtimeMs ||
+			after.ctimeMs !== info.ctimeMs
+		)
+			fail();
 		return bytes.subarray(0, length);
 	} finally {
 		await handle.close();

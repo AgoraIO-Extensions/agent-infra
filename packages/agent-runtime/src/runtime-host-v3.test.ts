@@ -18,6 +18,7 @@ import {
 import {
 	applyRuntimeAuthority,
 	type RuntimeExecutionAuthority,
+	validStoredExecutionAuthority,
 } from "./runtime-authorization.js";
 import { RuntimeHost } from "./runtime-host.js";
 
@@ -1983,5 +1984,21 @@ describe("Runtime V3 original evidence read contexts", () => {
 		await renewing;
 		await env.host.close();
 		expect(writes).toBe(0);
+	});
+	it("rejects unknown persisted execution authority fields", () => {
+		const authority: RuntimeExecutionAuthority = {
+			workerId: "worker",
+			executionDeliveryFence: 1,
+			issuedAt: fixtureNow - 1,
+			expiresAt: fixtureNow + 1_000,
+			deliveredCursors: [],
+		};
+		expect(validStoredExecutionAuthority(authority)).toBe(true);
+		expect(
+			validStoredExecutionAuthority({
+				...authority,
+				unexpected: true,
+			} as RuntimeExecutionAuthority & { unexpected: boolean }),
+		).toBe(false);
 	});
 });

@@ -97,27 +97,38 @@ export function validStoredAuthority(authority: RuntimeSessionAuthority) {
 export function validStoredExecutionAuthority(
 	authority: RuntimeExecutionAuthority,
 ) {
+	const keys =
+		authority && typeof authority === "object" && !Array.isArray(authority)
+			? Object.keys(authority).sort().join(",")
+			: "";
+	const expectedKeys = [
+		"workerId",
+		"executionDeliveryFence",
+		"issuedAt",
+		"expiresAt",
+		"deliveredCursors",
+		...(authority?.controlDeliveryFence === undefined
+			? []
+			: ["controlDeliveryFence"]),
+		...(authority?.authorizationRecordId === undefined
+			? []
+			: ["authorizationRecordId"]),
+		...(authority?.queryOnly === undefined ? [] : ["queryOnly"]),
+		...(authority?.control === undefined ? [] : ["control"]),
+		...(authority?.stopped === undefined ? [] : ["stopped"]),
+		...(authority?.confirmedCursor === undefined ? [] : ["confirmedCursor"]),
+		...(authority?.acknowledgedCursors === undefined
+			? []
+			: ["acknowledgedCursors"]),
+		...(authority?.evidenceQuery === undefined ? [] : ["evidenceQuery"]),
+	]
+		.sort()
+		.join(",");
 	return (
 		!!authority &&
 		typeof authority === "object" &&
 		!Array.isArray(authority) &&
-		Object.keys(authority).every((key) =>
-			[
-				"workerId",
-				"executionDeliveryFence",
-				"controlDeliveryFence",
-				"authorizationRecordId",
-				"issuedAt",
-				"expiresAt",
-				"queryOnly",
-				"control",
-				"stopped",
-				"confirmedCursor",
-				"deliveredCursors",
-				"acknowledgedCursors",
-				"evidenceQuery",
-			].includes(key),
-		) &&
+		keys === expectedKeys &&
 		typeof authority.workerId === "string" &&
 		authority.workerId.length > 0 &&
 		Number.isSafeInteger(authority.executionDeliveryFence) &&

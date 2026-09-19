@@ -188,6 +188,7 @@ export function WecomBotSetup({
 	}
 	async function cancel() {
 		const id = session.current;
+		const attempt = generation.current;
 		if (!id) return;
 		try {
 			const result = await cancelWecomSetup({
@@ -195,6 +196,7 @@ export function WecomBotSetup({
 				responseStyle: "fields",
 				throwOnError: false,
 			});
+			if (attempt !== generation.current || session.current !== id) return;
 			if (result.data?.status !== "cancelled") throw new Error();
 			generation.current++;
 			clearTimeout(timer.current);
@@ -204,7 +206,8 @@ export function WecomBotSetup({
 			setError("");
 			await refresh();
 		} catch {
-			setError("取消结果未确认，正在继续查询配置状态。");
+			if (attempt === generation.current && session.current === id)
+				setError("取消结果未确认，正在继续查询配置状态。");
 		}
 	}
 
