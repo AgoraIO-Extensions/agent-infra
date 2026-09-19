@@ -114,6 +114,29 @@ describe("Pilot Direct MCP/API contracts", () => {
 				],
 			}).success,
 		).toBe(false);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: Array.from(
+					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+					() => catalog.actions[0],
+				),
+			}).success,
+		).toBe(false);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: [
+					{
+						...catalog.actions[0],
+						requiredScopes: Array.from(
+							{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+							(_, index) => `scope-${index}`,
+						),
+					},
+				],
+			}).success,
+		).toBe(false);
 	});
 
 	it("rejects caller-selected authority and credential selectors", () => {
@@ -136,6 +159,10 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"context",
 			"targetConnectionId",
 			"selectedPrincipalId",
+			"connectionName",
+			"principalName",
+			"accountValue",
+			"credentialValue",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -398,6 +425,15 @@ describe("Pilot Direct MCP/API contracts", () => {
 			DirectGrantProjectionV1Schema.safeParse({
 				...grant,
 				actionVersions: ["v1"],
+			}).success,
+		).toBe(false);
+		expect(
+			DirectGrantProjectionV1Schema.safeParse({
+				...grant,
+				actions: Array.from(
+					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+					() => grant.actions[0],
+				),
 			}).success,
 		).toBe(false);
 	});

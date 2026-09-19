@@ -65,9 +65,13 @@ const authoritySelectorKeyTerms = [
 	"resource",
 	"credential",
 ];
-const authoritySelectorKeySuffixes = ["id", "selector", "context"];
+const safeProviderArgumentKeyPatterns = [
+	caseInsensitiveRegexSource("username"),
+	caseInsensitiveRegexSource("organizationName"),
+	caseInsensitiveRegexSource("resourcePath"),
+];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
+	`^(?:${safeProviderArgumentKeyPatterns.join("|")}|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?[A-Za-z0-9]*)?$).+)$`,
 );
 const unsafeArgumentValuePattern = new RegExp(
 	String.raw`^(?![\s\S]*(?:\b(?:${[
@@ -301,21 +305,27 @@ export const DirectActionCatalogEntryV1Schema = z.strictObject({
 	inputSchema: jsonSchemaDocument,
 	outputSchema: jsonSchemaDocument,
 	effect: DirectActionEffectV1Schema,
-	requiredScopes: z.array(nonEmptyString()),
+	requiredScopes: z
+		.array(nonEmptyString())
+		.max(DirectPayloadMaximumCollectionSizeV1),
 	status: DirectActionPublicationStatusV1Schema,
 });
 
-export const DirectCatalogResponseV1Schema = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	catalogVersion: nonEmptyString(),
-	actions: z.array(DirectActionCatalogEntryV1Schema),
-});
+export const DirectCatalogResponseV1Schema = withDirectPayloadBudget(
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		catalogVersion: nonEmptyString(),
+		actions: z
+			.array(DirectActionCatalogEntryV1Schema)
+			.max(DirectPayloadMaximumCollectionSizeV1),
+	}),
+);
 
 const browserRole = z.enum(["employee", "system_admin"]);
 export const DirectBrowserSessionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	displayName: nonEmptyString(),
-	roles: z.array(browserRole).min(1),
+	roles: z.array(browserRole).min(1).max(DirectPayloadMaximumCollectionSizeV1),
 });
 
 export const DirectGrantProjectionV1Schema = z.strictObject({
@@ -331,13 +341,16 @@ export const DirectGrantProjectionV1Schema = z.strictObject({
 				actionVersion: nonEmptyString(),
 			}),
 		)
-		.min(1),
+		.min(1)
+		.max(DirectPayloadMaximumCollectionSizeV1),
 	status: z.enum(["active", "revoked", "expired"]),
 });
 
 export const DirectGrantListResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
-	grants: z.array(DirectGrantProjectionV1Schema),
+	grants: z
+		.array(DirectGrantProjectionV1Schema)
+		.max(DirectPayloadMaximumCollectionSizeV1),
 });
 
 export const DirectGrantRevokeResponseV1Schema = z.strictObject({
