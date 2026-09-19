@@ -215,6 +215,7 @@ describe("Pilot standard artifacts", () => {
 			requestId: "request-direct-1",
 			idempotencyKey: "direct.call_1",
 			action: {
+				providerId: "github",
 				actionId: "github.get_current_user",
 				actionVersion: "v1",
 				arguments: {},

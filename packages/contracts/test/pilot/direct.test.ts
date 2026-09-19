@@ -26,6 +26,7 @@ const request = {
 	requestId: "request-direct-1",
 	idempotencyKey: "direct.call_1",
 	action: {
+		providerId: "github",
 		actionId: "github.create_pull_request",
 		actionVersion: "v1",
 		arguments: {
@@ -42,6 +43,7 @@ const resultBase = {
 	requestId: request.requestId,
 	idempotencyKey: request.idempotencyKey,
 	traceId: request.traceId,
+	providerId: request.action.providerId,
 	actionId: request.action.actionId,
 	actionVersion: request.action.actionVersion,
 	callId: "call-direct-1",
@@ -244,6 +246,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"principal/id",
 			"grant id",
 			"usernameConnectionId",
+			"connectionIdentifier",
+			"principalIdentifier",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -267,6 +271,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
 			{ value: "(ghp_abcdefghijklmnopqrstuvwxyz)" },
 			{ value: "glpat-0123456789012345678901234567890123456789" },
+			{ login: "Basic dXNlcjpwYXNzd29yZA==" },
 			{ authHeader: "Bearer credential" },
 			{ auth_header: "opaque-api-credential" },
 			{ authValue: "credential" },

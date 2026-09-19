@@ -107,7 +107,7 @@ const authoritySelectorExactKeys = [
 	"credentialId",
 ];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?!(?:${authoritySelectorExactKeys.map(caseInsensitiveRegexSource).join("|")})$)(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${["id", "selector", "context", "ref", "key", "value"].map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
+	`^(?!(?:${authoritySelectorExactKeys.map(caseInsensitiveRegexSource).join("|")})$)(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${["id", "selector", "context", "ref", "key", "value", "identifier"].map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
 );
 const outputAuthoritySelectorKeyTerms = [
 	"connection",
@@ -145,6 +145,7 @@ const authoritySelectorSuffixes = [
 	"ref",
 	"key",
 	"value",
+	"identifier",
 ];
 const outputAuthoritySelectorKeyPattern = new RegExp(
 	`^(?!.*(?:${outputAuthoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${authoritySelectorSuffixes.map(caseInsensitiveRegexSource).join("|")}))?$)(?!.*(?:${outputAuthoritySelectorSuffixOnlyTerms.map(caseInsensitiveRegexSource).join("|")})[_. /-]?(?:${authoritySelectorSuffixes.map(caseInsensitiveRegexSource).join("|")})$).+$`,
@@ -166,7 +167,9 @@ const unsafeArgumentValuePattern = new RegExp(
 		"jwt",
 	]
 		.map(caseInsensitiveRegexSource)
-		.join("|")})\s*[:=]|(?:^|[^A-Za-z0-9_-])(?:${[
+		.join(
+			"|",
+		)})\s*[:=]|(?:^|[^A-Za-z0-9_-])${caseInsensitiveRegexSource("basic")}\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:${[
 		caseInsensitiveRegexSource("sk"),
 		caseInsensitiveRegexSource("pk"),
 		"[Gg][Hh][PpOoUuSsRr]",
@@ -592,6 +595,7 @@ export const DirectActionRequestV1Schema = withDirectPayloadBudget(
 		requestId: RequestIdV1Schema,
 		idempotencyKey: IdempotencyKeyV1Schema,
 		action: z.strictObject({
+			providerId: boundedOpaqueId,
 			actionId: boundedOpaqueId,
 			actionVersion: nonEmptyString(),
 			arguments: directActionArgumentsRecordV1Schema,
@@ -605,6 +609,7 @@ const directResultShape = {
 	requestId: RequestIdV1Schema,
 	idempotencyKey: IdempotencyKeyV1Schema,
 	traceId: TraceIdV1Schema,
+	providerId: boundedOpaqueId,
 	actionId: boundedOpaqueId,
 	actionVersion: nonEmptyString(),
 };
@@ -867,6 +872,7 @@ export function validateDirectActionResultV1(
 		result.requestId !== request.requestId ||
 		result.idempotencyKey !== request.idempotencyKey ||
 		result.traceId !== request.traceId ||
+		result.providerId !== request.action.providerId ||
 		result.actionId !== request.action.actionId ||
 		result.actionVersion !== request.action.actionVersion
 	) {
