@@ -579,6 +579,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				String(value.fence)
 		);
 	}
+	function hasRecoveryMetadata(
+		object: KubernetesObject,
+		value: AgentWorkloadDesiredV1,
+	) {
+		const revision = Number(object.metadata?.labels?.[revisionLabel]);
+		return (
+			Number.isSafeInteger(revision) &&
+			revision >= 1 &&
+			revision <= value.workloadRevision &&
+			object.metadata?.labels?.[ownerLabel] ===
+				workloadResourceNameV1(value.agentId) &&
+			object.metadata?.annotations?.[agentAnnotation] === value.agentId &&
+			object.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
+				String(value.configRevision) &&
+			object.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
+				String(value.fence)
+		);
+	}
 	function hasSafeRoutingMetadata(
 		value: AgentWorkloadDesiredV1,
 		object: KubernetesObject,
@@ -934,6 +952,39 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					},
 				},
 			)
+		);
+	}
+	function normalizeStatefulSetSpecRevision(
+		spec: V1StatefulSet["spec"],
+		revision: number,
+	) {
+		return spec?.template
+			? {
+					...spec,
+					template: {
+						...spec.template,
+						metadata: {
+							...spec.template.metadata,
+							labels: {
+								...spec.template.metadata?.labels,
+								[revisionLabel]: String(revision),
+							},
+						},
+					},
+				}
+			: spec;
+	}
+	function canResumeScaledDownStatefulSet(
+		value: AgentWorkloadDesiredV1,
+		spec: V1StatefulSet["spec"],
+	) {
+		return Boolean(
+			spec?.replicas === 0 &&
+				value.replicas === 1 &&
+				!hasDriftedStatefulSetSpec(
+					value,
+					normalizeStatefulSetSpecRevision(spec, value.workloadRevision),
+				),
 		);
 	}
 	function hasDriftedStatefulSetTemplate(
@@ -1898,24 +1949,31 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				if (pods.length) throw new WorkloadKubernetesError("conflict");
 				return null;
 			}
-			if (
-				!current.metadata?.uid ||
-				!current.metadata.resourceVersion ||
+			if (!current.metadata?.uid || !current.metadata.resourceVersion)
+				throw new WorkloadKubernetesError("conflict");
+			const recoveryInvalid =
 				!Number.isSafeInteger(current.metadata.generation) ||
 				(current.metadata.generation ?? 0) < 1 ||
 				current.metadata.deletionTimestamp ||
-				!hasCurrentMetadata(current, value) ||
+				(!hasCurrentMetadata(current, value) &&
+					(!management || !hasRecoveryMetadata(current, value))) ||
 				hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
-				hasDriftedStatefulSetSpec(value, current.spec) ||
+				(!canResumeScaledDownStatefulSet(value, current.spec) &&
+					hasDriftedStatefulSetSpec(value, {
+						...normalizeStatefulSetSpecRevision(
+							current.spec,
+							value.workloadRevision,
+						),
+						replicas: value.replicas,
+					} as V1StatefulSet["spec"])) ||
 				(identity &&
 					(!identity.uid ||
 						!Number.isSafeInteger(identity.generation) ||
 						identity.generation < 1 ||
 						current.metadata.uid !== identity.uid ||
 						(current.metadata.generation ?? 0) < identity.generation)) ||
-				pods.some((pod) => !hasControllingWorkloadOwner(pod, current))
-			)
-				throw new WorkloadKubernetesError("conflict");
+				pods.some((pod) => !hasControllingWorkloadOwner(pod, current));
+			if (recoveryInvalid) throw new WorkloadKubernetesError("conflict");
 			return {
 				uid: current.metadata.uid,
 				generation: current.metadata.generation ?? 1,

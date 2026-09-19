@@ -555,6 +555,31 @@ export function createWorkloadRuntimeV1(
 				: { state: "absent" },
 		});
 	}
+	function desiredForRecovery(state: WorkloadReconciliationStateV1) {
+		const workload = desired(state);
+		if (!hasUnverifiedWorkloadSecretRecoveryV1(state.candidate, state.verified))
+			return workload;
+		const first = recoveries(state)[0];
+		if (!first) return workload;
+		if (
+			state.identity &&
+			first.identity?.uid === state.identity.uid &&
+			state.revision > first.workloadRevision
+		)
+			return workload;
+		return validateAgentWorkloadDesiredV1({
+			...workload,
+			workloadRevision: first.workloadRevision,
+			fence: first.fence,
+			expectedWorkload: first.identity
+				? {
+						state: "present",
+						workloadUid: first.identity.uid,
+						workloadGeneration: first.identity.generation,
+					}
+				: { state: "absent" },
+		});
+	}
 	async function revalidateCandidateCatalog(
 		state: WorkloadReconciliationStateV1,
 	) {
@@ -1118,11 +1143,15 @@ export function createWorkloadRuntimeV1(
 				state.candidate,
 				state.verified,
 			);
+			const firstRecovery = recoveryValues[0];
+			const recoveryWorkload = desiredForRecovery(state);
 			if (pendingRecovery) {
-				const first = recoveryValues[0];
+				const first = firstRecovery;
 				if (
 					!first ||
-					first.workloadRevision !== state.revision ||
+					(first.workloadRevision !== state.revision &&
+						(state.verified === null ||
+							state.verifiedRevision !== first.workloadRevision)) ||
 					first.fence !== state.fence ||
 					input.management.fence !== state.fence ||
 					input.management.desiredState !== "running" ||
@@ -1130,8 +1159,11 @@ export function createWorkloadRuntimeV1(
 				)
 					throw new Error("Workload recovery is stale");
 				const live = await adapter.observeRecoveryWorkload(
-					workload,
+					recoveryWorkload,
 					first.identity,
+					first.identity
+						? { revision: state.revision, fence: state.fence }
+						: undefined,
 				);
 				if (first.identity && !live)
 					throw new Error("Recovery Workload disappeared");
@@ -1185,7 +1217,7 @@ export function createWorkloadRuntimeV1(
 						"succeeded",
 					);
 					const secretUid = await adapter.applyImmutableSecret(
-						workload,
+						pendingRecovery ? recoveryWorkload : workload,
 						reference.name,
 						secretDataKey(record.name),
 						decryption.plaintext,
@@ -1217,7 +1249,9 @@ export function createWorkloadRuntimeV1(
 			}
 			if (!isDeepStrictEqual(nextRecoveries, recoveryValues))
 				return prepared(state, nextRecoveries);
-			const result = await adapter.reconcile(workload);
+			const result = await adapter.reconcile(
+				pendingRecovery ? recoveryWorkload : workload,
+			);
 			if (result.status !== "applied") return "pending";
 			const identity = {
 				uid: result.workloadUid,
@@ -1241,7 +1275,7 @@ export function createWorkloadRuntimeV1(
 					)
 						throw new Error("Recovery Workload identity changed");
 					await adapter.bindSecretFence(
-						workload,
+						pendingRecovery ? recoveryWorkload : workload,
 						identity,
 						recovery.reference.name,
 						recovery.fence,
@@ -1256,7 +1290,7 @@ export function createWorkloadRuntimeV1(
 				)
 					throw new Error("Active Workload Secret fence is unavailable");
 				await adapter.bindSecretFence(
-					workload,
+					pendingRecovery ? recoveryWorkload : workload,
 					identity,
 					repaired.reference.name,
 					repaired.activationFence.fence,
@@ -1270,6 +1304,7 @@ export function createWorkloadRuntimeV1(
 		async observe(state) {
 			observedCapabilities.delete(state);
 			if (!state.identity) return "pending";
+			const workload = desiredForRecovery(state);
 			for (const recovery of recoveries(state)) {
 				const activationFence = recoveryActivationFence(recovery);
 				if (
@@ -1277,7 +1312,7 @@ export function createWorkloadRuntimeV1(
 					recovery.identity?.uid !== state.identity.uid ||
 					state.identity.generation < recovery.identity.generation ||
 					!(await createAdapter(undefined, state).observeActiveImmutableSecret(
-						desired(state),
+						workload,
 						recovery.reference,
 						activationFence,
 					))
@@ -1289,7 +1324,7 @@ export function createWorkloadRuntimeV1(
 				capabilities = value;
 			}, state);
 			const health = await observation.observe(
-				desired(state),
+				workload,
 				state.identity,
 				routeSelectorMode(state),
 				state.phase === "observing" ? "activation" : "required",
@@ -1301,13 +1336,14 @@ export function createWorkloadRuntimeV1(
 		async activateSecrets(state, input) {
 			await revalidateCandidateCatalog(state);
 			const adapter = createAdapter(undefined, state);
+			const workload = desiredForRecovery(state);
 			const bindings = bindingsFor(state, input);
 			for (const recovery of recoveries(state)) {
 				if (
 					!state.identity ||
 					recovery.identity?.uid !== state.identity.uid ||
 					!(await adapter.observeSecretFence(
-						desired(state),
+						workload,
 						state.identity,
 						recovery.reference.name,
 						recovery.fence,
@@ -1330,7 +1366,6 @@ export function createWorkloadRuntimeV1(
 				)
 				.map(({ record }) => record);
 			if (!pending.length) return "active";
-			const workload = desired(state);
 			const identity = state.identity;
 			const activation = createSecretActivationUseCaseV1({
 				store: input.secrets.store,
