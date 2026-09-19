@@ -107,7 +107,7 @@ const authoritySelectorExactKeys = [
 	"credentialId",
 ];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?!(?:${authoritySelectorExactKeys.map(caseInsensitiveRegexSource).join("|")})$)(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})[_. /-]?(?:${["id", "selector", "context"].map(caseInsensitiveRegexSource).join("|")})$).+$`,
+	`^(?!(?:${authoritySelectorExactKeys.map(caseInsensitiveRegexSource).join("|")})$)(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${["id", "selector", "context", "ref", "key", "value"].map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
 );
 const outputAuthoritySelectorKeyTerms = [
 	"connection",
@@ -156,6 +156,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		caseInsensitiveRegexSource("pk"),
 		"[Gg][Hh][PpOoUuSsRr]",
 		"[Xx][Oo][Xx][BbAaPpRrSs]",
+		caseInsensitiveRegexSource("glpat"),
 	].join("|")})[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:${[
 		"AKIA",
 		"ASIA",
@@ -714,6 +715,7 @@ export function validateDirectActionRequestWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
 	validateCredentialFreeArguments: DirectPayloadValidatorV1,
+	validateActionArguments: DirectPayloadValidatorV1,
 ) {
 	if (
 		!validateDirectPayloadWithPublishedSchemaV1(input, validatePublishedSchema)
@@ -723,7 +725,8 @@ export function validateDirectActionRequestWithPublishedSchemaV1(
 	const parsed = DirectActionRequestV1Schema.safeParse(input);
 	return (
 		parsed.success &&
-		validateCredentialFreeArguments(parsed.data.action.arguments)
+		validateCredentialFreeArguments(parsed.data.action.arguments) &&
+		validateActionArguments(parsed.data.action.arguments)
 	);
 }
 

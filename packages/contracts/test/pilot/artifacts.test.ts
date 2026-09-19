@@ -328,6 +328,15 @@ describe("Pilot standard artifacts", () => {
 				nodeHeavyRequest,
 				(input) => validateDirectRequest(input),
 				() => true,
+				() => true,
+			),
+		).toBe(false);
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				directRequest,
+				() => true,
+				() => true,
+				() => false,
 			),
 		).toBe(false);
 		const oversizedMetadataRequest = {
@@ -343,6 +352,7 @@ describe("Pilot standard artifacts", () => {
 					return validateDirectRequest(input);
 				},
 				() => true,
+				() => true,
 			),
 		).toBe(false);
 		expect(publishedValidatorCalled).toBe(false);
@@ -354,6 +364,7 @@ describe("Pilot standard artifacts", () => {
 					bigintValidatorCalled = true;
 					return true;
 				},
+				() => true,
 				() => true,
 			),
 		).toBe(false);
