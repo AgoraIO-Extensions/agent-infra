@@ -282,8 +282,7 @@ function statusBody(request: ConversationRuntimeStatusRequestV2) {
 function parseFrame<T extends { cursor: string; type: string }>(
 	value: string,
 	schema: { parse(input: unknown): T },
-): T | undefined {
-	if (value.startsWith(":")) return undefined;
+): T {
 	const fields = new Map<string, string>();
 	for (const line of value.split(/\r?\n/)) {
 		const separator = line.indexOf(":");
@@ -350,8 +349,8 @@ async function* eventStream<T extends { cursor: string; type: string }>(
 						return failure("RUNTIME_EVENT_INVALID", true);
 					}
 					frame = [];
-					const event = parseFrame(value, schema);
-					if (event) yield event;
+					if (value.startsWith(":")) continue;
+					yield parseFrame(value, schema);
 				} else if (frame.length > maximumEventFrameBytes) {
 					return failure("RUNTIME_EVENT_INVALID", true);
 				}
