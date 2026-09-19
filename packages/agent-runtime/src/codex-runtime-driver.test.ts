@@ -8163,3 +8163,54 @@ it("revokes a native startup failure token before retrying the same Conversation
 	expect(unbound.status).toBe(403);
 	await unbound.text();
 });
+
+it("retires a failed native RPC before retrying the same Conversation", async () => {
+	class RetryDriver extends CodexRuntimeDriver {
+		static openBound(
+			options: CodexRuntimeDriverOptions,
+			factory: Parameters<typeof openCodexRuntimeDriverForTest>[1],
+		) {
+			return RetryDriver.openWithBridge(
+				options,
+				factory,
+			) as Promise<RetryDriver>;
+		}
+
+		openNative(key: string) {
+			return this.openConversationRpc(key);
+		}
+	}
+
+	const path = join(await runtimeDirectory(), "driver.json");
+	const first = new TestCodexBridge();
+	const second = new TestCodexBridge();
+	const bridges = [first, second];
+	let opened = 0;
+	const driver = await RetryDriver.openBound(
+		{
+			...driverOptions(path),
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+		},
+		async (options) => {
+			if (!options.modelAccess) throw new Error("missing access");
+			const bridge = bridges[opened++];
+			if (!bridge) throw new Error("unexpected native reopen");
+			bridge.setConfigReadResult(
+				modelAccessConfigReadResult(options.modelAccess),
+			);
+			return bridge;
+		},
+	);
+	drivers.push(driver);
+
+	const key = "b".repeat(64);
+	await driver.openNative(key);
+	await first.close();
+	await vi.waitFor(async () => {
+		await expect(driver.openNative(key)).resolves.toBeDefined();
+	});
+	expect(opened).toBe(2);
+});

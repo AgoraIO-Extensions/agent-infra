@@ -2984,6 +2984,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					this.sharesOneNativeTransport() ? undefined : conversationKey,
 				),
 			() => {
+				// A failed RPC is permanently unusable. Retire every cache entry that
+				// points at it before a later request can try to reuse the failed
+				// native process. The scripted shared-transport fixture can alias one
+				// RPC to several Conversations, so remove all such aliases.
+				for (const [key, cached] of this.conversationRpcs) {
+					if (cached === rpc) this.conversationRpcs.delete(key);
+				}
+				const cached = this.rpcsByTransport.get(bridge);
+				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
 				this.revokeConnectionClient(conversationKey);
 				this.revokeModelConversation?.(
 					this.modelConversationKey(conversationKey),
