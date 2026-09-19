@@ -112,7 +112,10 @@ export function createAuthentikBrowserAdapter(
 	config.timeout = 10;
 	oidc.enableNonRepudiationChecks(config);
 	const redirectUri = `${input.publicOrigin}/auth/callback`;
-	const sessions = new Map<string, { userId: string; expires: number }>();
+	const sessions = new Map<
+		string,
+		{ userId: string; expires: number; sessionGeneration: string }
+	>();
 	const challenges = new Map<
 		string,
 		{ state: string; nonce: string; verifier: string; expires: number }
@@ -129,7 +132,11 @@ export function createAuthentikBrowserAdapter(
 			prune();
 			const key = cookie(request, SESSION);
 			const session = key ? sessions.get(key) : undefined;
-			return session ? directory.resolveIdentity(session.userId) : null;
+			if (!session) return null;
+			const identity = await directory.resolveIdentity(session.userId);
+			return identity
+				? { ...identity, sessionGeneration: session.sessionGeneration }
+				: null;
 		},
 		hydrateUsers: (ids: readonly string[]) => directory.hydrateUsers(ids),
 		resolveUser: (id: string) => directory.resolveUser(id),
@@ -238,6 +245,7 @@ export function createAuthentikBrowserAdapter(
 			sessions.set(sessionKey, {
 				userId: identity.userId,
 				expires: Date.now() + SESSION_MS,
+				sessionGeneration: random(),
 			});
 			result = response(303, `${input.publicOrigin}/`);
 			result.headers.append(

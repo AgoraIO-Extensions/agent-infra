@@ -174,11 +174,11 @@ describe("Runtime V3 durable authorization", () => {
 		},
 	);
 
-	it("authorizes the first external action before the Driver native session ref is persisted", async () => {
+	it("rejects an external action before the Driver native session ref is persisted", async () => {
 		let authorized: Promise<void> | undefined;
 		const env = await setup({
 			afterOperationPrepared: () => {
-				authorized = env.store.authorizeExternalAction(
+				const pending = env.store.authorizeExternalAction(
 					{
 						nativeSessionRef: "native-session-created-by-driver",
 						executionId: "execution-fixture",
@@ -189,10 +189,14 @@ describe("Runtime V3 durable authorization", () => {
 					},
 					() => env.clock.now,
 				);
+				authorized = pending;
+				void pending.catch(() => undefined);
 			},
 		});
 		await submit(env.host);
-		await expect(authorized).resolves.toBeUndefined();
+		await expect(authorized).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 	});
 
 	it("replays a resolved submit while its execution is under recovery query authority", async () => {

@@ -800,8 +800,18 @@ function isNativeSourceRecord(
 					value.reservation.submissionId)
 		)
 			return false;
-	} else if (value.bindDenied !== undefined || value.delivery !== undefined)
-		return false;
+	} else if (value.bindDenied !== undefined) {
+		if (
+			!value.reserveAuthorized ||
+			!value.source ||
+			(value.delivery !== "started" && value.delivery !== "steered") ||
+			value.reserveDenied ||
+			(value.delivery === "started" &&
+				(value.source as CodexNativeSourceV1).turnId !==
+					value.reservation.submissionId)
+		)
+			return false;
+	} else if (value.delivery !== undefined) return false;
 	if (value.notStarted !== undefined) {
 		const allowed: Record<string, string[]> = {
 			not_queued: ["queue_closed", "cancelled_before_start"],
@@ -848,7 +858,8 @@ function isNativeSourceRecord(
 		value.source !== undefined &&
 		!value.bind &&
 		!value.bindPending &&
-		!value.notStarted
+		!value.notStarted &&
+		!value.bindDenied
 	)
 		return false;
 	return !(
@@ -5532,7 +5543,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				source.source = structuredClone(request.source);
 				source.delivery = request.delivery;
 				if (denied) {
-					source.bind = source.bindPending;
 					delete source.bindPending;
 					source.bindDenied = denied;
 				}
@@ -5593,7 +5603,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 									source.bindPending?.requestId !== receipt.requestId
 								)
 									stateInvalid();
-								source.bind = source.bindPending;
 								delete source.bindPending;
 								source.bindDenied = "authorization_unavailable";
 							});
@@ -5620,7 +5629,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 									source.bindPending?.requestId !== receipt.requestId
 								)
 									stateInvalid();
-								source.bind = source.bindPending;
 								delete source.bindPending;
 								source.bindDenied = "authorization_unavailable";
 							});
@@ -5641,7 +5649,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							)
 						) {
 							lateClose = true;
-							source.bind = source.bindPending;
+							delete source.bindPending;
 							source.bindDenied = "authorization_unavailable";
 						} else {
 							source.bind = source.bindPending;
@@ -5671,7 +5679,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							resolved.execution,
 						))
 				) {
-					source.bind = source.bindPending;
+					delete source.bindPending;
 					source.bindDenied = "authorization_unavailable";
 				} else {
 					source.bind = source.bindPending;

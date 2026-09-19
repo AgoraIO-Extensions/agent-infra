@@ -29,6 +29,8 @@ import {
 	validStoredExecutionAuthority,
 } from "./runtime-authorization.js";
 
+const maximumAcknowledgedCursors = 256;
+
 interface SessionBinding {
 	principal?: RuntimePrincipalV1;
 	channelId?: string;
@@ -1210,6 +1212,11 @@ export class FileRuntimeStore {
 			authority.acknowledgedCursors.push(
 				...authority.deliveredCursors.splice(0, index + 1),
 			);
+			if (authority.acknowledgedCursors.length > maximumAcknowledgedCursors)
+				authority.acknowledgedCursors.splice(
+					0,
+					authority.acknowledgedCursors.length - maximumAcknowledgedCursors,
+				);
 		});
 	}
 
@@ -1259,7 +1266,6 @@ export class FileRuntimeStore {
 		const session = await this.authorizedOriginalExecution(
 			{ ...reference, runtimeOperationId: reference.executionId },
 			readNow,
-			true,
 		);
 		if (
 			session.agentId !== reference.agentId ||
@@ -1286,7 +1292,6 @@ export class FileRuntimeStore {
 			runtimeOperationId: string;
 		},
 		readNow: () => number,
-		requireStoredNativeSessionRef = false,
 	) {
 		const state = await this.file.readCommitted();
 		assertStoreState(state);
@@ -1304,8 +1309,6 @@ export class FileRuntimeStore {
 			!session?.authority ||
 			session.generationBarrier ||
 			(action.nativeSessionRef !== undefined &&
-				(requireStoredNativeSessionRef ||
-					session.nativeSessionRef !== undefined) &&
 				session.nativeSessionRef !== action.nativeSessionRef)
 		)
 			runtimeAuthorizationDenied();

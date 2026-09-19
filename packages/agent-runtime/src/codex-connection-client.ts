@@ -174,10 +174,10 @@ export function createCodexConnectionClient(options: {
 			bootstrapRequests.has(request.requestId)
 		)
 			throw unavailable();
-		if (bootstrapRequests.size >= maximumHistoricalSlots) {
-			const oldest = bootstrapRequests.values().next().value;
-			if (oldest) bootstrapRequests.delete(oldest);
-		}
+		// Keep request IDs for the socket lifetime. Evicting an old ID would let a
+		// successful bootstrap be replayed after enough denied requests.
+		if (bootstrapRequests.size >= maximumHistoricalSlots)
+			return deny("credential_unavailable");
 		bootstrapRequests.add(request.requestId);
 		if (request.profileRef !== profile.profileRef)
 			return deny("profile_unavailable");

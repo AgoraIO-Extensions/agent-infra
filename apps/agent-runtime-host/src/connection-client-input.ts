@@ -145,8 +145,12 @@ async function readIndependentInput(
 					const after = await handle.stat();
 					if (
 						offset !== before.size ||
+						after.dev !== before.dev ||
+						after.ino !== before.ino ||
+						after.nlink !== before.nlink ||
 						after.size !== before.size ||
-						after.mtimeMs !== before.mtimeMs
+						after.mtimeMs !== before.mtimeMs ||
+						after.ctimeMs !== before.ctimeMs
 					)
 						return undefined;
 					const input: unknown = JSON.parse(bytes.toString("utf8"));

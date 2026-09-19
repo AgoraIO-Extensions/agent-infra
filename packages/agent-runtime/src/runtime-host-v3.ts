@@ -549,68 +549,79 @@ export class RuntimeHostV3 {
 				"generation-cancel",
 				(this.options.grantValidation.now ?? Date.now)(),
 			);
+			// Close the in-memory generation before aborting existing guards. This
+			// serialized latch prevents a new recovery from registering in the gap.
+			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(recoveryKey);
-		return this.options.serialize(
-			this.options.store.sessionQueueKey(request),
-			async () => {
-				this.assertOpen();
-				this.validate(request, "generation.cancel", verification);
-				const prepared = await this.options.store.prepareOperation({
-					authorization: claims,
-					now: (this.options.grantValidation.now ?? Date.now)(),
-					requestedHostSessionRef: request.hostSessionRef,
-					binding: request,
-					operationId: request.operation.id,
-					kind: "generation-cancel",
-					scope: `generation:${request.sessionGeneration}`,
-					deliveryFence: request.operation.deliveryFence,
-					executionDeliveryFence: request.operation.executionDeliveryFence,
-					requestDigest: requestDigest({
-						kind: "generation-cancel",
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						tombstoneId: request.operation.id,
-					}),
-					command: (nativeSessionRef) => ({
-						schemaVersion: 1,
-						kind: "generation-cancel",
+		let barrierActivated = false;
+		try {
+			return await this.options.serialize(
+				this.options.store.sessionQueueKey(request),
+				async () => {
+					this.assertOpen();
+					this.validate(request, "generation.cancel", verification);
+					const prepared = await this.options.store.prepareOperation({
+						authorization: claims,
+						now: (this.options.grantValidation.now ?? Date.now)(),
+						requestedHostSessionRef: request.hostSessionRef,
+						binding: request,
 						operationId: request.operation.id,
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeRequired(),
-					}),
-				});
-				await this.options.store.activateGenerationBarrier(
-					request.hostSessionRef,
-					request,
-					request.operation.id,
-				);
-				// Keep the in-memory fast path aligned with the durable barrier. If
-				// preparation or activation fails, a retry must still be able to
-				// recover evidence in this process.
-				this.closedRecoveryGenerations.add(recoveryGenerationKey);
-				const response = await this.options.dispatch(
-					prepared.session.hostSessionRef,
-					prepared.operation,
-				);
-				if (
-					response.result.outcome === "accepted" &&
-					["completed", "failed", "cancelled"].includes(response.result.status)
-				)
-					await this.options.store.confirmGenerationBarrier(
+						kind: "generation-cancel",
+						scope: `generation:${request.sessionGeneration}`,
+						deliveryFence: request.operation.deliveryFence,
+						executionDeliveryFence: request.operation.executionDeliveryFence,
+						requestDigest: requestDigest({
+							kind: "generation-cancel",
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							tombstoneId: request.operation.id,
+						}),
+						command: (nativeSessionRef) => ({
+							schemaVersion: 1,
+							kind: "generation-cancel",
+							operationId: request.operation.id,
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+						}),
+					});
+					await this.options.store.activateGenerationBarrier(
 						request.hostSessionRef,
+						request,
 						request.operation.id,
 					);
-				return { ...response, schemaVersion: 3 as const };
-			},
-		);
+					barrierActivated = true;
+					const response = await this.options.dispatch(
+						prepared.session.hostSessionRef,
+						prepared.operation,
+					);
+					if (
+						response.result.outcome === "accepted" &&
+						["completed", "failed", "cancelled"].includes(
+							response.result.status,
+						)
+					)
+						await this.options.store.confirmGenerationBarrier(
+							request.hostSessionRef,
+							request.operation.id,
+						);
+					return { ...response, schemaVersion: 3 as const };
+				},
+			);
+		} catch (error) {
+			// Preparation or barrier activation may fail before the durable barrier
+			// exists. In that case leave the generation recoverable for a retry.
+			if (!barrierActivated)
+				this.closedRecoveryGenerations.delete(recoveryGenerationKey);
+			throw error;
+		}
 	}
 
 	async renewAuthorization(
@@ -783,7 +794,7 @@ export class RuntimeHostV3 {
 				bounded.removeEventListener("abort", onAbort);
 				controller.abort();
 				// A Driver that ignores abort cannot hold an expired HTTP stream open.
-				void iterator.return?.().catch(() => undefined);
+				void Promise.resolve(iterator.return?.()).catch(() => undefined);
 			}
 		})();
 	}

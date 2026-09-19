@@ -247,15 +247,22 @@ export class PostgresWecomChannelV1
 				{ id: string; actor_id: string; scope: WecomScopeV1 }[]
 			>`update platform.wecom_receipts r
 			 set delivery_status='unknown',updated_at=now()
-			 where r.connection_bot_id is not null
-			   and r.delivery_status in ('pending','claimed')
-			   and not exists (
-					select 1
-					from platform.wecom_connections w
-					where w.bot_id=r.connection_bot_id
-					  and w.fence=r.connection_fence
-					  and w.lease_until>clock_timestamp()
-			   )
+			 where r.id in (
+				select candidate.id
+				from platform.wecom_receipts candidate
+				where candidate.connection_bot_id is not null
+				  and candidate.delivery_status in ('pending','claimed')
+				  and not exists (
+						select 1
+						from platform.wecom_connections w
+						where w.bot_id=candidate.connection_bot_id
+						  and w.fence=candidate.connection_fence
+						  and w.lease_until>clock_timestamp()
+				  )
+				order by candidate.created_at
+				limit 25
+				for update skip locked
+			 )
 			 returning r.id,r.actor_id,r.scope`;
 			recovered = staleConnections.length;
 			for (const row of staleConnections)

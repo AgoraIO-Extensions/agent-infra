@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import {
-	access,
-	lstat,
-	open,
-	readdir,
-	readFile,
-	realpath,
-} from "node:fs/promises";
+import { access, lstat, open, readdir, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 import { arch, getgid, getuid, platform } from "node:process";
 import { isDeepStrictEqual } from "node:util";
@@ -91,10 +84,8 @@ async function protectedDirectory(path: string) {
 	throw new Error();
 }
 
-async function verifyLayout() {
-	const files = new Set(
-		[...payloadFiles, "candidate.json", "release.json"].map(installedPath),
-	);
+async function verifyLayout(expectedFiles: readonly string[]) {
+	const files = new Set(expectedFiles);
 	const directories = new Set<string>();
 	for (const file of files) {
 		for (let path = dirname(file); path !== "/"; path = dirname(path)) {
@@ -199,7 +190,9 @@ async function verifyDerived(pinned: Record<string, unknown>) {
 	digest(artifact.archiveSha256);
 	digest(artifact.executableSha256);
 	const manifestHash = digest(artifact.candidateManifestSha256);
-	await verifyLayout();
+	await verifyLayout(
+		[...payloadFiles, "candidate.json", "release.json"].map(installedPath),
+	);
 	const installed = await readProtectedFile(installedPath("release.json"));
 	requireValid(
 		isDeepStrictEqual(JSON.parse(installed.toString("utf8")), release),
@@ -321,19 +314,34 @@ export async function verifyCodexPilotInstallation() {
 					? artifacts.amd64
 					: undefined;
 		const official = record(artifact);
-		const installed = await readFile("/opt/codex/share/release.json", "utf8");
-		requireValid(isDeepStrictEqual(JSON.parse(installed), release));
+		const legal = record(pinned.legal);
+		const legalNames = Object.keys(legal);
+		requireValid(
+			legalNames.every((name) =>
+				/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name),
+			),
+		);
+		await verifyLayout([
+			CODEX_PILOT_EXECUTABLE,
+			installedPath("release.json"),
+			...legalNames.map(installedPath),
+		]);
+		const installed = await readProtectedFile(installedPath("release.json"));
+		requireValid(
+			isDeepStrictEqual(JSON.parse(installed.toString("utf8")), release),
+		);
 		for (const [path, expected] of [
 			[CODEX_PILOT_EXECUTABLE, official.executableSha256],
-			...Object.entries(record(pinned.legal)).map(([name, hash]) => [
-				`/opt/codex/share/${name}`,
+			...Object.entries(legal).map(([name, hash]) => [
+				installedPath(name),
 				hash,
 			]),
 		] as [string, string][]) {
-			const actual = createHash("sha256")
-				.update(await readFile(path))
-				.digest("hex");
-			requireValid(`sha256:${actual}` === digest(expected));
+			await readProtectedFile(
+				path,
+				digest(expected),
+				path === CODEX_PILOT_EXECUTABLE,
+			);
 		}
 		return release.provenance;
 	} catch {
