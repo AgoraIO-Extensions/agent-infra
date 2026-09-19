@@ -131,10 +131,20 @@ async function readIndependentInput(
 					return undefined;
 				const bytes = Buffer.alloc(before.size);
 				try {
-					const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+					let offset = 0;
+					while (offset < bytes.length) {
+						const { bytesRead } = await handle.read(
+							bytes,
+							offset,
+							bytes.length - offset,
+							offset,
+						);
+						if (bytesRead === 0) return undefined;
+						offset += bytesRead;
+					}
 					const after = await handle.stat();
 					if (
-						bytesRead !== before.size ||
+						offset !== before.size ||
 						after.size !== before.size ||
 						after.mtimeMs !== before.mtimeMs
 					)

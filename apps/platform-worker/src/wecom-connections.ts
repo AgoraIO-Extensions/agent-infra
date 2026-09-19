@@ -175,7 +175,8 @@ export function createPlatformWecomConnectionsV1(
 					e.claim.bindingReference === input.scope.bindingReference &&
 					input.scope.kind === "wecom_bot",
 			);
-			return entry ? entry.connection.sender.send(input) : "failed";
+			if (!entry || !(await leases.current(entry.claim))) return "failed";
+			return entry.connection.sender.send(input);
 		},
 	};
 	return {

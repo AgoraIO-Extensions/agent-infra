@@ -1082,10 +1082,11 @@ function latestOperationAttemptFacts(events: readonly CodexJournalEvent[]) {
 	return [...latest.values()];
 }
 
-function latestOperationAttemptFact(events: readonly CodexJournalEvent[]) {
-	let latest: RuntimeOperationFactV2 | undefined;
+function latestModelOperationAttemptFact(events: readonly CodexJournalEvent[]) {
+	let latest: Extract<RuntimeOperationFactV2, { kind: "model" }> | undefined;
 	for (const event of events) {
-		if (event.type === "operation") latest = event.payload;
+		if (event.type === "operation" && event.payload.kind === "model")
+			latest = event.payload;
 	}
 	return latest;
 }
@@ -3939,7 +3940,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.assertModelAdmissionConfirmed(session, execution);
 		const journal = session.journals?.[execution.nativeTurnId];
 		const latestFact = journal
-			? latestOperationAttemptFact(journal.events)
+			? latestModelOperationAttemptFact(journal.events)
 			: undefined;
 		const deferInitialStatus = this.initialModelStatusPending.delete(
 			this.nativeTurnKey(session.threadId, execution.nativeTurnId),
@@ -4260,6 +4261,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								nativeSessionRef,
 								executionId,
 							)) &&
+						!driver.hasPendingConnectionMetadata(
+							nativeSessionRef,
+							executionId,
+						) &&
 						!waiter.wasNotified()
 					) {
 						return;
@@ -5848,13 +5853,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			this.assertExecutionConfiguration(state, session, execution);
 		} catch (error) {
-			if (!signal.aborted)
+			if (signal.aborted) {
+				await record("unknown", { failureCode: "interrupted" });
+			} else {
 				await record("failed", {
 					failureCode:
 						error instanceof RuntimeHostError && error.httpStatus === 403
 							? "authorization_denied"
 							: "authorization_unavailable",
 				});
+			}
 			throw error;
 		}
 		return {
@@ -6421,6 +6429,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (!execution) unavailable();
 		return execution.status !== "running";
+	}
+
+	private hasPendingConnectionMetadata(
+		nativeSessionRef: string,
+		executionId: string,
+	) {
+		const session = this.session(nativeSessionRef);
+		const execution = ownRecordValue(session.executions, executionId);
+		if (!execution) unavailable();
+		const journal = ownRecordValue(
+			session.journals ?? {},
+			execution.nativeTurnId,
+		);
+		return Object.values(journal?.nativeToolAttempts ?? {}).some(
+			(attempt) => attempt.connectionEvidence?.verification === "unverified",
+		);
 	}
 
 	private notifyEventStream(key: string) {

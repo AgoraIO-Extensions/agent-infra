@@ -33,6 +33,6 @@ export function parseWecomXml(xml: string): Record<string, string> {
 		depth--;
 	});
 	parser.write(xml).close();
-	if (!root) throw new Error("Invalid XML");
+	if (!root || depth !== 0) throw new Error("Invalid XML");
 	return result;
 }

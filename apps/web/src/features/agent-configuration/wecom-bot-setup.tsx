@@ -73,6 +73,14 @@ export function WecomBotSetup({
 		[agentId],
 	);
 	useEffect(() => {
+		generation.current++;
+		session.current = undefined;
+		setBotId("");
+		setSecret("");
+		setConfirmed(false);
+		setBusy(false);
+		setStatus(undefined);
+		setError("");
 		void refresh();
 		return () => {
 			generation.current++;

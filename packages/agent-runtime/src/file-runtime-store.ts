@@ -1255,6 +1255,7 @@ export class FileRuntimeStore {
 		const session = await this.authorizedOriginalExecution(
 			{ ...reference, runtimeOperationId: reference.executionId },
 			readNow,
+			true,
 		);
 		if (
 			session.agentId !== reference.agentId ||
@@ -1281,6 +1282,7 @@ export class FileRuntimeStore {
 			runtimeOperationId: string;
 		},
 		readNow: () => number,
+		requireStoredNativeSessionRef = false,
 	) {
 		const state = await this.file.readCommitted();
 		assertStoreState(state);
@@ -1298,7 +1300,8 @@ export class FileRuntimeStore {
 			!session?.authority ||
 			session.generationBarrier ||
 			(action.nativeSessionRef !== undefined &&
-				session.nativeSessionRef !== undefined &&
+				(requireStoredNativeSessionRef ||
+					session.nativeSessionRef !== undefined) &&
 				session.nativeSessionRef !== action.nativeSessionRef)
 		)
 			runtimeAuthorizationDenied();

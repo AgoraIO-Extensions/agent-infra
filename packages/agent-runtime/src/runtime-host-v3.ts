@@ -392,7 +392,6 @@ export class RuntimeHostV3 {
 			request.sessionGeneration,
 			request.executionId,
 		]);
-		await this.abortRecovery(key);
 		await this.options.serialize(key, () => {
 			this.assertOpen();
 			this.validate(request, "turn.stop", verification);
@@ -404,6 +403,7 @@ export class RuntimeHostV3 {
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 			return result;
 		});
+		await this.abortRecovery(key);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {

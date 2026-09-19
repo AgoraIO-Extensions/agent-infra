@@ -191,6 +191,11 @@ export function createConversationRuntimeV2(
 			denied("TASK_AUTHORIZATION_CONTEXT_INVALID");
 		const context = contexts.get(reference);
 		if (!context) denied("TASK_AUTHORIZATION_CONTEXT_INVALID");
+		if (
+			request.requestId !== context.claim.requestId &&
+			request.requestId !== context.claim.metadataRecovery?.id
+		)
+			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		for (const key of [
 			"agentId",
 			"actorId",
@@ -312,13 +317,36 @@ export function createConversationRuntimeV2(
 			postTarget.serviceToken !== finalTarget.serviceToken
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
+		state = await stateFor(context, signal);
+		const afterTargetRoute = await current(context, state, command, signal);
+		if (
+			afterTargetRoute.authority.purpose !== postTargetRoute.authority.purpose
+		) {
+			if (afterTargetRoute.authority.purpose === "control")
+				await control(context, afterTargetRoute.authority.reason, signal);
+			unavailable("RUNTIME_ROUTE_STALE");
+		}
+		if (
+			afterTargetRoute.record.configurationRevision !==
+				postTargetRoute.record.configurationRevision ||
+			!isDeepStrictEqual(
+				afterTargetRoute.record.agent,
+				postTargetRoute.record.agent,
+			) ||
+			!isDeepStrictEqual(
+				afterTargetRoute.record.workload,
+				postTargetRoute.record.workload,
+			)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		authority = afterTargetRoute.authority;
 		const client = createWorkerRuntimeHostClientV3({
 			...postTarget,
 			fetch: options.fetch,
 		});
 		const base = {
 			schemaVersion: 3 as const,
-			requestId: context.claim.metadataRecovery?.id ?? request.requestId,
+			requestId: context.claim.metadataRecovery?.id ?? context.claim.requestId,
 			traceId: context.claim.traceId,
 			principal: context.principal,
 			agentId: context.claim.agentId,
