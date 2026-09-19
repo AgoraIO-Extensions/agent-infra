@@ -272,35 +272,39 @@ function inspectDirectPayload(
 }
 
 function withDirectPayloadBudget<T extends z.ZodType>(schema: T) {
-	return schema
-		.meta(directPayloadBudgetMetadata)
-		.superRefine((value, context) => {
-			let size: DirectPayloadSize;
-			try {
-				size = inspectDirectPayload(value);
-			} catch (error) {
-				context.addIssue({
+	const budgetedSchema = schema.meta(directPayloadBudgetMetadata);
+	const originalRun = budgetedSchema._zod.run;
+	budgetedSchema._zod.run = (payload, context) => {
+		try {
+			const size = inspectDirectPayload(payload.value);
+			if (
+				size.nodes > DirectPayloadMaximumNodeCountV1 ||
+				size.bytes > DirectPayloadMaximumByteLengthV1
+			) {
+				payload.issues.push({
 					code: "custom",
+					input: payload.value,
 					message:
-						error instanceof Error
-							? error.message
-							: "Direct payload contains a non-JSON value",
+						size.nodes > DirectPayloadMaximumNodeCountV1
+							? "Direct payload contains too many JSON nodes"
+							: "Direct payload exceeds the total byte budget",
 				});
-				return;
+				return payload;
 			}
-			if (size.nodes > DirectPayloadMaximumNodeCountV1) {
-				context.addIssue({
-					code: "custom",
-					message: "Direct payload contains too many JSON nodes",
-				});
-			}
-			if (size.bytes > DirectPayloadMaximumByteLengthV1) {
-				context.addIssue({
-					code: "custom",
-					message: "Direct payload exceeds the total byte budget",
-				});
-			}
-		});
+		} catch (error) {
+			payload.issues.push({
+				code: "custom",
+				input: payload.value,
+				message:
+					error instanceof Error
+						? error.message
+						: "Direct payload contains a non-JSON value",
+			});
+			return payload;
+		}
+		return originalRun(payload, context);
+	};
+	return budgetedSchema;
 }
 
 const directJsonPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
@@ -750,6 +754,7 @@ export function validateDirectGrantListWithPublishedSchemaV1(
 export function validateDirectActionResultWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+	validateOutput: DirectPayloadValidatorV1,
 ) {
 	if (
 		!validateDirectPayloadWithPublishedSchemaV1(input, validatePublishedSchema)
@@ -758,10 +763,9 @@ export function validateDirectActionResultWithPublishedSchemaV1(
 	}
 	const parsed = DirectActionResultV1Schema.safeParse(input);
 	if (!parsed.success) return false;
-	return (
-		parsed.data.status === "succeeded" ||
-		parsed.data.error.traceId === parsed.data.traceId
-	);
+	return parsed.data.status === "succeeded"
+		? validateOutput(parsed.data.output)
+		: parsed.data.error.traceId === parsed.data.traceId;
 }
 
 export function validateDirectActionResultV1(

@@ -433,8 +433,19 @@ describe("Pilot Direct MCP/API contracts", () => {
 			}).success,
 		).toBe(true);
 		expect(
-			validateDirectActionResultWithPublishedSchemaV1(success, () => true),
+			validateDirectActionResultWithPublishedSchemaV1(
+				success,
+				() => true,
+				() => true,
+			),
 		).toBe(true);
+		expect(
+			validateDirectActionResultWithPublishedSchemaV1(
+				success,
+				() => true,
+				() => false,
+			),
+		).toBe(false);
 		expect(
 			validateDirectActionResultWithPublishedSchemaV1(
 				{
@@ -449,6 +460,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 						retryable: false,
 					},
 				},
+				() => true,
 				() => true,
 			),
 		).toBe(false);
