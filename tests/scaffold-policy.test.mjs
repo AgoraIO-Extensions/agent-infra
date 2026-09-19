@@ -153,6 +153,9 @@ test("Connection Web preserves every same-origin API route family", async () => 
 	assert.match(vite, /"\/connection\/pat-bindings"/);
 	assert.match(nginx, /absolute_redirect off;/);
 	assert.match(nginx, /location = \/connection/);
+	assert.match(nginx, /location = \/oauth\/callback/);
+	assert.match(nginx, /proxy_read_timeout 120s;/);
+	assert.match(nginx, /proxy_next_upstream off;/);
 	assert.match(
 		installPage,
 		/codex mcp add connection --url __CONNECTION_ORIGIN__\/mcp/,

@@ -1539,11 +1539,24 @@ export function createConnectionOAuthApp(
 			},
 		);
 		app.get("/oauth/callback", async (context) => {
-			await management.service.completeGithubOAuth(
-				context.req.query("code") ?? "",
-				context.req.query("state") ?? "",
-			);
-			return context.redirect("/connection/connections", 303);
+			try {
+				await management.service.completeGithubOAuth(
+					context.req.query("code") ?? "",
+					context.req.query("state") ?? "",
+				);
+				return context.redirect("/connection/connections", 303);
+			} catch (error) {
+				console.error(
+					JSON.stringify({
+						errorType: error instanceof Error ? error.name : typeof error,
+						event: "connection_provider_oauth_callback_rejected",
+					}),
+				);
+				return context.redirect(
+					"/connection/connections?oauth=callback_failed",
+					303,
+				);
+			}
 		});
 	}
 
