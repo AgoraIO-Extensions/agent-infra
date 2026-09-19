@@ -24,6 +24,84 @@ export interface WecomReplyRouteV1 {
 		readonly streamId: string;
 	};
 }
+function boundedText(value: unknown, max = 1024): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value.length <= max &&
+		value.isWellFormed() &&
+		!value.includes("\0") &&
+		Buffer.byteLength(value) <= max
+	);
+}
+function exactRecord(
+	value: unknown,
+	required: readonly string[],
+	optional: readonly string[] = [],
+) {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error();
+	const record = value as Record<string, unknown>;
+	const allowed = new Set([...required, ...optional]);
+	if (
+		Object.keys(record).some((key) => !allowed.has(key)) ||
+		required.some((key) => !Object.hasOwn(record, key))
+	)
+		throw new Error();
+	return record;
+}
+function parseReplyRoute(value: unknown): WecomReplyRouteV1 {
+	const route = exactRecord(
+		value,
+		["bindingReference", "credentialVersion", "expiresAt", "scope"],
+		["responseUrl", "recipientId", "websocket"],
+	);
+	if (
+		!boundedText(route.bindingReference) ||
+		!boundedText(route.credentialVersion) ||
+		!boundedText(route.expiresAt) ||
+		!Number.isFinite(Date.parse(route.expiresAt))
+	)
+		throw new Error();
+	const scope = exactRecord(route.scope, [
+		"agentId",
+		"bindingReference",
+		"kind",
+		"senderId",
+		"peerId",
+		"conversationType",
+		"threadId",
+	]);
+	if (
+		!boundedText(scope.agentId) ||
+		!boundedText(scope.bindingReference) ||
+		(scope.kind !== "wecom_bot" && scope.kind !== "wecom_app") ||
+		!boundedText(scope.senderId) ||
+		!boundedText(scope.peerId) ||
+		(scope.conversationType !== "single" &&
+			scope.conversationType !== "group") ||
+		(scope.threadId !== null && !boundedText(scope.threadId))
+	)
+		throw new Error();
+	if (route.responseUrl !== undefined && !boundedText(route.responseUrl, 4096))
+		throw new Error();
+	if (route.recipientId !== undefined && !boundedText(route.recipientId))
+		throw new Error();
+	if (route.websocket !== undefined) {
+		const websocket = exactRecord(route.websocket, [
+			"connectionId",
+			"requestId",
+			"streamId",
+		]);
+		if (
+			!boundedText(websocket.connectionId) ||
+			!boundedText(websocket.requestId) ||
+			!boundedText(websocket.streamId)
+		)
+			throw new Error();
+	}
+	return route as unknown as WecomReplyRouteV1;
+}
 function replyKeyId(key: ReturnType<typeof createPublicKey>) {
 	return createHash("sha256")
 		.update(key.export({ type: "spki", format: "der" }))
@@ -133,12 +211,14 @@ export function createWecomReplyDecryptorV1(
 			);
 			decipher.setAAD(Buffer.from(`wecom-reply-v1:${value.keyId}`));
 			decipher.setAuthTag(decode(value.tag, 16));
-			return JSON.parse(
-				Buffer.concat([
-					decipher.update(decode(value.ciphertext)),
-					decipher.final(),
-				]).toString("utf8"),
-			) as WecomReplyRouteV1;
+			return parseReplyRoute(
+				JSON.parse(
+					Buffer.concat([
+						decipher.update(decode(value.ciphertext)),
+						decipher.final(),
+					]).toString("utf8"),
+				),
+			);
 		} catch {
 			throw new Error("WeCom reply route is unavailable");
 		} finally {
