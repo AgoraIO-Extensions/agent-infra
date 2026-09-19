@@ -1,6 +1,39 @@
 {
   "$defs": {
     "DirectActionCatalogEntryV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "actionId": {
@@ -19,7 +52,9 @@
           "type": "string"
         },
         "inputSchema": {
-          "additionalProperties": {},
+          "additionalProperties": {
+            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+          },
           "propertyNames": {
             "minLength": 1,
             "type": "string"
@@ -27,7 +62,9 @@
           "type": "object"
         },
         "outputSchema": {
-          "additionalProperties": {},
+          "additionalProperties": {
+            "$ref": "#/$defs/DirectActionCatalogEntryV1/$defs/__schema0"
+          },
           "propertyNames": {
             "minLength": 1,
             "type": "string"
@@ -3278,6 +3315,39 @@
       "type": "object"
     },
     "DirectCatalogResponseV1": {
+      "$defs": {
+        "__schema0": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "actions": {
@@ -3300,7 +3370,9 @@
                 "type": "string"
               },
               "inputSchema": {
-                "additionalProperties": {},
+                "additionalProperties": {
+                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                },
                 "propertyNames": {
                   "minLength": 1,
                   "type": "string"
@@ -3308,7 +3380,9 @@
                 "type": "object"
               },
               "outputSchema": {
-                "additionalProperties": {},
+                "additionalProperties": {
+                  "$ref": "#/$defs/DirectCatalogResponseV1/$defs/__schema0"
+                },
                 "propertyNames": {
                   "minLength": 1,
                   "type": "string"

@@ -82,6 +82,24 @@ describe("Pilot Direct MCP/API contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		for (const invalidValue of [
+			undefined,
+			() => "not-json",
+			Symbol("not-json"),
+			1n,
+		]) {
+			expect(
+				DirectCatalogResponseV1Schema.safeParse({
+					...catalog,
+					actions: [
+						{
+							...catalog.actions[0],
+							inputSchema: { invalidValue },
+						},
+					],
+				}).success,
+			).toBe(false);
+		}
 	});
 
 	it("rejects caller-selected authority and credential selectors", () => {

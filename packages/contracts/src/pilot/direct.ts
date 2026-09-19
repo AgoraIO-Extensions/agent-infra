@@ -11,7 +11,7 @@ import {
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
 
 const nonEmptyString = () => z.string().min(1);
-const jsonSchemaDocument = z.record(z.string().min(1), z.unknown());
+const jsonSchemaDocument = z.record(z.string().min(1), z.json());
 
 // The transport boundary is intentionally bounded and rejects credential or
 // caller-authority selectors before they can cross the Connection contract

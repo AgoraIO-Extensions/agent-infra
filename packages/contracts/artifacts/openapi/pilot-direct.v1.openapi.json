@@ -20,7 +20,9 @@
             "type": "string"
           },
           "inputSchema": {
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema0"
+            },
             "propertyNames": {
               "minLength": 1,
               "type": "string"
@@ -28,7 +30,78 @@
             "type": "object"
           },
           "outputSchema": {
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema0"
+            },
+            "propertyNames": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "providerId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "requiredScopes": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "published",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "actionId",
+          "actionVersion",
+          "inputSchema",
+          "outputSchema",
+          "effect",
+          "requiredScopes",
+          "status"
+        ],
+        "type": "object"
+      },
+      "DirectActionCatalogEntryV1Output": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "actionVersion": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "effect": {
+            "enum": [
+              "READ",
+              "WRITE"
+            ],
+            "type": "string"
+          },
+          "inputSchema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema1"
+            },
+            "propertyNames": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema1"
+            },
             "propertyNames": {
               "minLength": 1,
               "type": "string"
@@ -2196,7 +2269,7 @@
         "properties": {
           "actions": {
             "items": {
-              "$ref": "#/components/schemas/DirectActionCatalogEntryV1"
+              "$ref": "#/components/schemas/DirectActionCatalogEntryV1Output"
             },
             "type": "array"
           },
@@ -2322,6 +2395,68 @@
           "revokedAt"
         ],
         "type": "object"
+      },
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "__schema1": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/__schema1"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/__schema1"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
       }
     }
   },
