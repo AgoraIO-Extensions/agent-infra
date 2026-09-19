@@ -518,13 +518,30 @@ export const DirectActionCatalogEntryV1Schema = z.strictObject({
 	status: DirectActionPublicationStatusV1Schema,
 });
 
+const directCatalogActionsV1Schema = z
+	.array(DirectActionCatalogEntryV1Schema)
+	.max(DirectPayloadMaximumCollectionSizeV1)
+	.superRefine((actions, context) => {
+		const identities = new Set<string>();
+		for (const [index, action] of actions.entries()) {
+			const identity = `${action.actionId}\u0000${action.actionVersion}`;
+			if (identities.has(identity)) {
+				context.addIssue({
+					code: "custom",
+					path: [index],
+					message: "Catalog action identity must be unique",
+				});
+			}
+			identities.add(identity);
+		}
+	})
+	.meta({ uniqueItems: true });
+
 export const DirectCatalogResponseV1Schema = withDirectPayloadBudget(
 	z.strictObject({
 		schemaVersion: SchemaVersionV1Schema,
 		catalogVersion: nonEmptyString(),
-		actions: z
-			.array(DirectActionCatalogEntryV1Schema)
-			.max(DirectPayloadMaximumCollectionSizeV1),
+		actions: directCatalogActionsV1Schema,
 	}),
 );
 

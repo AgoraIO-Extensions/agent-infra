@@ -425,6 +425,24 @@ describe("Pilot standard artifacts", () => {
 		expect(
 			validateDirectCatalog({
 				...directCatalog,
+				actions: [directCatalog.actions[0], directCatalog.actions[0]],
+			}),
+		).toBe(false);
+		expect(
+			validateDirectCatalogWithPublishedSchemaV1(
+				{
+					...directCatalog,
+					actions: [
+						directCatalog.actions[0],
+						{ ...directCatalog.actions[0], effect: "WRITE" },
+					],
+				},
+				(input) => validateDirectCatalog(input),
+			),
+		).toBe(false);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
 				actions: [
 					{
 						...directCatalog.actions[0],

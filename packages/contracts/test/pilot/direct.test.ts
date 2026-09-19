@@ -76,6 +76,12 @@ describe("Pilot Direct MCP/API contracts", () => {
 		};
 
 		expect(DirectCatalogResponseV1Schema.parse(catalog)).toEqual(catalog);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: [catalog.actions[0], { ...catalog.actions[0], effect: "WRITE" }],
+			}).success,
+		).toBe(false);
 		for (const field of [
 			"principalId",
 			"connectionId",

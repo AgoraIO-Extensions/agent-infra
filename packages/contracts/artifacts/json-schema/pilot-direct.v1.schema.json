@@ -3943,7 +3943,8 @@
             "type": "object"
           },
           "maxItems": 1000,
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "catalogVersion": {
           "maxLength": 65536,
