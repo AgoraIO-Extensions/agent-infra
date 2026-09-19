@@ -243,6 +243,10 @@ export class PostgresWecomChannelV1
 	async claim(): Promise<WecomDeliveryClaimV1 | null> {
 		let recovered = 0;
 		const claim = await this.#sql.begin(async (sql) => {
+			// A claimed receipt may already have reached WeCom, so a lost connection
+			// lease becomes unknown and stays fail-closed. An unclaimed receipt has no
+			// delivery attempt; leave it pending so a replacement connection can replay
+			// the ingress event and bind its fresh fence before delivery.
 			const staleConnections = await sql<
 				{ id: string; actor_id: string; scope: WecomScopeV1 }[]
 			>`update platform.wecom_receipts r
@@ -251,7 +255,7 @@ export class PostgresWecomChannelV1
 				select candidate.id
 				from platform.wecom_receipts candidate
 				where candidate.connection_bot_id is not null
-				  and candidate.delivery_status in ('pending','claimed')
+				  and candidate.delivery_status = 'claimed'
 				  and not exists (
 						select 1
 						from platform.wecom_connections w

@@ -54,6 +54,9 @@ export function createWorkerRuntimeGrantSignerV2(options: {
 		command: RuntimeExecutionGrantClaimsV2["allowedCommands"][0],
 	) => {
 		const issuedAt = (options.now ?? Date.now)();
+		const attachments = request.input?.attachments ?? [];
+		if (new Set(attachments).size !== attachments.length)
+			throw new TypeError("Runtime grant attachments must be unique");
 		const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
 			schemaVersion: 2,
 			issuer: options.issuer,
@@ -81,9 +84,10 @@ export function createWorkerRuntimeGrantSignerV2(options: {
 				.digest("hex"),
 			...(authority.purpose === "business"
 				? {
-						attachments: [...new Set(request.input?.attachments ?? [])].map(
-							(attachmentId) => ({ attachmentId, operations: ["read"] }),
-						),
+						attachments: attachments.map((attachmentId) => ({
+							attachmentId,
+							operations: ["read"],
+						})),
 					}
 				: {}),
 			...(command === "events.persist"

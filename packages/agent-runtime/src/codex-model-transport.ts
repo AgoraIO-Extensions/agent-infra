@@ -1281,6 +1281,8 @@ export async function openCodexModelTransport(
 		request.once("aborted", terminate);
 		response.once("close", terminate);
 		let journal: CodexModelRequestJournal | undefined;
+		let journalPromise: Promise<CodexModelRequestJournal> | undefined;
+		let startedPersistence: Promise<void> | undefined;
 		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
 		let startedAt: number | undefined;
 		let outcomeReported = false;
@@ -1293,6 +1295,17 @@ export async function openCodexModelTransport(
 			if (outcome.phase !== "succeeded")
 				revokeTurn(turnKey, startedAt === undefined);
 			const pending = (async () => {
+				// A persistence call may outlive the request abort/timeout. Join the
+				// underlying intent and started writes before finishing the journal so a
+				// late durable write can never appear after its terminal outcome.
+				if (!journal && journalPromise) {
+					try {
+						journal = await journalPromise;
+					} catch {
+						// The intent was not durably created; there is no journal to finish.
+					}
+				}
+				if (startedPersistence) await startedPersistence.catch(() => {});
 				if (!journal) {
 					readyModelTurns.delete(turnKey);
 					outcomeReported = true;
@@ -1352,17 +1365,15 @@ export async function openCodexModelTransport(
 				reject(response, 400);
 				return;
 			}
-			journal = await awaitPersistence(
-				observer.beforeRequest(
-					{
-						conversationKey,
-						...nativeTurn,
-						...admittedModel,
-					},
-					controller.signal,
-				),
+			journalPromise = observer.beforeRequest(
+				{
+					conversationKey,
+					...nativeTurn,
+					...admittedModel,
+				},
 				controller.signal,
 			);
+			journal = await awaitPersistence(journalPromise, controller.signal);
 			// Stop/revoke may arrive while intent or the Host authorization guard is
 			// awaiting durable storage. No await separates this check from fetch.
 			if (
@@ -1397,11 +1408,10 @@ export async function openCodexModelTransport(
 				(value) => ({ value }),
 				() => ({ value: undefined }),
 			);
-			if (journal)
-				await awaitPersistence(
-					journal.started(requestStartedAt),
-					controller.signal,
-				);
+			if (journal) {
+				startedPersistence = journal.started(requestStartedAt);
+				await awaitPersistence(startedPersistence, controller.signal);
+			}
 			const upstream = (await upstreamResult).value;
 			if (!upstream) {
 				settleModelRequestWaiters(turnKey, false);

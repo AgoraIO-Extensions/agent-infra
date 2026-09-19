@@ -84,6 +84,27 @@ describe("Worker Runtime grant signer", () => {
 			),
 		).toThrow();
 	});
+	it("rejects duplicate attachment IDs before signing", () => {
+		const body = {
+			...request,
+			input: {
+				text: "synthetic request",
+				attachments: ["attachment-1", "attachment-1"],
+			},
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "option",
+				reasoningLevel: "high",
+			},
+		};
+		expect(() =>
+			signer(
+				body,
+				{ purpose: "business", authorizationRecordId: "original-boundary" },
+				"turn.submit",
+			),
+		).toThrow("attachments must be unique");
+	});
 	it("control carries only a control source and never grants renewal or input", () => {
 		const body = { ...request, originalOperationDigest: "a".repeat(43) };
 		const authority = {

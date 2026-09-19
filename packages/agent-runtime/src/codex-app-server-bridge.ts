@@ -24,7 +24,7 @@ import {
 	resolve,
 	sep,
 } from "node:path";
-import { env, platform } from "node:process";
+import { env, kill as killProcess, platform } from "node:process";
 import { Duplex } from "node:stream";
 import { TextDecoder } from "node:util";
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
@@ -231,6 +231,17 @@ export async function runCodexConnectionRecovery(options: {
 	let callbacks: ReturnType<typeof serveCodexNativeCallbacks> | undefined;
 	let exited: Promise<void> | undefined;
 	const abort = () => {
+		const pid = child?.pid;
+		if (pid && pid > 1) {
+			try {
+				// The recovery helper can exec Codex. Kill its process group so an
+				// orphaned native child cannot outlive the bounded cleanup window.
+				killProcess(-pid, "SIGKILL");
+				return;
+			} catch {
+				// Fall back to the direct child when the group has already exited.
+			}
+		}
 		child?.kill("SIGKILL");
 	};
 	try {
@@ -266,6 +277,7 @@ export async function runCodexConnectionRecovery(options: {
 			],
 			{
 				stdio: ["ignore", "ignore", "ignore", "pipe"],
+				detached: true,
 				cwd: nativePolicy.directory,
 				env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
 			},

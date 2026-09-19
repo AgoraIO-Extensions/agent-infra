@@ -389,7 +389,7 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 	}
 });
 
-it("seals a pending connection receipt as unknown after its connection lease expires", async () => {
+it("keeps an unclaimed connection receipt pending after its connection lease expires", async () => {
 	await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
 	await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
     values (${message.providerId},${message.agentId},${message.bindingReference},'worker-stale',10,now()+interval '30 seconds','connected')
@@ -414,7 +414,7 @@ it("seals a pending connection receipt as unknown after its connection lease exp
 		expect(await owner.claim()).toBeNull();
 		expect(
 			await owner.read(accepted.receipt.receiptId, "stale-connection-sender"),
-		).toMatchObject({ deliveryStatus: "unknown" });
+		).toMatchObject({ deliveryStatus: "pending" });
 	} finally {
 		await owner.close();
 	}
