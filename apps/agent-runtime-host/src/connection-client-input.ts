@@ -4,9 +4,10 @@ import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import type {
-	CodexRuntimeDriverOptions,
-	FileRuntimeStore,
+import {
+	type CodexRuntimeDriverOptions,
+	type FileRuntimeStore,
+	isCodexConnectionClientConfiguration,
 } from "@agent-infra/agent-runtime";
 import { RuntimePrincipalV1Schema } from "@agent-infra/contracts/runtime";
 
@@ -78,7 +79,7 @@ export function readConnectionClientProfile(
 
 async function readIndependentInput(
 	dataDirectory: string,
-	profileRef: string,
+	profile: ClientOptions["profile"],
 	binding: OriginalBinding,
 ) {
 	const inputDirectory = join(dataDirectory, "independent-client-input");
@@ -88,7 +89,7 @@ async function readIndependentInput(
 				binding.principal.kind,
 				binding.principal.id,
 				binding.scope.agentId,
-				profileRef,
+				profile.profileRef,
 			]),
 		)
 		.digest("hex");
@@ -163,7 +164,16 @@ async function readIndependentInput(
 						input.agentId !== binding.scope.agentId ||
 						!record(input.client) ||
 						Object.keys(input.client).sort().join(",") !==
-							"connectionIdentity,credential,service"
+							"connectionIdentity,credential,service" ||
+						!isCodexConnectionClientConfiguration({
+							originalBinding: binding,
+							...input.client,
+						}) ||
+						!isDeepStrictEqual(input.client.service, {
+							serviceRef: profile.serviceRef,
+							issuer: profile.issuer,
+							resource: profile.resource,
+						})
 					)
 						return undefined;
 					// Canonical callback schema validates these nested values at the private lane.
@@ -206,7 +216,7 @@ export function createIndependentConnectionClientInput(options: {
 				return undefined;
 			const input = await readIndependentInput(
 				options.dataDirectory,
-				options.profile.profileRef,
+				options.profile,
 				binding,
 			);
 			signal.throwIfAborted();
@@ -221,7 +231,7 @@ export function createIndependentConnectionClientInput(options: {
 			signal.throwIfAborted();
 			const input = await readIndependentInput(
 				options.dataDirectory,
-				options.profile.profileRef,
+				options.profile,
 				binding,
 			);
 			signal.throwIfAborted();

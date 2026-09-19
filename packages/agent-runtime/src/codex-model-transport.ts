@@ -1300,7 +1300,10 @@ export async function openCodexModelTransport(
 				// late durable write can never appear after its terminal outcome.
 				if (!journal && journalPromise) {
 					try {
-						journal = await journalPromise;
+						// The request may already be aborted here. Keep the late intent
+						// join bounded without reusing that signal, otherwise a stalled
+						// observer can keep terminal cleanup alive forever.
+						journal = await awaitPersistence(journalPromise);
 					} catch {
 						// The intent was not durably created; there is no journal to finish.
 					}

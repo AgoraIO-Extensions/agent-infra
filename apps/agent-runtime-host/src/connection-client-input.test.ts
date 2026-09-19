@@ -191,6 +191,42 @@ describe("independent Connection credential delivery", () => {
 		await expect(env.read()).resolves.toBeUndefined();
 	});
 
+	it("validates nested client fields and binds the service to the configured profile", async () => {
+		const env = await fixture();
+		for (const value of [
+			{
+				...delivered,
+				client: {
+					...client,
+					service: { ...client.service, serviceRef: "other-service" },
+				},
+			},
+			{
+				...delivered,
+				client: {
+					...client,
+					connectionIdentity: {
+						...client.connectionIdentity,
+						actorId: 17,
+					},
+				},
+			},
+			{
+				...delivered,
+				client: {
+					...client,
+					credential: {
+						...client.credential,
+						expiresAt: "not-a-timestamp",
+					},
+				},
+			},
+		]) {
+			await env.write(value);
+			await expect(env.read()).resolves.toBeUndefined();
+		}
+	});
+
 	it("rejects readable-by-others files and symlinks before loading their contents", async () => {
 		const env = await fixture();
 		await chmod(env.file, 0o644);
