@@ -252,6 +252,12 @@ describe("Pilot Direct MCP/API contracts", () => {
 				output: { secretAccessKey: "must-not-cross" },
 			}).success,
 		).toBe(false);
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...success,
+				output: { value: "ghp_abcdefghijklmnopqrstuvwxyz" },
+			}).success,
+		).toBe(false);
 
 		const unresolved = {
 			...resultBase,

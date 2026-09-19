@@ -77,13 +77,19 @@ function inspectDirectPayload(
 		bytes += child.bytes;
 	};
 	if (Array.isArray(value)) {
+		let first = true;
 		for (const entry of value) {
+			if (!first) bytes += 1;
+			first = false;
 			visit(entry);
 			if (nodes > DirectPayloadMaximumNodeCountV1) break;
 			if (bytes > DirectPayloadMaximumByteLengthV1) break;
 		}
 	} else {
+		let first = true;
 		for (const [key, entry] of Object.entries(value)) {
+			if (!first) bytes += 1;
+			first = false;
 			visit(entry, utf8ByteLength(JSON.stringify(key)) + 1);
 			if (nodes > DirectPayloadMaximumNodeCountV1) break;
 			if (bytes > DirectPayloadMaximumByteLengthV1) break;
@@ -117,7 +123,13 @@ const directJsonPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z.null(),
 	z.boolean(),
 	z.number().finite(),
-	z.string().max(DirectPayloadMaximumStringLengthV1),
+	z
+		.string()
+		.max(DirectPayloadMaximumStringLengthV1)
+		.regex(
+			unsafeArgumentValuePattern,
+			"Direct payloads cannot carry credentials or authority selectors",
+		),
 ]);
 const directActionArgumentPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z.null(),
