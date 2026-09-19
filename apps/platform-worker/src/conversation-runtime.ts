@@ -296,8 +296,24 @@ export function createConversationRuntimeV2(
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
+		const postTarget = await bounded(
+			options.resolveRuntimeHost({
+				agentId: context.claim.agentId,
+				signal,
+				workload: postTargetRoute.record.workload,
+				purpose: postTargetRoute.authority.purpose,
+				command,
+			}),
+			signal,
+		);
+		if (
+			postTarget.workerId !== options.signing.workerId ||
+			postTarget.baseUrl !== finalTarget.baseUrl ||
+			postTarget.serviceToken !== finalTarget.serviceToken
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
 		const client = createWorkerRuntimeHostClientV3({
-			...finalTarget,
+			...postTarget,
 			fetch: options.fetch,
 		});
 		const base = {

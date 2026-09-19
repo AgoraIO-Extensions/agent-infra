@@ -57,15 +57,16 @@ export function createPlatformWecomWorkerV1(
 				...options.connections,
 				holderId: connectionHolderId,
 				bindings: async () => {
-					const merged = new Map(
-						(await deployment.bindings()).map((binding) => [
-							binding.botId,
-							binding,
-						]),
-					);
-					for (const binding of (await setup?.bindings()) ?? [])
-						merged.set(binding.botId, binding);
-					return [...merged.values()];
+					const bindings = [
+						...(await deployment.bindings()),
+						...((await setup?.bindings()) ?? []),
+					];
+					if (
+						new Set(bindings.map((binding) => binding.botId)).size !==
+						bindings.length
+					)
+						throw new Error("Invalid WeCom connection bindings");
+					return bindings;
 				},
 				databaseUrl: options.databaseUrl,
 				receive: channel.receive,

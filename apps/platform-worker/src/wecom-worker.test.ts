@@ -60,7 +60,7 @@ import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 
 afterEach(() => vi.resetAllMocks());
 
-it("merges setup bindings by botId and lets setup take precedence", async () => {
+it("rejects duplicate deployment and setup bindings by botId", async () => {
 	const deployment = [
 		{
 			botId: "bot-1",
@@ -108,10 +108,9 @@ it("merges setup bindings by botId and lets setup take precedence", async () => 
 		},
 	});
 	try {
-		await expect(mocks.connectionBindings?.()).resolves.toEqual([
-			setup,
-			deployment[1],
-		]);
+		await expect(mocks.connectionBindings?.()).rejects.toThrow(
+			"Invalid WeCom connection bindings",
+		);
 	} finally {
 		await worker.close();
 	}
