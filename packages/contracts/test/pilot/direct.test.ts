@@ -134,6 +134,17 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			DirectCatalogResponseV1Schema.safeParse({
 				...catalog,
+				actions: [
+					{
+						...catalog.actions[0],
+						inputSchema: { $schema: "https://example.invalid/schema" },
+					},
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
 				actions: Array.from(
 					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
 					() => catalog.actions[0],
@@ -202,6 +213,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"accountId",
 			"caller",
 			"context",
+			"organization",
+			"agent",
+			"conversation",
 			"targetConnectionId",
 			"targetConnection",
 			"connectionRef",
@@ -235,6 +249,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
 			{ value: "glpat-0123456789012345678901234567890123456789" },
 			{ authHeader: "Bearer credential" },
+			{ auth_header: "opaque-api-credential" },
 			{ authValue: "credential" },
 			{ authCode: "authorization-code" },
 			{ basicAuth: "credential" },

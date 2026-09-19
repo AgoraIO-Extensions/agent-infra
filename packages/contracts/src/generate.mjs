@@ -453,8 +453,14 @@ function buildArtifacts() {
 			title: "Agent Infra Pilot Direct MCP/API",
 			version: "1.0.0",
 		},
+		security: [{ PrincipalBearer: [] }],
 		paths: pilotDirectOpenApiPathsV1,
-		components: { schemas: pilotDirectSchemasV1 },
+		components: {
+			securitySchemes: {
+				PrincipalBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: pilotDirectSchemasV1,
+		},
 	});
 	const registryManifestJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",

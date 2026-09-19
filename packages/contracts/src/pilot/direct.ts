@@ -29,7 +29,7 @@ type DirectJson =
 const credentialSafeKeyPattern =
 	/^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
 const credentialAuthKeyPattern =
-	/^(?!.*(?:[Aa][Uu][Tt][Hh](?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_-]?[Aa][Uu][Tt][Hh])).+$/;
+	/^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$/;
 const caseInsensitiveRegexSource = (source: string) =>
 	source.replace(/[A-Za-z]/g, (letter) => {
 		const lower = letter.toLowerCase();
@@ -424,7 +424,25 @@ const jsonSchemaMetaValidator = new Ajv2020({ strict: false });
 const jsonSchemaDocument = withDirectPayloadBudget(
 	boundedRecord(jsonSchemaDocumentKeyV1Schema, jsonSchemaDocumentValueV1Schema),
 ).superRefine((value, context) => {
-	if (!jsonSchemaMetaValidator.validateSchema(value)) {
+	const dialect = value.$schema;
+	if (
+		dialect !== undefined &&
+		dialect !== "https://json-schema.org/draft/2020-12/schema"
+	) {
+		context.addIssue({
+			code: "custom",
+			message: "Catalog schema must use JSON Schema 2020-12",
+		});
+		return;
+	}
+	try {
+		if (!jsonSchemaMetaValidator.validateSchema(value)) {
+			context.addIssue({
+				code: "custom",
+				message: "Catalog schema is not a valid JSON Schema 2020-12 document",
+			});
+		}
+	} catch {
 		context.addIssue({
 			code: "custom",
 			message: "Catalog schema is not a valid JSON Schema 2020-12 document",
