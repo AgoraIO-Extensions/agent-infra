@@ -10,7 +10,8 @@ import {
 } from "../index.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
 
-const nonEmptyString = () => z.string().min(1);
+const nonEmptyString = () =>
+	z.string().min(1).max(DirectPayloadMaximumStringLengthV1);
 
 // The transport boundary is intentionally bounded and rejects credential or
 // caller-authority selectors before they can cross the Connection contract
@@ -71,7 +72,7 @@ const safeProviderArgumentKeyPatterns = [
 	caseInsensitiveRegexSource("resourcePath"),
 ];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?:${safeProviderArgumentKeyPatterns.join("|")}|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?[A-Za-z0-9]*)?$).+)$`,
+	`^(?:${safeProviderArgumentKeyPatterns.join("|")}|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})).+)$`,
 );
 const unsafeArgumentValuePattern = new RegExp(
 	String.raw`^(?![\s\S]*(?:\b(?:${[
@@ -95,9 +96,21 @@ const unsafeArgumentValuePattern = new RegExp(
 		caseInsensitiveRegexSource("pk"),
 		"[Gg][Hh][PpOoUuSsRr]",
 		"[Xx][Oo][Xx][BbAaPpRrSs]",
-	].join(
-		"|",
-	)})[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
+	].join("|")})[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:${[
+		"AKIA",
+		"ASIA",
+		"AIDA",
+		"AROA",
+		"AGPA",
+		"ANPA",
+		"ANVA",
+		"ABIA",
+		"ACCA",
+	]
+		.map(caseInsensitiveRegexSource)
+		.join(
+			"|",
+		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
 );
 
 export const DirectPayloadMaximumDepthV1 = 3;
@@ -105,6 +118,10 @@ export const DirectPayloadMaximumStringLengthV1 = 65_536;
 export const DirectPayloadMaximumCollectionSizeV1 = 1_000;
 export const DirectPayloadMaximumNodeCountV1 = 10_000;
 export const DirectPayloadMaximumByteLengthV1 = 1_048_576;
+
+const boundedOpaqueId = OpaqueIdV1Schema.max(
+	DirectPayloadMaximumStringLengthV1,
+);
 
 const directPayloadBudgetMetadata = {
 	description: `Direct payloads are limited to ${DirectPayloadMaximumNodeCountV1} total JSON nodes and ${DirectPayloadMaximumByteLengthV1} UTF-8 bytes.`,
@@ -299,8 +316,8 @@ export const DirectActionPublicationStatusV1Schema = z.enum([
 ]);
 
 export const DirectActionCatalogEntryV1Schema = z.strictObject({
-	providerId: OpaqueIdV1Schema,
-	actionId: OpaqueIdV1Schema,
+	providerId: boundedOpaqueId,
+	actionId: boundedOpaqueId,
 	actionVersion: nonEmptyString(),
 	inputSchema: jsonSchemaDocument,
 	outputSchema: jsonSchemaDocument,
@@ -328,34 +345,38 @@ export const DirectBrowserSessionV1Schema = z.strictObject({
 	roles: z.array(browserRole).min(1).max(DirectPayloadMaximumCollectionSizeV1),
 });
 
-export const DirectGrantProjectionV1Schema = z.strictObject({
-	grantId: OpaqueIdV1Schema,
-	consumerId: OpaqueIdV1Schema,
-	consumerInstanceId: OpaqueIdV1Schema,
-	actorId: OpaqueIdV1Schema.nullable(),
-	connectionId: OpaqueIdV1Schema,
-	actions: z
-		.array(
-			z.strictObject({
-				actionId: OpaqueIdV1Schema,
-				actionVersion: nonEmptyString(),
-			}),
-		)
-		.min(1)
-		.max(DirectPayloadMaximumCollectionSizeV1),
-	status: z.enum(["active", "revoked", "expired"]),
-});
+export const DirectGrantProjectionV1Schema = withDirectPayloadBudget(
+	z.strictObject({
+		grantId: boundedOpaqueId,
+		consumerId: boundedOpaqueId,
+		consumerInstanceId: boundedOpaqueId,
+		actorId: boundedOpaqueId.nullable(),
+		connectionId: boundedOpaqueId,
+		actions: z
+			.array(
+				z.strictObject({
+					actionId: boundedOpaqueId,
+					actionVersion: nonEmptyString(),
+				}),
+			)
+			.min(1)
+			.max(DirectPayloadMaximumCollectionSizeV1),
+		status: z.enum(["active", "revoked", "expired"]),
+	}),
+);
 
-export const DirectGrantListResponseV1Schema = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	grants: z
-		.array(DirectGrantProjectionV1Schema)
-		.max(DirectPayloadMaximumCollectionSizeV1),
-});
+export const DirectGrantListResponseV1Schema = withDirectPayloadBudget(
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		grants: z
+			.array(DirectGrantProjectionV1Schema)
+			.max(DirectPayloadMaximumCollectionSizeV1),
+	}),
+);
 
 export const DirectGrantRevokeResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
-	grantId: OpaqueIdV1Schema,
+	grantId: boundedOpaqueId,
 	status: z.literal("revoked"),
 	revokedAt: Rfc3339TimestampV1Schema,
 });
@@ -366,7 +387,7 @@ export const DirectActionRequestV1Schema = withDirectPayloadBudget(
 		requestId: RequestIdV1Schema,
 		idempotencyKey: IdempotencyKeyV1Schema,
 		action: z.strictObject({
-			actionId: OpaqueIdV1Schema,
+			actionId: boundedOpaqueId,
 			actionVersion: nonEmptyString(),
 			arguments: directActionArgumentsRecordV1Schema,
 		}),
@@ -379,7 +400,7 @@ const directResultShape = {
 	requestId: RequestIdV1Schema,
 	idempotencyKey: IdempotencyKeyV1Schema,
 	traceId: TraceIdV1Schema,
-	actionId: OpaqueIdV1Schema,
+	actionId: boundedOpaqueId,
 	actionVersion: nonEmptyString(),
 };
 
@@ -499,7 +520,7 @@ const directFailedActionErrorV1Schema = z.discriminatedUnion("code", [
 
 export const DirectActionSucceededV1Schema = z.strictObject({
 	...directResultShape,
-	callId: OpaqueIdV1Schema,
+	callId: boundedOpaqueId,
 	status: z.literal("succeeded"),
 	completedAt: Rfc3339TimestampV1Schema,
 	output: DirectJsonV1Schema,
@@ -507,7 +528,7 @@ export const DirectActionSucceededV1Schema = z.strictObject({
 
 const directNonSucceededBase = {
 	...directResultShape,
-	callId: OpaqueIdV1Schema,
+	callId: boundedOpaqueId,
 	updatedAt: Rfc3339TimestampV1Schema,
 };
 
@@ -702,7 +723,7 @@ export const pilotDirectOpenApiPathsV1 = {
 		post: {
 			operationId: "revokeConnectionGrant",
 			requestParams: {
-				path: z.strictObject({ grantId: OpaqueIdV1Schema }),
+				path: z.strictObject({ grantId: boundedOpaqueId }),
 			},
 			responses: {
 				"200": directJsonResponse(

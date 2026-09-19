@@ -5,6 +5,7 @@ import {
 	DirectActionRequestV1Schema,
 	DirectActionResultV1Schema,
 	DirectCatalogResponseV1Schema,
+	DirectGrantListResponseV1Schema,
 	DirectGrantProjectionV1Schema,
 	DirectPayloadMaximumByteLengthV1,
 	DirectPayloadMaximumCollectionSizeV1,
@@ -163,6 +164,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"principalName",
 			"accountValue",
 			"credentialValue",
+			"connection.id",
+			"principal/id",
+			"grant id",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -182,6 +186,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "sk-abcdefghijklmnopqrstuvwxyz" },
 			{ auth: "mF_9.B5f-4.1JqM" },
 			{ value: "mF_9.B5f-4.1JqM" },
+			{ key: "AKIAIOSFODNN7EXAMPLE" },
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -433,6 +438,25 @@ describe("Pilot Direct MCP/API contracts", () => {
 				actions: Array.from(
 					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
 					() => grant.actions[0],
+				),
+			}).success,
+		).toBe(false);
+		expect(
+			DirectGrantProjectionV1Schema.safeParse({
+				...grant,
+				grantId: "g".repeat(DirectPayloadMaximumStringLengthV1 + 1),
+			}).success,
+		).toBe(false);
+		const grantList = { schemaVersion: 1, grants: [grant] };
+		expect(DirectGrantListResponseV1Schema.safeParse(grantList).success).toBe(
+			true,
+		);
+		expect(
+			DirectGrantListResponseV1Schema.safeParse({
+				schemaVersion: 1,
+				grants: Array.from(
+					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+					() => grant,
 				),
 			}).success,
 		).toBe(false);
