@@ -568,6 +568,15 @@ describe("official declaration transition", () => {
 					NOTICE: hash("upstream notice"),
 				},
 			};
+			await rm(join(fixture.sandbox, "opt/codex"), {
+				recursive: true,
+				force: true,
+			});
+			await put(
+				installed("bundle/bin/codex"),
+				payload["bundle/bin/codex"] as Buffer,
+				0o555,
+			);
 			await put(installed("LICENSE"), "upstream license");
 			await put(installed("NOTICE"), "upstream notice");
 			await put(installed("release.json"), JSON.stringify(fixture.release));
