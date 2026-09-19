@@ -1256,10 +1256,21 @@ export class PostgresConversationDispatchStoreV1
 					message.role !== "user"
 				)
 					return null;
+				const inputFiles = await transaction<{ file_id: string }[]>`
+					select file_id from platform.files
+					where conversation_id = ${claim.conversationId}
+						and record->>'messageId' = ${originalPayload.messageId}
+						and record->>'kind' = 'attachment'
+						and record->>'status' = 'available'
+					order by file_id
+				`;
 				const original = {
 					...base,
 					kind: "submit-turn",
-					input: { text: message.text, attachments: [] },
+					input: {
+						text: message.text,
+						attachments: inputFiles.map((file) => file.file_id),
+					},
 					...(state.execution.model_option_id && state.execution.reasoning_level
 						? {
 								selection: {
