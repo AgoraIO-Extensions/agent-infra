@@ -1424,6 +1424,7 @@ export class PostgresConversationDispatchStoreV1
       `;
 			let originalPrincipal: { kind: "user"; id: string };
 			let controlSourceId: string;
+			let authorizationRecordId: string;
 			if (authorization) {
 				const boundary = parseTaskAuthorizationBoundaryV1(
 					authorization.boundary,
@@ -1442,6 +1443,7 @@ export class PostgresConversationDispatchStoreV1
 				});
 				originalPrincipal = { kind: "user", id: boundary.principal.id };
 				controlSourceId = authorization.id;
+				authorizationRecordId = authorization.id;
 			} else {
 				const historical = await readLegacyControlRecoveryInTransaction(
 					transaction,
@@ -1455,11 +1457,10 @@ export class PostgresConversationDispatchStoreV1
 					historical.hostSessionRef !== input.hostSessionRef
 				)
 					throw new StaleDispatchLease();
-				originalPrincipal = {
-					kind: "user",
-					id: historical.originalPrincipal.id,
-				};
-				controlSourceId = historical.migrationRecordId;
+				// A generation isolation control must be bound to a persisted
+				// authorization record. Legacy evidence without that record cannot
+				// satisfy the integrity foreign key and therefore fails closed.
+				throw new StaleDispatchLease();
 			}
 			const plan = planConversationGenerationIsolationV1({
 				claim: { ...claim, hostSessionRef: input.hostSessionRef },
@@ -1469,17 +1470,23 @@ export class PostgresConversationDispatchStoreV1
 			});
 			const controlRecordId = randomUUID();
 			await transaction`
+        insert into platform.task_control_records (id, execution_id, authorization_record_id, reason)
+        values (${controlRecordId}, ${claim.executionId}, ${authorizationRecordId}, 'generation_isolation')
+      `;
+			await transaction`
         insert into platform.conversation_generation_tombstones
           (operation_id, conversation_id, session_generation, execution_id, item_id, control_record_id, control_source_id, original_principal, host_session_ref, failure_code)
         values (${plan.operationId}, ${claim.conversationId}, ${claim.sessionGeneration}, ${claim.executionId}, ${claim.itemId}, ${controlRecordId},
           ${plan.controlSourceId}, ${transaction.json(plan.originalPrincipal)}, ${input.hostSessionRef}, ${plan.failureCode})
       `;
 			await transaction`
-        insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-        values (${controlRecordId}, ${claim.traceId}, 'system', ${claim.leaseOwner}, ${plan.auditAction}, 'conversation', ${claim.conversationId}, 'succeeded',
-          ${claim.requestId}, ${claim.agentId}, ${transaction.json({
+				insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+				values (${randomUUID()}, ${claim.traceId}, 'system', ${claim.leaseOwner}, ${plan.auditAction}, 'conversation', ${claim.conversationId}, 'succeeded',
+					${claim.requestId}, ${claim.agentId}, ${transaction.json({
 						originalPrincipal: plan.originalPrincipal,
 						controlSourceId,
+						authorizationRecordId,
+						controlRecordId,
 						operationId: plan.operationId,
 						reason: plan.reason,
 						failureCode: plan.failureCode,
