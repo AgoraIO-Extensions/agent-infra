@@ -2595,6 +2595,11 @@ describe("authorized historical metadata rearm", () => {
 			startedAt: new Date(1_800_000_000_002).toISOString(),
 			finishedAt: new Date(1_800_000_000_003).toISOString(),
 			durationMs: 1,
+			connection: {
+				serviceRef: "connection",
+				verification: "unverified",
+				reason: "receipt_missing",
+			},
 		} as const;
 		const operation = (
 			n: number,
