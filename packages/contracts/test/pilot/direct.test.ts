@@ -281,6 +281,22 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			DirectActionResultV1Schema.safeParse({
 				...success,
+				traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
+			}).success,
+		).toBe(false);
+		expect(() =>
+			validateDirectActionResultV1(
+				request,
+				{
+					...success,
+					traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
+				},
+				{ validateOutput: () => true },
+			),
+		).toThrow("payload budget");
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...success,
 				output: { secretAccessKey: "must-not-cross" },
 			}).success,
 		).toBe(false);

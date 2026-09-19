@@ -292,6 +292,14 @@ describe("Pilot standard artifacts", () => {
 			),
 		).toBe(false);
 		expect(publishedValidatorCalled).toBe(false);
+		let bigintValidatorCalled = false;
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(1n, () => {
+				bigintValidatorCalled = true;
+				return true;
+			}),
+		).toBe(false);
+		expect(bigintValidatorCalled).toBe(false);
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {

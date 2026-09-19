@@ -156,7 +156,7 @@ function inspectDirectPayload(
 	return { nodes, bytes };
 }
 
-function withDirectPayloadBudget<T extends z.ZodType<DirectJson>>(schema: T) {
+function withDirectPayloadBudget<T extends z.ZodType>(schema: T) {
 	return schema
 		.meta(directPayloadBudgetMetadata)
 		.superRefine((value, context) => {
@@ -486,23 +486,29 @@ export const DirectActionUnresolvedV1Schema = z.strictObject({
 	error: directUnresolvedErrorV1Schema,
 });
 
-export const DirectActionResultV1Schema = z.discriminatedUnion("status", [
-	DirectActionSucceededV1Schema,
-	DirectActionFailedV1Schema,
-	DirectActionPendingV1Schema,
-	DirectActionManualReviewV1Schema,
-	DirectActionUnresolvedV1Schema,
-]);
+export const DirectActionResultV1Schema = withDirectPayloadBudget(
+	z.discriminatedUnion("status", [
+		DirectActionSucceededV1Schema,
+		DirectActionFailedV1Schema,
+		DirectActionPendingV1Schema,
+		DirectActionManualReviewV1Schema,
+		DirectActionUnresolvedV1Schema,
+	]),
+);
 
 export type DirectPayloadValidatorV1 = (input: unknown) => boolean;
 export type DirectPublishedSchemaValidatorV1 = (input: unknown) => boolean;
 
 function isDirectPayloadWithinBudget(input: unknown) {
-	const size = inspectDirectPayload(input);
-	return (
-		size.nodes <= DirectPayloadMaximumNodeCountV1 &&
-		size.bytes <= DirectPayloadMaximumByteLengthV1
-	);
+	try {
+		const size = inspectDirectPayload(input);
+		return (
+			size.nodes <= DirectPayloadMaximumNodeCountV1 &&
+			size.bytes <= DirectPayloadMaximumByteLengthV1
+		);
+	} catch {
+		return false;
+	}
 }
 
 // JSON Schema and OpenAPI cannot express an aggregate recursive node/byte
@@ -523,6 +529,9 @@ export function validateDirectActionResultV1(
 	context: { validateOutput: DirectPayloadValidatorV1 },
 ) {
 	const request = DirectActionRequestV1Schema.parse(requestInput);
+	if (!isDirectPayloadWithinBudget(resultInput)) {
+		throw new Error("Direct Action result exceeds the payload budget");
+	}
 	const result = DirectActionResultV1Schema.parse(resultInput);
 	if (
 		result.requestId !== request.requestId ||

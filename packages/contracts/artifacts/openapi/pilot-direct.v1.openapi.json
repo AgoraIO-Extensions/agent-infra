@@ -1661,6 +1661,7 @@
         "type": "object"
       },
       "DirectActionResultV1": {
+        "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
         "discriminator": {
           "mapping": {
             "failed": "#/components/schemas/DirectActionFailedV1",
