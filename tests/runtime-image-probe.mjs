@@ -800,7 +800,6 @@ async function turn(
 	expectedStatus = "completed",
 	session = undefined,
 	beforePersist = undefined,
-	eventReason = undefined,
 ) {
 	const submitted = await submitTurn(name, selection, session);
 	await beforePersist?.(submitted);
@@ -818,7 +817,6 @@ async function turn(
 						afterCursor: null,
 					},
 					"events.persist",
-					eventReason,
 				),
 			);
 			assert.equal(events.status, 200);
@@ -849,7 +847,6 @@ async function turn(
 						confirmedCursor,
 					},
 					"events.ack",
-					eventReason,
 				),
 			);
 			assert.equal(ack.status, 200);
@@ -1046,14 +1043,17 @@ async function runImageProbe() {
 			selected.submit.selection,
 			"completed",
 			selected.lookup,
-			undefined,
-			"recovery",
 		);
 		check(
 			"persistent-runtime-restart",
 			restored.status === 200 &&
 				JSON.parse(restored.text).status === "completed" &&
-				requests.length === 2,
+				requests.length === 3 &&
+				requests[2].history &&
+				requests[2].path === "/approved-selected/v1/responses" &&
+				requests[2].model === "gpt-5.2" &&
+				requests[2].effort === "high" &&
+				requests[2].authenticated,
 		);
 		await runtime.stop();
 		for (const [name, changes] of [
