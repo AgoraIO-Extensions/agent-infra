@@ -699,14 +699,6 @@ async function waitForOpenModelRequest(path) {
 	assert.fail(`model request did not open: ${path}`);
 }
 
-async function waitForModelRequest(path) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (requests.some((observed) => observed.path === path)) return;
-		await delay(25);
-	}
-	assert.fail(`model request did not arrive: ${path}`);
-}
-
 function assertRedacted(text) {
 	for (const value of [
 		...Object.values(credentials),
@@ -961,35 +953,6 @@ async function runImageProbe() {
 			},
 			"completed",
 			defaultTurn.lookup,
-			async (selected) => {
-				await waitForModelRequest("/approved-selected/v1/responses");
-				const replayed = await request(
-					selected.path,
-					protocol.signRequest(selected.submit, "turn.submit"),
-				);
-				check(
-					"submit-idempotency",
-					replayed.status === 200 && requests.length === 2,
-				);
-				const conflicting = await request(
-					selected.path,
-					protocol.signRequest(
-						{
-							...selected.submit,
-							selection: {
-								schemaVersion: 1,
-								modelOptionId: "default-option",
-								reasoningLevel: "medium",
-							},
-						},
-						"turn.submit",
-					),
-				);
-				check(
-					"selection-conflict",
-					conflicting.status === 409 && requests.length === 2,
-				);
-			},
 		);
 		check(
 			"native-execution-selection",
@@ -998,6 +961,32 @@ async function runImageProbe() {
 				requests[1].model === "gpt-5.2" &&
 				requests[1].effort === "high" &&
 				requests[1].authenticated,
+		);
+		const replayed = await request(
+			selected.path,
+			protocol.signRequest(selected.submit, "turn.submit"),
+		);
+		check(
+			"submit-idempotency",
+			replayed.status === 200 && requests.length === 2,
+		);
+		const conflicting = await request(
+			selected.path,
+			protocol.signRequest(
+				{
+					...selected.submit,
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "default-option",
+						reasoningLevel: "medium",
+					},
+				},
+				"turn.submit",
+			),
+		);
+		check(
+			"selection-conflict",
+			conflicting.status === 409 && requests.length === 2,
 		);
 		stage = "grant-rejections";
 		const freshSubmission = protocol.signRequest(
