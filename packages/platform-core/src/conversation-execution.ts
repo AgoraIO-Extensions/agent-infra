@@ -1826,7 +1826,8 @@ function planMetadataRecovery(
 			!execution.runtimeCursor ||
 			!candidate.latestToolFacts.some(
 				(fact) =>
-					fact.kind === "tool" && fact.connection?.verification !== "verified",
+					fact.kind === "tool" &&
+					fact.connection?.verification === "unverified",
 			) ||
 			candidate.boundary === null ||
 			candidate.boundary === undefined

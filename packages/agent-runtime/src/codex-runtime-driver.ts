@@ -3373,6 +3373,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			) ?? [];
 		const fact = facts.at(-1);
 		const phase = fact?.phase;
+		const validSourceReserve =
+			action.purpose === "source-reserve" && phase === "intent";
 		const validSourceBind =
 			action.purpose === "source-bind" &&
 			facts.some((value) => value.phase === "started") &&
@@ -3382,7 +3384,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				phase === "failed");
 		if (
 			!fact ||
-			(!validSourceBind && phase !== "intent" && phase !== "started")
+			(!validSourceReserve &&
+				!validSourceBind &&
+				phase !== "intent" &&
+				phase !== "started")
 		)
 			runtimeAuthorizationDenied();
 	}
@@ -5460,7 +5465,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const needsAdmission =
 			request.phase === "source-reserve" ||
 			(request.phase === "source-bind" && request.delivery === "started");
-		if (!prepared.replay && needsAdmission) {
+		// A source-reserve replay must still cross the Host authorization boundary;
+		// only a completed bind/terminal decision may skip the external check.
+		const requiresAuthorization =
+			needsAdmission &&
+			(!prepared.replay || request.phase === "source-reserve");
+		if (requiresAuthorization) {
 			const waiting = new AbortController();
 			try {
 				if (!this.authorizeExternalAction) unavailable();
@@ -5476,7 +5486,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						operationRef: prepared.parent.operationRef,
 						attemptRef: prepared.parent.attemptRef,
 						kind: "tool",
-						purpose: "source-bind",
+						purpose:
+							request.phase === "source-reserve"
+								? "source-reserve"
+								: "source-bind",
 					}),
 				]);
 			} catch (error) {

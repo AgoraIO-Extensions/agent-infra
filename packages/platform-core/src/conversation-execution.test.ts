@@ -1636,6 +1636,11 @@ describe("Conversation metadata recovery planning", () => {
 							operationRef: "tool_01",
 							attemptRef: "attempt_01",
 							phase: "intent" as const,
+							connection: {
+								serviceRef: "github",
+								verification: "unverified" as const,
+								reason: "receipt_missing",
+							},
 						},
 					],
 				},
@@ -1941,6 +1946,11 @@ describe("Conversation metadata recovery planning", () => {
 			toolId: "connection.create_pr",
 			operationRef: "tool_01",
 			attemptRef: "attempt_01",
+			connection: {
+				serviceRef: "github",
+				verification: "unverified" as const,
+				reason: "receipt_missing" as const,
+			},
 		};
 		const startedAt = requestedAt.toISOString();
 		const outcome = {

@@ -46,7 +46,7 @@ export class PostgresWecomConnectionsV1 {
    select 1 from platform.wecom_connections w join platform.agents a on a.id=w.agent_id
    join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
    where w.bot_id=${claim.botId} and w.agent_id=${claim.agentId} and w.binding_reference=${claim.bindingReference} and w.holder_id=${claim.holderId} and w.fence=${claim.fence} and w.lease_until>clock_timestamp()
-   and w.status in ('verifying','connected')
+   and w.status in ('verifying','connected','disconnected')
    and ${admissible(this.#sql, claim)}`;
 		return rows.length === 1;
 	}

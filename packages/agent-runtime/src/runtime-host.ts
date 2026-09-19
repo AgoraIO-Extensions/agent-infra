@@ -373,6 +373,7 @@ export class RuntimeHost {
 		attemptRef: string;
 		runtimeOperationId: string;
 		kind: "model" | "tool";
+		purpose?: "source-reserve" | "source-bind";
 	}) {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)

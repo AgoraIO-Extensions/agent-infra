@@ -2076,7 +2076,7 @@ export class PostgresConversationExecutionTransactionV1
 					and exists (select 1 from platform.conversation_events ev where ev.execution_id = e.execution_id
 						and ev.source = 'runtime' and ev.event_type = 'execution.operation'
 						and ev.event_payload->'fact'->>'kind' = 'tool'
-						and coalesce(ev.event_payload->'fact'->'connection'->>'verification', '') <> 'verified'
+						and ev.event_payload->'fact'->'connection'->>'verification' = 'unverified'
 						and not exists (select 1 from platform.conversation_events newer where newer.execution_id = e.execution_id
 							and newer.event_type = 'execution.operation' and newer.sequence > ev.sequence
 							and newer.event_payload->'fact'->>'operationRef' = ev.event_payload->'fact'->>'operationRef'

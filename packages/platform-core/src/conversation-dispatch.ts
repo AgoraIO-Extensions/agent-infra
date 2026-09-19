@@ -1756,6 +1756,7 @@ export function createConversationDispatchUseCaseV1(
 							true,
 						);
 					// The barrier closes all producers; archive its remaining original events before fencing the DB generation.
+					let terminalEventSeen = claim.runtimeTerminalEventSeen === true;
 					for await (const raw of dependencies.runtimeHost.drainGenerationEvents(
 						request,
 						isolationHeartbeat.signal,
@@ -1763,6 +1764,17 @@ export function createConversationDispatchUseCaseV1(
 						const runtimeEvent = parseRuntimeEvent(raw, claim);
 						const event = normalizedEvent(runtimeEvent);
 						const transition = transitionFromEvent(event);
+						const eventFinalStatus = terminalStatus(event);
+						const connectionMetadata =
+							event.type === "execution.operation" &&
+							event.fact.kind === "tool" &&
+							event.fact.connection !== undefined &&
+							["completed", "failed", "unknown"].includes(event.fact.phase);
+						if (terminalEventSeen && !connectionMetadata)
+							throw new ConversationRuntimeHostError(
+								"RUNTIME_EVENT_CONFLICT",
+								true,
+							);
 						const persisted = await dependencies.events.persist({
 							schemaVersion: 1,
 							conversationId: claim.conversationId,
@@ -1773,7 +1785,10 @@ export function createConversationDispatchUseCaseV1(
 							runtimeCursor: runtimeEvent.cursor,
 							occurredAt: runtimeEvent.occurredAt,
 							event,
-							...(transition ? { transition } : {}),
+							...(terminalEventSeen ? { operationMetadataOnly: true } : {}),
+							...(transition && (!terminalEventSeen || eventFinalStatus)
+								? { transition }
+								: {}),
 							dispatchLease: {
 								schemaVersion: 1,
 								itemId: claim.itemId,
@@ -1781,6 +1796,7 @@ export function createConversationDispatchUseCaseV1(
 								deliveryFence: claim.deliveryFence,
 							},
 						});
+						if (eventFinalStatus) terminalEventSeen = true;
 						if (persisted.outcome === "stale")
 							return { schemaVersion: 1, outcome: "stale" };
 						await dependencies.runtimeHost.acknowledge?.(
