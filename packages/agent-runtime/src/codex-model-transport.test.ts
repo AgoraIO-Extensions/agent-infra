@@ -136,7 +136,7 @@ async function transportWithCredentials(
 					: `option_${index}/synthetic-selected`,
 			model: "synthetic-selected",
 			endpoint,
-				credential,
+			credential,
 		})),
 		testObserver,
 	);

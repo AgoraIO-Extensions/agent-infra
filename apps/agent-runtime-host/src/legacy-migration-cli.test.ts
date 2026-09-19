@@ -89,9 +89,9 @@ describe("offline Host migration candidate CLI", () => {
 			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
 		);
 		await rm(lock, { recursive: true });
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).resolves.toMatchObject(
-			{ status: "verified_candidate" },
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment),
+		).resolves.toMatchObject({ status: "verified_candidate" });
 	});
 
 	it("validates via the existing loader/Store without altering the original journal or opening a Driver/listener", async () => {
