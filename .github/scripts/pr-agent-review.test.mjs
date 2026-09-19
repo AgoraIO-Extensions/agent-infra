@@ -29,6 +29,7 @@ function api({
   wrongHead = false,
   dropComments = false,
   missingPatch = false,
+  addedFile = false,
 } = {}) {
   const baseSha = "b".repeat(40);
   let posted;
@@ -44,6 +45,7 @@ function api({
       return [
         {
           filename: "src/math.ts",
+          ...(addedFile ? { status: "added" } : {}),
           ...(missingPatch
             ? {}
             : { patch: "@@ -1 +1 @@\n-return a + b;\n+return a - b;" }),
@@ -163,6 +165,18 @@ test("publishes findings as native threads and verifies the exact head, body and
 
 test("anchors findings from GitHub content when a large-file patch is omitted", async () => {
   const { request } = api({ missingPatch: true });
+  const receipt = await publishPrAgentReview({
+    ...context,
+    raw: JSON.stringify({
+      key_issues_to_review: [{ ...finding, start_line: 2, end_line: 2 }],
+    }),
+    request,
+  });
+  assert.equal(receipt.findingCount, 1);
+});
+
+test("anchors findings in a newly added file when GitHub omits its patch", async () => {
+  const { request } = api({ missingPatch: true, addedFile: true });
   const receipt = await publishPrAgentReview({
     ...context,
     raw: JSON.stringify({

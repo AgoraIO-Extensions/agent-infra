@@ -3534,20 +3534,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTurnAdmitted = true;
 			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
 			await this.confirmModelAdmission(command, session.nativeSessionRef);
+			// A successfully registered native turn has already crossed the durable
+			// admission barrier. The first HTTP model request can arrive after this
+			// method returns, so defer only the initial status read instead of blocking
+			// acceptance on the provider request itself. The waiter above remains the
+			// narrow recovery path for a registration race.
 			if (this.waitForModelRequest) {
-				const modelReady =
-					modelRequestReady ??
-					(await this.waitForModelRequest(nativeTurn, admissionDeadline));
-				if (!modelReady) {
-					const current = this.operationRecord(command);
-					if (
-						current?.record?.result.outcome === "accepted" &&
-						current.record.result.status !== "running"
-					) {
-						return current.record;
-					}
-					unavailable();
-				}
 				this.initialModelStatusPending.add(
 					this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
 				);

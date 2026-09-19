@@ -206,6 +206,7 @@ export async function publishPrAgentReview(context) {
     throw new Error("PR-Agent review target must be in the same repository");
   const files = new Map();
   const missingPatches = new Set();
+  const addedFiles = new Set();
   // GitHub caps PR files at 3000; reaching the cap is not evidence of a complete list.
   for (let page = 1; page <= 30; page++) {
     const batch = await request(
@@ -216,6 +217,7 @@ export async function publishPrAgentReview(context) {
         files.set(file.filename, collectChangedDiffLines(file.patch).RIGHT);
       } else if (findings.some((finding) => finding.relevant_file.trim() === file.filename)) {
         missingPatches.add(file.filename);
+        if (file.status === "added") addedFiles.add(file.filename);
       }
     }
     if (batch.length < 100) break;
@@ -231,17 +233,20 @@ export async function publishPrAgentReview(context) {
         .map((segment) => encodeURIComponent(segment))
         .join("/");
       const [before, after] = await Promise.all([
-        request(
-          `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(baseSha)}`,
-        ),
+        addedFiles.has(filename)
+          ? undefined
+          : request(
+              `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(baseSha)}`,
+            ),
         request(
           `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(expectedHead)}`,
         ),
       ]);
       if (
-        before?.type !== "file" ||
-        before.encoding !== "base64" ||
-        typeof before.content !== "string" ||
+        (before !== undefined &&
+          (before.type !== "file" ||
+            before.encoding !== "base64" ||
+            typeof before.content !== "string")) ||
         after?.type !== "file" ||
         after.encoding !== "base64" ||
         typeof after.content !== "string"
@@ -252,7 +257,7 @@ export async function publishPrAgentReview(context) {
       files.set(
         filename,
         await changedRightLinesFromTexts(
-          decode(before.content),
+          before === undefined ? "" : decode(before.content),
           decode(after.content),
         ),
       );
