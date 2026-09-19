@@ -484,10 +484,9 @@ export class RuntimeHostV3 {
 		let response: Awaited<ReturnType<Options["dispatch"]>>;
 		try {
 			this.assertOpen();
-			response = await this.options.dispatch(
-				session.hostSessionRef,
-				operation,
-				false,
+			response = await abortable(
+				this.options.dispatch(session.hostSessionRef, operation, false),
+				signal ?? this.lifetime.signal,
 			);
 		} catch (error) {
 			if (

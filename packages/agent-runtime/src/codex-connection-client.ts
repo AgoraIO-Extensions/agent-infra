@@ -174,6 +174,10 @@ export function createCodexConnectionClient(options: {
 			bootstrapRequests.has(request.requestId)
 		)
 			throw unavailable();
+		if (bootstrapRequests.size >= maximumHistoricalSlots) {
+			const oldest = bootstrapRequests.values().next().value;
+			if (oldest) bootstrapRequests.delete(oldest);
+		}
 		bootstrapRequests.add(request.requestId);
 		if (request.profileRef !== profile.profileRef)
 			return deny("profile_unavailable");

@@ -1932,7 +1932,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await client.read<V1StatefulSet>("StatefulSet", name);
 			if (current) {
-				own(current, value.agentId, value.workloadRevision, value.fence);
+				// The persisted recovery creation may predate a newer management fence;
+				// ownership accepts both while the exact creation labels below protect deletion.
+				const ownershipRevision = Math.max(
+					value.workloadRevision,
+					creation.revision,
+				);
+				const ownershipFence = Math.max(value.fence, creation.fence);
+				own(current, value.agentId, ownershipRevision, ownershipFence);
 				if (
 					!identity?.uid ||
 					!Number.isSafeInteger(identity.generation) ||

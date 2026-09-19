@@ -5770,6 +5770,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			// Never call Host while holding the Driver durable-file queue. Host may
 			// still be awaiting this Driver's original submit result.
+			// Model and tool actions require the Host authorization seam; fail closed
+			// when this deployment did not supply it.
 			if (!this.authorizeExternalAction) unavailable();
 			const waiting = new AbortController();
 			try {
