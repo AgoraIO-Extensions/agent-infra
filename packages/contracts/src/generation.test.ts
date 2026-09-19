@@ -94,6 +94,22 @@ describe("standard contract artifacts", () => {
 			artifacts.pilotDelegatedOpenapi.paths["/internal/v1/delegated-actions"]
 				.post.responses,
 		).toHaveProperty("503");
+		expect(artifacts.pilotDirectJsonSchema.$id).toContain(
+			"pilot-direct.v1.schema.json",
+		);
+		expect(artifacts.pilotDirectJsonSchema.$defs).toHaveProperty(
+			"DirectActionResultV1",
+		);
+		expect(artifacts.pilotDirectOpenapi.openapi).toBe("3.1.0");
+		expect(artifacts.pilotDirectOpenapi.paths).toHaveProperty(
+			"/api/v1/actions.post",
+		);
+		expect(artifacts.pilotDirectOpenapi.security).toEqual([
+			{ PrincipalBearer: [] },
+		]);
+		expect(
+			artifacts.pilotDirectOpenapi.components.securitySchemes.PrincipalBearer,
+		).toEqual({ type: "http", scheme: "bearer" });
 		expect(artifacts.kubernetesWorkloadJsonSchema.$schema).toBe(
 			"https://json-schema.org/draft/2020-12/schema",
 		);

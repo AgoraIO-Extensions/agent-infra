@@ -358,6 +358,9 @@ importers:
 
   packages/contracts:
     dependencies:
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       jsonc-parser:
         specifier: 'catalog:'
         version: 3.3.1
@@ -374,9 +377,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
-      ajv:
-        specifier: 'catalog:'
-        version: 8.20.0
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
