@@ -516,7 +516,339 @@
             "type": "string"
           },
           "error": {
-            "$ref": "#/components/schemas/DirectActionErrorV1"
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "CONNECTION_UNAVAILABLE",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Connection is unavailable",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "PROVIDER_RATE_LIMITED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Provider rate limit reached",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "DEPENDENCY_UNAVAILABLE",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Connection dependency is unavailable",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "INTERNAL_ERROR",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Connection action failed",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "AUTHORIZATION_REQUIRED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Connection authorization is required",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "AUTHORIZATION_REVOKED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Connection authorization was revoked",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "ACTION_UNAVAILABLE",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Action is unavailable",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "REPOSITORY_POLICY_DENIED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Repository policy denied the action",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "PROVIDER_FAILED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Provider rejected the action",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "const": "PROVIDER_REVOKED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Provider authorization was revoked",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "traceId",
+                  "message",
+                  "retryable",
+                  "code"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
           },
           "idempotencyKey": {
             "maxLength": 128,
@@ -554,8 +886,8 @@
           "actionId",
           "actionVersion",
           "callId",
-          "status",
           "updatedAt",
+          "status",
           "error"
         ],
         "type": "object"
@@ -576,7 +908,37 @@
             "type": "string"
           },
           "error": {
-            "$ref": "#/components/schemas/DirectActionErrorV1"
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "NEEDS_MANUAL_REVIEW",
+                "type": "string"
+              },
+              "message": {
+                "const": "Provider result requires manual review",
+                "type": "string"
+              },
+              "retryable": {
+                "const": false,
+                "type": "boolean"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "traceId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "traceId",
+              "message",
+              "retryable",
+              "code"
+            ],
+            "type": "object"
           },
           "idempotencyKey": {
             "maxLength": 128,
@@ -614,8 +976,8 @@
           "actionId",
           "actionVersion",
           "callId",
-          "status",
           "updatedAt",
+          "status",
           "error"
         ],
         "type": "object"
@@ -636,7 +998,37 @@
             "type": "string"
           },
           "error": {
-            "$ref": "#/components/schemas/DirectActionErrorV1"
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "RESULT_PENDING",
+                "type": "string"
+              },
+              "message": {
+                "const": "Provider result requires reconciliation",
+                "type": "string"
+              },
+              "retryable": {
+                "const": false,
+                "type": "boolean"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "traceId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "traceId",
+              "message",
+              "retryable",
+              "code"
+            ],
+            "type": "object"
           },
           "idempotencyKey": {
             "maxLength": 128,
@@ -674,8 +1066,8 @@
           "actionId",
           "actionVersion",
           "callId",
-          "status",
           "updatedAt",
+          "status",
           "error"
         ],
         "type": "object"
@@ -709,6 +1101,7 @@
                           "type": "number"
                         },
                         {
+                          "maxLength": 65536,
                           "type": "string"
                         }
                       ]
@@ -728,6 +1121,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -747,6 +1141,7 @@
                                       "type": "number"
                                     },
                                     {
+                                      "maxLength": 65536,
                                       "type": "string"
                                     }
                                   ]
@@ -764,10 +1159,12 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxItems": 1000,
                                   "type": "array"
                                 },
                                 {
@@ -783,19 +1180,22 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxProperties": 1000,
                                   "propertyNames": {
                                     "allOf": [
                                       {
-                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
                                         "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                       }
                                     ],
+                                    "maxLength": 65536,
                                     "minLength": 1,
                                     "type": "string"
                                   },
@@ -803,6 +1203,7 @@
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -820,6 +1221,7 @@
                                       "type": "number"
                                     },
                                     {
+                                      "maxLength": 65536,
                                       "type": "string"
                                     }
                                   ]
@@ -837,10 +1239,12 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxItems": 1000,
                                   "type": "array"
                                 },
                                 {
@@ -856,19 +1260,22 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxProperties": 1000,
                                   "propertyNames": {
                                     "allOf": [
                                       {
-                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
                                         "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                       }
                                     ],
+                                    "maxLength": 65536,
                                     "minLength": 1,
                                     "type": "string"
                                   },
@@ -876,15 +1283,17 @@
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
                               "allOf": [
                                 {
-                                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                 },
                                 {
                                   "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                 }
                               ],
+                              "maxLength": 65536,
                               "minLength": 1,
                               "type": "string"
                             },
@@ -892,6 +1301,7 @@
                           }
                         ]
                       },
+                      "maxItems": 1000,
                       "type": "array"
                     },
                     {
@@ -909,6 +1319,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -928,6 +1339,7 @@
                                       "type": "number"
                                     },
                                     {
+                                      "maxLength": 65536,
                                       "type": "string"
                                     }
                                   ]
@@ -945,10 +1357,12 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxItems": 1000,
                                   "type": "array"
                                 },
                                 {
@@ -964,19 +1378,22 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxProperties": 1000,
                                   "propertyNames": {
                                     "allOf": [
                                       {
-                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
                                         "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                       }
                                     ],
+                                    "maxLength": 65536,
                                     "minLength": 1,
                                     "type": "string"
                                   },
@@ -984,6 +1401,7 @@
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -1001,6 +1419,7 @@
                                       "type": "number"
                                     },
                                     {
+                                      "maxLength": 65536,
                                       "type": "string"
                                     }
                                   ]
@@ -1018,10 +1437,12 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxItems": 1000,
                                   "type": "array"
                                 },
                                 {
@@ -1037,19 +1458,22 @@
                                         "type": "number"
                                       },
                                       {
+                                        "maxLength": 65536,
                                         "type": "string"
                                       }
                                     ]
                                   },
+                                  "maxProperties": 1000,
                                   "propertyNames": {
                                     "allOf": [
                                       {
-                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
                                         "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                       }
                                     ],
+                                    "maxLength": 65536,
                                     "minLength": 1,
                                     "type": "string"
                                   },
@@ -1057,15 +1481,17 @@
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
                               "allOf": [
                                 {
-                                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                 },
                                 {
                                   "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                                 }
                               ],
+                              "maxLength": 65536,
                               "minLength": 1,
                               "type": "string"
                             },
@@ -1073,15 +1499,17 @@
                           }
                         ]
                       },
+                      "maxProperties": 1000,
                       "propertyNames": {
                         "allOf": [
                           {
-                            "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                            "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                           },
                           {
                             "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                           }
                         ],
+                        "maxLength": 65536,
                         "minLength": 1,
                         "type": "string"
                       },
@@ -1089,15 +1517,17 @@
                     }
                   ]
                 },
+                "maxProperties": 1000,
                 "propertyNames": {
                   "allOf": [
                     {
-                      "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                      "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                     },
                     {
                       "pattern": "^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$"
                     }
                   ],
+                  "maxLength": 65536,
                   "minLength": 1,
                   "type": "string"
                 },
@@ -1209,6 +1639,7 @@
                     "type": "number"
                   },
                   {
+                    "maxLength": 65536,
                     "type": "string"
                   }
                 ]
@@ -1228,6 +1659,7 @@
                           "type": "number"
                         },
                         {
+                          "maxLength": 65536,
                           "type": "string"
                         }
                       ]
@@ -1247,6 +1679,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -1264,10 +1697,12 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -1283,19 +1718,23 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
+                              "maxLength": 65536,
                               "minLength": 1,
-                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                               "type": "string"
                             },
                             "type": "object"
                           }
                         ]
                       },
+                      "maxItems": 1000,
                       "type": "array"
                     },
                     {
@@ -1313,6 +1752,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -1330,10 +1770,12 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -1349,28 +1791,34 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
+                              "maxLength": 65536,
                               "minLength": 1,
-                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                               "type": "string"
                             },
                             "type": "object"
                           }
                         ]
                       },
+                      "maxProperties": 1000,
                       "propertyNames": {
+                        "maxLength": 65536,
                         "minLength": 1,
-                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                         "type": "string"
                       },
                       "type": "object"
                     }
                   ]
                 },
+                "maxItems": 1000,
                 "type": "array"
               },
               {
@@ -1388,6 +1836,7 @@
                           "type": "number"
                         },
                         {
+                          "maxLength": 65536,
                           "type": "string"
                         }
                       ]
@@ -1407,6 +1856,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -1424,10 +1874,12 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -1443,19 +1895,23 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
+                              "maxLength": 65536,
                               "minLength": 1,
-                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                               "type": "string"
                             },
                             "type": "object"
                           }
                         ]
                       },
+                      "maxItems": 1000,
                       "type": "array"
                     },
                     {
@@ -1473,6 +1929,7 @@
                                 "type": "number"
                               },
                               {
+                                "maxLength": 65536,
                                 "type": "string"
                               }
                             ]
@@ -1490,10 +1947,12 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           {
@@ -1509,31 +1968,38 @@
                                   "type": "number"
                                 },
                                 {
+                                  "maxLength": 65536,
                                   "type": "string"
                                 }
                               ]
                             },
+                            "maxProperties": 1000,
                             "propertyNames": {
+                              "maxLength": 65536,
                               "minLength": 1,
-                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                              "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                               "type": "string"
                             },
                             "type": "object"
                           }
                         ]
                       },
+                      "maxProperties": 1000,
                       "propertyNames": {
+                        "maxLength": 65536,
                         "minLength": 1,
-                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                        "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                         "type": "string"
                       },
                       "type": "object"
                     }
                   ]
                 },
+                "maxProperties": 1000,
                 "propertyNames": {
+                  "maxLength": 65536,
                   "minLength": 1,
-                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
+                  "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$",
                   "type": "string"
                 },
                 "type": "object"
@@ -1587,7 +2053,37 @@
             "type": "string"
           },
           "error": {
-            "$ref": "#/components/schemas/DirectActionErrorV1"
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "UNRESOLVED",
+                "type": "string"
+              },
+              "message": {
+                "const": "Provider result is unresolved",
+                "type": "string"
+              },
+              "retryable": {
+                "const": false,
+                "type": "boolean"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "traceId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "traceId",
+              "message",
+              "retryable",
+              "code"
+            ],
+            "type": "object"
           },
           "idempotencyKey": {
             "maxLength": 128,
@@ -1625,8 +2121,8 @@
           "actionId",
           "actionVersion",
           "callId",
-          "status",
           "updatedAt",
+          "status",
           "error"
         ],
         "type": "object"

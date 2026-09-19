@@ -5,7 +5,9 @@ import {
 	DirectActionRequestV1Schema,
 	DirectActionResultV1Schema,
 	DirectCatalogResponseV1Schema,
+	DirectPayloadMaximumCollectionSizeV1,
 	DirectPayloadMaximumDepthV1,
+	DirectPayloadMaximumStringLengthV1,
 	pilotDirectOpenApiPathsV1,
 	validateDirectActionResultV1,
 } from "../../src/pilot/direct.js";
@@ -101,6 +103,18 @@ describe("Pilot Direct MCP/API contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+		for (const argumentsInput of [
+			{ bearer: "credential" },
+			{ oauthCode: "credential" },
+			{ target: "caller-selected-connection" },
+		]) {
+			expect(
+				DirectActionRequestV1Schema.safeParse({
+					...request,
+					action: { ...request.action, arguments: argumentsInput },
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			DirectActionRequestV1Schema.safeParse({
 				...request,
@@ -119,6 +133,55 @@ describe("Pilot Direct MCP/API contracts", () => {
 						nested: nestedArray(DirectPayloadMaximumDepthV1 + 1),
 					},
 				},
+			}).success,
+		).toBe(false);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: {
+					...request.action,
+					arguments: {
+						target: "main",
+						description: "ordinary provider input",
+					},
+				},
+			}).success,
+		).toBe(true);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: {
+					...request.action,
+					arguments: {
+						long: "x".repeat(DirectPayloadMaximumStringLengthV1 + 1),
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: {
+					...request.action,
+					arguments: {
+						items: Array.from(
+							{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+							() => "item",
+						),
+					},
+				},
+			}).success,
+		).toBe(false);
+		const tooManyProperties = Object.fromEntries(
+			Array.from(
+				{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+				(_, index) => [`key${index}`, index],
+			),
+		);
+		expect(
+			DirectActionRequestV1Schema.safeParse({
+				...request,
+				action: { ...request.action, arguments: tooManyProperties },
 			}).success,
 		).toBe(false);
 	});
@@ -180,7 +243,17 @@ describe("Pilot Direct MCP/API contracts", () => {
 				},
 				{ validateOutput: (input) => input },
 			),
-		).toThrow("Direct Action result status mismatch");
+		).toThrow();
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...unresolved,
+				error: {
+					...unresolved.error,
+					code: "PROVIDER_FAILED",
+					message: "Provider rejected the action",
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	it("publishes the catalog, browser grant and Direct Action API paths", () => {

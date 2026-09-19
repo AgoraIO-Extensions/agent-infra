@@ -13,8 +13,10 @@ import { PilotProtocolErrorV1Schema } from "./errors.ts";
 const nonEmptyString = () => z.string().min(1);
 const jsonSchemaDocument = z.record(z.string().min(1), z.unknown());
 
-// The payload is intentionally bounded and rejects credential or caller-authority
-// selectors before it can cross the Connection contract boundary.
+// The transport boundary is intentionally bounded and rejects credential or
+// caller-authority selectors before they can cross the Connection contract
+// boundary. The Connection still validates arguments against its published,
+// action-specific inputSchema and resolves authority outside this payload.
 type DirectJson =
 	| null
 	| boolean
@@ -24,47 +26,87 @@ type DirectJson =
 	| { [key: string]: DirectJson };
 
 const credentialSafeKeyPattern =
-	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
+	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
 const authoritySelectorKeyPattern =
 	/^(?!.*(?:[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Nn][Cc][Ii][Pp][Aa][Ll].*[Ii][Dd]|[Cc][Oo][Nn][Ss][Uu][Mm][Ee][Rr].*[Ii][Dd]|[Ii][Nn][Ss][Tt][Aa][Nn][Cc][Ee].*[Ii][Dd]|[Ee][Xx][Tt][Ee][Rr][Nn][Aa][Ll].*[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Aa][Cc][Tt][Oo][Rr].*[Ii][Dd]|[Oo][Rr][Gg][Aa][Nn][Ii][Zz][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Aa][Gg][Ee][Nn][Tt].*[Ii][Dd]|[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Tt][Uu][Rr][Nn].*[Ii][Dd]|[Ee][Xx][Ee][Cc][Uu][Tt][Ii][Oo][Nn].*[Ii][Dd]|[Gg][Rr][Aa][Nn][Tt].*[Ii][Dd]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn].*[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Nn][Aa][Tt][Ii][Vv][Ee].*[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy].*[Cc][Oo][Nn][Tt][Ee][Xx][Tt]|[Pp][Ll][Aa][Tt][Ff][Oo][Rr][Mm].*(?:[Uu][Ss][Ee][Rr]|[Aa][Cc][Cc][Oo][Uu][Nn][Tt]|[Ss][Ee][Ss][Ss][Ii][Oo][Nn]|[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy]).*[Ii][Dd]|[Aa][Tt][Tt][Aa][Cc][Hh][Mm][Ee][Nn][T])).+$/;
+const unsafeArgumentValuePattern =
+	/^(?:bearer|credential(?:s)?|oauth(?:code|token)?|caller[-_ ]selected(?:[-_ ](?:connection|principal|grant|agent|account|session))?)$/i;
+
+export const DirectPayloadMaximumDepthV1 = 3;
+export const DirectPayloadMaximumStringLengthV1 = 65_536;
+export const DirectPayloadMaximumCollectionSizeV1 = 1_000;
 
 const directJsonPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z.null(),
 	z.boolean(),
 	z.number().finite(),
-	z.string(),
+	z.string().max(DirectPayloadMaximumStringLengthV1),
+]);
+const directActionArgumentPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
+	z.null(),
+	z.boolean(),
+	z.number().finite(),
+	z
+		.string()
+		.max(DirectPayloadMaximumStringLengthV1)
+		.refine((value) => !unsafeArgumentValuePattern.test(value), {
+			message: "Direct action arguments cannot carry credentials or authority selectors",
+		}),
 ]);
 
-function boundedDirectJsonSchema(key: z.ZodType<string>, maximumDepth: number) {
-	let schema = directJsonPrimitiveV1Schema;
+const boundedRecord = (key: z.ZodType<string>, value: z.ZodType<DirectJson>) =>
+	z
+		.record(key, value)
+		.meta({ maxProperties: DirectPayloadMaximumCollectionSizeV1 })
+		.superRefine((record, context) => {
+			if (Object.keys(record).length > DirectPayloadMaximumCollectionSizeV1) {
+				context.addIssue({
+					code: "custom",
+					message: "Direct payload object is too large",
+				});
+			}
+		});
+
+function boundedDirectJsonSchema(
+	key: z.ZodType<string>,
+	maximumDepth: number,
+	primitive: z.ZodType<DirectJson> = directJsonPrimitiveV1Schema,
+) {
+	let schema = primitive;
 	for (let depth = 0; depth < maximumDepth; depth += 1) {
 		const child = schema;
 		schema = z.union([
-			directJsonPrimitiveV1Schema,
-			z.array(child),
-			z.record(key, child),
+			primitive,
+			z.array(child).max(DirectPayloadMaximumCollectionSizeV1),
+			boundedRecord(key, child),
 		]);
 	}
 	return schema;
 }
 
-export const DirectPayloadMaximumDepthV1 = 3;
 export const DirectJsonV1Schema = boundedDirectJsonSchema(
-	z.string().min(1).regex(credentialSafeKeyPattern),
+	z
+		.string()
+		.min(1)
+		.max(DirectPayloadMaximumStringLengthV1)
+		.regex(credentialSafeKeyPattern),
 	DirectPayloadMaximumDepthV1,
 );
 export const DirectActionArgumentsV1Schema = boundedDirectJsonSchema(
 	z
 		.string()
 		.min(1)
+		.max(DirectPayloadMaximumStringLengthV1)
 		.regex(credentialSafeKeyPattern)
 		.regex(authoritySelectorKeyPattern),
 	DirectPayloadMaximumDepthV1,
+	directActionArgumentPrimitiveV1Schema,
 );
-const directActionArgumentsRecordV1Schema = z.record(
+const directActionArgumentsRecordV1Schema = boundedRecord(
 	z
 		.string()
 		.min(1)
+		.max(DirectPayloadMaximumStringLengthV1)
 		.regex(credentialSafeKeyPattern)
 		.regex(authoritySelectorKeyPattern),
 	DirectActionArgumentsV1Schema,
@@ -150,85 +192,111 @@ const directErrorShape = {
 	retryable: z.boolean(),
 };
 
+const directActionErrorV1Schema = <Code extends string>(
+	code: Code,
+	message: string,
+	retryable: boolean,
+) =>
+	z.strictObject({
+		...directErrorShape,
+		code: z.literal(code),
+		message: z.literal(message),
+		retryable: z.literal(retryable),
+	});
+
+const directConnectionUnavailableErrorV1Schema = directActionErrorV1Schema(
+	"CONNECTION_UNAVAILABLE",
+	"Connection is unavailable",
+	true,
+);
+const directProviderRateLimitedErrorV1Schema = directActionErrorV1Schema(
+	"PROVIDER_RATE_LIMITED",
+	"Provider rate limit reached",
+	true,
+);
+const directDependencyUnavailableErrorV1Schema = directActionErrorV1Schema(
+	"DEPENDENCY_UNAVAILABLE",
+	"Connection dependency is unavailable",
+	true,
+);
+const directInternalErrorV1Schema = directActionErrorV1Schema(
+	"INTERNAL_ERROR",
+	"Connection action failed",
+	true,
+);
+const directAuthorizationRequiredErrorV1Schema = directActionErrorV1Schema(
+	"AUTHORIZATION_REQUIRED",
+	"Connection authorization is required",
+	false,
+);
+const directAuthorizationRevokedErrorV1Schema = directActionErrorV1Schema(
+	"AUTHORIZATION_REVOKED",
+	"Connection authorization was revoked",
+	false,
+);
+const directActionUnavailableErrorV1Schema = directActionErrorV1Schema(
+	"ACTION_UNAVAILABLE",
+	"Action is unavailable",
+	false,
+);
+const directRepositoryPolicyDeniedErrorV1Schema = directActionErrorV1Schema(
+	"REPOSITORY_POLICY_DENIED",
+	"Repository policy denied the action",
+	false,
+);
+const directProviderFailedErrorV1Schema = directActionErrorV1Schema(
+	"PROVIDER_FAILED",
+	"Provider rejected the action",
+	false,
+);
+const directProviderRevokedErrorV1Schema = directActionErrorV1Schema(
+	"PROVIDER_REVOKED",
+	"Provider authorization was revoked",
+	false,
+);
+const directResultPendingErrorV1Schema = directActionErrorV1Schema(
+	"RESULT_PENDING",
+	"Provider result requires reconciliation",
+	false,
+);
+const directNeedsManualReviewErrorV1Schema = directActionErrorV1Schema(
+	"NEEDS_MANUAL_REVIEW",
+	"Provider result requires manual review",
+	false,
+);
+const directUnresolvedErrorV1Schema = directActionErrorV1Schema(
+	"UNRESOLVED",
+	"Provider result is unresolved",
+	false,
+);
+
 export const DirectActionErrorV1Schema = z.discriminatedUnion("code", [
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("CONNECTION_UNAVAILABLE"),
-		message: z.literal("Connection is unavailable"),
-		retryable: z.literal(true),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("PROVIDER_RATE_LIMITED"),
-		message: z.literal("Provider rate limit reached"),
-		retryable: z.literal(true),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("DEPENDENCY_UNAVAILABLE"),
-		message: z.literal("Connection dependency is unavailable"),
-		retryable: z.literal(true),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("INTERNAL_ERROR"),
-		message: z.literal("Connection action failed"),
-		retryable: z.literal(true),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("AUTHORIZATION_REQUIRED"),
-		message: z.literal("Connection authorization is required"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("AUTHORIZATION_REVOKED"),
-		message: z.literal("Connection authorization was revoked"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("ACTION_UNAVAILABLE"),
-		message: z.literal("Action is unavailable"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("REPOSITORY_POLICY_DENIED"),
-		message: z.literal("Repository policy denied the action"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("PROVIDER_FAILED"),
-		message: z.literal("Provider rejected the action"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("PROVIDER_REVOKED"),
-		message: z.literal("Provider authorization was revoked"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("RESULT_PENDING"),
-		message: z.literal("Provider result requires reconciliation"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("NEEDS_MANUAL_REVIEW"),
-		message: z.literal("Provider result requires manual review"),
-		retryable: z.literal(false),
-	}),
-	z.strictObject({
-		...directErrorShape,
-		code: z.literal("UNRESOLVED"),
-		message: z.literal("Provider result is unresolved"),
-		retryable: z.literal(false),
-	}),
+	directConnectionUnavailableErrorV1Schema,
+	directProviderRateLimitedErrorV1Schema,
+	directDependencyUnavailableErrorV1Schema,
+	directInternalErrorV1Schema,
+	directAuthorizationRequiredErrorV1Schema,
+	directAuthorizationRevokedErrorV1Schema,
+	directActionUnavailableErrorV1Schema,
+	directRepositoryPolicyDeniedErrorV1Schema,
+	directProviderFailedErrorV1Schema,
+	directProviderRevokedErrorV1Schema,
+	directResultPendingErrorV1Schema,
+	directNeedsManualReviewErrorV1Schema,
+	directUnresolvedErrorV1Schema,
+]);
+
+const directFailedActionErrorV1Schema = z.discriminatedUnion("code", [
+	directConnectionUnavailableErrorV1Schema,
+	directProviderRateLimitedErrorV1Schema,
+	directDependencyUnavailableErrorV1Schema,
+	directInternalErrorV1Schema,
+	directAuthorizationRequiredErrorV1Schema,
+	directAuthorizationRevokedErrorV1Schema,
+	directActionUnavailableErrorV1Schema,
+	directRepositoryPolicyDeniedErrorV1Schema,
+	directProviderFailedErrorV1Schema,
+	directProviderRevokedErrorV1Schema,
 ]);
 
 export const DirectActionSucceededV1Schema = z.strictObject({
@@ -242,26 +310,28 @@ export const DirectActionSucceededV1Schema = z.strictObject({
 const directNonSucceededBase = {
 	...directResultShape,
 	callId: OpaqueIdV1Schema,
-	status: z.enum(["failed", "pending", "manual_review", "unresolved"]),
 	updatedAt: Rfc3339TimestampV1Schema,
-	error: DirectActionErrorV1Schema,
 };
 
 export const DirectActionFailedV1Schema = z.strictObject({
 	...directNonSucceededBase,
 	status: z.literal("failed"),
+	error: directFailedActionErrorV1Schema,
 });
 export const DirectActionPendingV1Schema = z.strictObject({
 	...directNonSucceededBase,
 	status: z.literal("pending"),
+	error: directResultPendingErrorV1Schema,
 });
 export const DirectActionManualReviewV1Schema = z.strictObject({
 	...directNonSucceededBase,
 	status: z.literal("manual_review"),
+	error: directNeedsManualReviewErrorV1Schema,
 });
 export const DirectActionUnresolvedV1Schema = z.strictObject({
 	...directNonSucceededBase,
 	status: z.literal("unresolved"),
+	error: directUnresolvedErrorV1Schema,
 });
 
 export const DirectActionResultV1Schema = z.discriminatedUnion("status", [
