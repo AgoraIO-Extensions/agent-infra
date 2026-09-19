@@ -2423,3 +2423,37 @@ it("partitions identical native IDs and cancellation between Conversation proces
 	expect((await request(renewed)).status).toBe(401);
 	expect((await request(reopened)).status).toBe(403);
 });
+
+it("revokes recognized but not yet registered admissions with Conversation access", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const conversationKey = "e".repeat(64);
+	const threadId = "thread-recognized";
+	const turn = {
+		conversationKey,
+		threadId,
+		turnId: "turn-recognized",
+	};
+	value.modelAccessFor(conversationKey);
+	value.bindThread(conversationKey, threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		threadId,
+		"high",
+		conversationKey,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	value.revokeConversationAccess(conversationKey);
+	expect(value.registerTurn(admission, turn)).toBe(false);
+});

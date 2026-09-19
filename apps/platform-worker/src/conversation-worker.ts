@@ -140,8 +140,9 @@ export function createPlatformConversationWorkerV2(
 	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
+		const limit = 256;
 		const items = await store.findDispatchable({
-			limit: 256,
+			limit,
 			...(afterItemId ? { afterItemId } : {}),
 		});
 		let launched = 0;
@@ -178,6 +179,7 @@ export function createPlatformConversationWorkerV2(
 			launched += 1;
 			if (!deferred) afterItemId = item.itemId;
 		}
+		if (!deferred && items.length < limit) afterItemId = undefined;
 		return launched;
 	}
 	function tick() {

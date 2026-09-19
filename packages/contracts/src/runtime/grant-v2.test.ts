@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	RuntimeBusinessGrantClaimsV2Schema,
 	RuntimeControlGrantClaimsV2Schema,
+	validateVerifiedRuntimeExecutionGrantClaimsV2,
 } from "./grant-v2.ts";
 import {
 	RuntimeStatusRequestV3Schema,
@@ -97,6 +98,59 @@ describe("Runtime purpose separation", () => {
 				RuntimeControlGrantClaimsV2Schema.safeParse({ ...control, [field]: [] })
 					.success,
 			).toBe(false);
+	});
+	it("binds destructive control commands to their persisted reason", () => {
+		const control = {
+			...common,
+			purpose: "control" as const,
+			controlRecordId: "control",
+			reason: "recovery" as const,
+			allowedCommands: ["session.status" as const],
+		};
+		const context = {
+			expectedIssuer: common.issuer,
+			expectedWorkerId: common.workerId,
+			now: 2_000,
+		};
+		expect(
+			validateVerifiedRuntimeExecutionGrantClaimsV2(control, context),
+		).toEqual(control);
+		for (const invalid of [
+			{ allowedCommands: ["turn.stop" as const], reason: "recovery" as const },
+			{
+				allowedCommands: ["turn.stop" as const],
+				reason: "generation_isolation" as const,
+			},
+			{
+				allowedCommands: ["generation.cancel" as const],
+				reason: "recovery" as const,
+			},
+		]) {
+			expect(() =>
+				validateVerifiedRuntimeExecutionGrantClaimsV2(
+					{ ...control, ...invalid },
+					context,
+				),
+			).toThrow("Runtime Execution Grant claims are inconsistent");
+		}
+		for (const valid of [
+			{ allowedCommands: ["turn.stop" as const], reason: "stop" as const },
+			{
+				allowedCommands: ["turn.stop" as const],
+				reason: "authorization_revoked" as const,
+			},
+			{
+				allowedCommands: ["generation.cancel" as const],
+				reason: "generation_isolation" as const,
+			},
+		]) {
+			expect(
+				validateVerifiedRuntimeExecutionGrantClaimsV2(
+					{ ...control, ...valid },
+					context,
+				),
+			).toMatchObject(valid);
+		}
 	});
 	it("grants authorize exactly one audience and command", () => {
 		const business = {

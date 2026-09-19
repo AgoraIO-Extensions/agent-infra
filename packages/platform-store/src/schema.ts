@@ -1090,6 +1090,10 @@ export const taskAuthorizationRecords = platformSchema.table(
 			name: "task_authorization_execution_fk",
 		}),
 		uniqueIndex("task_authorization_execution_unique").on(table.executionId),
+		uniqueIndex("task_authorization_id_execution_unique").on(
+			table.id,
+			table.executionId,
+		),
 		check("task_authorization_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
 			"task_authorization_boundary_version",
@@ -1120,9 +1124,21 @@ export const taskControlRecords = platformSchema.table(
 			foreignColumns: [taskAuthorizationRecords.id],
 			name: "task_control_authorization_fk",
 		}),
+		foreignKey({
+			columns: [table.authorizationRecordId, table.executionId],
+			foreignColumns: [
+				taskAuthorizationRecords.id,
+				taskAuthorizationRecords.executionId,
+			],
+			name: "task_control_authorization_execution_fk",
+		}),
 		uniqueIndex("task_control_execution_reason_unique").on(
 			table.executionId,
 			table.reason,
+		),
+		uniqueIndex("task_control_id_execution_unique").on(
+			table.id,
+			table.executionId,
 		),
 		check("task_control_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
@@ -1157,6 +1173,16 @@ export const conversationGenerationTombstones = platformSchema.table(
 		confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_generation_execution_fk",
+		}),
+		foreignKey({
+			columns: [table.controlRecordId, table.executionId],
+			foreignColumns: [taskControlRecords.id, taskControlRecords.executionId],
+			name: "conversation_generation_control_execution_fk",
+		}),
 		uniqueIndex("conversation_generation_tombstone_unique").on(
 			table.conversationId,
 			table.sessionGeneration,

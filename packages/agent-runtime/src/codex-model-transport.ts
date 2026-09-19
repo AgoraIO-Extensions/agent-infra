@@ -1524,8 +1524,11 @@ export async function openCodexModelTransport(
 				if (key.startsWith(prefix))
 					for (const admission of [...pending]) closeAdmission(admission);
 			}
-			for (const key of admittedTurns.keys())
-				if (key.startsWith(prefix)) revokeTurn(key);
+			const turnKeys = new Set([
+				...recognizedTurns.keys(),
+				...admittedTurns.keys(),
+			]);
+			for (const key of turnKeys) if (key.startsWith(prefix)) revokeTurn(key);
 			for (const [key, requests] of activeTurns) {
 				if (key.startsWith(prefix))
 					for (const request of requests) request.terminate();

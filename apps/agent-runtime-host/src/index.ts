@@ -288,7 +288,8 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 			},
 		};
 	} catch (error) {
-		await close();
+		// Preserve the startup failure while still attempting every cleanup step.
+		await close().catch(() => undefined);
 		throw error;
 	}
 }

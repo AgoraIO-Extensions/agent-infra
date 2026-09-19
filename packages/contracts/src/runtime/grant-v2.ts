@@ -124,6 +124,13 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 	const claims = RuntimeExecutionGrantClaimsV2Schema.parse(input);
 	const command = claims.allowedCommands[0];
 	const isEvent = command === "events.persist" || command === "events.ack";
+	const controlReasonMismatch =
+		claims.purpose === "control" &&
+		((command === "turn.stop" &&
+			claims.reason !== "stop" &&
+			claims.reason !== "authorization_revoked") ||
+			(command === "generation.cancel" &&
+				claims.reason !== "generation_isolation"));
 	if (
 		claims.issuer !== context.expectedIssuer ||
 		claims.workerId !== context.expectedWorkerId ||
@@ -133,6 +140,7 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 		claims.expiresAt <= claims.issuedAt ||
 		claims.expiresAt - claims.issuedAt >
 			RuntimeExecutionGrantMaximumLifetimeMsV2 ||
+		controlReasonMismatch ||
 		(isEvent
 			? claims.eventAccess?.command !== command
 			: claims.eventAccess !== undefined) ||

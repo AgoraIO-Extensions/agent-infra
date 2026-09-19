@@ -160,6 +160,28 @@ describe("Conversation Worker discovery and shutdown", () => {
 			await worker.stop();
 		}
 	});
+	it("restarts discovery from the beginning after a short page", async () => {
+		mocks.find
+			.mockResolvedValueOnce([
+				{ itemId: "turn-b", operation: "conversation.turn.submit.v1" },
+			])
+			.mockResolvedValueOnce([
+				{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+			]);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2(options);
+		try {
+			expect(await worker.tick()).toBe(1);
+			expect(await worker.tick()).toBe(1);
+			expect(mocks.find.mock.calls[1]?.[0]).toEqual({ limit: 256 });
+			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
+				"turn-b",
+				"turn-a",
+			]);
+		} finally {
+			await worker.stop();
+		}
+	});
 	it("closes every database resource even when one close rejects", async () => {
 		mocks.find.mockResolvedValue([]);
 		mocks.storeClose.mockRejectedValueOnce(
