@@ -792,6 +792,7 @@ async function turn(
 	expectedStatus = "completed",
 	session = undefined,
 	beforePersist = undefined,
+	checkStatus = true,
 ) {
 	const submitted = await submitTurn(name, selection, session);
 	await beforePersist?.(submitted);
@@ -850,6 +851,7 @@ async function turn(
 		},
 		() => ({ httpStatus: events?.status }),
 	);
+	if (!checkStatus) return submitted;
 	let status;
 	await probeStep(
 		`${name}-status`,
@@ -953,6 +955,8 @@ async function runImageProbe() {
 			},
 			"completed",
 			defaultTurn.lookup,
+			undefined,
+			false,
 		);
 		check(
 			"native-execution-selection",
