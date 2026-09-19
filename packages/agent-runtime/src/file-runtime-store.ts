@@ -566,17 +566,25 @@ export class FileRuntimeStore {
 				}
 			}
 
+			const operation = session.operations[input.operationId];
 			if (input.authorization) {
 				assertSessionAuthority(session.authority, input.binding);
-				session.executionAuthorities ??= {};
-				applyRuntimeAuthority(
-					session.executionAuthorities,
-					input.authorization,
-					"prepare",
-					input.now,
-				);
+				const resolvedReplay =
+					operation?.state === "resolved" &&
+					operation.requestDigest === input.requestDigest;
+				// A retry of an already-resolved operation only reads its durable
+				// receipt. Recovery query authority must not turn that read into a
+				// fresh business authorization decision.
+				if (!resolvedReplay) {
+					session.executionAuthorities ??= {};
+					applyRuntimeAuthority(
+						session.executionAuthorities,
+						input.authorization,
+						"prepare",
+						input.now,
+					);
+				}
 			}
-			const operation = session.operations[input.operationId];
 			if (operation) {
 				if (
 					operation.requestDigest !== input.requestDigest ||
@@ -1290,6 +1298,7 @@ export class FileRuntimeStore {
 			!session?.authority ||
 			session.generationBarrier ||
 			(action.nativeSessionRef !== undefined &&
+				session.nativeSessionRef !== undefined &&
 				session.nativeSessionRef !== action.nativeSessionRef)
 		)
 			runtimeAuthorizationDenied();

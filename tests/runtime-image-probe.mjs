@@ -791,8 +791,10 @@ async function turn(
 	selection,
 	expectedStatus = "completed",
 	session = undefined,
+	beforePersist = undefined,
 ) {
 	const submitted = await submitTurn(name, selection, session);
+	await beforePersist?.(submitted);
 	const { lookup } = submitted;
 	let events;
 	await probeStep(
@@ -953,6 +955,34 @@ async function runImageProbe() {
 			},
 			"completed",
 			defaultTurn.lookup,
+			async (selected) => {
+				const replayed = await request(
+					selected.path,
+					protocol.signRequest(selected.submit, "turn.submit"),
+				);
+				check(
+					"submit-idempotency",
+					replayed.status === 200 && requests.length === 2,
+				);
+				const conflicting = await request(
+					selected.path,
+					protocol.signRequest(
+						{
+							...selected.submit,
+							selection: {
+								schemaVersion: 1,
+								modelOptionId: "default-option",
+								reasoningLevel: "medium",
+							},
+						},
+						"turn.submit",
+					),
+				);
+				check(
+					"selection-conflict",
+					conflicting.status === 409 && requests.length === 2,
+				);
+			},
 		);
 		check(
 			"native-execution-selection",
@@ -961,32 +991,6 @@ async function runImageProbe() {
 				requests[1].model === "gpt-5.2" &&
 				requests[1].effort === "high" &&
 				requests[1].authenticated,
-		);
-		const replayed = await request(
-			selected.path,
-			protocol.signRequest(selected.submit, "turn.submit"),
-		);
-		check(
-			"submit-idempotency",
-			replayed.status === 200 && requests.length === 2,
-		);
-		const conflicting = await request(
-			selected.path,
-			protocol.signRequest(
-				{
-					...selected.submit,
-					selection: {
-						schemaVersion: 1,
-						modelOptionId: "default-option",
-						reasoningLevel: "medium",
-					},
-				},
-				"turn.submit",
-			),
-		);
-		check(
-			"selection-conflict",
-			conflicting.status === 409 && requests.length === 2,
 		);
 		stage = "grant-rejections";
 		const freshSubmission = protocol.signRequest(

@@ -51,6 +51,10 @@ type RegisterTurnTestHook = (
 	deadline: number | undefined,
 	register: () => boolean,
 ) => boolean;
+type WaitForModelRequestTestHook = (
+	turn: CodexModelTurn,
+	deadline: number,
+) => Promise<boolean>;
 
 class ObservableCleanupPromise extends Promise<void> {
 	static override get [Symbol.species]() {
@@ -81,6 +85,8 @@ class ObservableCleanupPromise extends Promise<void> {
 const modelTransportTestHooks = vi.hoisted(() => ({
 	cancelTurn: undefined as CancelTurnTestHook | undefined,
 	registerTurn: undefined as RegisterTurnTestHook | undefined,
+	waitForInitialModelRequest: false,
+	waitForModelRequest: undefined as WaitForModelRequestTestHook | undefined,
 }));
 
 vi.mock("./codex-model-transport.js", async (importOriginal) => {
@@ -95,6 +101,11 @@ vi.mock("./codex-model-transport.js", async (importOriginal) => {
 			const deadlines = new WeakMap<CodexModelTurnAdmission, number>();
 			return {
 				...transport,
+				waitForModelRequest:
+					modelTransportTestHooks.waitForModelRequest ??
+					(modelTransportTestHooks.waitForInitialModelRequest
+						? transport.waitForModelRequest
+						: undefined),
 				beginTurnAdmission: (
 					...args: Parameters<typeof transport.beginTurnAdmission>
 				) => {
@@ -551,7 +562,10 @@ function openDriverWithModelEndpoint(
 	configVersion?: string,
 	credential = upstreamModelAccess.credential,
 	authorizeExternalAction?: CodexRuntimeDriverOptions["authorizeExternalAction"],
+	waitForInitialModelRequest = false,
 ) {
+	modelTransportTestHooks.waitForInitialModelRequest =
+		waitForInitialModelRequest;
 	return openCodexRuntimeDriverForTest(
 		{
 			...driverOptions(path, configVersion),
@@ -1111,6 +1125,8 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	modelTransportTestHooks.cancelTurn = undefined;
 	modelTransportTestHooks.registerTurn = undefined;
+	modelTransportTestHooks.waitForInitialModelRequest = false;
+	modelTransportTestHooks.waitForModelRequest = undefined;
 	await Promise.all(drivers.splice(0).map((driver) => driver.close()));
 	await Promise.all(
 		servers.splice(0).map(
@@ -2614,6 +2630,10 @@ describe("Codex Runtime Driver", () => {
 			(options) => {
 				loopback = options.modelAccess;
 			},
+			undefined,
+			upstreamModelAccess.credential,
+			undefined,
+			true,
 		);
 		drivers.push(driver);
 		const submission = driver.execute(submitCommand());
@@ -2640,6 +2660,64 @@ describe("Codex Runtime Driver", () => {
 			if (bridge.pendingTurnStartCount() > 0) bridge.respondToHeldTurnStart();
 			await submission;
 		}
+	});
+
+	it("keeps a request that already passed model admission when registration races its failure", async () => {
+		const directory = await runtimeDirectory();
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		modelTransportTestHooks.registerTurn = () => false;
+		modelTransportTestHooks.waitForModelRequest = async () => true;
+		const bridge = new TestCodexBridge();
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			undefined,
+			undefined,
+			upstreamModelAccess.credential,
+			undefined,
+			true,
+		);
+		drivers.push(driver);
+		await expect(driver.execute(submitCommand())).resolves.toMatchObject({
+			result: { outcome: "accepted" },
+		});
+	});
+
+	it("finishes a running execution from a durably recorded model HTTP failure", async () => {
+		const directory = await runtimeDirectory();
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				response.writeHead(401, { "content-type": "application/json" });
+				response.end(
+					JSON.stringify({ error: { message: "synthetic failure" } }),
+				);
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const submitted = await driver.execute(submitCommand());
+		if (!loopback) throw new Error("missing loopback access");
+		const response = await modelRequest(loopback, bridge);
+		expect(response.status).toBe(401);
+		await response.text();
+		expect(
+			await driver.getStatus(submitted.nativeSessionRef, "execution-codex"),
+		).toBe("failed");
 	});
 
 	it("keeps a start response without a recognized notification unavailable", async () => {

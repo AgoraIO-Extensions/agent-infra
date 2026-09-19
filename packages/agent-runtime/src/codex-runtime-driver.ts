@@ -2269,6 +2269,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly inFlightEventRecoveries = new Map<string, Promise<void>>();
 	private readonly observedNativeTurnStarts = new Set<string>();
 	private readonly nativeTurnStartWaiters = new Map<string, Set<() => void>>();
+	private readonly initialModelStatusPending = new Set<string>();
 	private readonly modelAdmissionDeadlines = new Map<string, number>();
 	private readonly modelTurnAdmissions = new Map<
 		string,
@@ -2313,6 +2314,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			admission: CodexModelTurnAdmission,
 			turn: CodexModelTurn,
 		) => boolean,
+		private readonly waitForModelRequest?: (
+			turn: CodexModelTurn,
+			deadline: number,
+			signal?: AbortSignal,
+		) => Promise<boolean>,
 		private readonly abandonModelTurnAdmission?: (
 			admission: CodexModelTurnAdmission,
 		) => void,
@@ -3249,6 +3255,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				: undefined,
 			modelTransport?.recognizeTurn,
 			modelTransport?.registerTurn,
+			modelTransport?.waitForModelRequest,
 			modelTransport?.abandonTurnAdmission,
 			modelTransport?.cancelTurn,
 			modelTransport?.revokeTurn,
@@ -3491,12 +3498,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			}
 			await this.confirmModelAdmission(command, session.nativeSessionRef, true);
-			if (
-				Date.now() >= admissionDeadline ||
-				(this.registerModelTurn !== undefined &&
-					(!modelAdmission ||
-						this.registerModelTurn(modelAdmission, nativeTurn) === false))
-			) {
+			let modelRequestReady: boolean | undefined;
+			const registered =
+				this.registerModelTurn === undefined
+					? true
+					: !!modelAdmission &&
+						this.registerModelTurn(modelAdmission, nativeTurn);
+			if (Date.now() >= admissionDeadline || !registered) {
+				if (!registered && this.waitForModelRequest) {
+					modelRequestReady = await this.waitForModelRequest(
+						nativeTurn,
+						admissionDeadline,
+					);
+					if (modelRequestReady) {
+						modelTurnAdmitted = true;
+						if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
+						this.initialModelStatusPending.add(
+							this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
+						);
+						return record;
+					}
+				}
 				abandonModelAdmission();
 				await this.cancelModelTurn?.(nativeTurn);
 				const current = this.operationRecord(command);
@@ -3512,6 +3534,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTurnAdmitted = true;
 			if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
 			await this.confirmModelAdmission(command, session.nativeSessionRef);
+			if (this.waitForModelRequest) {
+				const modelReady =
+					modelRequestReady ??
+					(await this.waitForModelRequest(nativeTurn, admissionDeadline));
+				if (!modelReady) {
+					const current = this.operationRecord(command);
+					if (
+						current?.record?.result.outcome === "accepted" &&
+						current.record.result.status !== "running"
+					) {
+						return current.record;
+					}
+					unavailable();
+				}
+				this.initialModelStatusPending.add(
+					this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
+				);
+			}
 			return record;
 		} catch (error) {
 			abandonModelAdmission();
@@ -3888,6 +3928,53 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
+		const journal = session.journals?.[execution.nativeTurnId];
+		const latestFact = journal
+			? latestOperationAttemptFacts(journal.events).at(-1)
+			: undefined;
+		const deferInitialStatus = this.initialModelStatusPending.delete(
+			this.nativeTurnKey(session.threadId, execution.nativeTurnId),
+		);
+		// The initial status lookup can race the response body of a live model
+		// stream. Its durable intent/started fact already proves that this execution
+		// is accepted; defer native resume until the stream records its outcome.
+		if (
+			deferInitialStatus &&
+			execution.status === "running" &&
+			latestFact?.kind === "model" &&
+			(latestFact.phase === "intent" || latestFact.phase === "started")
+		)
+			return "running";
+		// A provider HTTP failure is durably recorded by the model transport before
+		// it closes the native request. The native app-server may leave its Turn in
+		// `running` while processing that rejected response, so status recovery must
+		// finish from the committed failure fact instead of treating the native
+		// status read as an invalid Driver response.
+		if (
+			execution.status === "running" &&
+			journal?.externalActionsBlocked &&
+			latestFact?.kind === "model" &&
+			(latestFact.phase === "failed" ||
+				(latestFact.phase === "unknown" &&
+					latestFact.failureCode === "response_incomplete"))
+		) {
+			const nativeTurn = {
+				conversationKey: this.modelConversationKey(
+					codexConversationKey(session),
+				),
+				threadId: session.threadId,
+				turnId: execution.nativeTurnId,
+			};
+			if (this.cancelModelTurn)
+				await this.cancelModelTurn(nativeTurn).catch(() => undefined);
+			return this.updateExecutionStatus(
+				nativeSessionRef,
+				executionId,
+				execution.nativeTurnId,
+				"failed",
+				false,
+			);
+		}
 		if (execution.status !== "running") {
 			if (
 				!this.executionConfigurationMatches(initialState, session, execution)
@@ -4185,6 +4272,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async shutdown() {
 		this.closed = true;
+		this.initialModelStatusPending.clear();
 		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
 		this.connectionClients.clear();
@@ -6660,8 +6748,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		nativeTurnId: string,
 		status: PersistedTurnStatus,
+		cancelNative = true,
 	) {
-		if (status !== "running") {
+		if (status !== "running" && cancelNative) {
 			const session = this.session(nativeSessionRef);
 			if (session.threadId)
 				await this.cancelModelTurn?.({

@@ -64,8 +64,7 @@ function base<T extends string | null>(hostSessionRef: T) {
 	const { input: _input, ...request } = submitV3Fixture();
 	return { ...request, hostSessionRef };
 }
-function originalDigest() {
-	const request = submitV3Fixture();
+function originalDigest(request = submitV3Fixture()) {
 	return requestDigest({
 		kind: "submit-turn",
 		agentId: request.agentId,
@@ -74,6 +73,7 @@ function originalDigest() {
 		turnId: request.turnId,
 		sessionGeneration: request.sessionGeneration,
 		input: request.input,
+		...(request.selection ? { selection: request.selection } : {}),
 	});
 }
 async function submit(host: RuntimeHost) {
@@ -172,6 +172,62 @@ describe("Runtime V3 durable authorization", () => {
 			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 		},
 	);
+
+	it("authorizes the first external action before the Driver native session ref is persisted", async () => {
+		let authorized: Promise<void> | undefined;
+		const env = await setup({
+			afterOperationPrepared: () => {
+				authorized = env.store.authorizeExternalAction(
+					{
+						nativeSessionRef: "native-session-created-by-driver",
+						executionId: "execution-fixture",
+						runtimeOperationId: "execution-fixture",
+						operationRef: "model-fact-1",
+						attemptRef: "attempt-1",
+						kind: "model",
+					},
+					() => env.clock.now,
+				);
+			},
+		});
+		await submit(env.host);
+		await expect(authorized).resolves.toBeUndefined();
+	});
+
+	it("replays a resolved submit while its execution is under recovery query authority", async () => {
+		const env = await setup();
+		const unsigned = {
+			...submitV3Fixture(),
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-primary",
+				reasoningLevel: "high",
+			},
+		};
+		const request = signV3Fixture(unsigned, "turn.submit");
+		const accepted = await env.host.submitTurnV3(
+			request,
+			verifyRuntimeV2Fixture(request.grant),
+		);
+		const recovery = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				originalOperationDigest: originalDigest(unsigned),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		await env.host.recoverStatusV3(
+			recovery,
+			verifyRuntimeV2Fixture(recovery.grant),
+		);
+		await expect(
+			env.host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant)),
+		).resolves.toMatchObject({
+			result: { outcome: "accepted" },
+			hostSessionRef: accepted.hostSessionRef,
+		});
+	});
 
 	it("waits for queued revocation and never treats control authority as private bootstrap permission", async () => {
 		const env = await setup();

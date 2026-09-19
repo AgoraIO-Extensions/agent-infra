@@ -115,6 +115,10 @@ interface AdmissionWaiter {
 	readonly settle: (model: ModelTurnSelection | undefined) => void;
 }
 
+interface ModelRequestWaiter {
+	readonly settle: (ready: boolean) => void;
+}
+
 interface ModelTurnAdmissionState extends ModelTurnSelection {
 	state: "open" | "consumed" | "closed";
 	readonly deadline: number;
@@ -1028,6 +1032,8 @@ export async function openCodexModelTransport(
 	>();
 	const pendingThreads = new Map<string, Set<CodexModelTurnAdmission>>();
 	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
+	const modelRequestWaiters = new Map<string, Set<ModelRequestWaiter>>();
+	const readyModelTurns = new Set<string>();
 	let closing = false;
 	const settleAdmissionWaiters = (
 		key: string,
@@ -1037,6 +1043,13 @@ export async function openCodexModelTransport(
 		if (!waiters) return;
 		admissionWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(model);
+	};
+	const settleModelRequestWaiters = (key: string, ready: boolean) => {
+		if (ready) readyModelTurns.add(key);
+		const waiters = modelRequestWaiters.get(key);
+		if (!waiters) return;
+		modelRequestWaiters.delete(key);
+		for (const waiter of waiters) waiter.settle(ready);
 	};
 	const removePending = (
 		admission: CodexModelTurnAdmission,
@@ -1078,8 +1091,9 @@ export async function openCodexModelTransport(
 			}
 		}
 	};
-	const revokeTurn = (key: string) => {
+	const revokeTurn = (key: string, settleWaiters = true) => {
 		revokedTurns.add(key);
+		if (settleWaiters) settleModelRequestWaiters(key, false);
 		const recognized = recognizedTurns.get(key);
 		for (const admission of [...(recognized ?? [])]) {
 			closeAdmission(admission);
@@ -1146,6 +1160,35 @@ export async function openCodexModelTransport(
 			const timer = setTimeout(abort, state.deadline - Date.now());
 			waiters.add(waiter);
 			signal.addEventListener("abort", abort, { once: true });
+		});
+	};
+	const waitForModelRequest = (
+		turn: CodexModelTurn,
+		deadline: number,
+		signal?: AbortSignal,
+	) => {
+		const key = nativeTurnKey(turn);
+		if (readyModelTurns.has(key)) return Promise.resolve(true);
+		if (revokedTurns.has(key) || closing || signal?.aborted)
+			return Promise.resolve(false);
+		if (deadline <= Date.now()) return Promise.resolve(false);
+		return new Promise<boolean>((resolve) => {
+			const waiters = modelRequestWaiters.get(key) ?? new Set();
+			modelRequestWaiters.set(key, waiters);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const settle = (ready: boolean) => {
+				if (timer !== undefined) clearTimeout(timer);
+				signal?.removeEventListener("abort", abort);
+				waiters.delete(waiter);
+				if (waiters.size === 0 && modelRequestWaiters.get(key) === waiters)
+					modelRequestWaiters.delete(key);
+				resolve(ready);
+			};
+			const abort = () => settle(false);
+			const waiter = { settle };
+			timer = setTimeout(abort, Math.max(0, deadline - Date.now()));
+			waiters.add(waiter);
+			signal?.addEventListener("abort", abort, { once: true });
 		});
 	};
 	const server = createServer(async (request, response) => {
@@ -1220,7 +1263,8 @@ export async function openCodexModelTransport(
 			// in-flight write; a failed write is cleared so the catch path can retry.
 			if (outcomeReported) return;
 			if (outcomeReport) return outcomeReport;
-			if (outcome.phase !== "succeeded") revokeTurn(turnKey);
+			if (outcome.phase !== "succeeded")
+				revokeTurn(turnKey, startedAt === undefined);
 			const pending = (async () => {
 				await journal?.finish({
 					...outcome,
@@ -1246,6 +1290,7 @@ export async function openCodexModelTransport(
 		try {
 			const admittedModel = await waitForAdmission(turnKey, controller.signal);
 			if (admittedModel === undefined) {
+				settleModelRequestWaiters(turnKey, false);
 				reject(response, 409);
 				return;
 			}
@@ -1316,7 +1361,10 @@ export async function openCodexModelTransport(
 			);
 			await journal?.started(requestStartedAt);
 			const upstream = (await upstreamResult).value;
-			if (!upstream) throw new Error();
+			if (!upstream) {
+				settleModelRequestWaiters(turnKey, false);
+				throw new Error();
+			}
 			const contentType = upstream.headers.get("content-type") ?? "";
 			if (
 				!upstream.ok ||
@@ -1328,6 +1376,9 @@ export async function openCodexModelTransport(
 					phase: upstream.ok ? "unknown" : "failed",
 					failureCode: upstream.ok ? "invalid_response" : "http_error",
 				});
+				// A non-streaming response is still an accepted model request. Notify
+				// the Driver only after the durable failure fact is committed.
+				settleModelRequestWaiters(turnKey, true);
 				reject(
 					response,
 					upstream.status === 401 || upstream.status === 403
@@ -1336,6 +1387,9 @@ export async function openCodexModelTransport(
 				);
 				return;
 			}
+			// Streaming model requests are accepted once the upstream headers are
+			// available; the body may continue for the whole inference.
+			settleModelRequestWaiters(turnKey, true);
 			await forwardValidatedStream(
 				upstream.body,
 				response,
@@ -1359,6 +1413,7 @@ export async function openCodexModelTransport(
 							failureCode: interrupted ? "interrupted" : "transport_error",
 						},
 			).catch(() => {});
+			settleModelRequestWaiters(turnKey, false);
 			await failStream(response);
 		} finally {
 			request.off("aborted", terminate);
@@ -1434,6 +1489,7 @@ export async function openCodexModelTransport(
 					for (const request of requests) request.terminate();
 			}
 		},
+		waitForModelRequest,
 		beginTurnAdmission: (
 			deadline: number,
 			internalModel: string,
@@ -1544,6 +1600,9 @@ export async function openCodexModelTransport(
 				closing = true;
 				processAccess.clear();
 				boundThreads.clear();
+				for (const key of modelRequestWaiters.keys())
+					settleModelRequestWaiters(key, false);
+				readyModelTurns.clear();
 				for (const recognized of pendingThreads.values()) {
 					for (const admission of [...recognized]) {
 						closeAdmission(admission);
