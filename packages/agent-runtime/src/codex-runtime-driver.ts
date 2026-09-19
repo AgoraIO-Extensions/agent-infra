@@ -2644,6 +2644,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} catch {
 				itemSignal.throwIfAborted();
 				read.assertCurrent();
+				await markScanned();
 				return {
 					...base,
 					decision: "unavailable",

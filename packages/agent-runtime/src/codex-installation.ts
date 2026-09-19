@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, lstat, open, readdir, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
-import { arch, getgid, getuid, platform } from "node:process";
+import { arch, getuid, platform } from "node:process";
 import { isDeepStrictEqual } from "node:util";
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
@@ -63,17 +63,10 @@ function installedPath(source: string) {
 }
 
 async function protectedDirectory(path: string) {
+	if (typeof getuid === "function" && getuid() === 0) throw new Error();
 	requireValid((await realpath(path)) === path);
 	const stat = await lstat(path);
 	requireValid(stat.isDirectory() && (stat.mode & 0o7022) === 0);
-	// Root bypasses normal permission checks. Keep the same policy by requiring
-	// root-owned directories before accepting a protected installation path.
-	if (typeof getuid === "function" && getuid() === 0) {
-		requireValid(
-			stat.uid === 0 && (typeof getgid !== "function" || stat.gid === 0),
-		);
-		return;
-	}
 	try {
 		await access(path, constants.W_OK);
 	} catch (error) {

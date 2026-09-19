@@ -1352,12 +1352,15 @@ export async function openCodexModelTransport(
 				reject(response, 400);
 				return;
 			}
-			journal = await observer.beforeRequest(
-				{
-					conversationKey,
-					...nativeTurn,
-					...admittedModel,
-				},
+			journal = await awaitPersistence(
+				observer.beforeRequest(
+					{
+						conversationKey,
+						...nativeTurn,
+						...admittedModel,
+					},
+					controller.signal,
+				),
 				controller.signal,
 			);
 			// Stop/revoke may arrive while intent or the Host authorization guard is

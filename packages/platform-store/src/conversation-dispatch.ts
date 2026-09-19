@@ -18,6 +18,7 @@ import {
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
+	type TaskPrincipalV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -1422,7 +1423,7 @@ export class PostgresConversationDispatchStoreV1
 			>`
         select id, boundary from platform.task_authorization_records where execution_id = ${claim.executionId} for update
       `;
-			let originalPrincipal: { kind: "user"; id: string };
+			let originalPrincipal: TaskPrincipalV1;
 			let controlSourceId: string;
 			let authorizationRecordId: string;
 			if (authorization) {
@@ -1441,7 +1442,10 @@ export class PostgresConversationDispatchStoreV1
 						status: state.execution.status,
 					},
 				});
-				originalPrincipal = { kind: "user", id: boundary.principal.id };
+				const principal = boundary.principal;
+				if (principal.kind !== "user" || principal.id !== claim.actorId)
+					throw new StaleDispatchLease();
+				originalPrincipal = principal;
 				controlSourceId = authorization.id;
 				authorizationRecordId = authorization.id;
 			} else {

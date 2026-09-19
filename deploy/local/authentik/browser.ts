@@ -206,7 +206,7 @@ export function createAuthentikBrowserAdapter(
 		if (key) challenges.delete(key);
 		let result = response(401);
 		try {
-			if (!challenge || sessions.size >= MAX_ENTRIES) return result;
+			if (!challenge) return result;
 			const tokens = await oidc.authorizationCodeGrant(
 				config,
 				new URL(`${url.pathname}${url.search}`, input.publicOrigin),
@@ -233,14 +233,13 @@ export function createAuthentikBrowserAdapter(
 				issuer: claims.iss,
 				subject: claims.sub,
 			});
-			if (
-				!identity ||
-				challenge.expires <= Date.now() ||
-				sessions.size >= MAX_ENTRIES
-			)
-				return result;
+			if (!identity || challenge.expires <= Date.now()) return result;
 			const old = cookie(request, SESSION);
 			if (old) sessions.delete(old);
+			if (sessions.size >= MAX_ENTRIES) {
+				const oldest = sessions.keys().next().value;
+				if (oldest) sessions.delete(oldest);
+			}
 			const sessionKey = random();
 			sessions.set(sessionKey, {
 				userId: identity.userId,

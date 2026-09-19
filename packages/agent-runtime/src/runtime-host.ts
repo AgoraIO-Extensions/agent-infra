@@ -998,7 +998,7 @@ export class RuntimeHost {
 			)
 				return unknownOperationResponse(hostSessionRef, operation);
 			if (this.v3 && !isInterruption(operation))
-				this.options.store.authorizePreparedOperation(
+				await this.options.store.authorizePreparedOperation(
 					hostSessionRef,
 					operation,
 					(this.options.grantValidationV2?.now ?? Date.now)(),

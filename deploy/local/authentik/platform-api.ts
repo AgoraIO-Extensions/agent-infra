@@ -35,22 +35,30 @@ export async function startAuthentikPlatformApi(input: {
 	if (input.directory.issuer !== input.browser.issuer)
 		throw new Error("AUTHENTIK_DEPLOYMENT_CONFIGURATION_INVALID");
 	const directory = createAuthentikDirectory(input.directory);
-	const browser = createAuthentikBrowserAdapter(input.browser, directory);
-	const assemblyInput = await input.createAssemblyInput({
-		identity: browser.identityAdapter,
-		loadAuthorityContext: directory.loadAuthorityContext,
-	});
-	if (assemblyInput.identity !== browser.identityAdapter)
-		throw new Error("AUTHENTIK_DEPLOYMENT_IDENTITY_NOT_CONNECTED");
-	const assembly = input.runtime.assemblePlatformApi(assemblyInput);
-	const app = input.runtime.createPlatformApp(assembly.dependencies);
+	let browser: Browser | undefined;
+	let assembly:
+		| ReturnType<typeof input.runtime.assemblePlatformApi>
+		| undefined;
+	let app: ReturnType<typeof input.runtime.createPlatformApp> | undefined;
 	let server: ReturnType<typeof serve>;
 	try {
+		browser = createAuthentikBrowserAdapter(input.browser, directory);
+		const currentBrowser = browser;
+		const assemblyInput = await input.createAssemblyInput({
+			identity: currentBrowser.identityAdapter,
+			loadAuthorityContext: directory.loadAuthorityContext,
+		});
+		if (assemblyInput.identity !== currentBrowser.identityAdapter)
+			throw new Error("AUTHENTIK_DEPLOYMENT_IDENTITY_NOT_CONNECTED");
+		assembly = input.runtime.assemblePlatformApi(assemblyInput);
+		app = input.runtime.createPlatformApp(assembly.dependencies);
+		const currentApp = app;
 		server = serve({
 			hostname: "127.0.0.1",
 			port: input.port,
 			fetch: async (request) =>
-				(await browser.handleRequest(request)) ?? app.fetch(request),
+				(await currentBrowser.handleRequest(request)) ??
+				currentApp.fetch(request),
 		});
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);
@@ -60,10 +68,14 @@ export async function startAuthentikPlatformApi(input: {
 			});
 		});
 	} catch (error) {
-		browser.close();
-		await assembly.close();
+		browser?.close();
+		await assembly?.close();
 		throw error;
 	}
+	if (!browser || !assembly || !app)
+		throw new Error("AUTHENTIK_DEPLOYMENT_STARTUP_FAILED");
+	const activeBrowser = browser;
+	const activeAssembly = assembly;
 	let closing: Promise<void> | undefined;
 	return {
 		server,
@@ -72,8 +84,8 @@ export async function startAuthentikPlatformApi(input: {
 				server.close((error) => (error ? reject(error) : resolve()));
 				if ("closeAllConnections" in server) server.closeAllConnections();
 			})
-				.finally(() => browser.close())
-				.finally(() => assembly.close());
+				.finally(() => activeBrowser.close())
+				.finally(() => activeAssembly.close());
 			return closing;
 		},
 	};
