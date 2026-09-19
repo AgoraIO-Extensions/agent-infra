@@ -5,6 +5,7 @@ import {
 	DirectActionRequestV1Schema,
 	DirectActionResultV1Schema,
 	DirectCatalogResponseV1Schema,
+	DirectGrantProjectionV1Schema,
 	DirectPayloadMaximumByteLengthV1,
 	DirectPayloadMaximumCollectionSizeV1,
 	DirectPayloadMaximumDepthV1,
@@ -137,6 +138,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ target: "caller-selected-connection" },
 			{ note: "token=embedded-secret" },
 			{ value: "sk-abcdefghijklmnopqrstuvwxyz" },
+			{ auth: "mF_9.B5f-4.1JqM" },
+			{ value: "mF_9.B5f-4.1JqM" },
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -173,6 +176,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 					arguments: {
 						target: "main",
 						description: "ordinary provider input",
+						username: "provider-user",
+						organizationName: "provider-org",
+						resourcePath: "src/main.ts",
 					},
 				},
 			}).success,
@@ -281,6 +287,18 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			DirectActionResultV1Schema.safeParse({
 				...success,
+				output: { connectionId: "must-not-cross" },
+			}).success,
+		).toBe(false);
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...success,
+				output: { description: "line one\nline two" },
+			}).success,
+		).toBe(true);
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...success,
 				traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
 			}).success,
 		).toBe(false);
@@ -346,6 +364,25 @@ describe("Pilot Direct MCP/API contracts", () => {
 					code: "PROVIDER_FAILED",
 					message: "Provider rejected the action",
 				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("keeps grant action authorization unambiguous", () => {
+		const grant = {
+			grantId: "grant-1",
+			consumerId: "consumer-1",
+			consumerInstanceId: "instance-1",
+			actorId: null,
+			connectionId: "connection-1",
+			actions: [{ actionId: "github.issue.read", actionVersion: "v1" }],
+			status: "active",
+		};
+		expect(DirectGrantProjectionV1Schema.safeParse(grant).success).toBe(true);
+		expect(
+			DirectGrantProjectionV1Schema.safeParse({
+				...grant,
+				actionVersions: ["v1"],
 			}).success,
 		).toBe(false);
 	});

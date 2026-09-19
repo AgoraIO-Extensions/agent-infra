@@ -234,7 +234,39 @@ describe("Pilot standard artifacts", () => {
 				...directRequest,
 				action: {
 					...directRequest.action,
+					arguments: {
+						username: "provider-user",
+						organizationName: "provider-org",
+						resourcePath: "src/main.ts",
+						note: "line one\nline two",
+					},
+				},
+			}),
+		).toBe(true);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
 					arguments: { ConnectionID: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { auth: "mF_9.B5f-4.1JqM" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { value: "mF_9.B5f-4.1JqM" },
 				},
 			}),
 		).toBe(false);
@@ -300,6 +332,31 @@ describe("Pilot standard artifacts", () => {
 			}),
 		).toBe(false);
 		expect(bigintValidatorCalled).toBe(false);
+		const directGrantSchema = direct.DirectGrantProjectionV1;
+		if (!directGrantSchema) throw new Error("Direct grant schema missing");
+		const validateDirectGrant = ajv.compile(directGrantSchema);
+		expect(
+			validateDirectGrant({
+				grantId: "grant-1",
+				consumerId: "consumer-1",
+				consumerInstanceId: "instance-1",
+				actorId: null,
+				connectionId: "connection-1",
+				actions: [{ actionId: "github.issue.read", actionVersion: "v1" }],
+				status: "active",
+			}),
+		).toBe(true);
+		expect(
+			validateDirectGrant({
+				grantId: "grant-1",
+				consumerId: "consumer-1",
+				consumerInstanceId: "instance-1",
+				actorId: null,
+				connectionId: "connection-1",
+				actionVersions: ["v1"],
+				status: "active",
+			}),
+		).toBe(false);
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {

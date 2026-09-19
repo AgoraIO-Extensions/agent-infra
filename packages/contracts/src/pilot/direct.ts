@@ -26,7 +26,7 @@ type DirectJson =
 	| { [key: string]: DirectJson };
 
 const credentialSafeKeyPattern =
-	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
+	/^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
 const caseInsensitiveRegexSource = (source: string) =>
 	source.replace(/[A-Za-z]/g, (letter) => {
 		const lower = letter.toLowerCase();
@@ -37,8 +37,10 @@ const authoritySelectorKeyTerms = [
 	"connection",
 	"principal",
 	"consumer",
+	"consumerinstance",
 	"instance",
 	"external[_-]?account",
+	"externalaccount",
 	"actor",
 	"organization",
 	"agent",
@@ -48,7 +50,9 @@ const authoritySelectorKeyTerms = [
 	"grant",
 	"session",
 	"host[_-]?session",
+	"hostsession",
 	"native[_-]?session",
+	"nativesession",
 	"identity",
 	"platform",
 	"attachment",
@@ -64,10 +68,14 @@ const authoritySelectorKeyTerms = [
 ];
 const authoritySelectorKeySuffixes = ["id", "selector", "context"];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?).+$`,
+	`^(?!(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
 );
 const unsafeArgumentValuePattern = new RegExp(
-	String.raw`^(?!.*(?:\b(?:${["bearer", "credentials?", "oauth(?:code|token)?"]
+	String.raw`^(?![\s\S]*(?:\b(?:${[
+		"bearer",
+		"credentials?",
+		"oauth(?:code|token)?",
+	]
 		.map(caseInsensitiveRegexSource)
 		.join("|")})\b|(?:^|[\s:=])(?:${[
 		"token",
@@ -86,7 +94,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		"[Xx][Oo][Xx][BbAaPpRrSs]",
 	].join(
 		"|",
-	)})[-_][A-Za-z0-9_-]{8,}|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")})).*$`,
+	)})[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
 );
 
 export const DirectPayloadMaximumDepthV1 = 3;
@@ -236,7 +244,8 @@ export const DirectJsonV1Schema = boundedDirectJsonSchema(
 		.string()
 		.min(1)
 		.max(DirectPayloadMaximumStringLengthV1)
-		.regex(credentialSafeKeyPattern),
+		.regex(credentialSafeKeyPattern)
+		.regex(authoritySelectorKeyPattern),
 	DirectPayloadMaximumDepthV1,
 );
 export const DirectActionArgumentsV1Schema = boundedDirectJsonSchema(
@@ -298,7 +307,14 @@ export const DirectGrantProjectionV1Schema = z.strictObject({
 	consumerInstanceId: OpaqueIdV1Schema,
 	actorId: OpaqueIdV1Schema.nullable(),
 	connectionId: OpaqueIdV1Schema,
-	actionVersions: z.array(nonEmptyString()).min(1),
+	actions: z
+		.array(
+			z.strictObject({
+				actionId: OpaqueIdV1Schema,
+				actionVersion: nonEmptyString(),
+			}),
+		)
+		.min(1),
 	status: z.enum(["active", "revoked", "expired"]),
 });
 
