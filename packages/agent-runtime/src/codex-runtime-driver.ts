@@ -5624,6 +5624,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					const turn = { ...request.source, conversationKey };
 					let admission: CodexModelTurnAdmission | undefined;
 					let lateClose = false;
+					const cleanupTurnRegistration = () => {
+						if (admission) this.abandonModelTurnAdmission?.(admission);
+						this.revokeModelTurn?.(turn);
+					};
 					if (hasAdmissionHook) {
 						if (!beginAdmission || !recognizeTurn || !registerTurn) {
 							await this.update((state) => {
@@ -5666,31 +5670,38 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							unavailable();
 						}
 					}
-					saved = await this.update((state) => {
-						const resolved = locate(state);
-						const source = resolved.source;
-						if (!source || source.bindPending?.requestId !== receipt.requestId)
-							stateInvalid();
-						if (
-							isClosed(state, resolved) ||
-							!this.executionConfigurationMatches(
-								state,
-								resolved.session,
-								resolved.execution,
+					try {
+						saved = await this.update((state) => {
+							const resolved = locate(state);
+							const source = resolved.source;
+							if (
+								!source ||
+								source.bindPending?.requestId !== receipt.requestId
 							)
-						) {
-							lateClose = true;
+								stateInvalid();
+							if (
+								isClosed(state, resolved) ||
+								!this.executionConfigurationMatches(
+									state,
+									resolved.session,
+									resolved.execution,
+								)
+							) {
+								lateClose = true;
+								delete source.bindPending;
+								source.bindDenied = "authorization_unavailable";
+							} else {
+								source.bind = source.bindPending;
+							}
 							delete source.bindPending;
-							source.bindDenied = "authorization_unavailable";
-						} else {
-							source.bind = source.bindPending;
-						}
-						delete source.bindPending;
-						return resolved;
-					});
+							return resolved;
+						});
+					} catch (error) {
+						cleanupTurnRegistration();
+						throw error;
+					}
 					if (lateClose) {
-						if (admission) this.abandonModelTurnAdmission?.(admission);
-						this.revokeModelTurn?.(turn);
+						cleanupTurnRegistration();
 					}
 				}
 			} else unavailable();

@@ -27,7 +27,10 @@ const message = {
 	response_url:
 		"https://qyapi.weixin.qq.com/cgi-bin/aibot/response?response_code=fixture",
 };
-function fixture(outcome: "accepted" | "denied") {
+function fixture(
+	outcome: "accepted" | "denied",
+	protectReply: () => Promise<string> = async () => "protected",
+) {
 	const app = createPlatformHealthApp();
 	const seen: unknown[] = [];
 	const observed: string[] = [];
@@ -36,7 +39,7 @@ function fixture(outcome: "accepted" | "denied") {
 		resolveBinding: async () => config,
 		adapter: createWecomAdapterV1({
 			now: () => now,
-			protectReply: async () => "protected",
+			protectReply,
 		}),
 		channel: {
 			async receive(input) {
@@ -74,6 +77,15 @@ function fixture(outcome: "accepted" | "denied") {
 		request: () => wecomCallbackFixtureV1(config, message, now),
 	};
 }
+it("returns 503 when durable reply protection is unavailable", async () => {
+	const f = fixture("accepted", async () => {
+		throw new Error("reply store unavailable");
+	});
+	const response = await f.app.request(f.request());
+	expect(response.status).toBe(503);
+	expect(f.seen).toHaveLength(0);
+	expect(f.observed).toEqual(["unavailable"]);
+});
 it("only hands a verified callback to Core and acknowledges saved acceptance", async () => {
 	const f = fixture("accepted");
 	const response = await f.app.request(f.request());

@@ -3,9 +3,10 @@ import type {
 	createWecomReceiptAccessV1,
 	WecomMessageV1,
 } from "@agent-infra/platform-core";
-import type {
-	createWecomAdapterV1,
-	WecomConfigurationV1,
+import {
+	type createWecomAdapterV1,
+	type WecomConfigurationV1,
+	WecomReplyProtectionError,
 } from "@agent-infra/wecom";
 import type { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./common.js";
@@ -126,7 +127,11 @@ export function registerWecomRoutesV1(
 				);
 				if (callback.type === "challenge") return context.text(callback.text);
 				message = callback.message;
-			} catch {
+			} catch (error) {
+				if (error instanceof WecomReplyProtectionError) {
+					observe("unavailable");
+					return context.text("Unavailable", 503);
+				}
 				observe("invalid");
 				return context.text("Invalid callback", 400);
 			}

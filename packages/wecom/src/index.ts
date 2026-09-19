@@ -24,6 +24,11 @@ export class WecomProtocolError extends Error {
 		super("Invalid WeCom callback");
 	}
 }
+export class WecomReplyProtectionError extends Error {
+	constructor() {
+		super("WeCom reply protection unavailable");
+	}
+}
 function invalid(): never {
 	throw new WecomProtocolError();
 }
@@ -64,6 +69,15 @@ export function createWecomAdapterV1(options: {
 	}) => Promise<string>;
 }) {
 	const now = options.now ?? (() => new Date());
+	const protectReply = async (
+		route: Parameters<typeof options.protectReply>[0],
+	) => {
+		try {
+			return await options.protectReply(route);
+		} catch {
+			throw new WecomReplyProtectionError();
+		}
+	};
 	return {
 		passiveReply(
 			config: WecomConfigurationV1,
@@ -228,7 +242,7 @@ export function createWecomAdapterV1(options: {
 					const expiresAt = new Date(
 						Number(timestamp) * 1000 + 3600_000,
 					).toISOString();
-					const replyHandle = await options.protectReply({
+					const replyHandle = await protectReply({
 						bindingReference: config.bindingReference,
 						credentialVersion: config.credentialVersion,
 						recipientId: senderId,
@@ -291,7 +305,7 @@ export function createWecomAdapterV1(options: {
 				const expiresAt = new Date(
 					Number(timestamp) * 1000 + 3600_000,
 				).toISOString();
-				const replyHandle = await options.protectReply({
+				const replyHandle = await protectReply({
 					bindingReference: config.bindingReference,
 					credentialVersion: config.credentialVersion,
 					responseUrl: responseUrl.href,
@@ -323,7 +337,8 @@ export function createWecomAdapterV1(options: {
 						replyExpiresAt: expiresAt,
 					},
 				};
-			} catch {
+			} catch (error) {
+				if (error instanceof WecomReplyProtectionError) throw error;
 				return invalid();
 			}
 		},
