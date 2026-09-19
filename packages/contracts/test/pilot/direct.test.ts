@@ -184,6 +184,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"connection.id",
 			"principal/id",
 			"grant id",
+			"usernameConnectionId",
+			"resourcePathPrincipal",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({

@@ -72,7 +72,7 @@ const safeProviderArgumentKeyPatterns = [
 	caseInsensitiveRegexSource("resourcePath"),
 ];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?:${safeProviderArgumentKeyPatterns.join("|")}|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})).+)$`,
+	`^(?:(?:${safeProviderArgumentKeyPatterns.join("|")})$|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})).+)$`,
 );
 const outputAuthoritySelectorKeyTerms = [
 	"connection",
