@@ -55,6 +55,9 @@ export function ConnectionsPage() {
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
+	const callbackFailed =
+		new URLSearchParams(window.location.search).get("oauth") ===
+		"callback_failed";
 	useEffect(() => {
 		const search = new URLSearchParams(window.location.search);
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
@@ -263,7 +266,14 @@ export function ConnectionsPage() {
 				}
 			/>
 			{overview.isPending ? (
-				<div className="skeleton-block" role="status" aria-label="正在加载" />
+				<div className="skeleton-block" role="status">
+					正在加载 Connection...
+				</div>
+			) : null}
+			{callbackFailed ? (
+				<p className="alert alert-warning" role="status">
+					GitHub 授权回跳未确认，请以当前连接状态为准。
+				</p>
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}

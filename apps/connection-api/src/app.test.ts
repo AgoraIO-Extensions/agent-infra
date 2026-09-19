@@ -1091,6 +1091,7 @@ describe("Connection API", () => {
 				],
 			},
 		});
+		expect(apiOverviewBody.overview).toMatchObject({ actions: [] });
 		expect(apiOverviewBody.overview.principal).toBeUndefined();
 		const apiResponses = [
 			await app.request("/api/v1/connection/oauth-transactions", {

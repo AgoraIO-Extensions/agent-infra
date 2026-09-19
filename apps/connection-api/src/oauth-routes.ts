@@ -901,7 +901,7 @@ export function createConnectionOAuthApp(
 				isAdministrator: await management.service.isConnectionAdministrator(
 					session.account.principalId,
 				),
-				overview,
+				overview: { ...overview, actions: [] },
 			});
 		});
 

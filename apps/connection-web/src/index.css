@@ -460,6 +460,11 @@ input::placeholder {
 	background: var(--accent-soft);
 	color: var(--accent);
 }
+.alert-warning {
+	border: 1px solid var(--border-strong);
+	background: var(--warning-soft);
+	color: var(--text);
+}
 .secret-callout {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
@@ -669,9 +674,12 @@ tbody tr:hover {
 }
 .skeleton-block {
 	height: 180px;
+	display: grid;
+	place-items: center;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--surface-muted);
+	color: var(--text-muted);
 	animation: pulse 1.4s ease-in-out infinite;
 }
 @keyframes pulse {
