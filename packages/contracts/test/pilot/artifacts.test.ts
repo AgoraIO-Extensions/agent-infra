@@ -5,6 +5,7 @@ import { createDocument } from "zod-openapi";
 
 import {
 	DirectPayloadMaximumByteLengthV1,
+	DirectPayloadMaximumTraversalDepthV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
@@ -15,6 +16,7 @@ import {
 	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
 	validateDirectActionRequestWithPublishedSchemaV1,
+	validateDirectCatalogWithPublishedSchemaV1,
 } from "../../src/pilot/index.js";
 
 function generateJsonSchema(schemas: Record<string, z.ZodType>) {
@@ -275,7 +277,7 @@ describe("Pilot standard artifacts", () => {
 				...directRequest,
 				action: {
 					...directRequest.action,
-					arguments: { auth: "mF_9.B5f-4.1JqM" },
+					arguments: { auth: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
 				},
 			}),
 		).toBe(false);
@@ -284,7 +286,7 @@ describe("Pilot standard artifacts", () => {
 				...directRequest,
 				action: {
 					...directRequest.action,
-					arguments: { value: "mF_9.B5f-4.1JqM" },
+					arguments: { value: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
 				},
 			}),
 		).toBe(false);
@@ -400,6 +402,14 @@ describe("Pilot standard artifacts", () => {
 				},
 			],
 		};
+		let tooDeepSchema: unknown = "too-deep";
+		for (
+			let depth = 0;
+			depth <= DirectPayloadMaximumTraversalDepthV1;
+			depth += 1
+		) {
+			tooDeepSchema = [tooDeepSchema];
+		}
 		expect(validateDirectCatalog(directCatalog)).toBe(true);
 		expect(
 			validateDirectCatalog({
@@ -407,10 +417,24 @@ describe("Pilot standard artifacts", () => {
 				actions: [
 					{
 						...directCatalog.actions[0],
-						inputSchema: { nested: [[[["too-deep"]]]] },
+						inputSchema: { nested: tooDeepSchema },
 					},
 				],
 			}),
+		).toBe(true);
+		expect(
+			validateDirectCatalogWithPublishedSchemaV1(
+				{
+					...directCatalog,
+					actions: [
+						{
+							...directCatalog.actions[0],
+							inputSchema: { nested: tooDeepSchema },
+						},
+					],
+				},
+				(input) => validateDirectCatalog(input),
+			),
 		).toBe(false);
 	});
 

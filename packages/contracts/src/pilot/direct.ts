@@ -1,3 +1,4 @@
+import Ajv2020 from "ajv/dist/2020.js";
 import { z } from "zod";
 
 import {
@@ -58,23 +59,55 @@ const authoritySelectorKeyTerms = [
 	"identity",
 	"platform",
 	"attachment",
-	"user",
-	"tenant",
-	"account",
-	"subject",
-	"caller",
-	"owner",
-	"context",
-	"resource",
-	"credential",
 ];
-const safeProviderArgumentKeyPatterns = [
-	caseInsensitiveRegexSource("username"),
-	caseInsensitiveRegexSource("organizationName"),
-	caseInsensitiveRegexSource("resourcePath"),
+const authoritySelectorExactKeys = [
+	"connection",
+	"connectionId",
+	"principal",
+	"principalId",
+	"consumer",
+	"consumerId",
+	"consumerInstance",
+	"consumerInstanceId",
+	"instance",
+	"instanceId",
+	"externalAccount",
+	"externalAccountId",
+	"actor",
+	"actorId",
+	"agentId",
+	"conversationId",
+	"turnId",
+	"executionId",
+	"grant",
+	"grantId",
+	"session",
+	"sessionId",
+	"hostSession",
+	"hostSessionId",
+	"nativeSession",
+	"nativeSessionId",
+	"identity",
+	"identityId",
+	"platform",
+	"platformId",
+	"attachment",
+	"attachmentId",
+	"userId",
+	"user_id",
+	"tenantId",
+	"accountId",
+	"identityId",
+	"subjectId",
+	"caller",
+	"ownerId",
+	"context",
+	"resourceId",
+	"credential",
+	"credentialId",
 ];
 const authoritySelectorKeyPattern = new RegExp(
-	`^(?:(?:${safeProviderArgumentKeyPatterns.join("|")})$|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})).+)$`,
+	`^(?!(?:${authoritySelectorExactKeys.map(caseInsensitiveRegexSource).join("|")})$)(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})[_. /-]?(?:${["id", "selector", "context"].map(caseInsensitiveRegexSource).join("|")})$).+$`,
 );
 const outputAuthoritySelectorKeyTerms = [
 	"connection",
@@ -137,7 +170,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		.map(caseInsensitiveRegexSource)
 		.join(
 			"|",
-		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])${caseInsensitiveRegexSource("github_pat")}[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
+		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])${caseInsensitiveRegexSource("github_pat")}[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{10,}\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
 );
 
 export const DirectPayloadMaximumDepthV1 = 3;
@@ -346,17 +379,33 @@ const jsonSchemaDocumentPrimitiveV1Schema: z.ZodType<DirectJson> = z.union([
 	z.number().finite(),
 	z.string().max(DirectPayloadMaximumStringLengthV1),
 ]);
-const jsonSchemaDocumentValueV1Schema = boundedDirectJsonSchema(
-	z.string().min(1).max(DirectPayloadMaximumStringLengthV1),
-	DirectPayloadMaximumDepthV1,
-	jsonSchemaDocumentPrimitiveV1Schema,
+const jsonSchemaDocumentKeyV1Schema = z
+	.string()
+	.min(1)
+	.max(DirectPayloadMaximumStringLengthV1);
+const jsonSchemaDocumentValueV1Schema: z.ZodType<DirectJson> = z.lazy(() =>
+	z.union([
+		jsonSchemaDocumentPrimitiveV1Schema,
+		z
+			.array(jsonSchemaDocumentValueV1Schema)
+			.max(DirectPayloadMaximumCollectionSizeV1),
+		boundedRecord(
+			jsonSchemaDocumentKeyV1Schema,
+			jsonSchemaDocumentValueV1Schema,
+		),
+	]),
 );
+const jsonSchemaMetaValidator = new Ajv2020({ strict: false });
 const jsonSchemaDocument = withDirectPayloadBudget(
-	boundedRecord(
-		z.string().min(1).max(DirectPayloadMaximumStringLengthV1),
-		jsonSchemaDocumentValueV1Schema,
-	),
-);
+	boundedRecord(jsonSchemaDocumentKeyV1Schema, jsonSchemaDocumentValueV1Schema),
+).superRefine((value, context) => {
+	if (!jsonSchemaMetaValidator.validateSchema(value)) {
+		context.addIssue({
+			code: "custom",
+			message: "Catalog schema is not a valid JSON Schema 2020-12 document",
+		});
+	}
+});
 
 export const DirectActionEffectV1Schema = z.enum(["READ", "WRITE"]);
 export const DirectActionPublicationStatusV1Schema = z.enum([

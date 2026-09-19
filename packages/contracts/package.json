@@ -59,6 +59,7 @@
 		"test": "pnpm build && vitest run src test && pnpm check-generated && pnpm check-compatibility"
 	},
 	"dependencies": {
+		"ajv": "catalog:",
 		"jsonc-parser": "catalog:",
 		"zod": "catalog:"
 	},
@@ -66,7 +67,6 @@
 		"@agent-infra/config": "workspace:*",
 		"@hey-api/openapi-ts": "catalog:",
 		"@types/node": "catalog:",
-		"ajv": "catalog:",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:",

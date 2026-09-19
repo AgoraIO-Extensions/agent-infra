@@ -114,8 +114,19 @@ describe("Pilot Direct MCP/API contracts", () => {
 					{
 						...catalog.actions[0],
 						inputSchema: {
-							nested: nestedArray(DirectPayloadMaximumDepthV1 + 1),
+							nested: nestedArray(DirectPayloadMaximumTraversalDepthV1 + 1),
 						},
+					},
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: [
+					{
+						...catalog.actions[0],
+						inputSchema: { type: "not-a-json-schema-type" },
 					},
 				],
 			}).success,
@@ -193,15 +204,11 @@ describe("Pilot Direct MCP/API contracts", () => {
 			"context",
 			"targetConnectionId",
 			"selectedPrincipalId",
-			"connectionName",
-			"principalName",
-			"accountValue",
 			"credentialValue",
 			"connection.id",
 			"principal/id",
 			"grant id",
 			"usernameConnectionId",
-			"resourcePathPrincipal",
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({
@@ -219,8 +226,8 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ target: "caller-selected-connection" },
 			{ note: "token=embedded-secret" },
 			{ value: "sk-abcdefghijklmnopqrstuvwxyz" },
-			{ auth: "mF_9.B5f-4.1JqM" },
-			{ value: "mF_9.B5f-4.1JqM" },
+			{ auth: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
+			{ value: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
 			{ key: "AKIAIOSFODNN7EXAMPLE" },
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
 			{ authHeader: "Bearer credential" },
@@ -266,6 +273,12 @@ describe("Pilot Direct MCP/API contracts", () => {
 						username: "provider-user",
 						organizationName: "provider-org",
 						resourcePath: "src/main.ts",
+						assigneeUserId: "provider-user-id",
+						repositoryOwner: "provider-owner",
+						resourceType: "repository",
+						accountValue: "provider-account",
+						connectionName: "provider-connection",
+						principalName: "provider-principal",
 					},
 				},
 			}).success,
