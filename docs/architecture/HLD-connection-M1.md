@@ -98,8 +98,12 @@ ProviderRelease、Credential、Connection、Grant 与真实 App-owned Check E2E�
 `providerId` 为授权唯一维度，每个 Jenkins deployment 必须使用独立稳定 Provider ID、
 ProviderRelease、固定 origin、Credential 和 Grant；不能共用 `providerId=jenkins`，也不能通过
 环境变量或 Action 参数提交任意 endpoint。各 deployment 复用同一个参数化 Adapter 实现。
-`jenkins-ci` 固定 origin `https://jenkins-ci.agoralab.co`，但其公司 OAuth 网关尚无 Connection
-机器认证契约，因此只保留独立 catalog/profile，不进入 runtime supported providers。
+`jenkins-ci` 固定 origin `https://jenkins-ci.agoralab.co`，使用用户 Jenkins username + API Token
+的 Basic Auth 机器接口，并作为独立 Provider 进入 runtime。`jenkins-ci.agoralab.co` 只映射
+`providerId=jenkins-ci`；`114.94.148.35:8010` 与本地别名 `10.80.1.129:8080` 只映射
+`providerId=jenkins-release`。Consumer 根据 URL host/port 选择带 Provider 前缀的 Action ID，
+Connection 再按该 Provider 的 Grant、Credential 和固定 origin 执行；未知或不唯一 host 必须拒绝，
+不能默认选择任一 Jenkins，也不能把调用方 URL 作为 endpoint 传入 Adapter。
 
 `jenkins-release` 对应同一 Jenkins deployment，正式环境固定 public origin
 `http://114.94.148.35:8010`，本地开发固定 internal origin `http://10.80.1.129:8080`。启动配置只允许

@@ -38,7 +38,10 @@ describe("Connection Browser OpenAPI", () => {
 					additionalProperties: false,
 					properties: {
 						apiToken: { maxLength: 8192, minLength: 1, type: "string" },
-						providerId: { const: "jenkins-release", type: "string" },
+						providerId: {
+							enum: ["jenkins-ci", "jenkins-release"],
+							type: "string",
+						},
 						username: { maxLength: 256, minLength: 1, type: "string" },
 					},
 					required: ["providerId", "username", "apiToken"],
