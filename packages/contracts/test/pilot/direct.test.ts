@@ -14,6 +14,7 @@ import {
 	DirectPayloadMaximumStringLengthV1,
 	pilotDirectOpenApiPathsV1,
 	validateDirectActionResultV1,
+	validateDirectPayloadBudgetV1,
 } from "../../src/pilot/direct.js";
 
 const request = {
@@ -138,6 +139,16 @@ describe("Pilot Direct MCP/API contracts", () => {
 				],
 			}).success,
 		).toBe(false);
+		expect(validateDirectPayloadBudgetV1(catalog)).toBe(true);
+		expect(
+			validateDirectPayloadBudgetV1({
+				...catalog,
+				actions: Array.from(
+					{ length: DirectPayloadMaximumCollectionSizeV1 + 1 },
+					() => catalog.actions[0],
+				),
+			}),
+		).toBe(false);
 	});
 
 	it("rejects caller-selected authority and credential selectors", () => {
@@ -187,6 +198,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ auth: "mF_9.B5f-4.1JqM" },
 			{ value: "mF_9.B5f-4.1JqM" },
 			{ key: "AKIAIOSFODNN7EXAMPLE" },
+			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
 		]) {
 			expect(
 				DirectActionRequestV1Schema.safeParse({

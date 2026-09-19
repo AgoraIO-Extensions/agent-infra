@@ -110,7 +110,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		.map(caseInsensitiveRegexSource)
 		.join(
 			"|",
-		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
+		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])${caseInsensitiveRegexSource("github_pat")}[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{2,}\.){2,}[A-Za-z0-9_-]{2,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
 );
 
 export const DirectPayloadMaximumDepthV1 = 3;
@@ -566,7 +566,7 @@ export const DirectActionResultV1Schema = withDirectPayloadBudget(
 export type DirectPayloadValidatorV1 = (input: unknown) => boolean;
 export type DirectPublishedSchemaValidatorV1 = (input: unknown) => boolean;
 
-function isDirectPayloadWithinBudget(input: unknown) {
+export function validateDirectPayloadBudgetV1(input: unknown) {
 	try {
 		const size = inspectDirectPayload(input);
 		return (
@@ -585,7 +585,7 @@ export function validateDirectActionRequestWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
 ) {
-	if (!isDirectPayloadWithinBudget(input)) return false;
+	if (!validateDirectPayloadBudgetV1(input)) return false;
 	if (!validatePublishedSchema(input)) return false;
 	return DirectActionRequestV1Schema.safeParse(input).success;
 }
@@ -596,7 +596,7 @@ export function validateDirectActionResultV1(
 	context: { validateOutput: DirectPayloadValidatorV1 },
 ) {
 	const request = DirectActionRequestV1Schema.parse(requestInput);
-	if (!isDirectPayloadWithinBudget(resultInput)) {
+	if (!validateDirectPayloadBudgetV1(resultInput)) {
 		throw new Error("Direct Action result exceeds the payload budget");
 	}
 	const result = DirectActionResultV1Schema.parse(resultInput);
