@@ -502,6 +502,7 @@ export const pilotDirectOpenApiPathsV1 = {
 			operationId: "executeConnectionAction",
 			requestBody: {
 				required: true,
+				description: `The JSON request body must stay within the ${DirectPayloadMaximumByteLengthV1}-byte direct payload budget; Connection must enforce the transport limit before parsing.`,
 				content: {
 					"application/json": { schema: DirectActionRequestV1Schema },
 				},

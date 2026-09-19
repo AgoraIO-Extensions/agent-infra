@@ -2326,6 +2326,7 @@
               }
             }
           },
+          "description": "The JSON request body must stay within the 1048576-byte direct payload budget; Connection must enforce the transport limit before parsing.",
           "required": true
         },
         "responses": {
