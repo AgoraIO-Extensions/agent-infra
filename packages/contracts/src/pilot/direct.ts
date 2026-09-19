@@ -27,10 +27,67 @@ type DirectJson =
 
 const credentialSafeKeyPattern =
 	/^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$/;
-const authoritySelectorKeyPattern =
-	/^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$/i;
-const unsafeArgumentValuePattern =
-	/^(?!.*(?:\b(?:bearer|credentials?|oauth(?:code|token)?)\b|(?:^|[\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\s*[:=]|(?:^|[\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$/i;
+const caseInsensitiveRegexSource = (source: string) =>
+	source.replace(/[A-Za-z]/g, (letter) => {
+		const lower = letter.toLowerCase();
+		const upper = letter.toUpperCase();
+		return `[${lower}${upper}]`;
+	});
+const authoritySelectorKeyTerms = [
+	"connection",
+	"principal",
+	"consumer",
+	"instance",
+	"external[_-]?account",
+	"actor",
+	"organization",
+	"agent",
+	"conversation",
+	"turn",
+	"execution",
+	"grant",
+	"session",
+	"host[_-]?session",
+	"native[_-]?session",
+	"identity",
+	"platform",
+	"attachment",
+	"user",
+	"tenant",
+	"account",
+	"subject",
+	"caller",
+	"owner",
+	"context",
+	"resource",
+	"credential",
+];
+const authoritySelectorKeySuffixes = ["id", "selector", "context"];
+const authoritySelectorKeyPattern = new RegExp(
+	`^(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_-]?(?:${authoritySelectorKeySuffixes.map(caseInsensitiveRegexSource).join("|")}))?).+$`,
+);
+const unsafeArgumentValuePattern = new RegExp(
+	String.raw`^(?!.*(?:\b(?:${["bearer", "credentials?", "oauth(?:code|token)?"]
+		.map(caseInsensitiveRegexSource)
+		.join("|")})\b|(?:^|[\s:=])(?:${[
+		"token",
+		"api[-_]?key",
+		"secret",
+		"password",
+		"authorization",
+		"cookie",
+		"jwt",
+	]
+		.map(caseInsensitiveRegexSource)
+		.join("|")})\s*[:=]|(?:^|[\s:=])(?:${[
+		caseInsensitiveRegexSource("sk"),
+		caseInsensitiveRegexSource("pk"),
+		"[Gg][Hh][PpOoUuSsRr]",
+		"[Xx][Oo][Xx][BbAaPpRrSs]",
+	].join(
+		"|",
+	)})[-_][A-Za-z0-9_-]{8,}|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")})).*$`,
+);
 
 export const DirectPayloadMaximumDepthV1 = 3;
 export const DirectPayloadMaximumStringLengthV1 = 65_536;
@@ -437,7 +494,7 @@ export const DirectActionResultV1Schema = z.discriminatedUnion("status", [
 	DirectActionUnresolvedV1Schema,
 ]);
 
-export type DirectPayloadValidatorV1 = (input: unknown) => unknown;
+export type DirectPayloadValidatorV1 = (input: unknown) => boolean;
 export type DirectPublishedSchemaValidatorV1 = (input: unknown) => boolean;
 
 function isDirectPayloadWithinBudget(input: unknown) {
@@ -477,9 +534,10 @@ export function validateDirectActionResultV1(
 		throw new Error("Direct Action result correlation mismatch");
 	}
 	if (result.status === "succeeded") {
-		const output = DirectJsonV1Schema.parse(
-			context.validateOutput(result.output),
-		);
+		if (!context.validateOutput(result.output)) {
+			throw new Error("Direct Action output validation failed");
+		}
+		const output = DirectJsonV1Schema.parse(result.output);
 		return { ...result, output };
 	}
 	if (result.error.traceId !== result.traceId) {

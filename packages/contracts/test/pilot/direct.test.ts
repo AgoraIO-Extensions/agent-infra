@@ -275,7 +275,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 						pullRequestId: z.number().int(),
 						url: z.string().url(),
 					})
-					.parse(input),
+					.safeParse(input).success,
 		});
 		expect(validated).toEqual(success);
 		expect(
@@ -305,7 +305,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 		};
 		expect(
 			validateDirectActionResultV1(request, unresolved, {
-				validateOutput: (input) => input,
+				validateOutput: () => true,
 			}),
 		).toEqual(unresolved);
 		expect(() =>
@@ -319,7 +319,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 						message: "Provider rejected the action",
 					},
 				},
-				{ validateOutput: (input) => input },
+				{ validateOutput: () => true },
 			),
 		).toThrow();
 		expect(

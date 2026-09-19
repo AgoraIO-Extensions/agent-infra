@@ -1176,7 +1176,7 @@
                         },
                         {
                           "maxLength": 65536,
-                          "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                          "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                           "type": "string"
                         }
                       ]
@@ -1197,7 +1197,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1218,7 +1218,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
-                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                      "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1237,7 +1237,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1259,7 +1259,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1271,7 +1271,7 @@
                                         "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
-                                        "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                       }
                                     ],
                                     "maxLength": 65536,
@@ -1301,7 +1301,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
-                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                      "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1320,7 +1320,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1342,7 +1342,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1354,7 +1354,7 @@
                                         "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
-                                        "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                       }
                                     ],
                                     "maxLength": 65536,
@@ -1372,7 +1372,7 @@
                                   "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                 },
                                 {
-                                  "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                  "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                 }
                               ],
                               "maxLength": 65536,
@@ -1402,7 +1402,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1423,7 +1423,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
-                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                      "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1442,7 +1442,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1464,7 +1464,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1476,7 +1476,7 @@
                                         "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
-                                        "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                       }
                                     ],
                                     "maxLength": 65536,
@@ -1506,7 +1506,7 @@
                                     },
                                     {
                                       "maxLength": 65536,
-                                      "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                      "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                       "type": "string"
                                     }
                                   ]
@@ -1525,7 +1525,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1547,7 +1547,7 @@
                                       },
                                       {
                                         "maxLength": 65536,
-                                        "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                        "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                         "type": "string"
                                       }
                                     ]
@@ -1559,7 +1559,7 @@
                                         "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                       },
                                       {
-                                        "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                        "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                       }
                                     ],
                                     "maxLength": 65536,
@@ -1577,7 +1577,7 @@
                                   "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                                 },
                                 {
-                                  "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                                  "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                                 }
                               ],
                               "maxLength": 65536,
@@ -1595,7 +1595,7 @@
                             "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                           },
                           {
-                            "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                            "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                           }
                         ],
                         "maxLength": 65536,
@@ -1615,7 +1615,7 @@
                       "pattern": "^(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
                     },
                     {
-                      "pattern": "^(?!.*(?:connection|principal|consumer|instance|external[_-]?account|actor|organization|agent|conversation|turn|execution|grant|session|host[_-]?session|native[_-]?session|identity|platform|attachment|user|tenant|account|subject|caller|owner|context|resource|credential)(?:[_-]?(?:id|selector|context))?).+$"
+                      "pattern": "^(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[uU][sS][eE][rR]|[tT][eE][nN][aA][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][uU][bB][jJ][eE][cC][tT]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL])(?:[_-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]))?).+$"
                     }
                   ],
                   "maxLength": 65536,
@@ -1731,7 +1731,7 @@
                   },
                   {
                     "maxLength": 65536,
-                    "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                    "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                     "type": "string"
                   }
                 ]
@@ -1752,7 +1752,7 @@
                         },
                         {
                           "maxLength": 65536,
-                          "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                          "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                           "type": "string"
                         }
                       ]
@@ -1773,7 +1773,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1792,7 +1792,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -1814,7 +1814,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -1849,7 +1849,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1868,7 +1868,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -1890,7 +1890,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -1936,7 +1936,7 @@
                         },
                         {
                           "maxLength": 65536,
-                          "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                          "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                           "type": "string"
                         }
                       ]
@@ -1957,7 +1957,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -1976,7 +1976,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -1998,7 +1998,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -2033,7 +2033,7 @@
                               },
                               {
                                 "maxLength": 65536,
-                                "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                 "type": "string"
                               }
                             ]
@@ -2052,7 +2052,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]
@@ -2074,7 +2074,7 @@
                                 },
                                 {
                                   "maxLength": 65536,
-                                  "pattern": "^(?!.*(?:\\b(?:bearer|credentials?|oauth(?:code|token)?)\\b|(?:^|[\\s:=])(?:token|api[-_]?key|secret|password|authorization|cookie|jwt)\\s*[:=]|(?:^|[\\s:=])(?:sk|pk|gh[pousr]|xox[baprs])[-_][a-z0-9_-]{8,}|caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session))).*$",
+                                  "pattern": "^(?!.*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[\\s:=])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[\\s:=])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs])[-_][A-Za-z0-9_-]{8,}|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]))).*$",
                                   "type": "string"
                                 }
                               ]

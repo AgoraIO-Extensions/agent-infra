@@ -234,7 +234,25 @@ describe("Pilot standard artifacts", () => {
 				...directRequest,
 				action: {
 					...directRequest.action,
+					arguments: { ConnectionID: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
 					arguments: { note: "token=embedded-secret" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { note: "TOKEN=embedded-secret" },
 				},
 			}),
 		).toBe(false);
