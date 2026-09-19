@@ -28,6 +28,8 @@ API 专属目录至少包含 `platform-api.mjs`。该模块导出
 身份部署负责 HttpOnly、Secure、SameSite 会话及其真实登录过程，符合
 [身份边界](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#91-identityadapter)。
 此目录只挂给 API，不包含 Kubernetes credential、Worker keyring 或签名私钥。
+独立本地 Authentik 可使用[部署身份 Adapter](authentik/README.md)，同时接通浏览器登录和
+Worker 的当前用户目录；这不替代实际账号和完整首通验收。
 模型凭证由 Owner 在申请和配置时提交，经现有加密公钥加密，只由 Worker 解密注入。
 
 Web 使用 `https://localhost:3001`，`/api/` 同源转发给 API，SSE 不经过响应缓冲。

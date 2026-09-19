@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
 import {
 	type ConversationDispatchAuthorizationPortV1,
@@ -10,8 +11,82 @@ import {
 	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEventV1,
 	type ConversationRuntimeHostPortV1,
+	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
+	decideConversationDispatchRetryTransitionV1,
 } from "./index.js";
+
+describe("current-state retry transition", () => {
+	it.each(["completed", "failed", "cancelled"] as const)(
+		"preserves an already %s original Turn and its Conversation during unknown retry",
+		(executionStatus) => {
+			for (const operation of [
+				"conversation.turn.submit.v1",
+				"conversation.turn.regenerate.v1",
+			] as const) {
+				expect(
+					decideConversationDispatchRetryTransitionV1({
+						operation,
+						executionStatus,
+						transition: {
+							executionStatus: "unknown",
+							conversationStatus: "active",
+						},
+					}),
+				).toEqual({});
+			}
+		},
+	);
+
+	it.each(["submitted", "processing", "unknown"] as const)(
+		"retains the requested retry transition for %s work",
+		(executionStatus) => {
+			const transition = {
+				executionStatus: "unknown",
+				conversationStatus: "active",
+			} as const;
+			expect(
+				decideConversationDispatchRetryTransitionV1({
+					operation: "conversation.turn.submit.v1",
+					executionStatus,
+					transition,
+				}),
+			).toEqual(transition);
+		},
+	);
+
+	it("leaves control, conflicting terminal, and metadata transitions for the Store to validate", () => {
+		const cases = [
+			{
+				operation: "conversation.turn.stop.v1",
+				transition: {
+					executionStatus: "unknown",
+					conversationStatus: "active",
+				},
+			},
+			{
+				operation: "conversation.turn.supplement.v1",
+				transition: {
+					executionStatus: "unknown",
+					conversationStatus: "active",
+				},
+			},
+			{
+				operation: "conversation.turn.submit.v1",
+				transition: { executionStatus: "failed", conversationStatus: "ready" },
+			},
+			{ operation: "conversation.turn.submit.v1", transition: {} },
+		] as const;
+		for (const { operation, transition } of cases)
+			expect(
+				decideConversationDispatchRetryTransitionV1({
+					operation,
+					executionStatus: "cancelled",
+					transition,
+				}),
+			).toEqual(transition);
+	});
+});
 
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},
@@ -58,6 +133,8 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	errorCode: string | undefined;
 	renewable = true;
 	recordable = true;
+	capacity: "available" | "capacity_wait" | "capacity_unavailable" =
+		"available";
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -83,9 +160,13 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 			itemId: input.itemId,
 			leaseOwner: input.workerId,
 			deliveryFence: nextFence,
-			executionDeliveryFence: turn
-				? nextFence
-				: this.current.executionDeliveryFence,
+			executionDeliveryFence:
+				turn &&
+				!["completed", "failed", "cancelled"].includes(
+					this.current.executionStatus,
+				)
+					? nextFence
+					: this.current.executionDeliveryFence,
 		};
 		return {
 			outcome: "claimed" as const,
@@ -102,6 +183,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		leaseDurationMs: number;
 	}) {
 		if (!(await this.renew())) return false;
+		if (this.capacity !== "available") return this.capacity;
 		if (
 			(input.claim.operation === "conversation.turn.submit.v1" ||
 				input.claim.operation === "conversation.turn.regenerate.v1") &&
@@ -149,6 +231,11 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	applyEventTransition(transition: ConversationDispatchStateTransitionV1) {
 		this.current = {
 			...this.current,
+			...(["completed", "failed", "cancelled"].includes(
+				transition.executionStatus ?? "",
+			)
+				? { runtimeTerminalEventSeen: true as const }
+				: {}),
 			executionStatus:
 				transition.executionStatus ?? this.current.executionStatus,
 		};
@@ -255,6 +342,7 @@ function authorization(
 		actorId: string;
 		conversationId: string;
 		authorizationRevision: string;
+		controlOnly: true;
 	}> = {},
 ): ConversationDispatchAuthorizationPortV1 {
 	return {
@@ -273,6 +361,7 @@ function authorization(
 					authorizationRevision:
 						overrides.authorizationRevision ?? input.authorizationRevision,
 					runtimeGrant: "synthetic-grant",
+					...(overrides.controlOnly ? { controlOnly: true } : {}),
 				},
 			};
 		},
@@ -335,6 +424,265 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
+		let dispatches = 0;
+		let recoveries = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				dispatches++;
+				throw new Error("Unexpected submit");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			async recoverOriginalStatus(request) {
+				recoveries++;
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-original",
+					outcome: "not_found",
+				};
+			},
+			async *events() {
+				yield runtimeEvent(1);
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
+		);
+		const f = setup({ store, runtimeHost });
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "unknown" });
+		expect({ dispatches, recoveries }).toEqual({
+			dispatches: 0,
+			recoveries: 1,
+		});
+		expect(store.current.executionStatus).toBe("unknown");
+	});
+
+	it("rejects a found recovery that introduces a Runtime Host reference", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Unexpected dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "introduced-host",
+					executionId: request.executionId,
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				yield* [];
+				throw new Error("Unexpected event drain");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: null }),
+		);
+		const { useCase, events } = setup({ store, runtimeHost });
+		expect(await dispatch(useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
+		expect(events.persisted).toHaveLength(0);
+	});
+
+	it("rejects metadata recovery when Runtime status contradicts the committed execution", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Unexpected dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected status recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: request.hostSessionRef,
+					executionId: request.executionId,
+					outcome: "found",
+					status: "failed",
+				};
+			},
+			async *events() {
+				yield* [];
+				throw new Error("Unexpected event drain");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "completed",
+				hostSessionRef: "host-original",
+				runtimeCursor: "cursor-committed",
+				metadataRecovery: {
+					id: "metadata-recovery-1",
+					requestedAt: 1,
+					originalStatus: "succeeded",
+				},
+			}),
+		);
+		const { useCase, events } = setup({ store, runtimeHost });
+
+		await expect(dispatch(useCase)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(events.persisted).toHaveLength(0);
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_STATUS_CONFLICT");
+	});
+
+	it.each(["capacity_wait", "capacity_unavailable"] as const)(
+		"preserves unreserved submitted work when preparation reports %s",
+		async (capacity) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setEvents([runtimeEvent(1)]);
+			const f = setup({ runtimeHost });
+			f.store.capacity = capacity;
+			expect(await dispatch(f.useCase)).toMatchObject({
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			expect(f.store.current.executionStatus).toBe("submitted");
+			expect(f.store.outboxStatus).toBe("retry_scheduled");
+			expect(f.store.errorCode).toBe(
+				capacity === "capacity_wait"
+					? "AGENT_CAPACITY_FULL"
+					: "AGENT_CAPACITY_UNVERIFIED",
+			);
+			f.store.capacity = "available";
+			expect(runtimeHost.sideEffectCount()).toBe(0);
+			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+			expect(runtimeHost.sideEffectCount()).toBe(1);
+		},
+	);
+	it.each(["found", "not_found"] as const)(
+		"recovers a historical control-only task with %s evidence without business dispatch or renewal",
+		async (outcome) => {
+			let dispatches = 0;
+			let renewals = 0;
+			let recoveries = 0;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					dispatches++;
+					throw new Error("Business dispatch forbidden");
+				},
+				async recoverStatus() {
+					throw new Error("Body recovery forbidden");
+				},
+				async recoverOriginalStatus(request) {
+					recoveries++;
+					expect(request).not.toHaveProperty("recovery");
+					return {
+						schemaVersion: 2,
+						hostSessionRef: "host-original",
+						executionId: request.executionId,
+						...(outcome === "found"
+							? { outcome: "found" as const, status: "running" as const }
+							: { outcome: "not_found" as const }),
+					};
+				},
+				async renewAuthorization() {
+					renewals++;
+				},
+				async *events() {
+					await new Promise((resolve) => setTimeout(resolve, 1100));
+					yield runtimeEvent(1);
+				},
+			};
+			const store = new MemoryDispatchStore(
+				claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
+			);
+			const h = setup({
+				store,
+				runtimeHost,
+				authorization: authorization({ controlOnly: true }),
+			});
+			expect(await dispatch(h.useCase)).toMatchObject({
+				outcome: outcome === "found" ? "accepted" : "unknown",
+			});
+			expect({ dispatches, renewals, recoveries }).toEqual({
+				dispatches: 0,
+				renewals: 0,
+				recoveries: 1,
+			});
+			expect(store.current.executionStatus).toBe(
+				outcome === "found" ? "completed" : "unknown",
+			);
+		},
+	);
+
+	it("does not dispatch a never-started historical task on principal-only evidence", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const h = setup({
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(h.useCase)).toMatchObject({ outcome: "retry" });
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+		expect(h.store.current.executionStatus).toBe("submitted");
+	});
+
+	it("acknowledges only committed cursors and resumes after a lost acknowledgement without repeating execution", async () => {
+		const inner = new FakeConversationRuntimeHostV1();
+		inner.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
+		const acknowledged: string[] = [];
+		let failAck = true;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			dispatch: (request) => inner.dispatch(request),
+			recoverStatus: (request) => inner.recoverStatus(request),
+			events: (request) => inner.events(request),
+			async acknowledge(request) {
+				expect(
+					harness.events.persisted.some(
+						(event) => event.runtimeCursor === request.confirmedCursor,
+					),
+				).toBe(true);
+				if (failAck) {
+					failAck = false;
+					throw new Error("controlled acknowledgement loss");
+				}
+				acknowledged.push(request.confirmedCursor);
+			},
+		};
+		const harness = setup({ runtimeHost });
+		await expect(dispatch(harness.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(acknowledged).toEqual([]);
+		expect(harness.events.persisted).toHaveLength(1);
+		await expect(dispatch(harness.useCase)).resolves.toMatchObject({
+			outcome: "accepted",
+		});
+		expect(acknowledged).toEqual(["cursor-1", "cursor-2"]);
+		expect(harness.events.persisted).toHaveLength(2);
+		expect(inner.sideEffectCount()).toBe(1);
+	});
+
+	it("does not release an active execution when current authority is denied", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const harness = setup({
+			store,
+			authorization: {
+				async authorize() {
+					return { outcome: "denied" };
+				},
+			},
+		});
+		await expect(dispatch(harness.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.current.executionStatus).toBe("processing");
+	});
+
 	it("forwards the Execution-frozen selection without resolving defaults", async () => {
 		const inner = new FakeConversationRuntimeHostV1();
 		inner.setResult({ outcome: "accepted", status: "completed" });
@@ -499,14 +847,15 @@ describe("Conversation Worker dispatch", () => {
 
 		await expect(dispatch(harness.useCase)).resolves.toEqual({
 			schemaVersion: 1,
-			outcome: "stale",
+			outcome: "retry",
+			retryScheduled: true,
 		});
 		expect(harness.events.persisted).toHaveLength(1);
 		expect(harness.store.current.executionStatus).toBe("completed");
 
 		await expect(dispatch(harness.useCase)).resolves.toEqual({
 			schemaVersion: 1,
-			outcome: "already_completed",
+			outcome: "accepted",
 		});
 		expect(runtimeHost.sideEffectCount()).toBe(1);
 		expect(harness.store.outboxStatus).toBe("succeeded");
@@ -555,7 +904,94 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
 	});
 
-	it("rejects every Runtime event after the terminal event", async () => {
+	it.each(["completed", "failed", "unknown"] as const)(
+		"persists post-terminal Connection verification for the original %s tool outcome before ACK",
+		async (phase) => {
+			const inner = new FakeConversationRuntimeHostV1();
+			const runtimeHost: ConversationRuntimeHostPortV1 = inner;
+			const operation = (
+				sequence: number,
+				payload: ConversationRuntimeOperationEventV2["payload"],
+			): ConversationRuntimeOperationEventV2 => ({
+				...runtimeEvent(sequence),
+				schemaVersion: 2,
+				type: "operation",
+				payload,
+			});
+			const intent = {
+				kind: "tool",
+				toolId: "connection.create_pr",
+				operationRef: "tool-1",
+				attemptRef: "attempt-1",
+				phase: "intent",
+			} as const;
+			const started = {
+				...intent,
+				phase: "started",
+				startedAt: "2026-09-06T00:00:02.000Z",
+			} as const;
+			const outcome = {
+				...started,
+				phase,
+				finishedAt: "2026-09-06T00:00:03.000Z",
+				durationMs: 1000,
+			};
+			runtimeHost.events = async function* () {
+				yield operation(1, intent);
+				yield operation(2, started);
+				yield operation(3, outcome);
+				yield runtimeEvent(4);
+				yield operation(5, {
+					...outcome,
+					connection: {
+						serviceRef: "connection-primary",
+						verification: "verified",
+						callRef: "call-1",
+					},
+				});
+			};
+			const harness = setup({ runtimeHost });
+			const facts = new FakeConversationEventsV1({
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				sessionGeneration: 1,
+				deliveryFence: 2,
+			});
+			const persist = harness.events.persist.bind(harness.events);
+			harness.events.persist = async (command) => {
+				await facts.persist(command);
+				return persist(command);
+			};
+			const acknowledged: string[] = [];
+			runtimeHost.acknowledge = async ({ confirmedCursor }) => {
+				expect(harness.events.persisted.at(-1)?.runtimeCursor).toBe(
+					confirmedCursor,
+				);
+				acknowledged.push(confirmedCursor);
+			};
+			await expect(dispatch(harness.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(harness.events.persisted).toHaveLength(5);
+			expect(harness.events.persisted[4]).toMatchObject({
+				operationMetadataOnly: true,
+				event: {
+					fact: { ...outcome, connection: { verification: "verified" } },
+				},
+			});
+			expect(acknowledged).toEqual([
+				"cursor-1",
+				"cursor-2",
+				"cursor-3",
+				"cursor-4",
+				"cursor-5",
+			]);
+			expect(harness.store.current.executionStatus).toBe("completed");
+			expect(inner.sideEffectCount()).toBe(1);
+		},
+	);
+
+	it("rejects ordinary Runtime output after the terminal event", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setEvents([
 			runtimeEvent(1),
@@ -818,6 +1254,87 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("completed");
 	});
 
+	it("keeps stop pending until original recovery confirms running, then uses the existing stop path", async () => {
+		const original = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				stopPending: true,
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const stopped = () =>
+			new MemoryDispatchStore({
+				...original.current,
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-original",
+				input: null,
+			});
+		let stops = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch(request) {
+				expect(request.operation).toBe("turn.stop");
+				expect(request.stopRequestId).toBe("stop-original");
+				stops += 1;
+				return {
+					schemaVersion: 1,
+					hostSessionRef: "host-session-conversation-1",
+					operationId: "stop-original",
+					result: { outcome: "accepted", status: "cancelled" },
+				};
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-session-conversation-1",
+					executionId: request.executionId,
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				expect(original.current.executionStatus).toBe("processing");
+				const control = setup({
+					store: stopped(),
+					runtimeHost,
+					authorization: authorization({ controlOnly: true }),
+				});
+				expect(
+					await dispatch(control.useCase, "conversation:stop:stop-original"),
+				).toMatchObject({ outcome: "accepted" });
+				expect(control.store.current.executionStatus).toBe("cancelled");
+				yield {
+					...runtimeEvent(1),
+					type: "completed",
+					payload: { status: "cancelled" },
+				};
+			},
+		};
+		const pending = setup({
+			store: stopped(),
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(
+			await dispatch(pending.useCase, "conversation:stop:stop-original"),
+		).toMatchObject({ outcome: "retry" });
+		expect(pending.store.errorCode).toBe("ORIGINAL_RESPONSE_NOT_STARTED");
+		expect(stops).toBe(0);
+		const recovery = setup({
+			store: original,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+		expect(await dispatch(recovery.useCase)).toMatchObject({
+			outcome: "accepted",
+		});
+		expect(original.current.executionStatus).toBe("cancelled");
+		expect(stops).toBe(1);
+	});
+
 	it("locally cancels after RuntimeHost fences a never-accepted Turn", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		const store = new MemoryDispatchStore(
@@ -908,5 +1425,169 @@ describe("Conversation Worker dispatch", () => {
 		).resolves.toEqual({ schemaVersion: 1, outcome: "accepted" });
 		expect(first.store.outboxStatus).toBe("retry_scheduled");
 		expect(secondStore.outboxStatus).toBe("succeeded");
+	});
+});
+
+describe("terminal Runtime delivery recovery", () => {
+	it.each([
+		"terminal-commit",
+		"terminal-ack",
+		"metadata-before-commit",
+		"metadata-commit",
+		"metadata-ack",
+	])(
+		"retries %s loss twice with original cursor/fence and no second Turn",
+		async (fault) => {
+			const inner = new FakeConversationRuntimeHostV1();
+			const runtimeHost: ConversationRuntimeHostPortV1 = inner;
+			const tool = {
+				kind: "tool",
+				toolId: "connection.create_pr",
+				operationRef: "tool",
+				attemptRef: "attempt",
+				phase: "intent",
+			} as const;
+			const started = {
+				...tool,
+				phase: "started",
+				startedAt: "2026-09-06T00:00:02.000Z",
+			} as const;
+			const outcome = {
+				...started,
+				phase: "unknown",
+				finishedAt: "2026-09-06T00:00:03.000Z",
+				durationMs: 1000,
+			} as const;
+			const operation = (
+				sequence: number,
+				payload: ConversationRuntimeOperationEventV2["payload"],
+			): ConversationRuntimeOperationEventV2 => ({
+				...runtimeEvent(sequence),
+				schemaVersion: 2,
+				type: "operation",
+				payload,
+			});
+			const stream = [
+				operation(1, tool),
+				operation(2, started),
+				operation(3, outcome),
+				runtimeEvent(4),
+				operation(5, {
+					...outcome,
+					connection: {
+						serviceRef: "connection",
+						verification: "verified",
+						callRef: "call",
+					},
+				}),
+			];
+			const requests: { afterCursor?: string; deliveryFence: number }[] = [];
+			runtimeHost.events = async function* (request) {
+				requests.push(request);
+				const index = request.afterCursor
+					? stream.findIndex((event) => event.cursor === request.afterCursor) +
+						1
+					: 0;
+				for (const event of stream.slice(index)) yield event;
+			};
+			const h = setup({ runtimeHost });
+			const persist = h.events.persist.bind(h.events);
+			let remaining = fault.includes("commit")
+				? fault === "metadata-before-commit"
+					? 2
+					: 1
+				: 2;
+			h.events.persist = async (command) => {
+				const target = fault.startsWith("terminal") ? "cursor-4" : "cursor-5";
+				if (
+					command.runtimeCursor === target &&
+					remaining > 0 &&
+					fault.includes("commit")
+				) {
+					remaining--;
+					if (fault !== "metadata-before-commit") await persist(command);
+					throw new Error("injected persistence loss");
+				}
+				return persist(command);
+			};
+			const acknowledgements: string[] = [];
+			runtimeHost.acknowledge = async (request) => {
+				expect(request.deliveryFence).toBe(2);
+				expect(
+					h.events.persisted.some(
+						(event) => event.runtimeCursor === request.confirmedCursor,
+					),
+				).toBe(true);
+				if (
+					fault.endsWith("ack") &&
+					remaining > 0 &&
+					request.confirmedCursor ===
+						(fault.startsWith("terminal") ? "cursor-4" : "cursor-5")
+				) {
+					remaining--;
+					throw new Error("injected ACK loss");
+				}
+				acknowledgements.push(request.confirmedCursor);
+			};
+			let prepares = 0;
+			const prepare = h.store.prepareRuntimeDispatch.bind(h.store);
+			h.store.prepareRuntimeDispatch = async (input) => {
+				prepares++;
+				return prepare(input);
+			};
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			expect(h.store.current.executionStatus).toBe("completed");
+			h.store.capacity = "capacity_unavailable";
+			for (
+				let attempt = 0;
+				attempt < 3 && h.store.outboxStatus !== "succeeded";
+				attempt++
+			)
+				await dispatch(h.useCase);
+			expect(h.store.outboxStatus).toBe("succeeded");
+			expect(h.store.current.executionStatus).toBe("completed");
+			expect(h.store.current.executionDeliveryFence).toBe(2);
+			expect(h.store.current.deliveryFence).toBeGreaterThan(2);
+			expect(prepares).toBe(1);
+			expect(inner.sideEffectCount()).toBe(1);
+			expect(h.events.persisted).toHaveLength(5);
+			expect(h.events.persisted[4]).toMatchObject({
+				operationMetadataOnly: true,
+				event: {
+					fact: { ...outcome, connection: { verification: "verified" } },
+				},
+			});
+			expect(acknowledgements.at(-1)).toBe("cursor-5");
+			expect(
+				requests
+					.slice(1)
+					.every(
+						(request) =>
+							request.deliveryFence === 2 && request.afterCursor !== undefined,
+					),
+			).toBe(true);
+		},
+	);
+
+	it("drains historical events after a final response without falsely treating unfinished history as metadata", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
+		runtimeHost.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
+		const h = setup({ runtimeHost });
+		h.events.loseNextResponse = true;
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(h.store.current.executionStatus).toBe("completed");
+		expect(h.store.current.runtimeTerminalEventSeen).toBeUndefined();
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "accepted",
+		});
+		expect(h.events.persisted).toHaveLength(2);
+		expect(h.events.persisted[1]?.operationMetadataOnly).toBeUndefined();
+		expect(runtimeHost.sideEffectCount()).toBe(1);
 	});
 });

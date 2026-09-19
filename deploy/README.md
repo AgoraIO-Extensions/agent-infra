@@ -23,6 +23,11 @@ Ingress。真实 Agent Workload 的创建、停止、升级、回滚和失败恢
 KubernetesRuntimeAdapter 调谐；镜像发布与 release/rollback 校验属于
 [#334](https://github.com/AgoraIO-Extensions/agent-infra/issues/334)。
 
+生产 KubernetesRuntimeAdapter 为 Agent 容器固定挂载 `runtime-tmp` 到 `/tmp`，使用
+`emptyDir: { medium: Memory, sizeLimit: 128Mi }`；镜像准入探针对应 Docker
+`--tmpfs /tmp:size=128m,mode=1777`。容量计入容器内存使用，容量验证须包含该挂载。
+临时卷与隔离要求见[工程 Spec](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)。
+
 ## Helm 检查
 
 ```bash

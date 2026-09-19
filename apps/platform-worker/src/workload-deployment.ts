@@ -65,6 +65,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 		typeof createDeploymentModelCatalogAdapterV1
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
+	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
@@ -180,6 +181,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			admissionPolicyRef: input.admissionPolicyRef,
 			registrySubjectRef: input.registrySubjectRef,
 			templateModelBindings: structuredClone(input.templateModelBindings),
+			executionCapacityProfiles: structuredClone(
+				input.executionCapacityProfiles,
+			),
 			fetch: input.runtimeFetch,
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,

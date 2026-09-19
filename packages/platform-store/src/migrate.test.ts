@@ -123,16 +123,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 				await client.unsafe(`CREATE SCHEMA platform_migrations;
 					CREATE TABLE platform_migrations.history
 					(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
-				const configurationMigration = migrations[14];
-				if (!configurationMigration)
-					throw new Error("Configuration migration is missing");
 				const legacy =
 					history === "file-authority"
 						? migrations.slice(0, 14)
-						: [
-								...migrations.slice(0, 13),
-								{ ...configurationMigration, folderMillis: 1789378850883 },
-							];
+						: migrations.slice(0, 15);
 				for (const migration of legacy) {
 					for (const statement of migration.sql) await client.unsafe(statement);
 					await client`insert into platform_migrations.history (hash, created_at)
@@ -158,9 +152,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 				expect(upgradedHistory.slice(0, previousHistory.length)).toEqual(
 					previousHistory,
 				);
-				expect(upgradedHistory).toHaveLength(
-					history === "file-authority" ? 15 : 16,
-				);
+				expect(upgradedHistory).toHaveLength(migrations.length);
 				await builtStore.migratePlatformDatabase({
 					databaseUrl: database.databaseUrl,
 				});
@@ -362,7 +354,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 				where table_schema = 'platform'
 					and column_name ~ '(connection|kubernetes|credential|message_body)'
 				`;
-			expect(forbiddenObjects).toEqual([]);
+			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
+			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
+				"wecom_connections",
+				"wecom_receipts.connection_bot_id",
+				"wecom_receipts.connection_fence",
+				"wecom_setup_sessions.encrypted_credential",
+			]);
 
 			await expectConstraintFailure(
 				client`

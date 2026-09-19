@@ -1,4 +1,6 @@
-export type RuntimeDriverFailureKind = "unavailable";
+export type RuntimeDriverFailureKind =
+	| "unavailable"
+	| "session_recovery_failed";
 
 export class RuntimeHostError extends Error {
 	readonly code: string;

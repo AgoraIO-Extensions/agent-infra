@@ -588,6 +588,18 @@ describe("production deployment admissions", () => {
 		).rejects.toThrow();
 	});
 
+	it("allows disabling an unregistered managed bot without callback deployment", async () => {
+		const f = fixture();
+		const a = createDeploymentAdmissionsV1(f.input);
+		expect(
+			await a.channelAdmission.admitChannels({
+				...request,
+				current: [{ kind: "wecom_bot", bindingReference: "managed-session" }],
+				requested: [{ kind: "wecom_bot", enabled: false }],
+			}),
+		).toMatchObject({ status: "admitted", channels: [] });
+	});
+
 	it("registers channel bindings for the exact Agent and actor, including retained bindings", async () => {
 		const f = fixture();
 		const channel = { kind: "wecom_bot", bindingReference: "bot-a" } as const;

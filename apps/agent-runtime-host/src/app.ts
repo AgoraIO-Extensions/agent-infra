@@ -3,16 +3,26 @@ import { timingSafeEqual } from "node:crypto";
 import { type RuntimeHost, RuntimeHostError } from "@agent-infra/agent-runtime";
 import {
 	type ExecutionGrantV1,
+	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
+	RuntimeEventAckRequestV3Schema,
+	RuntimeEventPersistRequestV3Schema,
+	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
+	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
+	RuntimeStatusRequestV3Schema,
 	RuntimeStopRequestV1Schema,
+	RuntimeStopRequestV3Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
+	RuntimeSubmitTurnRequestV3Schema,
 	RuntimeSupplementRequestV1Schema,
+	RuntimeSupplementRequestV3Schema,
 	type VerifiedExecutionGrantV1,
+	type VerifiedRuntimeExecutionGrantV2,
 	WorkloadReadinessRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
@@ -22,6 +32,13 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** Identity authenticated by this deployment's service token. Never a caller field. */
+	runtimeWorkerId?: string;
+	verifyGrantV2?: (
+		grant: RuntimeExecutionGrantV2,
+	) =>
+		| VerifiedRuntimeExecutionGrantV2
+		| Promise<VerifiedRuntimeExecutionGrantV2>;
 	/** The transport token authenticates this deployment-provisioned Worker identity. */
 	readinessWorkerId?: string;
 	host: RuntimeHost;
@@ -235,6 +252,111 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				request,
 				await options.verifyGrant(request.grant),
 			),
+		);
+	});
+
+	async function verifyV2(grant: RuntimeExecutionGrantV2) {
+		if (!options.verifyGrantV2 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyGrantV2(grant);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
+	function v3Route<T extends { grant: RuntimeExecutionGrantV2 }>(
+		path: string,
+		parser: Parser<T>,
+		invoke: (
+			request: T,
+			verification: VerifiedRuntimeExecutionGrantV2,
+			signal: AbortSignal,
+		) => Promise<{ schemaVersion: 3 }>,
+	) {
+		app.post(`/internal/runtime/v3/${path}`, async (context) => {
+			const request = await parseBody(context.req.raw, parser);
+			return context.json(
+				await invoke(
+					request,
+					await verifyV2(request.grant),
+					context.req.raw.signal,
+				),
+			);
+		});
+	}
+	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
+		options.host.submitTurnV3(request, verification),
+	);
+	v3Route(
+		"instructions",
+		RuntimeSupplementRequestV3Schema,
+		(request, verification) => options.host.supplementV3(request, verification),
+	);
+	v3Route("stops", RuntimeStopRequestV3Schema, (request, verification) =>
+		options.host.stopV3(request, verification),
+	);
+	v3Route(
+		"status",
+		RuntimeStatusRequestV3Schema,
+		(request, verification, signal) =>
+			options.host.recoverStatusV3(request, verification, signal),
+	);
+	v3Route(
+		"generations/cancel",
+		RuntimeGenerationCancelRequestV3Schema,
+		(request, verification) =>
+			options.host.cancelGenerationV3(request, verification),
+	);
+	v3Route(
+		"authorizations/renew",
+		RuntimeAuthorizationRenewRequestV3Schema,
+		(request, verification) =>
+			options.host.renewAuthorizationV3(request, verification),
+	);
+	v3Route(
+		"events/ack",
+		RuntimeEventAckRequestV3Schema,
+		(request, verification) =>
+			options.host.acknowledgeEventsV3(request, verification),
+	);
+	app.post("/internal/runtime/v3/events/stream", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeEventPersistRequestV3Schema,
+		);
+		const abort = new AbortController();
+		const signal = AbortSignal.any([context.req.raw.signal, abort.signal]);
+		const events = await options.host.streamEventsV3(
+			request,
+			await verifyV2(request.grant),
+			signal,
+		);
+		return streamSSE(
+			context,
+			async (stream) => {
+				stream.onAbort(() => abort.abort());
+				try {
+					for await (const event of events) {
+						await stream.writeSSE({
+							id: event.cursor,
+							event: event.type,
+							data: JSON.stringify(event),
+						});
+					}
+				} finally {
+					abort.abort();
+				}
+			},
+			async () => {
+				abort.abort();
+			},
 		);
 	});
 

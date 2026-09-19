@@ -1,0 +1,172 @@
+name: Codex native candidate
+run-name: "PR #${{ github.event.pull_request.number }} | codex-native-candidate | pull_request"
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/codex-native-candidate.yml
+      - deploy/runtime/vendor/codex/**
+      - tests/codex-native-candidate.test.mjs
+      - .github/scripts/install-trivy.mjs
+      - .github/scripts/vulnerability-policy.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-native-candidate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    name: Codex Linux aarch64 candidate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+        working-directory: agent-infra
+    env:
+      CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
+      CANDIDATE_SOURCE: ${{ github.workspace }}/codex-source
+      CARGO_BUILD_JOBS: "3"
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUSTUP_TOOLCHAIN: 1.96.0
+      TARGET: aarch64-unknown-linux-musl
+      AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+      AWS_LC_SYS_NO_JITTER_ENTROPY_aarch64_unknown_linux_musl: "1"
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: agent-infra
+          persist-credentials: false
+
+      - name: Checkout fixed upstream source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openai/codex
+          ref: 41e22fee981a63b3698df7ed36bad393cda24715
+          path: codex-source
+          persist-credentials: false
+
+      - name: Configure task-owned directories
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh paths
+
+      - name: Verify and apply frozen inputs
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh prepare
+
+      - name: Install fixed Rust toolchain
+        uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install fixed Zig toolchain
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install upstream musl build tools
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh musl
+
+      # musl writes GITHUB_ENV; GitHub applies it before this next step.
+      - name: Verify fixed V8 prebuilt inputs
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh v8
+
+      - name: Restore Cargo build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/codex-native-target
+          key: codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-${{ hashFiles('codex-source/codex-rs/Cargo.lock', 'deploy/runtime/vendor/codex/build-input-v1.json', 'deploy/runtime/vendor/codex/build-linux-aarch64.py', 'deploy/runtime/vendor/codex/apply-source.py', 'deploy/runtime/vendor/codex/patches/**') }}
+          restore-keys: |
+            codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-
+
+      - name: Build candidate binaries and bundle
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh build
+
+      - name: Set up Node.js for the fixed scanner installer
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Record source dependency SBOM and seal candidate
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh seal
+
+      - name: Upload candidate bundle
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-candidate-${{ github.event.pull_request.head.sha }}-aarch64-unknown-linux-musl
+          path: ${{ runner.temp }}/codex-native-candidate/artifact/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Install fixed upstream test tools
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0,nextest@0.9.103
+
+      - name: Run focused native Connection and barrier tests
+        run: bash deploy/runtime/vendor/codex/build-linux-aarch64.sh tests
+
+      - name: Save Cargo build cache
+        if: ${{ always() }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/codex-native-target
+          key: codex-native-${{ runner.os }}-${{ runner.arch }}-41e22fee981a63b3698df7ed36bad393cda24715-${{ hashFiles('codex-source/codex-rs/Cargo.lock', 'deploy/runtime/vendor/codex/build-input-v1.json', 'deploy/runtime/vendor/codex/build-linux-aarch64.py', 'deploy/runtime/vendor/codex/apply-source.py', 'deploy/runtime/vendor/codex/patches/**') }}
+
+      - name: Upload bounded build diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-candidate-diagnostics-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-native-candidate/diagnostics/
+          if-no-files-found: warn
+          retention-days: 1
+
+  outcome:
+    name: Publish terminal outcome
+    needs: [candidate]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Publish terminal Job Summary
+        env:
+          SUMMARY_ACTION: ${{ github.event.action || github.event_name }}
+          SUMMARY_ATTEMPT: ${{ github.run_attempt }}
+          SUMMARY_CYCLE: ""
+          SUMMARY_EVENT: ${{ github.event_name }}
+          SUMMARY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SUMMARY_NEXT_OWNER: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'repository-maintainer' || 'none' }}
+          SUMMARY_OPERATION: codex-native-candidate
+          SUMMARY_OUTCOME: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || contains(needs.*.result, 'success') && 'success' || 'skipped' }}
+          SUMMARY_TARGET: Codex native candidate (not accepted)
+          SUMMARY_TARGET_URL: ${{ format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+        shell: bash
+        run: |
+          {
+            echo "## Workflow terminal outcome"
+            echo
+            echo "- Target: [$SUMMARY_TARGET]($SUMMARY_TARGET_URL)"
+            echo "- Run: [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- Operation: \`$SUMMARY_OPERATION\`"
+            echo "- Event/action: \`$SUMMARY_EVENT\` / \`$SUMMARY_ACTION\`"
+            echo "- Head SHA: \`$SUMMARY_HEAD_SHA\`"
+            echo "- Cycle: ${SUMMARY_CYCLE:-N/A}"
+            echo "- Attempt: ${SUMMARY_ATTEMPT:-N/A}"
+            echo "- Terminal outcome: \`$SUMMARY_OUTCOME\`"
+            echo "- Next owner: \`$SUMMARY_NEXT_OWNER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

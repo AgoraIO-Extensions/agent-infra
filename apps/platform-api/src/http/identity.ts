@@ -2,6 +2,11 @@ import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
 import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
+import type {
+	CurrentTaskUserV1,
+	TaskUserDirectoryV1,
+} from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common";
 
@@ -13,11 +18,33 @@ export interface IdentityContext {
 	readonly organizationIds: readonly string[];
 	readonly roles: readonly ("employee" | "system_admin")[];
 	readonly authorizationRevision: string;
+	/** Opaque per-login generation supplied by the trusted identity service. */
+	readonly sessionGeneration?: string;
 }
 
 export interface IdentityAdapter {
 	resolve(request: Request): Promise<unknown | null>;
 	hydrateUsers(userIds: readonly string[]): Promise<unknown>;
+	/** Required by trusted task dispatch; never reconstruct a saved browser Request. */
+	resolveUser?: TaskUserDirectoryV1["resolveUser"];
+}
+
+export async function resolveCurrentTaskUser(
+	adapter: IdentityAdapter | undefined,
+	userId: string,
+	traceId: string,
+): Promise<CurrentTaskUserV1 | null> {
+	try {
+		const resolveUser = adapter?.resolveUser;
+		return await resolveCurrentTaskUserV1(
+			resolveUser
+				? { resolveUser: (id) => resolveUser.call(adapter, id) }
+				: undefined,
+			userId,
+		);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
 }
 
 export type BrowserUserProjection = ReturnType<
@@ -105,6 +132,11 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 function parseIdentity(value: unknown): ResolvedIdentity {
+	const hasSessionGeneration =
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.hasOwn(value, "sessionGeneration");
 	const identity = record(value, [
 		"schemaVersion",
 		"userId",
@@ -113,6 +145,7 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		"organizationIds",
 		"roles",
 		"authorizationRevision",
+		...(hasSessionGeneration ? ["sessionGeneration"] : []),
 	]);
 	if (
 		identity.schemaVersion !== 1 ||
@@ -120,7 +153,10 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		!text(identity.displayName) ||
 		(identity.accountStatus !== "active" &&
 			identity.accountStatus !== "disabled") ||
-		!text(identity.authorizationRevision)
+		!text(identity.authorizationRevision) ||
+		(identity.sessionGeneration !== undefined &&
+			(!text(identity.sessionGeneration) ||
+				!/^[A-Za-z0-9_-]{43}$/.test(identity.sessionGeneration)))
 	) {
 		throw new Error();
 	}
@@ -139,6 +175,9 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		organizationIds: stringArray(identity.organizationIds),
 		roles: roles as ("employee" | "system_admin")[],
 		authorizationRevision: identity.authorizationRevision,
+		...(identity.sessionGeneration !== undefined
+			? { sessionGeneration: identity.sessionGeneration }
+			: {}),
 	};
 }
 

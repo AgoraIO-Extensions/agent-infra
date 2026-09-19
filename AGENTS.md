@@ -61,7 +61,7 @@ Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues。参见
 
 ## Engineering Baseline
 
-- 全 TypeScript，Better-T-Stack 只用于初始化工程骨架。
+- 自有代码保持全 TypeScript，Better-T-Stack 只用于初始化工程骨架；Codex 上游原生补丁须先满足[工程 Spec 的受控例外](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)。
 - Web 使用 React、TanStack Router 和 Vite。
 - 后端使用 Hono 与 Node.js LTS。
 - PostgreSQL 与 Drizzle 保存权威业务数据。
