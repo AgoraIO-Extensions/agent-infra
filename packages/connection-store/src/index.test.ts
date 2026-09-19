@@ -66,6 +66,7 @@ describe("Connection store migrations", () => {
 			"0027_github_profile_labels",
 			"0028_github_oauth_v8",
 			"0029_provider_egress_admission",
+			"0030_github_oauth_refresh",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));
@@ -146,6 +147,10 @@ describe("Connection store migrations", () => {
 			resolve(directory, "0029_provider_egress_admission.sql"),
 			"utf8",
 		);
+		const githubOAuthRefresh = await readFile(
+			resolve(directory, "0030_github_oauth_refresh.sql"),
+			"utf8",
+		);
 		expect(authority).toContain("DEFERRABLE INITIALLY DEFERRED");
 		expect(effects).toContain("connection_enforce_status_transition");
 		expect(lease).toContain("ADD COLUMN IF NOT EXISTS lease_id TEXT");
@@ -210,5 +215,12 @@ describe("Connection store migrations", () => {
 			"(effect = 'WRITE' AND effect_dispatch_id IS NOT NULL)",
 		);
 		expect(providerEgressAdmission).toContain("jti TEXT NOT NULL UNIQUE");
+		expect(githubOAuthRefresh).toContain("refresh_ciphertext TEXT");
+		expect(githubOAuthRefresh).toContain(
+			"CREATE TABLE connection_credential_refresh_attempts",
+		);
+		expect(githubOAuthRefresh).toContain(
+			"WHERE status IN ('PREPARED', 'SUBMISSION_STARTED')",
+		);
 	});
 });

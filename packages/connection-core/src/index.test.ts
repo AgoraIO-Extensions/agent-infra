@@ -9,6 +9,7 @@ import {
 	ConnectionRecoveryService,
 	type ConnectionRepository,
 	type CredentialForExecution,
+	type CredentialRefreshClaim,
 	canonicalHash,
 	canonicalHashForVersion,
 	canonicalHashMatches,
@@ -169,6 +170,11 @@ class MemoryRepository implements ConnectionRepository {
 	private callActionVersionIds = new Map<string, string>();
 	private leaseSequence = 0;
 	directInvocation = direct;
+	credentialAccessToken = "test-secret";
+	refreshClaim?: CredentialRefreshClaim | "IN_PROGRESS" | "REAUTH_REQUIRED";
+	refreshStarted = false;
+	refreshFailure?: "INVALID_GRANT" | "UNCERTAIN";
+	credentialPaused = false;
 	failSuccessfulFinalization = false;
 	rejectNextDispatch = false;
 	async ensurePrincipal() {}
@@ -315,6 +321,37 @@ class MemoryRepository implements ConnectionRepository {
 		this.storedOAuthCredential = input;
 		return { connectionId: "connection-provider" };
 	}
+	async claimCredentialRefresh() {
+		return this.refreshClaim;
+	}
+	async startCredentialRefresh() {
+		this.refreshStarted = true;
+	}
+	async failCredentialRefresh(
+		_claim: CredentialRefreshClaim,
+		reason: "INVALID_GRANT" | "UNCERTAIN",
+	) {
+		this.refreshFailure = reason;
+	}
+	async completeCredentialRefresh(
+		_claim: CredentialRefreshClaim,
+		identity: {
+			accessToken: string;
+			displayName: string;
+			externalAccount: string;
+			grantedScopes: string[];
+		},
+	) {
+		this.credentialAccessToken = identity.accessToken;
+		this.directInvocation = {
+			...this.directInvocation,
+			credentialVersionId: "credential-2",
+			grantId: "grant-refreshed",
+		};
+	}
+	async pauseCredentialForReauthorization() {
+		this.credentialPaused = true;
+	}
 	async findIdempotentCall(input: {
 		action: string;
 		idempotencyKey: string;
@@ -331,7 +368,7 @@ class MemoryRepository implements ConnectionRepository {
 	async getCredential(
 		_invocation: InvocationContext,
 	): Promise<CredentialForExecution> {
-		return { accessToken: "test-secret" };
+		return { accessToken: this.credentialAccessToken };
 	}
 	async listGitHubProfileRefreshCandidates() {
 		return this.githubProfileRefreshCandidates;
@@ -382,10 +419,10 @@ class MemoryRepository implements ConnectionRepository {
 		return this.directInvocation;
 	}
 	async resolveDirectIdentity() {
-		return direct;
+		return this.directInvocation;
 	}
 	async resolveDirectIdentities() {
-		return [direct];
+		return [this.directInvocation];
 	}
 	async setCallResult(input: {
 		callId: string;
@@ -942,8 +979,14 @@ describe("Connection application service", () => {
 
 	it("maps structured Provider availability and not-found failures", async () => {
 		for (const [failure, code] of [
-			[Object.assign(new Error("timeout"), { providerUnavailable: true }), "PROVIDER_UNAVAILABLE"],
-			[Object.assign(new Error("missing"), { providerStatus: 404 }), "PROVIDER_RESOURCE_NOT_FOUND"],
+			[
+				Object.assign(new Error("timeout"), { providerUnavailable: true }),
+				"PROVIDER_UNAVAILABLE",
+			],
+			[
+				Object.assign(new Error("missing"), { providerStatus: 404 }),
+				"PROVIDER_RESOURCE_NOT_FOUND",
+			],
 		] as const) {
 			const repository = new MemoryRepository();
 			const service = new ConnectionApplicationService(repository, {
@@ -1009,6 +1052,50 @@ describe("Connection application service", () => {
 			code: "PROVIDER_REAUTHORIZATION_REQUIRED",
 		});
 		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.credentialPaused).toBe(true);
+	});
+
+	it("does not misclassify a Provider permission 403 as token expiry", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Resource not accessible"), {
+					providerCode: "authorization_failed",
+					providerStatus: 403,
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.getRepository", {
+				repository: "acme/widgets",
+			}),
+		).rejects.toMatchObject({ code: "PROVIDER_FAILED" });
+		expect(repository.credentialPaused).toBe(false);
+	});
+
+	it("terminalizes a write 401 as uncertain and pauses the credential", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Bad credentials"), {
+					providerCode: "authorization_failed",
+					providerStatus: 401,
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				base: "main",
+				head: "feature/auth-failure",
+				idempotencyKey: "auth-failure-1",
+				repository: "acme/widgets",
+				title: "Auth failure",
+			}),
+		).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
+		expect(repository.calls[0]?.status).toBe("UNCERTAIN");
+		expect(repository.credentialPaused).toBe(true);
 	});
 
 	it("creates a PKCE OAuth transaction and consumes its state only once", async () => {
@@ -1027,6 +1114,12 @@ describe("Connection application service", () => {
 					grantedScopes: ["repo"],
 				};
 			},
+			refresh: async () => ({
+				accessToken: "refreshed-token",
+				displayName: "Alice GitHub",
+				externalAccount: "alice-github",
+				grantedScopes: ["repo"],
+			}),
 			getAuthorizationUrl: ({ codeChallenge, redirectUri, state }) =>
 				`https://github.test/authorize?challenge=${codeChallenge}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
 		};
@@ -1251,6 +1344,102 @@ describe("Connection application service", () => {
 			{},
 		);
 		expect(executed).toEqual(["bitbucket.list_projects"]);
+	});
+
+	it("refreshes an expiring GitHub credential before freezing the business call", async () => {
+		const repository = new MemoryRepository();
+		repository.refreshClaim = {
+			attemptId: "refresh-1",
+			connectionId: direct.connectionId,
+			credentialRevision: "1",
+			credentialVersionId: direct.credentialVersionId,
+			externalAccount: "alice-github",
+			providerId: "github",
+			providerReleaseId: direct.providerReleaseId,
+			refreshToken: "old-refresh-token",
+		};
+		const executedCredentials: string[] = [];
+		const service = new ConnectionApplicationService(
+			repository,
+			{
+				execute: async ({ credential }) => {
+					executedCredentials.push(credential.accessToken);
+					return { ok: true };
+				},
+			},
+			{
+				exchangeCode: async () => {
+					throw new Error("not used");
+				},
+				getAuthorizationUrl: () => "https://github.test/authorize",
+				refresh: async (refreshToken) => {
+					expect(refreshToken).toBe("old-refresh-token");
+					return {
+						accessToken: "new-access-token",
+						displayName: "Alice GitHub",
+						externalAccount: "alice-github",
+						expiresAt: "2030-01-02T03:04:05.000Z",
+						grantedScopes: ["repo"],
+						refreshToken: "new-refresh-token",
+					};
+				},
+			},
+		);
+
+		await service.executeDirectActionForIdentity(
+			direct,
+			"github.getRepository",
+			{ repository: "acme/widgets" },
+		);
+
+		expect(repository.refreshStarted).toBe(true);
+		expect(repository.refreshFailure).toBeUndefined();
+		expect(repository.directInvocation.credentialVersionId).toBe(
+			"credential-2",
+		);
+		expect(executedCredentials).toEqual(["new-access-token"]);
+	});
+
+	it("requires reauthorization when GitHub rejects the refresh token", async () => {
+		const repository = new MemoryRepository();
+		repository.refreshClaim = {
+			attemptId: "refresh-invalid",
+			connectionId: direct.connectionId,
+			credentialRevision: "1",
+			credentialVersionId: direct.credentialVersionId,
+			externalAccount: "alice-github",
+			providerId: "github",
+			providerReleaseId: direct.providerReleaseId,
+			refreshToken: "expired-refresh-token",
+		};
+		let executions = 0;
+		const service = new ConnectionApplicationService(
+			repository,
+			{
+				execute: async () => {
+					executions += 1;
+					return {};
+				},
+			},
+			{
+				exchangeCode: async () => {
+					throw new Error("not used");
+				},
+				getAuthorizationUrl: () => "https://github.test/authorize",
+				refresh: async () => {
+					throw new Error("bad_refresh_token");
+				},
+			},
+		);
+
+		await expect(
+			service.executeDirectActionForIdentity(direct, "github.getRepository", {
+				repository: "acme/widgets",
+			}),
+		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
+		expect(repository.refreshStarted).toBe(true);
+		expect(repository.refreshFailure).toBe("INVALID_GRANT");
+		expect(executions).toBe(0);
 	});
 
 	it("treats rejected Provider credentials as a definite validation failure", async () => {

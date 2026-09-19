@@ -17,6 +17,7 @@ import {
 	githubProvider,
 	type ResolvedCredential,
 	requestAuthorizationCodeToken,
+	requestRefreshToken,
 } from "@agent-infra/openconnector-kernel";
 
 export * from "./bitbucket-server.ts";
@@ -195,6 +196,29 @@ export class OpenConnectorGitHubOAuthAdapter implements GitHubOAuthProvider {
 			createError: (message) => new Error(message),
 			fetcher: this.options.fetcher,
 		});
+		return this.identityFromCredential(credential);
+	}
+
+	async refresh(refreshToken: string): Promise<GitHubOAuthIdentity> {
+		const auth = githubOAuthDefinition();
+		const credential = await requestRefreshToken({
+			clientId: this.options.clientId,
+			clientSecret: this.options.clientSecret,
+			refreshToken,
+			responseEnvelope: auth.tokenResponseEnvelope,
+			tokenRequestFields: auth.tokenRequestFields,
+			tokenEndpointAuthMethod: auth.tokenEndpointAuthMethod,
+			tokenRequestFormat: auth.tokenRequestFormat,
+			tokenUrl: this.options.tokenUrl ?? auth.tokenUrl,
+			createError: (message) => new Error(message),
+			fetcher: this.options.fetcher,
+		});
+		return this.identityFromCredential(credential);
+	}
+
+	private async identityFromCredential(
+		credential: ResolvedCredential & { authType: "oauth2" },
+	): Promise<GitHubOAuthIdentity> {
 		const user = await runKernelAction(
 			"github.getCurrentUser",
 			{},
@@ -226,7 +250,18 @@ export class OpenConnectorGitHubOAuthAdapter implements GitHubOAuthProvider {
 			accessToken: credential.accessToken,
 			displayName,
 			externalAccount,
+			...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}),
 			grantedScopes: [...new Set(grantedScopes)].sort(),
+			...(typeof credential.metadata.refresh_token_expires_in === "number"
+				? {
+						refreshExpiresAt: new Date(
+							Date.now() + credential.metadata.refresh_token_expires_in * 1000,
+						).toISOString(),
+					}
+				: {}),
+			...(credential.refreshToken
+				? { refreshToken: credential.refreshToken }
+				: {}),
 		};
 	}
 }

@@ -13,10 +13,12 @@ import {
 	ConnectionError,
 	type ConnectionOverview,
 	type ConnectionRepository,
+	type CredentialRefreshClaim,
 	type CurrentConsumerAuthorizationPreview,
 	canonicalHash,
 	createAuthorizationSnapshot,
 	decideReconnectAuthorization,
+	type GitHubOAuthIdentity,
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
@@ -1065,7 +1067,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		actorPrincipalId: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 		sharedScopeId: string;
 	}) {
 		const grantedScopes = [...new Set(input.grantedScopes)].sort();
@@ -1170,14 +1175,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				input.accessToken,
 				`credential:${credentialId}:${connectionId}`,
 			);
+			const protectedRefresh = input.refreshToken
+				? this.protector.encrypt(
+						input.refreshToken,
+						`credential-refresh:${credentialId}:${connectionId}`,
+					)
+				: undefined;
 			await sql`
 				INSERT INTO connection_credential_versions (
-					id, connection_id, ciphertext, nonce, tag, scope_json, status
+					id, connection_id, ciphertext, nonce, tag, scope_json, status,
+					refresh_ciphertext, refresh_nonce, refresh_tag, expires_at,
+					refresh_expires_at
 				)
 				VALUES (
 					${credentialId}, ${connectionId}, ${protectedCredential.ciphertext},
 					${protectedCredential.nonce}, ${protectedCredential.tag},
-					${sql.json(grantedScopes)}, 'ACTIVE'
+					${sql.json(grantedScopes)}, 'ACTIVE',
+					${protectedRefresh?.ciphertext ?? null},
+					${protectedRefresh?.nonce ?? null}, ${protectedRefresh?.tag ?? null},
+					${input.expiresAt ?? null}, ${input.refreshExpiresAt ?? null}
 				)
 			`;
 			if (existing) {
@@ -2370,6 +2386,273 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		if (!row?.valid) forbidden();
 	}
 
+	async claimCredentialRefresh(input: InvocationContext) {
+		await this.verifyInvocationBase(input);
+		return this.sql.begin(async (sql) => {
+			const staleStarted = await sql`
+				UPDATE connection_credential_refresh_attempts
+				SET status = 'UNCERTAIN', updated_at = now()
+				WHERE connection_id = ${input.connectionId}
+					AND source_credential_version_id = ${input.credentialVersionId}
+					AND status = 'SUBMISSION_STARTED' AND lease_expires_at <= now()
+			`;
+			if (staleStarted.count > 0) {
+				await this.pauseCredential(
+					sql,
+					input.connectionId,
+					input.credentialVersionId,
+				);
+				return "REAUTH_REQUIRED" as const;
+			}
+			await sql`
+				UPDATE connection_credential_refresh_attempts
+				SET status = 'FAILED', updated_at = now()
+				WHERE connection_id = ${input.connectionId}
+					AND source_credential_version_id = ${input.credentialVersionId}
+					AND status = 'PREPARED' AND lease_expires_at <= now()
+			`;
+			const [row] = await sql<
+				{
+					external_account: string;
+					refresh_due: boolean;
+					refresh_ciphertext: string | null;
+					refresh_expired: boolean;
+					refresh_nonce: string | null;
+					refresh_tag: string | null;
+					revision: string;
+				}[]
+			>`
+				SELECT credential.expires_at <= now() + interval '5 minutes' AS refresh_due,
+					credential.refresh_ciphertext,
+					credential.refresh_nonce, credential.refresh_tag,
+					COALESCE(credential.refresh_expires_at <= now(), false) AS refresh_expired,
+					credential.revision::text,
+					account.external_account
+				FROM connection_credential_versions credential
+				JOIN connection_accounts account ON account.id = credential.connection_id
+				WHERE credential.id = ${input.credentialVersionId}
+					AND credential.connection_id = ${input.connectionId}
+					AND credential.status = 'ACTIVE'
+				FOR UPDATE OF credential, account
+			`;
+			if (!row) forbidden();
+			if (!row.refresh_due) {
+				return undefined;
+			}
+			if (
+				!row.refresh_ciphertext ||
+				!row.refresh_nonce ||
+				!row.refresh_tag ||
+				row.refresh_expired
+			) {
+				await this.pauseCredential(
+					sql,
+					input.connectionId,
+					input.credentialVersionId,
+				);
+				return "REAUTH_REQUIRED" as const;
+			}
+			const attemptId = `credential-refresh-${randomUUID()}`;
+			const [attempt] = await sql<{ id: string }[]>`
+				INSERT INTO connection_credential_refresh_attempts (
+					id, connection_id, source_credential_version_id,
+					source_credential_revision, status, lease_expires_at
+				)
+				VALUES (
+					${attemptId}, ${input.connectionId}, ${input.credentialVersionId},
+					${row.revision}, 'PREPARED', now() + interval '30 seconds'
+				)
+				ON CONFLICT DO NOTHING
+				RETURNING id
+			`;
+			if (!attempt) return "IN_PROGRESS" as const;
+			return {
+				attemptId,
+				connectionId: input.connectionId,
+				credentialRevision: row.revision,
+				credentialVersionId: input.credentialVersionId,
+				externalAccount: row.external_account,
+				providerId: input.providerId,
+				providerReleaseId: input.providerReleaseId,
+				refreshToken: this.protector.decrypt(
+					{
+						ciphertext: row.refresh_ciphertext,
+						nonce: row.refresh_nonce,
+						tag: row.refresh_tag,
+					},
+					`credential-refresh:${input.credentialVersionId}:${input.connectionId}`,
+				),
+			};
+		});
+	}
+
+	async startCredentialRefresh(claim: CredentialRefreshClaim) {
+		const updated = await this.sql`
+			UPDATE connection_credential_refresh_attempts
+			SET status = 'SUBMISSION_STARTED', updated_at = now()
+			WHERE id = ${claim.attemptId}
+				AND connection_id = ${claim.connectionId}
+				AND source_credential_version_id = ${claim.credentialVersionId}
+				AND status = 'PREPARED' AND lease_expires_at > now()
+		`;
+		if (updated.count !== 1) forbidden();
+	}
+
+	async failCredentialRefresh(
+		claim: CredentialRefreshClaim,
+		reason: "INVALID_GRANT" | "UNCERTAIN",
+	) {
+		await this.sql.begin(async (sql) => {
+			await sql`
+				UPDATE connection_credential_refresh_attempts
+				SET status = ${reason === "INVALID_GRANT" ? "FAILED" : "UNCERTAIN"},
+					updated_at = now()
+				WHERE id = ${claim.attemptId} AND status = 'SUBMISSION_STARTED'
+			`;
+			await this.pauseCredential(
+				sql,
+				claim.connectionId,
+				claim.credentialVersionId,
+			);
+		});
+	}
+
+	async completeCredentialRefresh(
+		claim: CredentialRefreshClaim,
+		identity: GitHubOAuthIdentity,
+	) {
+		const grantedScopes = [...new Set(identity.grantedScopes)].sort();
+		if (
+			!identity.expiresAt ||
+			!identity.refreshToken ||
+			grantedScopes.length === 0
+		) {
+			forbidden();
+		}
+		const expiresAt = identity.expiresAt;
+		const refreshToken = identity.refreshToken;
+		await this.sql.begin(async (sql) => {
+			const [attempt] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_credential_refresh_attempts
+				WHERE id = ${claim.attemptId}
+					AND connection_id = ${claim.connectionId}
+					AND source_credential_version_id = ${claim.credentialVersionId}
+					AND source_credential_revision = ${claim.credentialRevision}
+					AND status = 'SUBMISSION_STARTED'
+				FOR UPDATE
+			`;
+			const [source] = await sql<{ id: string }[]>`
+				SELECT credential.id
+				FROM connection_credential_versions credential
+				JOIN connection_accounts account ON account.id = credential.connection_id
+				WHERE credential.id = ${claim.credentialVersionId}
+					AND credential.connection_id = ${claim.connectionId}
+					AND credential.revision = ${claim.credentialRevision}
+					AND credential.status = 'ACTIVE'
+					AND account.provider_id = ${claim.providerId}
+					AND account.provider_release_id = ${claim.providerReleaseId}
+					AND account.external_account = ${identity.externalAccount}
+					AND account.status = 'ACTIVE'
+				FOR UPDATE OF credential, account
+			`;
+			if (!attempt || !source) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Connection credential changed during refresh",
+				);
+			}
+			await sql`
+				UPDATE connection_credential_versions
+				SET status = 'REVOKED', revision = revision + 1
+				WHERE id = ${claim.credentialVersionId}
+			`;
+			await sql`
+				UPDATE connection_accounts SET
+					display_name = ${identity.displayName},
+					profile_label_source = NULL,
+					profile_label_attempted_at = NULL,
+					revision = revision + 1,
+					execution_fence = execution_fence + 1
+				WHERE id = ${claim.connectionId}
+			`;
+			const credentialId = `credential-${randomUUID()}`;
+			const protectedCredential = this.protector.encrypt(
+				identity.accessToken,
+				`credential:${credentialId}:${claim.connectionId}`,
+			);
+			const protectedRefresh = this.protector.encrypt(
+				refreshToken,
+				`credential-refresh:${credentialId}:${claim.connectionId}`,
+			);
+			await sql`
+				INSERT INTO connection_credential_versions (
+					id, connection_id, ciphertext, nonce, tag, scope_json, status,
+					refresh_ciphertext, refresh_nonce, refresh_tag, expires_at,
+					refresh_expires_at
+				)
+				VALUES (
+					${credentialId}, ${claim.connectionId},
+					${protectedCredential.ciphertext}, ${protectedCredential.nonce},
+					${protectedCredential.tag}, ${sql.json(grantedScopes)}, 'ACTIVE',
+					${protectedRefresh.ciphertext}, ${protectedRefresh.nonce},
+					${protectedRefresh.tag}, ${expiresAt},
+					${identity.refreshExpiresAt ?? null}
+				)
+			`;
+			await this.restoreGrantsAfterReconnect(sql, claim.connectionId);
+			await sql`
+				UPDATE connection_credential_refresh_attempts
+				SET status = 'SUCCEEDED', updated_at = now()
+				WHERE id = ${claim.attemptId} AND status = 'SUBMISSION_STARTED'
+			`;
+			await sql`
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'CREDENTIAL_REFRESHED',
+					${sql.json({
+						connectionId: claim.connectionId,
+						credentialVersionId: credentialId,
+						replacedCredentialVersionId: claim.credentialVersionId,
+					})}
+				FROM connection_grants
+				WHERE connection_id = ${claim.connectionId}
+				ORDER BY principal_id LIMIT 1
+			`;
+		});
+	}
+
+	async pauseCredentialForReauthorization(input: InvocationContext) {
+		await this.sql.begin((sql) =>
+			this.pauseCredential(sql, input.connectionId, input.credentialVersionId),
+		);
+	}
+
+	private async pauseCredential(
+		sql: postgres.TransactionSql,
+		connectionId: string,
+		credentialVersionId: string,
+	) {
+		await sql`
+			UPDATE connection_authorization_roots root
+			SET current_grant_id = NULL, fence = fence + 1
+			FROM connection_grants stored_grant
+			WHERE root.current_grant_id = stored_grant.id
+				AND stored_grant.connection_id = ${connectionId}
+				AND stored_grant.credential_version_id = ${credentialVersionId}
+		`;
+		await sql`
+			UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
+			WHERE connection_id = ${connectionId}
+				AND credential_version_id = ${credentialVersionId}
+				AND status = 'ACTIVE'
+		`;
+		await sql`
+			UPDATE connection_credential_versions
+			SET status = 'REVOKED', revision = revision + 1
+			WHERE id = ${credentialVersionId} AND connection_id = ${connectionId}
+				AND status = 'ACTIVE'
+		`;
+	}
+
 	async getCredential(input: InvocationContext) {
 		await this.verifyInvocationBase(input);
 		const [row] = await this.sql<
@@ -2600,8 +2883,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
 		principalId: string;
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 	}) {
 		const providerReleaseId =
 			this.publishedProviderReleaseIds.get(githubProvider);
@@ -2622,10 +2908,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
 		principalId: string;
 		providerId: string;
 		providerReleaseId: string;
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 		expectedConnectionId?: string;
 		expectedCredentialVersionId?: string;
 	}) {
@@ -2737,14 +3026,25 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				input.accessToken,
 				`credential:${credentialId}:${connectionId}`,
 			);
+			const protectedRefresh = input.refreshToken
+				? this.protector.encrypt(
+						input.refreshToken,
+						`credential-refresh:${credentialId}:${connectionId}`,
+					)
+				: undefined;
 			await sql`
 				INSERT INTO connection_credential_versions (
-					id, connection_id, ciphertext, nonce, tag, scope_json, status
+					id, connection_id, ciphertext, nonce, tag, scope_json, status,
+					refresh_ciphertext, refresh_nonce, refresh_tag, expires_at,
+					refresh_expires_at
 				)
 				VALUES (
 					${credentialId}, ${connectionId}, ${protectedCredential.ciphertext},
 					${protectedCredential.nonce}, ${protectedCredential.tag},
-					${sql.json(grantedScopes)}, 'ACTIVE'
+					${sql.json(grantedScopes)}, 'ACTIVE',
+					${protectedRefresh?.ciphertext ?? null},
+					${protectedRefresh?.nonce ?? null}, ${protectedRefresh?.tag ?? null},
+					${input.expiresAt ?? null}, ${input.refreshExpiresAt ?? null}
 				)
 			`;
 			await this.restoreGrantsAfterReconnect(sql, connectionId);

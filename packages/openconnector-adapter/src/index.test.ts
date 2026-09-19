@@ -16,6 +16,9 @@ test("GitHub OAuth uses published-action scopes and the kernel token flow", asyn
 		if (url === "https://github.com/login/oauth/access_token") {
 			return Response.json({
 				access_token: "github-token",
+				expires_in: 28_800,
+				refresh_token: "github-refresh-token",
+				refresh_token_expires_in: 15_897_600,
 				scope: "repo,user:email read:user workflow delete_repo",
 				token_type: "bearer",
 			});
@@ -52,6 +55,7 @@ test("GitHub OAuth uses published-action scopes and the kernel token flow", asyn
 			accessToken: "github-token",
 			displayName: "The Octocat",
 			externalAccount: "42",
+			expiresAt: identity.expiresAt,
 			grantedScopes: [
 				"delete_repo",
 				"read:user",
@@ -59,7 +63,14 @@ test("GitHub OAuth uses published-action scopes and the kernel token flow", asyn
 				"user:email",
 				"workflow",
 			],
+			refreshExpiresAt: identity.refreshExpiresAt,
+			refreshToken: "github-refresh-token",
 		});
+		assert.equal(Date.parse(identity.expiresAt ?? "") > Date.now(), true);
+		assert.equal(
+			Date.parse(identity.refreshExpiresAt ?? "") > Date.now(),
+			true,
+		);
 		assert.equal(requests.length, 2);
 		const tokenRequest = requests[0]?.init;
 		assert.equal(tokenRequest?.method, "POST");
@@ -90,6 +101,43 @@ test("GitHub execution resolves a newly cataloged action through the kernel", as
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
+});
+
+test("GitHub OAuth refresh rotates expiring credentials", async () => {
+	const requests: string[] = [];
+	const adapter = new OpenConnectorGitHubOAuthAdapter({
+		clientId: "client-id",
+		clientSecret: "client-secret",
+		fetcher: async (input, init) => {
+			const url = String(input);
+			requests.push(url);
+			if (url === "https://github.com/login/oauth/access_token") {
+				assert.match(String(init?.body), /grant_type=refresh_token/);
+				assert.match(String(init?.body), /refresh_token=old-refresh-token/);
+				return Response.json({
+					access_token: "new-access-token",
+					expires_in: 28_800,
+					refresh_token: "new-refresh-token",
+					refresh_token_expires_in: 15_897_600,
+					scope: "repo workflow",
+					token_type: "bearer",
+				});
+			}
+			if (url === "https://api.github.com/user") {
+				return Response.json({ id: 42, login: "octocat" });
+			}
+			throw new Error(`unexpected request: ${url}`);
+		},
+	});
+
+	const identity = await adapter.refresh("old-refresh-token");
+	assert.equal(identity.accessToken, "new-access-token");
+	assert.equal(identity.refreshToken, "new-refresh-token");
+	assert.deepEqual(identity.grantedScopes, ["repo", "workflow"]);
+	assert.deepEqual(requests, [
+		"https://github.com/login/oauth/access_token",
+		"https://api.github.com/user",
+	]);
 });
 
 test("GitHub OAuth catalog publishes only its 143 compatible v8 actions", () => {

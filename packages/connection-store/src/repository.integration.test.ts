@@ -126,6 +126,8 @@ describe("PostgreSQL Connection business authority", () => {
 			);
 			const sql = postgres(databaseUrl, { max: 1 });
 			const principalId = `principal-github-profile-${randomUUID()}`;
+			const expiresAt = "2030-01-02T03:04:05.000Z";
+			const refreshExpiresAt = "2030-06-02T03:04:05.000Z";
 			try {
 				await repository.publishProviderCatalog(githubConnectionCatalog);
 				await sql`
@@ -136,9 +138,30 @@ describe("PostgreSQL Connection business authority", () => {
 					accessToken: "github-profile-test-secret",
 					displayName: "Shared Profile Name",
 					externalAccount: "42",
+					expiresAt,
 					grantedScopes: ["repo"],
 					principalId,
+					refreshExpiresAt,
+					refreshToken: "github-profile-refresh-secret",
 				});
+				const [credential] = await sql<
+					{
+						expires_at: Date;
+						refresh_ciphertext: string;
+						refresh_expires_at: Date;
+					}[]
+				>`
+					SELECT expires_at, refresh_ciphertext, refresh_expires_at
+					FROM connection_credential_versions
+					WHERE connection_id = ${stored.connectionId} AND status = 'ACTIVE'
+				`;
+				expect(credential?.refresh_ciphertext).not.toContain(
+					"github-profile-refresh-secret",
+				);
+				expect(credential?.expires_at.toISOString()).toBe(expiresAt);
+				expect(credential?.refresh_expires_at.toISOString()).toBe(
+					refreshExpiresAt,
+				);
 
 				const candidates =
 					await repository.listGitHubProfileRefreshCandidates(principalId);
@@ -183,7 +206,7 @@ describe("PostgreSQL Connection business authority", () => {
 				await repository.close();
 			}
 		},
-		30_000,
+		60_000,
 	);
 
 	integrationTest(

@@ -2072,6 +2072,9 @@ describe("Connection API", () => {
 					grantedScopes: ["repo"],
 				};
 			},
+			refresh: async () => {
+				throw new Error("not used");
+			},
 			getAuthorizationUrl: ({ codeChallenge, redirectUri, state }) =>
 				`https://github.test/authorize?challenge=${codeChallenge}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
 		};

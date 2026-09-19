@@ -388,6 +388,17 @@ function projectCall(call: StoredCall): CallProjection {
 
 export type CredentialForExecution = { accessToken: string };
 
+export type CredentialRefreshClaim = {
+	attemptId: string;
+	connectionId: string;
+	credentialRevision: string;
+	credentialVersionId: string;
+	externalAccount: string;
+	providerId: string;
+	providerReleaseId: string;
+	refreshToken: string;
+};
+
 export type GitHubProfileRefreshCandidate = CredentialForExecution & {
 	actionVersionId: string;
 	connectionId: string;
@@ -405,7 +416,10 @@ export type GitHubOAuthIdentity = {
 	accessToken: string;
 	displayName: string;
 	externalAccount: string;
+	expiresAt?: string;
 	grantedScopes: string[];
+	refreshExpiresAt?: string;
+	refreshToken?: string;
 };
 
 export type ProviderCredentialIdentity = GitHubOAuthIdentity & {
@@ -630,17 +644,23 @@ export interface ConnectionRepository {
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
 		principalId: string;
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 	}): Promise<{ connectionId: string }>;
 	storeProviderCredential(input: {
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
 		principalId: string;
 		providerId: string;
 		providerReleaseId: string;
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 		expectedConnectionId?: string;
 		expectedCredentialVersionId?: string;
 	}): Promise<{ connectionId: string }>;
@@ -660,7 +680,10 @@ export interface ConnectionRepository {
 		actorPrincipalId: string;
 		displayName: string;
 		externalAccount: string;
+		expiresAt?: string;
 		grantedScopes: readonly string[];
+		refreshExpiresAt?: string;
+		refreshToken?: string;
 		sharedScopeId: string;
 	}): Promise<{ connectionId: string }>;
 	findIdempotentCall(input: {
@@ -669,6 +692,23 @@ export interface ConnectionRepository {
 		invocation: InvocationContext;
 	}): Promise<StoredCall | undefined>;
 	getCredential(invocation: InvocationContext): Promise<CredentialForExecution>;
+	claimCredentialRefresh?(
+		invocation: InvocationContext,
+	): Promise<
+		CredentialRefreshClaim | "IN_PROGRESS" | "REAUTH_REQUIRED" | undefined
+	>;
+	startCredentialRefresh?(claim: CredentialRefreshClaim): Promise<void>;
+	failCredentialRefresh?(
+		claim: CredentialRefreshClaim,
+		reason: "INVALID_GRANT" | "UNCERTAIN",
+	): Promise<void>;
+	completeCredentialRefresh?(
+		claim: CredentialRefreshClaim,
+		identity: GitHubOAuthIdentity,
+	): Promise<void>;
+	pauseCredentialForReauthorization?(
+		invocation: InvocationContext,
+	): Promise<void>;
 	listGitHubProfileRefreshCandidates?(
 		principalId: string,
 	): Promise<GitHubProfileRefreshCandidate[]>;
@@ -816,6 +856,7 @@ export interface GitHubOAuthProvider {
 		codeVerifier: string;
 		redirectUri: string;
 	}): Promise<GitHubOAuthIdentity>;
+	refresh(refreshToken: string): Promise<GitHubOAuthIdentity>;
 }
 
 export class ConnectionError extends Error {
@@ -1311,10 +1352,16 @@ export class ConnectionApplicationService {
 		action: ActionName,
 		input: unknown,
 	) {
-		const { invocation } = await this.authorizedDirectActionAcross(
+		let { invocation } = await this.authorizedDirectActionAcross(
 			identity,
 			action,
 		);
+		if (await this.refreshCredentialBeforeInvocation(invocation)) {
+			({ invocation } = await this.authorizedDirectActionAcross(
+				identity,
+				action,
+			));
+		}
 		return this.invoke(invocation, action, input);
 	}
 
@@ -1323,11 +1370,90 @@ export class ConnectionApplicationService {
 		actionId: string,
 		input: unknown,
 	) {
-		const { action, invocation } = await this.authorizedDirectActionAcross(
+		let { action, invocation } = await this.authorizedDirectActionAcross(
 			identity,
 			actionId,
 		);
+		if (await this.refreshCredentialBeforeInvocation(invocation)) {
+			({ action, invocation } = await this.authorizedDirectActionAcross(
+				identity,
+				actionId,
+			));
+		}
 		return this.invoke(invocation, action.name, input);
+	}
+
+	private async refreshCredentialBeforeInvocation(
+		invocation: InvocationContext,
+	) {
+		if (
+			invocation.providerId !== "github" ||
+			!this.repository.claimCredentialRefresh
+		) {
+			return false;
+		}
+		const claim = await this.repository.claimCredentialRefresh(invocation);
+		if (!claim) return false;
+		if (claim === "REAUTH_REQUIRED") {
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider authorization is no longer valid",
+			);
+		}
+		if (claim === "IN_PROGRESS") {
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Provider credential refresh is already in progress",
+			);
+		}
+		if (
+			!this.oauth ||
+			!this.repository.startCredentialRefresh ||
+			!this.repository.failCredentialRefresh ||
+			!this.repository.completeCredentialRefresh
+		) {
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Provider credential refresh is unavailable",
+			);
+		}
+		await this.repository.startCredentialRefresh(claim);
+		let identity: GitHubOAuthIdentity;
+		try {
+			identity = await this.oauth.refresh(claim.refreshToken);
+		} catch (error) {
+			const message = error instanceof Error ? error.message.toLowerCase() : "";
+			await this.repository.failCredentialRefresh(
+				claim,
+				message.includes("invalid_grant") ||
+					message.includes("bad_refresh_token")
+					? "INVALID_GRANT"
+					: "UNCERTAIN",
+			);
+			throw new ConnectionError(
+				message.includes("invalid_grant") ||
+					message.includes("bad_refresh_token")
+					? "PROVIDER_REAUTHORIZATION_REQUIRED"
+					: "PROVIDER_UNAVAILABLE",
+				"Provider credential refresh failed",
+			);
+		}
+		if (identity.externalAccount !== claim.externalAccount) {
+			await this.repository.failCredentialRefresh(claim, "INVALID_GRANT");
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider account changed during credential refresh",
+			);
+		}
+		if (!identity.expiresAt || !identity.refreshToken) {
+			await this.repository.failCredentialRefresh(claim, "UNCERTAIN");
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Provider credential refresh returned incomplete rotation data",
+			);
+		}
+		await this.repository.completeCredentialRefresh(claim, identity);
+		return true;
 	}
 
 	async createCurrentConsumerAuthorizationPreview(input: {
@@ -1593,7 +1719,8 @@ export class ConnectionApplicationService {
 		} catch (error) {
 			const status =
 				isMutating &&
-				(providerResponded ||
+				((submissionStarted && !isDeterministicProviderRejection(error)) ||
+					providerResponded ||
 					(error instanceof ConnectionError &&
 						error.code === "PROVIDER_UNCERTAIN") ||
 					isSubmissionUncertain(error))
@@ -1605,6 +1732,9 @@ export class ConnectionApplicationService {
 				await this.repository.setCallResult({ callId: call.callId, status });
 			} catch {
 				if (!providerResponded && !submissionStarted) throw error;
+			}
+			if (isProviderReauthorizationFailure(error)) {
+				await this.repository.pauseCredentialForReauthorization?.(invocation);
 			}
 			if (isMutating && providerResponded) {
 				throw new ConnectionError(
@@ -1624,7 +1754,8 @@ export class ConnectionApplicationService {
 			if (
 				typeof error === "object" &&
 				error !== null &&
-				(error as { providerUnavailable?: boolean }).providerUnavailable === true
+				(error as { providerUnavailable?: boolean }).providerUnavailable ===
+					true
 			) {
 				throw new ConnectionError(
 					"PROVIDER_UNAVAILABLE",
@@ -1658,15 +1789,7 @@ export class ConnectionApplicationService {
 						: "Provider rejected the action input",
 				);
 			}
-			if (
-				typeof error === "object" &&
-				error !== null &&
-				(error as { providerCode?: unknown }).providerCode ===
-					"authorization_failed" &&
-				[401, 403].includes(
-					(error as { providerStatus?: number }).providerStatus ?? 0,
-				)
-			) {
+			if (isProviderReauthorizationFailure(error)) {
 				throw new ConnectionError(
 					"PROVIDER_REAUTHORIZATION_REQUIRED",
 					"Provider authorization is no longer valid",
@@ -1789,6 +1912,27 @@ function isSubmissionUncertain(error: unknown) {
 		typeof error === "object" &&
 		error !== null &&
 		(error as { submissionUncertain?: unknown }).submissionUncertain === true
+	);
+}
+
+function isDeterministicProviderRejection(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { providerCode?: unknown }).providerCode === "invalid_input" &&
+		[400, 404, 409, 422].includes(
+			(error as { providerStatus?: number }).providerStatus ?? 0,
+		)
+	);
+}
+
+function isProviderReauthorizationFailure(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { providerCode?: unknown }).providerCode ===
+			"authorization_failed" &&
+		(error as { providerStatus?: number }).providerStatus === 401
 	);
 }
 
