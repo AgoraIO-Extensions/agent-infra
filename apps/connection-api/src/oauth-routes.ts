@@ -894,7 +894,9 @@ export function createConnectionOAuthApp(
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const { principal: _principal, ...overview } =
-				await management.service.overview(session.account.principalId);
+				await management.service.overview(session.account.principalId, {
+					includeActivity: false,
+				});
 			context.header("cache-control", "no-store");
 			return context.json({
 				account: browserAccountProjection(session.account),

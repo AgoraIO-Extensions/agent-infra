@@ -3114,7 +3114,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		};
 	}
 
-	async getOverview(principalId: string): Promise<ConnectionOverview> {
+	async getOverview(
+		principalId: string,
+		options: { includeActivity?: boolean } = {},
+	): Promise<ConnectionOverview> {
 		const currentReleaseIds = new Set(
 			this.publishedProviderReleaseIds.values(),
 		);
@@ -3176,17 +3179,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						credential.scope_json
 					ORDER BY account.display_name, account.id
 				`,
-				this.sql<
-					{
-						description: string;
-						effect: "READ" | "WRITE";
-						id: string;
-						input_schema: unknown;
-						name: ActionName;
-						provider_release_id: string;
-						required_scopes: unknown;
-					}[]
-				>`
+				options.includeActivity === false
+					? Promise.resolve([])
+					: this.sql<
+							{
+								description: string;
+								effect: "READ" | "WRITE";
+								id: string;
+								input_schema: unknown;
+								name: ActionName;
+								provider_release_id: string;
+								required_scopes: unknown;
+							}[]
+						>`
 					SELECT action.id, action.name, action.description, action.effect,
 							action.input_schema, action.required_scopes,
 							action.provider_release_id
@@ -3195,7 +3200,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						ON release.id = action.provider_release_id
 					WHERE action.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
 					ORDER BY action.id
-				`,
+					`,
 				this.sql<
 					{
 						action_version_ids: unknown;
@@ -3259,24 +3264,26 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND consumer.status = 'ACTIVE'
 					ORDER BY name, id
 				`,
-				this.sql<
-					{
-						action_name: ActionName;
-						connection_id: string;
-						created_at: Date;
-						grant_id: string;
-						id: string;
-						result: unknown;
-						status: CallStatus;
-					}[]
-				>`
+				options.includeActivity === false
+					? Promise.resolve([])
+					: this.sql<
+							{
+								action_name: ActionName;
+								connection_id: string;
+								created_at: Date;
+								grant_id: string;
+								id: string;
+								result: unknown;
+								status: CallStatus;
+							}[]
+						>`
 					SELECT call.id, call.connection_id, call.grant_id, call.status,
 						call.result, call.created_at, action.name AS action_name
 					FROM connection_calls call
 					JOIN connection_action_versions action ON action.id = call.action_version_id
 					WHERE call.principal_id = ${principalId}
 					ORDER BY call.created_at DESC LIMIT 100
-				`,
+					`,
 			]);
 		if (!principal[0]) forbidden();
 		return {

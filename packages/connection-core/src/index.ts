@@ -719,7 +719,10 @@ export interface ConnectionRepository {
 		externalAccount: string;
 		principalId: string;
 	}): Promise<void>;
-	getOverview(principalId: string): Promise<ConnectionOverview>;
+	getOverview(
+		principalId: string,
+		options?: { includeActivity?: boolean },
+	): Promise<ConnectionOverview>;
 	listAuthorizedConnections(
 		invocation: InvocationContext,
 	): Promise<ConnectionOverview["connections"]>;
@@ -960,8 +963,8 @@ export class ConnectionApplicationService {
 		> = {},
 	) {}
 
-	async overview(principalId: string) {
-		const overview = await this.repository.getOverview(principalId);
+	async overview(principalId: string, options?: { includeActivity?: boolean }) {
+		const overview = await this.repository.getOverview(principalId, options);
 		void this.refreshGitHubProfileLabels(principalId);
 		return overview;
 	}
