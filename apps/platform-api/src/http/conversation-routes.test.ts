@@ -63,20 +63,16 @@ const operationEvent = {
 	eventSchemaVersion: 2 as const,
 	eventType: "execution.operation",
 	eventPayload: {
-		schemaVersion: 2,
-		type: "execution.operation",
-		fact: {
-			kind: "model",
-			operationRef: "operation-1",
-			attemptRef: "attempt-1",
-			phase: "unknown",
-			failureCode: "response_incomplete",
-			model: {
-				configVersion: "config-1",
-				modelOptionId: "model-primary",
-				modelId: "model-1",
-				reasoningLevel: "medium",
-			},
+		kind: "model",
+		operationRef: "operation-1",
+		attemptRef: "attempt-1",
+		phase: "unknown",
+		failureCode: "response_incomplete",
+		model: {
+			configVersion: "config-1",
+			modelOptionId: "model-primary",
+			modelId: "model-1",
+			reasoningLevel: "medium",
 		},
 	},
 };
@@ -302,7 +298,7 @@ describe("Conversation HTTP routes", () => {
 		]);
 		expect(detail.events[1]).toMatchObject({
 			type: "execution.operation",
-			payload: operationEvent.eventPayload.fact,
+			payload: operationEvent.eventPayload,
 		});
 		const legacyResponse = await testApp(
 			await operationDependencies(),

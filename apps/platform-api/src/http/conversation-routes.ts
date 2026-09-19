@@ -23,6 +23,7 @@ import {
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
+	parseConversationOperationFactV2,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
@@ -313,9 +314,13 @@ function eventProjection(
 	) {
 		throw new Error("Event projection binding is inconsistent");
 	}
-	const persisted = parseConversationPersistedEventPayloadV1(
-		input.eventPayload,
-	);
+	const persisted =
+		input.eventType === "execution.operation" && input.eventSchemaVersion === 2
+			? {
+					type: "execution.operation" as const,
+					fact: parseConversationOperationFactV2(input.eventPayload),
+				}
+			: parseConversationPersistedEventPayloadV1(input.eventPayload);
 	if (persisted.type !== input.eventType) {
 		throw new Error("Invalid persisted event type");
 	}

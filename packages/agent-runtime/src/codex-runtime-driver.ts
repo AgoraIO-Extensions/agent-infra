@@ -3382,7 +3382,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const fact = facts.at(-1);
 		const phase = fact?.phase;
 		const validSourceReserve =
-			action.purpose === "source-reserve" && phase === "intent";
+			action.purpose === "source-reserve" &&
+			(phase === "intent" || phase === "started");
 		const validSourceBind =
 			action.purpose === "source-bind" &&
 			facts.some((value) => value.phase === "started") &&

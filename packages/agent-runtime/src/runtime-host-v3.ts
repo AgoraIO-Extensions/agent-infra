@@ -146,6 +146,7 @@ export class RuntimeHostV3 {
 		verification: unknown,
 		session: StoredSession,
 		signal?: AbortSignal,
+		skipLatched = false,
 	) {
 		const recover = this.options.driver.recoverOriginalEvidence;
 		const nativeSessionRef = session.nativeSessionRef;
@@ -161,6 +162,11 @@ export class RuntimeHostV3 {
 			session.generationBarrier ||
 			this.closedRecoveryGenerations.has(recoveryGenerationKey) ||
 			(claims.purpose === "control" && claims.reason === "generation_isolation")
+		)
+			return;
+		if (
+			skipLatched &&
+			session.executionAuthorities?.[request.executionId]?.evidenceQuery
 		)
 			return;
 		const originalOperationDigest =
@@ -744,6 +750,7 @@ export class RuntimeHostV3 {
 				verification,
 				session,
 				bounded,
+				true,
 			);
 			events = await abortable(
 				this.options.driver.subscribeEvents(

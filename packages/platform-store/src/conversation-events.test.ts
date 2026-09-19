@@ -429,20 +429,16 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 			expect(history?.events.slice(0, 3)).toEqual(before?.events);
 			expect(history?.events[3]).toMatchObject({
 				eventSchemaVersion: 2,
-				eventPayload: command.event,
+				eventPayload: command.event.fact,
 			});
 			// A metadata event replaces the view of its attempt; it is not a new execution.
 			const outcomes = new Map<string, ConversationOperationFactV2>();
 			for (const event of history?.events ?? []) {
-				const payload = event.eventPayload as {
-					type: string;
-					fact: ConversationOperationFactV2;
-				};
-				if (payload.type === "execution.operation")
-					outcomes.set(
-						`${event.executionId}:${payload.fact.operationRef}:${payload.fact.attemptRef}`,
-						payload.fact,
-					);
+				const payload = event.eventPayload as ConversationOperationFactV2;
+				outcomes.set(
+					`${event.executionId}:${payload.operationRef}:${payload.attemptRef}`,
+					payload,
+				);
 			}
 			expect([...outcomes.values()]).toEqual([fixture.verified]);
 			expect(
@@ -648,7 +644,7 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 			expect(history?.events[0]).not.toHaveProperty("eventSchemaVersion");
 			expect(history?.events[1]).toMatchObject({
 				eventSchemaVersion: 2,
-				eventPayload: fixture.command().event,
+				eventPayload: fixture.command().event.fact,
 			});
 			if (text.outcome === "stale") throw new Error("Expected stored text");
 			const replay = await fixture.query.replay(scope, fixture.conversationId, {

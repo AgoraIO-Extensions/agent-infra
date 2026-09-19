@@ -388,7 +388,7 @@ function event(row: EventRow): ConversationQueryEventV1 {
 		sequence: safeInteger(row.sequence, 1),
 		conversationCursor: conversationCursor(row.conversation_id, cursor),
 		eventType: text(row.event_type, 128),
-		eventPayload: operation ?? structuredClone(row.event_payload),
+		eventPayload: operation?.fact ?? structuredClone(row.event_payload),
 		occurredAt: timestamp(row.occurred_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
 	};

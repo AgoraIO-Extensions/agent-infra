@@ -665,8 +665,8 @@ async function readOperationSuccessorFacts(
 			where execution_id = ${executionId}
 				and event_type = 'execution.operation'
 				and source = 'runtime'
-				and ${next.parentOperationRef ?? null} is not null
-				and event_payload->'fact'->>'operationRef' = ${next.parentOperationRef ?? null}
+				and ${next.parentOperationRef ?? null}::text is not null
+				and event_payload->'fact'->>'operationRef' = ${next.parentOperationRef ?? null}::text
 			limit 1
 		)
 		select event_payload from candidates
