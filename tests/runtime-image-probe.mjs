@@ -964,7 +964,10 @@ async function runImageProbe() {
 		);
 		const replayed = await request(
 			selected.path,
-			protocol.signRequest(selected.submit, "turn.submit"),
+			protocol.signRequest(
+				{ ...selected.submit, hostSessionRef: selected.lookup.hostSessionRef },
+				"turn.submit",
+			),
 		);
 		check(
 			"submit-idempotency",
@@ -975,6 +978,7 @@ async function runImageProbe() {
 			protocol.signRequest(
 				{
 					...selected.submit,
+					hostSessionRef: selected.lookup.hostSessionRef,
 					selection: {
 						schemaVersion: 1,
 						modelOptionId: "default-option",
