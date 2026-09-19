@@ -6,6 +6,8 @@ import {
 
 import { RuntimeHostError } from "./errors.js";
 
+const storedAuthorityTextPattern = /^[A-Za-z0-9._:-]{1,1024}$/;
+
 export interface RuntimeSessionAuthority {
 	principal: RuntimePrincipalV1;
 	channelId: string;
@@ -69,19 +71,26 @@ export function assertSessionAuthority(
 }
 
 export function validStoredAuthority(authority: RuntimeSessionAuthority) {
+	const isRecord =
+		!!authority && typeof authority === "object" && !Array.isArray(authority);
+	const migrationId = isRecord ? authority.migrationId : undefined;
+	const keys = isRecord ? Object.keys(authority).sort().join(",") : "";
+	const expectedKeys = [
+		"principal",
+		"channelId",
+		...(migrationId === undefined ? [] : ["migrationId"]),
+	]
+		.sort()
+		.join(",");
 	return (
-		!!authority &&
-		typeof authority === "object" &&
-		!Array.isArray(authority) &&
-		Object.keys(authority).every((key) =>
-			["principal", "channelId", "migrationId"].includes(key),
-		) &&
+		isRecord &&
+		keys === expectedKeys &&
 		RuntimePrincipalV1Schema.safeParse(authority.principal).success &&
 		typeof authority.channelId === "string" &&
-		authority.channelId.length > 0 &&
-		(authority.migrationId === undefined ||
-			(typeof authority.migrationId === "string" &&
-				authority.migrationId.length > 0))
+		storedAuthorityTextPattern.test(authority.channelId) &&
+		(migrationId === undefined ||
+			(typeof migrationId === "string" &&
+				storedAuthorityTextPattern.test(migrationId)))
 	);
 }
 
