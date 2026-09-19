@@ -1,10 +1,10 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentConfigurationUpdateRequestV1Writable } from "../../pilot/generated/types.gen.js";
+import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
@@ -16,8 +16,8 @@ vi.mock("./agent-configuration.js", () => ({
 	upgradeAgentCustomImage: vi.fn(),
 }));
 
-const configuredAgent = AgentProjectionV1Schema.parse({
-	schemaVersion: 1,
+const configuredAgent = AgentProjectionV2Schema.parse({
+	schemaVersion: 2,
 	agentId: "agent-configuration-1",
 	name: "Configuration assistant",
 	description: "Helps the release team",
@@ -36,7 +36,7 @@ const configuredAgent = AgentProjectionV1Schema.parse({
 		modelOptions: [],
 		defaultModelOptionId: null,
 		defaultReasoningLevel: null,
-		actions: [],
+
 		environment: [],
 		channels: [],
 		secrets: [],
@@ -51,10 +51,10 @@ const configuredAgent = AgentProjectionV1Schema.parse({
 	interactionUrl: null,
 });
 const body = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	coOwnerIds: ["user-owner-1"],
 	availability: [],
-	actions: [],
+
 	modelConfiguration: {
 		options: [
 			{
@@ -69,7 +69,7 @@ const body = {
 		defaultReasoningLevel: "medium",
 	},
 	secrets: [{ name: "MODEL_API_KEY", value: "test-secret-value" }],
-} satisfies AgentConfigurationUpdateRequestV1Writable;
+} satisfies AgentConfigurationUpdateRequestV2Writable;
 
 afterEach(() => {
 	cleanup();

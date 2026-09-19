@@ -11,12 +11,11 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationProjectionV1,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationProjectionV2,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
-	type AgentApplicationActionDraft,
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationModelDraft,
 	type AgentApplicationSourceKind,
@@ -32,14 +31,14 @@ import {
 type AgentApplicationFormProps =
 	| {
 			mode: "create";
-			onSubmit: (body: AgentApplicationCreateRequestV1Writable) => void;
+			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			submitting: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
-			application: AgentApplicationProjectionV1;
+			application: AgentApplicationProjectionV2;
 			mode: "update";
-			onSubmit: (body: AgentApplicationUpdateRequestV1Writable) => void;
+			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			submitting: boolean;
 	  };
 
@@ -60,10 +59,6 @@ type DraftRowsProps<T extends string> = {
 	onRemove: (index: number) => void;
 	rows: readonly Record<T, string>[];
 };
-
-function blankAction(): AgentApplicationActionDraft {
-	return { providerId: "", actionId: "", actionVersion: "" };
-}
 
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
 	return { name: "", value: "" };
@@ -184,9 +179,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				.map((target) => target.organizationId)
 				.join("\n") ?? "",
 		);
-	const [actions, setActions] = useState<AgentApplicationActionDraft[]>(
-		configuration?.actions.map((action) => ({ ...action })) ?? [],
-	);
 	const [environment, setEnvironment] = useState<
 		AgentApplicationEnvironmentDraft[]
 	>(configuration?.environment.map((value) => ({ ...value })) ?? []);
@@ -219,7 +211,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			coOwnerIds,
 			userAvailabilityIds,
 			organizationAvailabilityIds,
-			actions,
 			environment,
 			secrets,
 			source: application?.source,
@@ -398,49 +389,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 						</div>
 					</div>
-				</fieldset>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Actions
-					</legend>
-					<DraftRows
-						fields={[
-							{
-								key: "providerId",
-								label: "Action provider ID",
-								required: true,
-							},
-							{ key: "actionId", label: "Action ID", required: true },
-							{
-								key: "actionVersion",
-								label: "Action version",
-								required: true,
-							},
-						]}
-						idPrefix="action"
-						label="action"
-						onChange={(index, key, value) =>
-							setActions((current) =>
-								current.map((item, itemIndex) =>
-									itemIndex === index ? { ...item, [key]: value } : item,
-								),
-							)
-						}
-						onRemove={(index) =>
-							setActions((current) =>
-								current.filter((_, itemIndex) => itemIndex !== index),
-							)
-						}
-						rows={actions}
-					/>
-					<Button
-						variant="outline"
-						onClick={() => setActions((current) => [...current, blankAction()])}
-						type="button"
-					>
-						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						Add action
-					</Button>
 				</fieldset>
 				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
 					<legend className="font-semibold text-slate-950 text-sm">

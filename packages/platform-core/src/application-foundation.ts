@@ -5,11 +5,12 @@ import {
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationActorContextV1,
 	AgentConfigurationError,
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	beginInitialAgentConfigurationAdmissionV1,
-	decodeAgentConfigurationRecordV1,
+	decodeAgentConfigurationRecordV2,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
-	type InitialAgentConfigurationCommandV1,
+	type InitialAgentConfigurationCommandV2,
+	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
@@ -17,8 +18,8 @@ import {
 	resolvePendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
 
-export interface CommitApplicationFoundationCommandV1
-	extends InitialAgentConfigurationCommandV1 {
+export interface CommitApplicationFoundationCommandV2
+	extends InitialAgentConfigurationCommandV2 {
 	readonly applicationId: string;
 	readonly idempotencyKey: string;
 	readonly name: string;
@@ -61,7 +62,7 @@ export interface ApplicationFoundationWritePlanV1 {
 	readonly configurationRevision: {
 		readonly agentId: string;
 		readonly revision: 1;
-		readonly configuration: AgentConfigurationRecordV1;
+		readonly configuration: AgentConfigurationRecordV2;
 		readonly createdAt: Date;
 	};
 	readonly access: {
@@ -137,8 +138,13 @@ export interface ApplicationFoundationTransactionPortV1 {
 }
 
 export interface ApplicationFoundationUseCaseV1 {
+	replayLegacyV1(
+		command: unknown,
+		actorContext: ApplicationFoundationActorContextV1,
+	): Promise<CommitApplicationFoundationResultV1>;
+
 	submit(
-		command: CommitApplicationFoundationCommandV1,
+		command: CommitApplicationFoundationCommandV2,
 		actorContext: ApplicationFoundationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<CommitApplicationFoundationResultV1>;
@@ -243,7 +249,6 @@ const commandRequiredKeys = [
 	"source",
 	"environment",
 	"secrets",
-	"actions",
 	"channels",
 	"traceId",
 ] as const;
@@ -315,11 +320,12 @@ function isCapturedText(value: unknown, maxBytes = 1024): value is string {
 
 function parseApplicationFoundationCommandV1(
 	command: unknown,
-): CommitApplicationFoundationCommandV1 {
+	legacy = false,
+): CommitApplicationFoundationCommandV2 {
 	try {
 		const values = snapshotExactDataValues(
 			command,
-			commandRequiredKeys,
+			legacy ? [...commandRequiredKeys, "actions"] : commandRequiredKeys,
 			commandOptionalKeys,
 		);
 		if (!values) invalidApplicationFoundationInput();
@@ -334,7 +340,7 @@ function parseApplicationFoundationCommandV1(
 			traceId,
 		} = values;
 		if (
-			schemaVersion !== 1 ||
+			schemaVersion !== (legacy ? 1 : 2) ||
 			!isCapturedText(applicationId) ||
 			!isCapturedText(agentId) ||
 			!isCapturedText(idempotencyKey, 128) ||
@@ -352,8 +358,9 @@ function parseApplicationFoundationCommandV1(
 			offset += (codePoint ?? 0) > 0xffff ? 2 : 1;
 			if (nameCodePointCount >= 200) invalidApplicationFoundationInput();
 		}
+		if (legacy) validateLegacyInitialActionsV1(values.actions);
 		return {
-			schemaVersion,
+			schemaVersion: 2,
 			applicationId,
 			agentId,
 			idempotencyKey,
@@ -363,19 +370,18 @@ function parseApplicationFoundationCommandV1(
 			coOwnerIds: values.coOwnerIds as readonly string[],
 			availability:
 				values.availability as readonly AgentConfigurationAccessTargetV1[],
-			source: values.source as InitialAgentConfigurationCommandV1["source"],
+			source: values.source as InitialAgentConfigurationCommandV2["source"],
 			...(Object.hasOwn(values, "modelConfiguration")
 				? {
 						modelConfiguration:
-							values.modelConfiguration as InitialAgentConfigurationCommandV1["modelConfiguration"],
+							values.modelConfiguration as InitialAgentConfigurationCommandV2["modelConfiguration"],
 					}
 				: {}),
 			environment:
-				values.environment as InitialAgentConfigurationCommandV1["environment"],
-			secrets: values.secrets as InitialAgentConfigurationCommandV1["secrets"],
-			actions: values.actions as InitialAgentConfigurationCommandV1["actions"],
+				values.environment as InitialAgentConfigurationCommandV2["environment"],
+			secrets: values.secrets as InitialAgentConfigurationCommandV2["secrets"],
 			channels:
-				values.channels as InitialAgentConfigurationCommandV1["channels"],
+				values.channels as InitialAgentConfigurationCommandV2["channels"],
 			traceId,
 		};
 	} catch {
@@ -492,6 +498,14 @@ export function snapshotApplicationFoundationWritePlanV1(
 			plan.configurationRevision,
 			["agentId", "revision", "configuration", "createdAt"],
 		);
+		if (
+			Object.getOwnPropertyDescriptor(
+				configurationRevision.configuration,
+				"schemaVersion",
+			)?.value !== 2
+		) {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
 		const access = requiredPlanObject(plan.access, [
 			"agentId",
 			"ownerIds",
@@ -558,7 +572,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 			configurationRevision: {
 				agentId: configurationRevision.agentId as string,
 				revision: configurationRevision.revision as 1,
-				configuration: decodeAgentConfigurationRecordV1(
+				configuration: decodeAgentConfigurationRecordV2(
 					configurationRevision.configuration,
 				),
 				createdAt: snapshotPlanDate(configurationRevision.createdAt),
@@ -730,179 +744,187 @@ export function createApplicationFoundationUseCaseV1(
 	options: ApplicationFoundationUseCaseOptionsV1 = {},
 ): ApplicationFoundationUseCaseV1 {
 	const now = options.now ?? systemNow;
-	return {
-		async submit(commandInput, actorContextInput, attachment) {
-			const actorContext =
-				parseApplicationFoundationActorContextV1(actorContextInput);
-			const command = parseApplicationFoundationCommandV1(commandInput);
-			let admission: Awaited<
-				ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
-			>;
-			try {
-				admission = await beginInitialAgentConfigurationAdmissionV1(
-					{
-						schemaVersion: 1,
-						agentId: command.agentId,
-						requestId: command.requestId,
-						traceId: command.traceId,
-						coOwnerIds: command.coOwnerIds,
-						availability: command.availability,
-						source: command.source,
-						...(command.modelConfiguration === undefined
-							? {}
-							: { modelConfiguration: command.modelConfiguration }),
-						environment: command.environment,
-						secrets: command.secrets,
-						actions: command.actions,
-						channels: command.channels,
-					},
-					{
-						schemaVersion: 1,
-						actorId: actorContext.userId,
-						rawRequestDigest: actorContext.rawRequestDigest,
-					} satisfies AgentConfigurationActorContextV1,
-					dependencies,
-				);
-			} catch (error) {
-				throw normalizeInitialAdmissionError(error);
-			}
-			const result: CommitApplicationFoundationResultV1 = {
-				schemaVersion: 1,
-				applicationId: command.applicationId,
-				agentId: command.agentId,
-				configurationRevision: initialConfigurationRevision,
-				status: "pending_approval",
-			};
-			let readDecision: ApplicationFoundationReadDecisionV1;
-			try {
-				readDecision = parseReadDecision(
-					await dependencies.transaction.read({
-						schemaVersion: 1,
-						applicationId: command.applicationId,
-						agentId: command.agentId,
-						actorId: actorContext.userId,
-						idempotencyKey: command.idempotencyKey,
-						requestDigest: actorContext.rawRequestDigest,
-					}),
-					result,
-				);
-			} catch {
-				throw new ApplicationFoundationError("persistence_failed");
-			}
-			if (readDecision.outcome === "replayed") return readDecision.result;
-			if (readDecision.outcome === "idempotency_conflict") {
-				throw new ApplicationFoundationError("idempotency_conflict");
-			}
-			let admitted: AdmittedInitialAgentConfigurationV1;
-			try {
-				admitted = await admission.complete();
-			} catch (error) {
-				throw normalizeInitialAdmissionError(error);
-			}
-			let submittedAt: Date;
-			try {
-				const milliseconds = Date.prototype.getTime.call(now());
-				if (!Number.isFinite(milliseconds)) throw new Error();
-				submittedAt = new Date(milliseconds);
-			} catch {
-				throw new ApplicationFoundationError("persistence_failed");
-			}
-			const plan: ApplicationFoundationWritePlanV1 = {
-				schemaVersion: 1,
-				agent: {
+	const execute = async (
+		commandInput: unknown,
+		actorContextInput: ApplicationFoundationActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
+		legacy = false,
+	): Promise<CommitApplicationFoundationResultV1> => {
+		const actorContext =
+			parseApplicationFoundationActorContextV1(actorContextInput);
+		const command = parseApplicationFoundationCommandV1(commandInput, legacy);
+		let admission: Awaited<
+			ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
+		>;
+		try {
+			admission = await beginInitialAgentConfigurationAdmissionV1(
+				{
+					schemaVersion: 2,
 					agentId: command.agentId,
-					currentConfigurationRevision: initialConfigurationRevision,
-					authorizationRevision: admitted.authorizationRevision,
-					createdAt: submittedAt,
+					requestId: command.requestId,
+					traceId: command.traceId,
+					coOwnerIds: command.coOwnerIds,
+					availability: command.availability,
+					source: command.source,
+					...(command.modelConfiguration === undefined
+						? {}
+						: { modelConfiguration: command.modelConfiguration }),
+					environment: command.environment,
+					secrets: command.secrets,
+					channels: command.channels,
 				},
-				application: {
+				{
+					schemaVersion: 1,
+					actorId: actorContext.userId,
+					rawRequestDigest: actorContext.rawRequestDigest,
+				} satisfies AgentConfigurationActorContextV1,
+				dependencies,
+			);
+		} catch (error) {
+			throw normalizeInitialAdmissionError(error);
+		}
+		const result: CommitApplicationFoundationResultV1 = {
+			schemaVersion: 1,
+			applicationId: command.applicationId,
+			agentId: command.agentId,
+			configurationRevision: initialConfigurationRevision,
+			status: "pending_approval",
+		};
+		let readDecision: ApplicationFoundationReadDecisionV1;
+		try {
+			readDecision = parseReadDecision(
+				await dependencies.transaction.read({
+					schemaVersion: 1,
 					applicationId: command.applicationId,
 					agentId: command.agentId,
-					applicantId: actorContext.userId,
-					name: command.name,
-					description: command.description,
-					status: "pending_approval",
-					traceId: command.traceId,
-					requestId: command.requestId,
-					submittedAt,
-				},
-				configurationRevision: {
-					agentId: command.agentId,
-					revision: initialConfigurationRevision,
-					configuration: admitted.configuration,
-					createdAt: submittedAt,
-				},
-				access: {
-					agentId: command.agentId,
-					ownerIds: admitted.ownerIds,
-					availability: admitted.availability,
-					createdAt: submittedAt,
-				},
-				result,
-				idempotency: {
-					key: command.idempotencyKey,
-					requestDigest: actorContext.rawRequestDigest,
-				},
-				outboxIntent: {
-					scopeType: "agent",
-					scopeId: command.agentId,
-					operation: "agent.application.submitted.v1",
-					payload: {
-						schemaVersion: 1,
-						applicationId: command.applicationId,
-						agentId: command.agentId,
-						configurationRevision: initialConfigurationRevision,
-					},
-					traceId: command.traceId,
-					requestId: command.requestId,
-					occurredAt: submittedAt,
-				},
-				auditEvent: {
-					traceId: command.traceId,
-					requestId: command.requestId,
-					agentId: command.agentId,
-					actorType: "user",
 					actorId: actorContext.userId,
-					action: "agent.application.submitted",
-					targetType: "agent_application",
-					targetId: command.applicationId,
-					outcome: "succeeded",
-					occurredAt: submittedAt,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: actorContext.rawRequestDigest,
+				}),
+				result,
+			);
+		} catch {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		if (readDecision.outcome === "replayed") return readDecision.result;
+		if (readDecision.outcome === "idempotency_conflict") {
+			throw new ApplicationFoundationError("idempotency_conflict");
+		}
+		if (legacy) throw new ApplicationFoundationError("invalid_command");
+		let admitted: AdmittedInitialAgentConfigurationV1;
+		try {
+			admitted = await admission.complete();
+		} catch (error) {
+			throw normalizeInitialAdmissionError(error);
+		}
+		let submittedAt: Date;
+		try {
+			const milliseconds = Date.prototype.getTime.call(now());
+			if (!Number.isFinite(milliseconds)) throw new Error();
+			submittedAt = new Date(milliseconds);
+		} catch {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
+		const plan: ApplicationFoundationWritePlanV1 = {
+			schemaVersion: 1,
+			agent: {
+				agentId: command.agentId,
+				currentConfigurationRevision: initialConfigurationRevision,
+				authorizationRevision: admitted.authorizationRevision,
+				createdAt: submittedAt,
+			},
+			application: {
+				applicationId: command.applicationId,
+				agentId: command.agentId,
+				applicantId: actorContext.userId,
+				name: command.name,
+				description: command.description,
+				status: "pending_approval",
+				traceId: command.traceId,
+				requestId: command.requestId,
+				submittedAt,
+			},
+			configurationRevision: {
+				agentId: command.agentId,
+				revision: initialConfigurationRevision,
+				configuration: admitted.configuration,
+				createdAt: submittedAt,
+			},
+			access: {
+				agentId: command.agentId,
+				ownerIds: admitted.ownerIds,
+				availability: admitted.availability,
+				createdAt: submittedAt,
+			},
+			result,
+			idempotency: {
+				key: command.idempotencyKey,
+				requestDigest: actorContext.rawRequestDigest,
+			},
+			outboxIntent: {
+				scopeType: "agent",
+				scopeId: command.agentId,
+				operation: "agent.application.submitted.v1",
+				payload: {
+					schemaVersion: 1,
+					applicationId: command.applicationId,
+					agentId: command.agentId,
+					configurationRevision: initialConfigurationRevision,
 				},
-			};
-			let attachments: PendingSecretRecordAttachmentsV1 | undefined;
-			try {
-				attachments = await resolvePendingSecretRecordAttachmentsV1({
-					attachment,
-					configuration: plan.configurationRevision.configuration,
-					ownerId: actorContext.userId,
-					occurredAt: submittedAt,
-				});
-			} catch {
-				throw new ApplicationFoundationError("dependency_unavailable");
-			}
-			let decision: ApplicationFoundationCommitDecisionV1;
-			try {
-				decision = parseCommitDecision(
-					await dependencies.transaction.commit(plan, attachments),
-					result,
-				);
-			} catch (error) {
-				const code = recognizedApplicationFoundationErrorCode(error);
-				throw new ApplicationFoundationError(
-					code === "conflict" || code === "idempotency_conflict"
-						? code
-						: "persistence_failed",
-				);
-			}
-			if (decision.outcome === "conflict") {
-				throw new ApplicationFoundationError(
-					decision.reason === "idempotency_conflict"
-						? "idempotency_conflict"
-						: "conflict",
-				);
-			}
-			return decision.result;
-		},
+				traceId: command.traceId,
+				requestId: command.requestId,
+				occurredAt: submittedAt,
+			},
+			auditEvent: {
+				traceId: command.traceId,
+				requestId: command.requestId,
+				agentId: command.agentId,
+				actorType: "user",
+				actorId: actorContext.userId,
+				action: "agent.application.submitted",
+				targetType: "agent_application",
+				targetId: command.applicationId,
+				outcome: "succeeded",
+				occurredAt: submittedAt,
+			},
+		};
+		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+		try {
+			attachments = await resolvePendingSecretRecordAttachmentsV1({
+				attachment,
+				configuration: plan.configurationRevision.configuration,
+				ownerId: actorContext.userId,
+				occurredAt: submittedAt,
+			});
+		} catch {
+			throw new ApplicationFoundationError("dependency_unavailable");
+		}
+		let decision: ApplicationFoundationCommitDecisionV1;
+		try {
+			decision = parseCommitDecision(
+				await dependencies.transaction.commit(plan, attachments),
+				result,
+			);
+		} catch (error) {
+			const code = recognizedApplicationFoundationErrorCode(error);
+			throw new ApplicationFoundationError(
+				code === "conflict" || code === "idempotency_conflict"
+					? code
+					: "persistence_failed",
+			);
+		}
+		if (decision.outcome === "conflict") {
+			throw new ApplicationFoundationError(
+				decision.reason === "idempotency_conflict"
+					? "idempotency_conflict"
+					: "conflict",
+			);
+		}
+		return decision.result;
+	};
+	return {
+		submit: (command, actor, attachment) => execute(command, actor, attachment),
+		replayLegacyV1: (command, actor) =>
+			execute(command, actor, undefined, true),
 	};
 }

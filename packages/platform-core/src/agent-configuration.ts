@@ -61,14 +61,12 @@ export interface AgentConfigurationModelV1 {
 	readonly defaultReasoningLevel: string;
 }
 
-export interface AgentConfigurationRecordV1 {
-	readonly schemaVersion: 1;
+export interface AgentConfigurationRecordV2 {
+	readonly schemaVersion: 2;
 	readonly agentId: string;
 	readonly revision: number;
 	readonly source: AgentConfigurationSourceV1;
 	readonly modelConfiguration: AgentConfigurationModelV1 | null;
-	readonly actions: readonly AgentConfigurationActionV1[];
-	readonly actionSetRevision: string;
 	readonly environment: readonly {
 		readonly name: string;
 		readonly value: string;
@@ -84,6 +82,14 @@ export interface AgentConfigurationRecordV1 {
 		readonly bindingReference: string;
 	}[];
 	readonly channelRevision: string;
+}
+
+/** Historical persisted shape; never a current policy or new write. */
+export interface AgentConfigurationRecordV1
+	extends Omit<AgentConfigurationRecordV2, "schemaVersion"> {
+	readonly schemaVersion: 1;
+	readonly actions: readonly AgentConfigurationActionV1[];
+	readonly actionSetRevision: string;
 }
 
 export interface AgentConfigurationActionV1 {
@@ -157,8 +163,8 @@ export interface AgentConfigurationAccessAuthorityV1 {
 	readonly authorityContext: AgentConfigurationAuthorityContextV1;
 }
 
-export interface InitialAgentConfigurationCommandV1 {
-	readonly schemaVersion: 1;
+export interface InitialAgentConfigurationCommandV2 {
+	readonly schemaVersion: 2;
 	readonly agentId: string;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -171,14 +177,13 @@ export interface InitialAgentConfigurationCommandV1 {
 		readonly value: string;
 	}[];
 	readonly secrets: readonly AgentConfigurationSecretReplacementInputV1[];
-	readonly actions: readonly AgentConfigurationActionV1[];
 	readonly channels: readonly AgentConfigurationChannelChangeV1[];
 }
 
 export interface AdmittedInitialAgentConfigurationV1 {
 	readonly schemaVersion: 1;
 	readonly authorizationRevision: string;
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly ownerIds: readonly string[];
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 }
@@ -190,8 +195,8 @@ export interface InitialAgentConfigurationAdmissionHandleV1 {
 	complete(): Promise<AdmittedInitialAgentConfigurationV1>;
 }
 
-export interface UpdateAgentConfigurationCommandV1 {
-	readonly schemaVersion: 1;
+export interface UpdateAgentConfigurationCommandV2 {
+	readonly schemaVersion: 2;
 	readonly agentId: string;
 	readonly idempotencyKey: string;
 	readonly requestId: string;
@@ -206,8 +211,15 @@ export interface UpdateAgentConfigurationCommandV1 {
 			readonly value: string;
 		}[];
 		readonly secrets?: readonly AgentConfigurationSecretReplacementInputV1[];
-		readonly actions?: readonly AgentConfigurationActionV1[];
 		readonly channels?: readonly AgentConfigurationChannelChangeV1[];
+	};
+}
+
+interface LegacyUpdateAgentConfigurationCommandV1
+	extends Omit<UpdateAgentConfigurationCommandV2, "schemaVersion" | "changes"> {
+	readonly schemaVersion: 1;
+	readonly changes: UpdateAgentConfigurationCommandV2["changes"] & {
+		readonly actions?: readonly AgentConfigurationActionV1[];
 	};
 }
 
@@ -257,9 +269,10 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly agentId: string;
 	readonly baseRevision: number;
 	readonly nextRevision: number;
+	readonly expectedManagementRevision: number | null;
 	readonly expectedAuthorizationRevision: string;
 	readonly nextAuthorizationRevision: string;
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
 	readonly result: AgentConfigurationResultV1;
 	readonly idempotency: {
@@ -278,7 +291,7 @@ export interface AgentConfigurationWritePlanV1 {
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly occurredAt: Date;
-	};
+	} | null;
 	readonly auditEvent: {
 		readonly action: "agent.configuration.revised" | "agent.access.updated";
 		readonly actorId: string;
@@ -304,7 +317,7 @@ export interface AgentConfigurationTransactionPortV1 {
 				readonly outcome: "ready";
 				readonly record: {
 					readonly schemaVersion: 1;
-					readonly configuration: AgentConfigurationRecordV1;
+					readonly configuration: AgentConfigurationRecordV2;
 					readonly authorizationRevision: string;
 				};
 		  }
@@ -414,39 +427,14 @@ export interface AgentConfigurationSecretAdmissionPortV1 {
 		readonly requestId: string;
 		readonly traceId: string;
 		readonly requested: readonly AgentConfigurationSecretReplacementInputV1[];
-		readonly current: AgentConfigurationRecordV1["secrets"];
+		readonly current: AgentConfigurationRecordV2["secrets"];
 	}): Promise<
 		| {
 				readonly schemaVersion: 1;
 				readonly status: "admitted";
 				readonly agentId: string;
 				readonly requestId: string;
-				readonly secrets: AgentConfigurationRecordV1["secrets"];
-		  }
-		| {
-				readonly schemaVersion: 1;
-				readonly status: "rejected";
-				readonly agentId: string;
-				readonly requestId: string;
-		  }
-	>;
-}
-
-export interface AgentConfigurationActionAdmissionPortV1 {
-	admitActions(input: {
-		readonly schemaVersion: 1;
-		readonly agentId: string;
-		readonly requestId: string;
-		readonly traceId: string;
-		readonly requested: readonly AgentConfigurationActionV1[];
-	}): Promise<
-		| {
-				readonly schemaVersion: 1;
-				readonly status: "admitted";
-				readonly agentId: string;
-				readonly requestId: string;
-				readonly actionSetRevision: string;
-				readonly actions: readonly AgentConfigurationActionV1[];
+				readonly secrets: AgentConfigurationRecordV2["secrets"];
 		  }
 		| {
 				readonly schemaVersion: 1;
@@ -464,7 +452,7 @@ export interface AgentConfigurationChannelAdmissionPortV1 {
 		readonly requestId: string;
 		readonly traceId: string;
 		readonly requested: readonly AgentConfigurationChannelChangeV1[];
-		readonly current: AgentConfigurationRecordV1["channels"];
+		readonly current: AgentConfigurationRecordV2["channels"];
 	}): Promise<
 		| {
 				readonly schemaVersion: 1;
@@ -472,7 +460,7 @@ export interface AgentConfigurationChannelAdmissionPortV1 {
 				readonly agentId: string;
 				readonly requestId: string;
 				readonly channelRevision: string;
-				readonly channels: AgentConfigurationRecordV1["channels"];
+				readonly channels: AgentConfigurationRecordV2["channels"];
 		  }
 		| {
 				readonly schemaVersion: 1;
@@ -485,10 +473,15 @@ export interface AgentConfigurationChannelAdmissionPortV1 {
 
 export interface AgentConfigurationUseCaseV1 {
 	update(
-		command: UpdateAgentConfigurationCommandV1,
+		command: UpdateAgentConfigurationCommandV2,
 		actorContext: AgentConfigurationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1>;
+	replayLegacyV1(
+		command: unknown,
+		actorContext: AgentConfigurationActorContextV1,
+	): Promise<AgentConfigurationResultV1>;
+
 	upgradeCustomImage(
 		command: UpgradeCustomAgentImageCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
@@ -521,7 +514,6 @@ export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly imageAdmission: AgentConfigurationImageAdmissionPortV1;
 	readonly modelAdmission: AgentConfigurationModelAdmissionPortV1;
 	readonly secretAdmission: AgentConfigurationSecretAdmissionPortV1;
-	readonly actionAdmission: AgentConfigurationActionAdmissionPortV1;
 	readonly channelAdmission: AgentConfigurationChannelAdmissionPortV1;
 }
 
@@ -934,7 +926,7 @@ function parseChannelChanges(
 
 function canonicalChannelBindings(
 	input: unknown,
-): AgentConfigurationRecordV1["channels"] {
+): AgentConfigurationRecordV2["channels"] {
 	const entries = denseArray(input, maxChannelChanges);
 	const kinds = new Set<AgentConfigurationChannelKindV1>();
 	return entries
@@ -1008,7 +1000,7 @@ function parseAvailability(input: unknown): AgentConfigurationAccessTargetV1[] {
 
 export function parseAgentConfigurationChangesV1(
 	input: unknown,
-): UpdateAgentConfigurationCommandV1["changes"] {
+): UpdateAgentConfigurationCommandV2["changes"] {
 	const changes = exactObject(
 		input,
 		[],
@@ -1019,7 +1011,6 @@ export function parseAgentConfigurationChangesV1(
 			"modelConfiguration",
 			"environment",
 			"secrets",
-			"actions",
 			"channels",
 		],
 	);
@@ -1046,16 +1037,66 @@ export function parseAgentConfigurationChangesV1(
 		...(Object.hasOwn(changes, "secrets")
 			? { secrets: parseSecretReplacements(changes.secrets) }
 			: {}),
-		...(Object.hasOwn(changes, "actions")
-			? { actions: canonicalActions(changes.actions) }
-			: {}),
 		...(Object.hasOwn(changes, "channels")
 			? { channels: parseChannelChanges(changes.channels) }
 			: {}),
 	};
 }
 
-function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
+/** Historical validation only; never use the result for a new mutation. */
+export function parseLegacyAgentConfigurationChangesV1(
+	input: unknown,
+): LegacyUpdateAgentConfigurationCommandV1["changes"] {
+	const values = exactObject(
+		input,
+		[],
+		[
+			"coOwnerIds",
+			"availability",
+			"source",
+			"modelConfiguration",
+			"environment",
+			"secrets",
+			"actions",
+			"channels",
+		],
+	);
+	const { actions, ...currentFields } = values;
+	return {
+		...parseAgentConfigurationChangesV1(currentFields),
+		...(Object.hasOwn(values, "actions")
+			? { actions: canonicalActions(actions) }
+			: {}),
+	};
+}
+
+function parseLegacyUpdateCommand(
+	input: unknown,
+): LegacyUpdateAgentConfigurationCommandV1 {
+	const values = exactObject(input, [
+		"schemaVersion",
+		"agentId",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+		"changes",
+	]);
+	if (values.schemaVersion !== 1) invalidCommand();
+	const changes = parseLegacyAgentConfigurationChangesV1(values.changes);
+	const { actions: _historicalActions, ...currentChanges } = changes;
+	const current = parseCommand({
+		...values,
+		schemaVersion: 2,
+		changes: currentChanges,
+	});
+	return { ...current, schemaVersion: 1, changes };
+}
+
+export function validateLegacyInitialActionsV1(input: unknown): void {
+	canonicalActions(input);
+}
+
+function parseCommand(command: unknown): UpdateAgentConfigurationCommandV2 {
 	const values = exactObject(command, [
 		"schemaVersion",
 		"agentId",
@@ -1065,7 +1106,7 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 		"changes",
 	]);
 	if (
-		values.schemaVersion !== 1 ||
+		values.schemaVersion !== 2 ||
 		!isText(values.agentId, idMaxBytes) ||
 		!isText(values.idempotencyKey, 128) ||
 		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
@@ -1075,7 +1116,7 @@ function parseCommand(command: unknown): UpdateAgentConfigurationCommandV1 {
 		invalidCommand();
 	}
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: values.agentId,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
@@ -1118,7 +1159,7 @@ function parseUpgradeCustomImageCommand(
 
 function parseInitialCommand(
 	command: unknown,
-): InitialAgentConfigurationCommandV1 {
+): InitialAgentConfigurationCommandV2 {
 	const values = exactObject(
 		command,
 		[
@@ -1131,13 +1172,12 @@ function parseInitialCommand(
 			"source",
 			"environment",
 			"secrets",
-			"actions",
 			"channels",
 		],
 		["modelConfiguration"],
 	);
 	if (
-		values.schemaVersion !== 1 ||
+		values.schemaVersion !== 2 ||
 		!isText(values.agentId, idMaxBytes) ||
 		!isText(values.requestId, idMaxBytes) ||
 		!isText(values.traceId, idMaxBytes)
@@ -1153,7 +1193,7 @@ function parseInitialCommand(
 		invalidCommand();
 	}
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: values.agentId,
 		requestId: values.requestId,
 		traceId: values.traceId,
@@ -1169,7 +1209,6 @@ function parseInitialCommand(
 			: {}),
 		environment: parseEnvironment(values.environment),
 		secrets: parseSecretReplacements(values.secrets),
-		actions: canonicalActions(values.actions),
 		channels: parseChannelChanges(values.channels),
 	};
 }
@@ -1285,7 +1324,7 @@ function parseStoredModel(input: unknown): AgentConfigurationModelV1 {
 
 function parseStoredSecrets(
 	input: unknown,
-): AgentConfigurationRecordV1["secrets"] {
+): AgentConfigurationRecordV2["secrets"] {
 	const names = new Set<string>();
 	return denseArray(input, maxSecretReplacements)
 		.map((metadataInput) => {
@@ -1319,29 +1358,30 @@ function parseStoredSecrets(
 		.toSorted((left, right) => compareText(left.name, right.name));
 }
 
-export function decodeAgentConfigurationRecordV1(
+export function decodeAgentConfigurationRecordV2(
 	input: unknown,
-): AgentConfigurationRecordV1 {
+): AgentConfigurationRecordV2 {
+	const header = snapshotAgentManagementDataObject(input);
+	const legacy = header.schemaVersion === 1;
 	const values = exactObject(input, [
 		"schemaVersion",
 		"agentId",
 		"revision",
 		"source",
 		"modelConfiguration",
-		"actions",
-		"actionSetRevision",
+		...(legacy ? ["actions", "actionSetRevision"] : []),
 		"environment",
 		"secrets",
 		"channels",
 		"channelRevision",
 	]);
 	if (
-		values.schemaVersion !== 1 ||
+		(values.schemaVersion !== 1 && values.schemaVersion !== 2) ||
 		!isText(values.agentId, idMaxBytes) ||
 		typeof values.revision !== "number" ||
 		!Number.isSafeInteger(values.revision) ||
 		values.revision < 0 ||
-		!isText(values.actionSetRevision, idMaxBytes) ||
+		(legacy && !isText(values.actionSetRevision, idMaxBytes)) ||
 		!isText(values.channelRevision, idMaxBytes)
 	) {
 		invalidCommand();
@@ -1351,7 +1391,11 @@ export function decodeAgentConfigurationRecordV1(
 		values.modelConfiguration === null
 			? null
 			: parseStoredModel(values.modelConfiguration);
-	const actions = canonicalActions(values.actions);
+	if (legacy) {
+		const historicalActions = canonicalActions(values.actions);
+		if (!source.connectionEnabled && historicalActions.length > 0)
+			invalidCommand();
+	}
 	const environment = parseEnvironment(values.environment);
 	const secrets = parseStoredSecrets(values.secrets);
 	const channels = canonicalChannelBindings(values.channels);
@@ -1360,17 +1404,14 @@ export function decodeAgentConfigurationRecordV1(
 		modelConfiguration,
 		environment,
 		secrets,
-		actions,
 		channels,
 	});
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: values.agentId,
 		revision: values.revision,
 		source,
 		modelConfiguration,
-		actions,
-		actionSetRevision: values.actionSetRevision,
 		environment,
 		secrets,
 		channels,
@@ -1573,32 +1614,6 @@ function parseSecretDecision(
 			}));
 }
 
-function parseActionDecision(
-	input: unknown,
-): Awaited<
-	ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
-> {
-	const decision = snapshotAdmissionDecision(input, [
-		"actionSetRevision",
-		"actions",
-	]);
-	return decision.status === "rejected"
-		? { schemaVersion: 1, ...decision }
-		: dependencyValue(() => {
-				if (!isText(decision.values.actionSetRevision, idMaxBytes)) {
-					invalidCommand();
-				}
-				return {
-					schemaVersion: 1,
-					status: "admitted",
-					agentId: decision.agentId,
-					requestId: decision.requestId,
-					actionSetRevision: decision.values.actionSetRevision,
-					actions: canonicalActions(decision.values.actions),
-				};
-			});
-}
-
 function parseChannelDecision(
 	input: unknown,
 ): Awaited<
@@ -1664,23 +1679,12 @@ function sameValue(left: unknown, right: unknown): boolean {
 
 function requireAdmittedConfigurationPolicy(
 	configuration: Pick<
-		AgentConfigurationRecordV1,
-		| "source"
-		| "modelConfiguration"
-		| "environment"
-		| "secrets"
-		| "actions"
-		| "channels"
+		AgentConfigurationRecordV2,
+		"source" | "modelConfiguration" | "environment" | "secrets" | "channels"
 	>,
 ): void {
-	const {
-		source,
-		modelConfiguration,
-		environment,
-		secrets,
-		actions,
-		channels,
-	} = configuration;
+	const { source, modelConfiguration, environment, secrets, channels } =
+		configuration;
 	if (
 		(source.kind === "standard" &&
 			(modelConfiguration === null ||
@@ -1695,7 +1699,6 @@ function requireAdmittedConfigurationPolicy(
 						source.platformManagedKeys.includes(name),
 				))) ||
 		(source.kind === "custom" && modelConfiguration !== null) ||
-		(!source.connectionEnabled && actions.length > 0) ||
 		(source.kind === "custom" &&
 			source.interactionMode === "self-managed" &&
 			channels.length > 0)
@@ -1725,13 +1728,18 @@ function sameModelConfiguration(
 }
 
 function requestDigest(
-	command: UpdateAgentConfigurationCommandV1,
+	command:
+		| UpdateAgentConfigurationCommandV2
+		| LegacyUpdateAgentConfigurationCommandV1,
 	actor: AgentConfigurationActorContextV1,
 ): string {
 	try {
 		return platformIdempotencyV1.canonicalRequestDigest({
 			schemaVersion: 1,
-			operation: "agent.configuration.update.v1",
+			operation:
+				command.schemaVersion === 1
+					? "agent.configuration.update.v1"
+					: "agent.configuration.update.v2",
 			agentId: command.agentId,
 			actorId: actor.actorId,
 			rawRequestDigest: actor.rawRequestDigest,
@@ -1885,6 +1893,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			"agentId",
 			"baseRevision",
 			"nextRevision",
+			"expectedManagementRevision",
 			"expectedAuthorizationRevision",
 			"nextAuthorizationRevision",
 			"configuration",
@@ -1896,7 +1905,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		]);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
-		const configuration = decodeAgentConfigurationRecordV1(
+		const configuration = decodeAgentConfigurationRecordV2(
 			values.configuration,
 		);
 		requireAdmittedConfigurationPolicy(configuration);
@@ -1909,24 +1918,6 @@ export function snapshotAgentConfigurationWritePlanV1(
 			"key",
 			"requestDigest",
 		]);
-		const outbox = configurationPlanObject(values.outboxIntent, [
-			"operation",
-			"payload",
-			"traceId",
-			"requestId",
-			"occurredAt",
-		]);
-		const payload = configurationPlanObject(outbox.payload, [
-			"schemaVersion",
-			"agentId",
-			"baseRevision",
-			"configurationRevision",
-			"changedFields",
-		]);
-		const payloadChangedFields = snapshotAgentManagementDenseArray(
-			payload.changedFields,
-			8,
-		);
 		const audit = configurationPlanObject(values.auditEvent, [
 			"action",
 			"actorId",
@@ -1942,21 +1933,32 @@ export function snapshotAgentConfigurationWritePlanV1(
 			audit.changedFields,
 			8,
 		);
-		const outboxOccurredAt = configurationPlanDate(outbox.occurredAt);
 		const auditOccurredAt = configurationPlanDate(audit.occurredAt);
 		const accessFields = result.changedFields.filter(
 			(field) => field === "owners" || field === "availability",
 		);
 		const accessOnly = accessFields.length === result.changedFields.length;
+		const runtimeUnchanged = result.changedFields.every(
+			(field) => field === "availability",
+		);
 		const expectedAction = accessOnly
 			? "agent.access.updated"
 			: "agent.configuration.revised";
 		if (
 			values.schemaVersion !== 1 ||
+			snapshotAgentManagementDataObject(values.configuration).schemaVersion !==
+				2 ||
+			result.changedFields.includes("actions") ||
 			!Number.isSafeInteger(values.baseRevision) ||
 			(values.baseRevision as number) < 1 ||
-			values.baseRevision === Number.MAX_SAFE_INTEGER ||
-			values.nextRevision !== (values.baseRevision as number) + 1 ||
+			!Number.isSafeInteger(values.nextRevision) ||
+			values.nextRevision !==
+				(values.baseRevision as number) + (runtimeUnchanged ? 0 : 1) ||
+			(values.expectedManagementRevision !== null &&
+				(!Number.isSafeInteger(values.expectedManagementRevision) ||
+					(values.expectedManagementRevision as number) < 0)) ||
+			(accessUpdate !== null &&
+				accessUpdate.expectedRevision !== values.expectedManagementRevision) ||
 			!isText(values.expectedAuthorizationRevision, idMaxBytes) ||
 			!isText(values.nextAuthorizationRevision, idMaxBytes) ||
 			configuration.agentId !== agentId ||
@@ -1966,32 +1968,76 @@ export function snapshotAgentConfigurationWritePlanV1(
 			!/^[A-Za-z0-9._~-]{1,128}$/.test(idempotency.key) ||
 			typeof idempotency.requestDigest !== "string" ||
 			!/^[a-f0-9]{64}$/.test(idempotency.requestDigest) ||
-			outbox.operation !== "agent.configuration.revised.v1" ||
-			payload.schemaVersion !== 1 ||
-			payload.agentId !== agentId ||
-			payload.baseRevision !== values.baseRevision ||
-			payload.configurationRevision !== values.nextRevision ||
-			!sameValue(payloadChangedFields, result.changedFields) ||
-			!isText(outbox.traceId, idMaxBytes) ||
-			!isText(outbox.requestId, idMaxBytes) ||
 			audit.action !== expectedAction ||
 			!isText(audit.actorId, idMaxBytes) ||
 			audit.agentId !== agentId ||
 			audit.subjectType !== "agent" ||
 			audit.subjectId !== agentId ||
 			!sameValue(auditChangedFields, result.changedFields) ||
-			audit.traceId !== outbox.traceId ||
-			audit.requestId !== outbox.requestId ||
-			auditOccurredAt.getTime() !== outboxOccurredAt.getTime() ||
+			!isText(audit.traceId, idMaxBytes) ||
+			!isText(audit.requestId, idMaxBytes) ||
 			accessFields.length > 0 !== (accessUpdate !== null)
 		) {
 			throw new Error();
+		}
+		let outboxIntent: AgentConfigurationWritePlanV1["outboxIntent"] = null;
+		if (runtimeUnchanged) {
+			if (values.outboxIntent !== null) throw new Error();
+		} else {
+			const outbox = configurationPlanObject(values.outboxIntent, [
+				"operation",
+				"payload",
+				"traceId",
+				"requestId",
+				"occurredAt",
+			]);
+			const payload = configurationPlanObject(outbox.payload, [
+				"schemaVersion",
+				"agentId",
+				"baseRevision",
+				"configurationRevision",
+				"changedFields",
+			]);
+			const payloadChangedFields = snapshotAgentManagementDenseArray(
+				payload.changedFields,
+				8,
+			);
+			const occurredAt = configurationPlanDate(outbox.occurredAt);
+			if (
+				outbox.operation !== "agent.configuration.revised.v1" ||
+				payload.schemaVersion !== 1 ||
+				payload.agentId !== agentId ||
+				payload.baseRevision !== values.baseRevision ||
+				payload.configurationRevision !== values.nextRevision ||
+				!sameValue(payloadChangedFields, result.changedFields) ||
+				outbox.traceId !== audit.traceId ||
+				outbox.requestId !== audit.requestId ||
+				occurredAt.getTime() !== auditOccurredAt.getTime()
+			) {
+				throw new Error();
+			}
+			outboxIntent = {
+				operation: "agent.configuration.revised.v1",
+				payload: {
+					schemaVersion: 1,
+					agentId,
+					baseRevision: values.baseRevision as number,
+					configurationRevision: values.nextRevision as number,
+					changedFields: result.changedFields,
+				},
+				traceId: audit.traceId,
+				requestId: audit.requestId,
+				occurredAt,
+			};
 		}
 		return {
 			schemaVersion: 1,
 			agentId,
 			baseRevision: values.baseRevision as number,
 			nextRevision: values.nextRevision as number,
+			expectedManagementRevision: values.expectedManagementRevision as
+				| number
+				| null,
 			expectedAuthorizationRevision: values.expectedAuthorizationRevision,
 			nextAuthorizationRevision: values.nextAuthorizationRevision,
 			configuration,
@@ -2001,19 +2047,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 				key: idempotency.key,
 				requestDigest: idempotency.requestDigest,
 			},
-			outboxIntent: {
-				operation: "agent.configuration.revised.v1",
-				payload: {
-					schemaVersion: 1,
-					agentId,
-					baseRevision: values.baseRevision as number,
-					configurationRevision: values.nextRevision as number,
-					changedFields: result.changedFields,
-				},
-				traceId: outbox.traceId,
-				requestId: outbox.requestId,
-				occurredAt: outboxOccurredAt,
-			},
+			outboxIntent,
 			auditEvent: {
 				action: expectedAction,
 				actorId: audit.actorId,
@@ -2021,8 +2055,8 @@ export function snapshotAgentConfigurationWritePlanV1(
 				subjectType: "agent",
 				subjectId: agentId,
 				changedFields: result.changedFields,
-				traceId: outbox.traceId,
-				requestId: outbox.requestId,
+				traceId: audit.traceId,
+				requestId: audit.requestId,
 				occurredAt: auditOccurredAt,
 			},
 		};
@@ -2052,7 +2086,7 @@ function parseTransactionReadDecision(
 				outcome: "ready",
 				record: {
 					schemaVersion: 1,
-					configuration: decodeAgentConfigurationRecordV1(record.configuration),
+					configuration: decodeAgentConfigurationRecordV2(record.configuration),
 					authorizationRevision: record.authorizationRevision,
 				},
 			};
@@ -2095,7 +2129,7 @@ const systemNow = () => new Date();
 async function admitCurrentAuthorization(
 	admission: AgentConfigurationAuthorizationAdmissionPortV1,
 	command: Pick<
-		UpdateAgentConfigurationCommandV1,
+		UpdateAgentConfigurationCommandV2,
 		"agentId" | "requestId" | "traceId"
 	>,
 	actorContext: AgentConfigurationActorContextV1,
@@ -2136,7 +2170,7 @@ async function admitCurrentAuthorization(
 }
 
 function admittedInitialAccess(
-	command: InitialAgentConfigurationCommandV1,
+	command: InitialAgentConfigurationCommandV2,
 	actorContext: AgentConfigurationActorContextV1,
 	authorization: Extract<
 		Awaited<
@@ -2175,7 +2209,7 @@ function admittedInitialAccess(
 }
 
 async function completeInitialAgentConfigurationAdmissionV1(
-	command: InitialAgentConfigurationCommandV1,
+	command: InitialAgentConfigurationCommandV2,
 	actorContext: AgentConfigurationActorContextV1,
 	firstAuthorization: Extract<
 		Awaited<
@@ -2241,7 +2275,6 @@ async function completeInitialAgentConfigurationAdmissionV1(
 						!source.allowedSecretKeys.includes(name) ||
 						source.platformManagedKeys.includes(name),
 				))) ||
-		(!source.connectionEnabled && command.actions.length > 0) ||
 		(source.kind === "custom" &&
 			source.interactionMode === "self-managed" &&
 			command.channels.some(({ enabled }) => enabled))
@@ -2314,31 +2347,6 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		throw new AgentConfigurationError("not_admitted");
 	}
 
-	let actionAdmission: Awaited<
-		ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
-	>;
-	try {
-		actionAdmission = parseActionDecision(
-			await dependencies.actionAdmission.admitActions({
-				schemaVersion: 1,
-				agentId: command.agentId,
-				requestId: command.requestId,
-				traceId: command.traceId,
-				requested: structuredClone(command.actions),
-			}),
-		);
-	} catch {
-		throw new AgentConfigurationError("dependency_unavailable");
-	}
-	if (
-		actionAdmission.status !== "admitted" ||
-		actionAdmission.agentId !== command.agentId ||
-		actionAdmission.requestId !== command.requestId ||
-		!sameValue(actionAdmission.actions, command.actions)
-	) {
-		throw new AgentConfigurationError("not_admitted");
-	}
-
 	let channelAdmission: Awaited<
 		ReturnType<AgentConfigurationChannelAdmissionPortV1["admitChannels"]>
 	>;
@@ -2372,14 +2380,12 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		throw new AgentConfigurationError("not_admitted");
 	}
 
-	const configuration: AgentConfigurationRecordV1 = {
-		schemaVersion: 1,
+	const configuration: AgentConfigurationRecordV2 = {
+		schemaVersion: 2,
 		agentId: command.agentId,
 		revision: 1,
 		source,
 		modelConfiguration,
-		actions: actionAdmission.actions,
-		actionSetRevision: actionAdmission.actionSetRevision,
 		environment: command.environment,
 		secrets: secretAdmission.secrets,
 		channels: channelAdmission.channels,
@@ -2407,7 +2413,7 @@ async function completeInitialAgentConfigurationAdmissionV1(
 }
 
 export async function beginInitialAgentConfigurationAdmissionV1(
-	commandInput: InitialAgentConfigurationCommandV1,
+	commandInput: InitialAgentConfigurationCommandV2,
 	actorContextInput: AgentConfigurationActorContextV1,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
 ): Promise<InitialAgentConfigurationAdmissionHandleV1> {
@@ -2419,7 +2425,6 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 			imageAdmission: dependencies.imageAdmission,
 			modelAdmission: dependencies.modelAdmission,
 			secretAdmission: dependencies.secretAdmission,
-			actionAdmission: dependencies.actionAdmission,
 			channelAdmission: dependencies.channelAdmission,
 		};
 	const firstAuthorization = await admitCurrentAuthorization(
@@ -2451,16 +2456,16 @@ function createAgentConfigurationUseCaseV1Internal(
 ): AgentConfigurationUseCaseV1 {
 	const now = options.now ?? systemNow;
 	type ExecutionCommand = Pick<
-		UpdateAgentConfigurationCommandV1,
-		"schemaVersion" | "agentId" | "idempotencyKey" | "requestId" | "traceId"
+		UpdateAgentConfigurationCommandV2,
+		"agentId" | "idempotencyKey" | "requestId" | "traceId"
 	>;
 	const execute = async (
 		command: ExecutionCommand,
 		actorContext: AgentConfigurationActorContextV1,
 		digest: string,
 		changesFromCurrent: (
-			current: AgentConfigurationRecordV1,
-		) => UpdateAgentConfigurationCommandV1["changes"],
+			current: AgentConfigurationRecordV2,
+		) => UpdateAgentConfigurationCommandV2["changes"],
 		preserveConnectionEnabled = false,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1> => {
@@ -2759,7 +2764,7 @@ function createAgentConfigurationUseCaseV1Internal(
 				const requestedNames = new Set(changes.secrets.map(({ name }) => name));
 				const replacements = new Map<
 					string,
-					AgentConfigurationRecordV1["secrets"][number]
+					AgentConfigurationRecordV2["secrets"][number]
 				>();
 				for (const metadata of admission.secrets) {
 					if (
@@ -2789,52 +2794,6 @@ function createAgentConfigurationUseCaseV1Internal(
 				);
 				if (!sameValue(secrets, current.secrets)) {
 					changedFields.push("secrets");
-				}
-			}
-		}
-
-		let actions = current.actions;
-		let actionSetRevision = current.actionSetRevision;
-		if (changes.actions) {
-			if (!source.connectionEnabled) {
-				if (changes.actions.length > 0) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				actions = [];
-				if (current.actions.length > 0) changedFields.push("actions");
-			} else {
-				let admission: Awaited<
-					ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]>
-				>;
-				try {
-					admission = parseActionDecision(
-						await dependencies.actionAdmission.admitActions({
-							schemaVersion: 1,
-							agentId: command.agentId,
-							requestId: command.requestId,
-							traceId: command.traceId,
-							requested: structuredClone(changes.actions),
-						}),
-					);
-				} catch {
-					throw new AgentConfigurationError("dependency_unavailable");
-				}
-				const admittedActions =
-					admission.status === "admitted" ? admission.actions : [];
-				if (
-					admission.status !== "admitted" ||
-					admission.schemaVersion !== 1 ||
-					admission.agentId !== command.agentId ||
-					admission.requestId !== command.requestId ||
-					!isText(admission.actionSetRevision, idMaxBytes) ||
-					!sameValue(admittedActions, changes.actions)
-				) {
-					throw new AgentConfigurationError("not_admitted");
-				}
-				actions = admittedActions;
-				if (!sameValue(actions, current.actions)) {
-					actionSetRevision = admission.actionSetRevision;
-					changedFields.push("actions");
 				}
 			}
 		}
@@ -2905,7 +2864,6 @@ function createAgentConfigurationUseCaseV1Internal(
 			modelConfiguration,
 			environment,
 			secrets,
-			actions,
 			channels,
 		});
 
@@ -2921,19 +2879,24 @@ function createAgentConfigurationUseCaseV1Internal(
 		} catch {
 			throw new AgentConfigurationError("persistence_failed");
 		}
-		const nextRevision = current.revision + 1;
+		const accessOnly = changedFields.every(
+			(field) => field === "owners" || field === "availability",
+		);
+		// Owner changes must re-run preflight because active Secrets bind to Owners.
+		const runtimeUnchanged = changedFields.every(
+			(field) => field === "availability",
+		);
+		const nextRevision = current.revision + (runtimeUnchanged ? 0 : 1);
 		if (!Number.isSafeInteger(nextRevision)) {
 			throw new AgentConfigurationError("persistence_failed");
 		}
-		const configuration: AgentConfigurationRecordV1 = {
+		const configuration: AgentConfigurationRecordV2 = {
 			...current,
 			revision: nextRevision,
 			source,
 			modelConfiguration,
 			environment,
 			secrets,
-			actions,
-			actionSetRevision,
 			channels,
 			channelRevision,
 		};
@@ -2948,6 +2911,8 @@ function createAgentConfigurationUseCaseV1Internal(
 			agentId: command.agentId,
 			baseRevision: current.revision,
 			nextRevision,
+			expectedManagementRevision:
+				authorization.accessAuthority?.state.revision ?? null,
 			expectedAuthorizationRevision: readDecision.record.authorizationRevision,
 			nextAuthorizationRevision: authorization.authorizationRevision,
 			configuration,
@@ -2957,27 +2922,25 @@ function createAgentConfigurationUseCaseV1Internal(
 				key: command.idempotencyKey,
 				requestDigest: digest,
 			},
-			outboxIntent: {
-				operation: "agent.configuration.revised.v1",
-				payload: {
-					schemaVersion: 1,
-					agentId: command.agentId,
-					baseRevision: current.revision,
-					configurationRevision: nextRevision,
-					changedFields,
-				},
-				traceId: command.traceId,
-				requestId: command.requestId,
-				occurredAt,
-			},
+			outboxIntent: runtimeUnchanged
+				? null
+				: {
+						operation: "agent.configuration.revised.v1",
+						payload: {
+							schemaVersion: 1,
+							agentId: command.agentId,
+							baseRevision: current.revision,
+							configurationRevision: nextRevision,
+							changedFields,
+						},
+						traceId: command.traceId,
+						requestId: command.requestId,
+						occurredAt,
+					},
 			auditEvent: {
-				action:
-					accessUpdate !== null &&
-					changedFields.every(
-						(field) => field === "owners" || field === "availability",
-					)
-						? "agent.access.updated"
-						: "agent.configuration.revised",
+				action: accessOnly
+					? "agent.access.updated"
+					: "agent.configuration.revised",
 				actorId: actorContext.actorId,
 				agentId: command.agentId,
 				subjectType: "agent",
@@ -3038,6 +3001,17 @@ function createAgentConfigurationUseCaseV1Internal(
 				attachment,
 			);
 		},
+		async replayLegacyV1(commandInput, actorContextInput) {
+			const command = parseLegacyUpdateCommand(commandInput);
+			const actorContext = parseActorContext(actorContextInput);
+			return execute(
+				command,
+				actorContext,
+				requestDigest(command, actorContext),
+				() => invalidCommand(),
+			);
+		},
+
 		async upgradeCustomImage(commandInput, actorContextInput) {
 			const command = parseUpgradeCustomImageCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
@@ -3086,9 +3060,9 @@ export function createAgentConfigurationUseCaseV1(
 }
 
 export async function captureAgentConfigurationWritePlanV1(input: {
-	readonly command: UpdateAgentConfigurationCommandV1;
+	readonly command: UpdateAgentConfigurationCommandV2;
 	readonly actorContext: AgentConfigurationActorContextV1;
-	readonly current: AgentConfigurationRecordV1;
+	readonly current: AgentConfigurationRecordV2;
 	readonly authorizationRevision: string;
 	readonly dependencies: Omit<
 		AgentConfigurationUseCaseDependenciesV1,

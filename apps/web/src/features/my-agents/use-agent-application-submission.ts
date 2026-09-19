@@ -2,9 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef } from "react";
 
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
 	createMyAgentApplication,
 	updateMyAgentApplication,
@@ -12,12 +12,12 @@ import {
 
 type SubmissionCommand =
 	| {
-			body: AgentApplicationCreateRequestV1Writable;
+			body: AgentApplicationCreateRequestV2Writable;
 			kind: "create";
 	  }
 	| {
 			applicationId: string;
-			body: AgentApplicationUpdateRequestV1Writable;
+			body: AgentApplicationUpdateRequestV2Writable;
 			kind: "update";
 	  };
 
@@ -76,14 +76,14 @@ export function useAgentApplicationSubmission(applicationId?: string) {
 
 	return {
 		...submission,
-		create: (body: AgentApplicationCreateRequestV1Writable) =>
+		create: (body: AgentApplicationCreateRequestV2Writable) =>
 			startSubmission({
 				kind: "create",
 				body,
 			}),
 		update: (
 			applicationId: string,
-			body: AgentApplicationUpdateRequestV1Writable,
+			body: AgentApplicationUpdateRequestV2Writable,
 		) =>
 			startSubmission({
 				kind: "update",

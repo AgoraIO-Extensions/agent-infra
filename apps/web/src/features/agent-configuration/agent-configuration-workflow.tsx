@@ -1,10 +1,10 @@
-import type { AgentProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { useBrowserSession } from "../agent-administration/use-browser-session.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 
 type AgentConfigurationWorkflowProps = {
-	agent: AgentProjectionV1;
+	agent: AgentProjectionV2;
 };
 
 export function AgentConfigurationWorkflow({

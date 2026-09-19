@@ -1,14 +1,26 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 
 import type {
 	AgentConfigurationAccessTargetV1,
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationWritePlanV1,
+	AgentManagementStateV1,
+	AgentRuntimePresentationDecisionV1,
+	AgentRuntimePresentationExpectationV1,
+	AgentRuntimePresentationFactsV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { snapshotAgentConfigurationWritePlanV1 } from "@agent-infra/platform-core";
+import {
+	decideAgentRuntimePresentationV1,
+	isAgentOwnerV1,
+	isAgentRuntimePresentationVisibleV1,
+	snapshotAgentConfigurationWritePlanV1,
+	snapshotAgentRuntimePresentationExpectationV1,
+} from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -17,6 +29,7 @@ import {
 	decodeAgentConfigurationRecord,
 	decodeAgentConfigurationResult,
 } from "./agent-configuration-record.js";
+import { readAgentManagementState } from "./agent-management.js";
 import {
 	advanceAgentConfigurationRevision,
 	insertAgentConfigurationEffects,
@@ -29,8 +42,10 @@ import {
 	agentOwners,
 	agents,
 	idempotencyRecords,
+	workloadReconciliations,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 const commandType = "agent.configuration.update.v1";
 const scopeType = "agent";
@@ -58,7 +73,7 @@ interface IdempotencyRow {
 	readonly result: unknown;
 }
 
-function canonicalSourceReference(configuration: AgentConfigurationRecordV1) {
+function canonicalSourceReference(configuration: AgentConfigurationRecordV2) {
 	return configuration.source.kind === "standard"
 		? configuration.source.templateId
 		: configuration.source.imageDigest;
@@ -249,6 +264,27 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					return { outcome: "stale" as const };
 				}
+				let applicationId: string | undefined;
+				if (plan.expectedManagementRevision !== null) {
+					const [application] = await transaction
+						.select({
+							id: agentApplications.id,
+							managementRevision: agentApplications.managementRevision,
+						})
+						.from(agentApplications)
+						.where(eq(agentApplications.agentId, plan.agentId))
+						.for("update")
+						.limit(1);
+					if (
+						!application ||
+						application.managementRevision !==
+							plan.expectedManagementRevision ||
+						plan.accessUpdate?.expectedRevision === Number.MAX_SAFE_INTEGER
+					) {
+						return { outcome: "stale" as const };
+					}
+					applicationId = application.id;
+				}
 				const [previous] = await transaction
 					.select({ configuration: agentConfigurationRevisions.configuration })
 					.from(agentConfigurationRevisions)
@@ -265,31 +301,11 @@ export class PostgresAgentConfigurationTransactionV1
 				);
 				if (
 					previousConfiguration.agentId !== plan.agentId ||
-					previousConfiguration.revision !== plan.baseRevision
+					previousConfiguration.revision !== plan.baseRevision ||
+					(plan.nextRevision === plan.baseRevision &&
+						!isDeepStrictEqual(configuration, previousConfiguration))
 				) {
 					throw new AgentConfigurationStoreError();
-				}
-
-				let applicationId: string | undefined;
-				if (plan.accessUpdate) {
-					const [application] = await transaction
-						.select({
-							id: agentApplications.id,
-							managementRevision: agentApplications.managementRevision,
-						})
-						.from(agentApplications)
-						.where(eq(agentApplications.agentId, plan.agentId))
-						.for("update")
-						.limit(1);
-					if (
-						!application ||
-						application.managementRevision !==
-							plan.accessUpdate.expectedRevision ||
-						plan.accessUpdate.expectedRevision === Number.MAX_SAFE_INTEGER
-					) {
-						return { outcome: "stale" as const };
-					}
-					applicationId = application.id;
 				}
 
 				if (
@@ -400,8 +416,7 @@ export interface AgentConfigurationProjectionV1 {
 	}[];
 	readonly defaultModelOptionId: string | null;
 	readonly defaultReasoningLevel: string | null;
-	readonly actions: AgentConfigurationRecordV1["actions"];
-	readonly environment: AgentConfigurationRecordV1["environment"];
+	readonly environment: AgentConfigurationRecordV2["environment"];
 	readonly channelKinds: readonly ("wecom_bot" | "wecom_app")[];
 	readonly secrets: readonly {
 		readonly name: string;
@@ -417,6 +432,26 @@ export type AgentConfigurationQueryResultV1 =
 	  }
 	| { readonly outcome: "unavailable" };
 
+export type AgentConfigurationAuthorityQueryInputV1 = Omit<
+	AgentConfigurationQueryInputV1,
+	"intent"
+>;
+export type AgentConfigurationAuthorityQueryResultV1 =
+	| {
+			readonly outcome: "found";
+			readonly configuration: AgentConfigurationRecordV2;
+			readonly management: AgentManagementStateV1;
+			readonly authorizationRevision: string;
+	  }
+	| { readonly outcome: "unavailable" };
+
+export interface AgentRuntimePresentationQueryInputV1
+	extends AgentConfigurationAuthorityQueryInputV1 {
+	readonly expected: AgentRuntimePresentationExpectationV1;
+}
+export type AgentRuntimePresentationQueryResultV1 =
+	AgentRuntimePresentationDecisionV1;
+
 export class PostgresAgentConfigurationQueryV1 {
 	readonly #client;
 	readonly #database;
@@ -424,6 +459,233 @@ export class PostgresAgentConfigurationQueryV1 {
 	constructor(options: PostgresAgentConfigurationOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
+	}
+
+	/** Internal admission material; an administrator role never grants Owner authority. */
+	async readAuthority(
+		input: AgentConfigurationAuthorityQueryInputV1,
+	): Promise<AgentConfigurationAuthorityQueryResultV1> {
+		try {
+			if (
+				!validateText(input.agentId) ||
+				!validateText(input.actorId) ||
+				typeof input.isAdministrator !== "boolean" ||
+				!Array.isArray(input.organizationIds) ||
+				input.organizationIds.length > maxAccessTargets ||
+				input.organizationIds.some((id) => !validateText(id))
+			)
+				throw new AgentConfigurationStoreError();
+			return await this.#database.transaction(
+				async (transaction) => {
+					const management = await readAgentManagementState(
+						transaction,
+						input.agentId,
+					);
+					if (!management || !isAgentOwnerV1(management, input.actorId))
+						return { outcome: "unavailable" };
+					if (
+						management.agentId !== input.agentId ||
+						management.ownerIds.length === 0 ||
+						new Set(management.ownerIds).size !== management.ownerIds.length ||
+						management.ownerIds.some((id) => !validateText(id))
+					)
+						throw new AgentConfigurationStoreError();
+					const [current] = await transaction
+						.select({
+							configuration: agentConfigurationRevisions.configuration,
+							revision: agents.currentConfigurationRevision,
+							sourceReference: agentConfigurationRevisions.sourceReference,
+							authorizationRevision: agents.authorizationRevision,
+						})
+						.from(agents)
+						.innerJoin(
+							agentConfigurationRevisions,
+							and(
+								eq(agentConfigurationRevisions.agentId, agents.id),
+								eq(
+									agentConfigurationRevisions.revision,
+									agents.currentConfigurationRevision,
+								),
+							),
+						)
+						.where(eq(agents.id, input.agentId))
+						.limit(1);
+					if (!current?.configuration) return { outcome: "unavailable" };
+					const configuration = decodeAgentConfigurationRecord(
+						current.configuration,
+					);
+					if (
+						configuration.agentId !== input.agentId ||
+						configuration.revision !== current.revision ||
+						canonicalSourceReference(configuration) !==
+							current.sourceReference ||
+						!validateText(current.authorizationRevision)
+					)
+						throw new AgentConfigurationStoreError();
+					return {
+						outcome: "found",
+						configuration,
+						management,
+						authorizationRevision: current.authorizationRevision,
+					};
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
+		} catch (error) {
+			if (error instanceof AgentConfigurationStoreError) throw error;
+			throw new AgentConfigurationStoreError();
+		}
+	}
+
+	/** Read one database snapshot; Core decides whether it matches the upstream projection. */
+	async readRuntimePresentation(
+		input: AgentRuntimePresentationQueryInputV1,
+	): Promise<AgentRuntimePresentationQueryResultV1> {
+		try {
+			if (
+				!validateText(input.agentId) ||
+				!validateText(input.actorId) ||
+				typeof input.isAdministrator !== "boolean" ||
+				!Array.isArray(input.organizationIds) ||
+				input.organizationIds.length > maxAccessTargets ||
+				input.organizationIds.some((id) => !validateText(id))
+			)
+				throw new AgentConfigurationStoreError();
+			const expected = snapshotAgentRuntimePresentationExpectationV1(
+				input.expected,
+			);
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: input.actorId,
+				accountStatus: "active" as const,
+				organizationIds: [...input.organizationIds],
+				isAdministrator: input.isAdministrator,
+			};
+			return await this.#database.transaction(
+				async (transaction) => {
+					const management = await readAgentManagementState(
+						transaction,
+						input.agentId,
+					);
+					if (
+						!management ||
+						!isAgentRuntimePresentationVisibleV1(management, actor)
+					)
+						return { outcome: "unavailable" };
+					const [current] = await transaction
+						.select({
+							configuration: agentConfigurationRevisions.configuration,
+							revision: agents.currentConfigurationRevision,
+							sourceReference: agentConfigurationRevisions.sourceReference,
+						})
+						.from(agents)
+						.innerJoin(
+							agentConfigurationRevisions,
+							and(
+								eq(agentConfigurationRevisions.agentId, agents.id),
+								eq(
+									agentConfigurationRevisions.revision,
+									agents.currentConfigurationRevision,
+								),
+							),
+						)
+						.where(eq(agents.id, input.agentId))
+						.limit(1);
+					if (!current?.configuration) return { outcome: "unavailable" };
+					const configuration = decodeAgentConfigurationRecord(
+						current.configuration,
+					);
+					if (
+						configuration.agentId !== input.agentId ||
+						configuration.revision !== current.revision ||
+						canonicalSourceReference(configuration) !== current.sourceReference
+					)
+						throw new AgentConfigurationStoreError();
+					const [row] = await transaction
+						.select({
+							revision: workloadReconciliations.revision,
+							state: workloadReconciliations.state,
+						})
+						.from(workloadReconciliations)
+						.where(eq(workloadReconciliations.agentId, input.agentId))
+						.limit(1);
+					let runtime: AgentRuntimePresentationFactsV1["runtime"] = null;
+					if (row) {
+						let persisted: ReturnType<typeof decodePersistedWorkloadStateV1> =
+							null;
+						try {
+							persisted = decodePersistedWorkloadStateV1(
+								row.state,
+								input.agentId,
+							);
+						} catch {
+							/* Invalid persisted runtime data provides no verified facts. */
+						}
+						if (persisted && !persisted.legacy && persisted.state.verified) {
+							const state = persisted.state;
+							const verified = persisted.state.verified;
+							const [active] = await transaction
+								.select({
+									configuration: agentConfigurationRevisions.configuration,
+									sourceReference: agentConfigurationRevisions.sourceReference,
+								})
+								.from(agentConfigurationRevisions)
+								.where(
+									and(
+										eq(agentConfigurationRevisions.agentId, input.agentId),
+										eq(
+											agentConfigurationRevisions.revision,
+											verified.configuration.revision,
+										),
+									),
+								)
+								.limit(1);
+							if (active?.configuration) {
+								try {
+									const verifiedConfiguration = decodeAgentConfigurationRecord(
+										active.configuration,
+									);
+									if (
+										verifiedConfiguration.agentId !== input.agentId ||
+										verifiedConfiguration.revision !==
+											verified.configuration.revision ||
+										canonicalSourceReference(verifiedConfiguration) !==
+											active.sourceReference
+									)
+										throw new AgentConfigurationStoreError();
+									runtime = {
+										revision: row.revision,
+										state,
+										verifiedConfiguration,
+										verifiedSourceReference: active.sourceReference,
+										deployment: validateAgentWorkloadDesiredV1(
+											verified.deployment,
+										),
+									};
+								} catch {
+									/* Incomplete history or invalid deployment is not runtime evidence. */
+								}
+							}
+						}
+					}
+					return decideAgentRuntimePresentationV1({
+						agentId: input.agentId,
+						actor,
+						expected,
+						facts: {
+							management,
+							configuration,
+							sourceReference: current.sourceReference,
+							runtime,
+						},
+					});
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
+		} catch (error) {
+			if (error instanceof AgentConfigurationStoreError) throw error;
+			throw new AgentConfigurationStoreError();
+		}
 	}
 
 	async read(
@@ -572,7 +834,6 @@ export class PostgresAgentConfigurationQueryV1 {
 								configuration.modelConfiguration?.defaultOptionId ?? null,
 							defaultReasoningLevel:
 								configuration.modelConfiguration?.defaultReasoningLevel ?? null,
-							actions: configuration.actions,
 							environment: configuration.environment,
 							channelKinds: configuration.channels.map(({ kind }) => kind),
 							secrets: configuration.secrets.map(({ name, version }) => ({

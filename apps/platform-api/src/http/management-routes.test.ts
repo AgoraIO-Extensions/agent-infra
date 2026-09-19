@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
 import {
-	AgentApplicationProjectionV1Schema,
-	AgentProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
+	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -66,13 +66,13 @@ const configuration = {
 	modelOptions: [],
 	defaultModelOptionId: null,
 	defaultReasoningLevel: null,
-	actions: [],
+
 	environment: [],
 	channels: [{ kind: "web" as const, status: "available" as const }],
 	secrets: [{ name: "MODEL_API_KEY", isSet: true, version: 1 }],
 };
 const applicationProjection = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	applicationId: "application-1",
 	agentId: "agent-1",
 	name: "Release assistant",
@@ -93,7 +93,7 @@ const applicationProjection = {
 	decision: null,
 };
 const agentProjection = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	agentId: "agent-1",
 	name: "Release assistant",
 	description: "Helps the release team",
@@ -230,13 +230,13 @@ const headers = {
 	"x-trace-id": "caller-trace-must-be-ignored",
 };
 const applicationBody = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	name: "Release assistant",
 	description: "Helps the release team",
 	source: { kind: "standard", templateId: "template-1" },
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-1" }],
-	actions: [],
+
 	environment: [],
 	secrets: [{ name: "MODEL_API_KEY", value: "never-return-this" }],
 };
@@ -251,7 +251,7 @@ describe("management routes", () => {
 			allocateApplicationIds,
 		} = createApp();
 		const rawBody = JSON.stringify(applicationBody);
-		const response = await app.request("/api/v1/agent-applications", {
+		const response = await app.request("/api/v2/agent-applications", {
 			method: "POST",
 			headers,
 			body: rawBody,
@@ -259,14 +259,14 @@ describe("management routes", () => {
 
 		expect(response.status).toBe(201);
 		const json = await response.json();
-		expect(AgentApplicationProjectionV1Schema.parse(json)).toEqual(
+		expect(AgentApplicationProjectionV2Schema.parse(json)).toEqual(
 			applicationProjection,
 		);
 		expect(JSON.stringify(json)).not.toContain("never-return-this");
 		expect(submit).toHaveBeenCalledOnce();
 		expect(submit).toHaveBeenCalledWith(
 			expect.objectContaining({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				applicationId: "application-1",
 				agentId: "agent-1",
 				idempotencyKey: "Command.Aa-01",
@@ -279,7 +279,7 @@ describe("management routes", () => {
 				source: applicationBody.source,
 				environment: [],
 				secrets: [{ name: "MODEL_API_KEY", replace: true }],
-				actions: [],
+
 				channels: [],
 			}),
 			{
@@ -318,7 +318,7 @@ describe("management routes", () => {
 
 	it("submits a credential-free application without preparing an attachment", async () => {
 		const { app, submit, prepareSecretReplacements } = createApp();
-		const response = await app.request("/api/v1/agent-applications", {
+		const response = await app.request("/api/v2/agent-applications", {
 			method: "POST",
 			headers,
 			body: JSON.stringify({ ...applicationBody, secrets: [] }),
@@ -340,20 +340,20 @@ describe("management routes", () => {
 		for (const [app, path, schema] of [
 			[
 				user.app,
-				"/api/v1/agent-applications?limit=10",
-				AgentApplicationProjectionV1Schema,
+				"/api/v2/agent-applications?limit=10",
+				AgentApplicationProjectionV2Schema,
 			],
 			[
 				user.app,
-				"/api/v1/agent-applications/application-1",
-				AgentApplicationProjectionV1Schema,
+				"/api/v2/agent-applications/application-1",
+				AgentApplicationProjectionV2Schema,
 			],
-			[user.app, "/api/v1/agents?cursor=agent-0", AgentProjectionV1Schema],
-			[user.app, "/api/v1/agents/agent-1", AgentProjectionV1Schema],
+			[user.app, "/api/v2/agents?cursor=agent-0", AgentProjectionV2Schema],
+			[user.app, "/api/v2/agents/agent-1", AgentProjectionV2Schema],
 			[
 				admin.app,
-				"/api/v1/admin/agent-applications",
-				AgentApplicationProjectionV1Schema,
+				"/api/v2/admin/agent-applications",
+				AgentApplicationProjectionV2Schema,
 			],
 		] as const) {
 			const response = await app.request(path);
@@ -383,20 +383,20 @@ describe("management routes", () => {
 
 		const { secrets: _secrets, ...updateBody } = applicationBody;
 		const calls = [
-			applicant.app.request("/api/v1/agent-applications/application-1", {
+			applicant.app.request("/api/v2/agent-applications/application-1", {
 				method: "PUT",
 				headers,
 				body: JSON.stringify(updateBody),
 			}),
 			applicant.app.request(
-				"/api/v1/agent-applications/application-1/withdraw",
+				"/api/v2/agent-applications/application-1/withdraw",
 				{
 					method: "POST",
 					headers,
 				},
 			),
 			admin.app.request(
-				"/api/v1/admin/agent-applications/application-1/decision",
+				"/api/v2/admin/agent-applications/application-1/decision",
 				{
 					method: "POST",
 					headers,
@@ -410,7 +410,7 @@ describe("management routes", () => {
 		];
 		for (const command of ["stop", "restart", "retry_creation"] as const) {
 			calls.push(
-				applicant.app.request("/api/v1/agents/agent-1/lifecycle", {
+				applicant.app.request("/api/v2/agents/agent-1/lifecycle", {
 					method: "POST",
 					headers,
 					body: JSON.stringify({ schemaVersion: 1, command }),
@@ -418,7 +418,7 @@ describe("management routes", () => {
 			);
 		}
 		calls.push(
-			admin.app.request("/api/v1/agents/agent-1/lifecycle", {
+			admin.app.request("/api/v2/agents/agent-1/lifecycle", {
 				method: "POST",
 				headers,
 				body: JSON.stringify({ schemaVersion: 1, command: "disable" }),
@@ -454,9 +454,9 @@ describe("management routes", () => {
 		const missing = createApp({ missing: true });
 		const ordinary = createApp();
 		for (const response of [
-			await missing.app.request("/api/v1/agent-applications/unknown"),
-			await missing.app.request("/api/v1/agents/unknown"),
-			await ordinary.app.request("/api/v1/agents?userId=other"),
+			await missing.app.request("/api/v2/agent-applications/unknown"),
+			await missing.app.request("/api/v2/agents/unknown"),
+			await ordinary.app.request("/api/v2/agents?userId=other"),
 		]) {
 			expect([400, 404]).toContain(response.status);
 			expect(
@@ -464,14 +464,14 @@ describe("management routes", () => {
 			).toBe(true);
 		}
 		const forbidden = await ordinary.app.request(
-			"/api/v1/admin/agent-applications",
+			"/api/v2/admin/agent-applications",
 		);
 		expect(forbidden.status).toBe(403);
 		expect(
 			PilotProtocolErrorV1Schema.safeParse(await forbidden.json()).success,
 		).toBe(true);
 		const secretAttack = await missing.app.request(
-			"/api/v1/agent-applications/application-1",
+			"/api/v2/agent-applications/application-1",
 			{
 				method: "PUT",
 				headers,
@@ -480,8 +480,8 @@ describe("management routes", () => {
 		);
 		expect(secretAttack.status).toBe(404);
 		expect(missing.prepareSecretReplacements).not.toHaveBeenCalled();
-		expect((await missing.app.request("/api/v1/agents/unknown")).status).toBe(
-			(await missing.app.request("/api/v1/agents/not-owned")).status,
+		expect((await missing.app.request("/api/v2/agents/unknown")).status).toBe(
+			(await missing.app.request("/api/v2/agents/not-owned")).status,
 		);
 	});
 
@@ -503,7 +503,7 @@ describe("management routes", () => {
 		});
 
 		const response = await upgraded.app.request(
-			"/api/v1/agents/agent-1/lifecycle",
+			"/api/v2/agents/agent-1/lifecycle",
 			{ method: "POST", headers, body: rawBody },
 		);
 
@@ -529,7 +529,7 @@ describe("management routes", () => {
 	it("uses administrator scope after an administrator image upgrade", async () => {
 		const upgraded = createApp({ administrator: true });
 		const response = await upgraded.app.request(
-			"/api/v1/agents/agent-1/lifecycle",
+			"/api/v2/agents/agent-1/lifecycle",
 			{
 				method: "POST",
 				headers,
@@ -550,10 +550,10 @@ describe("management routes", () => {
 
 	it("maps management query failures to dependency unavailable", async () => {
 		for (const [method, path] of [
-			["listApplications", "/api/v1/agent-applications"],
-			["getApplication", "/api/v1/agent-applications/application-1"],
-			["listAgents", "/api/v1/agents"],
-			["getAgent", "/api/v1/agents/agent-1"],
+			["listApplications", "/api/v2/agent-applications"],
+			["getApplication", "/api/v2/agent-applications/application-1"],
+			["listAgents", "/api/v2/agents"],
+			["getAgent", "/api/v2/agents/agent-1"],
 		] as const) {
 			const failed = createApp();
 			failed[method].mockRejectedValue(new Error("private database failure"));
@@ -574,7 +574,7 @@ describe("management routes", () => {
 		const closed = createApp();
 		closed.readAgentProjection.mockResolvedValue({ agentId: "agent-1" });
 
-		expect((await closed.app.request("/api/v1/agents/agent-1")).status).toBe(
+		expect((await closed.app.request("/api/v2/agents/agent-1")).status).toBe(
 			503,
 		);
 	});
@@ -584,7 +584,7 @@ describe("management routes", () => {
 		failed.prepareSecretReplacements.mockRejectedValue(
 			new Error("never-return-this internal encryption detail"),
 		);
-		const response = await failed.app.request("/api/v1/agent-applications", {
+		const response = await failed.app.request("/api/v2/agent-applications", {
 			method: "POST",
 			headers,
 			body: JSON.stringify(applicationBody),
@@ -601,7 +601,7 @@ describe("management routes", () => {
 			secrets: [{ name: "MODEL_API_KEY", replace: false }],
 		} as never);
 		const malformedResponse = await malformed.app.request(
-			"/api/v1/agent-applications",
+			"/api/v2/agent-applications",
 			{
 				method: "POST",
 				headers,
@@ -617,7 +617,7 @@ describe("management routes", () => {
 			secrets: [{ name: "MODEL_API_KEY", replace: true }],
 		} as never);
 		const missingAttachmentResponse = await missingAttachment.app.request(
-			"/api/v1/agent-applications",
+			"/api/v2/agent-applications",
 			{
 				method: "POST",
 				headers,
@@ -632,7 +632,7 @@ describe("management routes", () => {
 			new HttpProtocolError("FORBIDDEN", "allocator-trace"),
 		);
 		const allocatorResponse = await allocator.app.request(
-			"/api/v1/agent-applications",
+			"/api/v2/agent-applications",
 			{
 				method: "POST",
 				headers,

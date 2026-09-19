@@ -3,10 +3,10 @@ import { buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationProjectionV1,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationProjectionV2,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
 import {
@@ -20,17 +20,17 @@ type AgentApplicationSubmissionScreenProps =
 	| {
 			error?: RequestError | null;
 			mode: "create";
-			onSubmit: (body: AgentApplicationCreateRequestV1Writable) => void;
-			result?: AgentApplicationProjectionV1;
+			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
+			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
-			application: AgentApplicationProjectionV1;
+			application: AgentApplicationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
-			onSubmit: (body: AgentApplicationUpdateRequestV1Writable) => void;
-			result?: AgentApplicationProjectionV1;
+			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
+			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
 	  };
 

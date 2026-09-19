@@ -1,0 +1,308 @@
+{
+  "$defs": {
+    "WorkloadReadinessBindingV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "fence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "imageDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workloadRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workerId",
+        "agentId",
+        "workloadRevision",
+        "fence",
+        "imageDigest"
+      ],
+      "type": "object"
+    },
+    "WorkloadReadinessGrantClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "audience": {
+          "const": "runtime_host_readiness",
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "fence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "imageDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "issuedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "issuer": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "purpose": {
+          "const": "readiness.read",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workloadRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workerId",
+        "agentId",
+        "workloadRevision",
+        "fence",
+        "imageDigest",
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "issuer",
+        "audience",
+        "purpose",
+        "grantId",
+        "issuedAt",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "WorkloadReadinessGrantV1": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "workload-readiness-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "maxLength": 16384,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "WorkloadReadinessRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "fence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "workload-readiness-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "imageDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workloadRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workerId",
+        "agentId",
+        "workloadRevision",
+        "fence",
+        "imageDigest",
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "grant"
+      ],
+      "type": "object"
+    },
+    "WorkloadReadinessResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "capabilities": {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "type": "boolean"
+            },
+            "connection": {
+              "type": "boolean"
+            },
+            "modelSelection": {
+              "type": "boolean"
+            },
+            "resultFiles": {
+              "type": "boolean"
+            },
+            "supplementaryInstruction": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "modelSelection",
+            "attachments",
+            "resultFiles",
+            "connection",
+            "supplementaryInstruction"
+          ],
+          "type": "object"
+        },
+        "core": {
+          "const": "passed",
+          "type": "string"
+        },
+        "fence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "imageDigest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workloadRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workerId",
+        "agentId",
+        "workloadRevision",
+        "fence",
+        "imageDigest",
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "core",
+        "capabilities"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-readiness.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Workload Readiness V1"
+}

@@ -15,13 +15,7 @@ const standardCreateDraft = {
 	coOwnerIds: "owner-2\nowner-3",
 	userAvailabilityIds: "user-available",
 	organizationAvailabilityIds: "organization-available",
-	actions: [
-		{
-			providerId: "github",
-			actionId: "issues.read",
-			actionVersion: "v3",
-		},
-	],
+
 	environment: [{ name: "LOG_LEVEL", value: "debug" }],
 	secrets: [{ name: "MODEL_API_KEY", value: "never-echo" }],
 	configureModels: false,
@@ -42,7 +36,7 @@ describe("Agent application draft", () => {
 	it("serializes a standard application into its generated writable create body", () => {
 		expect(buildAgentApplicationRequest("create", standardCreateDraft)).toEqual(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				name: "Release assistant",
 				description: "Helps the release team",
 				source: { kind: "standard", templateId: "codex" },
@@ -51,13 +45,7 @@ describe("Agent application draft", () => {
 					{ kind: "user", userId: "user-available" },
 					{ kind: "organization", organizationId: "organization-available" },
 				],
-				actions: [
-					{
-						providerId: "github",
-						actionId: "issues.read",
-						actionVersion: "v3",
-					},
-				],
+
 				environment: [{ name: "LOG_LEVEL", value: "debug" }],
 				secrets: [{ name: "MODEL_API_KEY", value: "never-echo" }],
 				modelConfiguration: {
@@ -91,7 +79,7 @@ describe("Agent application draft", () => {
 				secrets: [],
 			}),
 		).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			name: "Release assistant",
 			description: "Helps the release team",
 			source: { kind: "standard", templateId: "codex" },
@@ -100,13 +88,7 @@ describe("Agent application draft", () => {
 				{ kind: "user", userId: "user-available" },
 				{ kind: "organization", organizationId: "organization-available" },
 			],
-			actions: [
-				{
-					providerId: "github",
-					actionId: "issues.read",
-					actionVersion: "v3",
-				},
-			],
+
 			environment: [{ name: "LOG_LEVEL", value: "debug" }],
 		});
 	});

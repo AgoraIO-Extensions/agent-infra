@@ -53,6 +53,9 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	WorkloadReadinessRequestV1Schema,
+	WorkloadReadinessResponseV1Schema,
+	WorkloadReadinessV1SchemaDefinitions,
 } from "./runtime/index.ts";
 import {
 	kubernetesWorkloadSchemasV1,
@@ -72,6 +75,14 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	readinessJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime-readiness.v1.schema.json",
+	),
+	readinessOpenapi: resolve(
+		artifactRoot,
+		"openapi/runtime-readiness.v1.openapi.json",
+	),
 	fileJsonSchema: resolve(artifactRoot, "json-schema/files.v1.schema.json"),
 	fileOpenapi: resolve(artifactRoot, "openapi/files.v1.openapi.json"),
 	jsonSchema: resolve(artifactRoot, "json-schema/common.v1.schema.json"),
@@ -457,6 +468,35 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		readinessJsonSchema: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-readiness.v1.schema.json",
+			title: "Agent Infra Workload Readiness V1",
+			definitions: WorkloadReadinessV1SchemaDefinitions,
+		}),
+		readinessOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Agent Infra Workload Readiness Contract",
+				version: "1.0.0",
+			},
+			security: [{ RuntimeServiceBearer: [] }],
+			paths: {
+				"/internal/runtime/v1/readiness": {
+					post: postOperation(
+						"readWorkloadReadinessV1",
+						WorkloadReadinessRequestV1Schema,
+						WorkloadReadinessResponseV1Schema,
+						"application/json",
+					),
+				},
+			},
+			components: {
+				securitySchemes: {
+					RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: WorkloadReadinessV1SchemaDefinitions,
+			},
+		}),
 		fileJsonSchema: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/files.v1.schema.json",
 			title: "Platform File Contracts V1",

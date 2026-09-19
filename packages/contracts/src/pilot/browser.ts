@@ -260,6 +260,32 @@ export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
 	secrets: z.array(SecretValueInputV1Schema).optional(),
 });
 
+// Independent Connection authorization retires Platform-owned Action selection.
+// Keep the published V1 schemas intact for historical consumers.
+export const AgentApplicationCreateRequestV2Schema =
+	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentApplicationUpdateRequestV2Schema =
+	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentConfigurationUpdateRequestV2Schema =
+	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentConfigurationProjectionV2Schema =
+	AgentConfigurationProjectionV1Schema.omit({ actions: true });
+export const AgentApplicationProjectionV2Schema =
+	AgentApplicationProjectionV1Schema.extend({
+		schemaVersion: z.literal(2),
+		configuration: AgentConfigurationProjectionV2Schema,
+	});
+export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
+	schemaVersion: z.literal(2),
+	configuration: AgentConfigurationProjectionV2Schema,
+});
+
 export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(
 	"command",
 	[
@@ -467,6 +493,12 @@ const agentPage = z.strictObject({
 export const ConversationPageV1Schema = z.strictObject({
 	items: z.array(ConversationProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
+});
+const applicationPageV2 = applicationPage.extend({
+	items: z.array(AgentApplicationProjectionV2Schema),
+});
+const agentPageV2 = agentPage.extend({
+	items: z.array(AgentProjectionV2Schema),
 });
 const auditPage = z.strictObject({
 	items: z.array(PlatformAuditProjectionV1Schema),
@@ -753,6 +785,144 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/agent-applications": {
+		get: {
+			operationId: "listAgentApplicationsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Current user's applications", applicationPageV2),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "createAgentApplicationV2",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV2Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application submitted",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agent-applications/{applicationId}": {
+		get: {
+			operationId: "getAgentApplicationV2",
+			requestParams: { path: applicationPath },
+			responses: {
+				"200": jsonResponse(
+					"Application detail",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "updateAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationUpdateRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Application updated",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agent-applications/{applicationId}/withdraw": {
+		post: {
+			operationId: "withdrawAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			responses: {
+				"200": jsonResponse(
+					"Application withdrawn",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/agent-applications": {
+		get: {
+			operationId: "listPendingAgentApplicationsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Pending applications", applicationPageV2),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/agent-applications/{applicationId}/decision": {
+		post: {
+			operationId: "decideAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(ApprovalDecisionRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Application decision",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents": {
+		get: {
+			operationId: "listAgentsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Visible agents", agentPageV2),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}": {
+		get: {
+			operationId: "getAgentV2",
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse("Agent detail", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/configuration": {
+		put: {
+			operationId: "updateAgentConfigurationV2",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentConfigurationUpdateRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse("Agent configuration", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/lifecycle": {
+		post: {
+			operationId: "commandAgentLifecycleV2",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentLifecycleCommandRequestV1Schema,
+			),
+			responses: {
+				"202": jsonResponse(
+					"Lifecycle command accepted",
+					AgentProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v2/admin/audit": {
 		get: {
 			operationId: "listPlatformAuditV2",
@@ -797,6 +967,15 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
+	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
+	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
+	AgentApplicationUpdateRequestV2: AgentApplicationUpdateRequestV2Schema,
+	AgentConfigurationUpdateRequestV2: AgentConfigurationUpdateRequestV2Schema,
+	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,
+	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
+	AgentProjectionV2: AgentProjectionV2Schema,
+
 	PilotInternalErrorV1: PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1: PilotProtocolErrorV1Schema,
 	PlatformAuditProjectionV2: PlatformAuditProjectionV2Schema,

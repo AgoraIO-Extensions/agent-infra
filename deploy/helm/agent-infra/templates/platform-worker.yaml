@@ -97,14 +97,31 @@ spec:
               value: /var/run/agent-infra/keyring/keyring.pem
             - name: AGENT_INFRA_WORKER_KEY_VERSIONS
               value: {{ join "," .Values.keys.workerDecryptionKeyring.versions | quote }}
+            {{- with .Values.platformWorker.configurationSecretRef }}
+            - name: PLATFORM_WORKER_CONFIGURATION_FILE
+              value: /var/run/agent-infra/deployment/config.json
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
           volumeMounts:
+            {{- with .Values.platformWorker.configurationSecretRef }}
+            - name: deployment-configuration
+              mountPath: /var/run/agent-infra/deployment
+              readOnly: true
+            {{- end }}
             - name: decryption-keyring
               mountPath: /var/run/agent-infra/keyring
               readOnly: true
       volumes:
+        {{- with .Values.platformWorker.configurationSecretRef }}
+        - name: deployment-configuration
+          secret:
+            secretName: {{ .name }}
+            items:
+              - key: {{ .key }}
+                path: config.json
+        {{- end }}
         - name: decryption-keyring
           secret:
             secretName: {{ .Values.keys.workerDecryptionKeyring.secretRef.name }}

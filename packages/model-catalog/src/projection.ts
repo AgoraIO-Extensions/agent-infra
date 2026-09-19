@@ -6,7 +6,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationModelOptionV1,
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
 import { z } from "zod";
@@ -75,13 +75,14 @@ export function standardTemplateModelProtocolV1(
 			binding.templateId === source.templateId &&
 			binding.imageDigest === source.imageDigest,
 	);
-	if (matches.length !== 1) throw new ModelConfigurationErrorV1();
-	return matches[0]!.protocol;
+	const match = matches[0];
+	if (matches.length !== 1 || !match) throw new ModelConfigurationErrorV1();
+	return match.protocol;
 }
 
 /** A Worker-owned, credential-free snapshot. Never append this to Workload desired annotations. */
 export async function projectRuntimeModelConfigurationV1(input: {
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly catalog: ModelCatalogAdapterV1;
 	readonly access: ModelAccessValidatorV1;
 	/** Bound to the admitted template image by deployment assembly, never an Owner field. */
@@ -174,7 +175,7 @@ export async function projectRuntimeModelConfigurationV1(input: {
 
 export function validateRuntimeModelProjectionV1(
 	value: unknown,
-	configuration?: AgentConfigurationRecordV1,
+	configuration?: AgentConfigurationRecordV2,
 ): RuntimeModelProjectionV1 {
 	try {
 		const projection = projectionSchema.parse(value);

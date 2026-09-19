@@ -1,30 +1,30 @@
 import {
-	AgentApplicationProjectionV1Schema,
-	AgentProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import {
-	createPilotAgentMockServerV1,
-	pilotFakeScenariosV1,
+	createPilotAgentMockServerV2,
+	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type {
-	AgentApplicationCreateRequestV1Writable,
 	AgentLifecycleCommandRequestV1,
 	ApprovalDecisionRequestV1,
 } from "../src/pilot/generated/types.gen";
+import type { AgentApplicationCreateRequestV2Writable } from "../src/pilot/generated-v2/types.gen";
 
 async function fixture(
 	page: Page,
 	role: "owner" | "admin" | "employee" = "owner",
 ) {
-	let application = AgentApplicationProjectionV1Schema.parse({
+	let application = AgentApplicationProjectionV2Schema.parse({
 		...pendingApplication,
 		applicationId: "application-browser-1",
 	});
-	let agent = AgentProjectionV1Schema.parse(
-		pilotFakeScenariosV1.starting.response.body,
+	let agent = AgentProjectionV2Schema.parse(
+		pilotFakeScenariosV2.starting.response.body,
 	);
 	const session = {
 		schemaVersion: 1,
@@ -34,7 +34,7 @@ async function fixture(
 			roles: role === "admin" ? ["employee", "system_admin"] : ["employee"],
 		},
 	};
-	const server = createPilotAgentMockServerV1({
+	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
 		listAgents: () => ({
 			status: 200,
@@ -65,7 +65,7 @@ async function fixture(
 	let rejectNextWithdrawal = false;
 	const commands: { path: string; body: unknown; key: string | undefined }[] =
 		[];
-	await page.route("**/api/v1/**", async (route) => {
+	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const pathname = new URL(request.url()).pathname;
 		const body = request.postData() ? request.postDataJSON() : undefined;
@@ -93,7 +93,7 @@ async function fixture(
 			}
 			if (pathname.endsWith("/decision")) {
 				const decision = body as ApprovalDecisionRequestV1;
-				application = AgentApplicationProjectionV1Schema.parse({
+				application = AgentApplicationProjectionV2Schema.parse({
 					...application,
 					status: decision.decision === "approve" ? "creating" : "rejected",
 					decision: {
@@ -104,7 +104,7 @@ async function fixture(
 			} else if (pathname.endsWith("/withdraw")) {
 				application = { ...application, status: "withdrawn" };
 			} else if (pathname.includes("/agent-applications")) {
-				const draft = body as AgentApplicationCreateRequestV1Writable;
+				const draft = body as AgentApplicationCreateRequestV2Writable;
 				application = {
 					...application,
 					name: draft.name,
@@ -255,7 +255,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page.keyboard.press("Enter");
 	await expect.poll(() => api.commands.length).toBe(1);
 	expect(api.commands[0]?.body).toEqual({
-		schemaVersion: 1,
+		schemaVersion: 2,
 		name: "Release assistant",
 		description: "Helps the release team",
 		source: {
@@ -265,7 +265,6 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 		},
 		coOwnerIds: [],
 		availability: [],
-		actions: [],
 		environment: [],
 		secrets: [],
 	});
@@ -395,7 +394,7 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		"synthetic-browser-secret",
 	);
 	expect(api.commands[0]?.body).toMatchObject({
-		schemaVersion: 1,
+		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
 		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
 	});
@@ -463,11 +462,11 @@ test("employee has no Owner or administrator controls, with loading and error st
 	const gate = new Promise<void>((resolve) => {
 		release = resolve;
 	});
-	await page.route("**/api/v1/agents", async (route) => {
+	await page.route("**/api/v2/agents", async (route) => {
 		await gate;
 		await route.fulfill({
 			status: 403,
-			json: pilotFakeScenariosV1.unauthorized.response.body,
+			json: pilotFakeScenariosV2.unauthorized.response.body,
 		});
 	});
 	await page.goto("/agents");

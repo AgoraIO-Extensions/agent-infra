@@ -1,5 +1,5 @@
 import {
-	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -32,8 +32,8 @@ const ordinaryUserSession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["employee"],
 	},
 });
-const unavailableAgent = AgentProjectionV1Schema.parse({
-	schemaVersion: 1,
+const unavailableAgent = AgentProjectionV2Schema.parse({
+	schemaVersion: 2,
 	agentId: "agent-pilot-1",
 	name: "Release assistant",
 	description: "Helps the release team",

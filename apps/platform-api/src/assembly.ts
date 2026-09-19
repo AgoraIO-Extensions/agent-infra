@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
@@ -34,16 +35,27 @@ import {
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
 export interface PlatformApiAssemblyInput {
+	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
-	readonly admissions: Admissions;
+	readonly admissions:
+		| Admissions
+		| ((queries: {
+				readonly configurationQuery: PostgresAgentConfigurationQueryV1;
+		  }) => Admissions);
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
-	readonly presentAgent: PresentPlatformAgent;
+	readonly presentAgent:
+		| PresentPlatformAgent
+		| {
+				create(queries: {
+					readonly configurationQuery: PostgresAgentConfigurationQueryV1;
+				}): PresentPlatformAgent;
+		  };
 }
 
 export interface PlatformApiAssembly {
@@ -88,24 +100,32 @@ export function assemblePlatformApi(
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
 	});
+	const admissions =
+		typeof input.admissions === "function"
+			? input.admissions({ configurationQuery })
+			: input.admissions;
+	const presentAgent =
+		typeof input.presentAgent === "function"
+			? input.presentAgent
+			: input.presentAgent.create({ configurationQuery });
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const management = createAgentManagementV1(managementTransaction);
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,
 		managementQuery,
 		configurationQuery,
-		presentAgent: input.presentAgent,
+		presentAgent,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
@@ -153,8 +173,9 @@ export function assemblePlatformApi(
 				});
 				if (configuration.outcome !== "found") return { outcome: "denied" };
 				supportsSupplementaryInstruction = (
-					await input.presentAgent({
+					await presentAgent({
 						agentId,
+						traceId: randomUUID(),
 						configuration: configuration.configuration,
 						management: agent.management,
 					})
@@ -197,8 +218,9 @@ export function assemblePlatformApi(
 						scope.agentId,
 					);
 					if (!agent) return null;
-					const projection = await input.presentAgent({
+					const projection = await presentAgent({
 						agentId: scope.agentId,
+						traceId: randomUUID(),
 						configuration: configuration.configuration,
 						management: agent.management,
 					});
@@ -222,6 +244,9 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(input.requestScope === undefined
+			? {}
+			: { requestScope: input.requestScope }),
 		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: input.identity,
