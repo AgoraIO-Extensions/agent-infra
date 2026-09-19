@@ -29,6 +29,8 @@ import {
 	pilotBrowserSseOpenApiPathsV1,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
+	pilotDirectOpenApiPathsV1,
+	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
 } from "./pilot/index.ts";
 import {
@@ -91,6 +93,14 @@ const artifactPaths = {
 	pilotDelegatedOpenapi: resolve(
 		artifactRoot,
 		"openapi/pilot-delegated.v1.openapi.json",
+	),
+	pilotDirectJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/pilot-direct.v1.schema.json",
+	),
+	pilotDirectOpenapi: resolve(
+		artifactRoot,
+		"openapi/pilot-direct.v1.openapi.json",
 	),
 	pilotSseJsonSchema: resolve(
 		artifactRoot,
@@ -432,6 +442,20 @@ function buildArtifacts() {
 		paths: pilotDelegatedOpenApiPathsV1,
 		components: { schemas: pilotDelegatedSchemasV1 },
 	});
+	const pilotDirectJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/pilot-direct.v1.schema.json",
+		title: "Agent Infra Pilot Direct MCP Contracts V1",
+		definitions: pilotDirectSchemasV1,
+	});
+	const pilotDirectOpenapi = createDocument({
+		openapi: "3.1.0",
+		info: {
+			title: "Agent Infra Pilot Direct MCP/API",
+			version: "1.0.0",
+		},
+		paths: pilotDirectOpenApiPathsV1,
+		components: { schemas: pilotDirectSchemasV1 },
+	});
 	const registryManifestJsonSchema = jsonSchemaDocument({
 		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/registry-manifest.v1.schema.json",
 		title: "Agent Infra Registry and Runtime Manifest Contracts V1",
@@ -474,6 +498,8 @@ function buildArtifacts() {
 		pilotBrowserOpenapiV2,
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,
+		pilotDirectJsonSchema,
+		pilotDirectOpenapi,
 		pilotSseJsonSchema,
 		kubernetesWorkloadJsonSchema,
 		registryManifestJsonSchema,
