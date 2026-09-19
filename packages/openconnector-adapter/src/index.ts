@@ -382,7 +382,11 @@ function unwrapResult(
 			new Error(
 				result.error?.message ?? "OpenConnector provider request failed",
 			),
-			{ providerCode: result.error?.code, providerStatus },
+			{
+				providerCode: result.error?.code,
+				providerMessage: result.error?.message,
+				providerStatus,
+			},
 		);
 		if (
 			kernelActionName === "create_pull_request" &&

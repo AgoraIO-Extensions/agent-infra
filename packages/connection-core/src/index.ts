@@ -1795,6 +1795,12 @@ export class ConnectionApplicationService {
 					"Provider authorization is no longer valid",
 				);
 			}
+			if (isProviderPermissionFailure(error)) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					providerFailureMessage(error),
+				);
+			}
 			throw new ConnectionError("PROVIDER_FAILED", "Provider request failed");
 		}
 	}
@@ -1919,11 +1925,30 @@ function isDeterministicProviderRejection(error: unknown) {
 	return (
 		typeof error === "object" &&
 		error !== null &&
-		(error as { providerCode?: unknown }).providerCode === "invalid_input" &&
-		[400, 404, 409, 422].includes(
-			(error as { providerStatus?: number }).providerStatus ?? 0,
-		)
+		((error as { providerStatus?: number }).providerStatus ?? 0) >= 400 &&
+		((error as { providerStatus?: number }).providerStatus ?? 0) < 500 &&
+		(error as { providerStatus?: number }).providerStatus !== 429
 	);
+}
+
+function isProviderPermissionFailure(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { providerCode?: unknown }).providerCode ===
+			"authorization_failed" &&
+		(error as { providerStatus?: number }).providerStatus === 403
+	);
+}
+
+function providerFailureMessage(error: unknown) {
+	const message =
+		typeof error === "object" &&
+		error !== null &&
+		typeof (error as { providerMessage?: unknown }).providerMessage === "string"
+			? (error as { providerMessage: string }).providerMessage
+			: "Provider rejected the request";
+	return `Provider rejected the action: ${message}`;
 }
 
 function isProviderReauthorizationFailure(error: unknown) {

@@ -1045,8 +1045,12 @@ describe("Connection application service", () => {
 		});
 
 		await expect(
-			service.invokeDirect("direct", "github.getRepository", {
+			service.invokeDirect("direct", "github.createPullRequest", {
+				base: "main",
+				head: "feature/permission-failure",
+				idempotencyKey: "permission-failure-1",
 				repository: "acme/widgets",
+				title: "Permission failure",
 			}),
 		).rejects.toMatchObject({
 			code: "PROVIDER_REAUTHORIZATION_REQUIRED",
@@ -1061,6 +1065,7 @@ describe("Connection application service", () => {
 			execute: async () => {
 				throw Object.assign(new Error("Resource not accessible"), {
 					providerCode: "authorization_failed",
+					providerMessage: "Resource not accessible by personal access token",
 					providerStatus: 403,
 				});
 			},
@@ -1070,11 +1075,17 @@ describe("Connection application service", () => {
 			service.invokeDirect("direct", "github.getRepository", {
 				repository: "acme/widgets",
 			}),
-		).rejects.toMatchObject({ code: "PROVIDER_FAILED" });
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			message:
+				"Provider rejected the action: Resource not accessible by personal access token",
+		});
 		expect(repository.credentialPaused).toBe(false);
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
-	it("terminalizes a write 401 as uncertain and pauses the credential", async () => {
+	it("terminalizes a write 401 as failed and pauses the credential", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
@@ -1093,8 +1104,8 @@ describe("Connection application service", () => {
 				repository: "acme/widgets",
 				title: "Auth failure",
 			}),
-		).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
-		expect(repository.calls[0]?.status).toBe("UNCERTAIN");
+		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
+		expect(repository.calls[0]?.status).toBe("FAILED");
 		expect(repository.credentialPaused).toBe(true);
 	});
 
