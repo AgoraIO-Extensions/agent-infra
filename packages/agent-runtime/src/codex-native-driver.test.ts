@@ -2171,7 +2171,7 @@ describe("Codex native source lifecycle", () => {
 		await expect(execution.bridge.callback(changedReceipt)).rejects.toThrow();
 	});
 
-	it("preserves matching reserve, bind and terminal receipts without new authorization or facts", async () => {
+	it("rechecks matching reserve receipts without adding new facts", async () => {
 		const authorize = vi.fn<Authorize>(async () => {});
 		const env = await setup(authorize);
 		const execution = await env.start();
@@ -2181,7 +2181,7 @@ describe("Codex native source lifecycle", () => {
 		await sourceAck(execution.bridge, child.reserve);
 		await sourceAck(execution.bridge, child.bind);
 		expect(await readFile(env.path, "utf8")).toBe(beforeReplay);
-		expect(authorize).toHaveBeenCalledTimes(calls);
+		expect(authorize).toHaveBeenCalledTimes(calls + 1);
 		await execution.bridge.callback(completed(child.parentStarted));
 		await execution.bridge.completeInferenceTurn();
 		execution.bridge.completeSource(child.bind.source);

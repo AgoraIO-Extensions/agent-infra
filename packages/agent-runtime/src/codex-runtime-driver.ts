@@ -2754,7 +2754,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						AbortSignal.any([processSignal, callbackSignal]),
 						{ read, ...item },
 					);
-					await markScannedEvidence?.();
+					if (!processSignal.aborted && !callbackSignal.aborted)
+						await markScannedEvidence?.();
 					return result;
 				},
 			});
@@ -4564,9 +4565,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				),
 			)
 			.digest("hex");
-		const write = () =>
+		const write = (checkAbort = true) =>
 			this.update((state) => {
-				signal.throwIfAborted();
+				if (checkAbort) signal.throwIfAborted();
 				if (this.closed) unavailable();
 				const resolved = this.resolveNativeSourceJournal(
 					state,
@@ -4612,7 +4613,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (this.connectionRecoveryClosed(state, nativeSessionRef))
 					unavailable();
 				if (recovery) {
-					const binding = recovery.read.assertCurrent();
+					const binding = checkAbort
+						? recovery.read.assertCurrent()
+						: recovery.original.connectionOrigin.originalBinding;
 					if (
 						!isDeepStrictEqual(
 							binding,
@@ -4670,7 +4673,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				});
 				return { nativeSessionRef, executionId: execution.executionId };
 			});
-		const saved = await (recovery ? recovery.read.commit(write) : write());
+		let saved: Awaited<ReturnType<typeof write>>;
+		if (recovery) {
+			// Once Host ordering has admitted this callback, finish the durable
+			// evidence commit even if generation cancellation aborts the recovery.
+			// A pre-commit abort still prevents the callback from entering write.
+			signal.throwIfAborted();
+			recovery.read.assertCurrent();
+			saved = await recovery.read.commit(() => write(false));
+		} else {
+			saved = await write();
+		}
 		this.notifyEventStream(
 			this.eventStreamKey(saved.nativeSessionRef, saved.executionId),
 		);
