@@ -193,6 +193,11 @@ type DirectPayloadSize = { nodes: number; bytes: number };
 const utf8ByteLength = (value: string) =>
 	new TextEncoder().encode(value).byteLength;
 
+const isPlainObject = (value: object): value is Record<string, unknown> => {
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+};
+
 function inspectDirectPayload(
 	value: unknown,
 	seen = new WeakSet<object>(),
@@ -229,6 +234,9 @@ function inspectDirectPayload(
 			nodes: DirectPayloadMaximumNodeCountV1 + 1,
 			bytes: DirectPayloadMaximumByteLengthV1 + 1,
 		};
+	}
+	if (!Array.isArray(value) && !isPlainObject(value)) {
+		throw new Error("Direct payload contains a non-JSON object");
 	}
 	seen.add(value);
 
@@ -267,7 +275,19 @@ function withDirectPayloadBudget<T extends z.ZodType>(schema: T) {
 	return schema
 		.meta(directPayloadBudgetMetadata)
 		.superRefine((value, context) => {
-			const size = inspectDirectPayload(value);
+			let size: DirectPayloadSize;
+			try {
+				size = inspectDirectPayload(value);
+			} catch (error) {
+				context.addIssue({
+					code: "custom",
+					message:
+						error instanceof Error
+							? error.message
+							: "Direct payload contains a non-JSON value",
+				});
+				return;
+			}
 			if (size.nodes > DirectPayloadMaximumNodeCountV1) {
 				context.addIssue({
 					code: "custom",

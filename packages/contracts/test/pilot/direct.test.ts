@@ -364,6 +364,31 @@ describe("Pilot Direct MCP/API contracts", () => {
 		);
 	});
 
+	it("rejects non-JSON object instances at the payload boundary", () => {
+		class CustomPayload {
+			value = "custom";
+		}
+		const invalidObjects: unknown[] = [
+			new Date("2026-09-19T00:00:00Z"),
+			new Map([["value", "map"]]),
+			new Set(["set"]),
+			new CustomPayload(),
+		];
+
+		for (const invalidObject of invalidObjects) {
+			expect(validateDirectPayloadBudgetV1(invalidObject)).toBe(false);
+			expect(
+				DirectActionRequestV1Schema.safeParse({
+					...request,
+					action: {
+						...request.action,
+						arguments: { payload: invalidObject },
+					},
+				}).success,
+			).toBe(false);
+		}
+	});
+
 	it("correlates successful and unresolved results without exposing secrets", () => {
 		const success = {
 			...resultBase,
