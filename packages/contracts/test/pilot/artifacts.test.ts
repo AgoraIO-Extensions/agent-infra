@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createDocument } from "zod-openapi";
 
 import {
+	DirectPayloadMaximumByteLengthV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
@@ -13,7 +14,6 @@ import {
 	pilotDirectOpenApiPathsV1,
 	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
-	DirectPayloadMaximumByteLengthV1,
 	validateDirectActionRequestWithPublishedSchemaV1,
 } from "../../src/pilot/index.js";
 
@@ -253,7 +253,7 @@ describe("Pilot standard artifacts", () => {
 		// AJV enforces the published structural schema; the composed helper adds
 		// the aggregate budget that JSON Schema cannot express recursively.
 		expect(validateDirectRequest(nodeHeavyRequest)).toBe(true);
-			expect(
+		expect(
 			validateDirectActionRequestWithPublishedSchemaV1(
 				nodeHeavyRequest,
 				(input) => validateDirectRequest(input),
