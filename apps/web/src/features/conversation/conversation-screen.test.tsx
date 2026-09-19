@@ -420,6 +420,15 @@ describe("functional conversation screen", () => {
 				);
 		});
 		const input = await composer();
+		const guard = document.querySelector<HTMLElement>("[data-c02-guard]");
+		expect(guard?.dataset.c02Guard).toBe("pending-submit");
+		expect(guard?.dataset.c02SessionId).toBe("conversation-1");
+		expect(guard?.dataset.c02MessageCount).toBe("0");
+		expect(
+			screen
+				.getByRole("button", { name: "发送" })
+				.getAttribute("data-c02-send-button"),
+		).toBe("send");
 		fireEvent.change(input, { target: { value: "第一行\n第二行" } });
 		fireEvent.compositionStart(input);
 		fireEvent.keyDown(input, { key: "Enter" });
@@ -439,6 +448,21 @@ describe("functional conversation screen", () => {
 		expect(input.value).toBe("");
 		expect(screen.queryByText("已完成")).toBeNull();
 		expect(screen.getByRole("button", { name: "停止回复" })).toBeTruthy();
+	});
+
+	it("guards synchronous send repeats within one session", async () => {
+		const { requests } = setup((request) =>
+			request.method === "POST" ? receipt() : undefined,
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "one operation" } });
+		const send = screen.getByRole("button", { name: "发送" });
+		fireEvent.click(send);
+		fireEvent.click(send);
+		await screen.findByText("消息已受理，等待处理结果。");
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(1);
 	});
 
 	it("retains an unknown command and only retries the same idempotency key explicitly", async () => {

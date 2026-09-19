@@ -131,6 +131,7 @@
 	margin-left: 224px;
 	display: flex;
 	flex-direction: column;
+	min-width: 0;
 	min-height: 100dvh;
 }
 .platform-topbar {
@@ -159,6 +160,7 @@
 .platform-content {
 	width: 100%;
 	margin: 0 auto;
+	min-width: 0;
 	padding: 38px 40px 64px;
 }
 .platform-topbar .mobile-menu {
@@ -238,6 +240,7 @@
 	display: flex;
 	flex-direction: column;
 	height: calc(100dvh - 104px);
+	max-width: 100%;
 	min-height: 480px;
 }
 .chat-layout > header {
@@ -249,12 +252,14 @@
 }
 .chat-workspace {
 	flex: 1;
+	max-width: 100%;
 	min-height: 0;
 	overflow: auto;
 }
 .chat-thread:not([hidden]) {
 	display: flex;
 	flex-direction: column;
+	max-width: 100%;
 	min-height: 100%;
 	height: 100%;
 }
@@ -374,6 +379,76 @@
 		animation: none;
 		transition: none;
 		scroll-behavior: auto;
+	}
+}
+
+/* v2.3 keeps every conversation surface readable at narrow widths. Code and
+ * tables retain their own horizontal scrollers; the page itself never grows
+ * a second horizontal scrollbar. */
+html,
+body {
+	max-width: 100%;
+	overflow-x: hidden;
+}
+:where(
+	.platform-topbar,
+	.platform-content,
+	.chat-layout,
+	.chat-workspace,
+	.chat-thread,
+	.chat-status,
+	.composer-zone,
+	.composer,
+	.model-controls,
+	.composer-controls
+) {
+	min-width: 0;
+	max-width: 100%;
+}
+:where(.platform-topbar > *, .chat-status > *, .composer-controls > *) {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 430px) {
+	.platform-topbar {
+		height: auto;
+		min-height: 56px;
+		align-items: flex-start;
+		flex-wrap: wrap;
+		padding: 6px 10px;
+	}
+	.platform-breadcrumb {
+		padding-top: 5px;
+	}
+	.chat-layout > header {
+		align-items: flex-start;
+	}
+	.chat-layout > header > div:last-child,
+	.chat-layout > header > div:last-child > [data-slot="button"] {
+		width: 100%;
+	}
+	.chat-layout > header > div:last-child {
+		flex-direction: column;
+	}
+	.chat-status {
+		align-items: flex-start;
+	}
+	.chat-status > [data-slot="button"] {
+		width: 100%;
+	}
+	.model-controls {
+		grid-template-columns: 1fr;
+	}
+	.composer-controls {
+		align-items: stretch;
+	}
+	.composer-actions {
+		width: 100%;
+	}
+	.composer-actions > [data-slot="button"] {
+		flex: 1 1 0;
 	}
 }
 

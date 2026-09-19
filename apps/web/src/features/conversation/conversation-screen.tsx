@@ -618,6 +618,7 @@ function ActiveConversation({
 						原执行结果待核实，同会话暂不能发送下一条消息。
 						<Button
 							variant="ghost"
+							data-c02-recover="recover-original"
 							onClick={() => {
 								void reader.refresh();
 								if (latestExecution) openExecution(latestExecution);
@@ -655,6 +656,12 @@ function ActiveConversation({
 				)}
 				<form
 					className="composer-zone composer space-y-3 rounded border border-border p-4"
+					data-c02-guard="pending-submit"
+					data-c02-session-id={conversation?.conversationId ?? conversationId}
+					data-c02-message-count={String(
+						timeline.history?.messages.length ?? 0,
+					)}
+					data-pending-submit={command.isPending ? "true" : "false"}
 					onSubmit={(event) => {
 						event.preventDefault();
 						send();
@@ -768,7 +775,7 @@ function ActiveConversation({
 						<p className="text-muted-foreground text-xs">
 							Enter 发送 · Shift + Enter 换行
 						</p>
-						<div className="flex gap-2">
+						<div className="composer-actions flex gap-2">
 							{active && (
 								<Button
 									type="button"
@@ -784,7 +791,11 @@ function ActiveConversation({
 									{stopping === latestExecution ? "正在停止" : "停止回复"}
 								</Button>
 							)}
-							<Button type="submit" disabled={!canSend}>
+							<Button
+								type="submit"
+								data-c02-send-button="send"
+								disabled={!canSend}
+							>
 								<ArrowUp aria-hidden="true" />
 								{active && agent.capabilities.supplementaryInstruction
 									? "发送补充指令"
