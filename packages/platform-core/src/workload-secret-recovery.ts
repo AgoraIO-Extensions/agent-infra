@@ -100,7 +100,7 @@ export function parseWorkloadSecretRecoveriesV1(
 	input: unknown,
 	agentId: string,
 ): readonly WorkloadSecretRecoveryV1[] {
-	if (!Array.isArray(input) || input.length === 0)
+	if (!Array.isArray(input))
 		throw new Error("Invalid Workload Secret recovery");
 	const names = new Set<string>();
 	return input.map((item) => {

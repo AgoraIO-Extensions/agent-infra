@@ -1324,6 +1324,7 @@ function isCodexSession(
 			}
 			for (const receipt of [
 				source.reserve,
+				source.bindPending,
 				source.bind,
 				source.notStarted,
 				source.terminal,
@@ -2522,6 +2523,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					queryClient: CodexConnectionQueryMetadata;
 			  }
 			| undefined;
+		let markScannedEvidence: (() => Promise<void>) | undefined;
 		const recovery = async (
 			request: CodexConnectionRecoveryRequest,
 			callbackSignal: AbortSignal,
@@ -2628,6 +2630,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						pass.scannedAttemptRefs.push(attemptRef);
 				});
 			};
+			markScannedEvidence = markScanned;
 			let value: unknown;
 			const waiting = new AbortController();
 			try {
@@ -2690,7 +2693,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					reason: "credential_expired",
 				};
 			}
-			await markScanned();
 			previousRecoveryId = randomUUID();
 			current = {
 				original,
@@ -2746,12 +2748,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						)
 					)
 						protocolInvalid();
-					return this.performNativeConnectionEvidence(
+					const result = await this.performNativeConnectionEvidence(
 						initial.conversationKey,
 						request,
 						AbortSignal.any([processSignal, callbackSignal]),
 						{ read, ...item },
 					);
+					await markScannedEvidence?.();
+					return result;
 				},
 			});
 			recoveryProcessCompleted = true;
