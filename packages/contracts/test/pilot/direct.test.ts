@@ -85,6 +85,15 @@ describe("Pilot Direct MCP/API contracts", () => {
 				],
 			}).success,
 		).toBe(false);
+		expect(
+			DirectCatalogResponseV1Schema.safeParse({
+				...catalog,
+				actions: [
+					catalog.actions[0],
+					{ ...catalog.actions[0], providerId: "other-provider" },
+				],
+			}).success,
+		).toBe(true);
 		for (const field of [
 			"principalId",
 			"connectionId",
@@ -256,6 +265,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
 			{ key: "AKIAIOSFODNN7EXAMPLE" },
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
+			{ value: "(ghp_abcdefghijklmnopqrstuvwxyz)" },
 			{ value: "glpat-0123456789012345678901234567890123456789" },
 			{ authHeader: "Bearer credential" },
 			{ auth_header: "opaque-api-credential" },

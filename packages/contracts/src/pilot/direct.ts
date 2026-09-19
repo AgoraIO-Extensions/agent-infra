@@ -156,7 +156,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		"oauth(?:code|token)?",
 	]
 		.map(caseInsensitiveRegexSource)
-		.join("|")})\b|(?:^|[\s:=])(?:${[
+		.join("|")})\b|(?:^|[^A-Za-z0-9_-])(?:${[
 		"token",
 		"api[-_]?key",
 		"secret",
@@ -166,13 +166,13 @@ const unsafeArgumentValuePattern = new RegExp(
 		"jwt",
 	]
 		.map(caseInsensitiveRegexSource)
-		.join("|")})\s*[:=]|(?:^|[\s:=])(?:${[
+		.join("|")})\s*[:=]|(?:^|[^A-Za-z0-9_-])(?:${[
 		caseInsensitiveRegexSource("sk"),
 		caseInsensitiveRegexSource("pk"),
 		"[Gg][Hh][PpOoUuSsRr]",
 		"[Xx][Oo][Xx][BbAaPpRrSs]",
 		caseInsensitiveRegexSource("glpat"),
-	].join("|")})[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:${[
+	].join("|")})[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:${[
 		"AKIA",
 		"ASIA",
 		"AIDA",
@@ -186,7 +186,7 @@ const unsafeArgumentValuePattern = new RegExp(
 		.map(caseInsensitiveRegexSource)
 		.join(
 			"|",
-		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[\s:=])${caseInsensitiveRegexSource("github_pat")}[-_][A-Za-z0-9_-]{8,}|(?:^|[\s:=])(?:[A-Za-z0-9_-]{10,}\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
+		)})[A-Za-z0-9]{16}(?=$|[\s,;])|(?:^|[^A-Za-z0-9_-])${caseInsensitiveRegexSource("github_pat")}[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\s,;])|${caseInsensitiveRegexSource("caller[-_ ]selected[-_ ](?:connection|principal|grant|agent|account|session)")}))[\s\S]*$`,
 );
 
 export const DirectPayloadMaximumDepthV1 = 3;
@@ -522,7 +522,7 @@ const directCatalogActionsV1Schema = z
 	.superRefine((actions, context) => {
 		const identities = new Set<string>();
 		for (const [index, action] of actions.entries()) {
-			const identity = `${action.actionId}\u0000${action.actionVersion}`;
+			const identity = `${action.providerId}\u0000${action.actionId}\u0000${action.actionVersion}`;
 			if (identities.has(identity)) {
 				context.addIssue({
 					code: "custom",
