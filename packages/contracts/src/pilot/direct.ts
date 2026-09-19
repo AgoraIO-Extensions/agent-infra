@@ -145,6 +145,7 @@ export const DirectPayloadMaximumStringLengthV1 = 65_536;
 export const DirectPayloadMaximumCollectionSizeV1 = 1_000;
 export const DirectPayloadMaximumNodeCountV1 = 10_000;
 export const DirectPayloadMaximumByteLengthV1 = 1_048_576;
+export const DirectPayloadMaximumTraversalDepthV1 = 64;
 
 const boundedOpaqueId = OpaqueIdV1Schema.max(
 	DirectPayloadMaximumStringLengthV1,
@@ -162,7 +163,14 @@ const utf8ByteLength = (value: string) =>
 function inspectDirectPayload(
 	value: unknown,
 	seen = new WeakSet<object>(),
+	depth = 0,
 ): DirectPayloadSize {
+	if (depth > DirectPayloadMaximumTraversalDepthV1) {
+		return {
+			nodes: DirectPayloadMaximumNodeCountV1 + 1,
+			bytes: DirectPayloadMaximumByteLengthV1 + 1,
+		};
+	}
 	if (typeof value === "string") {
 		return { nodes: 1, bytes: utf8ByteLength(JSON.stringify(value)) };
 	}
@@ -184,7 +192,7 @@ function inspectDirectPayload(
 	let bytes = 2;
 	const visit = (entry: unknown, keyBytes = 0) => {
 		bytes += keyBytes;
-		const child = inspectDirectPayload(entry, seen);
+		const child = inspectDirectPayload(entry, seen, depth + 1);
 		nodes += child.nodes;
 		bytes += child.bytes;
 	};
@@ -621,13 +629,18 @@ export function validateDirectPayloadWithPublishedSchemaV1(
 export function validateDirectActionRequestWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+	validateCredentialFreeArguments: DirectPayloadValidatorV1,
 ) {
 	if (
 		!validateDirectPayloadWithPublishedSchemaV1(input, validatePublishedSchema)
 	) {
 		return false;
 	}
-	return DirectActionRequestV1Schema.safeParse(input).success;
+	const parsed = DirectActionRequestV1Schema.safeParse(input);
+	return (
+		parsed.success &&
+		validateCredentialFreeArguments(parsed.data.action.arguments)
+	);
 }
 
 export function validateDirectCatalogWithPublishedSchemaV1(

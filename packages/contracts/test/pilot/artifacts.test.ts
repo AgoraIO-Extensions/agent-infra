@@ -325,6 +325,7 @@ describe("Pilot standard artifacts", () => {
 			validateDirectActionRequestWithPublishedSchemaV1(
 				nodeHeavyRequest,
 				(input) => validateDirectRequest(input),
+				() => true,
 			),
 		).toBe(false);
 		const oversizedMetadataRequest = {
@@ -339,15 +340,20 @@ describe("Pilot standard artifacts", () => {
 					publishedValidatorCalled = true;
 					return validateDirectRequest(input);
 				},
+				() => true,
 			),
 		).toBe(false);
 		expect(publishedValidatorCalled).toBe(false);
 		let bigintValidatorCalled = false;
 		expect(
-			validateDirectActionRequestWithPublishedSchemaV1(1n, () => {
-				bigintValidatorCalled = true;
-				return true;
-			}),
+			validateDirectActionRequestWithPublishedSchemaV1(
+				1n,
+				() => {
+					bigintValidatorCalled = true;
+					return true;
+				},
+				() => true,
+			),
 		).toBe(false);
 		expect(bigintValidatorCalled).toBe(false);
 		const directGrantSchema = direct.DirectGrantProjectionV1;

@@ -12,6 +12,7 @@ import {
 	DirectPayloadMaximumDepthV1,
 	DirectPayloadMaximumNodeCountV1,
 	DirectPayloadMaximumStringLengthV1,
+	DirectPayloadMaximumTraversalDepthV1,
 	pilotDirectOpenApiPathsV1,
 	validateDirectActionResultV1,
 	validateDirectActionResultWithPublishedSchemaV1,
@@ -144,6 +145,11 @@ describe("Pilot Direct MCP/API contracts", () => {
 		).toBe(false);
 		expect(validateDirectPayloadBudgetV1(catalog)).toBe(true);
 		expect(
+			validateDirectPayloadBudgetV1(
+				nestedArray(DirectPayloadMaximumTraversalDepthV1 + 1),
+			),
+		).toBe(false);
+		expect(
 			validateDirectCatalogWithPublishedSchemaV1(catalog, () => true),
 		).toBe(true);
 		expect(
@@ -209,6 +215,7 @@ describe("Pilot Direct MCP/API contracts", () => {
 			{ value: "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II" },
 			{ authHeader: "Bearer credential" },
 			{ authValue: "credential" },
+			{ authCode: "authorization-code" },
 			{ basicAuth: "credential" },
 		]) {
 			expect(
