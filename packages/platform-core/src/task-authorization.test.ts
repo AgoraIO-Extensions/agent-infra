@@ -199,6 +199,7 @@ describe("system control transaction plan", () => {
 			});
 			expect(plan).toEqual({
 				schemaVersion: 1,
+				workerId: "worker",
 				revokeAuthorization: true,
 				ensureStop,
 				audit: {

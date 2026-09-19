@@ -256,6 +256,7 @@ export function planTaskSystemControlV1(input: {
 		throw new TypeError("Task system control is invalid");
 	return {
 		schemaVersion: 1 as const,
+		workerId: input.workerId,
 		ensureStop:
 			input.reason === "authorization_revoked" &&
 			["submitted", "processing", "unknown"].includes(input.execution.status),

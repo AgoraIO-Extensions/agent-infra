@@ -773,15 +773,14 @@ export class PostgresConversationEventTransactionV1
 				conversation: conversationState(conversation),
 				execution: executionState(execution),
 				existingEvent: eventState(existing),
-				...(persistedRequest.command.event.type !== "execution.operation" ||
-				existing
-					? {}
-					: {
+				...(persistedRequest.command.event.type === "execution.operation"
+					? {
 							operationHistory: await readOperationHistory(
 								transaction,
 								persistedRequest.command.executionId,
 							),
-						}),
+						}
+					: {}),
 			};
 			const decision = decide(state);
 			if (!isWritePlan(decision)) return validateDecision(decision, state);

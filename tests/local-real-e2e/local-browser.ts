@@ -331,12 +331,18 @@ function proxy(
 	setCookie?: string,
 ) {
 	const target = new URL(request.url ?? "/", origin);
-	const contentLength = Number(request.headers["content-length"] ?? 0);
+	const rawContentLength = request.headers["content-length"];
 	if (
-		!Number.isFinite(contentLength) ||
-		contentLength < 0 ||
-		contentLength > maximumProxyBodyBytes
+		rawContentLength !== undefined &&
+		(Array.isArray(rawContentLength) ||
+			!/^(?:0|[1-9][0-9]*)$/.test(rawContentLength))
 	) {
+		failure(response, 413, setCookie);
+		return;
+	}
+	const contentLength =
+		rawContentLength === undefined ? 0 : Number(rawContentLength);
+	if (contentLength > maximumProxyBodyBytes) {
 		failure(response, 413, setCookie);
 		return;
 	}

@@ -230,6 +230,8 @@ export class PostgresTaskAuthorizationStoreV1 {
 						status: execution.status,
 					},
 				});
+				if (plan.workerId !== input.workerId)
+					throw new TaskAuthorizationStoreError();
 				if (plan.ensureStop) {
 					const [stop] = await transaction<
 						{ stop_request_id: string }[]
@@ -258,7 +260,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 				`;
 				await transaction`
 					insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-					values (${randomUUID()}, ${input.traceId}, 'system', ${input.workerId}, ${plan.audit.action}, 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ originalPrincipal: plan.audit.originalPrincipal, controlRecordId, authorizationRecordId: record.id, reason: plan.audit.reason } as unknown as JsonValue)})
+					values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, ${plan.audit.action}, 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId, authorizationRecordId: record.id, reason: plan.audit.reason } as unknown as JsonValue)})
 				`;
 				return { controlRecordId };
 			});

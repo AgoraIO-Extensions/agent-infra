@@ -112,9 +112,12 @@ export class RuntimeHostV3 {
 	>();
 	private readonly closedRecoveryGenerations = new Set<string>();
 	private readonly lifetime = new AbortController();
+	private closed = false;
 	constructor(private readonly options: Options) {}
 
 	async close() {
+		if (this.closed) return;
+		this.closed = true;
 		const keys = [...this.recoveryGuards.keys()];
 		this.lifetime.abort();
 		await Promise.allSettled(
@@ -125,6 +128,10 @@ export class RuntimeHostV3 {
 		await Promise.allSettled(
 			keys.map((key) => this.options.serialize(key, async () => undefined)),
 		);
+	}
+
+	private assertOpen() {
+		if (this.closed) nativeRequired();
 	}
 
 	private async abortRecovery(key: string) {
@@ -265,11 +272,13 @@ export class RuntimeHostV3 {
 	}
 
 	async submitTurn(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeSubmitTurnRequestV3Schema, value);
 		const claims = this.validate(request, "turn.submit", verification);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "turn.submit", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
@@ -321,11 +330,13 @@ export class RuntimeHostV3 {
 	}
 
 	async supplement(value: RuntimeSupplementRequestV3, verification: unknown) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeSupplementRequestV3Schema, value);
 		const claims = this.validate(request, "turn.supplement", verification);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "turn.supplement", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
@@ -372,6 +383,7 @@ export class RuntimeHostV3 {
 	}
 
 	async stop(value: RuntimeStopRequestV3, verification: unknown) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeStopRequestV3Schema, value);
 		const claims = this.validate(request, "turn.stop", verification);
 		const key = this.options.store.sessionQueueKey(request);
@@ -382,6 +394,7 @@ export class RuntimeHostV3 {
 		]);
 		await this.abortRecovery(key);
 		await this.options.serialize(key, () => {
+			this.assertOpen();
 			this.validate(request, "turn.stop", verification);
 			const result = this.options.store.authorizeRequestV3(
 				claims,
@@ -394,6 +407,7 @@ export class RuntimeHostV3 {
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "turn.stop", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
@@ -442,11 +456,13 @@ export class RuntimeHostV3 {
 		verification: unknown,
 		signal?: AbortSignal,
 	): Promise<RuntimeStatusResponseV3> {
+		this.assertOpen();
 		const request = parseRequest(RuntimeStatusRequestV3Schema, value);
 		const claims = this.validate(request, "session.status", verification);
 		const { session, found } = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "session.status", verification);
 				return this.options.store.recoverOperationV3(
 					claims,
@@ -467,6 +483,7 @@ export class RuntimeHostV3 {
 		// Lookup may retrieve a receipt but may never submit missing work under control authority.
 		let response: Awaited<ReturnType<Options["dispatch"]>>;
 		try {
+			this.assertOpen();
 			response = await this.options.dispatch(
 				session.hostSessionRef,
 				operation,
@@ -516,6 +533,7 @@ export class RuntimeHostV3 {
 		value: RuntimeGenerationCancelRequestV3,
 		verification: unknown,
 	) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeGenerationCancelRequestV3Schema, value);
 		const claims = this.validate(request, "generation.cancel", verification);
 		const recoveryKey = this.options.store.sessionQueueKey(request);
@@ -525,6 +543,7 @@ export class RuntimeHostV3 {
 			request.executionId,
 		]);
 		await this.options.serialize(recoveryKey, async () => {
+			this.assertOpen();
 			this.validate(request, "generation.cancel", verification);
 			await this.options.store.authorizeRequestV3(
 				claims,
@@ -536,6 +555,7 @@ export class RuntimeHostV3 {
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "generation.cancel", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
@@ -598,6 +618,7 @@ export class RuntimeHostV3 {
 		value: RuntimeAuthorizationRenewRequestV3,
 		verification: unknown,
 	) {
+		this.assertOpen();
 		const request = parseRequest(
 			RuntimeAuthorizationRenewRequestV3Schema,
 			value,
@@ -606,6 +627,7 @@ export class RuntimeHostV3 {
 		const { authority } = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "execution.renew", verification);
 				return this.options.store.authorizeRequestV3(
 					claims,
@@ -625,11 +647,13 @@ export class RuntimeHostV3 {
 		value: RuntimeEventAckRequestV3,
 		verification: unknown,
 	) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeEventAckRequestV3Schema, value);
 		const claims = this.validate(request, "events.ack", verification);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "events.ack", verification);
 				await this.options.store.authorizeRequestV3(
 					claims,
@@ -663,11 +687,13 @@ export class RuntimeHostV3 {
 		verification: unknown,
 		signal?: AbortSignal,
 	) {
+		this.assertOpen();
 		const request = parseRequest(RuntimeEventPersistRequestV3Schema, value);
 		const claims = this.validate(request, "events.persist", verification);
 		const { session } = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
+				this.assertOpen();
 				this.validate(request, "events.persist", verification);
 				return this.options.store.authorizeRequestV3(
 					claims,
@@ -700,6 +726,7 @@ export class RuntimeHostV3 {
 		timer.unref();
 		let events: AsyncIterable<unknown>;
 		try {
+			this.assertOpen();
 			bounded.throwIfAborted();
 			await this.recoverEvidence(
 				request,
@@ -722,8 +749,10 @@ export class RuntimeHostV3 {
 			throw error;
 		}
 		const options = this.options;
-		const validate = () =>
+		const validate = () => {
+			this.assertOpen();
 			this.validate(request, "events.persist", verification);
+		};
 		return (async function* () {
 			const iterator = events[Symbol.asyncIterator]();
 			let rejectAborted: ((reason?: unknown) => void) | undefined;
