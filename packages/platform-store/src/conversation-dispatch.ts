@@ -716,7 +716,8 @@ async function claimWork(
 	},
 ): Promise<ConversationDispatchClaimDecisionV1> {
 	const outbox = await lockOutbox(transaction, input.itemId);
-	if (outbox?.scope_type !== "conversation") return { outcome: "stale" };
+	if (!outbox || outbox.scope_type !== "conversation")
+		return { outcome: "stale" };
 	const conversation = await lockConversation(transaction, outbox.scope_id);
 	if (!conversation) return { outcome: "stale" };
 	const isolation = await readGenerationIsolation(

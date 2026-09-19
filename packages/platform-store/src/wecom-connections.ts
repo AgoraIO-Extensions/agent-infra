@@ -11,6 +11,7 @@ function admissible(
 	input: { agentId: string; bindingReference: string; botId: string },
 ) {
 	return sql`((c.configuration->'channels' @> ${sql.json([{ kind: "wecom_bot", bindingReference: input.bindingReference }])}::jsonb
+ and not exists(select 1 from jsonb_array_elements(c.configuration->'channels') channel where channel->>'kind'='wecom_bot' and channel->>'bindingReference'=${input.bindingReference} and channel->>'enabled'='false')
  and not exists(select 1 from platform.wecom_setup_sessions pending where pending.bot_id=${input.botId} and pending.agent_id=a.id and pending.status='verifying' and pending.expires_at>clock_timestamp() and pending.configuration_revision=a.current_configuration_revision and pending.authorization_revision=a.authorization_revision))
  or exists(select 1 from platform.wecom_setup_sessions candidate where candidate.session_id=${input.bindingReference} and candidate.agent_id=a.id and candidate.bot_id=${input.botId} and candidate.status='verifying' and candidate.expires_at>clock_timestamp() and candidate.configuration_revision=a.current_configuration_revision and candidate.authorization_revision=a.authorization_revision and exists(select 1 from platform.agent_owners o where o.agent_id=a.id and o.owner_id=candidate.actor_id)))`;
 }

@@ -43,6 +43,15 @@ function record(value: unknown): Record<string, unknown> {
 		return invalid();
 	return value as Record<string, unknown>;
 }
+function exactRecord(value: unknown, keys: readonly string[]) {
+	const result = record(value);
+	if (
+		Object.keys(result).length !== keys.length ||
+		keys.some((key) => !Object.hasOwn(result, key))
+	)
+		return invalid();
+	return result;
+}
 export function createWecomAdapterV1(options: {
 	readonly now?: () => Date;
 	readonly protectReply: (route: {
@@ -152,8 +161,8 @@ export function createWecomAdapterV1(options: {
 						? field(url.searchParams.get("echostr"), 128 * 1024)
 						: field(
 								config.kind === "wecom_bot"
-									? record(JSON.parse(raw)).encrypt
-									: parseWecomXml(raw).Encrypt,
+									? exactRecord(JSON.parse(raw), ["encrypt"]).encrypt
+									: exactRecord(parseWecomXml(raw), ["Encrypt"]).Encrypt,
 								128 * 1024,
 							);
 				const expected = createHash("sha1")
