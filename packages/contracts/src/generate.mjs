@@ -33,6 +33,7 @@ import {
 	pilotOperationSchemasV2,
 	pilotOperationSseSchemasV2,
 	pilotSseSchemasV1,
+	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import {
 	RuntimeCapabilitiesRequestV1Schema,
@@ -83,6 +84,10 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	standardTemplateReleaseOpenapi: resolve(
+		artifactRoot,
+		"openapi/standard-template-release.v1.openapi.json",
+	),
 	pilotSseJsonSchemaV2: resolve(
 		artifactRoot,
 		"json-schema/pilot-sse.v2.schema.json",
@@ -627,6 +632,11 @@ function buildArtifacts() {
 		jsonSchema,
 		openapi,
 		pilotBrowserOpenapi,
+		standardTemplateReleaseOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Standard template deployment release", version: "1.0.0" },
+			paths: standardTemplateReleaseOpenApiPathsV1,
+		}),
 		pilotBrowserOpenapiV2,
 		pilotDelegatedJsonSchema,
 		pilotDelegatedOpenapi,

@@ -169,3 +169,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 			process.exitCode = 1;
 		});
 }
+
+export {
+	createProductionSingleAgentTemplateReleaseAppV1,
+	type ProductionSingleAgentTemplateReleaseInputV1,
+	type StandardTemplateReleaseDeploymentBindingV1,
+} from "./template-release.js";
