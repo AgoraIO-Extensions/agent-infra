@@ -74,6 +74,31 @@ const safeProviderArgumentKeyPatterns = [
 const authoritySelectorKeyPattern = new RegExp(
 	`^(?:${safeProviderArgumentKeyPatterns.join("|")}|(?!.*(?:${authoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})).+)$`,
 );
+const outputAuthoritySelectorKeyTerms = [
+	"connection",
+	"principal",
+	"consumer",
+	"consumerinstance",
+	"instance",
+	"actor",
+	"agent",
+	"conversation",
+	"turn",
+	"execution",
+	"grant",
+	"session",
+	"host[_-]?session",
+	"hostsession",
+	"native[_-]?session",
+	"nativesession",
+	"identity",
+	"platform",
+	"attachment",
+	"credential",
+];
+const outputAuthoritySelectorKeyPattern = new RegExp(
+	`^(?!.*(?:${outputAuthoritySelectorKeyTerms.map(caseInsensitiveRegexSource).join("|")})(?:[_. /-]?(?:${["id", "selector", "context"].map(caseInsensitiveRegexSource).join("|")}))?$).+$`,
+);
 const unsafeArgumentValuePattern = new RegExp(
 	String.raw`^(?![\s\S]*(?:\b(?:${[
 		"bearer",
@@ -265,7 +290,7 @@ export const DirectJsonV1Schema = boundedDirectJsonSchema(
 		.min(1)
 		.max(DirectPayloadMaximumStringLengthV1)
 		.regex(credentialSafeKeyPattern)
-		.regex(authoritySelectorKeyPattern),
+		.regex(outputAuthoritySelectorKeyPattern),
 	DirectPayloadMaximumDepthV1,
 );
 export const DirectActionArgumentsV1Schema = boundedDirectJsonSchema(
@@ -578,6 +603,13 @@ export function validateDirectPayloadBudgetV1(input: unknown) {
 	}
 }
 
+export function validateDirectPayloadWithPublishedSchemaV1(
+	input: unknown,
+	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+) {
+	return validateDirectPayloadBudgetV1(input) && validatePublishedSchema(input);
+}
+
 // JSON Schema and OpenAPI cannot express an aggregate recursive node/byte
 // budget. Consumers validating against a published artifact must compose its
 // validator with this helper so the runtime budget remains enforced.
@@ -585,9 +617,48 @@ export function validateDirectActionRequestWithPublishedSchemaV1(
 	input: unknown,
 	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
 ) {
-	if (!validateDirectPayloadBudgetV1(input)) return false;
-	if (!validatePublishedSchema(input)) return false;
+	if (
+		!validateDirectPayloadWithPublishedSchemaV1(input, validatePublishedSchema)
+	) {
+		return false;
+	}
 	return DirectActionRequestV1Schema.safeParse(input).success;
+}
+
+export function validateDirectCatalogWithPublishedSchemaV1(
+	input: unknown,
+	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+) {
+	return (
+		validateDirectPayloadWithPublishedSchemaV1(
+			input,
+			validatePublishedSchema,
+		) && DirectCatalogResponseV1Schema.safeParse(input).success
+	);
+}
+
+export function validateDirectGrantListWithPublishedSchemaV1(
+	input: unknown,
+	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+) {
+	return (
+		validateDirectPayloadWithPublishedSchemaV1(
+			input,
+			validatePublishedSchema,
+		) && DirectGrantListResponseV1Schema.safeParse(input).success
+	);
+}
+
+export function validateDirectActionResultWithPublishedSchemaV1(
+	input: unknown,
+	validatePublishedSchema: DirectPublishedSchemaValidatorV1,
+) {
+	return (
+		validateDirectPayloadWithPublishedSchemaV1(
+			input,
+			validatePublishedSchema,
+		) && DirectActionResultV1Schema.safeParse(input).success
+	);
 }
 
 export function validateDirectActionResultV1(

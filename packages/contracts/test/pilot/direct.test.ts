@@ -14,6 +14,9 @@ import {
 	DirectPayloadMaximumStringLengthV1,
 	pilotDirectOpenApiPathsV1,
 	validateDirectActionResultV1,
+	validateDirectActionResultWithPublishedSchemaV1,
+	validateDirectCatalogWithPublishedSchemaV1,
+	validateDirectGrantListWithPublishedSchemaV1,
 	validateDirectPayloadBudgetV1,
 } from "../../src/pilot/direct.js";
 
@@ -140,6 +143,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 			}).success,
 		).toBe(false);
 		expect(validateDirectPayloadBudgetV1(catalog)).toBe(true);
+		expect(
+			validateDirectCatalogWithPublishedSchemaV1(catalog, () => true),
+		).toBe(true);
 		expect(
 			validateDirectPayloadBudgetV1({
 				...catalog,
@@ -358,6 +364,20 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(
 			DirectActionResultV1Schema.safeParse({
 				...success,
+				output: {
+					user: "provider-user",
+					account: "provider-account",
+					owner: "provider-owner",
+					resource: "provider-resource",
+				},
+			}).success,
+		).toBe(true);
+		expect(
+			validateDirectActionResultWithPublishedSchemaV1(success, () => true),
+		).toBe(true);
+		expect(
+			DirectActionResultV1Schema.safeParse({
+				...success,
 				traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
 			}).success,
 		).toBe(false);
@@ -463,6 +483,9 @@ describe("Pilot Direct MCP/API contracts", () => {
 		expect(DirectGrantListResponseV1Schema.safeParse(grantList).success).toBe(
 			true,
 		);
+		expect(
+			validateDirectGrantListWithPublishedSchemaV1(grantList, () => true),
+		).toBe(true);
 		expect(
 			DirectGrantListResponseV1Schema.safeParse({
 				schemaVersion: 1,
