@@ -144,6 +144,16 @@ describe("Pilot Direct MCP/API contracts", () => {
 			}).success,
 		).toBe(false);
 		expect(validateDirectPayloadBudgetV1(catalog)).toBe(true);
+		for (const invalidJson of [
+			undefined,
+			() => "invalid",
+			Symbol("invalid"),
+			1n,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+		]) {
+			expect(validateDirectPayloadBudgetV1(invalidJson)).toBe(false);
+		}
 		expect(
 			validateDirectPayloadBudgetV1(
 				nestedArray(DirectPayloadMaximumTraversalDepthV1 + 1),

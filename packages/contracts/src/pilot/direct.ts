@@ -174,10 +174,21 @@ function inspectDirectPayload(
 	if (typeof value === "string") {
 		return { nodes: 1, bytes: utf8ByteLength(JSON.stringify(value)) };
 	}
+	if (
+		typeof value === "undefined" ||
+		typeof value === "function" ||
+		typeof value === "symbol" ||
+		typeof value === "bigint"
+	) {
+		throw new Error("Direct payload contains a non-JSON value");
+	}
+	if (typeof value === "number" && !Number.isFinite(value)) {
+		throw new Error("Direct payload contains a non-finite number");
+	}
 	if (value === null || typeof value !== "object") {
 		return {
 			nodes: 1,
-			bytes: utf8ByteLength(JSON.stringify(value) ?? "null"),
+			bytes: utf8ByteLength(JSON.stringify(value)),
 		};
 	}
 	if (seen.has(value)) {
