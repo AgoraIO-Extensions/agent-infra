@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	authorizationClose: vi.fn(async () => {}),
 	legacyClose: vi.fn(async () => {}),
 	runtimeClose: vi.fn(),
+	dispatchAssemblyThrows: false,
 	signal: undefined as AbortSignal | undefined,
 }));
 vi.mock("@agent-infra/platform-store", () => ({
@@ -30,7 +31,11 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
-	createConversationDispatchUseCaseV1: () => ({ dispatch: mocks.dispatch }),
+	createConversationDispatchUseCaseV1: () => {
+		if (mocks.dispatchAssemblyThrows)
+			throw new Error("synthetic dispatch assembly failure");
+		return { dispatch: mocks.dispatch };
+	},
 	createConversationEventUseCaseV1: () => ({}),
 }));
 vi.mock("./conversation-runtime.js", () => ({
@@ -76,6 +81,7 @@ const options = {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
+	mocks.dispatchAssemblyThrows = false;
 	mocks.wecomDispatch.mockReset().mockResolvedValue(undefined);
 	mocks.wecomReconcile.mockReset().mockResolvedValue(undefined);
 });
@@ -161,6 +167,18 @@ describe("Conversation Worker discovery and shutdown", () => {
 		);
 		const worker = createPlatformConversationWorkerV2(options);
 		await expect(worker.stop()).rejects.toThrow("synthetic close failure");
+		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
+		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
+		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
+	});
+	it("closes the runtime when dispatch assembly fails", async () => {
+		mocks.dispatchAssemblyThrows = true;
+		mocks.find.mockResolvedValue([]);
+		expect(() => createPlatformConversationWorkerV2(options)).toThrow(
+			"synthetic dispatch assembly failure",
+		);
+		await vi.waitFor(() => expect(mocks.runtimeClose).toHaveBeenCalledTimes(1));
+		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);

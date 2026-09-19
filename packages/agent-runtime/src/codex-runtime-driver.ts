@@ -1082,6 +1082,14 @@ function latestOperationAttemptFacts(events: readonly CodexJournalEvent[]) {
 	return [...latest.values()];
 }
 
+function latestOperationAttemptFact(events: readonly CodexJournalEvent[]) {
+	let latest: RuntimeOperationFactV2 | undefined;
+	for (const event of events) {
+		if (event.type === "operation") latest = event.payload;
+	}
+	return latest;
+}
+
 function pendingNativeToolAttempts(journal: CodexEventJournal | undefined) {
 	if (!journal) return [];
 	const latest = new Map(
@@ -3931,7 +3939,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.assertModelAdmissionConfirmed(session, execution);
 		const journal = session.journals?.[execution.nativeTurnId];
 		const latestFact = journal
-			? latestOperationAttemptFacts(journal.events).at(-1)
+			? latestOperationAttemptFact(journal.events)
 			: undefined;
 		const deferInitialStatus = this.initialModelStatusPending.delete(
 			this.nativeTurnKey(session.threadId, execution.nativeTurnId),

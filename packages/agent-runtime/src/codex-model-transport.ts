@@ -159,6 +159,26 @@ async function failStream(response: ServerResponse) {
 	if (!response.destroyed && !response.writableEnded) response.end();
 }
 
+async function awaitPersistence<T>(
+	operation: Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	if (signal?.aborted) throw new Error();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abort: (() => void) | undefined;
+	const interrupted = new Promise<never>((_, reject) => {
+		abort = () => reject(new Error());
+		signal?.addEventListener("abort", abort, { once: true });
+		timer = setTimeout(() => reject(new Error()), requestTimeoutMs);
+	});
+	try {
+		return await Promise.race([operation, interrupted]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		if (abort) signal?.removeEventListener("abort", abort);
+	}
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	return (
 		typeof value === "object" &&
@@ -1270,18 +1290,24 @@ export async function openCodexModelTransport(
 			if (outcome.phase !== "succeeded")
 				revokeTurn(turnKey, startedAt === undefined);
 			const pending = (async () => {
-				await journal?.finish({
-					...outcome,
-					finishedAt: new Date().toISOString(),
-					...(startedAt === undefined
-						? {}
-						: {
-								durationMs: Math.max(
-									0,
-									Math.round(performance.now() - startedAt),
-								),
-							}),
-				});
+				if (!journal) {
+					outcomeReported = true;
+					return;
+				}
+				await awaitPersistence(
+					journal.finish({
+						...outcome,
+						finishedAt: new Date().toISOString(),
+						...(startedAt === undefined
+							? {}
+							: {
+									durationMs: Math.max(
+										0,
+										Math.round(performance.now() - startedAt),
+									),
+								}),
+					}),
+				);
 				outcomeReported = true;
 			})();
 			outcomeReport = pending;
@@ -1363,7 +1389,11 @@ export async function openCodexModelTransport(
 				(value) => ({ value }),
 				() => ({ value: undefined }),
 			);
-			await journal?.started(requestStartedAt);
+			if (journal)
+				await awaitPersistence(
+					journal.started(requestStartedAt),
+					controller.signal,
+				);
 			const upstream = (await upstreamResult).value;
 			if (!upstream) {
 				settleModelRequestWaiters(turnKey, false);

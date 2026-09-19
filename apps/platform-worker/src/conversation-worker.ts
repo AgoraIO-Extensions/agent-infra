@@ -62,7 +62,7 @@ export function createPlatformConversationWorkerV2(
 		databaseUrl: options.databaseUrl,
 	});
 	let wecom: ReturnType<typeof createPlatformWecomWorkerV1> | undefined;
-	let runtime: ReturnType<typeof createConversationRuntimeV2>;
+	let runtime: ReturnType<typeof createConversationRuntimeV2> | undefined;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
 		wecom = options.wecom
@@ -103,6 +103,7 @@ export function createPlatformConversationWorkerV2(
 	} catch (error) {
 		controller.abort();
 		void Promise.allSettled([
+			...(runtime ? [runtime.close()] : []),
 			...(wecom ? [wecom.close()] : []),
 			transaction.close(),
 			store.close(),
