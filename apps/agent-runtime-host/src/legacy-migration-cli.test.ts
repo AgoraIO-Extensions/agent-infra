@@ -81,6 +81,19 @@ describe("offline Host migration candidate CLI", () => {
 		);
 	});
 
+	it("serializes candidate mode with the same maintenance lock", async () => {
+		const env = await fixture();
+		const lock = join(env.dataDirectory, ".legacy-migration-bootstrap-lock");
+		await mkdir(lock);
+		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
+			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
+		);
+		await rm(lock, { recursive: true });
+		await expect(runRuntimeLegacyMigrationCli(env.environment)).resolves.toMatchObject(
+			{ status: "verified_candidate" },
+		);
+	});
+
 	it("validates via the existing loader/Store without altering the original journal or opening a Driver/listener", async () => {
 		const env = await fixture();
 		const original = await readFile(env.hostPath);

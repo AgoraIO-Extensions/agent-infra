@@ -1027,8 +1027,10 @@ function routedRequest(
 
 export async function openCodexModelTransport(
 	input: readonly CodexModelRoute[],
-	observer?: CodexModelTransportObserver,
+	observer: CodexModelTransportObserver,
 ) {
+	if (!observer || typeof observer.beforeRequest !== "function")
+		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const routes = validatedRoutes(input);
 	const credentials = [
 		...new Set([...routes.values()].map(({ credential }) => credential)),
@@ -1350,7 +1352,7 @@ export async function openCodexModelTransport(
 				reject(response, 400);
 				return;
 			}
-			journal = await observer?.beforeRequest(
+			journal = await observer.beforeRequest(
 				{
 					conversationKey,
 					...nativeTurn,

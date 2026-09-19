@@ -1003,6 +1003,30 @@ describe("PostgreSQL Conversation event transaction", () => {
 		},
 	);
 
+	it("allows the normal submitted to processing transition", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openEvents("event_submitted_processing");
+		try {
+			await expect(
+				events.persist({
+					...eventInput(conversationId, executionId),
+					event: { type: "execution.status", status: "processing" },
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).resolves.toMatchObject({ outcome: "accepted" });
+			const [state] = await client`
+				select status, last_event_sequence::int as sequence
+				from platform.conversation_executions
+				where execution_id = ${executionId}`;
+			expect(state).toEqual({ status: "processing", sequence: 1 });
+		} finally {
+			await close();
+		}
+	});
+
 	it("rolls back an event that would rewrite a terminal Execution", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		await client`

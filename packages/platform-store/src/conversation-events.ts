@@ -872,8 +872,7 @@ export class PostgresConversationEventTransactionV1
 						and (status not in ('completed', 'failed', 'cancelled')
 							or status = ${plan.transition.executionStatus})
 						and not (status <> 'submitted' and ${plan.transition.executionStatus} = 'submitted')
-						and not (status = 'submitted' and ${plan.transition.executionStatus} in ('unknown', 'processing'))
-					returning execution_id
+						returning execution_id
 				`;
 				if (transitionedExecution.length !== 1) unavailable();
 				const transitionedConversation = await transaction<{ id: string }[]>`

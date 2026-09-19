@@ -122,7 +122,10 @@ export async function runRuntimeLegacyMigrationCli(
 		)
 			fail();
 		const canonicalDirectory = await realpath(dataDirectory);
-		const candidateParent = await realpath(dirname(candidatePath));
+		const candidateDirectory = dirname(candidatePath);
+		const candidateParent = await realpath(candidateDirectory);
+		const candidateLeaf = relative(candidateDirectory, candidatePath);
+		const canonicalCandidatePath = join(candidateParent, candidateLeaf);
 		const withinData = relative(canonicalDirectory, candidateParent);
 		if (
 			withinData === "" ||
@@ -141,23 +144,9 @@ export async function runRuntimeLegacyMigrationCli(
 			dataDirectory: canonicalDirectory,
 		});
 		if (!migration) fail();
-		if (mode === "candidate") {
-			const lockExists = await lstat(
-				join(canonicalDirectory, ".legacy-migration-bootstrap-lock"),
-			).then(
-				() => true,
-				(error: NodeJS.ErrnoException) => {
-					if (error.code === "ENOENT") return false;
-					throw error;
-				},
-			);
-			if (lockExists) fail();
-		}
-		if (mode === "offline-commit") {
-			const lock = join(canonicalDirectory, ".legacy-migration-bootstrap-lock");
-			await mkdir(lock, { mode: 0o700 });
-			ownedLock = lock;
-		}
+		const lock = join(canonicalDirectory, ".legacy-migration-bootstrap-lock");
+		await mkdir(lock, { mode: 0o700 });
+		ownedLock = lock;
 		const path = join(canonicalDirectory, "host.json");
 		const before = await journal(path); // Missing original state must never initialize.
 		temporaryDirectory = await mkdtemp(join(tmpdir(), "runtime-legacy-"));
@@ -176,7 +165,7 @@ export async function runRuntimeLegacyMigrationCli(
 			fail();
 		// A candidate is reviewable output, never a durable commit to original state.
 		// Require a new file outside the original data directory; never overwrite output.
-		await writeFile(candidatePath, changed ? after : before.bytes, {
+		await writeFile(canonicalCandidatePath, changed ? after : before.bytes, {
 			flag: "wx",
 			mode: 0o600,
 		});

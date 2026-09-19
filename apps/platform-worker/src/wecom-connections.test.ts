@@ -296,3 +296,46 @@ it("does not route application scopes through a bot socket", async () => {
 		await worker.close();
 	}
 });
+
+it("revalidates the lease immediately before sending a reply", async () => {
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({ outcome: "denied" }),
+	});
+	try {
+		await worker.tick();
+		mocks.current.mockResolvedValue(false);
+		await expect(
+			worker.sender.send({
+				scope: {
+					agentId: "agent",
+					bindingReference: "binding",
+					kind: "wecom_bot",
+					senderId: "sender",
+					peerId: "peer",
+					conversationType: "single",
+					threadId: null,
+				},
+				replyHandle: "reply",
+				text: "fixture",
+			}),
+		).resolves.toBe("failed");
+		expect(mocks.socketSend).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});

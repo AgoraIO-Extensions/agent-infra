@@ -27,10 +27,17 @@ import {
 // Existing protocol cases use one explicitly bound synthetic native process.
 // Cross-process cases below call the production factory directly.
 const testConversationKey = "a".repeat(64);
+const testObserver: CodexModelTransportObserver = {
+	beforeRequest: async () => ({
+		started: async () => {},
+		finish: async () => {},
+	}),
+};
 async function openCodexModelTransport(
-	...args: Parameters<typeof openProductionModelTransport>
+	input: Parameters<typeof openProductionModelTransport>[0],
+	observer: CodexModelTransportObserver = testObserver,
 ) {
-	const value = await openProductionModelTransport(...args);
+	const value = await openProductionModelTransport(input, observer);
 	const modelAccess = value.modelAccessFor(testConversationKey);
 	value.bindThread(testConversationKey, "thread-synthetic");
 	return {
@@ -129,8 +136,9 @@ async function transportWithCredentials(
 					: `option_${index}/synthetic-selected`,
 			model: "synthetic-selected",
 			endpoint,
-			credential,
+				credential,
 		})),
+		testObserver,
 	);
 	admitTurn(value, defaultNativeTurn);
 	close.push(value.close);

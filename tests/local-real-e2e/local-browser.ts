@@ -441,6 +441,10 @@ function proxy(
 		refreshUploadTimer();
 	});
 	request.on("end", clearUploadTimer);
+	request.on("error", () => {
+		clearUploadTimer();
+		upstream.destroy();
+	});
 	request.on("aborted", () => {
 		clearUploadTimer();
 		upstream.destroy();

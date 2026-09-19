@@ -3531,6 +3531,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (modelRequestReady) {
 						modelTurnAdmitted = true;
 						if (modelAdmission) this.modelTurnAdmissions.delete(admissionKey);
+						await this.confirmModelAdmission(command, session.nativeSessionRef);
 						this.initialModelStatusPending.add(
 							this.nativeTurnKey(nativeTurn.threadId, nativeTurn.turnId),
 						);

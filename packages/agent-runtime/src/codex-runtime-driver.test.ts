@@ -2687,6 +2687,12 @@ describe("Codex Runtime Driver", () => {
 		await expect(driver.execute(submitCommand())).resolves.toMatchObject({
 			result: { outcome: "accepted" },
 		});
+		const persisted = JSON.parse(
+			await readFile(join(directory, "driver.json"), "utf8"),
+		) as { operations?: Record<string, { admissionRecoveryPending?: true }> };
+		expect(Object.values(persisted.operations ?? {})).not.toContainEqual(
+			expect.objectContaining({ admissionRecoveryPending: true }),
+		);
 	});
 
 	it("finishes a running execution from a durably recorded model HTTP failure", async () => {
