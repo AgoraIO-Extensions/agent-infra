@@ -4,13 +4,19 @@ import { z } from "zod";
 import { createDocument } from "zod-openapi";
 
 import {
+	DirectPayloadMaximumByteLengthV1,
+	DirectPayloadMaximumTraversalDepthV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
 	pilotBrowserSchemasV2,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
+	pilotDirectOpenApiPathsV1,
+	pilotDirectSchemasV1,
 	pilotSseSchemasV1,
+	validateDirectActionRequestWithPublishedSchemaV1,
+	validateDirectCatalogWithPublishedSchemaV1,
 } from "../../src/pilot/index.js";
 
 function generateJsonSchema(schemas: Record<string, z.ZodType>) {
@@ -78,9 +84,10 @@ describe("Pilot standard artifacts", () => {
 		);
 	});
 
-	it("generates JSON Schema 2020-12 for SSE and delegated contracts", () => {
+	it("generates JSON Schema 2020-12 for SSE and pilot contracts", () => {
 		const schemas = generateJsonSchema(pilotSseSchemasV1);
 		const delegated = generateJsonSchema(pilotDelegatedSchemasV1);
+		const direct = generateJsonSchema(pilotDirectSchemasV1);
 
 		expect(schemas.ConversationSseMessageV1).toHaveProperty(
 			"$schema",
@@ -199,6 +206,277 @@ describe("Pilot standard artifacts", () => {
 				}),
 			).toBe(false);
 		}
+
+		const directActionSchema = direct.DirectActionRequestV1;
+		if (!directActionSchema) throw new Error("Direct request schema missing");
+		const validateDirectRequest = ajv.compile(directActionSchema);
+		const directRequest = {
+			schemaVersion: 1,
+			requestId: "request-direct-1",
+			idempotencyKey: "direct.call_1",
+			action: {
+				providerId: "github",
+				actionId: "github.get_current_user",
+				actionVersion: "v1",
+				arguments: {},
+			},
+			traceId: "trace-direct-1",
+		};
+		expect(validateDirectRequest(directRequest)).toBe(true);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { connectionId: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { targetConnectionId: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { selectedPrincipalId: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: {
+						username: "provider-user",
+						organizationName: "provider-org",
+						resourcePath: "src/main.ts",
+						note: "line one\nline two",
+					},
+				},
+			}),
+		).toBe(true);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { ConnectionID: "caller-selected" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { auth: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { value: "mF_9B5f4JqM.abc123def456.ghi789jkl012" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { note: "token=embedded-secret" },
+				},
+			}),
+		).toBe(false);
+		expect(
+			validateDirectRequest({
+				...directRequest,
+				action: {
+					...directRequest.action,
+					arguments: { note: "TOKEN=embedded-secret" },
+				},
+			}),
+		).toBe(false);
+		const nodeHeavyArguments = Object.fromEntries(
+			Array.from({ length: 11 }, (_, group) => [
+				`group${group}`,
+				Object.fromEntries(
+					Array.from({ length: 1_000 }, (_, index) => [`key${index}`, true]),
+				),
+			]),
+		);
+		const nodeHeavyRequest = {
+			...directRequest,
+			action: { ...directRequest.action, arguments: nodeHeavyArguments },
+		};
+		// AJV enforces the published structural schema; the composed helper adds
+		// the aggregate budget that JSON Schema cannot express recursively.
+		expect(validateDirectRequest(nodeHeavyRequest)).toBe(true);
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				nodeHeavyRequest,
+				(input) => validateDirectRequest(input),
+				() => true,
+				() => true,
+			),
+		).toBe(false);
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				directRequest,
+				() => true,
+				() => true,
+				() => false,
+			),
+		).toBe(false);
+		const oversizedMetadataRequest = {
+			...directRequest,
+			traceId: "x".repeat(DirectPayloadMaximumByteLengthV1),
+		};
+		let publishedValidatorCalled = false;
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				oversizedMetadataRequest,
+				(input) => {
+					publishedValidatorCalled = true;
+					return validateDirectRequest(input);
+				},
+				() => true,
+				() => true,
+			),
+		).toBe(false);
+		expect(publishedValidatorCalled).toBe(false);
+		let bigintValidatorCalled = false;
+		expect(
+			validateDirectActionRequestWithPublishedSchemaV1(
+				1n,
+				() => {
+					bigintValidatorCalled = true;
+					return true;
+				},
+				() => true,
+				() => true,
+			),
+		).toBe(false);
+		expect(bigintValidatorCalled).toBe(false);
+		const directGrantSchema = direct.DirectGrantProjectionV1;
+		if (!directGrantSchema) throw new Error("Direct grant schema missing");
+		const validateDirectGrant = ajv.compile(directGrantSchema);
+		expect(
+			validateDirectGrant({
+				grantId: "grant-1",
+				consumerId: "consumer-1",
+				consumerInstanceId: "instance-1",
+				actorId: null,
+				connectionId: "connection-1",
+				actions: [{ actionId: "github.issue.read", actionVersion: "v1" }],
+				status: "active",
+			}),
+		).toBe(true);
+		expect(
+			validateDirectGrant({
+				grantId: "grant-1",
+				consumerId: "consumer-1",
+				consumerInstanceId: "instance-1",
+				actorId: null,
+				connectionId: "connection-1",
+				actionVersions: ["v1"],
+				status: "active",
+			}),
+		).toBe(false);
+		const directCatalogSchema = direct.DirectCatalogResponseV1;
+		if (!directCatalogSchema) throw new Error("Direct catalog schema missing");
+		const validateDirectCatalog = ajv.compile(directCatalogSchema);
+		const directCatalog = {
+			schemaVersion: 1,
+			catalogVersion: "catalog-1",
+			actions: [
+				{
+					providerId: "github",
+					actionId: "github.issue.read",
+					actionVersion: "v1",
+					inputSchema: { type: "object", properties: {} },
+					outputSchema: { type: "object", properties: {} },
+					effect: "READ",
+					requiredScopes: ["read:issues"],
+					status: "published",
+				},
+			],
+		};
+		let tooDeepSchema: unknown = "too-deep";
+		for (
+			let depth = 0;
+			depth <= DirectPayloadMaximumTraversalDepthV1;
+			depth += 1
+		) {
+			tooDeepSchema = [tooDeepSchema];
+		}
+		expect(validateDirectCatalog(directCatalog)).toBe(true);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
+				actions: [directCatalog.actions[0], directCatalog.actions[0]],
+			}),
+		).toBe(false);
+		expect(
+			validateDirectCatalogWithPublishedSchemaV1(
+				{
+					...directCatalog,
+					actions: [
+						directCatalog.actions[0],
+						{ ...directCatalog.actions[0], effect: "WRITE" },
+					],
+				},
+				(input) => validateDirectCatalog(input),
+			),
+		).toBe(false);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
+				actions: [
+					{
+						...directCatalog.actions[0],
+						inputSchema: { type: "not-a-json-schema-type" },
+					},
+				],
+			}),
+		).toBe(false);
+		expect(
+			validateDirectCatalog({
+				...directCatalog,
+				actions: [
+					{
+						...directCatalog.actions[0],
+						inputSchema: { nested: tooDeepSchema },
+					},
+				],
+			}),
+		).toBe(true);
+		expect(
+			validateDirectCatalogWithPublishedSchemaV1(
+				{
+					...directCatalog,
+					actions: [
+						{
+							...directCatalog.actions[0],
+							inputSchema: { nested: tooDeepSchema },
+						},
+					],
+				},
+				(input) => validateDirectCatalog(input),
+			),
+		).toBe(false);
 	});
 
 	it("generates the delegated internal HTTP contract as OpenAPI 3.1", () => {
@@ -223,5 +501,35 @@ describe("Pilot standard artifacts", () => {
 		expect(document.paths).toHaveProperty(
 			"/internal/v1/delegated-actions.post.responses.200",
 		);
+	});
+
+	it("generates the independent Direct MCP/API contract as OpenAPI 3.1", () => {
+		const document = createDocument({
+			openapi: "3.1.0",
+			info: {
+				title: "Agent Infra Pilot Direct MCP/API",
+				version: "1.0.0",
+			},
+			security: [{ PrincipalBearer: [] }],
+			paths: pilotDirectOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					PrincipalBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: pilotDirectSchemasV1,
+			},
+		});
+
+		expect(document.openapi).toBe("3.1.0");
+		expect(document.security).toEqual([{ PrincipalBearer: [] }]);
+		expect(document.paths).toHaveProperty(
+			"/api/v1/actions.post.operationId",
+			"executeConnectionAction",
+		);
+		expect(document.paths).toHaveProperty(
+			"/api/v1/catalog.get.operationId",
+			"listConnectionCatalog",
+		);
+		expect(document.components?.schemas).toHaveProperty("DirectActionResultV1");
 	});
 });
