@@ -532,7 +532,7 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 		return route.fulfill({ json: { ...session, status: "active" } });
 	});
 	await page.goto("/agents/agent-pilot-1");
-	await page.getByRole("link", { name: "Owner settings" }).click();
+	await page.getByRole("link", { name: "配置与管理" }).click();
 	await page.getByRole("button", { name: "扫码授权" }).click();
 	await expect(
 		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
