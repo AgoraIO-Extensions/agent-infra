@@ -804,7 +804,7 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 		previousSchemas?.[requestName] !== undefined ||
 		previousSchemas?.[responseName] !== undefined ||
 		additionDigest !==
-		"510b6dba362d2775a80c93fa454014f1fc0bdf2a2651f4aa1e7d15d84f6c9ddf"
+			"510b6dba362d2775a80c93fa454014f1fc0bdf2a2651f4aa1e7d15d84f6c9ddf"
 	) {
 		return false;
 	}
