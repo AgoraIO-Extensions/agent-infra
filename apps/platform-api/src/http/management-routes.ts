@@ -156,12 +156,22 @@ function ownerScope(identity: IdentityContext): AgentManagementAgentScopeV1 {
 function pageInput(
 	request: Request,
 	traceId: string,
+	additionalQueryKeys: readonly string[] = [],
 ): AgentManagementPageInputV1 {
-	const page = parsePageQuery(request, traceId);
+	const page = parsePageQuery(request, traceId, additionalQueryKeys);
 	return {
 		limit: page.limit ?? 50,
 		...(page.cursor === undefined ? {} : { afterId: page.cursor }),
 	};
+}
+
+function agentListScope(request: Request, traceId: string): "user" | "owner" {
+	const values = new URL(request.url).searchParams.getAll("scope");
+	if (values.length === 0) return "user";
+	if (values.length !== 1 || values[0] !== "owner") {
+		fail("INVALID_REQUEST", traceId);
+	}
+	return "owner";
 }
 
 function fail(
@@ -773,9 +783,14 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const scope = agentListScope(context.req.raw, metadata.traceId);
+			const queryPage = pageInput(context.req.raw, metadata.traceId, ["scope"]);
 			const page = await queryOrUnavailable(
-				() => dependencies.query.listAgents(userScope(identity), queryPage),
+				() =>
+					dependencies.query.listAgents(
+						scope === "owner" ? ownerScope(identity) : userScope(identity),
+						queryPage,
+					),
 				metadata.traceId,
 			);
 			return context.json({

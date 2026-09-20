@@ -23,6 +23,9 @@ const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
 });
+const agentListQuery = pageQuery.extend({
+	scope: z.literal("owner").optional(),
+});
 const jsonContent = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
@@ -1051,7 +1054,7 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",
-			requestParams: { query: pageQuery },
+			requestParams: { query: agentListQuery },
 			responses: {
 				"200": jsonResponse("Visible agents", agentPageV2),
 				...errorResponses,

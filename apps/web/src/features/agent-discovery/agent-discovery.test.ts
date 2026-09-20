@@ -48,6 +48,26 @@ describe("Agent discovery generated-client consumer", () => {
 		);
 	});
 
+	it("requests the server-owned Agent projection for the management view", async () => {
+		const server = createPilotAgentMockServerV2({
+			listAgents: {
+				status: 200,
+				body: { items: [startingAgent], nextCursor: null },
+			},
+			getAgent: { status: 200, body: startingAgent },
+		});
+
+		await expect(
+			loadAgentDiscovery(createAgentClient(server), "owner"),
+		).resolves.toEqual({
+			kind: "ready",
+			agents: [startingAgent],
+		});
+		expect(server.requests[0]?.url).toBe(
+			"https://platform.example.test/api/v2/agents?scope=owner",
+		);
+	});
+
 	it("aggregates every visible-Agent page from the generated client", async () => {
 		const cursor = "agent-pilot-1";
 		const server = createPilotAgentMockServerV2({

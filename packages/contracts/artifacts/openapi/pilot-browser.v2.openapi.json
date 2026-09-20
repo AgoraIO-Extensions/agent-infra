@@ -4440,6 +4440,14 @@
               "minimum": 1,
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "const": "owner",
+              "type": "string"
+            }
           }
         ],
         "responses": {

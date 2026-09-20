@@ -118,10 +118,15 @@ export interface PageQuery {
 	limit?: number;
 }
 
-export function parsePageQuery(request: Request, traceId: string): PageQuery {
+export function parsePageQuery(
+	request: Request,
+	traceId: string,
+	additionalKeys: readonly string[] = [],
+): PageQuery {
 	const search = new URL(request.url).searchParams;
+	const allowedKeys = new Set(["cursor", "limit", ...additionalKeys]);
 	if (
-		[...search.keys()].some((key) => key !== "cursor" && key !== "limit") ||
+		[...search.keys()].some((key) => !allowedKeys.has(key)) ||
 		search.getAll("cursor").length > 1 ||
 		search.getAll("limit").length > 1
 	) {
