@@ -121,6 +121,8 @@ describe("bounded standard template publication", () => {
 	it("reauthorizes before exact persisted replay after restarting the use case", async () => {
 		const h = harness();
 		const original = await h.create().releaseStandardTemplate(command, actor);
+		expect(command.target.expectedConfigurationRevision).toBe(7);
+		expect(original.revision).toBe(8);
 		expect(
 			await h.create().releaseStandardTemplate(
 				{

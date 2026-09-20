@@ -2681,6 +2681,8 @@ function createAgentConfigurationUseCaseV1Internal(
 			throw new AgentConfigurationError("persistence_failed");
 		}
 		if (readDecision.outcome === "replayed") {
+			// A persisted idempotency result is authoritative even when the current
+			// configuration revision has advanced since the original command.
 			return parseResult(readDecision.result, command.agentId);
 		}
 		if (readDecision.outcome === "idempotency_conflict") {
