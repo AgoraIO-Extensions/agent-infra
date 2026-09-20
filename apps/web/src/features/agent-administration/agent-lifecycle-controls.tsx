@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Dialog,
@@ -182,10 +182,20 @@ export function AgentLifecycleControls({
 	pendingCommand,
 	session,
 }: AgentLifecycleControlsProps) {
+	const [localPendingCommand, setLocalPendingCommand] =
+		useState<AgentLifecycleCommand | null>(null);
+	useEffect(() => {
+		if (pendingCommand !== undefined) setLocalPendingCommand(null);
+	}, [pendingCommand]);
 	const commands = visibleLifecycleCommands(agent, session);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;
-	const isPending = pendingCommand !== undefined;
+	const isPending =
+		pendingCommand !== undefined || localPendingCommand !== null;
+	const activeCommand =
+		pendingCommand?.agentId === agent.agentId
+			? pendingCommand.command
+			: localPendingCommand;
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
@@ -246,12 +256,15 @@ export function AgentLifecycleControls({
 							command={command}
 							disabled={isPending}
 							label={
-								pendingCommand?.agentId === agent.agentId &&
-								pendingCommand.command === command
+								activeCommand === command
 									? commandProgressLabels[command]
 									: commandLabels[command]
 							}
-							onCommand={onCommand}
+							onCommand={(nextCommand) => {
+								if (isPending) return;
+								setLocalPendingCommand(nextCommand);
+								onCommand(nextCommand);
+							}}
 						/>
 					))}
 				</div>

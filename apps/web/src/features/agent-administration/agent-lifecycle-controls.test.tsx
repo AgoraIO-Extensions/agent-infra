@@ -301,6 +301,31 @@ describe("AgentLifecycleControls", () => {
 		expect(onCommand).not.toHaveBeenCalled();
 	});
 
+	it("latches a lifecycle command before the parent exposes pending state", async () => {
+		const onCommand = vi.fn();
+		render(
+			<AgentLifecycleControls
+				agent={unavailableAgent}
+				onCommand={onCommand}
+				session={{ kind: "ready", session: ownerSession }}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
+		const dialog = await screen.findByRole("dialog", { name: "停止 Agent？" });
+		fireEvent.click(within(dialog).getByRole("button", { name: "确认停止" }));
+
+		expect(onCommand).toHaveBeenCalledExactlyOnceWith("stop");
+		expect(
+			screen.getByRole("button", { name: "停止中…" }).hasAttribute("disabled"),
+		).toBe(true);
+		expect(
+			screen
+				.getByRole("button", { name: "重启 Agent" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+	});
+
 	it("focuses completion only for the displayed Agent", async () => {
 		const props = {
 			agent: unavailableAgent,

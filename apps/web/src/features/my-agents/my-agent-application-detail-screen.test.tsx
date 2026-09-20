@@ -202,6 +202,26 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(onWithdraw).not.toHaveBeenCalled();
 	});
 
+	it("latches withdrawal before the parent exposes pending state", async () => {
+		const onWithdraw = vi.fn();
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={onWithdraw}
+				state={{ kind: "ready", application: pendingApplication }}
+				withdrawing={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "撤回申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "确认撤回" }));
+
+		expect(onWithdraw).toHaveBeenCalledOnce();
+		const withdraw = screen.getByRole("button", { name: "正在撤回…" });
+		expect(withdraw.hasAttribute("disabled")).toBe(true);
+		fireEvent.click(withdraw);
+		expect(onWithdraw).toHaveBeenCalledOnce();
+	});
+
 	it("shows a withdrawn application as read-only history and focuses the projected result", async () => {
 		const withdrawn = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,

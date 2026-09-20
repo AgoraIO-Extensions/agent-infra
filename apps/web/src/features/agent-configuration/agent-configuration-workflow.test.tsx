@@ -28,6 +28,14 @@ const ownerSession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["employee"],
 	},
 });
+const administratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-admin-1",
+		displayName: "Administrator",
+		roles: ["employee", "system_admin"],
+	},
+});
 const firstAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
 );
@@ -61,6 +69,17 @@ beforeEach(() => {
 });
 
 describe("AgentConfigurationWorkflow", () => {
+	it("keeps administrator lifecycle controls visible outside the Owner gate", () => {
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: administratorSession },
+		} as never);
+
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+
+		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
+		expect(screen.queryByLabelText("Owner 用户 ID")).toBeNull();
+	});
+
 	it("drops an entered Secret when navigation changes the Agent", () => {
 		const { rerender } = render(
 			<AgentConfigurationWorkflow agent={firstAgent} />,

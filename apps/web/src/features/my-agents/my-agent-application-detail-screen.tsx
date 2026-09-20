@@ -37,6 +37,8 @@ export function MyAgentApplicationDetailScreen({
 	withdrawing,
 }: MyAgentApplicationDetailScreenProps) {
 	const [confirmationFor, setConfirmationFor] = useState<string | null>(null);
+	const [withdrawalLatched, setWithdrawalLatched] = useState(false);
+	const withdrawalPending = withdrawing || withdrawalLatched;
 	const submittedResult =
 		state.kind === "ready" &&
 		withdrawalResult?.applicationId === state.application.applicationId
@@ -48,6 +50,9 @@ export function MyAgentApplicationDetailScreen({
 		state.kind === "ready"
 			? `${state.application.applicationId}:${state.application.status}`
 			: state.kind;
+	useEffect(() => {
+		if (withdrawing) setWithdrawalLatched(false);
+	}, [withdrawing]);
 	useEffect(() => {
 		if (withdrawalError && !withdrawing) withdrawButtonRef.current?.focus();
 	}, [withdrawalError, withdrawing]);
@@ -200,10 +205,10 @@ export function MyAgentApplicationDetailScreen({
 							>
 								<DialogTrigger
 									className={buttonVariants({ variant: "outline" })}
-									disabled={withdrawing}
+									disabled={withdrawalPending}
 									ref={withdrawButtonRef}
 								>
-									{withdrawing ? "正在撤回…" : "撤回申请"}
+									{withdrawalPending ? "正在撤回…" : "撤回申请"}
 								</DialogTrigger>
 								<DialogContent>
 									<DialogTitle>撤回这项申请？</DialogTitle>
@@ -218,9 +223,10 @@ export function MyAgentApplicationDetailScreen({
 											继续保留申请
 										</DialogClose>
 										<Button
-											disabled={withdrawing}
+											disabled={withdrawalPending}
 											onClick={() => {
-												if (withdrawing) return;
+												if (withdrawalPending) return;
+												setWithdrawalLatched(true);
 												setConfirmationFor(null);
 												onWithdraw();
 											}}
