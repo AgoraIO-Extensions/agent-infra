@@ -7,7 +7,7 @@ import {
 } from "../index.ts";
 import { RuntimeEventV1Schema } from "./events.ts";
 
-const count = z.number().int().nonnegative().safe();
+const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const metadataId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 
 /** A reference to independently authorized Connection evidence, without its data. */

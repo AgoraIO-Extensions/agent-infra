@@ -230,7 +230,9 @@ export async function runCodexConnectionRecovery(options: {
 	let child: ChildProcess | undefined;
 	let callbacks: ReturnType<typeof serveCodexNativeCallbacks> | undefined;
 	let exited: Promise<void> | undefined;
+	let childExited = false;
 	const abort = () => {
+		if (childExited) return;
 		const pid = child?.pid;
 		if (pid && pid > 1) {
 			try {
@@ -291,7 +293,10 @@ export async function runCodexConnectionRecovery(options: {
 			failed = true;
 		});
 		exited = new Promise<void>((resolve) =>
-			process.once("close", () => resolve()),
+			process.once("close", () => {
+				childExited = true;
+				resolve();
+			}),
 		);
 		const stream = process.stdio[3];
 		if (!(stream instanceof Duplex)) throw unavailable();

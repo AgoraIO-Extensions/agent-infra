@@ -87,12 +87,12 @@ export const RuntimeBusinessGrantClaimsV2Schema = z.strictObject({
 	...commonClaims,
 	purpose: z.literal("business"),
 	authorizationRecordId: OpaqueIdV1Schema,
-	allowedCommands: z.tuple([RuntimeBusinessCommandV2Schema]),
+	allowedCommands: z.array(RuntimeBusinessCommandV2Schema).length(1),
 	attachments: z
 		.array(
 			z.strictObject({
 				attachmentId: OpaqueIdV1Schema,
-				operations: z.tuple([z.literal("read")]),
+				operations: z.array(z.literal("read")).length(1),
 			}),
 		)
 		.refine(
@@ -108,7 +108,7 @@ export const RuntimeControlGrantClaimsV2Schema = z.strictObject({
 	purpose: z.literal("control"),
 	controlRecordId: OpaqueIdV1Schema,
 	reason: RuntimeControlReasonV2Schema,
-	allowedCommands: z.tuple([RuntimeControlCommandV2Schema]),
+	allowedCommands: z.array(RuntimeControlCommandV2Schema).length(1),
 });
 
 export const RuntimeExecutionGrantClaimsV2Schema = z.discriminatedUnion(

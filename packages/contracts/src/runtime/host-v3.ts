@@ -12,10 +12,21 @@ import {
 	RuntimePrincipalV1Schema,
 } from "./grant-v2.ts";
 import {
-	RuntimeInputV1Schema,
 	RuntimeOperationResultV2Schema,
 	RuntimeSelectionV1Schema,
 } from "./host.ts";
+
+const runtimeInputTextV3 = z.string().min(1).max(1_048_576);
+const runtimeInputAttachmentV3 = OpaqueIdV1Schema.max(256);
+const RuntimeInputV3Schema = z.union([
+	z.strictObject({
+		text: runtimeInputTextV3,
+		attachments: z.array(runtimeInputAttachmentV3).max(256),
+	}),
+	z.strictObject({
+		attachments: z.array(runtimeInputAttachmentV3).min(1).max(256),
+	}),
+]);
 
 const context = {
 	schemaVersion: z.literal(3),
@@ -35,13 +46,13 @@ const context = {
 
 export const RuntimeSubmitTurnRequestV3Schema = z.strictObject({
 	...context,
-	input: RuntimeInputV1Schema,
+	input: RuntimeInputV3Schema,
 	selection: RuntimeSelectionV1Schema.optional(),
 });
 export const RuntimeSupplementRequestV3Schema = z.strictObject({
 	...context,
 	hostSessionRef: OpaqueIdV1Schema,
-	input: RuntimeInputV1Schema,
+	input: RuntimeInputV3Schema,
 });
 export const RuntimeStopRequestV3Schema = z.strictObject({
 	...context,

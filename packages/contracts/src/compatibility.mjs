@@ -33,25 +33,45 @@ const unsupportedConstraintKeywords = [
 	"unevaluatedProperties",
 	"unevaluatedItems",
 ];
-// Runtime M1 publishes bounded V1/V2 input contracts together with the new
-// Host artifacts. Keep this allow-list immutable so an unrelated artifact
-// change still fails the compatibility gate.
+// Runtime M1 publishes a reviewed additive change to the Host artifacts. Bind
+// the exception to the exact previous/current pair; an arbitrary previous
+// artifact must never be accepted merely because the current one is known.
 const reviewedRuntimeArtifactDigests = new Map([
 	[
 		"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
-		"eafc5ebc2179c65cc25f671b744db3457c830ce86f52e0adcc0fe638597fdaca",
+		{
+			previous:
+				"b086bfef54501bb8d09a1e8a1716391c460f08539081884e6ee18353ff8dea47",
+			current:
+				"eafc5ebc2179c65cc25f671b744db3457c830ce86f52e0adcc0fe638597fdaca",
+		},
 	],
 	[
 		"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
-		"1c09e19ceb50ae69810eebabee870f158d7a306b606b426857394b3f86aa5edf",
+		{
+			previous:
+				"c7fef64514ea6dc5a23c97f50e0c78a6bc29c6f6311e198f2efc07ea96cd7bbe",
+			current:
+				"1c09e19ceb50ae69810eebabee870f158d7a306b606b426857394b3f86aa5edf",
+		},
 	],
 	[
 		"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
-		"06f6f4f24d2192adb092bbb29cdede4f466a5bc4c756261b072d14ef8f49d910",
+		{
+			previous:
+				"ad7e3a5ea778068fbc9eb93d6035df1f383978367767c3056fe8266be5fe293f",
+			current:
+				"06f6f4f24d2192adb092bbb29cdede4f466a5bc4c756261b072d14ef8f49d910",
+		},
 	],
 	[
 		"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
-		"19eed0ccb295b0ffaee317e49ba9abae2ed6cff04d2fa549f3d31f79c2556ebf",
+		{
+			previous:
+				"ff63cc62d29bd3593b5e10f34c374df50c89c9d3b57860f0bd441cce35278e2b",
+			current:
+				"19eed0ccb295b0ffaee317e49ba9abae2ed6cff04d2fa549f3d31f79c2556ebf",
+		},
 	],
 ]);
 const usage = "Usage: compatibility.mjs [--previous path --current path]";
@@ -76,6 +96,10 @@ function valueSet(value) {
 
 function sameValue(left, right) {
 	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function canonicalDigest(value) {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 function unmatchedOptions(options, baseline) {
@@ -780,7 +804,7 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 		previousSchemas?.[requestName] !== undefined ||
 		previousSchemas?.[responseName] !== undefined ||
 		additionDigest !==
-		"eb0c35e13a6d19d5ca57375941b131612c5c8ee96593669dcb244ef6e454c621"
+		"510b6dba362d2775a80c93fa454014f1fc0bdf2a2651f4aa1e7d15d84f6c9ddf"
 	) {
 		return false;
 	}
@@ -844,10 +868,11 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 
 function findBreakingChanges(previous, current, label) {
 	const changes = [];
+	const reviewed = reviewedRuntimeArtifactDigests.get(label);
 	if (
-		reviewedRuntimeArtifactDigests.has(label) &&
-		createHash("sha256").update(JSON.stringify(current)).digest("hex") ===
-			reviewedRuntimeArtifactDigests.get(label)
+		reviewed !== undefined &&
+		canonicalDigest(previous) === reviewed.previous &&
+		canonicalDigest(current) === reviewed.current
 	)
 		return changes;
 	if (previous.openapi !== undefined) {

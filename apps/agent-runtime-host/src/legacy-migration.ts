@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { FileRuntimeStore } from "@agent-infra/agent-runtime";
 import {
@@ -21,6 +21,25 @@ function fail(): never {
 	throw new RuntimeLegacyMigrationError();
 }
 
+async function assertProtectedAncestors(path: string) {
+	const runtimeUid = process.getuid?.();
+	if (runtimeUid === undefined || runtimeUid === 0) fail();
+	for (let parent = await realpath(dirname(path)); ; ) {
+		const info = await lstat(parent);
+		const mode = info.mode & 0o7777;
+		if (
+			!info.isDirectory() ||
+			info.uid === runtimeUid ||
+			((mode & 0o022) !== 0 && (mode & 0o1000) === 0) ||
+			(await realpath(parent)) !== parent
+		)
+			fail();
+		const next = dirname(parent);
+		if (next === parent) break;
+		parent = next;
+	}
+}
+
 /**
  * Both files must be mounted by deployment bootstrap outside the Agent writable data
  * directory. Public-key provisioning is a trust-root operation, not caller input.
@@ -32,6 +51,7 @@ async function readMountedFile(
 	maximumBytes: number,
 ) {
 	if (!isAbsolute(path) || resolve(path) !== path) fail();
+	await assertProtectedAncestors(path);
 	const [target, dataRoot] = await Promise.all([
 		realpath(path),
 		realpath(dataDirectory),

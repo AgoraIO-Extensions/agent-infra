@@ -1054,7 +1054,7 @@ export class FileRuntimeStore {
 				checked.generationBarrier ||
 				!checked.nativeSessionRef ||
 				!["session.status", "events.persist"].includes(
-					claims.allowedCommands[0],
+					claims.allowedCommands[0] ?? "",
 				) ||
 				(claims.purpose === "control" &&
 					claims.reason === "generation_isolation")
@@ -1117,6 +1117,7 @@ export class FileRuntimeStore {
 		now = Date.now(),
 	) {
 		return this.file.update((state) => {
+			assertStoreState(state);
 			if (
 				!Number.isSafeInteger(now) ||
 				claims.issuedAt > now ||
@@ -1130,6 +1131,8 @@ export class FileRuntimeStore {
 				claims,
 				claims.purpose === "control",
 			);
+			assertExecutionBinding(session, claims);
+			assertSessionAuthority(session.authority, claims);
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||

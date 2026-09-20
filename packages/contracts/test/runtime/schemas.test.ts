@@ -11,6 +11,7 @@ import {
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
+	RuntimeSubmitTurnRequestV3Schema,
 	RuntimeSupplementRequestV1Schema,
 } from "../../src/runtime/index.js";
 
@@ -18,6 +19,31 @@ const signedGrant = {
 	schemaVersion: 1,
 	format: "compact-jws",
 	token: "header.payload.signature",
+} as const;
+
+const v3RequestContext = {
+	schemaVersion: 3,
+	requestId: "request-runtime-v3",
+	traceId: "trace-runtime-v3",
+	principal: { kind: "user", id: "principal-v3" },
+	channelId: "web",
+	agentId: "agent-1",
+	conversationId: "conversation-1",
+	executionId: "execution-1",
+	turnId: "turn-1",
+	sessionGeneration: 1,
+	hostSessionRef: null,
+	operation: {
+		kind: "execution",
+		id: "execution-1",
+		deliveryFence: 1,
+		executionDeliveryFence: 1,
+	},
+	grant: {
+		schemaVersion: 2,
+		format: "runtime-execution-jws",
+		token: "header.payload.signature",
+	},
 } as const;
 
 const requestContext = {
@@ -199,11 +225,28 @@ describe("RuntimeHost V1 wire schemas", () => {
 			}).success,
 		).toBe(false);
 		expect(
+			RuntimeSubmitTurnRequestV3Schema.safeParse({
+				...v3RequestContext,
+				input: { text: "x".repeat(1_048_577), attachments: [] },
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeSubmitTurnRequestV3Schema.safeParse({
+				...v3RequestContext,
+				input: {
+					attachments: Array.from(
+						{ length: 257 },
+						(_, index) => `attachment-${index}`,
+					),
+				},
+			}).success,
+		).toBe(false);
+		expect(
 			RuntimeSubmitTurnRequestV1Schema.safeParse({
 				...requestContext,
 				input: { text: "x".repeat(1_048_577), attachments: [] },
 			}).success,
-		).toBe(false);
+		).toBe(true);
 		expect(
 			RuntimeSubmitTurnRequestV1Schema.safeParse({
 				...requestContext,
@@ -214,7 +257,7 @@ describe("RuntimeHost V1 wire schemas", () => {
 					),
 				},
 			}).success,
-		).toBe(false);
+		).toBe(true);
 		expect(
 			RuntimeEventV1Schema.safeParse({
 				schemaVersion: 1,
