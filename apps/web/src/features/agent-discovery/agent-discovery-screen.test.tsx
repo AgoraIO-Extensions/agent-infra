@@ -62,6 +62,22 @@ describe("AgentDiscoveryScreen", () => {
 		).toBeNull();
 	});
 
+	it("treats a supplied query without a callback as an editable initial value", async () => {
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				query="Release"
+				state={{ kind: "ready", agents: [startingAgent] }}
+			/>,
+		);
+		const input = screen.getByRole("searchbox", {
+			name: "搜索 Agent",
+		}) as HTMLInputElement;
+		expect(input.value).toBe("Release");
+		fireEvent.change(input, { target: { value: "other" } });
+		expect(input.value).toBe("other");
+		expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
+	});
+
 	it("searches only authorized names and purposes while reporting the actual collection size", async () => {
 		const documentAgent = AgentProjectionV2Schema.parse({
 			...startingAgent,

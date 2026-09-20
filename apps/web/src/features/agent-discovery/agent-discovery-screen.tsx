@@ -40,8 +40,10 @@ export function AgentDiscoveryScreen({
 	onQueryChange,
 	state,
 }: AgentDiscoveryScreenProps) {
-	const [localQuery, setLocalQuery] = useState("");
-	const query = controlledQuery ?? localQuery;
+	const [localQuery, setLocalQuery] = useState(controlledQuery ?? "");
+	const isControlled =
+		controlledQuery !== undefined && onQueryChange !== undefined;
+	const query = isControlled ? controlledQuery : localQuery;
 	const searchId = useId();
 	const search = query.trim().toLocaleLowerCase();
 	// Search narrows the already authorized response; it never discovers another
@@ -89,7 +91,7 @@ export function AgentDiscoveryScreen({
 									value={query}
 									onChange={(event) => {
 										const nextQuery = event.target.value;
-										if (controlledQuery === undefined) setLocalQuery(nextQuery);
+										if (!isControlled) setLocalQuery(nextQuery);
 										onQueryChange?.(nextQuery);
 									}}
 								/>
