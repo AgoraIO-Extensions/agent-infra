@@ -34,6 +34,8 @@ probe 静态声明不能替代当前进程保护安装或最终镜像的负向�
    压缩算法，以及 remote 和 TokenBudget 路径。
 7. `patches/0007-release-test-home-root.patch`：测试初始化可从显式的私有根目录创建
    CODEX_HOME，避免 release 测试在枚举阶段触发系统临时目录限制；生产 arg0 检查不变。
+8. `patches/0008-native-compaction-test-fixtures.patch`：将原生压缩 Hook fixture 放入独立
+   子进程，覆盖真实 FD3 准入和隔离测试，不改变生产流程。
 
 上游 Apache-2.0 的 [LICENSE](UPSTREAM-LICENSE) 与 [NOTICE](UPSTREAM-NOTICE) 保持不变。
 没有修改共享 Cargo registry 或外部 `rmcp 3.1.3` 源码。
@@ -53,7 +55,7 @@ python3 deploy/runtime/vendor/codex/apply-source.py --source-checkout "$CODEX_SO
 
 ## 验证与验收边界
 
-必须按序应用全部七份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
+必须按序应用全部八份补丁，并核对 `build-input-v1.json` 的逐文件 SHA、Cargo/Bazel
 lock、Schema、corpus 和 coverage。manifest/lock 可解析、格式化通过或静态 probe
 声明均不能代替原生类型检查、聚焦测试和实际进程保护验证。
 

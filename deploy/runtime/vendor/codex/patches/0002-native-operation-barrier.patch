@@ -1679,6 +1679,7 @@ index 0000000..1bea28c
 +            .await
 +            .is_err()
 +    );
++    CHANNEL_POISONED.store(false, Ordering::Release);
 +}
 +
 +fn request() -> Request {
@@ -2365,7 +2366,12 @@ index 0000000..4ff1ea6
 +    if let Some(lifecycle) = lifecycle {
 +        lifecycle.finish(status).await?;
 +    }
-+    sources().lock().map_err(|_| BarrierError)?.remove(source);
++    let mut records = sources().lock().map_err(|_| BarrierError)?;
++    if let Some(record) = records.get_mut(source) {
++        // Retain the thread-level owner after the active turn finishes so later
++        // controls fail closed when they present an unknown or different owner.
++        record.lifecycle = None;
++    }
 +    Ok(())
 +}
 +
@@ -5398,17 +5404,20 @@ index 0000000..2f7c754
 +    pub attempt: Arc<dyn NativeHookAttempt>,
 +    pub dispatched: bool,
 +    finished: bool,
++    task: Option<Box<dyn NativeHookTask>>,
 +}
 +
 +impl CommandAttempt {
 +    pub async fn begin(run_id: String, event_name: &'static str) -> io::Result<Self> {
++        let factory = current()?;
++        let task = factory.scheduled()?;
 +        Ok(Self {
-+            attempt: current()?.begin_command(run_id, event_name).await?,
++            attempt: factory.begin_command(run_id, event_name).await?,
 +            dispatched: false,
 +            finished: false,
++            task: Some(task),
 +        })
 +    }
-+
 +    pub async fn finish(&mut self, result: NativeHookResult) -> io::Result<()> {
 +        self.attempt.finish(result).await?;
 +        self.finished = true;
@@ -5422,12 +5431,14 @@ index 0000000..2f7c754
 +            && let Ok(runtime) = tokio::runtime::Handle::try_current()
 +        {
 +            let attempt = Arc::clone(&self.attempt);
++            let task = self.task.take();
 +            let result = if self.dispatched {
 +                NativeHookResult::Unknown
 +            } else {
 +                NativeHookResult::Failed
 +            };
 +            runtime.spawn(async move {
++                let _task = task;
 +                let _ = attempt.finish(result).await;
 +            });
 +        }

@@ -302,7 +302,8 @@ class Builder:
 
     def build(self):
         inputs = self.inputs()
-        require(os.environ.get("CARGO_BUILD_JOBS") in {"2", "3"}
+        cargo_jobs = int(os.environ.get("CARGO_BUILD_JOBS", "0"))
+        require(str(cargo_jobs) in {"2", "3"}
                 and os.environ.get("CARGO_INCREMENTAL") == "0", "Unexpected Cargo resource settings")
         for name, expected in V8_FILES.items():
             require(digest(self.v8 / name) == "sha256:" + expected, "V8 input changed")
@@ -361,7 +362,7 @@ class Builder:
         save(self.diag / "build.json", {
             "head": self.head, "upstream": UPSTREAM, "target": TARGET, "profile": "release",
             "sourceTree": native_source_tree(self.vendor, self.source),
-            "jobs": 2, "incremental": False, "inputSha256": inputs, "tools": tools,
+            "jobs": cargo_jobs, "incremental": False, "inputSha256": inputs, "tools": tools,
             "commands": [command + ["--bin", "bwrap"], command + ["--bin", "codex", "--bin",
                          "codex-code-mode-host", "--bin", "codex-responses-api-proxy"]],
             "bwrapSha256": bwrap_sha, "binaries": hashes, "nativeAcceptance": False,
@@ -411,8 +412,17 @@ class Builder:
         artifact.mkdir()
         files = sorted(path for path in self.candidate.rglob("*") if path.is_file())
         expected_files = {**record["files"], "candidate.json": digest(self.candidate / "candidate.json")}
-        expected_modes = {str(path.relative_to(self.candidate)): stat.S_IMODE(path.stat().st_mode)
-                          for path in files}
+        executable_files = {f"bundle/{relative}" for relative in BINARIES.values()}
+        expected_modes = {
+            str(path.relative_to(self.candidate)): (0o755 if
+                str(path.relative_to(self.candidate)) in executable_files else 0o644)
+            for path in files
+        }
+        # The installer contract is independent of the builder umask. Normalize
+        # archive entries before sealing so a restrictive runner cannot produce
+        # an artifact that passes this build but is rejected during installation.
+        for path in files:
+            path.chmod(expected_modes[str(path.relative_to(self.candidate))])
         self.guard(sum(path.stat().st_size for path in files) + 1024**2)
         archive = artifact / "codex-candidate.tar.gz"
         with tarfile.open(archive, "w:gz") as stream:
