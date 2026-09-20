@@ -38,7 +38,8 @@ export function MyAgentApplicationDetailScreen({
 }: MyAgentApplicationDetailScreenProps) {
 	const [confirmationFor, setConfirmationFor] = useState<string | null>(null);
 	const [withdrawalLatched, setWithdrawalLatched] = useState(false);
-	const withdrawalPending = withdrawing || withdrawalLatched;
+	const withdrawalPending =
+		withdrawing || (withdrawalLatched && !withdrawalError);
 	const submittedResult =
 		state.kind === "ready" &&
 		withdrawalResult?.applicationId === state.application.applicationId
@@ -50,9 +51,6 @@ export function MyAgentApplicationDetailScreen({
 		state.kind === "ready"
 			? `${state.application.applicationId}:${state.application.status}`
 			: state.kind;
-	useEffect(() => {
-		if (withdrawalError && !withdrawing) setWithdrawalLatched(false);
-	}, [withdrawalError, withdrawing]);
 	useEffect(() => {
 		if (withdrawalError && !withdrawing) withdrawButtonRef.current?.focus();
 	}, [withdrawalError, withdrawing]);
