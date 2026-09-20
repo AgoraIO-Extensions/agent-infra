@@ -295,6 +295,19 @@ export function AdminAgentApplicationsScreen({
 	const [openApplicationId, setOpenApplicationId] = useState<string | null>(
 		null,
 	);
+	useEffect(() => {
+		const renderedPendingApplication =
+			session.kind === "ready" &&
+			isSystemAdministrator(session.session) &&
+			state.kind === "ready" &&
+			state.applications.some(
+				(application) =>
+					application.applicationId === openApplicationId &&
+					application.status === "pending_approval",
+			);
+		if (openApplicationId !== null && !renderedPendingApplication)
+			setOpenApplicationId(null);
+	}, [openApplicationId, session, state]);
 	if (session.kind === "loading")
 		return <p aria-live="polite">正在读取审批申请…</p>;
 	if (session.kind !== "ready" || !isSystemAdministrator(session.session))

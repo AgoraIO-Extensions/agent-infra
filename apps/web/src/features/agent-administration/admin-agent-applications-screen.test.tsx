@@ -325,4 +325,37 @@ describe("AdminAgentApplicationsScreen", () => {
 			expect(screen.getAllByRole("alert")).toHaveLength(1);
 		});
 	});
+
+	it("clears dialog ownership when the open application is unmounted", async () => {
+		const props = {
+			decisionError: Object.assign(new Error(), { retryable: true }),
+			onDecision: vi.fn(),
+			session: { kind: "ready" as const, session: administratorSession },
+			state: { kind: "ready" as const, applications: [pendingApplication] },
+		};
+		const { rerender } = render(<AdminAgentApplicationsScreen {...props} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
+		await screen.findByRole("dialog");
+		rerender(
+			<AdminAgentApplicationsScreen
+				{...props}
+				session={{ kind: "ready", session: ordinaryUserSession }}
+				state={{ kind: "ready", applications: [] }}
+			/>,
+		);
+		rerender(
+			<AdminAgentApplicationsScreen
+				{...props}
+				state={{ kind: "ready", applications: [] }}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(screen.getAllByRole("alert")).toHaveLength(1);
+			expect(screen.getByRole("alert").textContent).toBe(
+				"审批未能提交，请稍后重试。",
+			);
+		});
+	});
 });
