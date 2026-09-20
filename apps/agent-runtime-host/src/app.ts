@@ -123,6 +123,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			context.req.raw,
 			WorkloadReadinessRequestV1Schema,
 		);
+		options.host.verifyReadiness(request, options.readinessWorkerId);
 		return context.json(
 			await options.host.readiness(
 				request,

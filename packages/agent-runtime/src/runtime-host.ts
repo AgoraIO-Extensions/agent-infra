@@ -584,15 +584,7 @@ export class RuntimeHost {
 		const parsed = WorkloadReadinessRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		const verify = this.options.readinessVerifier;
-		if (!verify)
-			throw new RuntimeHostError(
-				"RUNTIME_READINESS_UNAVAILABLE",
-				"Workload readiness is not configured",
-				503,
-				true,
-			);
-		verify(request, authenticatedWorkerId);
+		this.verifyReadiness(request, authenticatedWorkerId);
 		if (!this.options.driver.probeReadiness) driverInvalid();
 		const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
 		bounded.throwIfAborted();
@@ -614,7 +606,7 @@ export class RuntimeHost {
 				this.options.driver.probeReadiness(bounded),
 			]);
 			bounded.throwIfAborted();
-			verify(request, authenticatedWorkerId);
+			this.verifyReadiness(request, authenticatedWorkerId);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
@@ -624,6 +616,23 @@ export class RuntimeHost {
 		} finally {
 			bounded.removeEventListener("abort", abort);
 		}
+	}
+
+	verifyReadiness(
+		value: WorkloadReadinessRequestV1,
+		authenticatedWorkerId: string,
+	) {
+		const parsed = WorkloadReadinessRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const verify = this.options.readinessVerifier;
+		if (!verify)
+			throw new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness is not configured",
+				503,
+				true,
+			);
+		verify(parsed.data, authenticatedWorkerId);
 	}
 
 	async capabilities(
