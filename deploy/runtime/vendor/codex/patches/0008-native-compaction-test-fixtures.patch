@@ -223,15 +223,13 @@ new file mode 100644
 +    ) {
 +        if let Some(marker) = std::env::var_os(CHILD_MARKER) {
 +            std::assert_eq!(marker.to_str(), Some(name), "unexpected isolated scenario");
-+            std::assert_eq!(
-+                codex_core::initialize_native_operation_barrier(),
-+                admission != Admission::Missing,
-+                "the real native bootstrap must match this scenario",
-+            );
++            codex_core::initialize_native_operation_barrier();
 +            if admission != Admission::Missing {
 +                // SAFETY: inspect the descriptor owned by the production bootstrap.
 +                let flags = unsafe { libc::fcntl(3, libc::F_GETFD) };
 +                assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
++            } else {
++                assert_eq!(unsafe { libc::fcntl(3, libc::F_GETFD) }, -1);
 +            }
 +            tokio::runtime::Builder::new_multi_thread()
 +                .worker_threads(2)

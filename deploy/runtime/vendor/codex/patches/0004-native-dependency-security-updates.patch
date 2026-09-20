@@ -3042,6 +3042,9 @@ index 8d9670a..ce889d6 100644
 +                            if let Some(mode) = request.extensions().get_ref::<NetworkMode>() {
 +                                extensions.insert(*mode);
 +                            }
++                            if let Some(state) = request.extensions().get_arc::<NetworkProxyState>() {
++                                extensions.insert_arc(state);
++                            }
 +                            if let Some(state) = request.extensions().get_arc::<mitm::MitmState>() {
 +                                extensions.insert_arc(state);
 +                            }
@@ -3142,7 +3145,7 @@ index 8d9670a..ce889d6 100644
          .unwrap_or(NetworkMode::Full);
 -    if stream.extensions().get::<Arc<mitm::MitmState>>().is_none() {
 -        return Err(OpaqueError::from_display(format!(
-+    if stream.extensions().get_ref::<mitm::MitmState>().is_none() {
++    if stream.extensions().get_arc::<mitm::MitmState>().is_none() {
 +        return Err(rama_core::error::ErrorExt::into_opaque_error(format!(
              "cannot enable MITM without state (host={host}, port={port})"
          )));
@@ -3257,7 +3260,11 @@ index 8d9670a..ce889d6 100644
 -        Ok(request_ctx) => request_ctx,
 -        Err(err) => {
 -            warn!("missing host: {err}");
-+    let authority = match req.connector_target_with_default_port(80) {
++    let default_port = match req.uri().scheme_str() {
++        Some(scheme) if scheme.eq_ignore_ascii_case("https") => 443,
++        _ => 80,
++    };
++    let authority = match req.connector_target_with_default_port(default_port) {
 +        Some(authority) => authority,
 +        None => {
 +            warn!("missing host");

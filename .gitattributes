@@ -1,1 +1,4 @@
 .github/workflows/*.lock.yml linguist-generated=true
+# Vendored upstream patches and notices preserve source formatting verbatim.
+deploy/runtime/vendor/codex/patches/*.patch whitespace=-trailing-space
+deploy/runtime/vendor/codex/licenses/*.txt whitespace=-trailing-space
