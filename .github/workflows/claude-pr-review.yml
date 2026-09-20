@@ -63,10 +63,15 @@ jobs:
         run: |
           mkdir -p .review-input
           gh pr view "$PR_NUMBER" \
-            --json author,baseRefName,body,commits,files,headRefName,headRefOid,title,url \
+            --json author,baseRefName,baseRefOid,body,commits,files,headRefName,headRefOid,title,url \
             > .review-input/pr.json
           test "$(jq -r '.headRefOid' .review-input/pr.json)" = "$EXPECTED_HEAD_SHA"
-          gh pr diff "$PR_NUMBER" > .review-input/pr.diff
+          BASE_SHA="$(jq -r '.baseRefOid // empty' .review-input/pr.json)"
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git -C pr-head fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git -C pr-head diff --no-ext-diff --binary --unified=80 \
+            "$BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff
+          test -s .review-input/pr.diff
           test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')" = "$EXPECTED_HEAD_SHA"
 
       - name: Validate Claude Review configuration
