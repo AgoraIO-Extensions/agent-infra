@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileRuntimeStore } from "@agent-infra/agent-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRuntimeLegacyMigrationV1 } from "./legacy-migration.js";
 import {
 	createLegacyMigrationFixture,
@@ -22,9 +22,15 @@ import {
 } from "./legacy-migration.test-support.js";
 
 const directories: string[] = [];
+beforeEach(() => {
+	// Fixtures are created by the test process; model the separately-owned
+	// deployment mounts that production requires.
+	vi.spyOn(process, "getuid").mockReturnValue(65534);
+});
 afterEach(async () => {
 	for (const directory of directories.splice(0))
 		await rm(directory, { recursive: true, force: true });
+	vi.restoreAllMocks();
 });
 async function fixture() {
 	const directory = await mkdtemp(join(tmpdir(), "legacy-migration-"));

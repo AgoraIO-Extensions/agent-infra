@@ -14,6 +14,8 @@ import {
 import { ExecutionGrantV1Schema } from "./grant.ts";
 
 const positiveFence = z.number().int().positive();
+const runtimeInputText = z.string().min(1).max(1_048_576);
+const runtimeInputAttachment = z.string().min(1).max(256);
 const requestContext = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
@@ -31,10 +33,12 @@ const requestContext = {
 
 export const RuntimeInputV1Schema = z.union([
 	z.strictObject({
-		text: z.string().min(1),
-		attachments: z.array(OpaqueIdV1Schema),
+		text: runtimeInputText,
+		attachments: z.array(runtimeInputAttachment).max(256),
 	}),
-	z.strictObject({ attachments: z.array(OpaqueIdV1Schema).min(1) }),
+	z.strictObject({
+		attachments: z.array(runtimeInputAttachment).min(1).max(256),
+	}),
 ]);
 
 export const RuntimeSubmitTurnRequestV1Schema = z.strictObject({

@@ -199,6 +199,22 @@ describe("RuntimeHost V1 wire schemas", () => {
 			}).success,
 		).toBe(false);
 		expect(
+			RuntimeSubmitTurnRequestV1Schema.safeParse({
+				...requestContext,
+				input: { text: "x".repeat(1_048_577), attachments: [] },
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeSubmitTurnRequestV1Schema.safeParse({
+				...requestContext,
+				input: {
+					attachments: Array.from({ length: 257 }, (_, index) =>
+						`attachment-${index}`,
+					),
+				},
+			}).success,
+		).toBe(false);
+		expect(
 			RuntimeEventV1Schema.safeParse({
 				schemaVersion: 1,
 				adapterEventKey: "adapter-event-5",

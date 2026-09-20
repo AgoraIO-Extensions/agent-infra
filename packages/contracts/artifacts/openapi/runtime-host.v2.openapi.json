@@ -270,12 +270,15 @@
                     "properties": {
                       "attachments": {
                         "items": {
+                          "maxLength": 256,
                           "minLength": 1,
                           "type": "string"
                         },
+                        "maxItems": 256,
                         "type": "array"
                       },
                       "text": {
+                        "maxLength": 1048576,
                         "minLength": 1,
                         "type": "string"
                       }
@@ -291,9 +294,11 @@
                     "properties": {
                       "attachments": {
                         "items": {
+                          "maxLength": 256,
                           "minLength": 1,
                           "type": "string"
                         },
+                        "maxItems": 256,
                         "minItems": 1,
                         "type": "array"
                       }
@@ -495,12 +500,15 @@
                 "properties": {
                   "attachments": {
                     "items": {
+                      "maxLength": 256,
                       "minLength": 1,
                       "type": "string"
                     },
+                    "maxItems": 256,
                     "type": "array"
                   },
                   "text": {
+                    "maxLength": 1048576,
                     "minLength": 1,
                     "type": "string"
                   }
@@ -516,9 +524,11 @@
                 "properties": {
                   "attachments": {
                     "items": {
+                      "maxLength": 256,
                       "minLength": 1,
                       "type": "string"
                     },
+                    "maxItems": 256,
                     "minItems": 1,
                     "type": "array"
                   }

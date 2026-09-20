@@ -51,12 +51,15 @@ async function readMountedFile(
 		const openedTarget = await realpath(path);
 		const pathInfo = await lstat(path);
 		const info = await handle.stat();
+		const runtimeUid = process.getuid?.();
 		if (
+			runtimeUid === undefined ||
 			openedTarget !== target ||
 			pathInfo.dev !== info.dev ||
 			pathInfo.ino !== info.ino ||
 			!info.isFile() ||
 			info.nlink !== 1 ||
+			info.uid === runtimeUid ||
 			info.size === 0 ||
 			info.size > maximumBytes ||
 			(info.mode & 0o022) !== 0

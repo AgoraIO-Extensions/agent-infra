@@ -324,9 +324,6 @@ export class RuntimeHost {
 	async close() {
 		await this.v3?.close();
 	}
-	private requireLegacyHost() {
-		if (this.v3) runtimeAuthorizationDenied();
-	}
 
 	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
 		return this.trustedHost().submitTurn(value, verification);
@@ -406,7 +403,6 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -423,7 +419,6 @@ export class RuntimeHost {
 		value: RuntimeSubmitTurnRequestV2,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV2> {
-		this.requireLegacyHost();
 		const parsed = RuntimeSubmitTurnRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -494,7 +489,6 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV1,
 		verification: unknown,
 	): Promise<RuntimeStatusResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeStatusRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -521,7 +515,6 @@ export class RuntimeHost {
 		value: RuntimeStatusRequestV2,
 		verification: unknown,
 	): Promise<RuntimeStatusResponseV2> {
-		this.requireLegacyHost();
 		const parsed = RuntimeStatusRequestV2Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -637,7 +630,6 @@ export class RuntimeHost {
 		value: RuntimeCapabilitiesRequestV1,
 		verification: unknown,
 	): Promise<RuntimeCapabilitiesResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeCapabilitiesRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -668,7 +660,6 @@ export class RuntimeHost {
 		value: RuntimeReplayRequestV1,
 		verification: unknown,
 	): Promise<RuntimeReplayResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -711,7 +702,6 @@ export class RuntimeHost {
 		verification: unknown,
 		signal?: AbortSignal,
 	) {
-		this.requireLegacyHost();
 		const parsed = RuntimeReplayRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -756,7 +746,6 @@ export class RuntimeHost {
 		value: RuntimeSupplementRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeSupplementRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -811,7 +800,6 @@ export class RuntimeHost {
 		value: RuntimeStopRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeStopRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -864,7 +852,6 @@ export class RuntimeHost {
 		value: RuntimeGenerationCancelRequestV1,
 		verification: unknown,
 	): Promise<RuntimeOperationResponseV1> {
-		this.requireLegacyHost();
 		const parsed = RuntimeGenerationCancelRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
