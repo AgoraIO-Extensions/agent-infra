@@ -151,9 +151,11 @@ new file mode 100644
 +    _name: &str,
 +    _admission: Admission,
 +    _event: &str,
-+    _scenario: impl std::future::Future<Output = ()>,
++    scenario: impl std::future::Future<Output = ()>,
 +) {
-+    panic!("native hook admission requires an anonymous Unix socket");
++    // The private admission transport is Unix-only; preserve the upstream suite
++    // on Windows by skipping this transport-specific scenario.
++    drop(scenario);
 +}
 +
 +#[cfg(unix)]

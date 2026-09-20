@@ -3175,15 +3175,15 @@
     },
     {
       "path": "patches/0002-native-operation-barrier.patch",
-      "sha256": "sha256:542f22aa43817cbcadb8a3a84f496df74f57c8cf749e06d5e7caf0192e57fde0"
+      "sha256": "sha256:5c57f3dc0f24879a5b239ea24b86b0e7a6fa5f39301c02ed933dedd583046ba0"
     },
     {
       "path": "patches/0003-protected-connection-client.patch",
-      "sha256": "sha256:472ea19f98d6840055c4c5a4ce35cf7e58bcf2d4da3633f592dbd6fbf81b07b1"
+      "sha256": "sha256:727780283ef37935da49ae3ca000a00ecfabf931269ffb30f4dd2f318cea59bf"
     },
     {
       "path": "patches/0004-native-dependency-security-updates.patch",
-      "sha256": "sha256:0ae72d58882e863a663f9b4c181bf13a4c68131b9b96e458baacff08fab39252"
+      "sha256": "sha256:4ea0b5946c6d54bec8d5483f39a6a0d47781c81b2c08a10e7bac840281d9e23b"
     },
     {
       "path": "patches/0005-tls-error-chain-and-test-backend.patch",
@@ -3199,7 +3199,7 @@
     },
     {
       "path": "patches/0008-native-compaction-test-fixtures.patch",
-      "sha256": "sha256:35bab638fe4b0b705e79a04b9065e8446d7e9f1488e7685629a28fe28edb0df9"
+      "sha256": "sha256:f6a500575da4236cf4c63c962f9d6a46243f231b53eeda0eaa2ff667d75fc775"
     }
   ],
   "sourceFiles": [
@@ -3669,8 +3669,8 @@
     "bazelValidation": "just bazel-lock-update passed after the final dependency manifest change"
   },
   "callbackInputs": {
-    "callback-v1.schema.json": "sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2",
-    "callback-v2.schema.json": "sha256:62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c",
+    "callback-v1.schema.json": "sha256:6398fc614b9b442619f244544ad56392b96f76b3f97779f41d0a709775f493c6",
+    "callback-v2.schema.json": "sha256:9d7009ac6e8587b492139fc921689f48c76aab487f681bafa88687f101c49f80",
     "callback-v2-corpus.json": "sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a",
     "coverage-v1.json": "sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c",
     "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
