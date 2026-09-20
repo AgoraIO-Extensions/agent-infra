@@ -87,9 +87,11 @@ function ApplicationReview({
 	const [rejecting, setRejecting] = useState(false);
 	const [reason, setReason] = useState("");
 	const [reasonError, setReasonError] = useState(false);
+	const [localDecisionPending, setLocalDecisionPending] = useState(false);
 	const reasonId = useId();
 	const reasonInput = useRef<HTMLTextAreaElement>(null);
 	const deciding = pendingDecision !== undefined;
+	const decisionSubmitting = deciding || localDecisionPending;
 	const currentDecision =
 		pendingDecision?.applicationId === application.applicationId
 			? pendingDecision.decision
@@ -109,11 +111,14 @@ function ApplicationReview({
 	useEffect(() => {
 		if (resolved && open) close();
 	}, [close, open, resolved]);
+	useEffect(() => {
+		if (decisionError) setLocalDecisionPending(false);
+	}, [decisionError]);
 	return (
 		<Dialog
 			open={open && !resolved}
 			onOpenChange={(next) => {
-				if (deciding) return;
+				if (decisionSubmitting) return;
 				if (next) {
 					setOpen(true);
 					onOpenChange?.(true);
@@ -122,11 +127,11 @@ function ApplicationReview({
 		>
 			<DialogTrigger
 				className={buttonVariants({ variant: "outline" })}
-				disabled={deciding || resolved}
+				disabled={decisionSubmitting || resolved}
 			>
 				{currentDecision ? "审批提交中…" : "审阅申请"}
 			</DialogTrigger>
-			<DialogContent showCloseButton={!deciding}>
+			<DialogContent showCloseButton={!decisionSubmitting}>
 				<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
 				<DialogDescription>
 					{rejecting
@@ -189,12 +194,14 @@ function ApplicationReview({
 						</p>
 						<div className="mt-5 flex flex-wrap gap-3">
 							<Button
-								disabled={deciding || resolved}
+								disabled={decisionSubmitting || resolved}
 								onClick={() => {
-									if (!deciding && !resolved)
+									if (!decisionSubmitting && !resolved) {
+										setLocalDecisionPending(true);
 										onDecision(application.applicationId, {
 											decision: "approve",
 										});
+									}
 								}}
 							>
 								{currentDecision?.decision === "approve"
@@ -203,12 +210,16 @@ function ApplicationReview({
 							</Button>
 							<Button
 								variant="outline"
-								disabled={deciding}
+								disabled={decisionSubmitting}
 								onClick={() => setRejecting(true)}
 							>
 								驳回
 							</Button>
-							<Button variant="ghost" disabled={deciding} onClick={close}>
+							<Button
+								variant="ghost"
+								disabled={decisionSubmitting}
+								onClick={close}
+							>
 								取消
 							</Button>
 						</div>
@@ -219,13 +230,14 @@ function ApplicationReview({
 						noValidate
 						onSubmit={(event) => {
 							event.preventDefault();
-							if (deciding || resolved) return;
+							if (decisionSubmitting || resolved) return;
 							const trimmedReason = reason.trim();
 							if (!trimmedReason) {
 								setReasonError(true);
 								reasonInput.current?.focus();
 								return;
 							}
+							setLocalDecisionPending(true);
 							onDecision(application.applicationId, {
 								decision: "reject",
 								reason: trimmedReason,
@@ -237,7 +249,7 @@ function ApplicationReview({
 							<Textarea
 								ref={reasonInput}
 								id={reasonId}
-								disabled={deciding}
+								disabled={decisionSubmitting}
 								required
 								value={reason}
 								aria-invalid={reasonError || undefined}
@@ -258,14 +270,14 @@ function ApplicationReview({
 							)}
 						</div>
 						<div className="flex flex-wrap gap-3">
-							<Button disabled={deciding || resolved} type="submit">
+							<Button disabled={decisionSubmitting || resolved} type="submit">
 								{currentDecision?.decision === "reject"
 									? "提交中…"
 									: "确认驳回"}
 							</Button>
 							<Button
 								variant="outline"
-								disabled={deciding}
+								disabled={decisionSubmitting}
 								onClick={() => setRejecting(false)}
 								type="button"
 							>

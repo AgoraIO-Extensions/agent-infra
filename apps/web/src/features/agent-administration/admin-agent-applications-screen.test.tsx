@@ -159,6 +159,38 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 	});
 
+	it("latches a decision before the parent rerenders and releases on error", async () => {
+		const onDecision = vi.fn();
+		const props = {
+			onDecision,
+			session: { kind: "ready" as const, session: administratorSession },
+			state: { kind: "ready" as const, applications: [pendingApplication] },
+		};
+		const { rerender } = render(<AdminAgentApplicationsScreen {...props} />);
+		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
+		await screen.findByRole("dialog");
+		const approve = screen.getByRole("button", { name: "批准并创建" });
+		fireEvent.click(approve);
+		fireEvent.click(approve);
+		expect(onDecision).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<AdminAgentApplicationsScreen
+				{...props}
+				decisionError={Object.assign(new Error(), { retryable: true })}
+			/>,
+		);
+		await waitFor(() =>
+			expect(
+				screen
+					.getByRole("button", { name: "批准并创建" })
+					.getAttribute("disabled"),
+			).toBeNull(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "批准并创建" }));
+		expect(onDecision).toHaveBeenCalledTimes(2);
+	});
+
 	it("removes an open review if the session loses administrator access", async () => {
 		const onDecision = vi.fn();
 		const { rerender } = render(
