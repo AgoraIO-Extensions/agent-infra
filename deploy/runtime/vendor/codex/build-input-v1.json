@@ -3673,7 +3673,7 @@
     "callback-v2.schema.json": "sha256:9d7009ac6e8587b492139fc921689f48c76aab487f681bafa88687f101c49f80",
     "callback-v2-corpus.json": "sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a",
     "coverage-v1.json": "sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c",
-    "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
+    "native-barrier-v1.json": "sha256:39ff9aa8b34b90e72b5f72be8c0683237dd2b8fcf9cc207c7d217104bce5e20e"
   },
   "currentValidation": {
     "format": "just fmt passed on the complete patched source with Rust 1.96.0; only the owned compact.rs and new test fixture differ from the previous frozen inventory",
