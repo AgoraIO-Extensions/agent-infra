@@ -7,6 +7,7 @@ import type {
 import { jenkinsExecutorDigest } from "./jenkins-integrity.ts";
 
 const credentialScope = "jenkins.read";
+const maxArtifactBytes = 256 * 1024;
 const maxConsoleBytes = 256 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 30_000;
@@ -70,6 +71,18 @@ const actionSpecs = [
 			start: { minimum: 0, type: "integer" },
 		},
 		required: ["jobFullName", "buildNumber", "start"],
+	},
+	{
+		description:
+			"按字节游标读取 Jenkins Build artifact，单次最多返回 256 KiB；文本同时返回 text，其他内容返回 Base64。",
+		name: "get_build_artifact",
+		properties: {
+			artifactPath: { minLength: 1, type: "string" },
+			buildNumber: { minimum: 1, type: "integer" },
+			jobFullName: { minLength: 1, type: "string" },
+			start: { minimum: 0, type: "integer" },
+		},
+		required: ["jobFullName", "buildNumber", "artifactPath", "start"],
 	},
 	{
 		description: "按 Queue item ID 获取 Jenkins 排队状态。",
@@ -189,6 +202,12 @@ export class JenkinsAdapter
 					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/logText/progressiveText?start=${nonNegativeInteger(input.input, "start")}`,
 					nonNegativeInteger(input.input, "start"),
 				);
+			case "get_build_artifact":
+				return this.requestArtifact(
+					credential,
+					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/artifact/${artifactPath(input.input)}`,
+					nonNegativeInteger(input.input, "start"),
+				);
 			case "get_queue_item":
 				return this.requestJson(
 					credential,
@@ -290,6 +309,64 @@ export class JenkinsAdapter
 		};
 	}
 
+	private async requestArtifact(
+		credential: JenkinsCredential,
+		path: string,
+		start: number,
+	) {
+		const response = await this.fetchRead(
+			new URL(path, this.profile.apiOrigin),
+			{
+				headers: {
+					accept: "*/*",
+					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
+					range: `bytes=${start}-${start + maxArtifactBytes - 1}`,
+				},
+				redirect: "manual",
+			},
+		);
+		if (response.status === 401 || response.status === 403) {
+			throw invalidCredential("Jenkins credential was rejected");
+		}
+		if (response.status >= 300 && response.status < 400) {
+			throw providerError("Jenkins request redirected");
+		}
+		if (!response.ok) {
+			throw providerError(
+				`Jenkins request failed with HTTP ${response.status}`,
+				{ providerStatus: response.status },
+			);
+		}
+		if (start > 0 && response.status !== 206) {
+			throw providerError("Jenkins artifact does not support ranged reads");
+		}
+		const { bytes, truncated } = await readLimitedBytes(
+			response,
+			maxArtifactBytes,
+		);
+		const contentRange = parseContentRange(
+			response.headers.get("content-range"),
+		);
+		const size =
+			contentRange?.size ?? Number(response.headers.get("content-length"));
+		const nextStart = start + bytes.byteLength;
+		const mimeType =
+			response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
+			"application/octet-stream";
+		return {
+			contentBase64: Buffer.from(bytes).toString("base64"),
+			...(isTextMimeType(mimeType)
+				? { text: new TextDecoder().decode(bytes) }
+				: {}),
+			mimeType,
+			moreData:
+				truncated || (Number.isSafeInteger(size) && nextStart < Number(size)),
+			nextStart,
+			size: Number.isSafeInteger(size) ? Number(size) : undefined,
+			truncated,
+		};
+	}
+
 	private async fetchRead(input: URL, init: RequestInit) {
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			const controller = new AbortController();
@@ -347,6 +424,18 @@ function jobPath(input: JsonObject) {
 		.join("");
 }
 
+function artifactPath(input: JsonObject) {
+	const path = stringValue(input, "artifactPath");
+	const segments = path?.split("/");
+	if (
+		!segments?.length ||
+		segments.some((segment) => !segment || segment === "." || segment === "..")
+	) {
+		throw providerError("Jenkins artifactPath is invalid");
+	}
+	return segments.map(encodeURIComponent).join("/");
+}
+
 function positiveInteger(input: JsonObject, name: string) {
 	const value = input[name];
 	if (!Number.isSafeInteger(value) || Number(value) < 1) {
@@ -390,6 +479,21 @@ async function readLimitedBytes(response: Response, limit: number) {
 		offset += chunk.byteLength;
 	}
 	return { bytes, truncated };
+}
+
+function parseContentRange(value: string | null) {
+	const match = value?.match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+	if (!match) return undefined;
+	const size = Number(match[3]);
+	return Number.isSafeInteger(size) ? { size } : undefined;
+}
+
+function isTextMimeType(value: string) {
+	return (
+		value.startsWith("text/") ||
+		value === "application/json" ||
+		value === "application/xml"
+	);
 }
 
 function stringValue(input: JsonObject, name: string) {

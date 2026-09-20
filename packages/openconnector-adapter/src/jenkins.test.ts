@@ -135,6 +135,89 @@ test("Jenkins truncates a console page at 256 KiB", async () => {
 	assert.equal(result.truncated, true);
 });
 
+test("Jenkins reads bounded text artifacts with byte ranges", async () => {
+	const requests: Request[] = [];
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async (input, init) => {
+			requests.push(new Request(input, init));
+			return new Response("compile error\n", {
+				headers: {
+					"content-range": "bytes 10-23/24",
+					"content-type": "text/plain; charset=utf-8",
+				},
+				status: 206,
+			});
+		},
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "logs/compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 10,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: Buffer.from("compile error\n").toString("base64"),
+		mimeType: "text/plain",
+		moreData: false,
+		nextStart: 24,
+		size: 24,
+		text: "compile error\n",
+		truncated: false,
+	});
+	assert.equal(
+		requests[0]?.url,
+		"http://114.94.148.35:8010/job/AD/job/Agora-Iris/4342/artifact/logs/compile.log",
+	);
+	assert.equal(requests[0]?.headers.get("range"), "bytes=10-262153");
+});
+
+test("Jenkins returns binary artifacts as Base64 and rejects path injection", async () => {
+	let requests = 0;
+	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		requests += 1;
+		return new Response(new Uint8Array([0, 255]), {
+			headers: { "content-length": "2" },
+		});
+	});
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "output.zip",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "AP8=",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 2,
+		size: 2,
+		truncated: false,
+	});
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "../secrets.txt",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifactPath is invalid/,
+	);
+	assert.equal(requests, 1);
+});
+
 test("Jenkins credential validation fails closed on auth errors and redirects", async () => {
 	for (const response of [
 		new Response("denied", { status: 401 }),
