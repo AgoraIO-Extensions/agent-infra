@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import {
+	createHash,
+	generateKeyPairSync,
+	randomBytes,
+	sign,
+} from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -12,6 +18,7 @@ import {
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
 import {
@@ -386,60 +393,164 @@ const model = createServer(async (request, response) => {
 	}
 });
 
-function grant(binding) {
-	const claims = {
-		schemaVersion: 1,
-		issuer: "synthetic-platform",
-		audience: ["runtime_host"],
-		issuedAt: new Date(Date.now() - 30_000).toISOString(),
-		expiresAt: new Date(Date.now() + 300_000).toISOString(),
-		grantId: `grant-${randomBytes(8).toString("hex")}`,
-		agentId: binding.agentId,
-		actorId: binding.actorId,
-		channelId: binding.channelId,
-		conversationId: binding.conversationId,
-		executionId: binding.executionId,
-		turnId: binding.turnId,
-		sessionGeneration: binding.sessionGeneration,
-		traceId: binding.traceId,
-		allowedCommands: [
-			"turn.submit",
-			"turn.stop",
-			"generation.cancel",
-			"session.status",
-			"events.replay",
-		],
-		attachments: [],
-		actionSetVersion: "synthetic-actions",
-		actionIds: [],
-	};
-	const protectedSegment = Buffer.from(
-		JSON.stringify({ alg: "EdDSA", kid: "synthetic-key" }),
-	).toString("base64url");
-	const input = `${protectedSegment}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
-	return {
-		schemaVersion: 1,
-		format: "compact-jws",
-		token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}`,
-	};
-}
+// Only the isolated image probe owns these synthetic identities and signing keys.
+export const runtimeProbeWorkerId = "synthetic-worker";
+let protocol;
 
-function binding(name, overrides = {}) {
-	const value = {
-		schemaVersion: 1,
-		requestId: `request-${name}`,
-		agentId: "synthetic-agent",
-		actorId: "synthetic-actor",
-		channelId: "web",
-		conversationId: `conversation-${name}`,
-		executionId: `execution-${name}`,
-		turnId: `turn-${name}`,
-		sessionGeneration: 1,
-		deliveryFence: 1,
-		traceId: `trace-${name}`,
-		...overrides,
+export function createRuntimeProbeProtocol({
+	contracts,
+	requestDigest,
+	privateKey,
+	now = Date.now,
+}) {
+	const schemas = {
+		"turn.submit": contracts.RuntimeSubmitTurnRequestV3Schema,
+		"turn.stop": contracts.RuntimeStopRequestV3Schema,
+		"generation.cancel": contracts.RuntimeGenerationCancelRequestV3Schema,
+		"session.status": contracts.RuntimeStatusRequestV3Schema,
+		"events.persist": contracts.RuntimeEventPersistRequestV3Schema,
+		"events.ack": contracts.RuntimeEventAckRequestV3Schema,
 	};
-	return { ...value, grant: grant(value) };
+	function signRequest(value, command, reason) {
+		const request = {
+			...value,
+			requestId: `request-${randomBytes(12).toString("hex")}`,
+		};
+		const issuedAt = now();
+		const claims = contracts.RuntimeExecutionGrantClaimsV2Schema.parse({
+			schemaVersion: 2,
+			issuer: "synthetic-platform",
+			audience: "runtime_host",
+			workerId: runtimeProbeWorkerId,
+			issuedAt,
+			expiresAt: issuedAt + contracts.RuntimeExecutionGrantMaximumLifetimeMsV2,
+			grantId: `grant-${randomBytes(12).toString("hex")}`,
+			principal: request.principal,
+			agentId: request.agentId,
+			channelId: request.channelId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			traceId: request.traceId,
+			hostSessionRef: request.hostSessionRef,
+			operation: request.operation,
+			allowedCommands: [command],
+			requestDigest: createHash("sha256")
+				.update(contracts.runtimeRequestSigningPayloadV3(request))
+				.digest("hex"),
+			...(reason
+				? {
+						purpose: "control",
+						controlRecordId: `control-${request.executionId}-${reason}`,
+						reason,
+					}
+				: {
+						purpose: "business",
+						authorizationRecordId: `authorization-${request.executionId}`,
+						attachments: (request.input?.attachments ?? []).map(
+							(attachmentId) => ({ attachmentId, operations: ["read"] }),
+						),
+					}),
+			...(command === "events.persist"
+				? {
+						eventAccess: {
+							command,
+							consumer: request.consumer,
+							afterCursor: request.afterCursor,
+						},
+					}
+				: command === "events.ack"
+					? {
+							eventAccess: {
+								command,
+								consumer: request.consumer,
+								confirmedCursor: request.confirmedCursor,
+							},
+						}
+					: {}),
+		});
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: "synthetic-key",
+				typ: "runtime-execution+jws",
+			}),
+		).toString("base64url");
+		const input = `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+		return schemas[command].parse({
+			...request,
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}`,
+			},
+		});
+	}
+	function binding(name, overrides = {}) {
+		const value = {
+			schemaVersion: 3,
+			requestId: `request-${name}`,
+			agentId: "synthetic-agent",
+			principal: { kind: "user", id: "synthetic-actor" },
+			channelId: "web",
+			conversationId: `conversation-${name}`,
+			executionId: `execution-${name}`,
+			turnId: `turn-${name}`,
+			sessionGeneration: 1,
+			hostSessionRef: null,
+			traceId: `trace-${name}`,
+			...overrides,
+		};
+		return {
+			...value,
+			operation: {
+				kind: "execution",
+				id: value.executionId,
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			},
+		};
+	}
+	function originalOperationDigest(submit) {
+		return requestDigest({
+			kind: "submit-turn",
+			agentId: submit.agentId,
+			conversationId: submit.conversationId,
+			executionId: submit.executionId,
+			turnId: submit.turnId,
+			sessionGeneration: submit.sessionGeneration,
+			input: submit.input,
+			...(submit.selection ? { selection: submit.selection } : {}),
+		});
+	}
+	return {
+		binding,
+		signRequest,
+		originalOperationDigest,
+		status(submitted, reason = "recovery") {
+			return signRequest(
+				{
+					...submitted.lookup,
+					originalOperationDigest: submitted.originalOperationDigest,
+				},
+				"session.status",
+				reason,
+			);
+		},
+		parseEvents(text, executionId) {
+			return text
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) => {
+					const event = contracts.RuntimeEventSchema.parse(
+						JSON.parse(line.slice(6)),
+					);
+					assert.equal(event.executionId, executionId);
+					return event;
+				});
+		},
+	};
 }
 
 function deployment(origin, directory) {
@@ -452,6 +563,7 @@ function deployment(origin, directory) {
 		OPENAI_BASE_URL: "http://127.0.0.1:1/forbidden",
 		AGENT_INFRA_RUNTIME_DRIVER: "codex",
 		AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+		AGENT_INFRA_RUNTIME_WORKER_ID: runtimeProbeWorkerId,
 		AGENT_INFRA_RUNTIME_DATA_DIR: directory,
 		AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "synthetic-key",
 		AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKeyPem,
@@ -487,7 +599,7 @@ function deployment(origin, directory) {
 }
 
 async function launch(environment, rejection) {
-	const child = spawn(process.execPath, ["/app/dist/index.mjs"], {
+	const child = spawn("/bin/sh", ["/app/start-runtime-host.sh"], {
 		cwd: "/app",
 		env: environment,
 		stdio: ["ignore", "pipe", "pipe"],
@@ -630,7 +742,7 @@ async function request(path, body, token = serviceToken) {
 }
 
 async function submitTurn(name, selection, session = undefined) {
-	const base = binding(
+	const base = protocol.binding(
 		name,
 		session
 			? {
@@ -639,13 +751,15 @@ async function submitTurn(name, selection, session = undefined) {
 				}
 			: {},
 	);
-	const submit = {
-		...base,
-		schemaVersion: selection ? 2 : 1,
-		input: { text: "synthetic-runtime-input", attachments: [] },
-		...(selection ? { selection } : {}),
-	};
-	const path = `v${submit.schemaVersion}/turns`;
+	const submit = protocol.signRequest(
+		{
+			...base,
+			input: { text: "synthetic-runtime-input", attachments: [] },
+			...(selection ? { selection } : {}),
+		},
+		"turn.submit",
+	);
+	const path = "v3/turns";
 	let accepted;
 	return probeStep(
 		`${name}-submit`,
@@ -655,7 +769,13 @@ async function submitTurn(name, selection, session = undefined) {
 			assert.equal(accepted.status, 200);
 			assert.equal(result.result.outcome, "accepted");
 			const lookup = { ...base, hostSessionRef: result.hostSessionRef };
-			return { lookup, submit, path, accepted: result };
+			return {
+				lookup,
+				submit,
+				path,
+				accepted: result,
+				originalOperationDigest: protocol.originalOperationDigest(submit),
+			};
 		},
 		() => ({
 			httpStatus: accepted?.status,
@@ -671,20 +791,30 @@ async function turn(
 	selection,
 	expectedStatus = "completed",
 	session = undefined,
+	beforePersist = undefined,
+	checkStatus = true,
 ) {
 	const submitted = await submitTurn(name, selection, session);
+	await beforePersist?.(submitted);
 	const { lookup } = submitted;
 	let events;
 	await probeStep(
 		`${name}-events`,
 		async () => {
-			events = await request("v1/events/stream", lookup);
+			events = await request(
+				"v3/events/stream",
+				protocol.signRequest(
+					{
+						...lookup,
+						consumer: "platform_worker_persistence",
+						afterCursor: null,
+					},
+					"events.persist",
+				),
+			);
 			assert.equal(events.status, 200);
 			assert.ok(events.contentType.includes("text/event-stream"));
-			const frames = events.text
-				.split("\n")
-				.filter((line) => line.startsWith("data: "))
-				.map((line) => JSON.parse(line.slice(6)));
+			const frames = protocol.parseEvents(events.text, lookup.executionId);
 			assert.ok(
 				frames.some(
 					(event) =>
@@ -700,15 +830,35 @@ async function turn(
 							event.payload.delta.includes("synthetic runtime answer"),
 					),
 				);
+			const confirmedCursor = frames.at(-1).cursor;
+			const ack = await request(
+				"v3/events/ack",
+				protocol.signRequest(
+					{
+						...lookup,
+						consumer: "platform_worker_persistence",
+						confirmedCursor,
+					},
+					"events.ack",
+				),
+			);
+			assert.equal(ack.status, 200);
+			assert.deepEqual(JSON.parse(ack.text), {
+				schemaVersion: 3,
+				executionId: lookup.executionId,
+				confirmedCursor,
+			});
 		},
 		() => ({ httpStatus: events?.status }),
 	);
+	if (!checkStatus) return submitted;
 	let status;
 	await probeStep(
 		`${name}-status`,
 		async () => {
-			status = await request("v1/status", lookup);
+			status = await request("v3/status", protocol.status(submitted));
 			assert.equal(status.status, 200);
+			assert.equal(JSON.parse(status.text).outcome, "found");
 			assert.equal(JSON.parse(status.text).status, expectedStatus);
 		},
 		() => ({
@@ -746,7 +896,19 @@ async function assertNoSensitiveDataOnDisk(directory) {
 	}
 }
 
-try {
+async function runImageProbe() {
+	// These are the deployed Host dependencies, never a source checkout fallback.
+	const contracts = await import(
+		"/app/node_modules/@agent-infra/contracts/dist/runtime/index.mjs"
+	);
+	const { requestDigest } = await import(
+		"/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs"
+	);
+	protocol = createRuntimeProbeProtocol({
+		contracts,
+		requestDigest,
+		privateKey,
+	});
 	await new Promise((resolve) => model.listen(0, "127.0.0.1", resolve));
 	const origin = `http://127.0.0.1:${model.address().port}`;
 	await mkdir("/tmp/personal", { recursive: true });
@@ -793,6 +955,8 @@ try {
 			},
 			"completed",
 			defaultTurn.lookup,
+			undefined,
+			false,
 		);
 		check(
 			"native-execution-selection",
@@ -802,36 +966,59 @@ try {
 				requests[1].effort === "high" &&
 				requests[1].authenticated,
 		);
-		const replayed = await request(selected.path, selected.submit);
+		const replayed = await request(
+			selected.path,
+			protocol.signRequest(
+				{ ...selected.submit, hostSessionRef: selected.lookup.hostSessionRef },
+				"turn.submit",
+			),
+		);
 		check(
 			"submit-idempotency",
 			replayed.status === 200 && requests.length === 2,
 		);
-		const conflicting = await request(selected.path, {
-			...selected.submit,
-			selection: {
-				schemaVersion: 1,
-				modelOptionId: "default-option",
-				reasoningLevel: "medium",
-			},
-		});
+		const conflicting = await request(
+			selected.path,
+			protocol.signRequest(
+				{
+					...selected.submit,
+					hostSessionRef: selected.lookup.hostSessionRef,
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "default-option",
+						reasoningLevel: "medium",
+					},
+				},
+				"turn.submit",
+			),
+		);
 		check(
 			"selection-conflict",
 			conflicting.status === 409 && requests.length === 2,
 		);
 		stage = "grant-rejections";
+		const freshSubmission = protocol.signRequest(
+			selected.submit,
+			"turn.submit",
+		);
 		const invalid = await request(selected.path, {
-			...selected.submit,
+			...freshSubmission,
 			grant: {
-				...selected.submit.grant,
-				token: `${selected.submit.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
+				...freshSubmission.grant,
+				token: `${freshSubmission.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
 			},
 		});
-		const other = binding("other", { agentId: "other-agent" });
-		const wrongAgent = await request("v1/turns", {
-			...other,
-			input: selected.submit.input,
-		});
+		const other = protocol.binding("other", { agentId: "other-agent" });
+		const wrongAgent = await request(
+			"v3/turns",
+			protocol.signRequest(
+				{
+					...other,
+					input: selected.submit.input,
+				},
+				"turn.submit",
+			),
+		);
 		const unauthorized = await request(
 			selected.path,
 			selected.submit,
@@ -847,7 +1034,7 @@ try {
 		stage = "process-restart";
 		await runtime.stop();
 		runtime = await launch(env);
-		const restored = await request("v1/status", selected.lookup);
+		const restored = await request("v3/status", protocol.status(selected));
 		await turn(
 			"resumed",
 			selected.submit.selection,
@@ -965,12 +1152,21 @@ try {
 			},
 			() => ({ authenticated: independentRequest.authenticated }),
 		);
-		const stopConfirmation = request("v1/stops", {
-			...stopped.lookup,
-			requestId: "request-stop-generation",
-			stopRequestId: "stop-generation-synthetic",
-			executionDeliveryFence: 1,
-		});
+		const stopConfirmation = request(
+			"v3/stops",
+			protocol.signRequest(
+				{
+					...stopped.lookup,
+					operation: {
+						...stopped.lookup.operation,
+						kind: "stop",
+						id: "stop-generation-synthetic",
+					},
+				},
+				"turn.stop",
+				"stop",
+			),
+		);
 		const stopResult = await assertUpstreamClosedBeforeConfirmation(
 			stopRequest,
 			stopConfirmation,
@@ -1044,11 +1240,21 @@ try {
 		httpStatus = undefined;
 		responseCode = undefined;
 		stage = "model-cancellation-close-before-confirmation";
-		const cancelConfirmation = request("v1/generations/cancel", {
-			...cancellation.lookup,
-			requestId: "request-cancel-generation",
-			tombstoneId: "generation-cancel-synthetic",
-		});
+		const cancelConfirmation = request(
+			"v3/generations/cancel",
+			protocol.signRequest(
+				{
+					...cancellation.lookup,
+					operation: {
+						...cancellation.lookup.operation,
+						kind: "generation",
+						id: "generation-cancel-synthetic",
+					},
+				},
+				"generation.cancel",
+				"generation_isolation",
+			),
+		);
 		const cancelResult = await assertUpstreamClosedBeforeConfirmation(
 			cancellationRequest,
 			cancelConfirmation,
@@ -1076,23 +1282,40 @@ try {
 			}),
 		);
 		stage = "model-cancellation-status";
-		const cancelledStatus = await request("v1/status", cancellation.lookup);
+		const cancelledStatus = await request(
+			"v3/status",
+			protocol.status(cancellation, "generation_isolation"),
+		);
+		const cancelledReplay = await request(
+			cancellation.path,
+			protocol.signRequest(cancellation.submit, "turn.submit"),
+		);
 		await runtime.stop();
 		stage = "model-cancellation-restart";
 		runtime = await launch(cancellationEnvironment);
 		const restartedCancelledStatus = await request(
-			"v1/status",
-			cancellation.lookup,
+			"v3/status",
+			protocol.status(cancellation, "generation_isolation"),
+		);
+		const restartedCancelledReplay = await request(
+			cancellation.path,
+			protocol.signRequest(cancellation.submit, "turn.submit"),
 		);
 		check(
 			"cancellation-aborts-upstream",
 			stopRequest.closed &&
 				cancellationRequest.closed &&
-				cancelledStatus.status === 409 &&
-				JSON.parse(cancelledStatus.text).code ===
+				cancelledStatus.status === 200 &&
+				JSON.parse(cancelledStatus.text).outcome === "found" &&
+				JSON.parse(cancelledStatus.text).status === "cancelled" &&
+				restartedCancelledStatus.status === 200 &&
+				JSON.parse(restartedCancelledStatus.text).outcome === "found" &&
+				JSON.parse(restartedCancelledStatus.text).status === "cancelled" &&
+				cancelledReplay.status === 409 &&
+				JSON.parse(cancelledReplay.text).code ===
 					"RUNTIME_GENERATION_CANCELLED" &&
-				restartedCancelledStatus.status === 409 &&
-				JSON.parse(restartedCancelledStatus.text).code ===
+				restartedCancelledReplay.status === 409 &&
+				JSON.parse(restartedCancelledReplay.text).code ===
 					"RUNTIME_GENERATION_CANCELLED",
 		);
 		await runtime.stop();
@@ -1157,40 +1380,77 @@ try {
 			"personal-configuration-isolated",
 			(await readFile("/tmp/personal/config.toml", "utf8")) === personalConfig,
 		);
-		const release = JSON.parse(
-			await readFile("/opt/codex/share/release.json", "utf8"),
-		);
+		stage = "installed-codex-identity";
+		const releaseBytes = await readFile("/opt/codex/share/release.json");
+		const release = JSON.parse(releaseBytes.toString("utf8"));
+		let derivedIdentity;
+		if (release.schemaVersion === 2) {
+			assert.equal(release.distribution.kind, "derived");
+			const artifact = release.artifacts[process.arch];
+			assert.ok(artifact?.target);
+			const candidateBytes = await readFile("/opt/codex/share/candidate.json");
+			const binaries = {};
+			for (const [name, path] of Object.entries({
+				codex: "bin/codex",
+				"codex-code-mode-host": "codex-resources/codex-code-mode-host",
+				"codex-responses-api-proxy": "bin/codex-responses-api-proxy",
+				bwrap: "codex-resources/bwrap",
+			})) {
+				const hash = createHash("sha256");
+				for await (const chunk of createReadStream(join("/opt/codex", path)))
+					hash.update(chunk);
+				binaries[name] = `sha256:${hash.digest("hex")}`;
+			}
+			derivedIdentity = {
+				protocolVersion: release.provenance.protocolVersion,
+				distribution: {
+					...release.distribution,
+					target: artifact.target,
+					releaseSha256: `sha256:${createHash("sha256").update(releaseBytes).digest("hex")}`,
+					candidateManifestSha256: `sha256:${createHash("sha256").update(candidateBytes).digest("hex")}`,
+					binaries,
+				},
+			};
+		}
 		console.info(
 			JSON.stringify({
-				schemaVersion: 1,
+				schemaVersion: derivedIdentity ? 2 : 1,
 				status: "passed",
 				codexVersion: release.provenance.codexVersion,
 				configurationSchemaVersion: 2,
 				configVersion: observedConfigVersion,
 				checks,
+				...derivedIdentity,
 			}),
 		);
 	}
-} catch (error) {
-	console.error(
-		JSON.stringify(
-			error instanceof ProbeStepFailure
-				? error.diagnostic
-				: {
-						status: "failed",
-						stage,
-						startupCode,
-						httpStatus,
-						responseCode,
-						resultStatus,
-						isolationFileKind,
-						modelRequests: requests.length,
-					},
-		),
-	);
-	process.exitCode = 1;
-} finally {
-	for (const child of processes) child.kill("SIGKILL");
-	model.closeAllConnections();
-	await new Promise((resolve) => model.close(resolve));
+}
+
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+	try {
+		await runImageProbe();
+	} catch (error) {
+		console.error(
+			JSON.stringify(
+				error instanceof ProbeStepFailure
+					? error.diagnostic
+					: {
+							status: "failed",
+							stage,
+							startupCode,
+							httpStatus,
+							responseCode,
+							resultStatus,
+							isolationFileKind,
+							modelRequests: requests.length,
+						},
+			),
+		);
+		process.exitCode = 1;
+	} finally {
+		for (const child of processes) child.kill("SIGKILL");
+		model.closeAllConnections();
+		await new Promise((resolve) => model.close(resolve));
+	}
 }

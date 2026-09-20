@@ -197,7 +197,8 @@ export async function forwardClaudeMessages(
 					case "content_block_stop":
 						if (typeof index !== "number" || !blocks.delete(index)) invalid();
 						if (toolArguments.has(index)) {
-							const argumentsJson = toolArguments.get(index)!;
+							const argumentsJson = toolArguments.get(index);
+							if (argumentsJson === undefined) invalid();
 							if (argumentsJson) {
 								const args: unknown = JSON.parse(argumentsJson);
 								if (!record(args)) invalid();

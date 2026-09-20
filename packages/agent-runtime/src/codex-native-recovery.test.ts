@@ -260,9 +260,11 @@ async function loopbackResponsesProvider(
 	];
 	// The launch runs inside the Conversation boundary, so the shim must not open
 	// any path outside it; native stderr stays with the bridge.
+	// The mandatory barrier probe accepts exactly its one private argument.
+	// Provider overrides belong only to the normal native launch.
 	await writeFile(
 		join(bin, "codex"),
-		`#!/bin/sh\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")}\n`,
+		`#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "--agent-infra-native-barrier-info" ]; then\n  exec ${shellQuote(nativeExecutable)} "$@"\nfi\nexec ${shellQuote(nativeExecutable)} "$@" ${providerConfigs.map((value) => `--config ${shellQuote(value)}`).join(" ")}\n`,
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
