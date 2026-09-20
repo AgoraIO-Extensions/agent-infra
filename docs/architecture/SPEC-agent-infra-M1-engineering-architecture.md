@@ -645,7 +645,7 @@ reasoning/加密项或历史、跳过实际压缩或更换 Session。既有内�
 支持清单，也不缩减 PRD 的会话内模型切换要求。任一切换路径仍需请求 A 时，唯一 B 准入
 继续拒绝该请求；这表示模型选择对接尚未完成，不能作为新的产品例外或宣称完整修复。失败边界见
 [Runtime HLD 8.5.2](HLD-agent-runtime-M1.md#852-codex-模型切换前置压缩)，取舍见
-[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0013-use-current-selection-for-codex-switch-compaction.md)。
+[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
 
 模型 endpoint 必须使用 HTTPS；HTTP 仅允许原始 URL 显式使用 `127.0.0.1` 或 `[::1]`
 的 loopback 地址，不接受主机名或其他 IP 别名。注入 credential 必须为 16–8192 个可打印
@@ -831,7 +831,7 @@ unknown 或新协议状态只能核实原执行，不得新建 Session/Turn、�
 更新 pin。真实各 target 产物、原 built-ins 正向能力、隔离、故障与恢复均按 HLD 第 11 节验证；
 既有官方 binary 的证明不转移给派生字节。长期维护及上游替代的取舍见
 [ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)及
-[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0013-use-current-selection-for-codex-switch-compaction.md)。
+[ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
 原执行屏障的既有评审不代表新增压缩策略已获评审；本差额的文档和 Issue 范围先完成独立
 架构、安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
 
