@@ -3175,7 +3175,7 @@
     },
     {
       "path": "patches/0002-native-operation-barrier.patch",
-      "sha256": "sha256:5c57f3dc0f24879a5b239ea24b86b0e7a6fa5f39301c02ed933dedd583046ba0"
+      "sha256": "sha256:f0b2faba28fd52fb7f1fc4beed4e37aceb85ff6c5e219976570df090ed2cb59e"
     },
     {
       "path": "patches/0003-protected-connection-client.patch",
