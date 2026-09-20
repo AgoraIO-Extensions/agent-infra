@@ -14,12 +14,12 @@ function AgentDetailRoute() {
 	const query = useAgentDetail(agentId);
 	const session = useBrowserSession();
 	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
-	const ownerSettings =
+	const canManage =
 		agent &&
 		session.state.kind === "ready" &&
-		isAgentConfigurationOwner(agent, session.state.session)
-			? { agentId }
-			: undefined;
+		(isAgentConfigurationOwner(agent, session.state.session) ||
+			session.state.session.user.roles.includes("system_admin"));
+	const ownerSettings = canManage ? { agentId } : undefined;
 
 	return (
 		<main className="platform-content management-content">
