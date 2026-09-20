@@ -39,9 +39,9 @@ Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程�
 
 ## 本地验证
 
-持续运行的申请、审批、配置和 Workload 装配见
-[本地 Platform 生命周期](deploy/local/README.md)。真实身份、模型和独立 Connection 仍需
-部署输入与端到端验收，健康检查和组件测试不替代真实业务闭环。
+持续运行的申请、审批、配置和 Workload 装配由 Platform slice 提供；部署拓扑和
+Workload 交付见 [Kubernetes 交付拓扑](deploy/README.md)。真实身份、模型和独立
+Connection 仍需部署输入与端到端验收，健康检查和组件测试不替代真实业务闭环。
 
 使用 Node.js 24 和 pnpm 11：
 
