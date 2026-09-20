@@ -185,8 +185,14 @@ export function AgentLifecycleControls({
 	const [localPendingCommand, setLocalPendingCommand] =
 		useState<AgentLifecycleCommand | null>(null);
 	useEffect(() => {
-		if (pendingCommand !== undefined) setLocalPendingCommand(null);
-	}, [pendingCommand]);
+		if (
+			pendingCommand !== undefined ||
+			commandError !== null ||
+			commandResult?.agentId === agent.agentId
+		) {
+			setLocalPendingCommand(null);
+		}
+	}, [agent.agentId, commandError, commandResult, pendingCommand]);
 	const commands = visibleLifecycleCommands(agent, session);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;

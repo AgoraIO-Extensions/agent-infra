@@ -326,6 +326,39 @@ describe("AgentLifecycleControls", () => {
 		).toBe(true);
 	});
 
+	it("releases the local latch when the parent reports a command error", async () => {
+		const onCommand = vi.fn();
+		const props = {
+			agent: unavailableAgent,
+			onCommand,
+			session: { kind: "ready" as const, session: ownerSession },
+		};
+		const { rerender } = render(<AgentLifecycleControls {...props} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
+		const dialog = await screen.findByRole("dialog", { name: "停止 Agent？" });
+		fireEvent.click(within(dialog).getByRole("button", { name: "确认停止" }));
+
+		rerender(
+			<AgentLifecycleControls
+				{...props}
+				commandError={Object.assign(new Error(), { retryable: true })}
+			/>,
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "停止 Agent" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "停止 Agent？" }),
+			).getByRole("button", { name: "确认停止" }),
+		);
+		expect(onCommand).toHaveBeenCalledTimes(2);
+	});
+
 	it("focuses completion only for the displayed Agent", async () => {
 		const props = {
 			agent: unavailableAgent,
