@@ -1649,8 +1649,19 @@ index 0000000..1bea28c
 +use pretty_assertions::assert_eq;
 +
 +#[cfg(unix)]
++struct ChannelPoisonReset;
++
++#[cfg(unix)]
++impl Drop for ChannelPoisonReset {
++    fn drop(&mut self) {
++        CHANNEL_POISONED.store(false, Ordering::Release);
++    }
++}
++
++#[cfg(unix)]
 +#[tokio::test]
 +async fn cancelling_an_exchange_poison_closes_the_partially_consumed_channel() {
++    let _reset = ChannelPoisonReset;
 +    use tokio::io::AsyncBufReadExt;
 +
 +    let (client, peer) = tokio::net::UnixStream::pair().unwrap();
