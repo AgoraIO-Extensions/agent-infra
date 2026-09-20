@@ -46,6 +46,16 @@ async function directory() {
 async function runGuard(
 	options: { flags?: string[]; preamble?: string; coreLimit?: string } = {},
 ) {
+	const cwd = await directory();
+	const script = join(cwd, "guard.mjs");
+	await writeFile(
+		script,
+		`import { assertRuntimeProcessProtection } from ${JSON.stringify(guardUrl)};
+	${options.preamble ?? ""}
+	try { assertRuntimeProcessProtection(); console.log("protected"); }
+	catch (error) { console.log(error.code); process.exitCode = 17; }
+	`,
+	);
 	return execute(
 		"/bin/sh",
 		[
@@ -54,15 +64,7 @@ async function runGuard(
 			"protected-runtime-test",
 			process.execPath,
 			...(options.flags ?? ["--disable-sigusr1"]),
-			"--import",
-			"tsx",
-			"--input-type=module",
-			"-e",
-			`import { assertRuntimeProcessProtection } from ${JSON.stringify(guardUrl)};
-		${options.preamble ?? ""}
-		try { assertRuntimeProcessProtection(); console.log("protected"); }
-		catch (error) { console.log(error.code); process.exitCode = 17; }
-		`,
+			script,
 		],
 		{ cwd: appDirectory, env: environment, timeout: 10_000 },
 	);

@@ -1,6 +1,6 @@
 // biome-ignore-all lint/suspicious/noThenProperty: JSON Schema conditionals are data, not thenable objects.
 // Generated from vendor/codex/callback-v2.schema.json. Do not edit.
-// Source SHA-256: 62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c
+// Source SHA-256: 9d7009ac6e8587b492139fc921689f48c76aab487f681bafa88687f101c49f80
 // biome-ignore format: Keep the canonical JSON literal mechanically generated.
 export const codexCallbackSchema = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -917,7 +917,14 @@ export const codexCallbackSchema = {
               "const": "source-bind"
             },
             "request": {
-              "$ref": "#/$defs/sourceBindStartedRequest"
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sourceBindStartedRequest"
+                },
+                {
+                  "$ref": "#/$defs/sourceBindSteeredRequest"
+                }
+              ]
             },
             "decision": {
               "const": "deny"

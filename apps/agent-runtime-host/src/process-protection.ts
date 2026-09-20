@@ -12,19 +12,18 @@ export function assertRuntimeProcessProtection() {
 			503,
 		);
 	};
-	const forbidden =
-		/^--(?:inspect|debug|heap|report|experimental-report|diagnostic-dir|tls-keylog|prof|no-disable-sigusr1)/;
+	const allowedExecArgv = [
+		["--disable-sigusr1"],
+		["--disable-sigusr1", "--watch", "--import", "tsx"],
+	] as const;
+	const hasAllowedExecArgv = allowedExecArgv.some(
+		(expected) =>
+			expected.length === process.execArgv.length &&
+			expected.every((argument, index) => process.execArgv[index] === argument),
+	);
 	if (
 		!["linux", "darwin"].includes(process.platform) ||
-		!process.execArgv.includes("--disable-sigusr1") ||
-		process.execArgv.some((argument) => {
-			const normalized = argument.replaceAll("_", "-");
-			return (
-				forbidden.test(normalized) ||
-				(normalized.startsWith("--disable-sigusr1") &&
-					normalized !== "--disable-sigusr1")
-			);
-		}) ||
+		!hasAllowedExecArgv ||
 		[
 			"NODE_OPTIONS",
 			"NODE_DEBUG",

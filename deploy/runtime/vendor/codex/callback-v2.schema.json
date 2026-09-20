@@ -913,7 +913,14 @@
               "const": "source-bind"
             },
             "request": {
-              "$ref": "#/$defs/sourceBindStartedRequest"
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sourceBindStartedRequest"
+                },
+                {
+                  "$ref": "#/$defs/sourceBindSteeredRequest"
+                }
+              ]
             },
             "decision": {
               "const": "deny"
