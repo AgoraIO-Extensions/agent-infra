@@ -274,4 +274,20 @@ describe("AdminAgentApplicationsScreen", () => {
 			"审批未能提交，请稍后重试。",
 		);
 	});
+
+	it("renders a decision error only once while a review dialog is open", async () => {
+		render(
+			<AdminAgentApplicationsScreen
+				decisionError={Object.assign(new Error(), { retryable: true })}
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [pendingApplication] }}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
+		const dialog = await screen.findByRole("dialog");
+		expect(within(dialog).getAllByRole("alert")).toHaveLength(1);
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+	});
 });

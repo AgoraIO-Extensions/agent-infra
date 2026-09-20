@@ -273,6 +273,32 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.queryByDisplayValue("replacement-value")).toBeNull();
 	});
 
+	it("clears model credentials when replacement is disabled", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		const replaceModels = screen.getByRole("checkbox", {
+			name: "替换模型配置",
+		});
+		fireEvent.click(replaceModels);
+		fireEvent.change(screen.getByLabelText("新模型凭证"), {
+			target: { value: "temporary-credential" },
+		});
+		fireEvent.click(replaceModels);
+		fireEvent.click(replaceModels);
+
+		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
+			"",
+		);
+	});
+
 	it("places the supplied lifecycle controls in the configuration aside", () => {
 		render(
 			<AgentConfigurationScreen

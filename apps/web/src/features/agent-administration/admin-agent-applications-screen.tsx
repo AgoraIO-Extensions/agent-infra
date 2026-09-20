@@ -38,6 +38,15 @@ type AdminAgentApplicationsScreenProps = {
 	state: PendingAgentApplicationsState | { kind: "loading" };
 };
 
+type ApplicationReviewProps = {
+	application: AgentApplicationProjectionV2;
+	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
+	pendingDecision?: PendingDecision;
+	decisionError?: RequestError | null;
+	decisionResult?: AgentApplicationProjectionV2;
+	onOpenChange?: (open: boolean) => void;
+};
+
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	// This controls visibility only. The Platform authorizes every decision command.
 	return session.user.roles.includes("system_admin");
@@ -72,13 +81,8 @@ function ApplicationReview({
 	pendingDecision,
 	decisionError,
 	decisionResult,
-}: {
-	application: AgentApplicationProjectionV2;
-	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
-	pendingDecision?: PendingDecision;
-	decisionError?: RequestError | null;
-	decisionResult?: AgentApplicationProjectionV2;
-}) {
+	onOpenChange,
+}: ApplicationReviewProps) {
 	const [open, setOpen] = useState(false);
 	const [rejecting, setRejecting] = useState(false);
 	const [reason, setReason] = useState("");
@@ -101,6 +105,7 @@ function ApplicationReview({
 			onOpenChange={(next) => {
 				if (deciding) return;
 				setOpen(next);
+				onOpenChange?.(next);
 				if (!next) {
 					setRejecting(false);
 					setReason("");
@@ -284,6 +289,9 @@ export function AdminAgentApplicationsScreen({
 	session,
 	state,
 }: AdminAgentApplicationsScreenProps) {
+	const [openApplicationId, setOpenApplicationId] = useState<string | null>(
+		null,
+	);
 	if (session.kind === "loading")
 		return <p aria-live="polite">正在读取审批申请…</p>;
 	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
@@ -350,8 +358,17 @@ export function AdminAgentApplicationsScreen({
 											application={application}
 											onDecision={onDecision}
 											pendingDecision={pendingDecision}
-											decisionError={decisionError}
+											decisionError={
+												openApplicationId === application.applicationId
+													? decisionError
+													: null
+											}
 											decisionResult={decisionResult}
+											onOpenChange={(open) =>
+												setOpenApplicationId(
+													open ? application.applicationId : null,
+												)
+											}
 										/>
 									)}
 								</li>
@@ -360,7 +377,7 @@ export function AdminAgentApplicationsScreen({
 					)}
 				</>
 			)}
-			{decisionError && (
+			{decisionError && openApplicationId === null && (
 				<p className="mt-4 text-destructive text-sm" role="alert">
 					{decisionFailure(decisionError)}
 				</p>

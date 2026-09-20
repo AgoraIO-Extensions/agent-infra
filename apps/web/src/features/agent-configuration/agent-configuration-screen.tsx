@@ -475,10 +475,14 @@ export function AgentConfigurationScreen({
 													setDraft((current) => ({
 														...current,
 														replaceModels: checked,
-														models:
-															checked && current.models.length === 0
+														models: checked
+															? current.models.length === 0
 																? [blankModel()]
-																: current.models,
+																: current.models
+															: current.models.map((model) => ({
+																	...model,
+																	credentialValue: "",
+																})),
 													}))
 												}
 											/>
