@@ -4254,8 +4254,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 		throughCursor: string,
+		beforeCommit?: () => void,
 	) {
 		await this.update((state) => {
+			beforeCommit?.();
 			const session = ownRecordValue(state.sessions, nativeSessionRef);
 			const execution =
 				session && ownRecordValue(session.executions, executionId);

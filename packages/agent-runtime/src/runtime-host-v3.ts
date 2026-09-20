@@ -688,6 +688,13 @@ export class RuntimeHostV3 {
 					session.nativeSessionRef ?? nativeRequired(),
 					request.executionId,
 					request.confirmedCursor,
+					() => {
+						this.validate(request, "events.ack", verification);
+						this.options.store.checkAcknowledgableCursor(
+							claims,
+							request.confirmedCursor,
+						);
+					},
 				);
 				this.validate(request, "events.ack", verification);
 				await this.options.store.authorizeRequestV3(

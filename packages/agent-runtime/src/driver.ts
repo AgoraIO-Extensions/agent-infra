@@ -85,6 +85,7 @@ export interface RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 		throughCursor: string,
+		beforeCommit?: () => void,
 	): Promise<void>;
 	subscribeEvents(
 		nativeSessionRef: string,
