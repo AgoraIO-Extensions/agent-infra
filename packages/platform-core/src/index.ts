@@ -30,6 +30,10 @@ export type {
 	AgentConfigurationUseCaseOptionsV1,
 	AgentConfigurationUseCaseV1,
 	AgentConfigurationWritePlanV1,
+	ReleaseStandardTemplateCommandV1,
+	StandardTemplateReleaseAuthorizationPortV1,
+	StandardTemplateReleaseAuthorizationV1,
+	StandardTemplateReleaseTargetV1,
 	UpdateAgentConfigurationCommandV2,
 	UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration.js";
@@ -37,6 +41,7 @@ export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
 	parseAgentConfigurationChangesV1,
+	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
