@@ -114,7 +114,7 @@ export async function changedRightLinesFromTexts(before, after) {
       writeFile(beforePath, before, "utf8"),
       writeFile(afterPath, after, "utf8"),
     ]);
-    const changed = new Set();
+    const changed = [];
     await new Promise((resolve, reject) => {
       const child = spawn(
         "git",
@@ -138,8 +138,7 @@ export async function changedRightLinesFromTexts(before, after) {
         if (!match) return;
         const start = Number(match[1]);
         const count = Number(match[2] ?? 1);
-        for (let offset = 0; offset < count; offset += 1)
-          changed.add(start + offset);
+        if (count > 0) changed.push({ start, end: start + count - 1 });
       };
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
@@ -163,6 +162,20 @@ export async function changedRightLinesFromTexts(before, after) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function findChangedLine(changed, start, end) {
+  if (changed instanceof Set) {
+    for (const line of changed) {
+      if (line >= start && line <= end) return line;
+    }
+    return undefined;
+  }
+  for (const range of changed ?? []) {
+    const line = Math.max(start, range.start);
+    if (line <= Math.min(end, range.end)) return line;
+  }
+  return undefined;
 }
 
 function validateContext({
@@ -287,8 +300,12 @@ export async function publishPrAgentReview(context) {
       if (typeof file.patch === "string") {
         files.set(file.filename, collectChangedDiffLines(file.patch).RIGHT);
       } else if (findings.some((finding) => finding.relevant_file.trim() === file.filename)) {
-        missingPatches.add(file.filename);
-        if (file.status === "added") addedFiles.add(file.filename);
+        if (file.status === "removed") {
+          files.set(file.filename, new Set());
+        } else {
+          missingPatches.add(file.filename);
+          if (file.status === "added") addedFiles.add(file.filename);
+        }
       }
     }
     if (batch.length < 100) break;
@@ -331,8 +348,10 @@ export async function publishPrAgentReview(context) {
   }
   const comments = findings.map((finding) => {
     const path = finding.relevant_file.trim();
-    const line = [...(files.get(path) ?? [])].find(
-      (line) => line >= finding.start_line && line <= finding.end_line,
+    const line = findChangedLine(
+      files.get(path),
+      finding.start_line,
+      finding.end_line,
     );
     if (!line)
       throw new Error(
