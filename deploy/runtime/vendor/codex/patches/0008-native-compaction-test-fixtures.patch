@@ -125,7 +125,7 @@ diff --git a/codex-rs/core/tests/suite/compact/native_hook_fixture.rs b/codex-rs
 new file mode 100644
 --- /dev/null
 +++ b/codex-rs/core/tests/suite/compact/native_hook_fixture.rs
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,368 @@
 +//! Exercise compact hooks through the real private admission channel in a fresh process.
 +use super::*;
 +
