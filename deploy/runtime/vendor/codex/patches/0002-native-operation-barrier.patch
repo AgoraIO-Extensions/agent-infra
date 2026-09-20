@@ -1638,7 +1638,7 @@ index 0000000..629aac6
 --- /dev/null
 +++ b/codex-rs/core/src/native_operation_barrier_manifest.json
 @@ -0,0 +1 @@
-+{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2","coverageSha256":"sha256:cd35715fc049562eeceb9326d2b15a140700e74ce1a60f63bf49400a2302eebe"}
++{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:6398fc614b9b442619f244544ad56392b96f76b3f97779f41d0a709775f493c6","coverageSha256":"sha256:cd35715fc049562eeceb9326d2b15a140700e74ce1a60f63bf49400a2302eebe"}
 diff --git a/codex-rs/core/src/native_operation_barrier_tests.rs b/codex-rs/core/src/native_operation_barrier_tests.rs
 new file mode 100644
 index 0000000..1bea28c
@@ -1930,6 +1930,10 @@ index 0000000..ed87015
 +    work: impl Future<Output = Result<T, E>>,
 +) -> Result<Result<T, E>, BarrierError> {
 +    let attempt = current().ok();
++    if let Some(attempt) = &attempt {
++        check_control_target(thread_id)?;
++        attempt.started().await?;
++    }
 +    tokio::pin!(work);
 +    let result = std::future::poll_fn(|context| {
 +        if check_control_target(thread_id).is_err() {
@@ -1938,11 +1942,6 @@ index 0000000..ed87015
 +        work.as_mut().poll(context).map(Ok)
 +    })
 +    .await?;
-+    if result.is_ok()
-+        && let Some(attempt) = attempt
-+    {
-+        attempt.started().await?;
-+    }
 +    Ok(result)
 +}
 diff --git a/codex-rs/core/src/native_sources/mod.rs b/codex-rs/core/src/native_sources/mod.rs
@@ -5421,6 +5420,7 @@ index 0000000..2f7c754
 +    pub async fn finish(&mut self, result: NativeHookResult) -> io::Result<()> {
 +        self.attempt.finish(result).await?;
 +        self.finished = true;
++        self.task.take();
 +        Ok(())
 +    }
 +}
@@ -5810,11 +5810,21 @@ index 0000000..a0b0ad3
 +                .await?;
 +            return Err(unavailable());
 +        }
-+        self.call
-+            .attempts
-+            .lock()
-+            .map_err(|_| unavailable())?
-+            .insert(self.id.clone(), attempt);
++        let inserted = {
++            let mut attempts = self.call.attempts.lock().map_err(|_| unavailable())?;
++            if !self.call.active.load(Ordering::Acquire) || attempts.contains_key(&self.id) {
++                false
++            } else {
++                attempts.insert(self.id.clone(), Arc::clone(&attempt));
++                true
++            }
++        };
++        if !inserted {
++            attempt
++                .finish(NativeMcpResult::CancelledBeforeDispatch)
++                .await?;
++            return Err(unavailable());
++        }
 +        Ok(())
 +    }
 +    pub(crate) async fn started(&self) -> io::Result<()> {

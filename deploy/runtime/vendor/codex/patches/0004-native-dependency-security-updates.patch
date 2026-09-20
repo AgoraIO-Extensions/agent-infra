@@ -4119,7 +4119,13 @@ index f523327..1809737 100644
 -        let request_context = RequestContext::try_from(&req).ok();
 -        let authority = request_context
 +    async fn serve(&self, req: Request<Body>) -> Result<Self::Output, Self::Error> {
-+        let target = req.connector_target_with_default_port(80);
++        let target = req.connector_target_with_default_port(
++            if req.protocol().is_some_and(rama_net::Protocol::is_secure) {
++                443
++            } else {
++                80
++            },
++        );
 +        let authority = target
              .as_ref()
 -            .map(|ctx| ctx.host_with_port().to_string())
