@@ -38,8 +38,7 @@ export function MyAgentApplicationDetailScreen({
 }: MyAgentApplicationDetailScreenProps) {
 	const [confirmationFor, setConfirmationFor] = useState<string | null>(null);
 	const [withdrawalLatched, setWithdrawalLatched] = useState(false);
-	const withdrawalPending =
-		withdrawing || (withdrawalLatched && !withdrawalError);
+	const withdrawalPending = withdrawing || withdrawalLatched;
 	const submittedResult =
 		state.kind === "ready" &&
 		withdrawalResult?.applicationId === state.application.applicationId
@@ -51,9 +50,19 @@ export function MyAgentApplicationDetailScreen({
 		state.kind === "ready"
 			? `${state.application.applicationId}:${state.application.status}`
 			: state.kind;
+	const applicationId =
+		state.kind === "ready" ? state.application.applicationId : null;
 	useEffect(() => {
-		if (withdrawalError && !withdrawing) withdrawButtonRef.current?.focus();
+		if (withdrawalError && !withdrawing) setWithdrawalLatched(false);
 	}, [withdrawalError, withdrawing]);
+	useEffect(() => {
+		if (withdrawalError && !withdrawing && !withdrawalLatched) {
+			withdrawButtonRef.current?.focus();
+		}
+	}, [withdrawalError, withdrawing, withdrawalLatched]);
+	useEffect(() => {
+		if (applicationId !== null) setWithdrawalLatched(false);
+	}, [applicationId]);
 	if (state.kind === "loading") return <p role="status">正在读取申请…</p>;
 	if (state.kind === "unavailable")
 		return (
