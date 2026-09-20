@@ -37,6 +37,53 @@ const ordinarySession = BrowserSessionProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AgentConfigurationScreen", () => {
+	it("shows the current default model without prefilling a replacement draft", () => {
+		const configuredAgent = AgentProjectionV2Schema.parse({
+			...agent,
+			configuration: {
+				...agent.configuration,
+				modelOptions: [
+					{
+						optionId: "other-model",
+						displayName: "Other model",
+						modelId: "other",
+						reasoningLevels: ["low"],
+					},
+					{
+						optionId: "current-default",
+						displayName: "Current model",
+						modelId: "current",
+						reasoningLevels: ["low", "high"],
+					},
+				],
+				defaultModelOptionId: "current-default",
+				defaultReasoningLevel: "high",
+			},
+		});
+		render(
+			<AgentConfigurationScreen
+				agent={configuredAgent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByText("当前默认：Current model · high")).toBeTruthy();
+		expect(screen.queryByLabelText("默认模型选项 ID")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
+		expect(
+			screen.getByLabelText<HTMLInputElement>("默认模型选项 ID").value,
+		).toBe("");
+		expect(screen.getByLabelText<HTMLInputElement>("默认推理强度").value).toBe(
+			"",
+		);
+		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
+			"",
+		);
+	});
+
 	it("lets an Owner submit configuration while clearing entered 新 Secret 值s", () => {
 		const onSave = vi.fn();
 		render(

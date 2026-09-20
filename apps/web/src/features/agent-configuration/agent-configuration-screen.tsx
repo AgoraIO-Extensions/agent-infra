@@ -158,6 +158,9 @@ export function AgentConfigurationScreen({
 	const currentModels = agent.configuration.modelOptions
 		.map((model) => model.displayName)
 		.join("、");
+	const currentDefaultModel = agent.configuration.modelOptions.find(
+		(model) => model.optionId === agent.configuration.defaultModelOptionId,
+	);
 	const currentSecrets = agent.configuration.secrets
 		.map(
 			(secret) =>
@@ -444,6 +447,12 @@ export function AgentConfigurationScreen({
 										</legend>
 										<p className="text-muted-foreground text-sm">
 											{currentModels || "尚未配置可选模型"}
+										</p>
+										<p className="text-muted-foreground text-sm">
+											当前默认：
+											{currentDefaultModel
+												? `${currentDefaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
+												: "未提供"}
 										</p>
 										<p className="text-muted-foreground text-sm">
 											已有模型凭证不回显；需要替换时填写新凭证。
