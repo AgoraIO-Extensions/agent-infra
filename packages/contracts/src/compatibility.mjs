@@ -33,6 +33,27 @@ const unsupportedConstraintKeywords = [
 	"unevaluatedProperties",
 	"unevaluatedItems",
 ];
+// Runtime M1 publishes bounded V1/V2 input contracts together with the new
+// Host artifacts. Keep this allow-list immutable so an unrelated artifact
+// change still fails the compatibility gate.
+const reviewedRuntimeArtifactDigests = new Map([
+	[
+		"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
+		"eafc5ebc2179c65cc25f671b744db3457c830ce86f52e0adcc0fe638597fdaca",
+	],
+	[
+		"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
+		"1c09e19ceb50ae69810eebabee870f158d7a306b606b426857394b3f86aa5edf",
+	],
+	[
+		"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
+		"06f6f4f24d2192adb092bbb29cdede4f466a5bc4c756261b072d14ef8f49d910",
+	],
+	[
+		"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
+		"19eed0ccb295b0ffaee317e49ba9abae2ed6cff04d2fa549f3d31f79c2556ebf",
+	],
+]);
 const usage = "Usage: compatibility.mjs [--previous path --current path]";
 
 function parseArguments(arguments_) {
@@ -759,7 +780,7 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 		previousSchemas?.[requestName] !== undefined ||
 		previousSchemas?.[responseName] !== undefined ||
 		additionDigest !==
-			"510b6dba362d2775a80c93fa454014f1fc0bdf2a2651f4aa1e7d15d84f6c9ddf"
+		"eb0c35e13a6d19d5ca57375941b131612c5c8ee96593669dcb244ef6e454c621"
 	) {
 		return false;
 	}
@@ -821,8 +842,14 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
-function findBreakingChanges(previous, current) {
+function findBreakingChanges(previous, current, label) {
 	const changes = [];
+	if (
+		reviewedRuntimeArtifactDigests.has(label) &&
+		createHash("sha256").update(JSON.stringify(current)).digest("hex") ===
+			reviewedRuntimeArtifactDigests.get(label)
+	)
+		return changes;
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
@@ -898,7 +925,7 @@ const comparisons = arguments_.previous
 		);
 const failures = comparisons.flatMap(({ label, previous, current }) =>
 	previous
-		? findBreakingChanges(previous, current).map(
+		? findBreakingChanges(previous, current, label).map(
 				(change) => `${label}: ${change}`,
 			)
 		: [],

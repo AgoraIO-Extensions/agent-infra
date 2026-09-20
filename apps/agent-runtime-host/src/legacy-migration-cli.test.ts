@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createLegacyMigrationFixture,
 	legacyBodySentinel,
@@ -19,9 +19,14 @@ import {
 import { runRuntimeLegacyMigrationCli } from "./legacy-migration-cli.js";
 
 const directories: string[] = [];
+beforeEach(() => {
+	// Model deployment-owned mounts without weakening the production ownership check.
+	vi.spyOn(process, "getuid").mockReturnValue(65534);
+});
 afterEach(async () => {
 	for (const directory of directories.splice(0))
 		await rm(directory, { recursive: true, force: true });
+	vi.restoreAllMocks();
 });
 async function fixture() {
 	const directory = await mkdtemp(join(tmpdir(), "legacy-cli-"));

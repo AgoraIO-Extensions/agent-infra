@@ -99,7 +99,10 @@ async function verifyLayout(expectedFiles: readonly string[]) {
 			const child = `${path}/${name}`;
 			const childRelative = relative ? `${relative}/${name}` : name;
 			if (directories.has(childRelative)) await visit(child, childRelative);
-			else requireValid(files.delete(childRelative) && (await lstat(child)).isFile());
+			else
+				requireValid(
+					files.delete(childRelative) && (await lstat(child)).isFile(),
+				);
 		}
 	}
 	await visit(installationRoot, "");

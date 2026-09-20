@@ -1117,7 +1117,9 @@ function pendingNativeToolAttempts(journal: CodexEventJournal | undefined) {
 		(attempt) =>
 			!attempt.denied &&
 			(!attempt.outcomeRequestId ||
-				latest.get(operationAttemptKey(attempt))?.phase === "unknown"),
+				latest.get(operationAttemptKey(attempt))?.phase === "unknown") &&
+			(attempt.permitId !== undefined ||
+				latest.get(operationAttemptKey(attempt))?.phase !== "unknown"),
 	);
 }
 

@@ -208,8 +208,9 @@ describe("RuntimeHost V1 wire schemas", () => {
 			RuntimeSubmitTurnRequestV1Schema.safeParse({
 				...requestContext,
 				input: {
-					attachments: Array.from({ length: 257 }, (_, index) =>
-						`attachment-${index}`,
+					attachments: Array.from(
+						{ length: 257 },
+						(_, index) => `attachment-${index}`,
 					),
 				},
 			}).success,

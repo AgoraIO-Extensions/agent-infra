@@ -6,7 +6,7 @@ import {
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -48,6 +48,11 @@ import { createLegacyMigrationFixture } from "./legacy-migration.test-support.js
 const directories: string[] = [];
 const { publicKey } = generateKeyPairSync("ed25519");
 
+beforeEach(() => {
+	// The fixture represents files mounted by a separate deployment identity.
+	vi.spyOn(process, "getuid").mockReturnValue(65534);
+});
+
 async function environment() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-assembly-"));
 	directories.push(directory);
@@ -71,6 +76,7 @@ afterEach(async () => {
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
+	vi.restoreAllMocks();
 });
 
 describe("RuntimeHost environment assembly", () => {
