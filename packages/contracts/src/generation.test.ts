@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
+import { StandardTemplateReleaseApplyResponseV1Schema } from "./pilot/template-release.ts";
+
 const generatorPath = fileURLToPath(new URL("./generate.mjs", import.meta.url));
 const schemaNames = [
 	"IdempotencyKeyV1",
@@ -28,6 +30,35 @@ function generate() {
 }
 
 describe("standard contract artifacts", () => {
+	it("keeps publication response validation equivalent in generated OpenAPI and Zod", () => {
+		const artifacts = JSON.parse(generate());
+		const schema =
+			artifacts.standardTemplateReleaseOpenapi.paths[
+				"/internal/ops/standard-template-releases/{releaseId}/apply"
+			].post.responses["202"].content["application/json"].schema;
+		const validate = new Ajv2020({ strictTuples: false }).compile(schema);
+		for (const { changedFields, accepted } of [
+			{ changedFields: ["source"], accepted: true },
+			{ changedFields: [], accepted: false },
+			{ changedFields: ["source", "modelConfiguration"], accepted: false },
+			{ changedFields: ["source", {}], accepted: false },
+			{ changedFields: ["source", "source"], accepted: false },
+			{ changedFields: ["modelConfiguration"], accepted: false },
+		]) {
+			const response = {
+				schemaVersion: 1,
+				agentId: "agent_01",
+				configurationRevision: 8,
+				changedFields,
+			};
+			expect(
+				StandardTemplateReleaseApplyResponseV1Schema.safeParse(response)
+					.success,
+			).toBe(accepted);
+			expect(validate(response), JSON.stringify(changedFields)).toBe(accepted);
+		}
+	});
+
 	it("generates deterministic OpenAPI 3.1 and JSON Schema 2020-12", () => {
 		const first = generate();
 		const second = generate();
@@ -35,6 +66,37 @@ describe("standard contract artifacts", () => {
 		expect(first.endsWith("\n")).toBe(true);
 
 		const artifacts = JSON.parse(first);
+		const publication =
+			artifacts.standardTemplateReleaseOpenapi.paths[
+				"/internal/ops/standard-template-releases/{releaseId}/apply"
+			].post;
+		expect(publication.parameters).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					in: "path",
+					name: "releaseId",
+					required: true,
+					schema: expect.objectContaining({
+						type: "string",
+						pattern: "^[A-Za-z0-9._~-]{1,128}$",
+					}),
+				}),
+				expect.objectContaining({
+					in: "header",
+					name: "Idempotency-Key",
+					required: true,
+					schema: expect.objectContaining({ minLength: 1, maxLength: 128 }),
+				}),
+			]),
+		);
+		expect(
+			publication.requestBody.content["application/json"].schema,
+		).toMatchObject({
+			type: "object",
+			additionalProperties: false,
+			required: ["schemaVersion"],
+		});
+		expect(JSON.stringify(publication)).not.toContain('"def":');
 		expect(artifacts.openapi.openapi).toBe("3.1.0");
 		expect(artifacts.openapi.paths).toEqual({});
 		expect(Object.keys(artifacts.openapi.components.schemas).sort()).toEqual(
@@ -59,7 +121,19 @@ describe("standard contract artifacts", () => {
 			"/api/v1/conversations/{conversationId}/events",
 		);
 		expect(Object.keys(artifacts.pilotBrowserOpenapiV2.paths)).toEqual([
+			"/api/v2/admin/agent-applications",
+			"/api/v2/admin/agent-applications/{applicationId}/decision",
 			"/api/v2/admin/audit",
+			"/api/v2/agent-applications",
+			"/api/v2/agent-applications/{applicationId}",
+			"/api/v2/agent-applications/{applicationId}/withdraw",
+			"/api/v2/agents",
+			"/api/v2/agents/{agentId}",
+			"/api/v2/agents/{agentId}/configuration",
+			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/conversations/{conversationId}",
+			"/api/v2/conversations/{conversationId}/events",
+			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 		]);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",
