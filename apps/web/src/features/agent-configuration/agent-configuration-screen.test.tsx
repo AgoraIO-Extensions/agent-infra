@@ -338,7 +338,7 @@ it("shows group visibility before an Owner submits a WeCom binding through the e
 	fireEvent.change(screen.getByLabelText("自建应用配置标识"), {
 		target: { value: "approved_bot" },
 	});
-	fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+	fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 	expect(onSave).toHaveBeenCalledWith(
 		expect.objectContaining({
 			channels: [
