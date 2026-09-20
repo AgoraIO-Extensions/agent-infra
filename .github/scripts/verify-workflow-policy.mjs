@@ -2256,7 +2256,25 @@ export function validateWorkflowDocuments(workflows) {
     !String(reviewInputStage?.run ?? "").includes('gh pr view "$PR_NUMBER"') ||
     !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
     !String(reviewInputStage?.run ?? "").includes(
-      'gh pr diff "$PR_NUMBER" > .review-input/pr.diff',
+      "--json author,baseRefName,baseRefOid,body,commits,files,headRefName,headRefOid,title,url",
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'BASE_SHA="$(jq -r \'.baseRefOid // empty\' .review-input/pr.json)"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'git -C pr-head fetch --no-tags --depth=1 origin "$BASE_SHA"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      "git -C pr-head diff --no-ext-diff --binary --unified=80",
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '"$BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      "test -s .review-input/pr.diff",
     ) ||
     (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
       .length !== 2 ||
