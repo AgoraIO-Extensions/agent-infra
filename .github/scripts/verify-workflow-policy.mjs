@@ -2274,6 +2274,9 @@ export function validateWorkflowDocuments(workflows) {
       `git -C pr-head -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA"`,
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
+      'test "$(git -C pr-head rev-parse --verify HEAD)" = "$EXPECTED_HEAD_SHA"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
       "git -C pr-head diff --no-ext-diff --no-textconv --diff-algorithm=myers --binary --unified=80",
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
@@ -2283,7 +2286,7 @@ export function validateWorkflowDocuments(workflows) {
       "test -s .review-input/pr.diff",
     ) ||
     (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
-      .length !== 2 ||
+      .length !== 3 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
