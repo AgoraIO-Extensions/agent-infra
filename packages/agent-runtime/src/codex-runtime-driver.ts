@@ -2299,6 +2299,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		CodexModelTurnAdmission
 	>();
+	/** A registered child turn may arrive before its durable bind is committed. */
+	private readonly admittedPendingSourceTurns = new Set<string>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
@@ -5545,7 +5547,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				checkReceipt(prior);
 				if (decisionRecorded(source)) return resolved;
 			}
-			if (request.phase !== "source-reserve") {
+			// An identical callback may already have a pending bind receipt. Its
+			// fingerprint was checked above, so do not reject the coalesced update
+			// as a reused request while the first admission is being committed.
+			if (request.phase !== "source-reserve" && !prior) {
 				checkUniqueRequest(state);
 				this.assertJournalOpen(resolved.journal);
 				validateTransition(state, resolved);
@@ -5626,9 +5631,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						recognizeTurn !== undefined ||
 						registerTurn !== undefined;
 					const turn = { ...request.source, conversationKey };
+					const turnKey = this.nativeTurnKey(
+						conversationKey,
+						request.source.threadId,
+						request.source.turnId,
+					);
 					let admission: CodexModelTurnAdmission | undefined;
 					let lateClose = false;
 					const cleanupTurnRegistration = () => {
+						this.admittedPendingSourceTurns.delete(turnKey);
 						if (admission) this.abandonModelTurnAdmission?.(admission);
 						this.revokeModelTurn?.(turn);
 					};
@@ -5673,6 +5684,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							});
 							unavailable();
 						}
+						this.admittedPendingSourceTurns.add(
+							this.nativeTurnKey(
+								conversationKey,
+								request.source.threadId,
+								request.source.turnId,
+							),
+						);
 					}
 					try {
 						saved = await this.update((state) => {
@@ -5704,9 +5722,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						cleanupTurnRegistration();
 						throw error;
 					}
-					if (lateClose) {
-						cleanupTurnRegistration();
-					}
+					if (lateClose) cleanupTurnRegistration();
+					else this.admittedPendingSourceTurns.delete(turnKey);
 				}
 			} else unavailable();
 		}
@@ -6254,14 +6271,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				return [];
 			return Object.values(session.journals ?? {}).flatMap((journal) =>
 				Object.values(journal.nativeSources ?? {})
-					.filter(
-						(source) =>
+					.filter((source) => {
+						const pendingAdmission =
+							source.bindPending !== undefined &&
+							source.source !== undefined &&
+							this.admittedPendingSourceTurns.has(
+								this.nativeTurnKey(conversationKey, threadId, nativeTurnId),
+							);
+						return (
 							source.delivery === "started" &&
-							source.bind &&
-							!source.bindDenied &&
+							((source.bind !== undefined && !source.bindDenied) ||
+								pendingAdmission) &&
 							source.source?.threadId === threadId &&
-							source.source.turnId === nativeTurnId,
-					)
+							source.source.turnId === nativeTurnId
+						);
+					})
 					.map((sourceRecord) => ({ session, journal, sourceRecord })),
 			);
 		});
