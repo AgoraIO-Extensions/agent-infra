@@ -552,6 +552,19 @@ describe("official declaration transition", () => {
 	it.each(["arm64", "x64"])(
 		"keeps the old declared %s installation valid",
 		async (arch) => {
+			// The setup above models the newer derived installation. Remove its
+			// manifest and payload before exercising the legacy official layout;
+			// production verification intentionally rejects mixed layouts.
+			for (const source of [...allPayload, "candidate.json", "release.json"])
+				await rm(installed(source), { force: true });
+			await rm(join(fixture.sandbox, "opt/codex/codex-resources"), {
+				recursive: true,
+				force: true,
+			});
+			await rm(join(fixture.sandbox, "opt/codex/share/legal"), {
+				recursive: true,
+				force: true,
+			});
 			fixture.arch = arch;
 			fixture.release = {
 				provenance: { ...provenance },
@@ -568,10 +581,6 @@ describe("official declaration transition", () => {
 					NOTICE: hash("upstream notice"),
 				},
 			};
-			await rm(join(fixture.sandbox, "opt/codex"), {
-				recursive: true,
-				force: true,
-			});
 			await put(
 				installed("bundle/bin/codex"),
 				payload["bundle/bin/codex"] as Buffer,

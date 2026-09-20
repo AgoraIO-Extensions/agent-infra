@@ -2299,10 +2299,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		CodexModelTurnAdmission
 	>();
+	/** A registered child turn may arrive before its durable bind is committed. */
+	private readonly admittedPendingSourceTurns = new Map<
+		string,
+		Map<string, number>
+	>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
 	>();
+
+	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
+		const requests =
+			this.admittedPendingSourceTurns.get(turnKey) ?? new Map<string, number>();
+		requests.set(requestId, (requests.get(requestId) ?? 0) + 1);
+		this.admittedPendingSourceTurns.set(turnKey, requests);
+	}
+
+	private releasePendingSourceTurn(turnKey: string, requestId: string): void {
+		const requests = this.admittedPendingSourceTurns.get(turnKey);
+		const count = requests?.get(requestId);
+		if (count === undefined) return;
+		if (count > 1) requests?.set(requestId, count - 1);
+		else requests?.delete(requestId);
+		if (requests?.size === 0) this.admittedPendingSourceTurns.delete(turnKey);
+	}
+
+	private hasPendingSourceTurn(turnKey: string, requestId: string): boolean {
+		return (
+			this.admittedPendingSourceTurns.get(turnKey)?.has(requestId) === true
+		);
+	}
 
 	/** @internal */
 	protected constructor(
@@ -5545,8 +5572,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				checkReceipt(prior);
 				if (decisionRecorded(source)) return resolved;
 			}
+			// An identical callback may already have a pending bind receipt. Its
+			// fingerprint was checked above, so do not reject the coalesced update
+			// as a reused request while the first admission is being committed.
 			if (request.phase !== "source-reserve") {
-				checkUniqueRequest(state);
+				if (!prior) checkUniqueRequest(state);
 				this.assertJournalOpen(resolved.journal);
 				validateTransition(state, resolved);
 			}
@@ -5626,9 +5656,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						recognizeTurn !== undefined ||
 						registerTurn !== undefined;
 					const turn = { ...request.source, conversationKey };
+					const turnKey = this.nativeTurnKey(
+						conversationKey,
+						request.source.threadId,
+						request.source.turnId,
+					);
 					let admission: CodexModelTurnAdmission | undefined;
+					let pendingSourceRetained = false;
 					let lateClose = false;
 					const cleanupTurnRegistration = () => {
+						if (pendingSourceRetained) {
+							this.releasePendingSourceTurn(turnKey, receipt.requestId);
+							pendingSourceRetained = false;
+						}
 						if (admission) this.abandonModelTurnAdmission?.(admission);
 						this.revokeModelTurn?.(turn);
 					};
@@ -5673,6 +5713,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							});
 							unavailable();
 						}
+						this.retainPendingSourceTurn(turnKey, receipt.requestId);
+						pendingSourceRetained = true;
 					}
 					try {
 						saved = await this.update((state) => {
@@ -5704,8 +5746,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						cleanupTurnRegistration();
 						throw error;
 					}
-					if (lateClose) {
-						cleanupTurnRegistration();
+					if (lateClose) cleanupTurnRegistration();
+					else {
+						this.releasePendingSourceTurn(turnKey, receipt.requestId);
+						pendingSourceRetained = false;
 					}
 				}
 			} else unavailable();
@@ -6247,21 +6291,34 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				sourceRecord: undefined as CodexNativeSourceRecord | undefined,
 			};
 		const matches = Object.values(state.sessions).flatMap((session) => {
+			const sessionConversationKey = codexConversationKey(session);
 			if (
 				conversationKey !== undefined &&
-				codexConversationKey(session) !== conversationKey
+				sessionConversationKey !== conversationKey
 			)
 				return [];
 			return Object.values(session.journals ?? {}).flatMap((journal) =>
 				Object.values(journal.nativeSources ?? {})
-					.filter(
-						(source) =>
+					.filter((source) => {
+						const pendingAdmission =
+							source.bindPending !== undefined &&
+							source.source !== undefined &&
+							this.hasPendingSourceTurn(
+								this.nativeTurnKey(
+									sessionConversationKey,
+									threadId,
+									nativeTurnId,
+								),
+								source.bindPending.requestId,
+							);
+						return (
 							source.delivery === "started" &&
-							source.bind &&
-							!source.bindDenied &&
+							((source.bind !== undefined && !source.bindDenied) ||
+								pendingAdmission) &&
 							source.source?.threadId === threadId &&
-							source.source.turnId === nativeTurnId,
-					)
+							source.source.turnId === nativeTurnId
+						);
+					})
 					.map((sourceRecord) => ({ session, journal, sourceRecord })),
 			);
 		});
