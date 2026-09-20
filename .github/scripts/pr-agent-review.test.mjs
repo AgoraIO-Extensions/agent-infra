@@ -30,11 +30,18 @@ function api({
   dropComments = false,
   missingPatch = false,
   addedFile = false,
+  largeFile = false,
+  renamedFile = false,
 } = {}) {
   const baseSha = "b".repeat(40);
+  const mergeBaseSha = "c".repeat(40);
+  const baseBlobSha = "d".repeat(40);
+  const headBlobSha = "e".repeat(40);
   let posted;
   const writes = [];
+  const requested = [];
   const request = async (path, options = {}) => {
+    requested.push(path);
     if (options.method === "POST") {
       writes.push(path);
       if (failPost) throw new Error("GitHub API POST failed: 403");
@@ -46,19 +53,41 @@ function api({
         {
           filename: "src/math.ts",
           ...(addedFile ? { status: "added" } : {}),
+          ...(renamedFile ? { previous_filename: "src/old-math.ts" } : {}),
           ...(missingPatch
             ? {}
             : { patch: "@@ -1 +1 @@\n-return a + b;\n+return a - b;" }),
         },
       ];
-    if (missingPatch && path.includes("/contents/src/math.ts?ref=")) {
-      const content = path.endsWith(baseSha)
-        ? "keep\nold\nend\n"
-        : "keep\nnew\nend\n";
+    if (missingPatch && path.includes("/compare/"))
+      return { merge_base_commit: { sha: mergeBaseSha } };
+    if (missingPatch && path.includes("/contents/")) {
+      const before = path.includes(mergeBaseSha);
       return {
         type: "file",
+        sha: before ? baseBlobSha : headBlobSha,
+        ...(largeFile
+          ? { encoding: "none" }
+          : {
+              encoding: "base64",
+              content: Buffer.from(
+                before ? "keep\nold\nend\n" : "keep\nnew\nend\n",
+              ).toString("base64"),
+            }),
+      };
+    }
+    if (missingPatch && path.endsWith(`/git/blobs/${baseBlobSha}`)) {
+      return {
+        sha: baseBlobSha,
         encoding: "base64",
-        content: Buffer.from(content).toString("base64"),
+        content: Buffer.from("keep\nold\nend\n").toString("base64"),
+      };
+    }
+    if (missingPatch && path.endsWith(`/git/blobs/${headBlobSha}`)) {
+      return {
+        sha: headBlobSha,
+        encoding: "base64",
+        content: Buffer.from("keep\nnew\nend\n").toString("base64"),
       };
     }
     if (path.endsWith("/reviews/77/comments?per_page=100"))
@@ -94,7 +123,7 @@ function api({
       base: { sha: baseSha },
     };
   };
-  return { request, writes };
+  return { request, writes, requested, mergeBaseSha };
 }
 
 test("validates the official review output, including explicit zero findings", () => {
@@ -185,6 +214,28 @@ test("anchors findings in a newly added file when GitHub omits its patch", async
     request,
   });
   assert.equal(receipt.findingCount, 1);
+});
+
+test("uses Git blobs, merge-base content, and previous filename for large renames", async () => {
+  const { request, requested, mergeBaseSha } = api({
+    missingPatch: true,
+    largeFile: true,
+    renamedFile: true,
+  });
+  const receipt = await publishPrAgentReview({
+    ...context,
+    raw: JSON.stringify({
+      key_issues_to_review: [{ ...finding, start_line: 2, end_line: 2 }],
+    }),
+    request,
+  });
+  assert.equal(receipt.findingCount, 1);
+  assert.ok(
+    requested.some((path) =>
+      path.includes(`/contents/src/old-math.ts?ref=${mergeBaseSha}`),
+    ),
+  );
+  assert.ok(requested.some((path) => path.endsWith(`/git/blobs/${"d".repeat(40)}`)));
 });
 
 test("publishes a clear no-findings conclusion", async () => {

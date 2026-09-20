@@ -57,6 +57,53 @@ export function parsePrAgentReview(raw) {
 
 const execFileAsync = promisify(execFile);
 
+const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+
+const encodedPath = (filename) =>
+  filename
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+function decodeBase64Content(value) {
+  if (typeof value !== "string") throw new Error("GitHub file content is invalid");
+  return Buffer.from(value.replace(/\s/g, ""), "base64").toString("utf8");
+}
+
+/**
+ * Read a file through the Contents API and fall back to the Git Blob API for
+ * files where Contents returns encoding=none (currently the large-file path).
+ */
+async function readGitHubFile({ repository, filename, ref, request }) {
+  const content = await request(
+    `/repos/${repository}/contents/${encodedPath(filename)}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (content?.type !== "file" || !sha(content.sha))
+    throw new Error("PR-Agent review file contents are invalid");
+  if (content.encoding === "base64" && typeof content.content === "string")
+    return decodeBase64Content(content.content);
+
+  const blob = await request(`/repos/${repository}/git/blobs/${content.sha}`);
+  if (
+    blob?.sha !== content.sha ||
+    blob.encoding !== "base64" ||
+    typeof blob.content !== "string"
+  )
+    throw new Error("PR-Agent review file blob is invalid");
+  return decodeBase64Content(blob.content);
+}
+
+async function resolveMergeBase({ repository, baseSha, headSha, request }) {
+  if (!sha(baseSha) || !sha(headSha))
+    throw new Error("PR-Agent review commit is invalid");
+  const comparison = await request(
+    `/repos/${repository}/compare/${baseSha}...${headSha}`,
+  );
+  if (!sha(comparison?.merge_base_commit?.sha))
+    throw new Error("PR-Agent review merge-base is invalid");
+  return comparison.merge_base_commit.sha;
+}
+
 /**
  * Use Git's own zero-context hunk calculation so repeated lines and EOF
  * insertions follow the same anchors as the pull-request diff.
@@ -205,6 +252,7 @@ export async function publishPrAgentReview(context) {
   if (current.head.repo?.full_name !== repository)
     throw new Error("PR-Agent review target must be in the same repository");
   const files = new Map();
+  const fileMetadata = new Map();
   const missingPatches = new Set();
   const addedFiles = new Set();
   // GitHub caps PR files at 3000; reaching the cap is not evidence of a complete list.
@@ -213,6 +261,7 @@ export async function publishPrAgentReview(context) {
       `/repos/${repository}/pulls/${prNumber}/files?per_page=100&page=${page}`,
     );
     for (const file of batch) {
+      fileMetadata.set(file.filename, file);
       if (typeof file.patch === "string") {
         files.set(file.filename, collectChangedDiffLines(file.patch).RIGHT);
       } else if (findings.some((finding) => finding.relevant_file.trim() === file.filename)) {
@@ -224,41 +273,36 @@ export async function publishPrAgentReview(context) {
     if (page === 30) throw new Error("PR-Agent review file list is incomplete");
   }
   if (missingPatches.size > 0) {
-    const baseSha = current.base?.sha;
-    if (!/^[a-f0-9]{40}$/.test(baseSha ?? ""))
-      throw new Error("PR-Agent review base commit is invalid");
+    const mergeBaseSha = await resolveMergeBase({
+      repository,
+      baseSha: current.base?.sha,
+      headSha: expectedHead,
+      request,
+    });
     for (const filename of missingPatches) {
-      const path = filename
-        .split("/")
-        .map((segment) => encodeURIComponent(segment))
-        .join("/");
+      const metadata = fileMetadata.get(filename);
+      const beforeFilename = metadata?.previous_filename ?? filename;
       const [before, after] = await Promise.all([
         addedFiles.has(filename)
           ? undefined
-          : request(
-              `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(baseSha)}`,
-            ),
-        request(
-          `/repos/${repository}/contents/${path}?ref=${encodeURIComponent(expectedHead)}`,
-        ),
+          : readGitHubFile({
+              repository,
+              filename: beforeFilename,
+              ref: mergeBaseSha,
+              request,
+            }),
+        readGitHubFile({
+          repository,
+          filename,
+          ref: expectedHead,
+          request,
+        }),
       ]);
-      if (
-        (before !== undefined &&
-          (before.type !== "file" ||
-            before.encoding !== "base64" ||
-            typeof before.content !== "string")) ||
-        after?.type !== "file" ||
-        after.encoding !== "base64" ||
-        typeof after.content !== "string"
-      )
-        throw new Error("PR-Agent review file contents are invalid");
-      const decode = (value) =>
-        Buffer.from(value.replace(/\s/g, ""), "base64").toString("utf8");
       files.set(
         filename,
         await changedRightLinesFromTexts(
-          before === undefined ? "" : decode(before.content),
-          decode(after.content),
+          before === undefined ? "" : before,
+          after,
         ),
       );
     }
