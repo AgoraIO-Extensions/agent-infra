@@ -868,7 +868,7 @@ fi
     const stage = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
       (step) => step.name === "Stage untrusted PR review data",
     );
-    await run("bash", ["-e", "-o", "pipefail", "-c", stage.run], {
+    const runStage = () => run("bash", ["-e", "-o", "pipefail", "-c", stage.run], {
       cwd: directory,
       env: {
         ...env,
@@ -878,11 +878,17 @@ fi
         PR_NUMBER: "1",
       },
     });
-    const diff = await fs.readFile(path.join(directory, ".review-input/pr.diff"), "utf8");
+    await runStage();
+    const diffPath = path.join(directory, ".review-input/pr.diff");
+    const diff = await fs.readFile(diffPath, "utf8");
     assert.match(diff, /diff --git a\/large.txt b\/large.txt/);
     assert.match(diff, /\+changed line 20000\n/);
     assert.equal(diff.split("\n").filter((line) => /^\+changed line /.test(line)).length, 20_001);
     assert.doesNotMatch(diff, /base-only.txt/);
+    await fs.rm(diffPath);
+    await git("-C", checkout, "checkout", "--detach", mergeBase);
+    await assert.rejects(runStage());
+    await assert.rejects(fs.stat(diffPath), { code: "ENOENT" });
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
