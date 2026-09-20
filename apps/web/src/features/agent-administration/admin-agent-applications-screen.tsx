@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -99,18 +99,25 @@ function ApplicationReview({
 		decisionResult.status !== "pending_approval";
 	const { configuration, resourceProfile, source } = application;
 	const resources = resourceProfile.estimatedResources;
+	const close = useCallback(() => {
+		setOpen(false);
+		onOpenChange?.(false);
+		setRejecting(false);
+		setReason("");
+		setReasonError(false);
+	}, [onOpenChange]);
+	useEffect(() => {
+		if (resolved && open) close();
+	}, [close, open, resolved]);
 	return (
 		<Dialog
 			open={open && !resolved}
 			onOpenChange={(next) => {
 				if (deciding) return;
-				setOpen(next);
-				onOpenChange?.(next);
-				if (!next) {
-					setRejecting(false);
-					setReason("");
-					setReasonError(false);
-				}
+				if (next) {
+					setOpen(true);
+					onOpenChange?.(true);
+				} else close();
 			}}
 		>
 			<DialogTrigger
@@ -201,11 +208,7 @@ function ApplicationReview({
 							>
 								驳回
 							</Button>
-							<Button
-								variant="ghost"
-								disabled={deciding}
-								onClick={() => setOpen(false)}
-							>
+							<Button variant="ghost" disabled={deciding} onClick={close}>
 								取消
 							</Button>
 						</div>

@@ -290,4 +290,39 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(within(dialog).getAllByRole("alert")).toHaveLength(1);
 		expect(screen.getAllByRole("alert")).toHaveLength(1);
 	});
+
+	it("restores page-level decision feedback after a programmatic close", async () => {
+		const props = {
+			decisionError: Object.assign(new Error(), { retryable: true }),
+			onDecision: vi.fn(),
+			session: { kind: "ready" as const, session: administratorSession },
+			state: { kind: "ready" as const, applications: [pendingApplication] },
+		};
+		const { rerender } = render(<AdminAgentApplicationsScreen {...props} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => {
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(screen.getAllByRole("alert")).toHaveLength(1);
+		});
+
+		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
+		await screen.findByRole("dialog");
+		rerender(
+			<AdminAgentApplicationsScreen
+				{...props}
+				decisionResult={{
+					...pendingApplication,
+					agentId: "agent-pilot-1",
+					status: "creating",
+				}}
+			/>,
+		);
+		await waitFor(() => {
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(screen.getAllByRole("alert")).toHaveLength(1);
+		});
+	});
 });
