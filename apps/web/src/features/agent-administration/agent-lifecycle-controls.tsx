@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Dialog,
@@ -184,15 +184,25 @@ export function AgentLifecycleControls({
 }: AgentLifecycleControlsProps) {
 	const [localPendingCommand, setLocalPendingCommand] =
 		useState<AgentLifecycleCommand | null>(null);
+	const observedResult = commandResult ? JSON.stringify(commandResult) : null;
+	const lastObservedResult = useRef(observedResult);
 	useEffect(() => {
+		const resultAdvanced = observedResult !== lastObservedResult.current;
+		lastObservedResult.current = observedResult;
 		if (
 			pendingCommand !== undefined ||
 			commandError !== null ||
-			commandResult?.agentId === agent.agentId
+			(resultAdvanced && commandResult?.agentId === agent.agentId)
 		) {
 			setLocalPendingCommand(null);
 		}
-	}, [agent.agentId, commandError, commandResult, pendingCommand]);
+	}, [
+		agent.agentId,
+		commandError,
+		commandResult?.agentId,
+		observedResult,
+		pendingCommand,
+	]);
 	const commands = visibleLifecycleCommands(agent, session);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;

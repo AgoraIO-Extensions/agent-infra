@@ -359,6 +359,43 @@ describe("AgentLifecycleControls", () => {
 		expect(onCommand).toHaveBeenCalledTimes(2);
 	});
 
+	it("keeps a local latch while the parent repeats a stale command result", async () => {
+		const onCommand = vi.fn();
+		const props = {
+			agent: unavailableAgent,
+			onCommand,
+			session: { kind: "ready" as const, session: ownerSession },
+			commandResult: {
+				...unavailableAgent,
+				managementStatus: "available" as const,
+			},
+		};
+		const { rerender } = render(<AgentLifecycleControls {...props} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "停止 Agent？" }),
+			).getByRole("button", { name: "确认停止" }),
+		);
+		expect(
+			screen.getByRole("button", { name: "停止中…" }).hasAttribute("disabled"),
+		).toBe(true);
+
+		// A parent rerender can recreate the last mutation projection while it is
+		// still the result of the previous command. It must not release this latch.
+		rerender(
+			<AgentLifecycleControls
+				{...props}
+				commandResult={{ ...props.commandResult }}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "停止中…" }).hasAttribute("disabled"),
+		).toBe(true);
+		expect(onCommand).toHaveBeenCalledExactlyOnceWith("stop");
+	});
+
 	it("focuses completion only for the displayed Agent", async () => {
 		const props = {
 			agent: unavailableAgent,
