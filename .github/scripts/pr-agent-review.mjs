@@ -9,8 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import {
   collectChangedDiffLines,
   requireCurrentReviewTarget,
@@ -54,8 +53,6 @@ export function parsePrAgentReview(raw) {
   }
   return findings;
 }
-
-const execFileAsync = promisify(execFile);
 
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 
@@ -117,26 +114,51 @@ export async function changedRightLinesFromTexts(before, after) {
       writeFile(beforePath, before, "utf8"),
       writeFile(afterPath, after, "utf8"),
     ]);
-    let stdout = "";
-    try {
-      ({ stdout } = await execFileAsync(
-        "git",
-        ["diff", "--no-index", "--unified=0", "--", beforePath, afterPath],
-        { maxBuffer: 64 * 1024 * 1024 },
-      ));
-    } catch (error) {
-      if (error?.code !== 1) throw error;
-      stdout = error.stdout ?? "";
-    }
     const changed = new Set();
-    for (const line of stdout.split("\n")) {
-      const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-      if (!match) continue;
-      const start = Number(match[1]);
-      const count = Number(match[2] ?? 1);
-      for (let offset = 0; offset < count; offset += 1)
-        changed.add(start + offset);
-    }
+    await new Promise((resolve, reject) => {
+      const child = spawn(
+        "git",
+        [
+          "diff",
+          "--no-index",
+          "--unified=0",
+          "--diff-algorithm=myers",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--",
+          beforePath,
+          afterPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let pending = "";
+      let stderr = "";
+      const consume = (line) => {
+        const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+        if (!match) return;
+        const start = Number(match[1]);
+        const count = Number(match[2] ?? 1);
+        for (let offset = 0; offset < count; offset += 1)
+          changed.add(start + offset);
+      };
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        pending += chunk;
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) consume(line);
+      });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        if (stderr.length < 4096) stderr += chunk;
+      });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (pending) consume(pending);
+        if (code === 0 || code === 1) return resolve();
+        reject(new Error(`git diff failed with exit code ${code}: ${stderr.trim()}`));
+      });
+    });
     return changed;
   } finally {
     await rm(directory, { recursive: true, force: true });
