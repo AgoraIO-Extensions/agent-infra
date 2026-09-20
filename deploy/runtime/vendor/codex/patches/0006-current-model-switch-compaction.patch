@@ -1,0 +1,343 @@
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index f7c42680c2bb3005dcb2e49ff418dcdc2cb393a2..336178c1bdd03216df5f897369620b58c51ac200 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -1056,7 +1056,7 @@ async fn run_pre_sampling_compact(
+     client_session: &mut ModelClientSession,
+     cancellation_token: &CancellationToken,
+ ) -> CodexResult<()> {
+-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
++    maybe_run_model_switch_inline_compact(sess, turn_context, client_session, cancellation_token)
+         .await?;
+     let token_status =
+         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
+@@ -1114,11 +1114,12 @@ async fn capture_current_model_fallback_step_context(
+         .map(Some)
+ }
+ 
+-/// Runs pre-sampling compaction against the previous model when its compaction compatibility
+-/// hash changed or when switching to a smaller context-window model.
++/// Runs pre-sampling compaction when the compaction compatibility hash changed or when switching
++/// to a smaller context-window model. Local compaction uses the current model; remote and token
++/// budget compaction retain the previous-model behavior.
+ ///
+ /// Returns `Err(_)` only when compaction was attempted and failed.
+-async fn maybe_run_previous_model_inline_compact(
++async fn maybe_run_model_switch_inline_compact(
+     sess: &Arc<Session>,
+     turn_context: &Arc<TurnContext>,
+     client_session: &mut ModelClientSession,
+@@ -1137,10 +1138,22 @@ async fn maybe_run_previous_model_inline_compact(
+             .with_model(previous_model.clone(), &sess.services.models_manager)
+             .await,
+     );
++    // Match run_auto_compact's local dispatch without replacing the previous context used below
++    // to decide whether the model switch needs compaction.
++    let compaction_turn_context =
++        if matches!(
++            turn_context.provider.capabilities().remote_compaction,
++            RemoteCompactionSupport::Unsupported
++        ) && !turn_context.config.features.enabled(Feature::TokenBudget)
++        {
++            turn_context
++        } else {
++            &previous_model_turn_context
++        };
+ 
+     if should_compact_for_comp_hash_change {
+         let step_context = sess
+-            .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
++            .capture_step_context(Arc::clone(compaction_turn_context), cancellation_token)
+             .await?;
+         let fallback_step_context = capture_current_model_fallback_step_context(
+             sess,
+@@ -1188,7 +1201,7 @@ async fn maybe_run_previous_model_inline_compact(
+         && old_context_window > new_context_window;
+     if should_run {
+         let step_context = sess
+-            .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
++            .capture_step_context(Arc::clone(compaction_turn_context), cancellation_token)
+             .await?;
+         let fallback_step_context = capture_current_model_fallback_step_context(
+             sess,
+diff --git a/codex-rs/core/tests/suite/compact.rs b/codex-rs/core/tests/suite/compact.rs
+index 3473e39628088eaa42259d7444cac6f9e9cc26be..1a2c9a870d4e1ec9b8198e36378031fc38791413 100644
+--- a/codex-rs/core/tests/suite/compact.rs
++++ b/codex-rs/core/tests/suite/compact.rs
+@@ -22,6 +22,7 @@ use codex_protocol::models::PermissionProfile;
+ use codex_protocol::openai_models::ModelInfo;
+ use codex_protocol::openai_models::ModelServiceTier;
+ use codex_protocol::openai_models::ModelsResponse;
++use codex_protocol::openai_models::ReasoningEffort;
+ use codex_protocol::protocol::AskForApproval;
+ use codex_protocol::protocol::EventMsg;
+ use codex_protocol::protocol::HookEventName;
+@@ -420,17 +421,35 @@ fn model_info_with_optional_comp_hash(slug: &str, comp_hash: Option<&str>) -> Mo
+     model_info
+ }
+ 
+-fn assert_pre_sampling_switch_compaction_requests(
++fn assert_local_pre_sampling_switch_compaction_requests(
+     first: &serde_json::Value,
+     compact: &serde_json::Value,
+     follow_up: &serde_json::Value,
+     previous_model: &str,
+     next_model: &str,
++    expected_reason: &str,
+ ) {
+     assert_eq!(first["model"].as_str(), Some(previous_model));
+-    assert_eq!(compact["model"].as_str(), Some(previous_model));
++    assert_eq!(compact["model"].as_str(), Some(next_model));
+     assert_eq!(follow_up["model"].as_str(), Some(next_model));
+ 
++    let compact_metadata: Value = serde_json::from_str(
++        compact["client_metadata"]["x-codex-turn-metadata"]
++            .as_str()
++            .expect("local compact request metadata"),
++    )
++    .expect("valid local compact request metadata");
++    assert_eq!(
++        compact_metadata["compaction"],
++        json!({
++            "trigger": "auto",
++            "reason": expected_reason,
++            "implementation": "responses",
++            "phase": "pre_turn",
++            "strategy": "memento",
++        })
++    );
++
+     let compact_body = compact.to_string();
+     assert!(
+         body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+@@ -2224,12 +2243,13 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
+         3,
+         "expected user, compact, and follow-up requests"
+     );
+-    assert_pre_sampling_switch_compaction_requests(
++    assert_local_pre_sampling_switch_compaction_requests(
+         &requests[0].body_json(),
+         &requests[1].body_json(),
+         &requests[2].body_json(),
+         previous_model,
+         next_model,
++        "model_downshift",
+     );
+ 
+     insta::assert_snapshot!(
+@@ -2326,17 +2346,139 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
+         3,
+         "a comp-hash change should compact before sampling the next turn"
+     );
+-    assert_pre_sampling_switch_compaction_requests(
++    assert_local_pre_sampling_switch_compaction_requests(
+         &requests[0].body_json(),
+         &requests[1].body_json(),
+         &requests[2].body_json(),
+         previous_model,
+         next_model,
++        "comp_hash_changed",
+     );
+ }
+ 
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-async fn previous_model_compaction_resolves_selected_settings() -> Result<()> {
++async fn local_model_switch_compaction_preserves_encrypted_history_before_new_input() -> Result<()>
++{
++    skip_if_no_network!(Ok(()));
++    let server = start_mock_server().await;
++    let before_switch = "OLD_USER_INPUT_BEFORE_SWITCH";
++    let after_switch = "NEW_USER_INPUT_AFTER_SWITCH";
++    let compact_summary = "CURRENT_MODEL_COMPACTION_SUMMARY";
++    let reasoning_summary = "Previous model reasoning summary";
++    let reasoning = ev_reasoning_item("rs-before-switch", &[reasoning_summary], &[]);
++    let expected_reasoning = json!([{
++        "type": "reasoning",
++        "summary": [{ "type": "summary_text", "text": reasoning_summary }],
++        "content": null,
++        "encrypted_content": reasoning["item"]["encrypted_content"],
++    }]);
++    let request_log = mount_sse_sequence(
++        &server,
++        vec![
++            sse(vec![
++                reasoning,
++                ev_assistant_message("m1", "Previous model answer"),
++                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
++            ]),
++            sse(vec![
++                ev_assistant_message("m2", compact_summary),
++                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
++            ]),
++            sse(vec![
++                ev_assistant_message("m3", "Current model answer"),
++                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
++            ]),
++        ],
++    )
++    .await;
++    let model_provider = non_openai_model_provider(&server);
++    let test = test_codex()
++        .with_model("gpt-5.4")
++        .with_model_info_override("gpt-5.4", |model| {
++            model.comp_hash = Some("hash-a".to_string());
++        })
++        .with_model_info_override("gpt-5.2", |model| {
++            model.comp_hash = Some("hash-b".to_string());
++        })
++        .with_config(move |config| {
++            config.model_provider = model_provider;
++            set_test_compact_prompt(config);
++        })
++        .build_with_auto_env(&server)
++        .await?;
++    test.submit_text_turn(before_switch).await?;
++    test.codex
++        .start_or_steer_turn(
++            TurnInputRequest::user_input(vec![UserInput::Text {
++                text: after_switch.to_string(),
++                text_elements: Vec::new(),
++            }])
++            .with_thread_settings(ThreadSettingsOverrides {
++                model: Some("gpt-5.2".to_string()),
++                effort: Some(Some(ReasoningEffort::High)),
++                ..Default::default()
++            }),
++        )
++        .await?;
++    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
++
++    let requests = request_log.requests();
++    assert_eq!(requests.len(), 3);
++    assert_local_pre_sampling_switch_compaction_requests(
++        &requests[0].body_json(),
++        &requests[1].body_json(),
++        &requests[2].body_json(),
++        "gpt-5.4",
++        "gpt-5.2",
++        "comp_hash_changed",
++    );
++    assert_eq!(
++        strip_response_item_ids_from_json(json!(requests[1].inputs_of_type("reasoning"))),
++        expected_reasoning,
++        "local compaction must receive the previous model's encrypted reasoning unchanged"
++    );
++    assert_eq!(
++        requests[1..]
++            .iter()
++            .map(|request| request.body_json()["reasoning"]["effort"].clone())
++            .collect::<Vec<_>>(),
++        vec![json!("high"), json!("high")]
++    );
++    let compact_user_texts = requests[1].message_input_texts("user");
++    assert!(compact_user_texts.iter().any(|text| text == before_switch));
++    assert!(!compact_user_texts.iter().any(|text| text == after_switch));
++    let follow_up_user_texts = requests[2].message_input_texts("user");
++    let summary_index = follow_up_user_texts
++        .iter()
++        .position(|text| text == &summary_with_prefix(compact_summary))
++        .expect("installed compaction summary");
++    let new_input_index = follow_up_user_texts
++        .iter()
++        .position(|text| text == after_switch)
++        .expect("new user input");
++    assert!(summary_index < new_input_index);
++    let turn_metadata = requests
++        .iter()
++        .map(|request| {
++            serde_json::from_str::<Value>(
++                &request
++                    .header("x-codex-turn-metadata")
++                    .expect("request turn metadata"),
++            )
++            .expect("valid request turn metadata")
++        })
++        .collect::<Vec<_>>();
++    assert!(turn_metadata[0]["thread_id"].is_string());
++    assert_eq!(turn_metadata[0]["thread_id"], turn_metadata[1]["thread_id"]);
++    assert_eq!(turn_metadata[1]["thread_id"], turn_metadata[2]["thread_id"]);
++    assert!(turn_metadata[1]["turn_id"].is_string());
++    assert_eq!(turn_metadata[1]["turn_id"], turn_metadata[2]["turn_id"]);
++    assert_ne!(turn_metadata[0]["turn_id"], turn_metadata[1]["turn_id"]);
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn current_model_compaction_resolves_selected_settings() -> Result<()> {
+     skip_if_no_network!(Ok(()));
+     let server = start_mock_server().await;
+     let request_log = mount_sse_sequence(
+@@ -2401,8 +2543,8 @@ async fn previous_model_compaction_resolves_selected_settings() -> Result<()> {
+     })
+     .await;
+ 
+-    // The retained priority selection is filtered out for B, restored for
+-    // compaction on A, and still omitted from the following B request.
++    // Both compaction and the following request use B's resolved settings, including filtering
++    // out the retained priority selection that B does not support.
+     let actual = request_log
+         .requests()
+         .iter()
+@@ -2419,7 +2561,7 @@ async fn previous_model_compaction_resolves_selected_settings() -> Result<()> {
+         actual,
+         vec![
+             json!(["gpt-5.4", "detailed", "priority"]),
+-            json!(["gpt-5.4", "detailed", "priority"]),
++            json!(["gpt-5.2", "auto", null]),
+             json!(["gpt-5.2", "auto", null]),
+         ]
+     );
+@@ -2938,7 +3080,7 @@ async fn pre_sampling_legacy_remote_compact_falls_back_after_previous_model_inva
+ }
+ 
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_custom_provider() {
++async fn pre_sampling_compact_uses_current_model_for_api_key_auth_and_custom_provider() {
+     skip_if_no_network!();
+ 
+     let server = MockServer::start().await;
+@@ -3012,12 +3154,13 @@ async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_
+ 
+     let requests = request_log.requests();
+     assert_eq!(requests.len(), 3);
+-    assert_pre_sampling_switch_compaction_requests(
++    assert_local_pre_sampling_switch_compaction_requests(
+         &requests[0].body_json(),
+         &requests[1].body_json(),
+         &requests[2].body_json(),
+         previous_model,
+         next_model,
++        "comp_hash_changed",
+     );
+ }
+ 
+@@ -3337,12 +3480,13 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
+         3,
+         "expected user, compact, and follow-up requests"
+     );
+-    assert_pre_sampling_switch_compaction_requests(
++    assert_local_pre_sampling_switch_compaction_requests(
+         &requests[0].body_json(),
+         &requests[1].body_json(),
+         &requests[2].body_json(),
+         previous_model,
+         next_model,
++        "model_downshift",
+     );
+ }
+ 
+@@ -3468,12 +3612,13 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
+         3,
+         "the resumed turn should compact using the comp hash recovered from rollout"
+     );
+-    assert_pre_sampling_switch_compaction_requests(
++    assert_local_pre_sampling_switch_compaction_requests(
+         &requests[0].body_json(),
+         &requests[1].body_json(),
+         &requests[2].body_json(),
+         previous_model,
+         next_model,
++        "comp_hash_changed",
+     );
+ }
+ 
