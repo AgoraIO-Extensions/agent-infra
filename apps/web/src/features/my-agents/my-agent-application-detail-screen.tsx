@@ -17,6 +17,7 @@ import { agentManagementStatusLabels } from "../agent-management-status.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
+	hasCreatedAgent,
 	type MyAgentApplicationState,
 } from "./my-agent-applications.js";
 
@@ -230,7 +231,7 @@ export function MyAgentApplicationDetailScreen({
 								</DialogContent>
 							</Dialog>
 						) : null}
-						{application.agentId ? (
+						{hasCreatedAgent(application) ? (
 							<Link
 								className={buttonVariants({ variant: "outline" })}
 								params={{ agentId: application.agentId }}

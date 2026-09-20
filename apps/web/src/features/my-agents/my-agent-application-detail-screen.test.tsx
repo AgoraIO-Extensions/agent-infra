@@ -7,6 +7,43 @@ import { pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
 
 describe("MyAgentApplicationDetailScreen", () => {
+	it.each([
+		["pending_approval", false],
+		["rejected", false],
+		["withdrawn", false],
+		["creating", true],
+		["available", true],
+		["stopped", true],
+		["creation_failed", true],
+		["disabled", true],
+	] as const)(
+		"shows an Agent entrance only after creation has begun (%s)",
+		async (status, hasAgentEntrance) => {
+			const application = AgentApplicationProjectionV2Schema.parse({
+				...pendingApplication,
+				agentId: "agent-reserved-before-approval",
+				status,
+			});
+			await renderWithMyAgentsRouter(
+				<MyAgentApplicationDetailScreen
+					onWithdraw={vi.fn()}
+					state={{ kind: "ready", application }}
+					withdrawing={false}
+				/>,
+			);
+
+			const link = screen.queryByRole("link", { name: "查看 Agent" });
+			if (hasAgentEntrance) {
+				expect(link?.getAttribute("href")).toBe(
+					"/agents/agent-reserved-before-approval",
+				);
+			} else {
+				expect(link).toBeNull();
+			}
+			expect(screen.getByRole("link", { name: "返回我的 Agent" })).toBeTruthy();
+		},
+	);
+
 	it("renders a pending projection and lets the applicant withdraw it", async () => {
 		const onWithdraw = vi.fn();
 		await renderWithMyAgentsRouter(

@@ -8,7 +8,10 @@ import { buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
-import type { MyAgentApplicationsState } from "./my-agent-applications.js";
+import {
+	hasCreatedAgent,
+	type MyAgentApplicationsState,
+} from "./my-agent-applications.js";
 
 type MyAgentsScreenProps = {
 	state: MyAgentApplicationsState | { kind: "loading" };
@@ -92,7 +95,7 @@ export function MyAgentsScreen({
 										>
 											申请详情
 										</Link>
-										{application.agentId ? (
+										{hasCreatedAgent(application) ? (
 											<Link
 												className={buttonVariants({ variant: "link" })}
 												params={{ agentId: application.agentId }}

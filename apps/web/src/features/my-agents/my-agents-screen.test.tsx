@@ -1,4 +1,7 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApplicationProjectionV2Schema,
+	AgentProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -8,6 +11,41 @@ import { creatingApplication, pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
 
 describe("MyAgentsScreen", () => {
+	it.each([
+		["pending_approval", false],
+		["rejected", false],
+		["withdrawn", false],
+		["creating", true],
+		["available", true],
+		["stopped", true],
+		["creation_failed", true],
+		["disabled", true],
+	] as const)(
+		"shows an Agent entrance only after creation has begun (%s)",
+		async (status, hasAgentEntrance) => {
+			const application = AgentApplicationProjectionV2Schema.parse({
+				...pendingApplication,
+				agentId: "agent-reserved-before-approval",
+				status,
+			});
+			await renderWithMyAgentsRouter(
+				<MyAgentsScreen
+					state={{ kind: "ready", applications: [application] }}
+				/>,
+			);
+
+			const link = screen.queryByRole("link", { name: "查看 Agent" });
+			if (hasAgentEntrance) {
+				expect(link?.getAttribute("href")).toBe(
+					"/agents/agent-reserved-before-approval",
+				);
+			} else {
+				expect(link).toBeNull();
+			}
+			expect(screen.getByRole("link", { name: "申请详情" })).toBeTruthy();
+		},
+	);
+
 	it("renders projected statuses responsively and links only an emitted Agent ID", async () => {
 		await renderWithMyAgentsRouter(
 			<MyAgentsScreen
