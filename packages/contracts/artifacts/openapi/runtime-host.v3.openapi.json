@@ -148,12 +148,12 @@
             "type": "string"
           },
           "allowedCommands": {
-            "prefixItems": [
-              {
-                "$ref": "#/components/schemas/RuntimeBusinessCommandV2"
-              }
-            ],
-            "type": "array"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeBusinessCommandV2"
+            },
+            "minItems": 1,
+            "maxItems": 1
           },
           "attachments": {
             "items": {
@@ -164,13 +164,13 @@
                   "type": "string"
                 },
                 "operations": {
-                  "prefixItems": [
-                    {
-                      "const": "read",
-                      "type": "string"
-                    }
-                  ],
-                  "type": "array"
+                  "type": "array",
+                  "items": {
+                    "const": "read",
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
                 }
               },
               "required": [
@@ -429,12 +429,12 @@
             "type": "string"
           },
           "allowedCommands": {
-            "prefixItems": [
-              {
-                "$ref": "#/components/schemas/RuntimeControlCommandV2"
-              }
-            ],
-            "type": "array"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeControlCommandV2"
+            },
+            "minItems": 1,
+            "maxItems": 1
           },
           "audience": {
             "const": "runtime_host",

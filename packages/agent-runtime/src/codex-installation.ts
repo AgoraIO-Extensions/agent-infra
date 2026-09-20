@@ -78,25 +78,31 @@ async function protectedDirectory(path: string) {
 }
 
 async function verifyLayout(expectedFiles: readonly string[]) {
-	const files = new Set(expectedFiles);
+	const rootPrefix = `${installationRoot}/`;
+	const files = new Set<string>();
+	for (const file of expectedFiles) {
+		requireValid(file.startsWith(rootPrefix));
+		files.add(file.slice(rootPrefix.length));
+	}
 	const directories = new Set<string>();
 	for (const file of files) {
-		for (let path = dirname(file); path !== "/"; path = dirname(path)) {
+		for (let path = dirname(file); path !== "."; path = dirname(path))
 			directories.add(path);
-		}
 	}
-	// Prevent replacing the installation through a writable or symlinked ancestor.
+	// Protect ancestors separately; exact inventory checks apply only inside the
+	// Codex installation root, whose unrelated siblings must remain untouched.
 	await protectedDirectory("/");
 	await protectedDirectory("/opt");
-	async function visit(path: string) {
+	async function visit(path: string, relative: string) {
 		await protectedDirectory(path);
 		for (const name of await readdir(path)) {
 			const child = `${path}/${name}`;
-			if (directories.has(child)) await visit(child);
-			else requireValid(files.delete(child) && (await lstat(child)).isFile());
+			const childRelative = relative ? `${relative}/${name}` : name;
+			if (directories.has(childRelative)) await visit(child, childRelative);
+			else requireValid(files.delete(childRelative) && (await lstat(child)).isFile());
 		}
 	}
-	await visit(installationRoot);
+	await visit(installationRoot, "");
 	requireValid(files.size === 0);
 }
 

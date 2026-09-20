@@ -186,21 +186,21 @@
           "type": "string"
         },
         "allowedCommands": {
-          "prefixItems": [
-            {
-              "enum": [
-                "turn.submit",
-                "turn.supplement",
-                "turn.stop",
-                "session.status",
-                "execution.renew",
-                "events.persist",
-                "events.ack"
-              ],
-              "type": "string"
-            }
-          ],
-          "type": "array"
+          "type": "array",
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "execution.renew",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 1
         },
         "attachments": {
           "items": {
@@ -211,13 +211,13 @@
                 "type": "string"
               },
               "operations": {
-                "prefixItems": [
-                  {
-                    "const": "read",
-                    "type": "string"
-                  }
-                ],
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "const": "read",
+                  "type": "string"
+                },
+                "minItems": 1,
+                "maxItems": 1
               }
             },
             "required": [
@@ -524,19 +524,19 @@
           "type": "string"
         },
         "allowedCommands": {
-          "prefixItems": [
-            {
-              "enum": [
-                "turn.stop",
-                "session.status",
-                "generation.cancel",
-                "events.persist",
-                "events.ack"
-              ],
-              "type": "string"
-            }
-          ],
-          "type": "array"
+          "type": "array",
+          "items": {
+            "enum": [
+              "turn.stop",
+              "session.status",
+              "generation.cancel",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 1
         },
         "audience": {
           "const": "runtime_host",
@@ -2115,21 +2115,21 @@
               "type": "string"
             },
             "allowedCommands": {
-              "prefixItems": [
-                {
-                  "enum": [
-                    "turn.submit",
-                    "turn.supplement",
-                    "turn.stop",
-                    "session.status",
-                    "execution.renew",
-                    "events.persist",
-                    "events.ack"
-                  ],
-                  "type": "string"
-                }
-              ],
-              "type": "array"
+              "type": "array",
+              "items": {
+                "enum": [
+                  "turn.submit",
+                  "turn.supplement",
+                  "turn.stop",
+                  "session.status",
+                  "execution.renew",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 1
             },
             "attachments": {
               "items": {
@@ -2140,13 +2140,13 @@
                     "type": "string"
                   },
                   "operations": {
-                    "prefixItems": [
-                      {
-                        "const": "read",
-                        "type": "string"
-                      }
-                    ],
-                    "type": "array"
+                    "type": "array",
+                    "items": {
+                      "const": "read",
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 1
                   }
                 },
                 "required": [
@@ -2383,19 +2383,19 @@
               "type": "string"
             },
             "allowedCommands": {
-              "prefixItems": [
-                {
-                  "enum": [
-                    "turn.stop",
-                    "session.status",
-                    "generation.cancel",
-                    "events.persist",
-                    "events.ack"
-                  ],
-                  "type": "string"
-                }
-              ],
-              "type": "array"
+              "type": "array",
+              "items": {
+                "enum": [
+                  "turn.stop",
+                  "session.status",
+                  "generation.cancel",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 1
             },
             "audience": {
               "const": "runtime_host",
@@ -4269,21 +4269,21 @@
                   "type": "string"
                 },
                 "allowedCommands": {
-                  "prefixItems": [
-                    {
-                      "enum": [
-                        "turn.submit",
-                        "turn.supplement",
-                        "turn.stop",
-                        "session.status",
-                        "execution.renew",
-                        "events.persist",
-                        "events.ack"
-                      ],
-                      "type": "string"
-                    }
-                  ],
-                  "type": "array"
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "turn.submit",
+                      "turn.supplement",
+                      "turn.stop",
+                      "session.status",
+                      "execution.renew",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
                 },
                 "attachments": {
                   "items": {
@@ -4294,13 +4294,13 @@
                         "type": "string"
                       },
                       "operations": {
-                        "prefixItems": [
-                          {
-                            "const": "read",
-                            "type": "string"
-                          }
-                        ],
-                        "type": "array"
+                        "type": "array",
+                        "items": {
+                          "const": "read",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "maxItems": 1
                       }
                     },
                     "required": [
@@ -4537,19 +4537,19 @@
                   "type": "string"
                 },
                 "allowedCommands": {
-                  "prefixItems": [
-                    {
-                      "enum": [
-                        "turn.stop",
-                        "session.status",
-                        "generation.cancel",
-                        "events.persist",
-                        "events.ack"
-                      ],
-                      "type": "string"
-                    }
-                  ],
-                  "type": "array"
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "turn.stop",
+                      "session.status",
+                      "generation.cancel",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
                 },
                 "audience": {
                   "const": "runtime_host",

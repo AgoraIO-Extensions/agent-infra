@@ -398,10 +398,10 @@ export class RuntimeHostV3 {
 			request.sessionGeneration,
 			request.executionId,
 		]);
-		await this.options.serialize(key, () => {
+		await this.options.serialize(key, async () => {
 			this.assertOpen();
 			this.validate(request, "turn.stop", verification);
-			const result = this.options.store.authorizeRequestV3(
+			const result = await this.options.store.authorizeRequestV3(
 				claims,
 				"query",
 				(this.options.grantValidation.now ?? Date.now)(),
