@@ -2300,11 +2300,36 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		CodexModelTurnAdmission
 	>();
 	/** A registered child turn may arrive before its durable bind is committed. */
-	private readonly admittedPendingSourceTurns = new Set<string>();
+	private readonly admittedPendingSourceTurns = new Map<
+		string,
+		Map<string, number>
+	>();
 	private readonly inFlightOperations = new Map<
 		string,
 		Promise<RuntimeDriverOperationRecord>
 	>();
+
+	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
+		const requests =
+			this.admittedPendingSourceTurns.get(turnKey) ?? new Map<string, number>();
+		requests.set(requestId, (requests.get(requestId) ?? 0) + 1);
+		this.admittedPendingSourceTurns.set(turnKey, requests);
+	}
+
+	private releasePendingSourceTurn(turnKey: string, requestId: string): void {
+		const requests = this.admittedPendingSourceTurns.get(turnKey);
+		const count = requests?.get(requestId);
+		if (count === undefined) return;
+		if (count > 1) requests?.set(requestId, count - 1);
+		else requests?.delete(requestId);
+		if (requests?.size === 0) this.admittedPendingSourceTurns.delete(turnKey);
+	}
+
+	private hasPendingSourceTurn(turnKey: string, requestId: string): boolean {
+		return (
+			this.admittedPendingSourceTurns.get(turnKey)?.has(requestId) === true
+		);
+	}
 
 	/** @internal */
 	protected constructor(
@@ -5637,9 +5662,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						request.source.turnId,
 					);
 					let admission: CodexModelTurnAdmission | undefined;
+					let pendingSourceRetained = false;
 					let lateClose = false;
 					const cleanupTurnRegistration = () => {
-						this.admittedPendingSourceTurns.delete(turnKey);
+						if (pendingSourceRetained) {
+							this.releasePendingSourceTurn(turnKey, receipt.requestId);
+							pendingSourceRetained = false;
+						}
 						if (admission) this.abandonModelTurnAdmission?.(admission);
 						this.revokeModelTurn?.(turn);
 					};
@@ -5684,13 +5713,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							});
 							unavailable();
 						}
-						this.admittedPendingSourceTurns.add(
-							this.nativeTurnKey(
-								conversationKey,
-								request.source.threadId,
-								request.source.turnId,
-							),
-						);
+						this.retainPendingSourceTurn(turnKey, receipt.requestId);
+						pendingSourceRetained = true;
 					}
 					try {
 						saved = await this.update((state) => {
@@ -5723,7 +5747,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						throw error;
 					}
 					if (lateClose) cleanupTurnRegistration();
-					else this.admittedPendingSourceTurns.delete(turnKey);
+					else {
+						this.releasePendingSourceTurn(turnKey, receipt.requestId);
+						pendingSourceRetained = false;
+					}
 				}
 			} else unavailable();
 		}
@@ -6276,12 +6303,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						const pendingAdmission =
 							source.bindPending !== undefined &&
 							source.source !== undefined &&
-							this.admittedPendingSourceTurns.has(
+							this.hasPendingSourceTurn(
 								this.nativeTurnKey(
 									sessionConversationKey,
 									threadId,
 									nativeTurnId,
 								),
+								source.bindPending.requestId,
 							);
 						return (
 							source.delivery === "started" &&
