@@ -295,6 +295,21 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 	});
 
+	it("健康 GitHub 连接会清理 callback_failed 提示", async () => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?oauth=callback_failed",
+		);
+		renderPage(<ConnectionsPage />);
+
+		await screen.findByRole("heading", { name: "connectionE2E2" });
+		await waitFor(() => expect(window.location.search).toBe(""));
+		expect(
+			screen.queryByText("GitHub 授权回跳未确认，请以当前连接状态为准。"),
+		).toBeNull();
+	});
+
 	it("连接页调用 GitHub、Bitbucket、授权、断开和 Grant API", async () => {
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		const open = vi.spyOn(window, "open");

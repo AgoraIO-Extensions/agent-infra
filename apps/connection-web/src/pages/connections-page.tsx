@@ -194,6 +194,18 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin();
 
 	const data = overview.data?.overview;
+	const githubConnectionHealthy = data?.connections.some(
+		(connection) =>
+			connection.providerId === "github" &&
+			connection.status === "ACTIVE" &&
+			!connection.requiresReconnect,
+	);
+	useEffect(() => {
+		if (!callbackFailed || !githubConnectionHealthy) return;
+		const url = new URL(window.location.href);
+		url.searchParams.delete("oauth");
+		window.history.replaceState(null, "", url);
+	}, [callbackFailed, githubConnectionHealthy]);
 	useEffect(() => {
 		if (!data || recoveryHandled.current) return;
 		const search = new URLSearchParams(window.location.search);
@@ -270,7 +282,7 @@ export function ConnectionsPage() {
 					正在加载 Connection...
 				</div>
 			) : null}
-			{callbackFailed ? (
+			{callbackFailed && overview.isSuccess && !githubConnectionHealthy ? (
 				<p className="alert alert-warning" role="status">
 					GitHub 授权回跳未确认，请以当前连接状态为准。
 				</p>
