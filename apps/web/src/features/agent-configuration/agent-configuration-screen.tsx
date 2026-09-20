@@ -326,121 +326,131 @@ export function AgentConfigurationScreen({
 												value={draft.organizationAvailabilityIds}
 											/>
 										</div>
-							</div>
-						</fieldset>
-						{!(
-							agent.source.kind === "custom" &&
-							agent.source.interactionMode === "self-managed"
-						) ? (
-							<fieldset
-								className="detail-section space-y-4 border-border border-t pt-5"
-								aria-describedby="wecom-visibility"
-						>
-								<legend className="font-semibold text-foreground text-sm">
-									企微渠道
-								</legend>
-								<p id="wecom-visibility" className="text-muted-foreground text-sm">
-									群消息和 Agent 回复对群成员可见。Agent 可用范围只限制谁能触发
-									Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
-								</p>
-								<p className="text-muted-foreground text-sm">
-									自建应用使用部署提供的回调配置；智能机器人可在下方直接绑定。
-								</p>
-								<WecomBotSetup
-									key={agent.agentId}
-									agentId={agent.agentId}
-									onUnbind={onSave}
-								/>
-								{(["wecom_app"] as const).map((kind) => {
-									const label = "自建应用";
-									const change = draft.channels?.find((c) => c.kind === kind);
-									const update = (
-										next:
-											| NonNullable<
-													AgentConfigurationUpdateRequestV2Writable["channels"]
-											  >[number]
-											| null,
-									) =>
-										setDraft((current) => ({
-											...current,
-											channels: [
-												...(current.channels ?? []).filter(
-													(c) => c.kind !== kind,
-												),
-												...(next ? [next] : []),
-											],
-										}));
-									return (
-										<div className="space-y-3" key={kind}>
-											<div className="flex items-center gap-2">
-												<Checkbox
-													id={`change-${kind}`}
-													checked={!!change}
-													onCheckedChange={(checked) =>
-														update(
-															checked
-																? { kind, enabled: true, bindingReference: "" }
-																: null,
-														)
-													}
-												/>
-												<Label htmlFor={`change-${kind}`}>
-													修改{label}绑定
-												</Label>
-											</div>
-											{change ? (
-												<div className="space-y-3 pl-6">
+									</div>
+								</fieldset>
+								{!(
+									agent.source.kind === "custom" &&
+									agent.source.interactionMode === "self-managed"
+								) ? (
+									<fieldset
+										className="detail-section space-y-4 border-border border-t pt-5"
+										aria-describedby="wecom-visibility"
+									>
+										<legend className="font-semibold text-foreground text-sm">
+											企微渠道
+										</legend>
+										<p
+											id="wecom-visibility"
+											className="text-muted-foreground text-sm"
+										>
+											群消息和 Agent 回复对群成员可见。Agent
+											可用范围只限制谁能触发
+											Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
+										</p>
+										<p className="text-muted-foreground text-sm">
+											自建应用使用部署提供的回调配置；智能机器人可在下方直接绑定。
+										</p>
+										<WecomBotSetup
+											key={agent.agentId}
+											agentId={agent.agentId}
+											onUnbind={onSave}
+										/>
+										{(["wecom_app"] as const).map((kind) => {
+											const label = "自建应用";
+											const change = draft.channels?.find(
+												(c) => c.kind === kind,
+											);
+											const update = (
+												next:
+													| NonNullable<
+															AgentConfigurationUpdateRequestV2Writable["channels"]
+													  >[number]
+													| null,
+											) =>
+												setDraft((current) => ({
+													...current,
+													channels: [
+														...(current.channels ?? []).filter(
+															(c) => c.kind !== kind,
+														),
+														...(next ? [next] : []),
+													],
+												}));
+											return (
+												<div className="space-y-3" key={kind}>
 													<div className="flex items-center gap-2">
 														<Checkbox
-															id={`enable-${kind}`}
-															checked={change.enabled}
+															id={`change-${kind}`}
+															checked={!!change}
 															onCheckedChange={(checked) =>
 																update(
 																	checked
 																		? {
-																			kind,
-																			enabled: true,
-																			bindingReference: "",
-																		}
-																		: { kind, enabled: false },
+																				kind,
+																				enabled: true,
+																				bindingReference: "",
+																			}
+																		: null,
 																)
 															}
 														/>
-														<Label htmlFor={`enable-${kind}`}>
-															启用{label}
+														<Label htmlFor={`change-${kind}`}>
+															修改{label}绑定
 														</Label>
 													</div>
-													{change.enabled ? (
-														<div className="space-y-2">
-															<Label htmlFor={`binding-${kind}`}>
-																{label}配置标识
-															</Label>
-															<Input
-																id={`binding-${kind}`}
-																required
-																value={change.bindingReference}
-																onChange={(event) =>
-																	update({
-																		kind,
-																		enabled: true,
-																		bindingReference: event.target.value,
-																	})
-																}
-															/>
+													{change ? (
+														<div className="space-y-3 pl-6">
+															<div className="flex items-center gap-2">
+																<Checkbox
+																	id={`enable-${kind}`}
+																	checked={change.enabled}
+																	onCheckedChange={(checked) =>
+																		update(
+																			checked
+																				? {
+																						kind,
+																						enabled: true,
+																						bindingReference: "",
+																					}
+																				: { kind, enabled: false },
+																		)
+																	}
+																/>
+																<Label htmlFor={`enable-${kind}`}>
+																	启用{label}
+																</Label>
+															</div>
+															{change.enabled ? (
+																<div className="space-y-2">
+																	<Label htmlFor={`binding-${kind}`}>
+																		{label}配置标识
+																	</Label>
+																	<Input
+																		id={`binding-${kind}`}
+																		required
+																		value={change.bindingReference}
+																		onChange={(event) =>
+																			update({
+																				kind,
+																				enabled: true,
+																				bindingReference: event.target.value,
+																			})
+																		}
+																	/>
+																</div>
+															) : (
+																<p className="text-muted-foreground text-sm">
+																	保存后解除此渠道绑定。
+																</p>
+															)}
 														</div>
-													) : (
-														<p className="text-muted-foreground text-sm">
-															保存后解除此渠道绑定。
-														</p>
-													)}
+													) : null}
 												</div>
-											) : null}
-										</div>
-									);
-								})}
-							</fieldset>
-						) : null}
-						{agent.source.kind === "standard" ? (
+											);
+										})}
+									</fieldset>
+								) : null}
+								{agent.source.kind === "standard" ? (
 									<fieldset className="detail-section space-y-4 border-border border-t pt-5">
 										<legend className="font-semibold text-foreground text-sm">
 											模型配置
