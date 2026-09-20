@@ -3006,7 +3006,7 @@ index 8d9670a..ce889d6 100644
      run_http_proxy_with_listener(state, listener, policy_decider, environment_id).await
  }
  
-@@ -150,15 +152,45 @@ pub(crate) fn http_proxy_service(
+@@ -150,15 +152,48 @@ pub(crate) fn http_proxy_service(
      // forces every accepted socket through the HTTP version sniffing pre-read path before proxy
      // request parsing, which can stall some local clients on macOS before CONNECT/absolute-form
      // handling runs at all.
@@ -3252,7 +3252,7 @@ index 8d9670a..ce889d6 100644
          Some(state) => state,
          None => {
              error!("missing app state");
-@@ -674,17 +705,16 @@ async fn http_plain_proxy(
+@@ -674,17 +705,20 @@ async fn http_plain_proxy(
          };
      }
  
