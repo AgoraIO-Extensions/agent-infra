@@ -29,15 +29,19 @@ M1 上线是独立验收层次，当前仍有未完成门禁，见交付与汇�
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
 | Web | `apps/web` | Agent 列表、申请/审批和 Owner 配置；对话页面与设计确认待交付 |
-| Platform API | `apps/platform-api` | Agent 管理、配置、Conversation、审计 HTTP API 与 SSE |
-| Platform Worker | `apps/platform-worker` | Conversation dispatch 和 Secret 装配；完整 Kubernetes 调谐待交付 |
-| Agent RuntimeHost | `apps/agent-runtime-host` | HTTP/SSE Host、持久 store 与 Driver 组件；环境启动入口仍为 Fake，正式 Codex 镜像装配待交付 |
+| Platform API | `apps/platform-api` | Agent 管理、配置、Conversation、审计 HTTP API 与 SSE；真实 Store/Registry/模型/Secret 和部署身份装配 |
+| Platform Worker | `apps/platform-worker` | 持久 Workload 调谐、Secret/模型候选验证、受控网络与就绪探测；任务生产循环单独交付 |
+| Agent RuntimeHost | `apps/agent-runtime-host` | HTTP/SSE Host、持久 store、Codex/Claude Driver 与不可变 Codex 镜像入口；只读 Workload 就绪授权 |
 | Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
 
 Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
 工程架构 Spec 保持独立部署、运行身份和数据边界。
 
 ## 本地验证
+
+持续运行的申请、审批、配置和 Workload 装配见
+[本地 Platform 生命周期](deploy/local/README.md)。真实身份、模型和独立 Connection 仍需
+部署输入与端到端验收，健康检查和组件测试不替代真实业务闭环。
 
 使用 Node.js 24 和 pnpm 11：
 
