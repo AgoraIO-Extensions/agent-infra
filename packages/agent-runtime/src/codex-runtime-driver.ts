@@ -5550,8 +5550,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// An identical callback may already have a pending bind receipt. Its
 			// fingerprint was checked above, so do not reject the coalesced update
 			// as a reused request while the first admission is being committed.
-			if (request.phase !== "source-reserve" && !prior) {
-				checkUniqueRequest(state);
+			if (request.phase !== "source-reserve") {
+				if (!prior) checkUniqueRequest(state);
 				this.assertJournalOpen(resolved.journal);
 				validateTransition(state, resolved);
 			}
@@ -6264,9 +6264,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				sourceRecord: undefined as CodexNativeSourceRecord | undefined,
 			};
 		const matches = Object.values(state.sessions).flatMap((session) => {
+			const sessionConversationKey = codexConversationKey(session);
 			if (
 				conversationKey !== undefined &&
-				codexConversationKey(session) !== conversationKey
+				sessionConversationKey !== conversationKey
 			)
 				return [];
 			return Object.values(session.journals ?? {}).flatMap((journal) =>
@@ -6276,7 +6277,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							source.bindPending !== undefined &&
 							source.source !== undefined &&
 							this.admittedPendingSourceTurns.has(
-								this.nativeTurnKey(conversationKey, threadId, nativeTurnId),
+								this.nativeTurnKey(
+									sessionConversationKey,
+									threadId,
+									nativeTurnId,
+								),
 							);
 						return (
 							source.delivery === "started" &&
