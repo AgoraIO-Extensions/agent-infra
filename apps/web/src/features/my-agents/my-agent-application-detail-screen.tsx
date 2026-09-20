@@ -51,8 +51,8 @@ export function MyAgentApplicationDetailScreen({
 			? `${state.application.applicationId}:${state.application.status}`
 			: state.kind;
 	useEffect(() => {
-		if (withdrawing) setWithdrawalLatched(false);
-	}, [withdrawing]);
+		if (withdrawalError && !withdrawing) setWithdrawalLatched(false);
+	}, [withdrawalError, withdrawing]);
 	useEffect(() => {
 		if (withdrawalError && !withdrawing) withdrawButtonRef.current?.focus();
 	}, [withdrawalError, withdrawing]);
