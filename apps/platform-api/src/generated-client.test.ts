@@ -18,30 +18,32 @@ const generatedSdkV2 = await import(
 const { createClient } = generatedClient;
 const { createClient: createClientV2 } = generatedClientV2;
 const {
-	commandAgentLifecycle,
-	createAgentApplication,
 	createConversation,
-	decideAgentApplication,
-	getAgent,
-	getAgentApplication,
 	getConversation,
 	getCurrentSession,
 	getExecutionDetail,
-	listAgentApplications,
-	listAgents,
 	listConversations,
-	listPendingAgentApplications,
 	listPlatformAudit,
 	regenerateAnswer,
 	stopExecution,
 	streamConversationEvents,
 	submitMessage,
-	updateAgentApplication,
-	updateAgentConfiguration,
 	updateConversationModelSelection,
-	withdrawAgentApplication,
 } = generatedSdk;
-const { listPlatformAuditV2 } = generatedSdkV2;
+const {
+	listPlatformAuditV2,
+	commandAgentLifecycleV2: commandAgentLifecycle,
+	createAgentApplicationV2: createAgentApplication,
+	decideAgentApplicationV2: decideAgentApplication,
+	getAgentV2: getAgent,
+	getAgentApplicationV2: getAgentApplication,
+	listAgentApplicationsV2: listAgentApplications,
+	listAgentsV2: listAgents,
+	listPendingAgentApplicationsV2: listPendingAgentApplications,
+	updateAgentApplicationV2: updateAgentApplication,
+	updateAgentConfigurationV2: updateAgentConfiguration,
+	withdrawAgentApplicationV2: withdrawAgentApplication,
+} = generatedSdkV2;
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -98,13 +100,13 @@ const configuration = {
 	modelOptions: [],
 	defaultModelOptionId: null,
 	defaultReasoningLevel: null,
-	actions: [],
+
 	environment: [],
 	channels: [{ kind: "web" as const, status: "available" as const }],
 	secrets: [],
 };
 const applicationProjection = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	applicationId: "application-1",
 	agentId: "agent-1",
 	name: applicationRecord.name,
@@ -125,7 +127,7 @@ const applicationProjection = {
 	decision: null,
 };
 const agentProjection = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	agentId: "agent-1",
 	name: agentRecord.name,
 	description: agentRecord.description,
@@ -143,13 +145,13 @@ const agentProjection = {
 	interactionUrl: null,
 };
 const applicationBody = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	name: applicationRecord.name,
 	description: applicationRecord.description,
 	source: { kind: "standard" as const, templateId: "template-1" },
 	coOwnerIds: [],
 	availability: management.availability,
-	actions: [],
+
 	environment: [],
 	secrets: [],
 };
@@ -234,6 +236,9 @@ function testApp() {
 				}),
 			},
 			commands: vi.fn().mockReturnValue({
+				requestMetadataRecovery: vi.fn().mockResolvedValue({
+					outcome: "not_applicable",
+				}),
 				createConversation: vi.fn().mockResolvedValue({
 					outcome: "accepted",
 					result: {
@@ -393,7 +398,7 @@ describe("generated Pilot browser client", () => {
 			updateAgentConfiguration({
 				client,
 				path: { agentId: "agent-1" },
-				body: { schemaVersion: 1, environment: [] },
+				body: { schemaVersion: 2, environment: [] },
 				headers: idempotency,
 			}),
 			commandAgentLifecycle({

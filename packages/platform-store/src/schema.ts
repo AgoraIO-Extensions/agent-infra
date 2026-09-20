@@ -1,6 +1,8 @@
 import type { PlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
+	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
@@ -315,7 +317,9 @@ export const agentConfigurationRevisions = platformSchema.table(
 		revision: bigint("revision", { mode: "number" }).notNull(),
 		sourceReference: text("source_reference").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-		configuration: jsonb("configuration").$type<AgentConfigurationRecordV1>(),
+		configuration: jsonb("configuration").$type<
+			AgentConfigurationRecordV1 | AgentConfigurationRecordV2
+		>(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.agentId, table.revision] }),
@@ -331,8 +335,9 @@ export const agentConfigurationRevisions = platformSchema.table(
 			"agent_configuration_identity_matches",
 			sql`${table.configuration} IS NULL OR (
 				jsonb_typeof(${table.configuration}) = 'object'
-				and ${table.configuration} @> jsonb_build_object(
-					'schemaVersion', 1,
+				and ${table.configuration} ? 'schemaVersion'
+                and ${table.configuration}->'schemaVersion' in ('1'::jsonb, '2'::jsonb)
+                and ${table.configuration} @> jsonb_build_object(
 					'agentId', ${table.agentId},
 					'revision', ${table.revision}
 				)
@@ -1067,6 +1072,144 @@ export const outboxItems = platformSchema.table(
 	],
 );
 
+export const taskAuthorizationRecords = platformSchema.table(
+	"task_authorization_records",
+	{
+		id: text("id").primaryKey(),
+		executionId: text("execution_id").notNull(),
+		boundary: jsonb("boundary").$type<TaskAuthorizationBoundaryV1>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "task_authorization_execution_fk",
+		}),
+		uniqueIndex("task_authorization_execution_unique").on(table.executionId),
+		uniqueIndex("task_authorization_id_execution_unique").on(
+			table.id,
+			table.executionId,
+		),
+		check("task_authorization_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"task_authorization_boundary_version",
+			sql`${table.boundary}->>'schemaVersion' = '1'`,
+		),
+	],
+);
+
+export const taskControlRecords = platformSchema.table(
+	"task_control_records",
+	{
+		id: text("id").primaryKey(),
+		executionId: text("execution_id").notNull(),
+		authorizationRecordId: text("authorization_record_id").notNull(),
+		reason: text("reason").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "task_control_execution_fk",
+		}),
+		foreignKey({
+			columns: [table.authorizationRecordId],
+			foreignColumns: [taskAuthorizationRecords.id],
+			name: "task_control_authorization_fk",
+		}),
+		foreignKey({
+			columns: [table.authorizationRecordId, table.executionId],
+			foreignColumns: [
+				taskAuthorizationRecords.id,
+				taskAuthorizationRecords.executionId,
+			],
+			name: "task_control_authorization_execution_fk",
+		}),
+		uniqueIndex("task_control_execution_reason_unique").on(
+			table.executionId,
+			table.reason,
+		),
+		uniqueIndex("task_control_id_execution_unique").on(
+			table.id,
+			table.executionId,
+		),
+		check("task_control_id_non_empty", sql`char_length(${table.id}) > 0`),
+		check(
+			"task_control_reason_valid",
+			sql`${table.reason} in ('stop', 'authorization_revoked', 'recovery', 'generation_isolation')`,
+		),
+	],
+);
+
+/** Pending rows keep the original generation authoritative until its Host barrier is acknowledged. */
+export const conversationGenerationTombstones = platformSchema.table(
+	"conversation_generation_tombstones",
+	{
+		operationId: text("operation_id").primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		sessionGeneration: bigint("session_generation", {
+			mode: "number",
+		}).notNull(),
+		executionId: text("execution_id").notNull(),
+		itemId: text("item_id").notNull(),
+		controlRecordId: text("control_record_id").notNull(),
+		controlSourceId: text("control_source_id").notNull(),
+		originalPrincipal: jsonb("original_principal")
+			.$type<{ kind: "user"; id: string }>()
+			.notNull(),
+		hostSessionRef: text("host_session_ref").notNull(),
+		status: text("status").notNull().default("pending"),
+		failureCode: text("failure_code").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "conversation_generation_execution_fk",
+		}),
+		foreignKey({
+			columns: [table.controlRecordId, table.executionId],
+			foreignColumns: [taskControlRecords.id, taskControlRecords.executionId],
+			name: "conversation_generation_control_execution_fk",
+		}),
+		uniqueIndex("conversation_generation_tombstone_unique").on(
+			table.conversationId,
+			table.sessionGeneration,
+		),
+		uniqueIndex("conversation_generation_control_unique").on(
+			table.controlRecordId,
+		),
+		index("conversation_generation_pending_idx").on(table.status, table.itemId),
+		check(
+			"conversation_generation_tombstone_generation_safe",
+			sql`${table.sessionGeneration} between 1 and 9007199254740990`,
+		),
+		check(
+			"conversation_generation_tombstone_status_valid",
+			sql`(${table.status} = 'pending' and ${table.confirmedAt} is null) or (${table.status} = 'confirmed' and ${table.confirmedAt} is not null)`,
+		),
+		check(
+			"conversation_generation_tombstone_reason_valid",
+			sql`${table.failureCode} = 'RUNTIME_SESSION_RECOVERY_FAILED'`,
+		),
+		check(
+			"conversation_generation_tombstone_principal_valid",
+			sql`${table.originalPrincipal}->>'kind' = 'user' and char_length(${table.originalPrincipal}->>'id') > 0`,
+		),
+	],
+);
+
 export const auditEvents = platformSchema.table(
 	"audit_events",
 	{
@@ -1245,6 +1388,94 @@ export const workloadReconciliations = platformSchema.table(
 	],
 );
 
+export const wecomReceipts = platformSchema.table(
+	"wecom_receipts",
+	{
+		id: text("id").primaryKey(),
+		requestDigest: text("request_digest").notNull(),
+		scope: jsonb("scope").notNull(),
+		actorId: text("actor_id").notNull(),
+		taskBoundary: jsonb("task_boundary").notNull(),
+		channelRevision: text("channel_revision").notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		acceptanceStatus: text("acceptance_status").notNull(),
+		conversationId: text("conversation_id"),
+		executionId: text("execution_id"),
+		replyHandle: text("reply_handle").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		deliveryStatus: text("delivery_status").notNull().default("pending"),
+		fence: integer("fence").notNull().default(0),
+		leaseUntil: timestamp("lease_until", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		connectionBotId: text("connection_bot_id"),
+		connectionFence: bigint("connection_fence", { mode: "number" }),
+	},
+	(table) => [
+		check(
+			"wecom_acceptance_status",
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable')`,
+		),
+		check(
+			"wecom_delivery_status",
+			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,
+		),
+		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
+	],
+);
+
+export const wecomConnections = platformSchema.table(
+	"wecom_connections",
+	{
+		botId: text("bot_id").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		bindingReference: text("binding_reference").notNull(),
+		holderId: text("holder_id").notNull(),
+		fence: bigint("fence", { mode: "number" }).notNull(),
+		leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+		status: text("status").notNull(),
+	},
+	(table) => [
+		check(
+			"wecom_connection_fence_safe",
+			sql`${table.fence} between 1 and 9007199254740991`,
+		),
+		check(
+			"wecom_connection_status",
+			sql`${table.status} in ('verifying','connected','disconnected','auth_failed')`,
+		),
+	],
+);
+
+export const wecomSetupSessions = platformSchema.table(
+	"wecom_setup_sessions",
+	{
+		sessionId: text("session_id").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		actorId: text("actor_id").notNull(),
+		configurationRevision: bigint("configuration_revision", {
+			mode: "number",
+		}).notNull(),
+		authorizationRevision: text("authorization_revision").notNull(),
+		stateDigest: text("state_digest").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		status: text("status").notNull(),
+		botId: text("bot_id"),
+		encryptedCredential: jsonb("encrypted_credential"),
+	},
+	(table) => [
+		check(
+			"wecom_setup_status",
+			sql`${table.status} in ('awaiting_input','verifying','active','auth_failed','conflict','cancelled','expired')`,
+		),
+		index("wecom_setup_pending").on(table.status, table.expiresAt),
+	],
+);
+
 export const platformFiles = platformSchema.table(
 	"files",
 	{
@@ -1334,6 +1565,9 @@ export const platformInfrastructureTables = [
 	agentManagementHistory,
 	conversations,
 	conversationExecutions,
+	taskAuthorizationRecords,
+	taskControlRecords,
+	conversationGenerationTombstones,
 	conversationMessages,
 	conversationStops,
 	conversationAuditEvents,
@@ -1342,6 +1576,9 @@ export const platformInfrastructureTables = [
 	auditEvents,
 	idempotencyRecords,
 	persistedEvents,
+	wecomReceipts,
+	wecomConnections,
+	wecomSetupSessions,
 	platformFiles,
 	platformFileAccesses,
 	fileReconciliation,

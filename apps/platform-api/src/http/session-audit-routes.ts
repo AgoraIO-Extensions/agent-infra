@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import {
 	BrowserSessionProjectionV1Schema,
 	PlatformAuditProjectionV1Schema,
@@ -18,6 +20,7 @@ import {
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	type IdentityContext,
 	resolveIdentity,
 } from "./identity.js";
 
@@ -39,6 +42,10 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
+}
+
+function sessionGeneration(identity: IdentityContext) {
+	return identity.sessionGeneration ?? randomBytes(32).toString("base64url");
 }
 
 function mapAuditError(error: unknown, traceId: string): never {
@@ -150,6 +157,10 @@ export function registerSessionAuditRoutes(
 		if (!projection.success) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}
+		context.header(
+			"X-Platform-Session-Generation",
+			sessionGeneration(identity),
+		);
 		return context.json(projection.data);
 	});
 

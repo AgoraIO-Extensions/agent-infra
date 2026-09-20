@@ -14,13 +14,17 @@
 		"test": "vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/image-registry": "workspace:*",
+		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "^4.12.32",
-		"@agent-infra/object-storage": "workspace:*"
+		"@agent-infra/object-storage": "workspace:*",
+		"@agent-infra/wecom": "workspace:*"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

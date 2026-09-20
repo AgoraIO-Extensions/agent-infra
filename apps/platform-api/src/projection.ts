@@ -1,6 +1,6 @@
 import {
-	AgentApplicationProjectionV1Schema,
-	AgentProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import type { AgentManagementStateV1 } from "@agent-infra/platform-core";
 import type {
@@ -19,12 +19,13 @@ import {
 } from "./http/identity.js";
 
 type ApplicationProjection = ReturnType<
-	typeof AgentApplicationProjectionV1Schema.parse
+	typeof AgentApplicationProjectionV2Schema.parse
 >;
-type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
 
 export type PresentPlatformAgent = (input: {
 	readonly agentId: string;
+	readonly traceId: string;
 	readonly configuration: AgentConfigurationProjectionV1;
 	readonly management: AgentManagementStateV1;
 }) => Promise<{
@@ -94,7 +95,12 @@ export function createPlatformProjectionReaders(
 				configuration.ownerIds,
 				metadata.traceId,
 			),
-			dependencies.presentAgent({ agentId, configuration, management }),
+			dependencies.presentAgent({
+				agentId,
+				traceId: metadata.traceId,
+				configuration,
+				management,
+			}),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
@@ -108,7 +114,6 @@ export function createPlatformProjectionReaders(
 				modelOptions: presentation.modelOptions,
 				defaultModelOptionId: configuration.defaultModelOptionId,
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
-				actions: configuration.actions,
 				environment: configuration.environment,
 				channels: presentation.channels,
 				secrets: configuration.secrets,
@@ -125,8 +130,8 @@ export function createPlatformProjectionReaders(
 			agent.management,
 			metadata,
 		);
-		return AgentProjectionV1Schema.parse({
-			schemaVersion: 1,
+		return AgentProjectionV2Schema.parse({
+			schemaVersion: 2,
 			agentId: agent.agentId,
 			name: agent.name,
 			description: agent.description,
@@ -153,8 +158,8 @@ export function createPlatformProjectionReaders(
 				input.application.management,
 				input,
 			);
-			return AgentApplicationProjectionV1Schema.parse({
-				schemaVersion: 1,
+			return AgentApplicationProjectionV2Schema.parse({
+				schemaVersion: 2,
 				applicationId: input.application.applicationId,
 				agentId: input.application.agentId,
 				name: input.application.name,

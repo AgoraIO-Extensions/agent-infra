@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import {
 	PendingSecretRecordAttachmentError,
 	resolvePendingSecretRecordAttachmentsV1,
@@ -9,9 +9,9 @@ import {
 function configuration(
 	revision: number,
 	secretVersion: number,
-): AgentConfigurationRecordV1 {
+): AgentConfigurationRecordV2 {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: "agent_01",
 		revision,
 		source: {
@@ -25,8 +25,6 @@ function configuration(
 			connectionEnabled: false,
 		},
 		modelConfiguration: null,
-		actions: [],
-		actionSetRevision: "actions_01",
 		environment: [],
 		secrets: [
 			{

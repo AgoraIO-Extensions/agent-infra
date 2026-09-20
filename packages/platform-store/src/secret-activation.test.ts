@@ -125,8 +125,15 @@ beforeAll(async () => {
 	database = await startPostgresTestDatabase("secret-activation");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	client = postgres(database.databaseUrl, { max: 1 });
+	await client`create role secret_activation_runtime login password 'controlled_activation_test'`;
+	await client`grant usage on schema platform to secret_activation_runtime`;
+	await client`grant select, update on platform.agents, platform.secret_records to secret_activation_runtime`;
+	await client`grant select, insert on platform.audit_events to secret_activation_runtime`;
+	const runtimeUrl = new URL(database.databaseUrl);
+	runtimeUrl.username = "secret_activation_runtime";
+	runtimeUrl.password = "controlled_activation_test";
 	store = openPostgresSecretActivationStoreV1({
-		databaseUrl: database.databaseUrl,
+		databaseUrl: runtimeUrl.toString(),
 	});
 	await client`
 		insert into platform.agents (id, current_configuration_revision)
@@ -375,7 +382,20 @@ describe("PostgreSQL Secret activation Store", () => {
 		});
 	});
 
-	it("serializes an Agent, fences stale writes and atomically activates with audit", async () => {
+	it("serializes an Agent, fences stale writes and atomically activates with append-only audit", async () => {
+		const [permissions] = await client`
+			select
+				has_table_privilege('secret_activation_runtime', 'platform.audit_events', 'SELECT') as can_select,
+				has_table_privilege('secret_activation_runtime', 'platform.audit_events', 'INSERT') as can_insert,
+				has_table_privilege('secret_activation_runtime', 'platform.audit_events', 'UPDATE') as can_update,
+				has_table_privilege('secret_activation_runtime', 'platform.audit_events', 'DELETE') as can_delete
+		`;
+		expect(permissions).toEqual({
+			can_select: true,
+			can_insert: true,
+			can_update: false,
+			can_delete: false,
+		});
 		const first = await claim("worker_01");
 		expect(first.outcome).toBe("claimed");
 		if (first.outcome !== "claimed") throw new Error("Expected claim");
@@ -409,12 +429,28 @@ describe("PostgreSQL Secret activation Store", () => {
 			}),
 		).resolves.toBe(false);
 
+		const decryptAudit = audit(second.claim, "decrypt", "succeeded");
 		await expect(
 			store.recordAudit({
 				claim: second.claim,
-				auditEvent: audit(second.claim, "decrypt", "succeeded"),
+				auditEvent: decryptAudit,
 			}),
 		).resolves.toBe(true);
+		const originalAudit = await client`
+			select * from platform.audit_events where id = ${decryptAudit.auditId}
+		`;
+		await expect(
+			store.recordAudit({ claim: second.claim, auditEvent: decryptAudit }),
+		).resolves.toBe(true);
+		await expect(
+			store.recordAudit({
+				claim: second.claim,
+				auditEvent: { ...decryptAudit, traceId: "conflicting_trace" },
+			}),
+		).rejects.toBeInstanceOf(SecretActivationStoreError);
+		expect(
+			await client`select * from platform.audit_events where id = ${decryptAudit.auditId}`,
+		).toEqual(originalAudit);
 		const currentReference = reference(second.claim.candidate);
 		const currentFence = activationFence(second.claim);
 		const wrongReference = {
@@ -464,6 +500,41 @@ describe("PostgreSQL Secret activation Store", () => {
 				}),
 			}),
 		).resolves.toBe(true);
+
+		const rolledBackAudit = {
+			...audit(second.claim, "activate", "succeeded"),
+			auditId: "audit-before-conflict",
+		};
+		await expect(
+			store.commitTransition({
+				claim: second.claim,
+				plan: plan({
+					expectedLifecycleStates: ["observed"],
+					expectedActivationFence: currentFence,
+					next: {
+						lifecycleState: "active",
+						kubernetesSecretRef: currentReference,
+						activationFence: currentFence,
+					},
+					auditEvents: [
+						rolledBackAudit,
+						{ ...decryptAudit, traceId: "conflicting_trace" },
+					],
+				}),
+			}),
+		).rejects.toBeInstanceOf(SecretActivationStoreError);
+		expect(
+			await client`select id from platform.audit_events where id = ${rolledBackAudit.auditId}`,
+		).toEqual([]);
+		const [afterConflict] = await client`
+			select lifecycle_state from platform.secret_records
+			where agent_id = ${pending.agentId} and secret_id = ${pending.secretId}
+				and secret_version = ${pending.secretVersion}
+		`;
+		expect(afterConflict?.lifecycle_state).toBe("observed");
+		expect(
+			await client`select * from platform.audit_events where id = ${decryptAudit.auditId}`,
+		).toEqual(originalAudit);
 
 		await client`
 			create function platform.fail_secret_activation_audit() returns trigger

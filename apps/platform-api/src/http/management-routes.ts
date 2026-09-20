@@ -1,9 +1,9 @@
 import {
-	AgentApplicationCreateRequestV1Schema,
-	AgentApplicationProjectionV1Schema,
-	AgentApplicationUpdateRequestV1Schema,
+	AgentApplicationCreateRequestV2Schema,
+	AgentApplicationProjectionV2Schema,
+	AgentApplicationUpdateRequestV2Schema,
 	AgentLifecycleCommandRequestV1Schema,
-	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	ApprovalDecisionRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
@@ -42,14 +42,14 @@ import {
 } from "./identity.js";
 
 type ApplicationProjection = ReturnType<
-	typeof AgentApplicationProjectionV1Schema.parse
+	typeof AgentApplicationProjectionV2Schema.parse
 >;
-type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
 type ApplicationCreateInput = ReturnType<
-	typeof AgentApplicationCreateRequestV1Schema.parse
+	typeof AgentApplicationCreateRequestV2Schema.parse
 >;
 type ApplicationUpdateInput = ReturnType<
-	typeof AgentApplicationUpdateRequestV1Schema.parse
+	typeof AgentApplicationUpdateRequestV2Schema.parse
 >;
 
 export interface ManagementQuery {
@@ -156,12 +156,22 @@ function ownerScope(identity: IdentityContext): AgentManagementAgentScopeV1 {
 function pageInput(
 	request: Request,
 	traceId: string,
+	additionalQueryKeys: readonly string[] = [],
 ): AgentManagementPageInputV1 {
-	const page = parsePageQuery(request, traceId);
+	const page = parsePageQuery(request, traceId, additionalQueryKeys);
 	return {
 		limit: page.limit ?? 50,
 		...(page.cursor === undefined ? {} : { afterId: page.cursor }),
 	};
+}
+
+function agentListScope(request: Request, traceId: string): "user" | "owner" {
+	const values = new URL(request.url).searchParams.getAll("scope");
+	if (values.length === 0) return "user";
+	if (values.length !== 1 || values[0] !== "owner") {
+		fail("INVALID_REQUEST", traceId);
+	}
+	return "owner";
 }
 
 function fail(
@@ -229,7 +239,7 @@ async function projectApplication(
 	} catch {
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
-	const parsed = AgentApplicationProjectionV1Schema.safeParse(value);
+	const parsed = AgentApplicationProjectionV2Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	return parsed.data;
 }
@@ -250,7 +260,7 @@ async function projectAgent(
 	} catch {
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
-	const parsed = AgentProjectionV1Schema.safeParse(value);
+	const parsed = AgentProjectionV2Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	return parsed.data;
 }
@@ -433,7 +443,6 @@ function applicationCommandFields(
 		source: body.source,
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		environment: body.environment,
-		actions: body.actions,
 	};
 }
 
@@ -451,7 +460,7 @@ export function registerManagementRoutes(
 	app: Hono,
 	dependencies: ManagementRouteDependencies,
 ): void {
-	app.post("/api/v1/agent-applications", (context) =>
+	app.post("/api/v2/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -460,7 +469,7 @@ export function registerManagementRoutes(
 			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
-				AgentApplicationCreateRequestV1Schema,
+				AgentApplicationCreateRequestV2Schema,
 				metadata.traceId,
 			);
 			const idempotencyKey = parseIdempotencyKey(
@@ -487,7 +496,7 @@ export function registerManagementRoutes(
 			);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
@@ -512,7 +521,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.get("/api/v1/agent-applications", (context) =>
+	app.get("/api/v2/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -539,7 +548,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.get("/api/v1/agent-applications/:applicationId", (context) =>
+	app.get("/api/v2/agent-applications/:applicationId", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -558,7 +567,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.put("/api/v1/agent-applications/:applicationId", (context) =>
+	app.put("/api/v2/agent-applications/:applicationId", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -567,7 +576,7 @@ export function registerManagementRoutes(
 			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
-				AgentApplicationUpdateRequestV1Schema,
+				AgentApplicationUpdateRequestV2Schema,
 				metadata.traceId,
 			);
 			const idempotencyKey = parseIdempotencyKey(
@@ -590,7 +599,7 @@ export function registerManagementRoutes(
 			);
 			await dependencies.revision.revise(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
@@ -620,7 +629,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.post("/api/v1/agent-applications/:applicationId/withdraw", (context) =>
+	app.post("/api/v2/agent-applications/:applicationId/withdraw", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -665,7 +674,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.get("/api/v1/admin/agent-applications", (context) =>
+	app.get("/api/v2/admin/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -694,7 +703,7 @@ export function registerManagementRoutes(
 	);
 
 	app.post(
-		"/api/v1/admin/agent-applications/:applicationId/decision",
+		"/api/v2/admin/agent-applications/:applicationId/decision",
 		(context) =>
 			boundary(context, async (metadata) => {
 				const identity = await resolveIdentity(
@@ -767,16 +776,21 @@ export function registerManagementRoutes(
 			}),
 	);
 
-	app.get("/api/v1/agents", (context) =>
+	app.get("/api/v2/agents", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
 				context.req.raw,
 				metadata.traceId,
 			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const scope = agentListScope(context.req.raw, metadata.traceId);
+			const queryPage = pageInput(context.req.raw, metadata.traceId, ["scope"]);
 			const page = await queryOrUnavailable(
-				() => dependencies.query.listAgents(userScope(identity), queryPage),
+				() =>
+					dependencies.query.listAgents(
+						scope === "owner" ? ownerScope(identity) : userScope(identity),
+						queryPage,
+					),
 				metadata.traceId,
 			);
 			return context.json({
@@ -790,7 +804,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.get("/api/v1/agents/:agentId", (context) =>
+	app.get("/api/v2/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,
@@ -809,7 +823,7 @@ export function registerManagementRoutes(
 		}),
 	);
 
-	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
+	app.post("/api/v2/agents/:agentId/lifecycle", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
 				dependencies.identity,

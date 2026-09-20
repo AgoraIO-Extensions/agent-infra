@@ -64,7 +64,7 @@ describe("Pilot standard artifacts", () => {
 		);
 	});
 
-	it("generates the independent browser v2 audit OpenAPI", () => {
+	it("generates Action-free V2 lifecycle and audit while retaining V1 conversations", () => {
 		const document = createDocument({
 			openapi: "3.1.0",
 			info: {
@@ -75,7 +75,44 @@ describe("Pilot standard artifacts", () => {
 			components: { schemas: pilotBrowserSchemasV2 },
 		});
 
-		expect(Object.keys(document.paths ?? {})).toEqual(["/api/v2/admin/audit"]);
+		expect(document.paths?.["/api/v2/agent-applications"]?.post).toMatchObject({
+			operationId: "createAgentApplicationV2",
+		});
+		expect(
+			document.paths?.["/api/v2/agents/{agentId}/configuration"]?.put,
+		).toMatchObject({
+			operationId: "updateAgentConfigurationV2",
+		});
+		expect(
+			Object.keys(document.paths ?? {}).every((path) =>
+				path.startsWith("/api/v2/"),
+			),
+		).toBe(true);
+		expect(
+			Object.keys(document.paths ?? {}).some((path) =>
+				/conversations|session/.test(path),
+			),
+		).toBe(false);
+		expect(pilotBrowserOpenApiPathsV1).toHaveProperty(
+			"/api/v1/conversations/{conversationId}/messages",
+		);
+		for (const name of [
+			"AgentApplicationCreateRequestV2",
+			"AgentConfigurationUpdateRequestV2",
+		]) {
+			const schema = document.components?.schemas?.[name];
+			expect(schema).toHaveProperty(
+				"properties.modelConfiguration.properties.options.items.properties.credentialValue.writeOnly",
+				true,
+			);
+			expect(schema).toHaveProperty(
+				"properties.secrets.items.properties.value.writeOnly",
+				true,
+			);
+			expect(JSON.stringify(schema)).not.toMatch(
+				/actionCatalog|actionSelection|allowedActions/,
+			);
+		}
 		expect(document.paths?.["/api/v2/admin/audit"]?.get).toMatchObject({
 			operationId: "listPlatformAuditV2",
 		});
