@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 1,
-  "transport": "anonymous-unix-stream-fd3",
-  "callbackSchemaSha256": "sha256:62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c",
-  "coverageSha256": "sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c",
-  "callbackCorpusSha256": "sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a"
-}
