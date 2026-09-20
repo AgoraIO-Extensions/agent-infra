@@ -1639,6 +1639,25 @@ describe("Codex model transport", () => {
 		expect(calls).toBe(1);
 	});
 
+	it("retains fast model completion until the Driver observes admission", async () => {
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		await response.text();
+		expect(
+			await value.waitForModelRequest(
+				{ ...defaultNativeTurn, conversationKey: testConversationKey },
+				Date.now() + 1_000,
+			),
+		).toBe(true);
+	});
+
 	it.each([
 		"abandon",
 		"expire",

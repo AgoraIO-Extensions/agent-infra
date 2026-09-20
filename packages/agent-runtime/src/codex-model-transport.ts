@@ -1071,9 +1071,9 @@ export async function openCodexModelTransport(
 		ready: boolean,
 		rememberReady = ready,
 	) => {
-		if (ready && rememberReady) readyModelTurns.add(key);
-		if (!ready) readyModelTurns.delete(key);
 		const waiters = modelRequestWaiters.get(key);
+		if (ready && rememberReady && !waiters?.size) readyModelTurns.add(key);
+		if (!ready) readyModelTurns.delete(key);
 		if (!waiters) return;
 		modelRequestWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(ready);
@@ -1120,6 +1120,7 @@ export async function openCodexModelTransport(
 	};
 	const revokeTurn = (key: string, settleWaiters = true) => {
 		revokedTurns.add(key);
+		readyModelTurns.delete(key);
 		if (settleWaiters) settleModelRequestWaiters(key, false);
 		const recognized = recognizedTurns.get(key);
 		for (const admission of [...(recognized ?? [])]) {
@@ -1197,7 +1198,7 @@ export async function openCodexModelTransport(
 		const key = nativeTurnKey(turn);
 		if (revokedTurns.has(key) || closing || signal?.aborted)
 			return Promise.resolve(false);
-		if (readyModelTurns.has(key)) return Promise.resolve(true);
+		if (readyModelTurns.delete(key)) return Promise.resolve(true);
 		if (deadline <= Date.now()) return Promise.resolve(false);
 		return new Promise<boolean>((resolve) => {
 			const waiters = modelRequestWaiters.get(key) ?? new Set();
@@ -1310,7 +1311,6 @@ export async function openCodexModelTransport(
 				}
 				if (startedPersistence) await startedPersistence.catch(() => {});
 				if (!journal) {
-					readyModelTurns.delete(turnKey);
 					outcomeReported = true;
 					return;
 				}
@@ -1328,7 +1328,6 @@ export async function openCodexModelTransport(
 								}),
 					}),
 				);
-				readyModelTurns.delete(turnKey);
 				outcomeReported = true;
 			})();
 			outcomeReport = pending;

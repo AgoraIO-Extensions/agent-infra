@@ -1293,6 +1293,9 @@ export class FileRuntimeStore {
 			nativeSessionRef?: string;
 			executionId: string;
 			runtimeOperationId: string;
+			agentId?: string;
+			conversationId?: string;
+			sessionGeneration?: number;
 		},
 		readNow: () => number,
 	) {
@@ -1304,7 +1307,14 @@ export class FileRuntimeStore {
 			(entry) =>
 				entry.operations[action.runtimeOperationId]?.kind === "submit-turn" &&
 				entry.operations[action.runtimeOperationId]?.executionId ===
-					action.executionId,
+					action.executionId &&
+				(action.nativeSessionRef === undefined ||
+					entry.nativeSessionRef === action.nativeSessionRef) &&
+				(action.agentId === undefined || entry.agentId === action.agentId) &&
+				(action.conversationId === undefined ||
+					entry.conversationId === action.conversationId) &&
+				(action.sessionGeneration === undefined ||
+					entry.sessionGeneration === action.sessionGeneration),
 		);
 		if (candidates.length !== 1) runtimeAuthorizationDenied();
 		const session = candidates[0];
