@@ -913,14 +913,7 @@
               "const": "source-bind"
             },
             "request": {
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/sourceBindStartedRequest"
-                },
-                {
-                  "$ref": "#/$defs/sourceBindSteeredRequest"
-                }
-              ]
+              "$ref": "#/$defs/sourceBindStartedRequest"
             },
             "decision": {
               "const": "deny"
@@ -1149,8 +1142,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "minLength": 1,
-          "type": "string"
+          "$ref": "#/$defs/boundedId"
         },
         "kind": {
           "enum": [
@@ -1298,8 +1290,7 @@
       "additionalProperties": false,
       "required": [
         "revision",
-        "expiresAt",
-        "accessToken"
+        "expiresAt"
       ],
       "properties": {
         "revision": {
@@ -1307,12 +1298,6 @@
         },
         "expiresAt": {
           "$ref": "#/$defs/timestamp"
-        },
-        "accessToken": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 8192,
-          "pattern": "^[A-Za-z0-9\\-._~+/]+=*$"
         }
       }
     },
@@ -1980,6 +1965,7 @@
         "requestId",
         "phase",
         "identity",
+        "permitId",
         "connectionRequest",
         "decision"
       ],
@@ -1997,10 +1983,13 @@
           "$ref": "#/$defs/identity"
         },
         "connectionRequest": {
-          "$ref": "#/$defs/connectionRequest"
+          "$ref": "#/$defs/connectionExecuteRequest"
         },
         "decision": {
           "const": "ack"
+        },
+        "permitId": {
+          "$ref": "#/$defs/canonicalUuid"
         }
       }
     },
