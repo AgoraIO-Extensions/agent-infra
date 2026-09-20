@@ -1,0 +1,7 @@
+Connection request digests use serde_json_canonicalizer 0.3.2 (MIT),
+Copyright (c) 2023 Attila Mravik, https://github.com/evik42/serde-json-canonicalizer.
+It uses ryu-js 1.0.3 (Apache-2.0 OR BSL-1.0),
+https://github.com/boa-dev/ryu-js, for ECMAScript number formatting.
+The registry crate sources are unmodified. License texts are retained in licenses/.
+RFC 8785 conformance vectors are part of the shared callback-v2-corpus.json;
+passing those vectors does not establish real Connection authorization or binary isolation.
