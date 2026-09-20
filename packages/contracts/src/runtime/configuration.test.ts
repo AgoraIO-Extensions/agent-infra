@@ -23,11 +23,8 @@ it("preserves a Claude option's explicit protocol and authentication in configur
 	expect(RuntimeModelConfigurationV3Schema.parse(configuration)).toEqual(
 		configuration,
 	);
-	const firstOption = configuration.modelOptions[0];
-	if (!firstOption)
-		throw new Error("Configuration fixture has no model option");
 	const { authentication: _authentication, ...missingAuthentication } =
-		firstOption;
+		configuration.modelOptions[0]!;
 	expect(
 		RuntimeModelConfigurationV3Schema.safeParse({
 			...configuration,
