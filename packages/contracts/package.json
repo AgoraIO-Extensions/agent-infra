@@ -20,6 +20,7 @@
 		},
 		"./json-schema/common.v1": "./artifacts/json-schema/common.v1.schema.json",
 		"./json-schema/kubernetes-workload.v1": "./artifacts/json-schema/kubernetes-workload.v1.schema.json",
+		"./json-schema/pilot-direct.v1": "./artifacts/json-schema/pilot-direct.v1.schema.json",
 		"./json-schema/pilot-delegated.v1": "./artifacts/json-schema/pilot-delegated.v1.schema.json",
 		"./json-schema/pilot-sse.v2": "./artifacts/json-schema/pilot-sse.v2.schema.json",
 		"./json-schema/pilot-sse.v1": "./artifacts/json-schema/pilot-sse.v1.schema.json",
@@ -36,6 +37,7 @@
 		"./openapi/pilot-browser.v1": "./artifacts/openapi/pilot-browser.v1.openapi.json",
 		"./openapi/pilot-browser.v2": "./artifacts/openapi/pilot-browser.v2.openapi.json",
 		"./openapi/pilot-delegated.v1": "./artifacts/openapi/pilot-delegated.v1.openapi.json",
+		"./openapi/pilot-direct.v1": "./artifacts/openapi/pilot-direct.v1.openapi.json",
 		"./openapi/runtime-host.v1": "./artifacts/openapi/runtime-host.v1.openapi.json",
 		"./openapi/runtime-host.v2": "./artifacts/openapi/runtime-host.v2.openapi.json",
 		"./openapi/runtime-readiness.v1": "./artifacts/openapi/runtime-readiness.v1.openapi.json",
@@ -62,6 +64,7 @@
 		"test": "pnpm build && vitest run src test && pnpm check-generated && pnpm check-compatibility"
 	},
 	"dependencies": {
+		"ajv": "catalog:",
 		"jsonc-parser": "catalog:",
 		"zod": "catalog:"
 	},
@@ -69,7 +72,6 @@
 		"@agent-infra/config": "workspace:*",
 		"@hey-api/openapi-ts": "catalog:",
 		"@types/node": "catalog:",
-		"ajv": "catalog:",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:",
