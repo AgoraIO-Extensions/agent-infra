@@ -63,10 +63,15 @@ function installedPath(source: string) {
 }
 
 async function protectedDirectory(path: string) {
-	if (typeof getuid === "function" && getuid() === 0) throw new Error();
+	const runtimeUid = typeof getuid === "function" ? getuid() : undefined;
+	if (runtimeUid === 0) throw new Error();
 	requireValid((await realpath(path)) === path);
 	const stat = await lstat(path);
-	requireValid(stat.isDirectory() && (stat.mode & 0o7022) === 0);
+	requireValid(
+		stat.isDirectory() &&
+			(runtimeUid === undefined || stat.uid !== runtimeUid) &&
+			(stat.mode & 0o7022) === 0,
+	);
 	try {
 		await access(path, constants.W_OK);
 	} catch (error) {
@@ -155,13 +160,16 @@ async function readProtectedFile(
 		if (expected !== undefined)
 			requireValid(`sha256:${hash.digest("hex")}` === digest(expected));
 		if (binary) {
+			const expectedMachine =
+				arch === "arm64" ? 183 : arch === "x64" ? 62 : undefined;
 			requireValid(
-				header.length === 64 &&
+				expectedMachine !== undefined &&
+					header.length === 64 &&
 					header
 						.subarray(0, 6)
 						.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1])) &&
 					[2, 3].includes(header.readUInt16LE(16)) &&
-					header.readUInt16LE(18) === 183,
+					header.readUInt16LE(18) === expectedMachine,
 			);
 		}
 		return Buffer.concat(chunks);

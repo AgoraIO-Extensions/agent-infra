@@ -1111,8 +1111,18 @@ export class FileRuntimeStore {
 		};
 	}
 
-	recordDeliveredCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+	recordDeliveredCursor(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursor: string,
+		now = Date.now(),
+	) {
 		return this.file.update((state) => {
+			if (
+				!Number.isSafeInteger(now) ||
+				claims.issuedAt > now ||
+				claims.expiresAt <= now
+			)
+				runtimeAuthorizationDenied();
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
 				state,
@@ -1171,8 +1181,18 @@ export class FileRuntimeStore {
 		return session;
 	}
 
-	acknowledgeCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+	acknowledgeCursor(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursor: string,
+		now = Date.now(),
+	) {
 		return this.file.update((state) => {
+			if (
+				!Number.isSafeInteger(now) ||
+				claims.issuedAt > now ||
+				claims.expiresAt <= now
+			)
+				runtimeAuthorizationDenied();
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
 				state,

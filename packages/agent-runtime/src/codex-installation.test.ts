@@ -24,6 +24,7 @@ const fixture = vi.hoisted(() => ({
 	release: {} as Record<string, unknown>,
 	arch: "arm64",
 	platform: "linux",
+	runtimeUid: 99_999,
 }));
 
 vi.mock("./codex-release.json", () => ({
@@ -38,6 +39,9 @@ vi.mock("node:process", async (importOriginal) => ({
 	},
 	get platform() {
 		return fixture.platform;
+	},
+	getuid() {
+		return fixture.runtimeUid;
 	},
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -176,7 +180,7 @@ beforeEach(async () => {
 		const elf = Buffer.alloc(80);
 		elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
 		elf.writeUInt16LE(2, 16);
-		elf.writeUInt16LE(183, 18);
+		elf.writeUInt16LE(fixture.arch === "x64" ? 62 : 183, 18);
 		elf.write(name, 64);
 		payload[path] = elf;
 	}
@@ -566,14 +570,16 @@ describe("official declaration transition", () => {
 				force: true,
 			});
 			fixture.arch = arch;
+			const executable = Buffer.from(payload["bundle/bin/codex"] as Buffer);
+			executable.writeUInt16LE(arch === "x64" ? 62 : 183, 18);
 			fixture.release = {
 				provenance: { ...provenance },
 				artifacts: {
 					arm64: {
-						executableSha256: hash(payload["bundle/bin/codex"] as Buffer),
+						executableSha256: hash(executable),
 					},
 					amd64: {
-						executableSha256: hash(payload["bundle/bin/codex"] as Buffer),
+						executableSha256: hash(executable),
 					},
 				},
 				legal: {
@@ -581,11 +587,7 @@ describe("official declaration transition", () => {
 					NOTICE: hash("upstream notice"),
 				},
 			};
-			await put(
-				installed("bundle/bin/codex"),
-				payload["bundle/bin/codex"] as Buffer,
-				0o555,
-			);
+			await put(installed("bundle/bin/codex"), executable, 0o555);
 			await put(installed("LICENSE"), "upstream license");
 			await put(installed("NOTICE"), "upstream notice");
 			await put(installed("release.json"), JSON.stringify(fixture.release));

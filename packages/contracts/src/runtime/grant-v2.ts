@@ -88,12 +88,19 @@ export const RuntimeBusinessGrantClaimsV2Schema = z.strictObject({
 	purpose: z.literal("business"),
 	authorizationRecordId: OpaqueIdV1Schema,
 	allowedCommands: z.tuple([RuntimeBusinessCommandV2Schema]),
-	attachments: z.array(
-		z.strictObject({
-			attachmentId: OpaqueIdV1Schema,
-			operations: z.tuple([z.literal("read")]),
-		}),
-	),
+	attachments: z
+		.array(
+			z.strictObject({
+				attachmentId: OpaqueIdV1Schema,
+				operations: z.tuple([z.literal("read")]),
+			}),
+		)
+		.refine(
+			(entries) =>
+				new Set(entries.map((entry) => entry.attachmentId)).size ===
+				entries.length,
+			{ message: "Attachment IDs must be unique" },
+		),
 });
 
 export const RuntimeControlGrantClaimsV2Schema = z.strictObject({
@@ -126,8 +133,12 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 	const isEvent = command === "events.persist" || command === "events.ack";
 	const controlReasonMismatch =
 		claims.purpose === "control" &&
-		command === "generation.cancel" &&
-		claims.reason !== "generation_isolation";
+		((command === "generation.cancel" &&
+			claims.reason !== "generation_isolation") ||
+			(command === "turn.stop" &&
+				!["stop", "authorization_revoked", "recovery"].includes(
+					claims.reason,
+				)));
 	if (
 		claims.issuer !== context.expectedIssuer ||
 		claims.workerId !== context.expectedWorkerId ||

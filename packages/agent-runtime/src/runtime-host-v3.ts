@@ -685,9 +685,16 @@ export class RuntimeHostV3 {
 					request.executionId,
 					request.confirmedCursor,
 				);
+				this.validate(request, "events.ack", verification);
+				await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					(this.options.grantValidation.now ?? Date.now)(),
+				);
 				await this.options.store.acknowledgeCursor(
 					claims,
 					request.confirmedCursor,
+					(this.options.grantValidation.now ?? Date.now)(),
 				);
 				return {
 					schemaVersion: 3 as const,
@@ -791,7 +798,11 @@ export class RuntimeHostV3 {
 						parsed.data.executionId !== request.executionId
 					)
 						invalidDriver();
-					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
+					await options.store.recordDeliveredCursor(
+						claims,
+						parsed.data.cursor,
+						(options.grantValidation.now ?? Date.now)(),
+					);
 					validate();
 					options.store.checkRequestV3(claims);
 					yield parsed.data;

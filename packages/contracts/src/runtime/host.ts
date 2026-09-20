@@ -15,7 +15,7 @@ import { ExecutionGrantV1Schema } from "./grant.ts";
 
 const positiveFence = z.number().int().positive();
 const runtimeInputText = z.string().min(1).max(1_048_576);
-const runtimeInputAttachment = z.string().min(1).max(256);
+const runtimeInputAttachment = OpaqueIdV1Schema.max(256);
 const requestContext = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
