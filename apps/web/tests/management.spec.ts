@@ -36,10 +36,17 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
-		listAgents: () => ({
-			status: 200,
-			body: { items: [agent], nextCursor: null },
-		}),
+		listAgents: (request) => {
+			const ownerScope =
+				new URL(request.url).searchParams.get("scope") === "owner";
+			return {
+				status: 200,
+				body: {
+					items: ownerScope && role !== "owner" ? [] : [agent],
+					nextCursor: null,
+				},
+			};
+		},
 		getAgent: () => ({ status: 200, body: agent }),
 		listAgentApplications: () => ({
 			status: 200,
