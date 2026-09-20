@@ -6,7 +6,8 @@ import { ConversationScreen } from "../../../features/conversation/conversation-
 export const Route = createFileRoute("/agents/$agentId/conversations")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { conversation?: string } => ({
+	): { conversation?: string; view?: "history" } => ({
+		view: search.view === "history" ? "history" : undefined,
 		conversation:
 			typeof search.conversation === "string" &&
 			search.conversation.length <= 256
@@ -18,7 +19,7 @@ export const Route = createFileRoute("/agents/$agentId/conversations")({
 
 function ConversationRoute() {
 	const { agentId } = Route.useParams();
-	const { conversation } = Route.useSearch();
+	const { conversation, view } = Route.useSearch();
 	const navigate = Route.useNavigate();
 	const { identityKey } = useApplicationSession();
 	const session = useBrowserSession();
@@ -29,11 +30,20 @@ function ConversationRoute() {
 				agentId={agentId}
 				conversationId={conversation}
 				identityKey={identityKey}
+				view={view ?? "conversation"}
+				onViewChange={(next) => {
+					void navigate({
+						search: {
+							conversation,
+							view: next === "history" ? "history" : undefined,
+						},
+					});
+				}}
 				onAccessDenied={() => {
 					void session.refetch();
 				}}
 				onConversationChange={(next) => {
-					void navigate({ search: { conversation: next } });
+					void navigate({ search: { conversation: next, view: undefined } });
 				}}
 			/>
 		</main>

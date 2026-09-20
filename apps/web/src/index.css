@@ -231,6 +231,196 @@
 		padding: 26px 20px 40px;
 	}
 }
+/* P01–P06 share the confirmed Pilot page and form hierarchy. */
+.management-content {
+	max-width: 1250px;
+}
+.management-content h1 {
+	font-size: 28px;
+	line-height: 1.35;
+	letter-spacing: 0;
+	overflow-wrap: anywhere;
+}
+.management-content .page-heading {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	gap: 20px;
+	margin-bottom: 28px;
+}
+.management-content .list-tools {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	justify-content: space-between;
+	gap: 20px;
+	margin: 24px 0;
+}
+.management-content .form-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 720px) minmax(180px, 240px);
+	gap: 48px;
+	align-items: start;
+}
+.management-content .form-aside {
+	border-left: 1px solid var(--border);
+	padding-left: 24px;
+	min-width: 0;
+}
+.management-content .form-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 24px;
+}
+.management-content .metadata {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px 20px;
+	color: var(--muted-foreground);
+	font-size: 14px;
+}
+.management-content .agent-row {
+	min-width: 0;
+}
+.management-content .record-row {
+	min-width: 0;
+}
+.management-content h2 {
+	font-size: 18px;
+	font-weight: 600;
+}
+.management-content .page-heading p {
+	color: var(--muted-foreground);
+	margin-top: 9px;
+}
+.management-content .tabs {
+	display: flex;
+	gap: 24px;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 10px;
+}
+.management-content .tabs [role="tab"] {
+	min-height: 48px;
+	padding: 10px 2px;
+	color: var(--muted-foreground);
+	font-size: 14px;
+}
+.management-content .tabs [aria-selected="true"] {
+	border-bottom: 2px solid var(--foreground);
+	color: var(--foreground);
+	font-weight: 600;
+}
+.management-content .record-row {
+	display: flex;
+	align-items: center;
+	gap: 20px;
+	border-bottom: 1px solid var(--border);
+	padding: 25px 0;
+}
+.management-content .record-row > div:first-child {
+	flex: 1;
+	min-width: 0;
+}
+.management-content .record-row p {
+	font-size: 14px;
+	color: var(--muted-foreground);
+	margin-top: 7px;
+}
+.management-content .form-section,
+.management-content .detail-section {
+	padding: 24px 0;
+	border-bottom: 1px solid var(--border);
+}
+.management-content .form-section:first-child {
+	padding-top: 0;
+}
+.management-content .form-section > p {
+	color: var(--muted-foreground);
+	font-size: 14px;
+	margin-top: 6px;
+}
+.management-content .detail-section h2 {
+	margin-bottom: 14px;
+}
+.management-content .form-aside {
+	font-size: 14px;
+}
+.management-content .form-aside p {
+	margin: 12px 0;
+}
+.management-content .form-aside ol {
+	padding-left: 20px;
+	line-height: 2.6;
+	list-style: decimal;
+}
+.management-content .form-footer,
+.management-content .actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.management-content .form-footer {
+	padding: 24px 0;
+}
+.management-content .status-line {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 14px;
+	padding: 14px 0;
+}
+.management-content .alert {
+	border: 1px solid currentColor;
+	border-radius: 4px;
+	padding: 13px 16px;
+	margin: 12px 0;
+	font-size: 14px;
+}
+.management-content .empty {
+	padding: 64px 20px;
+	text-align: center;
+	color: var(--muted-foreground);
+}
+@media (max-width: 767px) {
+	.management-content .record-row {
+		flex-wrap: wrap;
+	}
+	.management-content .record-row > div:first-child {
+		flex-basis: 100%;
+	}
+}
+@media (max-width: 1024px) {
+	.management-content .form-layout {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 28px;
+	}
+	.management-content .form-aside {
+		border-left: 0;
+		border-top: 1px solid var(--border);
+		padding: 24px 0 0;
+	}
+}
+@media (max-width: 767px) {
+	.management-content h1 {
+		font-size: 26px;
+	}
+	.management-content .page-heading {
+		flex-direction: column;
+		margin-bottom: 24px;
+	}
+	.management-content .list-tools {
+		align-items: stretch;
+		flex-direction: column;
+	}
+	.management-content .form-grid {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 16px;
+	}
+}
+
 /* P07 keeps the composer visible while persisted messages scroll independently. */
 .platform-content.chat-content {
 	max-width: 1250px;

@@ -15,7 +15,7 @@ function NewAgentApplicationRoute() {
 			: null;
 
 	return (
-		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
 				error={error}
 				mode="create"
