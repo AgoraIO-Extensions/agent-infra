@@ -2265,13 +2265,19 @@ export function validateWorkflowDocuments(workflows) {
       '[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
-      'git -C pr-head fetch --no-tags --depth=1 origin "$BASE_SHA"',
+      'MERGE_BASE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$EXPECTED_HEAD_SHA" --jq .merge_base_commit.sha)"',
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
-      "git -C pr-head diff --no-ext-diff --binary --unified=80",
+      '[[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
-      '"$BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff',
+      `git -C pr-head -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA"`,
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      "git -C pr-head diff --no-ext-diff --no-textconv --diff-algorithm=myers --binary --unified=80",
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '"$MERGE_BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff',
     ) ||
     !String(reviewInputStage?.run ?? "").includes(
       "test -s .review-input/pr.diff",
