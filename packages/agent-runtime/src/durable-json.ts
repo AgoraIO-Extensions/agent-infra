@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 
 export class DurableJsonFile<T> {
 	private queue: Promise<void> = Promise.resolve();
+	private persistenceFailed = false;
 
 	private constructor(
 		private readonly path: string,
@@ -25,14 +26,36 @@ export class DurableJsonFile<T> {
 	}
 
 	read() {
+		if (this.persistenceFailed)
+			throw new Error("Durable state requires recovery");
 		return structuredClone(this.state);
+	}
+
+	async readCommitted() {
+		// Observe all mutations already queued by this caller's read boundary.
+		// This joins persistence without taking a lock across a Driver callback.
+		await this.queue;
+		return this.read();
+	}
+
+	async close() {
+		await this.queue;
 	}
 
 	update<R>(change: (draft: T) => R | Promise<R>): Promise<R> {
 		const run = this.queue.then(async () => {
+			if (this.persistenceFailed)
+				throw new Error("Durable state requires recovery");
 			const draft = structuredClone(this.state);
 			const result = await change(draft);
-			await this.persist(draft);
+			try {
+				await this.persist(draft);
+			} catch (error) {
+				// Rename may have succeeded before a directory fsync/close failed. The
+				// disk can be ahead of memory; only a fresh open may recover that state.
+				this.persistenceFailed = true;
+				throw error;
+			}
 			this.state = draft;
 			return result;
 		});

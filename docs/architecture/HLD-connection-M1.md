@@ -2,22 +2,22 @@
 
 ## 1. 状态与范围
 
-本文定义 Connection M1 首个 Agent Platform delegated GitHub Pilot 的高层设计。产品行为以 [Connection M1 产品需求](../prd/PRD-connection-M1.md) 和 [Agent 平台 M1 产品需求](../prd/PRD-agent-platform-M1.md) 为准；跨系统工程边界以 [M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) 为准。
+本文定义 Connection M1 独立客户端接口与首个 Codex GitHub Pilot 的高层设计。产品行为以 [Connection M1 产品需求](../prd/PRD-connection-M1.md) 和 [Agent 平台 M1 产品需求](../prd/PRD-agent-platform-M1.md) 为准；跨系统工程边界以 [M1 工程架构 Spec](SPEC-agent-infra-M1-engineering-architecture.md) 为准。
 
-本设计已完成 Wayfinder 决策，可以进入独立 Implementation Issues；它不表示代码、部署或 Pilot 已完成。首个 Pilot 只覆盖：
+本文规定实现与验收边界，不表示代码、部署或 Pilot 已完成。首个 Pilot 只覆盖：
 
 - Connection 独立中文 Web 与 LDAP 登录。
-- Agent Platform delegated Consumer 和稳定 Agent Actor。
+- 独立 MCP/API 客户端身份、具体 Agent 授权和可核实的原调用关联；首个 Pilot 使用 Codex。
 - GitHub 专用测试账号、一个受控 private 仓库和三项 Action。
 - 连接、Grant、真实创建 PR、幂等、撤权、未知结果、审计和跨主体隔离。
 
-Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员工日常 GitHub 账号、GitHub App、Bitbucket、Jira、Confluence、共享账号真实组织范围和广泛生产化不在本 Pilot 范围。
+员工日常 GitHub 账号、GitHub App、Bitbucket、Jira、Confluence、共享账号真实组织范围和广泛生产化不在本 Pilot 范围。独立客户端接口及受控测试不表示真实账号 Pilot 已通过。
 
 ## 2. 设计目标
 
 1. Connection 独立拥有 Principal、Consumer/Actor、Connection Grant、外部账号、Credential 和调用审计。
-2. Platform Agent Action policy 与 Connection Grant 只能共同收紧能力，不能互相替代。
-3. Agent、模型、浏览器和 Platform 都不能获得 Provider Credential；delegated Action 调用不能由 Agent、模型、Platform 或请求字段指定目标 Connection。Connection Web 仅允许当前 Principal 在管理流程中选择经服务端确认其有权使用的 Connection。
+2. Platform 任务授权与 Connection 客户端/Agent 授权分别由各自系统校验，不能互相替代。
+3. Agent、模型、浏览器和 Platform 都不能获得 Provider Credential；Action 调用不能由 Agent、模型、Platform 或请求字段指定目标 Connection。Connection Web 仅允许当前 Principal 在管理流程中选择经服务端确认其有权使用的 Connection。
 4. 撤权在 Provider 提交前可靠阻止调用；提交后保留外部真实结果，不伪造回滚。
 5. 写操作结果未知时不自动重发，并能经过限时自动对账、管理员处理和明确未知终态。
 6. 所有跨 Principal、Consumer、Actor 和 Connection 访问 fail closed 且不可枚举。
@@ -26,23 +26,22 @@ Direct MCP Client、Connection PAT、Connection OAuth Authorization Server、员
 
 | 模型 | 含义与权威 |
 | --- | --- |
-| Principal | `identity issuer + stable subject` 映射的 Connection 员工主体 |
+| Principal | Connection 独立确认的用户或应用主体；用户以 `identity issuer + stable subject` 映射，应用使用独立注册身份 |
 | BrowserSession | Connection Web 的 hash-only、可撤销登录会话 |
 | AdministratorRole | Connection 内独立、可撤销且可审计的管理员角色绑定 |
-| Consumer | 已注册的调用产品；本 Pilot 为 Agent Platform |
-| ConsumerInstance | 已认证 Platform workload 的稳定实例 |
+| Consumer | 独立注册并取得 Connection 访问权限的客户端或应用 |
+| ConsumerInstance | Connection 独立认证并绑定 Principal/Consumer 的客户端实例；不使用 Platform workload 替代主体 |
 | Actor | Consumer 内不透明稳定授权单元；本 Pilot 为 Agent ID |
 | ProviderRelease | 经来源、权限、Schema 和执行审查后发布的 Provider 版本 |
 | ActionVersion | ProviderRelease 下不可变的 Action 契约 |
 | Connection | Principal 拥有或当前有资格使用的外部账号连接 |
 | CredentialVersion | Connection 当前受保护的 Provider Credential 版本 |
 | Grant | Principal 对 Consumer/Actor、Connection 和 exact ActionVersion 的确认授权 |
-| PlatformPolicyFence | Connection 保存的 Platform Agent/Action policy revision 与撤权 fence；不是 Grant 副本 |
 | ActionCall | Connection 已接受并持久化的一次逻辑调用 |
 | Effect | WRITE ActionCall 可能产生的外部业务副作用 |
 | Dispatch | 向 Provider 发起一次 Action 执行的具体尝试；WRITE Dispatch 关联对应 Effect |
 
-Connection DB 是上述模型的唯一权威。Platform DB 只保存 Agent Action policy、执行状态、Connection `callId`、状态和脱敏结果引用。
+Connection DB 是上述模型的唯一权威。Platform 只保存自身执行事实，以及按工程 Spec §13.2 核实的关联引用与核实状态。
 
 ## 4. 系统上下文
 
@@ -55,13 +54,12 @@ flowchart LR
     CA --> K[OpenConnector Kernel Adapter]
     K --> GH[GitHub]
 
-    A[Agent Runtime] --> PTG[Platform Tool Gateway]
-    PTG --> CA
-    PTG --> PD[(Platform DB)]
+    A[Independent Agent Client] -->|Connection client identity| CA
+    A -->|Verified association reference| PD[(Platform execution records)]
 ```
 
 - `connection-web` 只调用 Connection Browser API，不读取 Platform DB。
-- Platform Tool Gateway 不读取 Connection DB，也不接收 Provider Credential。
+- Agent/客户端直接访问 Connection MCP/API；Platform 不提供 Tool Gateway、delegated assertion 或 Connection 状态投影。
 - OpenConnector Kernel 只执行已发布 Provider Action，不拥有 Principal、Grant、Credential、审计或恢复状态。
 
 ## 5. Principal 与浏览器会话
@@ -93,7 +91,7 @@ LA3 Pilot 保持与 Rehoboam 一致的目录查找和用户 bind 路径，只保
 - 使用 host-only `__Host-` Cookie，并设置 `HttpOnly`、`Secure`、`SameSite=Strict` 和 `Path=/`，不设置 `Domain`。
 - PostgreSQL 只保存 session hash、Principal、issuer、过期、撤销和 recovery generation。
 - 退出、过期、Principal 停用或 recovery generation 变化后立即失效。
-- BrowserSession 只用于 Connection Web 管理操作，不能作为 delegated Action 调用凭据。
+- BrowserSession 只用于 Connection Web 管理操作，不能作为客户端 Action 调用凭据。
 - 除 OAuth callback 外，所有 Browser 写请求必须同时校验独立 CSRF token、精确同源 `Origin` 和 Fetch Metadata；缺失、跨源或不匹配时在执行任何状态变更前拒绝。
 - OAuth callback 不依赖 BrowserSession Cookie、`Origin` 或同源 Fetch Metadata；它必须原子消费一次性、短期、不可预测且服务端持久化的 state，并校验其绑定的 Principal、Provider、发起事务和受控回跳地址。callback 只能完成原 OAuth 事务，不能创建 Grant 或接受调用方提供的 Principal、Connection 归属和任意跳转地址。
 
@@ -106,63 +104,43 @@ LA3 Pilot 保持与 Rehoboam 一致的目录查找和用户 bind 路径，只保
 - 当前 Pilot 只验证 `uid` 条目存在。缺少离职 active-state 真值必须进入风险与验收说明，不能描述为离职立即停权。
 - Rehoboam 只在登录时执行 LDAP bind，现有 Token 校验不回查 LDAP，也没有可复用的离职状态判断；Connection 不复制该 Token 行为，按已确认的 15 分钟条目存在性策略执行。
 
-## 6. Catalog 与双层授权
+## 6. Catalog 与独立授权
 
 ### 6.1 Catalog
 
-Connection 发布版本化只读 Catalog，内容只包括 Provider、immutable ActionVersion、输入/输出 Schema、effect、required scope 和发布状态。
+Connection 是 Provider/Action 目录的唯一权威，向当前获权客户端提供发布的 immutable ActionVersion、输入/输出 Schema、effect 和 required scope。目录发现不能扩大授权；实际调用及 Dispatch 仍重新校验当前发布状态。Platform 不同步目录或维护 Owner Action policy。
 
-Platform 使用注册 workload identity 和短期 `catalog:read` credential 拉取并保存只读投影。该凭据：
+### 6.2 Connection Grant
 
-- 可撤销、轮换和审计。
-- 不能调用 Action。
-- 不能读取 Principal、Connection、Grant、Credential、调用或审计。
-- 不能发布、停用或覆盖 Catalog。
+有效 Action 是当前 Consumer/具体 Agent 的 Connection 授权、Principal current Grant exact ActionVersions、Provider/Action/Connection/Credential 状态与 Pilot repository policy 的交集。GitHub OAuth 不自动创建 Grant，新增 Action 不自动扩大旧 Grant；授权主体在 Connection 独立确认。Platform Runtime Grant、workload 或签名上下文不能替代这些授权，不建立 PlatformPolicyFence。
 
-Platform Catalog 缓存只用于 Owner 配置；调用时 Connection 始终按 current ProviderRelease/ActionVersion 状态重新校验。
+## 7. 独立客户端身份与调用关联
 
-### 6.2 Platform policy 与 Connection Grant
+### 7.1 客户端认证与主体映射
 
-有效 Action 是以下集合交集：
+Connection 独立签发和撤销短期客户端访问 token。token 绑定 resource、Consumer/client、具体 Agent Actor 及服务端解析的用户或应用主体；首个 consumer profile 不接受缺少 Actor 的 Consumer-level fallback。用户主体使用 Connection 确认的 issuer 与稳定 subject，应用使用独立注册身份；邮箱、显示名、Owner、应用责任人、Platform API 凭证和 Runtime Execution Grant 不参与替代映射。
 
-```text
-Platform current Agent Action policy
-∩ Connection current Consumer declaration
-∩ Principal current Grant exact ActionVersions
-∩ current Provider/Action/Connection/Credential state
-∩ Pilot repository policy
-```
+独立授权交付包含客户端可核对的主体类型/稳定键、Actor、issuer/resource、凭据 revision 和期限。`GET /api/client/identity` 使用该客户端自己的当前访问 token，返回上述服务端解析绑定；不能复用管理浏览器会话。Runtime 原主体 ID 与 Connection 主体 ID 若来自不同 namespace，须有同一次独立授权确认的稳定映射，缺失或错配时拒绝。具体 token 签发和存储仍由 Connection 实现，不由 Platform 签发 assertion。
 
-Platform policy 由 Agent Owner 管理。Connection Grant 只能由当前 Principal 在 Connection Web 确认。GitHub OAuth 成功不自动创建 Grant；Owner 新增 Action 后旧 Grant 不自动扩权。
+客户端固定 HTTPS MCP origin、issuer/resource 和只读核实路径。每次 MCP/API 请求重新检查当前 token、Principal、ConsumerInstance 和 Actor；参数、header 或 `_meta` 不能覆盖已认证身份、目标账户或授权。客户端访问 token 与 Provider Credential 分开，后者始终留在 Connection。
 
-Connection 不保存 Platform policy 内容，但为 delegated 调用保存当前 Agent/Action 的 `PlatformPolicyFence`。Platform 创建或更新 Agent policy 时注册单调 revision；delegated assertion 必须绑定该 revision。Owner 移除 Action 时，Platform 必须先原子停止签发新 assertion，并禁用对应 delegated workload 的调用资格，再让 Connection 持久终结对应 fence；取得成功确认后才能恢复不受该撤权影响的调用并把撤权命令标记完成。Connection 不可用或 fence 尚未同步时，撤权保持处理中，相关 workload credential 或 delegated route 必须 fail closed，使已签发 assertion 也无法调用；服务恢复时先完成 fence 同步，再恢复相关入口。重复命令按同一 revision 幂等恢复。这样 Connection dispatch 可以在本地事务检查 fence，而不读取 Platform DB 或保存第二份 Grant。
+### 7.2 MCP 请求与原调用回执
 
-## 7. Delegated 身份
+受控 consumer profile 使用 `POST /mcp` 的原生 `tools/call`。可信客户端 leaf 在实际发送前生成 `params._meta["connection.clientRequest/v1"]`：`operationNonce` 绑定一次原生逻辑工具操作，`attemptNonce` 标识本次真实传输；保留字段不得由模型参数或 `_meta` 覆盖。这些值只供关联，不授予权限。
 
-### 7.1 Platform 签发责任
+双方对实际请求按 `connection-request-v1` 计算摘要：将 `{version: "connection-request-v1", method, toolName, arguments}` 按 RFC 8785 JSON Canonicalization Scheme 序列化为 UTF-8，再计算 SHA-256；arguments 为通过 schema 校验的原始 wire 业务参数，包含实际 Action selector，不包含 token、cookie、nonce 或回执。schema 不支持的数值或字段在发送/执行前拒绝，摘要不能基于填入默认值或改写字段后的副本。Connection 独立计算并保存摘要，不能只接受客户端提交的摘要值。
 
-Platform Tool Gateway 负责：
+写 Action 的业务幂等键由可信客户端从本次逻辑操作生成并放入上述保留 metadata 的 `idempotencyKey`，不作为模型可选择的 Provider 参数。Connection 在原调用命名空间中保持键、主体/Actor、Action、业务参数摘要和 operationNonce 的不可变绑定；同键不同绑定拒绝，传输重试不得把新任务 nonce 追加到旧调用。实际新 attempt 可追加到同一已确认 logical operation。
 
-- 重新确认当前平台用户仍可使用 Agent。
-- 校验 Action 仍在 Agent Owner 当前 policy。
-- 认证注册 workload，并解析稳定 Agent Actor。
-- 从可信 Platform IdentityContext 取得部署批准的稳定 issuer/subject；该值必须与 Connection LDAP `issuer + uid` 映射同一员工，不能从邮箱、显示名或请求字段推导。
-- 签发短期、不可篡改、一次性 delegated assertion。
-- 将当前 Agent/Action policy revision 绑定到 assertion，并在 policy 撤销流程中先终结 Connection 的对应 PlatformPolicyFence，再确认 Platform 撤权完成。
-- 保存自己的执行记录和 Connection `callId` 引用。
+Connection 创建原调用记录后，在本次匹配 JSON-RPC request ID 的响应 `result._meta["connection.receipt/v1"]` 返回 `callRef`、`operationNonce`、`attemptNonce`、`requestDigestVersion`、`requestDigest`、服务端解析的 `principal`（type/key）、`actorId` 和 `actionVersionId`。已创建记录的 JSON-RPC error 在固定 `error.data` 中使用相同 receipt 结构；未创建记录时明确不返回 callRef。回执包含的记录绑定来源于本次认证请求，不能接受调用方指定的 callRef 或其他任务的真实引用。
 
-### 7.2 Connection 验证责任
+### 7.3 原调用只读核实
 
-Connection 在 Grant lookup 前校验：
+`GET /api/client/calls/{callRef}` 是固定 Connection origin 下的只读接口，使用原主体当前独立取得的 `calls:read` 权限并逐次鉴权；无权访问时不泄露记录是否存在。它返回原调用的服务端 Principal/type、Consumer/client、Actor、ActionVersion、operationNonce、实际 attemptNonce 集合与 requestDigest/version，不返回 Provider 凭据或要求复制调用结果/审计。
 
-- 签名、issuer、audience、issued/expiry 和 key version。
-- 一次性 `jti` 与 recovery generation。
-- Principal evidence、Consumer、ConsumerInstance 和 workload。
-- Actor 存在、已注册且 current workload 有权代表；Agent Platform 固定 `REQUIRED` Actor，不允许回退到 Consumer-level Grant。
-- exact ActionVersion、参数摘要、业务幂等键和 deadline。
-- assertion 绑定的 Platform policy revision 与 Connection 当前 PlatformPolicyFence 一致。
+受信客户端核对本地原执行意图、实际请求 nonce/摘要、同一次认证响应的原回执以及只读原记录，全部匹配才记录 verified；任一缺失、错配或查询无权保持 unverified。固定 origin/TLS/resource 错配或跨 origin redirect 拒绝，回执中的 URL 不作为查询地址。相同主体/Agent、相同参数、时间、签名或另一任务的真实 callRef 都不能替代上述匹配。
 
-Connection 必须在创建 ActionCall 的同一 PostgreSQL 事务中原子写入 `jti`、全部请求绑定字段和 `callId`，并以 `jti` 唯一约束串行化并发请求；不得先单独标记 `jti` 已消费。若 `jti` 已存在，只有全部绑定字段完全一致且原 ActionCall 已提交时才能读取原调用，任一字段变化或绑定记录不完整都必须拒绝。Assertion 只能证明调用主体和请求绑定，不能创建/扩大 Grant 或指定 Connection。
+核实仅查询原记录，不重发 Provider 操作。完整丢失原调用回执时，即使按 nonce 找到记录也不能以缺失的原响应证据宣称 verified。Runtime 的 FD3 交付、真实 leaf 采集与本地可靠保存遵循 [Runtime HLD §9](HLD-agent-runtime-M1.md#9-runtime-身份上下文)；Platform API/Worker 不持有客户端查询凭据。
 
 ## 8. GitHub ProviderRelease
 
@@ -188,7 +166,7 @@ Connection 必须在创建 ActionCall 的同一 PostgreSQL 事务中原子写入
 
 Connection 在一个持久化流程中：
 
-1. 验证 delegated assertion 和 current Grant。
+1. 验证本次独立客户端身份、具体 Agent 和 current Grant。
 2. 校验 Action Schema 和 repository policy。
 3. 以 Principal、Consumer/Actor 和业务幂等键查找原调用；业务幂等键在该命名空间内使用唯一约束串行化并发创建。
 4. 将 ActionVersion、参数摘要和服务端从 current Grant 解析出的 Connection 稳定 ID 作为原调用的不可变绑定；全部一致时返回原 `callId`，任一字段不同则拒绝。
@@ -198,11 +176,10 @@ Connection 在一个持久化流程中：
 
 在访问 Provider 前，Connection 在同一 PostgreSQL 事务重新检查：
 
-- Principal、ConsumerInstance、workload 和 Actor。
+- Principal、客户端访问凭据及其 revision、ConsumerInstance 和 Actor。
 - Grant root/current Grant 和 exact ActionVersion。
 - Connection revision/fence 和 CredentialVersion。
 - Consumer declaration、ProviderRelease 和 ActionVersion 状态。
-- Platform policy revision/fence 仍有效。
 - repository allowlist。
 - 请求 deadline 尚未到期。
 
@@ -238,7 +215,7 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 `connection-web` 是独立 React SPA，与 `connection-api` 通过同一批准 public origin 路由：
 
 - Connection Web 路由进入 SPA。
-- Browser API、OAuth callback、Catalog 和 delegated API 进入 Connection API。
+- Browser API、OAuth callback、Catalog、独立 MCP/API 和原调用核实接口进入 Connection API。
 - 不使用跨域 Cookie、公共 tunnel 或调用方身份 Header 补偿错误路由。
 
 普通用户可以登录、连接 GitHub、查看脱敏账号、确认/撤销 Grant、断开 Connection，以及查看自己的调用和未知结果。管理员可以管理 Catalog/共享 Connection/审计，并处理 `NEEDS_MANUAL_REVIEW`。LDAP 只认证 Principal；Connection PostgreSQL 保存 AdministratorRole binding，每次管理请求重新检查当前角色。
@@ -250,22 +227,21 @@ GitHub create-PR 不接受 Connection 业务幂等键。Provider 可能已接受
 Connection DB 至少保存：
 
 - Principal、identity mapping、BrowserSession 和 AdministratorRole binding。
-- Consumer、ConsumerInstance、workload 和 Actor registration。
-- Platform Agent/Action policy revision 和 revocation fence，不保存 policy 内容或用户 Grant 副本。
+- Consumer、ConsumerInstance、独立客户端访问凭据绑定和 Actor registration。
 - ProviderRelease、ActionVersion 和 Consumer declaration。
 - Connection、CredentialVersion、Grant/root/fence。
-- AuthorizedInvocation、ActionCall、Effect、Dispatch 和 reconciliation job。
+- AuthorizedInvocation、ActionCall 及不可变请求/回执绑定、Effect、Dispatch 和 reconciliation job。
 - Provider revoke attempt 和 Connection audit。
 
-审计记录稳定 ID、主体、版本、状态、时间和脱敏证据。不得记录 LDAP 密码、Provider Token、Cookie、delegated assertion、加密密钥、聊天正文或模型内部思考。
+审计记录稳定 ID、主体、版本、状态、时间和脱敏证据。不得记录 LDAP 密码、Provider Token、Cookie、客户端访问 token、加密密钥、聊天正文或模型内部思考。
 
 ## 14. 部署与失败停止
 
 - `connection-api`、`connection-web` 和 migration job 使用从 `main` 固定 commit 构建的不可变镜像 digest。
-- ProviderRelease 和 Action 默认 disabled，只在具名 LA3 HCI Pilot 环境和测试主体范围内启用。
-- 缺少 PostgreSQL、LDAP、Credential key、GitHub OAuth、repository policy 或 delegated verifier 时，业务路由启动 fail closed。
-- 越权、Credential 泄露、错误 assertion 被接受、重复 PR、Effect 无法持久化或撤权后仍可新调用时立即停止 Pilot。
-- 停止时禁用 ProviderRelease/Action 或 delegated route，保留数据库和审计。回滚到健康检查或只读入口不表示 GitHub 能力仍可用。
+- ProviderRelease 和 Action 默认 disabled，只在具名 LA3 HCI Pilot 环境和测试主体范围内启用；独立批准的本地首通按其具名范围举证，不关闭完整联合 Pilot，客户端 fixture/conformance 不自动启用真实 Provider。
+- 缺少 PostgreSQL、LDAP、Credential key、GitHub OAuth、repository policy 或独立客户端身份验证器时，业务路由启动 fail closed。
+- 越权、Credential 泄露、错误客户端身份或调用绑定被接受、重复 PR、Effect 无法持久化或撤权后仍可新调用时立即停止 Pilot。
+- 停止时禁用 ProviderRelease/Action 或客户端调用入口，保留数据库和审计。回滚到健康检查或只读入口不表示 GitHub 能力仍可用。
 - 公司 KMS/Secret 产品、唯一受控 egress、HA/PITR、容量和正式值班仍是 Pilot 后生产化门禁；受监督 Pilot 的局部通过不能关闭这些缺口。
 - LA3 私网 `ldap://` 是具名 Pilot 风险接受，不是通用兼容模式；正式上线证据必须证明已使用验证证书和主机名的 LDAPS/StartTLS，并关闭明文 profile。
 
@@ -278,17 +254,17 @@ Connection DB 至少保存：
 - 两人分别为同一 Agent Actor 确认三项 Action，调用只能解析各自 Connection。
 - current-user 返回稳定 numeric ID；repository-read 发现受控仓库；create-PR 产生真实 PR。
 - 相同幂等键重试返回同一 `callId` 和 PR，不创建第二个 PR。
-- Platform execution 与 Connection audit 通过 `callId` 关联。
+- Platform execution 与 Connection audit 按第 7 节核对实际请求、原回执及记录后关联，分别鉴权查询。
 
 ### 15.2 负向
 
 - Alice/Bob 不能访问对方 Principal、Connection、Grant、Credential、OAuth transaction 或调用记录。
-- 错误 issuer、audience、期限、`jti`、workload、Consumer/Actor、ActionVersion、参数或幂等绑定均拒绝。
-- stale Platform policy revision、已终结 fence 和超过 deadline 的 PENDING Dispatch 均在 Provider 访问前拒绝。
+- 错误 issuer/resource、期限、主体、Consumer/Actor、ActionVersion、参数摘要、nonce 或幂等绑定均拒绝；同主体/Agent 的跨 Execution 真实引用移植不能被核实。
+- 已撤销客户端凭据、已终结授权 fence 和超过 deadline 的 PENDING Dispatch 均在 Provider 访问前拒绝。
 - LDAP 登录覆盖账号/来源限流、退避、统一失败响应和 CSRF/Origin/Fetch Metadata 拒绝，不能枚举账号或借限流锁死指定员工。
 - LA3 Pilot 验证只允许固定私网 LDAP endpoint 且无 downgrade/fallback；证据明确标记明文 Credential 传输风险，不能作为 TLS conformance 证据。
 - LA3 Pilot 不宣称 LDAP 失败路径具备时序不可区分性；正式 profile 必须用等价认证工作和安全测试关闭该账号枚举风险。
-- Owner policy 移除、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
+- 客户端访问凭据撤销、Grant revoke、Connection disconnect、Credential/Action/Provider 停用均阻止新调用。
 - repository allowlist 外的请求在访问 GitHub 前拒绝。
 - 仓库重命名、转移和同名替换不能改变 allowlist 指向的 numeric repository ID；无法确认稳定 ID 时拒绝写操作。
 - GitHub 普通 `403` 覆盖限流、abuse protection 和仓库权限拒绝，不得错误 fence 有效 Credential。
@@ -299,7 +275,7 @@ Connection DB 至少保存：
 - dispatch 前撤权、本地持久化失败、Provider 响应丢失、结果落库失败和进程重启。
 - 24 小时自动对账、歧义转管理员、七天 `UNRESOLVED`。
 - 单 Token revoke 成功、失败/重试和 GitHub 侧已撤销。
-- Provider/Action disable、delegated route shutdown 和固定 digest 回滚。
+- Provider/Action disable、客户端调用入口关闭和固定 digest 回滚。
 
 ## 16. 证据与成功声明
 
@@ -307,14 +283,14 @@ Connection DB 至少保存：
 
 Platform Owner、Connection Owner、Security、SRE 和 Pilot 使用者分别签收自己的边界。任一签收缺失，Pilot 不通过。
 
-唯一允许的成功声明是：在具名 HCI 环境、固定镜像、两个测试 Principal、两个专用 GitHub 账号和一个受控 private 仓库范围内，Agent Platform delegated GitHub Pilot 已通过。
+成功声明的范围遵循 [Connection PRD 第 13 节](../prd/PRD-connection-M1.md#13-首个-github-pilot-验收)。受控 consumer/conformance 测试不表示真实账号验收，也不表示 Connection 服务的实现、部署或正式交接完成。
 
 ## 17. 实施顺序
 
 1. 权威文档和 wire contracts。
 2. Connection Core/PostgreSQL 与 migrations。
-3. 并行实现 LDAP Session、三项 GitHub Adapter、Catalog、Connection Web/Grant 和 delegated verifier。
+3. 按独立任务实现 LDAP Session、三项 GitHub Adapter、Catalog、Connection Web/Grant 与独立客户端身份/原调用核实接口。
 4. 可靠 Effect、对账和 Provider revoke。
-5. 生产 runtime、HCI readiness 和跨系统真实 Pilot。
+5. 运行装配、HCI readiness 和跨系统真实 Pilot。
 
 每项实施使用独立 primary Issue 和 PR，直接从最新 `main` 开始。历史分支、tag 和开放 PR只作为候选证据，不整体合入或作为执行授权。

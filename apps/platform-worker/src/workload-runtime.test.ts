@@ -19,6 +19,7 @@ import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationRecordV2,
@@ -47,6 +48,7 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
+import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
 	workloadRegistryFixture,
@@ -60,6 +62,7 @@ import {
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
+	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
 function configurationFixture(
@@ -139,8 +142,9 @@ function pendingSecretRecord(
 
 function materializedSecretRecord(
 	lifecycleState: "applying" | "observed",
+	overrides: Parameters<typeof pendingSecretRecord>[0] = {},
 ): PlatformSecretRecordV1 {
-	const record = pendingSecretRecord();
+	const record = pendingSecretRecord(overrides);
 	const reference = {
 		schemaVersion: 1 as const,
 		ownerType: record.ownerType,
@@ -172,8 +176,10 @@ function materializedSecretRecord(
 	});
 }
 
-function activeSecretRecord(): ActiveSecretRecordV1 {
-	const record = materializedSecretRecord("observed");
+function activeSecretRecord(
+	overrides: Parameters<typeof pendingSecretRecord>[0] = {},
+): ActiveSecretRecordV1 {
+	const record = materializedSecretRecord("observed", overrides);
 	return validateActiveSecretRecordV1({
 		...record,
 		lifecycleState: "active",
@@ -288,7 +294,7 @@ function fixture(
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
-	const configuration = inputOverrides.configuration ?? configurationFixture();
+	let configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
 		schemaVersion: 1,
@@ -308,6 +314,17 @@ function fixture(
 		failureCode: null,
 	};
 	const options: WorkloadRuntimeOptionsV1 = {
+		executionCapacityProfiles: [
+			{
+				schemaVersion: 1,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				resourceProfileRef: workloadTestPolicy.resourceProfileRef,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+				maximumConcurrentExecutions: 2,
+				conformanceEvidenceHash: "c".repeat(64),
+			},
+		],
 		templateModelBindings: [
 			{
 				templateId: "template-a",
@@ -353,6 +370,18 @@ function fixture(
 		},
 		setManagement(next: WorkloadReconciliationInputV1["management"]) {
 			management = structuredClone(next);
+		},
+		setConfiguration(next: WorkloadReconciliationInputV1["configuration"]) {
+			configuration = structuredClone(next);
+		},
+		async until(
+			predicate: (value: WorkloadReconciliationStateV1 | null) => boolean,
+		) {
+			for (let i = 0; i < 50; i++) {
+				if (predicate(state)) return;
+				await this.tick(1);
+			}
+			throw new Error("Workload did not reach the expected recovery step");
 		},
 		async tick(times: number) {
 			for (let i = 0; i < times; i++) {
@@ -467,6 +496,126 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it("keeps legacy lifecycle readiness without inventing verified execution capacity", async () => {
+		const f = fixture({ executionCapacityProfiles: [] });
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.verified).not.toHaveProperty("executionCapacity");
+	});
+
+	it("resolves trusted Conversation routes through live Workload observation and rejects changed resources", async () => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "transport-a",
+			issuer: "platform",
+			keyId: "key-a",
+			privateKey: keys.privateKey,
+		};
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantKeyId: signing.keyId,
+					grantIssuer: signing.issuer,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "runtime-transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		assert(f.state?.phase === "ready");
+		const resolve = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport-token",
+		});
+		const input = {
+			agentId: "agent-a",
+			signal: new AbortController().signal,
+			workload: f.state,
+			purpose: "business" as const,
+			command: "turn.submit" as const,
+		};
+		const before = structuredClone(f.resources);
+		const service = workloadResourceNameV1("agent-a");
+		expect(await resolve(input)).toEqual({
+			baseUrl: `http://${service}.${f.options.policy.namespace}.svc:8080`,
+			workerId: "transport-a",
+			serviceToken: "synthetic-transport-token",
+		});
+		expect(await resolve({ ...input, purpose: "control" })).toMatchObject({
+			baseUrl: `http://${service}-probe.${f.options.policy.namespace}.svc:8080`,
+		});
+		expect(f.resources).toEqual(before);
+		expect(f.state.verified?.executionCapacity).toEqual(
+			f.options.executionCapacityProfiles?.[0],
+		);
+		const withdrawn = createProductionConversationRuntimeResolverV2({
+			workload: { ...f.options, executionCapacityProfiles: [] },
+			signing,
+			serviceToken: "synthetic-transport-token",
+		});
+		await expect(withdrawn(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		await expect(
+			withdrawn({ ...input, command: "session.status" }),
+		).resolves.toBeDefined();
+		await expect(
+			withdrawn({ ...input, command: "turn.supplement" }),
+		).resolves.toBeDefined();
+		await expect(
+			withdrawn({ ...input, purpose: "control" }),
+		).resolves.toMatchObject({
+			baseUrl: `http://${service}-probe.${f.options.policy.namespace}.svc:8080`,
+		});
+		await expect(
+			resolve({ ...input, agentId: "other-agent" }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		await expect(
+			resolve({ ...input, workload: { ...f.state, phase: "observing" } }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		const actual = await f.client.read<V1StatefulSet>("StatefulSet", service);
+		assert(actual?.metadata);
+		f.resources.set(`StatefulSet/${service}`, {
+			...actual,
+			metadata: { ...actual.metadata, uid: "replacement-workload" },
+		});
+		await expect(resolve(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		await expect(
+			resolve({ ...input, purpose: "control" }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		f.resources.set(`StatefulSet/${service}`, actual);
+		const liveService = await f.client.read<V1Service>("Service", service);
+		assert(liveService?.spec);
+		f.resources.set(`Service/${service}`, {
+			...liveService,
+			spec: {
+				...liveService.spec,
+				type: "ExternalName",
+				externalName: "foreign.invalid",
+			},
+		} as V1Service);
+		await expect(resolve(input)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		expect(() =>
+			createProductionConversationRuntimeResolverV2({
+				workload: f.options,
+				signing: {
+					...signing,
+					privateKey: generateKeyPairSync("ed25519").privateKey,
+				},
+				serviceToken: "synthetic-transport-token",
+			}),
+		).toThrow("Conversation Runtime deployment authorization is invalid");
+	});
+
 	it("rejects a Messages candidate bound to a Responses image before decrypting or probing", async () => {
 		const catalog = catalogFixture();
 		catalog.endpoints = catalog.endpoints.map((endpoint) => ({
@@ -1444,38 +1593,149 @@ describe("assembled Workload Runtime contracts", () => {
 		},
 	);
 
+	const secretReuseScenarios: readonly {
+		label: string;
+		binding?:
+			| "bound"
+			| "legacy missing UID"
+			| "missing Secret"
+			| "recreated UID"
+			| "missing Secret after CAS retry";
+		standard?: boolean;
+		recovery?: {
+			secretDrift?: "missing" | "uid";
+			restartAgain?: boolean;
+			changeConfiguration?: boolean;
+			lostReceiptKind?: "Secret" | "StatefulSet";
+			stop?: "before" | "after";
+			failHealth?: boolean;
+			revokedOwner?: boolean;
+		};
+	}[] = [
+		{ label: "bound", binding: "bound" },
+		{ label: "legacy missing UID", binding: "legacy missing UID" },
+		{ label: "missing Secret", binding: "missing Secret" },
+		{ label: "recreated UID", binding: "recreated UID" },
+		{
+			label: "missing Secret after CAS retry",
+			binding: "missing Secret after CAS retry",
+		},
+		{ label: "missing Workload", recovery: {} },
+		{
+			label: "missing Workload then Secret disappears",
+			recovery: { secretDrift: "missing" },
+		},
+		{
+			label: "missing Workload then Secret UID changes",
+			recovery: { secretDrift: "uid" },
+		},
+		{
+			label: "missing Workload then another restart",
+			recovery: { restartAgain: true },
+		},
+		{
+			label: "missing Workload then configuration changes",
+			recovery: { changeConfiguration: true },
+		},
+		{
+			label: "missing Workload with lost Secret create receipt",
+			recovery: { lostReceiptKind: "Secret" },
+		},
+		{
+			label: "missing Workload with lost Workload create receipt",
+			recovery: { lostReceiptKind: "StatefulSet" },
+		},
+		{
+			label: "missing Workload stopped before creation",
+			recovery: { stop: "before" },
+		},
+		{
+			label: "missing Workload stopped after creation",
+			recovery: { stop: "after" },
+		},
+		{
+			label: "missing Workload with failed health",
+			recovery: { failHealth: true },
+		},
+		{
+			label: "missing Workload with revoked Owner",
+			recovery: { revokedOwner: true },
+		},
+		{
+			label: "missing Workload with model projection",
+			standard: true,
+			recovery: {},
+		},
+		{
+			label:
+				"missing Workload with model projection then configuration changes",
+			standard: true,
+			recovery: { changeConfiguration: true },
+		},
+		{
+			label: "missing Workload with model projection and failed health",
+			standard: true,
+			recovery: { failHealth: true },
+		},
+		{
+			label: "missing Workload with model projection stopped after creation",
+			standard: true,
+			recovery: { stop: "after" },
+		},
+	];
 	it.each(
 		(["current", "active-origin"] as const).flatMap((materialization) =>
-			(
-				[
-					"bound",
-					"legacy missing UID",
-					"missing Secret",
-					"recreated UID",
-					"missing Secret after CAS retry",
-				] as const
-			).map((binding) => ({ materialization, binding })),
+			secretReuseScenarios.map((scenario) => ({
+				materialization,
+				...scenario,
+			})),
 		),
 	)(
-		"safely reuses an $materialization Secret with $binding identity",
-		async ({ materialization, binding }) => {
-			let record = activeSecretRecord();
+		"safely reuses an $materialization Secret with $label identity",
+		async ({ materialization, binding, standard = false, recovery }) => {
+			let currentMaterialization = materialization;
+			const secretBytes = () =>
+				standard
+					? new TextEncoder().encode("synthetic-primary-credential")
+					: new Uint8Array([1, 2, 3]);
+			let record = activeSecretRecord(
+				standard ? { name: "model:primary", secretId: "model-secret-a" } : {},
+			);
 			if (record.lifecycleState !== "active") throw new Error();
 			const cleanup = secretCleanupStore(record);
 			const decrypt = vi.fn(async () => ({
 				outcome: "decrypted" as const,
-				plaintext: new Uint8Array([1, 2, 3]),
+				plaintext: secretBytes(),
 			}));
 			const audit = vi.fn(async () => undefined);
 			const f = fixture(
-				{ decryptor: { decrypt } },
 				{
-					configuration: secretConfiguration({
+					decryptor: { decrypt },
+					...(standard
+						? {
+								modelCatalog: createDeploymentModelCatalogAdapterV1({
+									load: async () => catalogFixture(),
+								}),
+								modelAccess: createFakeModelAccessValidatorV1([
+									{
+										endpointId: "endpoint-a",
+										modelId: "model-a",
+										reasoningLevels: ["medium"],
+										credential: "synthetic-primary-credential",
+									},
+								]),
+							}
+						: {}),
+				},
+				{
+					configuration: (standard
+						? standardModelConfiguration
+						: secretConfiguration)({
 						revision: materialization === "current" ? 1 : 2,
 					}),
 					secrets: {
 						get bindings() {
-							return [{ materialization, record }];
+							return [{ materialization: currentMaterialization, record }];
 						},
 						store: cleanup.store,
 						auditDecryption: audit,
@@ -1501,12 +1761,19 @@ describe("assembled Workload Runtime contracts", () => {
 				client: f.client,
 				policy: workloadTestPolicy,
 				probe: async () => true,
+				...(standard
+					? {
+							modelProjection: validateRuntimeModelProjectionV1(
+								f.state?.candidate.modelProjection,
+							),
+						}
+					: {}),
 			});
 			const secretUid = await adapter.applyImmutableSecret(
 				deployment,
 				ref.name,
-				"BOT_TOKEN",
-				new Uint8Array([1, 2, 3]),
+				standard ? modelCredentialEnvironmentKey : "BOT_TOKEN",
+				secretBytes(),
 			);
 			const identity = await adapter.apply(deployment);
 			if (!identity || identity === "pending") throw new Error();
@@ -1541,7 +1808,9 @@ describe("assembled Workload Runtime contracts", () => {
 				f.resources.set(resourceKey, statefulSet);
 			}
 			const recreated = binding === "recreated UID";
-			const missing = binding.startsWith("missing Secret");
+			const missing =
+				binding === "missing Secret" ||
+				binding === "missing Secret after CAS retry";
 			let expectedUid = recreated ? "replacement-secret-uid" : secretUid;
 			if (recreated) {
 				const secret = await f.client.read<V1Secret>("Secret", ref.name);
@@ -1552,6 +1821,356 @@ describe("assembled Workload Runtime contracts", () => {
 				} as V1Secret);
 			}
 			if (missing) f.resources.delete(`Secret/${ref.name}`);
+			if (recovery) {
+				await f.tick(8);
+				expect(f.state?.phase).toBe("ready");
+				const originalSecret = await f.client.read<V1Secret>(
+					"Secret",
+					ref.name,
+				);
+				const originalVolume = await f.client.read(
+					"PersistentVolumeClaim",
+					deployment.persistentVolume.name,
+				);
+				const originalRecord = structuredClone(record);
+				const originalSecrets = [...f.resources.entries()].filter(([key]) =>
+					key.startsWith("Secret/"),
+				);
+				const unavailable = vi
+					.spyOn(f.options.decryptor, "decrypt")
+					.mockResolvedValue({
+						outcome: "failed",
+						code: "SECRET_KEY_UNAVAILABLE",
+					});
+				f.resources.delete(resourceKey);
+				for (const key of f.resources.keys()) {
+					if (key.startsWith("Pod/")) f.resources.delete(key);
+				}
+				await f.tick(24);
+				expect(f.state?.phase).toBe("failed");
+				expect(f.state?.identity).toBeNull();
+				unavailable.mockImplementation(async () => ({
+					outcome: "decrypted",
+					plaintext: secretBytes(),
+				}));
+				const management = new FakeAgentManagementV1({
+					states: [
+						{
+							...f.management,
+							status: "available",
+							revision: 2,
+							serviceAvailability: "unavailable",
+							failureCode: "health_check_failed",
+						},
+					],
+				});
+				const restart = await management.executeManagementCommand(
+					{
+						schemaVersion: 1,
+						command: "restart_agent",
+						agentId: "agent-a",
+						expectedRevision: 2,
+						idempotencyKey: "recover-original-workload",
+						requestId: "request-recover-original-workload",
+						traceId: "trace-recover-original-workload",
+					},
+					{
+						schemaVersion: 1,
+						userId: "owner-a",
+						accountStatus: "active",
+						organizationIds: [],
+						isAdministrator: false,
+					},
+				);
+				if (restart.outcome !== "accepted")
+					throw new Error("Restart was not accepted");
+				f.setManagement(restart.writePlan.state);
+				let lostReceipt = false;
+				if (recovery.lostReceiptKind) {
+					const create = f.client.create.bind(f.client);
+					vi.spyOn(f.client, "create").mockImplementation(async (object) => {
+						const result = await create(object);
+						if (
+							!lostReceipt &&
+							object.kind === recovery.lostReceiptKind &&
+							object.metadata?.name !== ref.name
+						) {
+							lostReceipt = true;
+							throw new WorkloadKubernetesError("unavailable");
+						}
+						return result;
+					});
+				}
+				if (recovery.stop) {
+					await f.until(
+						(value) =>
+							value?.phase === "applying" &&
+							!!value.candidate.secretRecoveries?.length &&
+							(recovery.stop === "before"
+								? value.candidate.secretRecoveries.every(
+										(recovery) => recovery.secretUid === null,
+									)
+								: !!value.candidate.secretRecoveries[0]?.identity),
+					);
+					const intent = f.state?.candidate.secretRecoveries?.[0];
+					expect(intent).toBeDefined();
+					if (recovery.stop === "before")
+						expect(
+							await f.client.read("Secret", intent?.reference.name ?? ""),
+						).toBeNull();
+					else expect(f.state?.identity?.uid).not.toBe(identity.uid);
+					const stop = await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-a",
+							expectedRevision: restart.writePlan.state.revision,
+							idempotencyKey: "stop-workload-recovery",
+							requestId: "stop-workload-recovery",
+							traceId: "stop-workload-recovery",
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					);
+					if (stop.outcome !== "accepted")
+						throw new Error("Stop was not accepted");
+					f.setManagement(stop.writePlan.state);
+					await f.tick(20);
+					expect(f.state?.phase).toBe("stopped");
+					expect(f.state?.identity).toBeNull();
+					expect(
+						[...f.resources.entries()].filter(([key]) =>
+							key.startsWith("Secret/"),
+						),
+					).toEqual(originalSecrets);
+					expect(
+						await f.client.read("StatefulSet", deployment.service.name),
+					).toBeNull();
+					expect(
+						await f.client.read("Secret", intent?.reference.name ?? ""),
+					).toBeNull();
+					expect(await f.client.read("Secret", ref.name)).toEqual(
+						originalSecret,
+					);
+					expect(
+						(
+							await f.client.read(
+								"PersistentVolumeClaim",
+								deployment.persistentVolume.name,
+							)
+						)?.metadata?.uid,
+					).toBe(originalVolume?.metadata?.uid);
+					return;
+				}
+				if (recovery.revokedOwner) {
+					f.setManagement({ ...f.management, ownerIds: ["other-owner"] });
+					unavailable.mockClear();
+					await f.tick(24);
+					expect(f.state?.phase).toBe("cleaning");
+					expect(f.state?.cleanupInterrupted).toBe(true);
+					expect(unavailable).not.toHaveBeenCalled();
+					expect(
+						await f.client.read("StatefulSet", deployment.service.name),
+					).toBeNull();
+					expect(await f.client.read("Secret", ref.name)).toEqual(
+						originalSecret,
+					);
+					return;
+				}
+				if (recovery.failHealth) {
+					const probe = vi
+						.spyOn(f.options, "probeRuntime")
+						.mockResolvedValue({ core: "failed", capabilities: {} });
+					await f.tick(32);
+					expect(f.state?.phase).toBe("failed");
+					expect(
+						await f.client.read("StatefulSet", deployment.service.name),
+					).toBeNull();
+					expect(
+						[...f.resources.entries()].filter(([key]) =>
+							key.startsWith("Secret/"),
+						),
+					).toEqual(originalSecrets);
+					expect(
+						(
+							await f.client.read(
+								"PersistentVolumeClaim",
+								deployment.persistentVolume.name,
+							)
+						)?.metadata?.uid,
+					).toBe(originalVolume?.metadata?.uid);
+					probe.mockResolvedValue({ core: "passed", capabilities: {} });
+					const retry = await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "restart_agent",
+							agentId: "agent-a",
+							expectedRevision: restart.writePlan.state.revision,
+							idempotencyKey: "retry-workload-recovery",
+							requestId: "retry-workload-recovery",
+							traceId: "retry-workload-recovery",
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					);
+					if (retry.outcome !== "accepted")
+						throw new Error("Retry was not accepted");
+					f.setManagement(retry.writePlan.state);
+				}
+				await f.tick(24);
+				expect(f.state?.phase).toBe("ready");
+				const recovered = f.state?.verified?.secretRecoveries?.[0];
+				expect(recovered?.identity?.uid).toBe(f.state?.identity?.uid);
+				expect(recovered?.identity?.uid).not.toBe(identity.uid);
+				expect(recovered?.reference.name).not.toBe(ref.name);
+				expect(recovered?.fence).toBe(f.management.fence);
+				expect(await f.client.read<V1Secret>("Secret", ref.name)).toEqual(
+					originalSecret,
+				);
+				expect(record).toEqual(originalRecord);
+				const retainedVolume = await f.client.read(
+					"PersistentVolumeClaim",
+					deployment.persistentVolume.name,
+				);
+				expect(retainedVolume?.metadata?.uid).toBe(
+					originalVolume?.metadata?.uid,
+				);
+				expect(cleanup.claims).toBe(0);
+				expect(cleanup.commits).toBe(0);
+				if (standard) {
+					const projection = validateRuntimeModelProjectionV1(
+						f.state?.verified?.modelProjection,
+					);
+					expect(projection.options[0]?.secretRef.name).toBe(
+						recovered?.reference.name,
+					);
+					const pod = await f.client.read<V1Pod>(
+						"Pod",
+						`${deployment.service.name}-0`,
+					);
+					expect(
+						pod?.spec?.containers[0]?.env?.some(
+							(value) =>
+								value.valueFrom?.secretKeyRef?.name ===
+								recovered?.reference.name,
+						),
+					).toBe(true);
+				}
+				if (recovery.lostReceiptKind) {
+					expect(lostReceipt).toBe(true);
+					expect(
+						[...f.resources.keys()].filter((key) => key.startsWith("Secret/")),
+					).toHaveLength(2);
+				}
+				if (recovery.secretDrift) {
+					if (!recovered) throw new Error();
+					const current = await f.client.read<V1Secret>(
+						"Secret",
+						recovered.reference.name,
+					);
+					if (!current) throw new Error();
+					if (recovery.secretDrift === "missing")
+						f.resources.delete(`Secret/${recovered.reference.name}`);
+					else
+						f.resources.set(`Secret/${recovered.reference.name}`, {
+							...current,
+							metadata: {
+								...current.metadata,
+								uid: "recreated-recovery-secret",
+							},
+						});
+					await f.tick(18);
+					expect(f.state?.phase).toBe("ready");
+					expect(f.state?.identity?.uid).toBe(recovered.identity?.uid);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.reference).toEqual(
+						recovered.reference,
+					);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.secretUid).not.toBe(
+						recovered.secretUid,
+					);
+					expect(await f.client.read("Secret", ref.name)).toEqual(
+						originalSecret,
+					);
+				}
+				if (recovery.restartAgain) {
+					const next = await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "restart_agent",
+							agentId: "agent-a",
+							expectedRevision: restart.writePlan.state.revision,
+							idempotencyKey: "restart-recovered-workload",
+							requestId: "restart-recovered-workload",
+							traceId: "restart-recovered-workload",
+						},
+						{
+							schemaVersion: 1,
+							userId: "owner-a",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					);
+					if (next.outcome !== "accepted") throw new Error();
+					f.setManagement(next.writePlan.state);
+					await f.tick(18);
+					expect(f.state?.phase).toBe("ready");
+					expect(f.state?.identity?.uid).toBe(recovered?.identity?.uid);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.reference).toEqual(
+						recovered?.reference,
+					);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.fence).toBe(
+						recovered?.fence,
+					);
+				}
+				if (recovery.changeConfiguration) {
+					const previous = f.state?.verified?.configuration;
+					if (!previous || !recovered) throw new Error();
+					const next = {
+						...previous,
+						revision: previous.revision + 1,
+						...(standard
+							? {}
+							: { environment: [{ name: "LOG_LEVEL", value: "debug" }] }),
+					};
+					currentMaterialization = "active-origin";
+					f.setConfiguration(next);
+					await f.tick(24);
+					expect(f.state?.phase).toBe("ready");
+					expect(f.state?.sourceConfigurationRevision).toBe(next.revision);
+					expect(f.state?.verified?.configuration).toEqual(next);
+					expect(f.state?.identity?.uid).toBe(recovered.identity?.uid);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.reference).toEqual(
+						recovered.reference,
+					);
+					expect(f.state?.verified?.secretRecoveries?.[0]?.fence).toBe(
+						recovered.fence,
+					);
+					expect(record).toEqual(originalRecord);
+					expect(await f.client.read("Secret", ref.name)).toEqual(
+						originalSecret,
+					);
+					if (standard) {
+						const projection = validateRuntimeModelProjectionV1(
+							f.state?.verified?.modelProjection,
+						);
+						expect(projection.options[0]?.secretRef.name).toBe(
+							recovered.reference.name,
+						);
+					}
+				}
+				return;
+			}
 			let failedCas = false;
 			if (binding === "missing Secret after CAS retry") {
 				const replace = f.client.replace.bind(f.client);

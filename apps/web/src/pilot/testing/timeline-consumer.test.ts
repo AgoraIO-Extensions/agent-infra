@@ -4,6 +4,55 @@ import type { ConversationSseMessageV1 } from "../generated/types.gen.js";
 import { createPilotSseMessageConsumer } from "./timeline-consumer.js";
 
 describe("Pilot Web SSE consumer", () => {
+	it("retains V2 operation facts beside original V1 output and deduplicates mixed replay", () => {
+		const consumer = createPilotSseMessageConsumer();
+		const original = pilotFakeScenariosV1.replay.messages[0];
+		const operation = {
+			schemaVersion: 2,
+			kind: "event",
+			eventId: "actual-model-operation",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			sequence: 50,
+			conversationCursor: "cursor-50",
+			occurredAt: "2026-09-14T12:00:00Z",
+			type: "execution.operation",
+			payload: {
+				kind: "model",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+				phase: "unknown",
+				failureCode: "response_incomplete",
+				model: {
+					configVersion: "config-1",
+					modelOptionId: "option-1",
+					modelId: "model-1",
+				},
+			},
+		};
+		const live = consumer.consume([original, operation]);
+		expect(live.events).toEqual([original, operation]);
+		expect(live.events.map((event) => event.schemaVersion)).toEqual([1, 2]);
+		expect(consumer.consume([operation, original]).events).toEqual([]);
+	});
+
+	it("rejects a malformed V2 batch before consuming an earlier valid V1 message", () => {
+		const consumer = createPilotSseMessageConsumer();
+		const original = pilotFakeScenariosV1.replay.messages[0];
+		expect(() =>
+			consumer.consume([
+				original,
+				{
+					schemaVersion: 2,
+					kind: "event",
+					type: "execution.operation",
+					payload: { prompt: "private request" },
+				},
+			]),
+		).toThrow();
+		expect(consumer.consume([original]).events).toHaveLength(1);
+	});
+
 	it("deduplicates replay by stable eventId without reordering new events", () => {
 		const consumer = createPilotSseMessageConsumer();
 		const messages = pilotFakeScenariosV1.replay

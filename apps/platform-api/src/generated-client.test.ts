@@ -236,6 +236,9 @@ function testApp() {
 				}),
 			},
 			commands: vi.fn().mockReturnValue({
+				requestMetadataRecovery: vi.fn().mockResolvedValue({
+					outcome: "not_applicable",
+				}),
 				createConversation: vi.fn().mockResolvedValue({
 					outcome: "accepted",
 					result: {

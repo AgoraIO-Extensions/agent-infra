@@ -1,8 +1,8 @@
-import { ConversationSseMessageV1Schema } from "@agent-infra/contracts/pilot";
-import type { ConversationSseMessageV1 } from "../generated/types.gen.js";
+import { ConversationSseMessageV2Schema } from "@agent-infra/contracts/pilot";
+import type { ConversationSseMessageV2 } from "../generated-v2/types.gen.js";
 
-type PersistedEvent = Extract<ConversationSseMessageV1, { kind: "event" }>;
-type ControlSignal = Extract<ConversationSseMessageV1, { kind: "control" }>;
+type PersistedEvent = Extract<ConversationSseMessageV2, { kind: "event" }>;
+type ControlSignal = Extract<ConversationSseMessageV2, { kind: "control" }>;
 
 export function createPilotSseMessageConsumer() {
 	const seenEventIds = new Set<string>();
@@ -12,7 +12,7 @@ export function createPilotSseMessageConsumer() {
 		const controls: ControlSignal[] = [];
 		const parsedMessages = messages.map(
 			(input) =>
-				ConversationSseMessageV1Schema.parse(input) as ConversationSseMessageV1,
+				ConversationSseMessageV2Schema.parse(input) as ConversationSseMessageV2,
 		);
 
 		for (const message of parsedMessages) {

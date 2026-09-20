@@ -41,6 +41,14 @@ const requiredOperations = [
 	"updateConversationModelSelection",
 	"getExecutionDetail",
 	"listPlatformAudit",
+	"listWecomReceipts",
+	"getWecomReceipt",
+	"abandonUnknownWecomDelivery",
+	"getWecomBotConnection",
+	"beginWecomSetup",
+	"getWecomSetup",
+	"submitWecomCredentials",
+	"cancelWecomSetup",
 ];
 
 const validApplication = {

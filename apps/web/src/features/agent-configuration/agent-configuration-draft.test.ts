@@ -109,4 +109,13 @@ describe("Agent configuration draft", () => {
 			secrets: [{ name: "MODEL_API_KEY", value: "new-secret" }],
 		});
 	});
+
+	it("preserves an explicit empty channel replacement", () => {
+		const request = buildAgentConfigurationRequest({
+			...configurationDraftFromAgent(agent),
+			channels: [],
+		});
+
+		expect(request.channels).toEqual([]);
+	});
 });

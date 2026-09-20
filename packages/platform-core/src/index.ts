@@ -44,8 +44,16 @@ export * from "./agent-runtime-presentation.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";
+export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
+export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+export {
+	isConversationGenerationBarrierConfirmedV1,
+	planConversationGenerationConfirmationV1,
+	planConversationGenerationIsolationV1,
+} from "./conversation-generation-isolation.js";
+export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export {
 	bindInputFileV1,
@@ -79,4 +87,22 @@ export type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
+export * from "./task-authorization.js";
+export type {
+	LegacyTaskControlRecoveryV1,
+	TaskRuntimeAuthorizationContextV1,
+	TaskRuntimeAuthorizationRecordV1,
+	TaskRuntimeRecoveryStateV1,
+} from "./task-runtime-authorization.js";
+export { createTaskRuntimeAuthorizationUseCaseV1 } from "./task-runtime-authorization.js";
+export type { WecomConnectionFenceV1 } from "./wecom-channel.js";
+export * from "./wecom-channel.js";
+export {
+	createWecomSetupV1,
+	WecomSetupError,
+	type WecomSetupRecordV1,
+	type WecomSetupStatusV1,
+	type WecomSetupStoreV1,
+} from "./wecom-setup.js";
 export * from "./workload-reconciliation.js";
+export * from "./workload-secret-recovery.js";

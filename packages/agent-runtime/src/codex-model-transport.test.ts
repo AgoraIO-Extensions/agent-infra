@@ -17,9 +17,66 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+	type CodexModelRequestOutcome,
+	type CodexModelTransportObserver,
+	type CodexModelTurnAdmission,
 	type CodexNativeTurn,
-	openCodexModelTransport,
+	openCodexModelTransport as openProductionModelTransport,
 } from "./codex-model-transport.js";
+
+// Existing protocol cases use one explicitly bound synthetic native process.
+// Cross-process cases below call the production factory directly.
+const testConversationKey = "a".repeat(64);
+const testObserver: CodexModelTransportObserver = {
+	beforeRequest: async () => ({
+		started: async () => {},
+		finish: async () => {},
+	}),
+};
+async function openCodexModelTransport(
+	input: Parameters<typeof openProductionModelTransport>[0],
+	observer: CodexModelTransportObserver = testObserver,
+) {
+	const value = await openProductionModelTransport(input, observer);
+	const modelAccess = value.modelAccessFor(testConversationKey);
+	value.bindThread(testConversationKey, "thread-synthetic");
+	return {
+		...value,
+		modelAccess,
+		beginTurnAdmission: (
+			deadline: number,
+			model: string,
+			threadId: string,
+			reasoning: string,
+		) => {
+			value.bindThread(testConversationKey, threadId);
+			return value.beginTurnAdmission(
+				deadline,
+				model,
+				threadId,
+				reasoning,
+				testConversationKey,
+			);
+		},
+		recognizeTurn: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) =>
+			value.recognizeTurn(admission, {
+				...turn,
+				conversationKey: testConversationKey,
+			}),
+		registerTurn: (admission: CodexModelTurnAdmission, turn: CodexNativeTurn) =>
+			value.registerTurn(admission, {
+				...turn,
+				conversationKey: testConversationKey,
+			}),
+		revokeTurn: (turn: CodexNativeTurn) =>
+			value.revokeTurn({ ...turn, conversationKey: testConversationKey }),
+		cancelTurn: (turn: CodexNativeTurn) =>
+			value.cancelTurn({ ...turn, conversationKey: testConversationKey }),
+	};
+}
 
 const credential = "synthetic-model-credential";
 const sensitiveMarker = "synthetic-sensitive-model-failure";
@@ -46,15 +103,22 @@ async function listen(server: Server) {
 	return `http://127.0.0.1:${address.port}`;
 }
 
-async function transport(endpoint: string, registerDefaultTurn = true) {
-	const value = await openCodexModelTransport([
-		{
-			internalModel: selectedInternalModel,
-			model: "synthetic-selected",
-			endpoint,
-			credential,
-		},
-	]);
+async function transport(
+	endpoint: string,
+	registerDefaultTurn = true,
+	observer?: CodexModelTransportObserver,
+) {
+	const value = await openCodexModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint,
+				credential,
+			},
+		],
+		observer,
+	);
 	if (registerDefaultTurn) admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
 	return value;
@@ -74,6 +138,7 @@ async function transportWithCredentials(
 			endpoint,
 			credential,
 		})),
+		testObserver,
 	);
 	admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
@@ -144,6 +209,130 @@ afterEach(async () => {
 });
 
 describe("Codex model transport", () => {
+	it("withholds native completion until the actual model result is durably acknowledged", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.output_text.delta",
+						delta: "synthetic partial",
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			beforeRequest: async () => ({
+				started: async () => {},
+				finish: async (outcome) => {
+					outcomes.push(outcome);
+					entered.resolve();
+					await release.promise;
+				},
+			}),
+		});
+		const response = await request(value.modelAccess);
+		let ended = false;
+		const output = response.text().then((text) => {
+			ended = true;
+			return text;
+		});
+		await entered.promise;
+		expect(ended).toBe(false);
+		expect(outcomes).toEqual([
+			expect.objectContaining({
+				phase: "succeeded",
+				durationMs: expect.any(Number),
+				finishedAt: expect.any(String),
+			}),
+		]);
+		release.resolve();
+		expect(await output).toContain("response.completed");
+	});
+
+	it("rechecks stop after intent/authorization await and before invoking fetch", async () => {
+		let requests = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				requests += 1;
+				response.end();
+			}),
+		);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		const value = await transport(target, true, {
+			beforeRequest: async () => {
+				entered.resolve();
+				await release.promise;
+				return {
+					started: async () => {
+						throw new Error("must not start");
+					},
+					finish: async (outcome) => {
+						outcomes.push(outcome);
+					},
+				};
+			},
+		});
+		const pending = request(value.modelAccess);
+		await entered.promise;
+		value.revokeTurn(defaultNativeTurn);
+		release.resolve();
+		expect((await pending).status).toBe(409);
+		expect(requests).toBe(0);
+		expect(outcomes).toEqual([
+			expect.objectContaining({
+				phase: "failed",
+				failureCode: "request_not_started",
+			}),
+		]);
+		expect(outcomes[0]?.durationMs).toBeUndefined();
+	});
+
+	it.each(["http", "provider", "malformed", "disconnect"] as const)(
+		"records the real %s failure and blocks another request for the uncertain Turn",
+		async (mode) => {
+			let requests = 0;
+			const outcomes: CodexModelRequestOutcome[] = [];
+			const target = await listen(
+				createServer((_request, response) => {
+					requests += 1;
+					if (mode === "disconnect") {
+						response.destroy();
+						return;
+					}
+					response.writeHead(mode === "http" ? 503 : 200, {
+						"content-type": "text/event-stream",
+					});
+					response.end(
+						mode === "provider"
+							? event({ type: "response.failed" })
+							: "data: malformed\n\n",
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				beforeRequest: async () => ({
+					started: async () => {},
+					finish: async (outcome) => {
+						outcomes.push(outcome);
+					},
+				}),
+			});
+			await (await request(value.modelAccess)).text();
+			expect(outcomes).toHaveLength(1);
+			expect(outcomes[0]).toMatchObject({
+				phase: mode === "http" || mode === "provider" ? "failed" : "unknown",
+			});
+			expect((await request(value.modelAccess)).status).toBe(409);
+			expect(requests).toBe(1);
+		},
+	);
+
 	it("does not retain listeners across repeated real response backpressure", async () => {
 		const delta = "a".repeat(256 * 1024);
 		const body =
@@ -2105,4 +2294,166 @@ it("fences an admitted request whose body completes after revocation", async () 
 		spy.mockRestore();
 		client.destroy();
 	}
+});
+
+it("binds HTTP credentials to the owning Conversation before touching foreign admission", async () => {
+	let upstreamCalls = 0;
+	const observed: string[] = [];
+	const target = await listen(
+		createServer((_request, response) => {
+			upstreamCalls++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{
+			beforeRequest: async (context) => {
+				observed.push(context.conversationKey);
+				return { started: async () => {}, finish: async () => {} };
+			},
+		},
+	);
+	close.push(value.close);
+	const owner = "a".repeat(64);
+	const sibling = "b".repeat(64);
+	const ownerAccess = value.modelAccessFor(owner);
+	const siblingAccess = value.modelAccessFor(sibling);
+	expect(siblingAccess.credential).not.toBe(ownerAccess.credential);
+	value.bindThread(owner, defaultNativeTurn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		defaultNativeTurn.threadId,
+		"high",
+		owner,
+	);
+	const turn = { ...defaultNativeTurn, conversationKey: owner };
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	// Even valid foreign IDs, parent metadata and malformed body cannot revoke
+	// another process's actual admission or create a model intent for it.
+	const forged = await request(siblingAccess, {
+		body: "{",
+		headers: {
+			"x-codex-parent-thread-id": defaultNativeTurn.threadId,
+		},
+	});
+	expect(forged.status).toBe(403);
+	await forged.text();
+	expect(upstreamCalls).toBe(0);
+	expect(observed).toEqual([]);
+	const accepted = await request(ownerAccess);
+	expect(accepted.status).toBe(200);
+	await accepted.text();
+	expect(upstreamCalls).toBe(1);
+	expect(observed).toEqual([owner]);
+	value.revokeConversationAccess(owner);
+	const retired = await request(ownerAccess);
+	expect(retired.status).toBe(401);
+	await retired.text();
+	expect(upstreamCalls).toBe(1);
+});
+
+it("partitions identical native IDs and cancellation between Conversation processes", async () => {
+	const observed: string[] = [];
+	const target = await listen(
+		createServer((_request, response) => {
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{
+			beforeRequest: async (context) => {
+				observed.push(context.conversationKey);
+				return { started: async () => {}, finish: async () => {} };
+			},
+		},
+	);
+	close.push(value.close);
+	const first = "c".repeat(64);
+	const second = "d".repeat(64);
+	const accesses = [first, second].map((key) => {
+		const access = value.modelAccessFor(key);
+		value.bindThread(key, defaultNativeTurn.threadId);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			defaultNativeTurn.threadId,
+			"high",
+			key,
+		);
+		const turn = { ...defaultNativeTurn, conversationKey: key };
+		expect(value.recognizeTurn(admission, turn)).toBe(true);
+		expect(value.registerTurn(admission, turn)).toBe(true);
+		return access;
+	});
+	const [firstAccess, secondAccess] = accesses;
+	if (!firstAccess || !secondAccess) throw new Error("missing process access");
+	await value.cancelTurn({ ...defaultNativeTurn, conversationKey: first });
+	const cancelled = await request(firstAccess);
+	expect(cancelled.status).toBe(409);
+	await cancelled.text();
+	const live = await request(secondAccess);
+	expect(live.status).toBe(200);
+	await live.text();
+	expect(observed).toEqual([second]);
+	const renewed = value.modelAccessFor(first);
+	expect(renewed.credential).toBe(firstAccess.credential);
+	value.revokeConversationAccess(first);
+	const reopened = value.modelAccessFor(first);
+	expect(reopened.credential).not.toBe(renewed.credential);
+	expect((await request(renewed)).status).toBe(401);
+	expect((await request(reopened)).status).toBe(403);
+});
+
+it("revokes recognized but not yet registered admissions with Conversation access", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const conversationKey = "e".repeat(64);
+	const threadId = "thread-recognized";
+	const turn = {
+		conversationKey,
+		threadId,
+		turnId: "turn-recognized",
+	};
+	value.modelAccessFor(conversationKey);
+	value.bindThread(conversationKey, threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		threadId,
+		"high",
+		conversationKey,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	value.revokeConversationAccess(conversationKey);
+	expect(value.registerTurn(admission, turn)).toBe(false);
 });

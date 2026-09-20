@@ -145,6 +145,7 @@ export {
 } from "./secret-preparation.js";
 export {
 	assemblePlatformApi,
+	createPlatformApp,
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 };

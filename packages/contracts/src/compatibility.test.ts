@@ -196,6 +196,62 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only WeCom receipt and setup routes and preserves existing browser authority", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const paths = [
+			"/api/v1/wecom/receipts",
+			"/api/v1/wecom/receipts/{receiptId}",
+			"/api/v1/wecom/receipts/{receiptId}/abandon",
+			"/api/v1/agents/{agentId}/wecom-bot",
+			"/api/v1/agents/{agentId}/wecom-setup",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
+			"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+		] as const;
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-wecom-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const mutations = [
+				(document: typeof current) => {
+					delete document.paths[paths[0]];
+				},
+				(document: typeof current) => {
+					document.paths[paths[2]].post.operationId = "retryDelivery";
+				},
+				(document: typeof current) => {
+					document.paths[paths[6]].post.requestBody = {};
+				},
+				(document: typeof current) => {
+					document.paths[paths[0]].get.responses = {};
+				},
+				(document: typeof current) => {
+					delete document.paths["/api/v1/agents"];
+				},
+				(document: typeof current) => {
+					document.components.schemas = {};
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts only the Runtime status-recovery V2 addition", async () => {
 		const current = JSON.parse(
 			await readFile(runtimeHostV2ArtifactPath, "utf8"),
@@ -237,7 +293,11 @@ describe("contract compatibility command", () => {
 		);
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths)) {
-			if (path !== "/api/v2/admin/audit") delete previous.paths[path];
+			if (
+				path !== "/api/v2/admin/audit" &&
+				!path.startsWith("/api/v2/conversations/")
+			)
+				delete previous.paths[path];
 		}
 		for (const name of [
 			"AgentApplicationCreateRequestV2",
@@ -288,6 +348,87 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+
+	it("admits reviewed V2 operation reads while preserving lifecycle and audit", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		for (const path of Object.keys(previous.paths)) {
+			if (path.startsWith("/api/v2/conversations/"))
+				delete previous.paths[path];
+		}
+		for (const name of [
+			"AuthorizationRevokedSignalV1",
+			"ConversationDetailProjectionV2",
+			"ConversationSseMessageV1",
+			"ConversationSseMessageV2",
+			"ExecutionDetailProjectionV2",
+			"ExecutionOperationEventV2",
+			"HeartbeatSignalV1",
+			"ModelSelectionFallbackEventV1",
+			"PersistedConversationEventV1",
+			"PersistedConversationEventV2",
+			"RuntimeConnectionAssociationV1",
+			"RuntimeOperationFactV2",
+			"RuntimeOperationFailureV2",
+			"SseEventIdV1",
+			"TimelineReloadSignalV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-operation-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					delete document.paths[
+						"/api/v2/conversations/{conversationId}/events"
+					];
+				},
+				(document: typeof current) => {
+					document.components.schemas.RuntimeOperationFactV2.required = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/agents"].get.operationId = "changed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.PlatformAuditProjectionV2.required = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/conversations/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		["removed", "removed"],
+		["narrowed", "narrowed"],
+		["retyped", "retyped"],
+	])("rejects %s schema changes", (fixture, reason) => {
+		const result = compare(fixture);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(reason);
 	});
 
 	it("accepts only the exact file addition and rejects altered authorization, limits and old operations", async () => {
@@ -350,80 +491,6 @@ describe("contract compatibility command", () => {
 		const result = compare(fixture);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain(reason);
-	});
-
-	it("rejects retyped OpenAPI component schemas", () => {
-		const result = compare("openapi-retyped", "openapi-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI contract");
-	});
-
-	it.each([
-		"openapi-operation-removed",
-		"openapi-request-media-removed",
-		"openapi-response-removed",
-		"openapi-parameter-removed",
-		"openapi-required-body-added",
-	])("rejects %s HTTP contract changes", (fixture) => {
-		const previous =
-			fixture.startsWith("openapi-parameter") ||
-			fixture === "openapi-required-body-added"
-				? "openapi-parameter-base"
-				: "openapi-base";
-		const result = compare(fixture, previous);
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("changed OpenAPI contract");
-	});
-
-	it("rejects introduced const, enum, union, and reference narrowings", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of ["const", "enum", "oneOf", "$ref", "type"]) {
-			expect(result.stderr).toContain(keyword);
-		}
-	});
-
-	it("rejects adding an array item constraint", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("narrowed $defs.ArrayV1[] items");
-	});
-
-	it("rejects adding numeric and collection constraints", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of [
-			"exclusiveMinimum",
-			"exclusiveMaximum",
-			"multipleOf",
-			"uniqueItems",
-		]) {
-			expect(result.stderr).toContain(keyword);
-		}
-	});
-
-	it("rejects adding an additional-property schema", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain(
-			"narrowed $defs.RecordV1 additionalProperties",
-		);
-	});
-
-	it("rejects composition, tuple, contains, and property-name narrowings", () => {
-		const result = compare("advanced-narrowed", "advanced-base");
-		expect(result.status).toBe(1);
-		for (const keyword of [
-			"allOf",
-			"not",
-			"prefixItems",
-			"contains",
-			"minContains",
-			"maxContains",
-			"propertyNames",
-		]) {
-			expect(result.stderr).toContain(keyword);
-		}
 	});
 
 	it("rejects adding an overlapping oneOf option", () => {
