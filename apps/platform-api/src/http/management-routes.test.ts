@@ -371,6 +371,11 @@ describe("management routes", () => {
 			{ kind: "user", userId: "user-1", organizationIds: ["org-1"] },
 			{ limit: 50, afterId: "agent-0" },
 		);
+		await user.app.request("/api/v2/agents?scope=owner&limit=10");
+		expect(user.listAgents).toHaveBeenCalledWith(
+			{ kind: "owner", ownerId: "user-1" },
+			{ limit: 10 },
+		);
 		expect(admin.listApplications).toHaveBeenCalledWith(
 			{ kind: "administrator" },
 			{ limit: 50 },
@@ -457,6 +462,8 @@ describe("management routes", () => {
 			await missing.app.request("/api/v2/agent-applications/unknown"),
 			await missing.app.request("/api/v2/agents/unknown"),
 			await ordinary.app.request("/api/v2/agents?userId=other"),
+			await ordinary.app.request("/api/v2/agents?scope=user"),
+			await ordinary.app.request("/api/v2/agents?scope=owner&scope=owner"),
 		]) {
 			expect([400, 404]).toContain(response.status);
 			expect(

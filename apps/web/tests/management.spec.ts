@@ -36,10 +36,17 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
-		listAgents: () => ({
-			status: 200,
-			body: { items: [agent], nextCursor: null },
-		}),
+		listAgents: (request) => {
+			const ownerScope =
+				new URL(request.url).searchParams.get("scope") === "owner";
+			return {
+				status: 200,
+				body: {
+					items: ownerScope && role !== "owner" ? [] : [agent],
+					nextCursor: null,
+				},
+			};
+		},
 		getAgent: () => ({ status: 200, body: agent }),
 		listAgentApplications: () => ({
 			status: 200,
@@ -115,6 +122,7 @@ async function fixture(
 					description: draft.description,
 					source: draft.source,
 					status: "pending_approval",
+					decision: null,
 				};
 			} else if (pathname.endsWith("/lifecycle")) {
 				const command = body as AgentLifecycleCommandRequestV1;
@@ -221,41 +229,37 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
 	const create = page.getByRole("button", {
-		name: "Create application",
+		name: "提交申请",
 		exact: true,
 	});
 	await create.click();
-	await expect(page.getByLabel("Application name")).toBeFocused();
+	await expect(page.getByLabel("Agent 名称")).toBeFocused();
 	expect(api.commands).toHaveLength(0);
-	await page.getByLabel("Application name").fill("Release assistant");
+	await page.getByLabel("Agent 名称").fill("Release assistant");
 	await page.keyboard.press("Tab");
-	await expect(page.getByLabel("Description", { exact: true })).toBeFocused();
+	await expect(page.getByLabel("用途说明", { exact: true })).toBeFocused();
 	expect(
 		await page
-			.getByLabel("Description", { exact: true })
+			.getByLabel("用途说明", { exact: true })
 			.evaluate((element) => getComputedStyle(element).boxShadow),
 	).not.toBe("none");
 	await page
-		.getByLabel("Description", { exact: true })
+		.getByLabel("用途说明", { exact: true })
 		.fill("Helps the release team");
-	await page.getByLabel("Source kind").focus();
-	await page.getByLabel("Source kind").selectOption("custom-platform-adapter");
+	await page.getByLabel("Agent 来源").focus();
+	await page.getByLabel("Agent 来源").selectOption("custom-platform-adapter");
 	await page.keyboard.press("Tab");
-	await expect(page.getByLabel("Image reference")).toBeFocused();
-	await expect(page.getByLabel("Source kind")).toHaveValue(
+	await expect(page.getByLabel("镜像地址")).toBeFocused();
+	await expect(page.getByLabel("Agent 来源")).toHaveValue(
 		"custom-platform-adapter",
 	);
-	await page
-		.getByLabel("Image reference")
-		.fill("registry.example/agents/release:v1");
+	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
 	await capture(page, info, "create-application");
 	api.holdNextCommand();
 	await create.focus();
 	await page.keyboard.press("Enter");
-	await expect(
-		page.getByRole("button", { name: "Submitting..." }),
-	).toBeDisabled();
-	await expect(page.getByLabel("Application name")).toBeDisabled();
+	await expect(page.getByRole("button", { name: "正在提交…" })).toBeDisabled();
+	await expect(page.getByLabel("Agent 名称")).toBeDisabled();
 	await page.keyboard.press("Enter");
 	await expect.poll(() => api.commands.length).toBe(1);
 	expect(api.commands[0]?.body).toEqual({
@@ -276,47 +280,41 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await capture(page, info, "application-pending");
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
-	await page.getByRole("link", { name: "Open application" }).click();
-	await page.getByRole("link", { name: "Edit application" }).click();
-	await expect(page.getByLabel("Source kind")).toBeDisabled();
+	await page.getByRole("link", { name: "查看申请" }).click();
+	await page.getByRole("link", { name: "修改申请" }).click();
+	await expect(page.getByLabel("Agent 来源")).toBeDisabled();
 	await page
-		.getByLabel("Description", { exact: true })
+		.getByLabel("用途说明", { exact: true })
 		.fill("Updated release workflow");
-	await page
-		.getByRole("button", { name: "Edit application", exact: true })
-		.click();
-	await expect(page.getByRole("status")).toContainText("Application submitted");
+	await page.getByRole("button", { name: "修改申请", exact: true }).click();
+	await expect(page.getByRole("status")).toContainText("申请已提交");
 	api.rejectApplication();
 	await page.goto("/my-agents/application-browser-1/edit");
 	await page
-		.getByRole("button", { name: "Resubmit application", exact: true })
+		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
-	await expect(page.getByRole("status")).toContainText("Pending approval");
-	await page.getByRole("link", { name: "Open application" }).click();
-	const withdraw = page.getByRole("button", { name: "Withdraw application" });
+	await expect(page.getByRole("status")).toContainText("待审批");
+	await page.getByRole("link", { name: "查看申请" }).click();
+	const withdraw = page.getByRole("button", { name: "撤回申请" });
 	api.rejectNextWithdrawal();
 	await withdraw.focus();
 	await page.keyboard.press("Enter");
+	await page.getByRole("button", { name: "确认撤回" }).click();
 	await expect(page.getByRole("alert")).toHaveText(
-		"Unable to withdraw application.",
+		"暂未确认撤回结果，请先查看申请的最新状态。",
 	);
 	await expect(withdraw).toBeEnabled();
 	await expect(withdraw).toBeFocused();
 	await capture(page, info, "withdraw-application-error");
 	api.holdNextCommand();
-	await page.keyboard.press("Enter");
-	await expect(
-		page.getByRole("button", { name: "Withdrawing..." }),
-	).toBeDisabled();
+	await withdraw.click();
+	await page.getByRole("button", { name: "确认撤回" }).click();
+	await expect(page.getByRole("button", { name: "正在撤回…" })).toBeDisabled();
 	api.release();
-	await expect(page.getByText("Withdrawn", { exact: true })).toBeVisible();
+	await expect(page.getByText("已撤回", { exact: true })).toBeVisible();
 	await expect(page.getByRole("status")).toBeFocused();
-	await expect(page.getByRole("status")).toHaveText(
-		"Withdrawal submitted: Withdrawn.",
-	);
-	await expect(
-		page.getByRole("button", { name: "Withdraw application" }),
-	).toHaveCount(0);
+	await expect(page.getByRole("status")).toHaveText("撤回请求已提交：已撤回。");
+	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
 test("administrator rejection, approval, empty queue and pending controls", async ({
@@ -324,24 +322,22 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 }, info) => {
 	const api = await fixture(page, "admin");
 	await page.goto("/admin/approvals");
-	const reject = page.getByRole("button", { name: "Reject application" });
-	await expect(reject).toBeDisabled();
-	await page.getByLabel("Rejection reason").fill("  Capacity is unavailable  ");
-	await page.getByLabel("Rejection reason").focus();
+	await page.getByRole("button", { name: "审阅申请" }).click();
+	await page.getByRole("button", { name: "驳回", exact: true }).click();
+	const reject = page.getByRole("button", { name: "确认驳回" });
+	await reject.click();
+	await expect(page.getByLabel("驳回原因")).toBeFocused();
+	await page.getByLabel("驳回原因").fill("  Capacity is unavailable  ");
 	await page.keyboard.press("Tab");
 	await expect(reject).toBeFocused();
 	await capture(page, info, "approvals");
 	api.holdNextCommand();
 	await page.keyboard.press("Enter");
-	await expect(
-		page.getByRole("button", { name: "Rejecting..." }),
-	).toBeDisabled();
-	await expect(
-		page.getByRole("button", { name: "Approve application" }),
-	).toBeDisabled();
+	await expect(page.getByRole("button", { name: "提交中…" })).toBeDisabled();
+	await expect(page.getByRole("button", { name: "返回审阅" })).toBeDisabled();
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
-	await expect(page.getByText("No pending Agent applications.")).toBeVisible();
+	await expect(page.getByText("暂无待审批申请。")).toBeVisible();
 	expect(api.commands[0]?.body).toEqual({
 		schemaVersion: 1,
 		decision: "reject",
@@ -350,12 +346,13 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	await capture(page, info, "approvals-empty");
 	await page.goto("/my-agents/application-browser-1/edit");
 	await page
-		.getByRole("button", { name: "Resubmit application", exact: true })
+		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
 	await expect(page.getByRole("status")).toBeVisible();
 	await page.goto("/admin/approvals");
-	await page.getByRole("button", { name: "Approve application" }).click();
-	await expect(page.getByRole("status")).toContainText("Creating");
+	await page.getByRole("button", { name: "审阅申请" }).click();
+	await page.getByRole("button", { name: "批准并创建" }).click();
+	await expect(page.getByRole("status")).toContainText("创建中");
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		decision: "approve",
@@ -367,20 +364,20 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/agents/agent-pilot-1");
-	await page.getByRole("link", { name: "Owner settings" }).click();
+	await page.getByRole("link", { name: "配置与管理" }).click();
 	const replaceModels = page.getByRole("checkbox", {
-		name: "Replace model configuration",
+		name: "替换模型配置",
 	});
 	await replaceModels.focus();
 	await page.keyboard.press("Space");
 	await expect(replaceModels).toBeChecked();
-	await expect(page.getByLabel("Credential value")).toHaveValue("");
+	await expect(page.getByLabel("新模型凭证")).toHaveValue("");
 	await page.keyboard.press("Space");
 	await expect(replaceModels).not.toBeChecked();
-	await page.getByRole("button", { name: "Add Secret" }).click();
-	await page.getByLabel("Secret name").fill("RELEASE_KEY");
-	await page.getByLabel("Secret value").fill("synthetic-browser-secret");
-	await expect(page.getByLabel("Secret value")).toHaveAttribute(
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
+	await page.getByLabel("新 Secret 值").fill("synthetic-browser-secret");
+	await expect(page.getByLabel("新 Secret 值")).toHaveAttribute(
 		"type",
 		"password",
 	);
@@ -389,12 +386,12 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 	await page.getByLabel("自建应用配置标识").fill("approved-app-fixture");
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
-	await page.getByRole("button", { name: "Save configuration" }).click();
+	await page.getByRole("button", { name: "校验并保存" }).click();
 	await expect(
-		page.getByRole("button", { name: "Saving configuration..." }),
+		page.getByRole("button", { name: "校验并保存中…" }),
 	).toBeDisabled();
 	await expect(replaceModels).toBeDisabled();
-	await expect(page.getByLabel("Secret value")).toHaveCount(0);
+	await expect(page.getByLabel("新 Secret 值")).toHaveCount(0);
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
 	await expect(page.locator("body")).not.toContainText(
@@ -412,39 +409,29 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 			},
 		],
 	});
-	await page.goto("/agents/agent-pilot-1");
+	await page.goto("/agents/agent-pilot-1/configuration");
 	await capture(page, info, "lifecycle");
 	api.holdNextCommand();
-	await page.getByRole("button", { name: "Stop Agent" }).focus();
+	await page.getByRole("button", { name: "停止 Agent" }).focus();
 	await page.keyboard.press("Enter");
-	await expect(
-		page.getByRole("button", { name: "Stopping..." }),
-	).toBeDisabled();
-	await expect(
-		page.getByRole("button", { name: "Restart Agent" }),
-	).toBeDisabled();
+	await page.getByRole("button", { name: "确认停止" }).click();
+	await expect(page.getByRole("button", { name: "停止中…" })).toBeDisabled();
+	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeDisabled();
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
-	await page.getByRole("button", { name: "Restart Agent" }).click();
-	await expect(page.getByRole("status")).toContainText("Available");
+	await page.getByRole("button", { name: "重启 Agent" }).click();
+	await page.getByRole("button", { name: "确认重启" }).click();
+	await expect(page.getByRole("status")).toContainText("可用");
 	api.customAgent();
 	await page.goto("/agents/agent-pilot-1/configuration");
-	await expect(
-		page.getByRole("button", { name: "Upgrade image" }),
-	).toBeDisabled();
-	await page
-		.getByLabel("New image reference")
-		.fill("registry.example/agent:v2");
+	await expect(page.getByRole("button", { name: "升级镜像" })).toBeDisabled();
+	await page.getByLabel("新镜像引用").fill("registry.example/agent:v2");
 	api.holdNextCommand();
-	await page.getByRole("button", { name: "Upgrade image" }).click();
-	await expect(
-		page.getByRole("button", { name: "Upgrading image..." }),
-	).toBeDisabled();
-	await expect(page.getByLabel("New image reference")).toBeDisabled();
+	await page.getByRole("button", { name: "升级镜像" }).click();
+	await expect(page.getByRole("button", { name: "升级中…" })).toBeDisabled();
+	await expect(page.getByLabel("新镜像引用")).toBeDisabled();
 	api.release();
-	await expect(page.getByRole("status")).toContainText(
-		"Configuration submitted",
-	);
+	await expect(page.getByRole("status")).toContainText("配置已提交");
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		command: "upgrade_custom_image",
@@ -460,18 +447,14 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(
 		page.getByRole("heading", { name: "Release assistant", exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("link", { name: "Owner settings" })).toHaveCount(
-		0,
-	);
-	await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+	await expect(
+		page.getByRole("button", { name: /停止 Agent|重启 Agent|停用 Agent/ }),
+	).toHaveCount(0);
 	await page.goto("/agents/agent-pilot-1/configuration");
-	await expect(page.getByRole("alert")).toHaveText(
-		"This configuration is unavailable.",
-	);
+	await expect(page.getByRole("alert")).toHaveText("当前无法访问此配置。");
 	await page.goto("/admin/approvals");
-	await expect(page.getByRole("alert")).toHaveText(
-		"Approvals are unavailable.",
-	);
+	await expect(page.getByRole("alert")).toHaveText("当前无法访问审批。");
 	let release: (() => void) | undefined;
 	const gate = new Promise<void>((resolve) => {
 		release = resolve;
@@ -484,11 +467,11 @@ test("employee has no Owner or administrator controls, with loading and error st
 		});
 	});
 	await page.goto("/agents");
-	await expect(page.getByText("Loading Agents...")).toBeVisible();
+	await expect(page.getByText("正在加载 Agent…")).toBeVisible();
 	await capture(page, info, "agents-loading");
 	release?.();
 	await expect(page.getByRole("alert")).toHaveText(
-		"Please contact an administrator.",
+		"Agent 列表暂时无法访问，请联系管理员。",
 	);
 	await capture(page, info, "agents-unavailable");
 });
@@ -556,7 +539,7 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 		return route.fulfill({ json: { ...session, status: "active" } });
 	});
 	await page.goto("/agents/agent-pilot-1");
-	await page.getByRole("link", { name: "Owner settings" }).click();
+	await page.getByRole("link", { name: "配置与管理" }).click();
 	await page.getByRole("button", { name: "扫码授权" }).click();
 	await expect(
 		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
@@ -581,4 +564,76 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	});
 	await expect(page.getByLabel("智能机器人配置标识")).toHaveCount(0);
 	await capture(page, info, "wecom-connected");
+});
+
+test("owned Agent tab consumes the authorized collection and supports keyboard navigation", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	await page.goto("/my-agents");
+	const applications = page.getByRole("tab", { name: "申请", exact: true });
+	await applications.focus();
+	await page.keyboard.press("ArrowRight");
+	await expect(page.getByRole("tab", { name: "已创建 Agent" })).toBeFocused();
+	await expect(
+		page.getByRole("list", { name: "我管理的 Agent" }),
+	).toContainText("Release assistant");
+	await capture(page, info, "owned-agents");
+	await page.getByRole("link", { name: "配置与管理" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/configuration$/);
+});
+
+test("employee collection is not presented as owned Agents", async ({
+	page,
+}) => {
+	await fixture(page, "employee");
+	await page.goto("/my-agents");
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await expect(
+		page.getByRole("heading", { name: "暂无你管理的 Agent" }),
+	).toBeVisible();
+	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+});
+
+test("withdraw confirmation traps focus and cancellation sends no request", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/my-agents/application-browser-1");
+	const trigger = page.getByRole("button", { name: "撤回申请" });
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "撤回这项申请？" });
+	await expect(dialog).toBeVisible();
+	for (let i = 0; i < 6; i++) {
+		await page.keyboard.press("Tab");
+		await expect
+			.poll(() => dialog.evaluate((el) => el.contains(document.activeElement)))
+			.toBe(true);
+	}
+	await capture(page, info, "withdraw-confirmation");
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
+	expect(api.commands).toHaveLength(0);
+});
+
+test("Agent search survives reload and browser back without adding typing history", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents");
+	const search = page.getByPlaceholder("按名称或用途搜索");
+	await search.fill("Release");
+	await expect(page).toHaveURL(/q=Release/);
+	await page.reload();
+	await expect(search).toHaveValue("Release");
+	await page.getByRole("link", { name: "查看 Release assistant 详情" }).click();
+	await page.goBack();
+	await expect(search).toHaveValue("Release");
+	await search.fill("没有匹配的中文");
+	await expect(
+		page.getByRole("link", { name: "查看 Release assistant 详情" }),
+	).toHaveCount(0);
+	await page.reload();
+	await expect(search).toHaveValue("没有匹配的中文");
 });

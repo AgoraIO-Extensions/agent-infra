@@ -1165,6 +1165,7 @@ export type ListAgentsV2Data = {
     query?: {
         cursor?: string;
         limit?: number;
+        scope?: 'owner';
     };
     url: '/api/v2/agents';
 };

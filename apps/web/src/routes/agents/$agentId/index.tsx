@@ -1,7 +1,5 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { buttonVariants } from "@/components/ui/button";
+import { createFileRoute } from "@tanstack/react-router";
 
-import { AgentLifecycleWorkflow } from "../../../features/agent-administration/agent-lifecycle-workflow.js";
 import { useBrowserSession } from "../../../features/agent-administration/use-browser-session.js";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
@@ -16,15 +14,15 @@ function AgentDetailRoute() {
 	const query = useAgentDetail(agentId);
 	const session = useBrowserSession();
 	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
-	const ownerSettings =
+	const canManage =
 		agent &&
 		session.state.kind === "ready" &&
-		isAgentConfigurationOwner(agent, session.state.session)
-			? { agentId }
-			: undefined;
+		(isAgentConfigurationOwner(agent, session.state.session) ||
+			session.state.session.user.roles.includes("system_admin"));
+	const ownerSettings = canManage ? { agentId } : undefined;
 
 	return (
-		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<div className="space-y-6">
 				<AgentDetailScreen
 					state={
@@ -36,21 +34,6 @@ function AgentDetailRoute() {
 					}
 					ownerSettings={ownerSettings}
 				/>
-				{agent &&
-				!(
-					agent.source.kind === "custom" &&
-					agent.source.interactionMode === "self-managed"
-				) ? (
-					<Link
-						className={buttonVariants()}
-						to="/agents/$agentId/conversations"
-						params={{ agentId }}
-						search={{ conversation: undefined }}
-					>
-						对话与个人历史
-					</Link>
-				) : null}
-				{agent ? <AgentLifecycleWorkflow agent={agent} /> : null}
 			</div>
 		</main>
 	);

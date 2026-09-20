@@ -51,14 +51,28 @@ export const agentApplicationEditActionLabels: Record<
 	AgentApplicationEditAction,
 	string
 > = {
-	edit: "Edit application",
-	resubmit: "Resubmit application",
+	edit: "修改申请",
+	resubmit: "修改并重新提交",
 };
 
 export function getAgentApplicationEditAction(
 	application: AgentApplicationProjectionV2,
 ) {
 	return agentApplicationEditActionByStatus[application.status];
+}
+
+export function hasCreatedAgent(
+	application: AgentApplicationProjectionV2,
+): application is AgentApplicationProjectionV2 & { agentId: string } {
+	// An application can reserve an Agent ID before approval starts creation.
+	return (
+		application.agentId !== null &&
+		(application.status === "creating" ||
+			application.status === "available" ||
+			application.status === "stopped" ||
+			application.status === "creation_failed" ||
+			application.status === "disabled")
+	);
 }
 
 function requestError(retryable: boolean) {

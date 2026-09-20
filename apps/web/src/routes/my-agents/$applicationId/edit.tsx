@@ -15,23 +15,23 @@ function EditAgentApplicationRoute() {
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
 	if (query.isPending) {
-		return <p aria-live="polite">Loading application...</p>;
+		return <p aria-live="polite">正在读取申请…</p>;
 	}
 	if (query.isError || !query.data || query.data.kind !== "ready") {
 		return (
-			<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+			<main className="platform-content management-content">
 				<section
 					aria-labelledby="agent-application-edit-heading"
 					className="space-y-4"
 				>
 					<h1
 						id="agent-application-edit-heading"
-						className="font-semibold text-2xl text-slate-950"
+						className="font-semibold text-2xl text-foreground"
 					>
-						Application is unavailable
+						申请暂不可用
 					</h1>
-					<p className="text-slate-600" role="alert">
-						Please try again shortly.
+					<p className="text-muted-foreground" role="alert">
+						请稍后重试。
 					</p>
 				</section>
 			</main>
@@ -41,23 +41,23 @@ function EditAgentApplicationRoute() {
 	const action = getAgentApplicationEditAction(application);
 	if (!action) {
 		return (
-			<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+			<main className="platform-content management-content">
 				<section
 					aria-labelledby="agent-application-edit-heading"
 					className="space-y-4"
 				>
 					<h1
 						id="agent-application-edit-heading"
-						className="font-semibold text-2xl text-slate-950"
+						className="font-semibold text-2xl text-foreground"
 					>
-						Application is not editable
+						当前申请不可修改
 					</h1>
 					<Link
 						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ applicationId }}
 						to="/my-agents/$applicationId"
 					>
-						Back to application
+						返回申请详情
 					</Link>
 				</section>
 			</main>
@@ -69,7 +69,7 @@ function EditAgentApplicationRoute() {
 			: null;
 
 	return (
-		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
 				action={action}
 				application={application}

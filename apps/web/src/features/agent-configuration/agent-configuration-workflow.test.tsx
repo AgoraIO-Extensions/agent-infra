@@ -13,6 +13,9 @@ import { useAgentConfigurationSubmission } from "./use-agent-configuration-submi
 vi.mock("../agent-administration/use-browser-session.js", () => ({
 	useBrowserSession: vi.fn(),
 }));
+vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({
+	useAgentLifecycleCommand: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 vi.mock("./use-agent-configuration-submission.js", () => ({
 	useAgentConfigurationSubmission: vi.fn(),
 }));
@@ -23,6 +26,14 @@ const ownerSession = BrowserSessionProjectionV1Schema.parse({
 		userId: "user-owner-1",
 		displayName: "Owner",
 		roles: ["employee"],
+	},
+});
+const administratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-admin-1",
+		displayName: "Administrator",
+		roles: ["employee", "system_admin"],
 	},
 });
 const firstAgent = AgentProjectionV2Schema.parse(
@@ -58,27 +69,34 @@ beforeEach(() => {
 });
 
 describe("AgentConfigurationWorkflow", () => {
+	it("keeps administrator lifecycle controls visible outside the Owner gate", () => {
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: administratorSession },
+		} as never);
+
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+
+		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
+		expect(screen.queryByLabelText("Owner 用户 ID")).toBeNull();
+	});
+
 	it("drops an entered Secret when navigation changes the Agent", () => {
 		const { rerender } = render(
 			<AgentConfigurationWorkflow agent={firstAgent} />,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Add Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret name"), {
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
 			target: { value: "NEW_SECRET" },
 		});
-		fireEvent.change(screen.getByLabelText("Secret value"), {
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
 			target: { value: "typed-secret" },
 		});
 
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
-		expect(screen.queryByLabelText("Secret value")).toBeNull();
+		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
 		expect(
-			(
-				screen.getByLabelText(
-					"Organization availability IDs",
-				) as HTMLTextAreaElement
-			).value,
+			(screen.getByLabelText("可用组织 ID") as HTMLTextAreaElement).value,
 		).toBe("organization-2");
 	});
 });

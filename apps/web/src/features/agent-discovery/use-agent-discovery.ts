@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-
+import type { AgentDiscoveryScope } from "./agent-discovery.js";
 import { loadAgentDiscovery } from "./agent-discovery.js";
 
-export function useAgentDiscovery() {
+export function useAgentDiscovery(scope: AgentDiscoveryScope = "visible") {
 	return useQuery({
-		queryKey: ["agents"],
-		queryFn: () => loadAgentDiscovery(),
+		queryKey: ["agents", scope],
+		queryFn: () => loadAgentDiscovery(undefined, scope),
 	});
 }

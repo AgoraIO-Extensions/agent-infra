@@ -777,6 +777,44 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 
 // #504 adds versioned management routes. Preserve the published audit contract
 // exactly and admit only this immutable addition, as for Runtime recovery above.
+function withoutAgentOwnerScope(operation) {
+	const normalized = structuredClone(operation);
+	if (Array.isArray(normalized?.parameters)) {
+		normalized.parameters = normalized.parameters.filter(
+			(parameter) =>
+				!(parameter?.in === "query" && parameter?.name === "scope"),
+		);
+	}
+	return normalized;
+}
+
+// The owner projection is an optional, server-authorized narrowing of the
+// existing Agent list. It does not change the default visible-Agent contract.
+function isAgentOwnerScopeOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents";
+	const previousOperation = previous.paths?.[path]?.get;
+	const currentOperation = current.paths?.[path]?.get;
+	if (!previousOperation || !currentOperation) return false;
+	const addedParameters = (currentOperation.parameters ?? []).filter(
+		(parameter) =>
+			!(previousOperation.parameters ?? []).some((previousParameter) =>
+				sameValue(previousParameter, parameter),
+			),
+	);
+	if (
+		addedParameters.length !== 1 ||
+		!sameValue(addedParameters[0], {
+			in: "query",
+			name: "scope",
+			schema: { const: "owner", type: "string" },
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.paths[path].get = withoutAgentOwnerScope(currentOperation);
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -804,9 +842,17 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
+	const normalizedAgentsPath = withoutAgentOwnerScope(
+		current.paths["/api/v2/agents"]?.get,
+	);
 	const addition = {
 		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
+			paths.map((path) => [
+				path,
+				path === "/api/v2/agents"
+					? { ...current.paths?.[path], get: normalizedAgentsPath }
+					: current.paths?.[path],
+			]),
 		),
 		schemas: Object.fromEntries(
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
@@ -960,6 +1006,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
+			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)

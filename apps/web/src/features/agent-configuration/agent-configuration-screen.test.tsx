@@ -37,7 +37,54 @@ const ordinarySession = BrowserSessionProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AgentConfigurationScreen", () => {
-	it("lets an Owner submit configuration while clearing entered Secret values", () => {
+	it("shows the current default model without prefilling a replacement draft", () => {
+		const configuredAgent = AgentProjectionV2Schema.parse({
+			...agent,
+			configuration: {
+				...agent.configuration,
+				modelOptions: [
+					{
+						optionId: "other-model",
+						displayName: "Other model",
+						modelId: "other",
+						reasoningLevels: ["low"],
+					},
+					{
+						optionId: "current-default",
+						displayName: "Current model",
+						modelId: "current",
+						reasoningLevels: ["low", "high"],
+					},
+				],
+				defaultModelOptionId: "current-default",
+				defaultReasoningLevel: "high",
+			},
+		});
+		render(
+			<AgentConfigurationScreen
+				agent={configuredAgent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByText("当前默认：Current model · high")).toBeTruthy();
+		expect(screen.queryByLabelText("默认模型选项 ID")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
+		expect(
+			screen.getByLabelText<HTMLInputElement>("默认模型选项 ID").value,
+		).toBe("");
+		expect(screen.getByLabelText<HTMLInputElement>("默认推理强度").value).toBe(
+			"",
+		);
+		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
+			"",
+		);
+	});
+
+	it("lets an Owner submit configuration while clearing entered 新 Secret 值s", () => {
 		const onSave = vi.fn();
 		render(
 			<AgentConfigurationScreen
@@ -49,16 +96,16 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByText("MODEL_API_KEY (set, version 1)")).toBeTruthy();
+		expect(screen.getByText("MODEL_API_KEY（已设置，版本 1）")).toBeTruthy();
 		expect(screen.queryByText("test-secret-value")).toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "Add Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret name"), {
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
 			target: { value: "NEW_SECRET" },
 		});
-		fireEvent.change(screen.getByLabelText("Secret value"), {
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
 			target: { value: "test-secret-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -66,7 +113,7 @@ describe("AgentConfigurationScreen", () => {
 				secrets: [{ name: "NEW_SECRET", value: "test-secret-value" }],
 			}),
 		);
-		expect(screen.queryByLabelText("Secret value")).toBeNull();
+		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
 	});
 
 	it("does not render configuration data or controls for an ordinary-user projection", () => {
@@ -80,12 +127,8 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		expect(
-			screen.getByRole("heading", { name: "Configuration is unavailable" }),
-		).toBeTruthy();
-		expect(
-			screen.queryByRole("button", { name: "Save configuration" }),
-		).toBeNull();
+		expect(screen.getByRole("heading", { name: "配置不可用" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "校验并保存" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 
@@ -109,10 +152,10 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		fireEvent.change(screen.getByLabelText("New image reference"), {
+		fireEvent.change(screen.getByLabelText("新镜像引用"), {
 			target: { value: "registry.example/agents/release:2" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Upgrade image" }));
+		fireEvent.click(screen.getByRole("button", { name: "升级镜像" }));
 		expect(onUpgradeImage).toHaveBeenCalledWith(
 			"registry.example/agents/release:2",
 		);
@@ -130,9 +173,7 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("status").textContent).toBe(
-			"Configuration submitted: Creating.",
-		);
+		expect(screen.getByRole("status").textContent).toBe("配置已提交：创建中。");
 
 		rerender(
 			<AgentConfigurationScreen
@@ -148,7 +189,7 @@ describe("AgentConfigurationScreen", () => {
 		);
 
 		expect(screen.getByRole("alert").textContent).toBe(
-			"Your permission or this Agent changed. Refresh the page.",
+			"权限或 Agent 状态已变化，请刷新页面。",
 		);
 		expect(screen.queryByText("private transport detail")).toBeNull();
 	});
@@ -183,6 +224,128 @@ describe("AgentConfigurationScreen", () => {
 		const status = screen.getByRole("status");
 		await waitFor(() => expect(document.activeElement).toBe(status));
 	});
+	it("allows model credential replacement without reading back the original value", () => {
+		const onSave = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={onSave}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
+		const credential = screen.getByLabelText<HTMLInputElement>("新模型凭证");
+		expect(credential.value).toBe("");
+		expect(credential.type).toBe("password");
+		expect(credential.autocomplete).toBe("new-password");
+		for (const [label, value] of [
+			["选项 ID", "primary"],
+			["端点 ID", "approved-endpoint"],
+			["模型 ID", "release-model"],
+			["可选推理强度", "high"],
+			["默认模型选项 ID", "primary"],
+			["默认推理强度", "high"],
+			["新模型凭证", "replacement-value"],
+		]) {
+			fireEvent.change(screen.getByLabelText(label), { target: { value } });
+		}
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				modelConfiguration: {
+					options: [
+						{
+							optionId: "primary",
+							endpointId: "approved-endpoint",
+							modelId: "release-model",
+							reasoningLevels: ["high"],
+							credentialValue: "replacement-value",
+						},
+					],
+					defaultOptionId: "primary",
+					defaultReasoningLevel: "high",
+				},
+			}),
+		);
+		expect(credential.value).toBe("");
+		expect(screen.queryByDisplayValue("replacement-value")).toBeNull();
+	});
+
+	it("clears model credentials when replacement is disabled", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		const replaceModels = screen.getByRole("checkbox", {
+			name: "替换模型配置",
+		});
+		fireEvent.click(replaceModels);
+		fireEvent.change(screen.getByLabelText("新模型凭证"), {
+			target: { value: "temporary-credential" },
+		});
+		fireEvent.click(replaceModels);
+		fireEvent.click(replaceModels);
+
+		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
+			"",
+		);
+	});
+
+	it("places the supplied lifecycle controls in the configuration aside", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				lifecycle={<section aria-label="生命周期">测试生命周期操作</section>}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		const controls = screen.getByRole("region", { name: "生命周期" });
+		expect(controls.closest("aside")?.className).toBe("form-aside");
+		expect(controls.closest(".form-layout")).not.toBeNull();
+	});
+
+	it.each(["pending", "disabled"] as const)(
+		"prevents saving a configuration that is %s",
+		(state) => {
+			const onSave = vi.fn();
+			render(
+				<AgentConfigurationScreen
+					agent={
+						state === "disabled"
+							? {
+									...agent,
+									managementStatus: "disabled",
+									serviceAvailability: null,
+								}
+							: agent
+					}
+					onSave={onSave}
+					onUpgradeImage={vi.fn()}
+					session={{ kind: "ready", session: ownerSession }}
+					submitting={state === "pending"}
+				/>,
+			);
+			const button = screen.getByRole("button", {
+				name: state === "pending" ? "校验并保存中…" : "校验并保存",
+			});
+			expect(button.getAttribute("disabled")).not.toBeNull();
+			fireEvent.click(button);
+			const form = button.closest("form");
+			if (form) fireEvent.submit(form);
+			expect(onSave).not.toHaveBeenCalled();
+		},
+	);
 });
 
 it("shows group visibility before an Owner submits a WeCom binding through the existing configuration request", () => {
@@ -201,7 +364,7 @@ it("shows group visibility before an Owner submits a WeCom binding through the e
 	fireEvent.change(screen.getByLabelText("自建应用配置标识"), {
 		target: { value: "approved_bot" },
 	});
-	fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+	fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 	expect(onSave).toHaveBeenCalledWith(
 		expect.objectContaining({
 			channels: [
