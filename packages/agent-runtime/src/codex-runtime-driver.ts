@@ -3303,39 +3303,39 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		// instead of carrying a test-only flag through production state.
 		try {
 			driver = new this(
-			file,
-			openConversationBridge,
-			assertContainedNativeConfiguration,
-			modelOptions,
-			defaultSelection,
-			options.configVersion,
-			modelTransport ? () => modelTransport.close() : undefined,
-			modelTransport?.revokeConversationAccess,
-			modelTransport
-				? (deadline, model, threadId, reasoning, conversationKey) => {
-						modelTransport.modelAccessFor(conversationKey);
-						modelTransport.bindThread(conversationKey, threadId);
-						return modelTransport.beginTurnAdmission(
-							deadline,
-							model,
-							threadId,
-							reasoning,
-							conversationKey,
-						);
-					}
-				: undefined,
-			modelTransport?.recognizeTurn,
-			modelTransport?.registerTurn,
-			modelTransport?.waitForModelRequest,
-			modelTransport?.abandonTurnAdmission,
-			modelTransport?.cancelTurn,
-			modelTransport?.revokeTurn,
-			probeNative,
-			options.authorizeExternalAction,
-			connectionClient,
-			runCodexConnectionRecovery,
-			`${options.path}.native`,
-			options.launchPath,
+				file,
+				openConversationBridge,
+				assertContainedNativeConfiguration,
+				modelOptions,
+				defaultSelection,
+				options.configVersion,
+				modelTransport ? () => modelTransport.close() : undefined,
+				modelTransport?.revokeConversationAccess,
+				modelTransport
+					? (deadline, model, threadId, reasoning, conversationKey) => {
+							modelTransport.modelAccessFor(conversationKey);
+							modelTransport.bindThread(conversationKey, threadId);
+							return modelTransport.beginTurnAdmission(
+								deadline,
+								model,
+								threadId,
+								reasoning,
+								conversationKey,
+							);
+						}
+					: undefined,
+				modelTransport?.recognizeTurn,
+				modelTransport?.registerTurn,
+				modelTransport?.waitForModelRequest,
+				modelTransport?.abandonTurnAdmission,
+				modelTransport?.cancelTurn,
+				modelTransport?.revokeTurn,
+				probeNative,
+				options.authorizeExternalAction,
+				connectionClient,
+				runCodexConnectionRecovery,
+				`${options.path}.native`,
+				options.launchPath,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
