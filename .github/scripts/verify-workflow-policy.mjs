@@ -2256,10 +2256,37 @@ export function validateWorkflowDocuments(workflows) {
     !String(reviewInputStage?.run ?? "").includes('gh pr view "$PR_NUMBER"') ||
     !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
     !String(reviewInputStage?.run ?? "").includes(
-      'gh pr diff "$PR_NUMBER" > .review-input/pr.diff',
+      "--json author,baseRefName,baseRefOid,body,commits,files,headRefName,headRefOid,title,url",
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'BASE_SHA="$(jq -r \'.baseRefOid // empty\' .review-input/pr.json)"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'MERGE_BASE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$EXPECTED_HEAD_SHA" --jq .merge_base_commit.sha)"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '[[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      `git -C pr-head -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA"`,
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      'test "$(git -C pr-head rev-parse --verify HEAD)" = "$EXPECTED_HEAD_SHA"',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      "git -C pr-head diff --no-ext-diff --no-textconv --diff-algorithm=myers --binary --unified=80",
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      '"$MERGE_BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff',
+    ) ||
+    !String(reviewInputStage?.run ?? "").includes(
+      "test -s .review-input/pr.diff",
     ) ||
     (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
-      .length !== 2 ||
+      .length !== 3 ||
     reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
     reviewAction?.with?.show_full_output !==
       "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||

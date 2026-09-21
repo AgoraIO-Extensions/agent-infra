@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import YAML from "yaml";
 
 import {
@@ -313,7 +315,7 @@ test("starts review, recovery, and outcome handling from the CI workflow", async
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-	assert.equal(Object.keys(workflows).length, 11);
+  assert.equal(Object.keys(workflows).length, 11);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
@@ -810,6 +812,86 @@ test("binds staged Claude Review input to the completed CI head", async () => {
       error.includes("Claude PR Review model configuration must use validated settings"),
     ),
   );
+});
+
+test("stages a complete large PR diff without including later base-only changes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "review-diff-stage-"));
+  const run = promisify(execFile);
+  const source = path.join(directory, "source");
+  const checkout = path.join(directory, "pr-head");
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Review test",
+    GIT_AUTHOR_EMAIL: "review-test@example.invalid",
+    GIT_COMMITTER_NAME: "Review test",
+    GIT_COMMITTER_EMAIL: "review-test@example.invalid",
+  };
+  const git = (...args) => run("git", args, { cwd: source, env });
+  try {
+    await fs.mkdir(source);
+    await git("init", "--initial-branch=main");
+    await fs.writeFile(path.join(source, "shared.txt"), "shared\n");
+    await git("add", ".");
+    await git("commit", "-m", "base");
+    const mergeBase = (await git("rev-parse", "HEAD")).stdout.trim();
+    await git("checkout", "-b", "feature");
+    await fs.writeFile(
+      path.join(source, "large.txt"),
+      Array.from({ length: 20_001 }, (_, index) => `changed line ${index}\n`).join(""),
+    );
+    await git("add", ".");
+    await git("commit", "-m", "large PR change");
+    const head = (await git("rev-parse", "HEAD")).stdout.trim();
+    await git("checkout", "main");
+    await fs.writeFile(path.join(source, "base-only.txt"), "later base change\n");
+    await git("add", ".");
+    await git("commit", "-m", "base moves ahead");
+    const base = (await git("rev-parse", "HEAD")).stdout.trim();
+    await git("clone", "--depth=1", "--branch=feature", `file://${source}`, checkout);
+    const mockBin = path.join(directory, "bin");
+    await fs.mkdir(mockBin);
+    await fs.writeFile(path.join(mockBin, "gh"), `#!/bin/sh
+if [ "$1 $2" = "pr view" ]; then
+  case "$*" in
+    *--jq*) printf '%s\\n' "$EXPECTED_HEAD_SHA" ;;
+    *) printf '%s\\n' '{"headRefOid":"${head}","baseRefOid":"${base}"}' ;;
+  esac
+elif [ "$1" = "api" ] && [ "$2" = "repos/test/repo/compare/${base}...${head}" ]; then
+  printf '%s\\n' '${mergeBase}'
+else
+  exit 2
+fi
+`, { mode: 0o755 });
+    const workflows = await actualWorkflows();
+    const stage = workflows["claude-pr-review.yml"].jobs.analyze.steps.find(
+      (step) => step.name === "Stage untrusted PR review data",
+    );
+    const runStage = () => run("bash", ["-e", "-o", "pipefail", "-c", stage.run], {
+      cwd: directory,
+      env: {
+        ...env,
+        PATH: `${mockBin}${path.delimiter}${process.env.PATH}`,
+        EXPECTED_HEAD_SHA: head,
+        GITHUB_REPOSITORY: "test/repo",
+        PR_NUMBER: "1",
+      },
+    });
+    await runStage();
+    const diffPath = path.join(directory, ".review-input/pr.diff");
+    const diff = await fs.readFile(diffPath, "utf8");
+    assert.match(diff, /diff --git a\/large.txt b\/large.txt/);
+    assert.match(diff, /\+changed line 20000\n/);
+    assert.equal(diff.split("\n").filter((line) => /^\+changed line /.test(line)).length, 20_001);
+    assert.doesNotMatch(diff, /base-only.txt/);
+    await fs.rm(diffPath);
+    await git("-C", checkout, "checkout", "--detach", mergeBase);
+    await assert.rejects(runStage());
+    await assert.rejects(fs.stat(diffPath), { code: "ENOENT" });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("binds Claude Review publication to the completed CI head", async () => {

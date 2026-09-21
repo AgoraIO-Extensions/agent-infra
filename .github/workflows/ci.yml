@@ -177,6 +177,7 @@ jobs:
           fi
 
       - name: Install verified vulnerability scanner
+        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
         run: node .github/scripts/install-trivy.mjs "$TRIVY_TOOL_DIR"
 
       - name: Scan dependencies and built images

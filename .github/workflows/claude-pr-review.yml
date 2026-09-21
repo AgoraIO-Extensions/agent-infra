@@ -63,10 +63,18 @@ jobs:
         run: |
           mkdir -p .review-input
           gh pr view "$PR_NUMBER" \
-            --json author,baseRefName,body,commits,files,headRefName,headRefOid,title,url \
+            --json author,baseRefName,baseRefOid,body,commits,files,headRefName,headRefOid,title,url \
             > .review-input/pr.json
           test "$(jq -r '.headRefOid' .review-input/pr.json)" = "$EXPECTED_HEAD_SHA"
-          gh pr diff "$PR_NUMBER" > .review-input/pr.diff
+          BASE_SHA="$(jq -r '.baseRefOid // empty' .review-input/pr.json)"
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          MERGE_BASE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$EXPECTED_HEAD_SHA" --jq .merge_base_commit.sha)"
+          [[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git -C pr-head -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA"
+          test "$(git -C pr-head rev-parse --verify HEAD)" = "$EXPECTED_HEAD_SHA"
+          git -C pr-head diff --no-ext-diff --no-textconv --diff-algorithm=myers --binary --unified=80 \
+            "$MERGE_BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff
+          test -s .review-input/pr.diff
           test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')" = "$EXPECTED_HEAD_SHA"
 
       - name: Validate Claude Review configuration
