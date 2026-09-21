@@ -32,9 +32,10 @@ for patch in manifest["patches"]:
     if digest(raw) != patch["sha256"]:
         raise SystemExit("Patch digest mismatch")
     patches.append(raw)
+status = git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
+if any(line.startswith(("??", "!!")) for line in status):
+    raise SystemExit("Untracked files are not allowed in the upstream checkout")
 if not args.verify_existing:
-    if git("status", "--porcelain"):
-        raise SystemExit("An explicit clean upstream checkout is required")
     for raw in patches:
         git("apply", "--check", "-", data=raw)
         git("apply", "-", data=raw)

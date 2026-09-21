@@ -304,6 +304,10 @@ class VendorInputTests(unittest.TestCase):
         self.assertEqual((source / "file.txt").read_bytes(), b"after\n")
         result = subprocess.run([*command, "--verify-existing"], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        (source / "untracked.txt").write_text("dirty\n")
+        result = subprocess.run([*command, "--verify-existing"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Untracked files", result.stderr)
         self.assertEqual(git("rev-parse", "HEAD"), head)
 
 
