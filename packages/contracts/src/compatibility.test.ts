@@ -32,13 +32,14 @@ function compare(current: string, previous = "base") {
 }
 
 describe("contract compatibility command", () => {
-	it("tracks published browser, file and readiness contracts", async () => {
+	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
 			"json-schema/files.v1.schema.json",
 			"openapi/files.v1.openapi.json",
 			"json-schema/runtime-readiness.v1.schema.json",
 			"openapi/runtime-readiness.v1.openapi.json",
+			"openapi/standard-template-release.v1.openapi.json",
 		])
 			expect(source).toContain(`"packages/contracts/artifacts/${path}"`);
 		expect(source).toContain(

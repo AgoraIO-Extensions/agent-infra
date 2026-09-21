@@ -186,20 +186,20 @@
           "type": "string"
         },
         "allowedCommands": {
-          "prefixItems": [
-            {
-              "enum": [
-                "turn.submit",
-                "turn.supplement",
-                "turn.stop",
-                "session.status",
-                "execution.renew",
-                "events.persist",
-                "events.ack"
-              ],
-              "type": "string"
-            }
-          ],
+          "items": {
+            "enum": [
+              "turn.submit",
+              "turn.supplement",
+              "turn.stop",
+              "session.status",
+              "execution.renew",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
           "type": "array"
         },
         "attachments": {
@@ -211,12 +211,12 @@
                 "type": "string"
               },
               "operations": {
-                "prefixItems": [
-                  {
-                    "const": "read",
-                    "type": "string"
-                  }
-                ],
+                "items": {
+                  "const": "read",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
                 "type": "array"
               }
             },
@@ -327,7 +327,7 @@
         },
         "issuedAt": {
           "maximum": 9007199254740991,
-          "minimum": -9007199254740991,
+          "minimum": 0,
           "type": "integer"
         },
         "issuer": {
@@ -524,18 +524,18 @@
           "type": "string"
         },
         "allowedCommands": {
-          "prefixItems": [
-            {
-              "enum": [
-                "turn.stop",
-                "session.status",
-                "generation.cancel",
-                "events.persist",
-                "events.ack"
-              ],
-              "type": "string"
-            }
-          ],
+          "items": {
+            "enum": [
+              "turn.stop",
+              "session.status",
+              "generation.cancel",
+              "events.persist",
+              "events.ack"
+            ],
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
           "type": "array"
         },
         "audience": {
@@ -637,7 +637,7 @@
         },
         "issuedAt": {
           "maximum": 9007199254740991,
-          "minimum": -9007199254740991,
+          "minimum": 0,
           "type": "integer"
         },
         "issuer": {
@@ -1208,7 +1208,7 @@
                     },
                     "durationMs": {
                       "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
+                      "minimum": 0,
                       "type": "integer"
                     },
                     "failureCode": {
@@ -1289,17 +1289,17 @@
                       "properties": {
                         "cachedInputTokens": {
                           "maximum": 9007199254740991,
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "type": "integer"
                         },
                         "inputTokens": {
                           "maximum": 9007199254740991,
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "type": "integer"
                         },
                         "outputTokens": {
                           "maximum": 9007199254740991,
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "type": "integer"
                         }
                       },
@@ -1384,7 +1384,7 @@
                     },
                     "durationMs": {
                       "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
+                      "minimum": 0,
                       "type": "integer"
                     },
                     "failureCode": {
@@ -1840,7 +1840,7 @@
                 },
                 "durationMs": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "failureCode": {
@@ -1921,17 +1921,17 @@
                   "properties": {
                     "cachedInputTokens": {
                       "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
+                      "minimum": 0,
                       "type": "integer"
                     },
                     "inputTokens": {
                       "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
+                      "minimum": 0,
                       "type": "integer"
                     },
                     "outputTokens": {
                       "maximum": 9007199254740991,
-                      "minimum": -9007199254740991,
+                      "minimum": 0,
                       "type": "integer"
                     }
                   },
@@ -2016,7 +2016,7 @@
                 },
                 "durationMs": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "failureCode": {
@@ -2115,20 +2115,20 @@
               "type": "string"
             },
             "allowedCommands": {
-              "prefixItems": [
-                {
-                  "enum": [
-                    "turn.submit",
-                    "turn.supplement",
-                    "turn.stop",
-                    "session.status",
-                    "execution.renew",
-                    "events.persist",
-                    "events.ack"
-                  ],
-                  "type": "string"
-                }
-              ],
+              "items": {
+                "enum": [
+                  "turn.submit",
+                  "turn.supplement",
+                  "turn.stop",
+                  "session.status",
+                  "execution.renew",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "maxItems": 1,
+              "minItems": 1,
               "type": "array"
             },
             "attachments": {
@@ -2140,12 +2140,12 @@
                     "type": "string"
                   },
                   "operations": {
-                    "prefixItems": [
-                      {
-                        "const": "read",
-                        "type": "string"
-                      }
-                    ],
+                    "items": {
+                      "const": "read",
+                      "type": "string"
+                    },
+                    "maxItems": 1,
+                    "minItems": 1,
                     "type": "array"
                   }
                 },
@@ -2256,7 +2256,7 @@
             },
             "issuedAt": {
               "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
+              "minimum": 0,
               "type": "integer"
             },
             "issuer": {
@@ -2383,18 +2383,18 @@
               "type": "string"
             },
             "allowedCommands": {
-              "prefixItems": [
-                {
-                  "enum": [
-                    "turn.stop",
-                    "session.status",
-                    "generation.cancel",
-                    "events.persist",
-                    "events.ack"
-                  ],
-                  "type": "string"
-                }
-              ],
+              "items": {
+                "enum": [
+                  "turn.stop",
+                  "session.status",
+                  "generation.cancel",
+                  "events.persist",
+                  "events.ack"
+                ],
+                "type": "string"
+              },
+              "maxItems": 1,
+              "minItems": 1,
               "type": "array"
             },
             "audience": {
@@ -2496,7 +2496,7 @@
             },
             "issuedAt": {
               "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
+              "minimum": 0,
               "type": "integer"
             },
             "issuer": {
@@ -3021,7 +3021,7 @@
             },
             "durationMs": {
               "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
+              "minimum": 0,
               "type": "integer"
             },
             "failureCode": {
@@ -3102,17 +3102,17 @@
               "properties": {
                 "cachedInputTokens": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "inputTokens": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "outputTokens": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 }
               },
@@ -3197,7 +3197,7 @@
             },
             "durationMs": {
               "maximum": 9007199254740991,
-              "minimum": -9007199254740991,
+              "minimum": 0,
               "type": "integer"
             },
             "failureCode": {
@@ -4269,20 +4269,20 @@
                   "type": "string"
                 },
                 "allowedCommands": {
-                  "prefixItems": [
-                    {
-                      "enum": [
-                        "turn.submit",
-                        "turn.supplement",
-                        "turn.stop",
-                        "session.status",
-                        "execution.renew",
-                        "events.persist",
-                        "events.ack"
-                      ],
-                      "type": "string"
-                    }
-                  ],
+                  "items": {
+                    "enum": [
+                      "turn.submit",
+                      "turn.supplement",
+                      "turn.stop",
+                      "session.status",
+                      "execution.renew",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
                   "type": "array"
                 },
                 "attachments": {
@@ -4294,12 +4294,12 @@
                         "type": "string"
                       },
                       "operations": {
-                        "prefixItems": [
-                          {
-                            "const": "read",
-                            "type": "string"
-                          }
-                        ],
+                        "items": {
+                          "const": "read",
+                          "type": "string"
+                        },
+                        "maxItems": 1,
+                        "minItems": 1,
                         "type": "array"
                       }
                     },
@@ -4410,7 +4410,7 @@
                 },
                 "issuedAt": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "issuer": {
@@ -4537,18 +4537,18 @@
                   "type": "string"
                 },
                 "allowedCommands": {
-                  "prefixItems": [
-                    {
-                      "enum": [
-                        "turn.stop",
-                        "session.status",
-                        "generation.cancel",
-                        "events.persist",
-                        "events.ack"
-                      ],
-                      "type": "string"
-                    }
-                  ],
+                  "items": {
+                    "enum": [
+                      "turn.stop",
+                      "session.status",
+                      "generation.cancel",
+                      "events.persist",
+                      "events.ack"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
                   "type": "array"
                 },
                 "audience": {
@@ -4650,7 +4650,7 @@
                 },
                 "issuedAt": {
                   "maximum": 9007199254740991,
-                  "minimum": -9007199254740991,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "issuer": {

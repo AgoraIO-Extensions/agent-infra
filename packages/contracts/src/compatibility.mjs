@@ -29,6 +29,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
@@ -959,7 +960,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"a46be79641a2c0a24ee28a2657d14179042e94e696cbc007c39fdedba1a52246"
+		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
 	)
 		return false;
 	const normalized = structuredClone(current);

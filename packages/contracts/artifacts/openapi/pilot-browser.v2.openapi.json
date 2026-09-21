@@ -3248,7 +3248,7 @@
               },
               "durationMs": {
                 "maximum": 9007199254740991,
-                "minimum": -9007199254740991,
+                "minimum": 0,
                 "type": "integer"
               },
               "failureCode": {
@@ -3318,17 +3318,17 @@
                 "properties": {
                   "cachedInputTokens": {
                     "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "inputTokens": {
                     "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "outputTokens": {
                     "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
+                    "minimum": 0,
                     "type": "integer"
                   }
                 },
@@ -3356,7 +3356,7 @@
               },
               "durationMs": {
                 "maximum": 9007199254740991,
-                "minimum": -9007199254740991,
+                "minimum": 0,
                 "type": "integer"
               },
               "failureCode": {
