@@ -829,8 +829,11 @@ export class RuntimeHostV3 {
 					bounded.throwIfAborted();
 					validate();
 					options.store.checkRequestV3(claims);
-					yield parsed.data;
+					bounded.throwIfAborted();
 					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
+					validate();
+					options.store.checkRequestV3(claims);
+					yield parsed.data;
 				}
 			} finally {
 				clearTimeout(timer);
