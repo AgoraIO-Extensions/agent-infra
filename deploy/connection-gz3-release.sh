@@ -44,7 +44,11 @@ fi
 
 echo "Preflight OK: $version -> $connection_sha (previous: ${previous_tag:-none})"
 [[ -n "$previous_tag" ]] || { echo "A previous production tag is required for catalog comparison" >&2; exit 1; }
-node .github/scripts/connection-release-guard.mjs --baseline "$previous_tag" | tee /tmp/connection-catalog-diff.txt
+if ! catalog_diff=$(node .github/scripts/connection-release-guard.mjs --baseline "$previous_tag"); then
+  echo "Connection catalog guard failed" >&2
+  exit 1
+fi
+printf '%s\n' "$catalog_diff" | tee /tmp/connection-catalog-diff.txt
 
 if $publish; then
   if [[ -z "$tag_sha" ]]; then
@@ -109,6 +113,9 @@ if ! $ready; then
   exit 1
 fi
 
-node .github/scripts/connection-production-read-verify.mjs \
-  | tee /tmp/connection-production-read-result.json
+if ! read_result=$(node .github/scripts/connection-production-read-verify.mjs); then
+  echo "Production Provider READ verification failed" >&2
+  exit 1
+fi
+printf '%s\n' "$read_result" | tee /tmp/connection-production-read-result.json
 echo "Deployment and real Provider READ acceptance succeeded."

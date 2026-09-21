@@ -10,9 +10,9 @@ test("requires an active connection and a successful real READ", async () => {
 		calls.push(body.params.name);
 		const structuredContent =
 			body.params.name === "list_connections"
-				? { connections: [{ status: "ACTIVE" }] }
+				? { connections: [{ status: "ACTIVE", actionVersionIds: ["bitbucket.get_pull_request@v6"] }] }
 				: body.params.name === "get_action_guide"
-					? { action: { actionVersionId: "bitbucket.get_pull_request@v6", effect: "READ" } }
+					? { action: { actionId: "bitbucket.get_pull_request", actionVersionId: "bitbucket.get_pull_request@v6", effect: "READ" } }
 					: { callId: "call-1", status: "SUCCEEDED" };
 		return { ok: true, json: async () => ({ result: { structuredContent } }) };
 	};
@@ -31,9 +31,9 @@ test("fails when the Provider READ does not succeed", async () => {
 		const name = JSON.parse(request.body).params.name;
 		const structuredContent =
 			name === "list_connections"
-				? { connections: [{ status: "ACTIVE" }] }
+				? { connections: [{ status: "ACTIVE", actionVersionIds: ["jira.get_issue@v8"] }] }
 				: name === "get_action_guide"
-					? { action: { actionVersionId: "jira.get_issue@v8", effect: "READ" } }
+					? { action: { actionId: "jira.get_issue", actionVersionId: "jira.get_issue@v8", effect: "READ" } }
 					: { callId: "call-1", status: "FAILED" };
 		return { ok: true, json: async () => ({ result: { structuredContent } }) };
 	};
@@ -46,5 +46,19 @@ test("fails when the Provider READ does not succeed", async () => {
 			token: "secret",
 		}),
 		/did not succeed/,
+	);
+});
+
+test("rejects a probe whose action belongs to another service", async () => {
+	await assert.rejects(
+		verifyProductionReads({
+			endpoint: "https://connection.example/mcp",
+			fetch: async () => {
+				throw new Error("must not call");
+			},
+			probes: [{ service: "bitbucket", actionId: "jira.get_issue", input: {} }],
+			token: "secret",
+		}),
+		/does not belong/,
 	);
 });

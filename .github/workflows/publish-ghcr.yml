@@ -41,7 +41,11 @@ jobs:
         run: |
           baseline=$(git tag --merged HEAD --list 'v*' --sort=-version:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
           test -n "$baseline"
-          node .github/scripts/connection-release-guard.mjs --baseline "$baseline" | tee connection-catalog-diff.txt
+          if ! catalog_diff=$(node .github/scripts/connection-release-guard.mjs --baseline "$baseline"); then
+            echo 'Connection catalog guard failed' >&2
+            exit 1
+          fi
+          printf '%s\n' "$catalog_diff" | tee connection-catalog-diff.txt
           cat connection-catalog-diff.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR

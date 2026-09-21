@@ -16,12 +16,23 @@ export async function verifyProductionReads({ endpoint, fetch, probes, token }) 
 	};
 	const results = [];
 	for (const probe of probes) {
+		if (!probe.actionId.startsWith(`${probe.service}.`)) {
+			throw new Error(`${probe.actionId} does not belong to ${probe.service}`);
+		}
 		const connections = await call("list_connections", { service: probe.service });
-		if (!connections?.connections?.some((item) => item.status === "ACTIVE")) {
+		const active = connections?.connections?.filter((item) => item.status === "ACTIVE") ?? [];
+		if (active.length === 0) {
 			throw new Error(`No active ${probe.service} connection`);
 		}
 		const guide = await call("get_action_guide", { actionId: probe.actionId });
-		if (guide?.action?.effect !== "READ") throw new Error(`${probe.actionId} is not READ`);
+		if (
+			guide?.action?.actionId !== probe.actionId ||
+			guide.action.effect !== "READ" ||
+			!guide.action.actionVersionId?.startsWith(`${probe.actionId}@`) ||
+			!active.some((item) => item.actionVersionIds?.includes(guide.action.actionVersionId))
+		) {
+			throw new Error(`${probe.actionId} is not an authorized ${probe.service} READ`);
+		}
 		const execution = await call("execute_action", { actionId: probe.actionId, input: probe.input });
 		if (execution?.status !== "SUCCEEDED") throw new Error(`${probe.actionId} did not succeed`);
 		results.push({ actionVersionId: guide.action.actionVersionId, callId: execution.callId, service: probe.service });
