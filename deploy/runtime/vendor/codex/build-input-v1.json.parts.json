@@ -1,0 +1,22 @@
+{
+  "format": "agent-infra-vendor-parts-v1",
+  "byteLength": 164033,
+  "sha256": "sha256:3b5111408f510b493a6023f8b42461a887a46fb404d65124881eb160ee25c281",
+  "parts": [
+    {
+      "path": "build-input-v1.json.parts/0001.part",
+      "byteLength": 65498,
+      "sha256": "sha256:dce5aedae7dc94f0c86c23b9ff94b48cd8582bc68c4c8e3e8d2c616d3ec26b36"
+    },
+    {
+      "path": "build-input-v1.json.parts/0002.part",
+      "byteLength": 65324,
+      "sha256": "sha256:aa50fb287a70c15f21798bb5ac0204e4b4cbe3e1edaddf11ae6277d6e1f028c2"
+    },
+    {
+      "path": "build-input-v1.json.parts/0003.part",
+      "byteLength": 33211,
+      "sha256": "sha256:15f967307ab71b9663a22457182c77ee6ac4c5be91360e44ac916da5891b44fc"
+    }
+  ]
+}

@@ -1,0 +1,435 @@
+@@ -163,13 +163,15 @@ pub(crate) fn socks5_proxy_service(
+     let socks_connector = DefaultConnector::default()
+         .with_connector(policy_tcp_connector)
+         .with_service(socks_proxy);
+-    let base = Socks5Acceptor::new().with_connector(socks_connector);
++    let base =
++        Socks5Acceptor::new(rama_core::rt::Executor::default()).with_connector(socks_connector);
+ 
+     if enable_socks5_udp {
+         let udp_state = state.clone();
+         let udp_decider = policy_decider.clone();
+-        let udp_relay =
+-            DefaultUdpRelay::default().with_async_inspector(service_fn({
++        let udp_relay = DefaultUdpRelay::default()
++            .with_dns_address_resolver(crate::connect_policy::hickory_dns_resolver())
++            .with_async_inspector(service_fn({
+                 let environment_id = environment_id.clone();
+                 move |request: RelayRequest| {
+                     let udp_state = udp_state.clone();
+@@ -195,8 +197,7 @@ async fn handle_socks5_tcp(
+ ) -> Result<EstablishedClientConnection<Socks5TcpConnection, TcpRequest>, BoxError> {
+     let app_state = req
+         .extensions()
+-        .get::<Arc<NetworkProxyState>>()
+-        .cloned()
++        .get_arc::<NetworkProxyState>()
+         .ok_or_else(|| io::Error::other("missing state"))?;
+ 
+     let host = normalize_host(&req.authority.host.to_string());
+@@ -208,7 +209,7 @@ async fn handle_socks5_tcp(
+ 
+     let client = req
+         .extensions()
+-        .get::<SocketInfo>()
++        .get_ref::<SocketInfo>()
+         .map(|info| info.peer_addr().to_string());
+ 
+     match app_state.enabled().await {
+@@ -535,17 +536,21 @@ impl AsyncWrite for Socks5TcpConnection {
+ }
+ 
+ impl Socket for Socks5TcpConnection {
+-    fn local_addr(&self) -> io::Result<SocketAddr> {
++    fn local_addr(&self) -> io::Result<rama_net::address::SocketAddress> {
+         match self {
+             Self::Direct(stream) => stream.local_addr(),
+-            Self::Mitm { .. } | Self::DetectTls { .. } => Ok(SocketAddr::from(([0, 0, 0, 0], 0))),
++            Self::Mitm { .. } | Self::DetectTls { .. } => {
++                Ok(SocketAddr::from(([0, 0, 0, 0], 0)).into())
++            }
+         }
+     }
+ 
+-    fn peer_addr(&self) -> io::Result<SocketAddr> {
++    fn peer_addr(&self) -> io::Result<rama_net::address::SocketAddress> {
+         match self {
+             Self::Direct(stream) => stream.peer_addr(),
+-            Self::Mitm { .. } | Self::DetectTls { .. } => Ok(SocketAddr::from(([0, 0, 0, 0], 0))),
++            Self::Mitm { .. } | Self::DetectTls { .. } => {
++                Ok(SocketAddr::from(([0, 0, 0, 0], 0)).into())
++            }
+         }
+     }
+ }
+@@ -559,30 +564,22 @@ impl ExtensionsRef for Socks5TcpConnection {
+     }
+ }
+ 
+-impl ExtensionsMut for Socks5TcpConnection {
+-    fn extensions_mut(&mut self) -> &mut Extensions {
+-        match self {
+-            Self::Direct(stream) => stream.extensions_mut(),
+-            Self::Mitm { extensions, .. } | Self::DetectTls { extensions, .. } => extensions,
+-        }
+-    }
+-}
+-
+ async fn proxy_socks5_tcp(
+-    request: ProxyRequest<TcpStream, Socks5TcpConnection>,
++    request: BridgeIo<TcpStream, Socks5TcpConnection>,
+ ) -> Result<(), BoxError> {
+-    let ProxyRequest { mut source, target } = request;
++    let BridgeIo(source, target) = request;
+     match target {
+-        Socks5TcpConnection::Direct(target) => StreamForwardService::default()
+-            .serve(ProxyRequest { source, target })
+-            .await
+-            .map_err(Into::into),
++        Socks5TcpConnection::Direct(target) => {
++            IoForwardService::default()
++                .serve(BridgeIo(source, target))
++                .await
++        }
+         Socks5TcpConnection::Mitm {
+             target, mode, mitm, ..
+         } => {
+-            source.extensions_mut().insert(ProxyTarget(target));
+-            source.extensions_mut().insert(mode);
+-            source.extensions_mut().insert(mitm);
++            source.extensions().insert(ConnectorTarget(target));
++            source.extensions().insert(mode);
++            source.extensions().insert_arc(mitm);
+             mitm::mitm_stream(source).await.map_err(Into::into)
+         }
+         Socks5TcpConnection::DetectTls {
+@@ -592,9 +589,9 @@ async fn proxy_socks5_tcp(
+             state,
+             ..
+         } => {
+-            source.extensions_mut().insert(ProxyTarget(target.clone()));
+-            source.extensions_mut().insert(mode);
+-            source.extensions_mut().insert(mitm);
++            source.extensions().insert(ConnectorTarget(target.clone()));
++            source.extensions().insert(mode);
++            source.extensions().insert_arc(mitm);
+             let (is_tls, source) = mitm::peek_tls_prefix(source)
+                 .await
+                 .map_err(|err| -> BoxError { err.into() })?;
+@@ -611,13 +608,9 @@ async fn proxy_socks5_tcp(
+                     "SOCKS opaque upstream dial established (target={target}, elapsed_ms={})",
+                     connect_started_at.elapsed().as_millis()
+                 );
+-                StreamForwardService::default()
+-                    .serve(ProxyRequest {
+-                        source,
+-                        target: upstream,
+-                    })
++                IoForwardService::default()
++                    .serve(BridgeIo(source, upstream))
+                     .await
+-                    .map_err(Into::into)
+             }
+         }
+     }
+@@ -643,7 +636,7 @@ async fn inspect_socks5_udp(
+     }
+ 
+     let client = extensions
+-        .get::<SocketInfo>()
++        .get_ref::<SocketInfo>()
+         .map(|info| info.peer_addr().to_string());
+ 
+     match state.enabled().await {
+@@ -830,7 +823,6 @@ mod tests {
+     use crate::state::build_config_state;
+     use pretty_assertions::assert_eq;
+     use rama_core::extensions::Extensions;
+-    use rama_core::extensions::ExtensionsMut;
+     use rama_net::address::HostWithPort;
+     use rama_net::address::SocketAddress;
+     use rama_socks5::server::udp::RelayDirection;
+@@ -880,9 +872,9 @@ mod tests {
+             mode: NetworkMode::Full,
+             ..NetworkProxyConfig::default()
+         });
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("example.com:443").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let (result, events) = capture_events(|| async {
+             handle_socks5_tcp(
+@@ -925,9 +917,9 @@ mod tests {
+         };
+         settings.set_allowed_domains(vec!["example.com".to_string()]);
+         let state = state_for_settings(settings);
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("example.com:443").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let result = handle_socks5_tcp(
+             request,
+@@ -950,9 +942,9 @@ mod tests {
+         };
+         settings.set_allowed_domains(vec!["example.com".to_string()]);
+         let state = state_for_settings(settings);
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("example.com:80").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let (result, events) = capture_events(|| async {
+             handle_socks5_tcp(
+@@ -1001,10 +993,10 @@ mod tests {
+         let state = state_for_settings(settings);
+         let mut env = HashMap::from([("OPENAI_API_KEY".to_string(), "sk-real".to_string())]);
+         state.virtualize_child_credentials(&mut env);
+-        let mut request = TcpRequest::new(
++        let request = TcpRequest::new(
+             HostWithPort::try_from("api.openai.com:8443").expect("valid authority"),
+         );
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let result = handle_socks5_tcp(
+             request,
+@@ -1027,9 +1019,9 @@ mod tests {
+         };
+         settings.set_allowed_domains(vec!["example.com".to_string()]);
+         let state = state_for_settings(settings);
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("example.com:443").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let err = handle_socks5_tcp(
+             request,
+@@ -1065,9 +1057,9 @@ mod tests {
+         };
+         settings.set_allowed_domains(vec!["api.github.com".to_string()]);
+         let state = state_for_settings(settings);
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("api.github.com:443").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let result = handle_socks5_tcp(
+             request,
+@@ -1100,9 +1092,9 @@ mod tests {
+         };
+         settings.set_allowed_domains(vec!["api.github.com".to_string()]);
+         let state = state_for_settings(settings);
+-        let mut request =
++        let request =
+             TcpRequest::new(HostWithPort::try_from("api.github.com:80").expect("valid authority"));
+-        request.extensions_mut().insert(state.clone());
++        request.extensions().insert_arc(state.clone());
+ 
+         let err = handle_socks5_tcp(
+             request,
+diff --git a/codex-rs/network-proxy/src/upstream.rs b/codex-rs/network-proxy/src/upstream.rs
+index f523327..1809737 100644
+--- a/codex-rs/network-proxy/src/upstream.rs
++++ b/codex-rs/network-proxy/src/upstream.rs
+@@ -6,8 +6,7 @@ use rama_core::Layer;
+ use rama_core::Service;
+ use rama_core::error::BoxError;
+ use rama_core::error::ErrorExt as _;
+-use rama_core::error::OpaqueError;
+-use rama_core::extensions::ExtensionsMut;
++use rama_core::error::extra::OpaqueError;
+ use rama_core::extensions::ExtensionsRef;
+ use rama_core::service::BoxService;
+ use rama_http::Body;
+@@ -17,11 +16,13 @@ use rama_http::layer::version_adapter::RequestVersionAdapter;
+ use rama_http_backend::client::HttpClientService;
+ use rama_http_backend::client::HttpConnector;
+ use rama_http_backend::client::proxy::layer::HttpProxyConnectorLayer;
++use rama_net::ConnectorTargetInputExt;
++use rama_net::ProtocolInputExt;
+ use rama_net::address::HostWithPort;
+ use rama_net::address::ProxyAddress;
+ use rama_net::client::EstablishedClientConnection;
+-use rama_net::http::RequestContext;
+-use rama_tls_rustls::client::TlsConnectorDataBuilder;
++use rama_tls::client::TlsClientConfig;
++use rama_tls_rustls::client::RustlsClientConfigExt;
+ use rama_tls_rustls::client::TlsConnectorLayer;
+ use rama_tls_rustls::client::client_root_certs;
+ use rama_tls_rustls::dep::rustls;
+@@ -175,17 +176,19 @@ impl Service<Request<Body>> for UpstreamClient {
+     type Output = Response;
+     type Error = OpaqueError;
+ 
+-    async fn serve(&self, mut req: Request<Body>) -> Result<Self::Output, Self::Error> {
+-        let request_context = RequestContext::try_from(&req).ok();
+-        let authority = request_context
++    async fn serve(&self, req: Request<Body>) -> Result<Self::Output, Self::Error> {
++        let target = req.connector_target_with_default_port(80);
++        let authority = target
+             .as_ref()
+-            .map(|ctx| ctx.host_with_port().to_string())
++            .map(ToString::to_string)
+             .unwrap_or_else(|| "<unknown>".to_string());
+-        let proxy = request_context.as_ref().map_or_else(
++        let proxy = target.as_ref().map_or_else(
+             || self.proxy_config.proxy_for_protocol(/*is_secure*/ false),
+-            |ctx| {
+-                self.proxy_config
+-                    .proxy_for_target(&ctx.host_with_port(), ctx.protocol.is_secure())
++            |target| {
++                self.proxy_config.proxy_for_target(
++                    target,
++                    req.protocol().is_some_and(rama_net::Protocol::is_secure),
++                )
+             },
+         );
+         match proxy.as_ref() {
+@@ -196,13 +199,13 @@ impl Service<Request<Body>> for UpstreamClient {
+             None => info!("HTTP upstream route selected (target={authority}, route=direct)"),
+         }
+         if let Some(proxy) = proxy {
+-            req.extensions_mut().insert(proxy);
++            req.extensions().insert(proxy);
+         }
+ 
+         let uri = req.uri().clone();
+         let connect_started_at = Instant::now();
+         let EstablishedClientConnection {
+-            input: mut req,
++            input: req,
+             conn: http_connection,
+         } = match self.connector.serve(req).await {
+             Ok(connection) => {
+@@ -217,12 +220,11 @@ impl Service<Request<Body>> for UpstreamClient {
+                     "HTTP upstream connection failed (target={authority}, elapsed_ms={})",
+                     connect_started_at.elapsed().as_millis()
+                 );
+-                return Err(OpaqueError::from_boxed(err));
++                return Err(rama_core::error::ErrorExt::into_opaque_error(err));
+             }
+         };
+ 
+-        req.extensions_mut()
+-            .extend(http_connection.extensions().clone());
++        req.extensions().extend(http_connection.extensions());
+ 
+         let request_started_at = Instant::now();
+         match http_connection.serve(req).await {
+@@ -238,8 +240,9 @@ impl Service<Request<Body>> for UpstreamClient {
+                     "HTTP upstream response headers failed (target={authority}, elapsed_ms={})",
+                     request_started_at.elapsed().as_millis()
+                 );
+-                Err(OpaqueError::from_boxed(err)
+-                    .context(format!("http request failure for uri: {uri}")))
++                Err(rama_core::error::ErrorExt::into_opaque_error(err)
++                    .context(format!("http request failure for uri: {uri}"))
++                    .into_opaque_error())
+             }
+         }
+     }
+@@ -258,15 +261,19 @@ fn build_http_connector(
+     let client_config = rustls::ClientConfig::builder_with_protocol_versions(rustls::ALL_VERSIONS)
+         .with_root_certificates(tls_root_store)
+         .with_no_client_auth();
+-    let tls_config = TlsConnectorDataBuilder::from(client_config)
+-        .with_alpn_protocols_http_auto()
+-        .build();
++    let tls_config = TlsClientConfig::new()
++        .with_alpn_http_auto()
++        .with_modify_rustls_config(move |config| {
++            let mut custom = client_config.clone();
++            custom.alpn_protocols = config.alpn_protocols;
++            Ok(custom)
++        });
+     let tls = TlsConnectorLayer::auto()
+-        .with_connector_data(tls_config)
++        .with_base_config(tls_config)
+         .into_layer(proxy);
+     let tls = RequestVersionAdapter::new(tls);
+-    let connector = HttpConnector::new(tls);
+-    connector.boxed()
++    let connector = HttpConnector::new(tls, rama_core::rt::Executor::default());
++    rama_core::layer::MapErr::into_box_error(connector).boxed()
+ }
+ 
+ #[cfg(test)]
+@@ -282,6 +289,6 @@ fn build_unix_connector(
+     BoxError,
+ > {
+     let transport = UnixConnector::fixed(path);
+-    let connector = HttpConnector::new(transport);
+-    connector.boxed()
++    let connector = HttpConnector::new(transport, rama_core::rt::Executor::default());
++    rama_core::layer::MapErr::into_box_error(connector).boxed()
+ }
+diff --git a/codex-rs/network-proxy/src/upstream_tests.rs b/codex-rs/network-proxy/src/upstream_tests.rs
+index a90efe9..5dcbaa6 100644
+--- a/codex-rs/network-proxy/src/upstream_tests.rs
++++ b/codex-rs/network-proxy/src/upstream_tests.rs
+@@ -2,23 +2,23 @@ use super::*;
+ use crate::config::NetworkProxyConfig;
+ use crate::state::network_proxy_state_for_policy;
+ use pretty_assertions::assert_eq;
++use rama_crypto::dep::rcgen::BasicConstraints;
++use rama_crypto::dep::rcgen::CertificateParams;
++use rama_crypto::dep::rcgen::DistinguishedName;
++use rama_crypto::dep::rcgen::DnType;
++use rama_crypto::dep::rcgen::ExtendedKeyUsagePurpose;
++use rama_crypto::dep::rcgen::IsCa;
++use rama_crypto::dep::rcgen::Issuer;
++use rama_crypto::dep::rcgen::KeyPair;
++use rama_crypto::dep::rcgen::KeyUsagePurpose;
++use rama_crypto::dep::rcgen::PKCS_ECDSA_P256_SHA256;
++use rama_crypto::pki_types::CertificateDer;
++use rama_crypto::pki_types::PrivateKeyDer;
++use rama_crypto::pki_types::pem::PemObject;
+ use rama_http::StatusCode;
+ use rama_http::Version;
+ use rama_net::address::Host;
+ use rama_net::address::HostWithPort;
+-use rama_tls_rustls::dep::pki_types::CertificateDer;
+-use rama_tls_rustls::dep::pki_types::PrivateKeyDer;
+-use rama_tls_rustls::dep::pki_types::pem::PemObject;
+-use rama_tls_rustls::dep::rcgen::BasicConstraints;
+-use rama_tls_rustls::dep::rcgen::CertificateParams;
+-use rama_tls_rustls::dep::rcgen::DistinguishedName;
+-use rama_tls_rustls::dep::rcgen::DnType;
+-use rama_tls_rustls::dep::rcgen::ExtendedKeyUsagePurpose;
+-use rama_tls_rustls::dep::rcgen::IsCa;
+-use rama_tls_rustls::dep::rcgen::Issuer;
+-use rama_tls_rustls::dep::rcgen::KeyPair;
+-use rama_tls_rustls::dep::rcgen::KeyUsagePurpose;
+-use rama_tls_rustls::dep::rcgen::PKCS_ECDSA_P256_SHA256;
+ use rama_tls_rustls::dep::tokio_rustls::TlsAcceptor;
+ use std::collections::HashMap;
+ use std::fs;
+diff --git a/codex-rs/network-proxy/src/windows_proxy_ingress.rs b/codex-rs/network-proxy/src/windows_proxy_ingress.rs
+index a1b7891..4bcb78f 100644
+--- a/codex-rs/network-proxy/src/windows_proxy_ingress.rs
++++ b/codex-rs/network-proxy/src/windows_proxy_ingress.rs
+@@ -255,7 +255,7 @@ impl WindowsProxyIngress {
+             .context("read shared managed Windows SOCKS5 ingress address")?;
+         let listener = {
+             let _runtime = self.runtime.enter();
+-            TcpListener::try_from(listener)
++            TcpListener::try_from_std_tcp_listener(listener, rama_core::rt::Executor::default())
+         }
+         .context("convert shared SOCKS5 ingress listener")?;
+         let task = spawn_socks_listener(&self.runtime, &self.routes, listener, addr);
+diff --git a/codex-rs/rust-toolchain.toml b/codex-rs/rust-toolchain.toml
+index 910c651..917d249 100644
+--- a/codex-rs/rust-toolchain.toml
++++ b/codex-rs/rust-toolchain.toml
+@@ -1,3 +1,3 @@
+ [toolchain]
+-channel = "1.95.0"
++channel = "1.96.0"
+ components = ["clippy", "rustfmt", "rust-src"]

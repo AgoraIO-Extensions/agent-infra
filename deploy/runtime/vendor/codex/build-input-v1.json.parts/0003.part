@@ -1,0 +1,707 @@
+    {
+      "name": "toml_edit",
+      "version": "0.25.15+spec-1.1.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/toml-rs/toml",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+      "cargoManifestSha256": "fd6863ad69982e15e92b3f3ccde0a27589f56f7d5d543f69dc7f3d32e964b15f",
+      "vcs": {
+        "git": {
+          "sha1": "8e1d5a85c361ac012957441bb4788ae82f5dc9c8"
+        },
+        "path_in_vcs": "crates/toml_edit"
+      },
+      "licenseSources": [
+        {
+          "path": "toml_edit-0.25.15+spec-1.1.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "toml_edit-0.25.15+spec-1.1.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/toml_edit/toml_edit-0.25.15+spec-1.1.0.crate",
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        }
+      ]
+    },
+    {
+      "name": "toml_parser",
+      "version": "1.1.3+spec-1.1.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/toml-rs/toml",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+      "cargoManifestSha256": "23bf7bc66a7090d0048555ec05a81216a5d335e5648952d7fb266c7529a7ad90",
+      "vcs": {
+        "git": {
+          "sha1": "4ec099fed591a172f82007cb2f9d605985bbecee"
+        },
+        "path_in_vcs": "crates/toml_parser"
+      },
+      "licenseSources": [
+        {
+          "path": "toml_parser-1.1.3+spec-1.1.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "toml_parser-1.1.3+spec-1.1.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/toml_parser/toml_parser-1.1.3+spec-1.1.0.crate",
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        }
+      ]
+    },
+    {
+      "name": "uuid",
+      "version": "1.26.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/uuid-rs/uuid",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+      "cargoManifestSha256": "98c0820aa1874f216ac95cca9423c1890335013221343ad6a2b1e1bb06018808",
+      "vcs": {
+        "git": {
+          "sha1": "9f927126c89892ddfed6cd2f92df16852f3f9aa6"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "uuid-1.26.1/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "uuid-1.26.1/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/uuid/uuid-1.26.1.crate",
+          "sha256": "436bc5a105d8e57dcd8778730f3754f7bf39c14d2f530e4cde4bd2d17a83ec3d"
+        }
+      ]
+    },
+    {
+      "name": "winnow",
+      "version": "1.0.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81",
+      "license": "MIT",
+      "repository": "https://github.com/winnow-rs/winnow",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate",
+      "cargoManifestSha256": "cff392f2e5af8a662aed09551f50bbe74eafa5a53dc051c62add73ea82a3cab0",
+      "vcs": {
+        "git": {
+          "sha1": "7539ec0fc27144bfdcf9a68b0dbbec48bd0d5bae"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "winnow-1.0.4/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/winnow/winnow-1.0.4.crate",
+          "sha256": "cb5aedb296c5246d1f22e9099f925a65146f9f0d6b4eebba97fd27a6cdbbab2d"
+        }
+      ]
+    },
+    {
+      "name": "yasna",
+      "version": "0.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/qnighy/yasna.rs",
+      "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+      "packageUrl": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+      "cargoManifestSha256": "95d1cf9bfdefd6f2f096d49bd0e5f99c2ba36f996bfc36b71b81385a559b84b2",
+      "vcs": {
+        "git": {
+          "sha1": "3c7f2ba61cfb59c478137051a7e79ad8af0e2247"
+        },
+        "path_in_vcs": ""
+      },
+      "licenseSources": [
+        {
+          "path": "yasna-0.6.0/LICENSE-APACHE",
+          "source": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "path": "yasna-0.6.0/LICENSE-MIT",
+          "source": "https://static.crates.io/crates/yasna/yasna-0.6.0.crate",
+          "sha256": "2a7df90e60fd5512b8bca35d3ce90e068f21c52d962855053fd1d9e2e7ca0f16"
+        }
+      ]
+    }
+  ],
+  "patches": [
+    {
+      "path": "patches/0001-release-lock-versions.patch",
+      "sha256": "sha256:1f67629dc3eb3531bce9d26b798d76f8b996e4f38a9f558e7e4d3013e443a615"
+    },
+    {
+      "path": "patches/0002-native-operation-barrier.patch",
+      "sha256": "sha256:542f22aa43817cbcadb8a3a84f496df74f57c8cf749e06d5e7caf0192e57fde0"
+    },
+    {
+      "path": "patches/0003-protected-connection-client.patch",
+      "sha256": "sha256:472ea19f98d6840055c4c5a4ce35cf7e58bcf2d4da3633f592dbd6fbf81b07b1"
+    },
+    {
+      "path": "patches/0004-native-dependency-security-updates.patch",
+      "sha256": "sha256:0ae72d58882e863a663f9b4c181bf13a4c68131b9b96e458baacff08fab39252"
+    },
+    {
+      "path": "patches/0005-tls-error-chain-and-test-backend.patch",
+      "sha256": "sha256:382722e069093f7ba1b32b16d01e52b8cb0383a929808cef163dedd2285139db"
+    },
+    {
+      "path": "patches/0006-current-model-switch-compaction.patch",
+      "sha256": "sha256:6f5b7e3d27d04e0659aa7c6f61102a324f6f776b4ecb403a84e8d283d54076a0"
+    },
+    {
+      "path": "patches/0007-release-test-home-root.patch",
+      "sha256": "sha256:081ad14e7230fe1330ef12153b961d6237d1e41e28a7955d496fbd1309cc3155"
+    },
+    {
+      "path": "patches/0008-native-compaction-test-fixtures.patch",
+      "sha256": "sha256:35bab638fe4b0b705e79a04b9065e8446d7e9f1488e7685629a28fe28edb0df9"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "MODULE.bazel",
+      "sha256": "sha256:1f99a2dc755b9a64c90ccd686b4aa19c5764c95d3f20db3f94a172b8d1e4cef8"
+    },
+    {
+      "path": "MODULE.bazel.lock",
+      "sha256": "sha256:ea079d3a10ad5bd664e1f674978f9196be8272e18915600436e33cc83b24fc4f"
+    },
+    {
+      "path": "codex-rs/Cargo.lock",
+      "sha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff"
+    },
+    {
+      "path": "codex-rs/Cargo.toml",
+      "sha256": "sha256:c3d3dfcaf7ba6ae1b5ce5caf8fe743464dea8ae9fe8bd6d1bbd9e03be5e95667"
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/outgoing_message.rs",
+      "sha256": "sha256:311bfef5b274c81c53ea0a4c54184092537a6ca8b1a859784529cb85059a5b05"
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/stdio.rs",
+      "sha256": "sha256:3ed1d6afb37856284c60925ed1baa4cf66b5eba4beea760060757d838cff0470"
+    },
+    {
+      "path": "codex-rs/app-server-transport/src/transport/websocket.rs",
+      "sha256": "sha256:b585a64446eb749c830319e3beb14a7eba5b9eff86cf7983f395993cb25648ac"
+    },
+    {
+      "path": "codex-rs/apply-patch/src/lib.rs",
+      "sha256": "sha256:f74232273a81ba08ca5537e4938afa0941d08e8943ac64b198d431da99ece4f7"
+    },
+    {
+      "path": "codex-rs/apply-patch/src/native_dispatch.rs",
+      "sha256": "sha256:1370d45ef867a160ba5dc356fbf599fcd80a1ab7e2ad6b6bb289242996944e63"
+    },
+    {
+      "path": "codex-rs/cli/Cargo.toml",
+      "sha256": "sha256:ecb22ad0ed8c7b6525af743cce499be44baae25ae52819977325b9dd981e2fc2"
+    },
+    {
+      "path": "codex-rs/cli/src/main.rs",
+      "sha256": "sha256:3b59463c5563e97de9f311d2d24cc2c34796469c3abad06a05f65f6269a8a4f5"
+    },
+    {
+      "path": "codex-rs/core/BUILD.bazel",
+      "sha256": "sha256:86b14ae6a31826650cb5f300f9bcb2a0c777cc11d91e5f0b0779115a4cf6439a"
+    },
+    {
+      "path": "codex-rs/core/src/agent/control.rs",
+      "sha256": "sha256:0d7d5e94d955550710a127dcef1d3f10625ef5cb26ddbdd205ca36c54d6e451c"
+    },
+    {
+      "path": "codex-rs/core/src/agent/control/legacy.rs",
+      "sha256": "sha256:56463556dec382bbdce4df5f8e8e748eb07dc6be77161750c2091ba4a8ad70ed"
+    },
+    {
+      "path": "codex-rs/core/src/agent/control/spawn.rs",
+      "sha256": "sha256:5ec401607db57c32c3861fbb42550701d4b5b0aeb31066daafdf647305119bdd"
+    },
+    {
+      "path": "codex-rs/core/src/exec.rs",
+      "sha256": "sha256:24082a3f138656456c7207c0e41bdd0cb0f002e5b4e1f576185eb5a063f1c787"
+    },
+    {
+      "path": "codex-rs/core/src/hook_runtime.rs",
+      "sha256": "sha256:4dfce9e1deab3f4821681ff9dc252764b25f03c5014f7b6628bdd428ad0f02c4"
+    },
+    {
+      "path": "codex-rs/core/src/lib.rs",
+      "sha256": "sha256:6afd69f58907f15f282884d29b8b3f5b1bfc276c8aa899659aae149c210b7324"
+    },
+    {
+      "path": "codex-rs/core/src/mcp_tool_call.rs",
+      "sha256": "sha256:70300d8d25aa8a215a05adcf15e2547519f6fb8cf26d5a75bb994d7374b18656"
+    },
+    {
+      "path": "codex-rs/core/src/native_connection_bootstrap.rs",
+      "sha256": "sha256:e941032d456cec9c48b18c860963a2248e22559d766f189af92a72a19ddd23f8"
+    },
+    {
+      "path": "codex-rs/core/src/native_connection_bootstrap_tests.rs",
+      "sha256": "sha256:7b4f5f08387eb9f9f37608942e659cb83dfa885fa526aadd53f173cbfff9813a"
+    },
+    {
+      "path": "codex-rs/core/src/native_dynamic_dispatch.rs",
+      "sha256": "sha256:318addf6d1f6cffa47fefb7a466efa27430e1f6f59a4935e9d10021cdd0f8532"
+    },
+    {
+      "path": "codex-rs/core/src/native_hook_dispatch.rs",
+      "sha256": "sha256:7e4a8c6460ab6103244188c62c6a7e5d41e7b0bf7be13bb0b0c879dea67b8575"
+    },
+    {
+      "path": "codex-rs/core/src/native_mcp_dispatch.rs",
+      "sha256": "sha256:55ebc025ca5dc9dd6d154f4e3fc40feebc98d8745831309fcee628ce832bd80c"
+    },
+    {
+      "path": "codex-rs/core/src/native_operation_barrier.rs",
+      "sha256": "sha256:28449040ba4e199e6cfa9d15cc5fce2c19d94668942c04f32d8d98d1fc4ab20f"
+    },
+    {
+      "path": "codex-rs/core/src/native_operation_barrier_manifest.json",
+      "sha256": "sha256:7aeff23a4505a681a6861b91dc9c957c862f943c9017b0c9820190b6ea819c1a"
+    },
+    {
+      "path": "codex-rs/core/src/native_operation_barrier_tests.rs",
+      "sha256": "sha256:557af87e1c1324214b81c3ec262b18ad99eec6819f53fa23d1b28490564913da"
+    },
+    {
+      "path": "codex-rs/core/src/native_process_protection.rs",
+      "sha256": "sha256:3b03cba9cbdb53809f13511b0e7e021b0adb744b51bea9c311bd384138f833ad"
+    },
+    {
+      "path": "codex-rs/core/src/native_sources/control.rs",
+      "sha256": "sha256:b849fb707b65d5834880c2bb6928154fc5e1b372ad0fe9b1ecc920255ff64cdb"
+    },
+    {
+      "path": "codex-rs/core/src/native_sources/mod.rs",
+      "sha256": "sha256:c2740263ad1223902f781b13d850f87d9321d00914ffe2d8605b71bd5ff5bf89"
+    },
+    {
+      "path": "codex-rs/core/src/native_sources/queue_tests.rs",
+      "sha256": "sha256:35ba9e7c4dedd88d7f652f1f7a6ece6311d373380a2744e5aae7c1243b0b10dd"
+    },
+    {
+      "path": "codex-rs/core/src/native_sources/wire.rs",
+      "sha256": "sha256:56630577be89b54e2d301c92379acf438781a600a8c29d3f1cb39888ab26540e"
+    },
+    {
+      "path": "codex-rs/core/src/native_sources/wire_tests.rs",
+      "sha256": "sha256:eadf05e9fe26dcacd2a96daff27e1239c8745d362cbb3e18fc0152af3cb886e6"
+    },
+    {
+      "path": "codex-rs/core/src/session/handlers.rs",
+      "sha256": "sha256:20d29b469e9d7fa352b58971e0e801788ab25905026cf32b2fe278a570977ff4"
+    },
+    {
+      "path": "codex-rs/core/src/session/mod.rs",
+      "sha256": "sha256:50ee619d65248a9a2c999c93476fcf818797630a3819c85e4ae0082ce7aec757"
+    },
+    {
+      "path": "codex-rs/core/src/session/native_source_tests.rs",
+      "sha256": "sha256:b04da1398c6f162b0b3d325134b6a40db9bd8b4de233b6bf385a073153c4eb0e"
+    },
+    {
+      "path": "codex-rs/core/src/session/tests.rs",
+      "sha256": "sha256:77d36bab2ce9995f84b83aa5507b428a0bbde44a53e132456cd8ab9027e4cae9"
+    },
+    {
+      "path": "codex-rs/core/src/session/turn.rs",
+      "sha256": "sha256:7dba24d2ad77665e8ed17a05bf0bd5de509f5969c28f467522dd2460a2298d74"
+    },
+    {
+      "path": "codex-rs/core/src/session/turn_input.rs",
+      "sha256": "sha256:0a91932f619538c7ec0d0c1bd726438d78bbc88bd9fbda6f725dd065402fb358"
+    },
+    {
+      "path": "codex-rs/core/src/tasks/mod.rs",
+      "sha256": "sha256:41d357ec73240f4ceb17d7c4e471d044680508db6739b55aeb34195774fa6b2d"
+    },
+    {
+      "path": "codex-rs/core/src/thread_manager.rs",
+      "sha256": "sha256:1d3fcde606cf70b85a31b0ed17bccc7499bb71cc8a6b41eb51326effdc972aae"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/dynamic.rs",
+      "sha256": "sha256:f521fc458d2856bfa37ce0ded706abecda808520564440095efb1a2348c61088"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs",
+      "sha256": "sha256:e4d6389a66efb9ba12829170af611744cbe7599d2c0988e8cefeb6520a4e0317"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs",
+      "sha256": "sha256:fed89f3a4b706392ff9cebe5c17c48393c3d56ff2171322e87a7f2d919ca33c9"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/multi_agents/send_input.rs",
+      "sha256": "sha256:2cbaa839ce40f4df37da702b40ac8bfa4d4389a430b0bea3f900d407804365c4"
+    },
+    {
+      "path": "codex-rs/core/src/tools/handlers/multi_agents/spawn.rs",
+      "sha256": "sha256:760c43b0167ea9e37cf1017d6e12a8752ee4f609b55b96043b4eba9e74d0bb73"
+    },
+    {
+      "path": "codex-rs/core/src/tools/orchestrator.rs",
+      "sha256": "sha256:a1602c76ff2a99e34a2e99cc97d9b866590e1f1953cef24d0203a14d9ff749e5"
+    },
+    {
+      "path": "codex-rs/core/src/tools/runtimes/apply_patch.rs",
+      "sha256": "sha256:7bb42dd3ee61387fb2d1c18a855bc0a2fcbbf094af7152c8ed383816e03fcfe9"
+    },
+    {
+      "path": "codex-rs/core/src/unified_exec/async_watcher.rs",
+      "sha256": "sha256:758a318c1e4db949aebf59f304252a2889708f0da73b4e4013c4497bd09323c4"
+    },
+    {
+      "path": "codex-rs/core/src/unified_exec/process.rs",
+      "sha256": "sha256:a3d8e532b37e7fcc60e9e0dd96d64a94eb3788150e3c01cbc310db03a2e95434"
+    },
+    {
+      "path": "codex-rs/core/src/unified_exec/process_manager.rs",
+      "sha256": "sha256:78832f9f1484bda05917257fc04073aedbe57ea3d28ebfc61b0b3e530bc8243f"
+    },
+    {
+      "path": "codex-rs/core/tests/suite/compact.rs",
+      "sha256": "sha256:0dcbe7d9f108d15ab9da946b7921c5a1028fef21c3f23619aa24dd6b38f51330"
+    },
+    {
+      "path": "codex-rs/core/tests/suite/compact/native_hook_fixture.rs",
+      "sha256": "sha256:8fe8279f46fc8e2466900d7b5c5a626498a6f392dda1929e6e4db6a4cd5ed653"
+    },
+    {
+      "path": "codex-rs/exec-server/src/client/http_response_body_stream.rs",
+      "sha256": "sha256:14598937c51f42698f0727c64f1e32344df675a223719666bffc801e75a10df0"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/command_runner.rs",
+      "sha256": "sha256:003b150fbc38d8f588015315ee7f1233a10b518bb887f93ae522bb2adb76d5d6"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/mcp_runner.rs",
+      "sha256": "sha256:e3be3508b526b4245ca2655d24619a70bf2b53fa88f193a52390721e0d2891b5"
+    },
+    {
+      "path": "codex-rs/hooks/src/engine/native_dispatch_tests.rs",
+      "sha256": "sha256:360e3c0e8b801eefa7c62fafd3f04672c74cd68e09b8c951792655517203a2c6"
+    },
+    {
+      "path": "codex-rs/hooks/src/legacy_notify.rs",
+      "sha256": "sha256:fe924f7e3637d519f9e7c60638ee3f3a659d702fba2d63e0e97ae58b13b50cbb"
+    },
+    {
+      "path": "codex-rs/hooks/src/lib.rs",
+      "sha256": "sha256:99d8a1bddb571936dfd00b6dfbe6d7b3cb0310a8d3e0ebeae387c3b219be5fa3"
+    },
+    {
+      "path": "codex-rs/hooks/src/native_dispatch.rs",
+      "sha256": "sha256:8c1658d24a0a3482865e8241783391fa8165d9c4424099646af1068176e9962d"
+    },
+    {
+      "path": "codex-rs/http-client/Cargo.toml",
+      "sha256": "sha256:e96186b14f43d598d2efc920d279cde30c9b9fdcdf77f047d296a442d52f6fa3"
+    },
+    {
+      "path": "codex-rs/http-client/src/route_aware_client_pool.rs",
+      "sha256": "sha256:7a9a8db262f589b1d766764d5dd48f60274203c64c12599761e659cd38420e35"
+    },
+    {
+      "path": "codex-rs/http-client/src/route_aware_client_pool_tests.rs",
+      "sha256": "sha256:e8f1e4648b9f270e3c2b21769038beb4fda0c1d00dcd89c567693e66931599e2"
+    },
+    {
+      "path": "codex-rs/http-client/src/route_aware_tls_fallback_tests.rs",
+      "sha256": "sha256:234ec005f7ece076174579e336009a8c8e2d277c63a77cda520a9e8245b37185"
+    },
+    {
+      "path": "codex-rs/linux-sandbox/src/lib.rs",
+      "sha256": "sha256:19bb55ae2bca962ccda97442d8578133c2ad68f5b3e566fa0e64cd14988b83b4"
+    },
+    {
+      "path": "codex-rs/linux-sandbox/src/memory.rs",
+      "sha256": "sha256:1d8fa15adf7f1ca557aa3c9df9385a1626b3c6adcf2a203ca91d7bd0d50ba0f0"
+    },
+    {
+      "path": "codex-rs/linux-sandbox/src/memory_tests.rs",
+      "sha256": "sha256:0eb01312f41ac7d10272cc90a67f7587140d1dedcfb214f8388f5e1e19e36d07"
+    },
+    {
+      "path": "codex-rs/network-proxy/Cargo.toml",
+      "sha256": "sha256:bb821f352046dbf40448e12532418b6b255b9146f90dd4425e0a1d31f725cad9"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/attribution.rs",
+      "sha256": "sha256:bafd443f05c43cda9a405f9e529b75f3effaa8b277e752040e87e11cfeb2e97d"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/attribution_tests.rs",
+      "sha256": "sha256:4960ef9934481520efd6f55fca73b77cb5c02c9af5a0bfedd917cfa999cc4f64"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/certs.rs",
+      "sha256": "sha256:9649aacb2dc75a33c049581d6e909c4b5a9308dd7f25ae4d1d1c7f046e3f3603"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/config.rs",
+      "sha256": "sha256:b5c64bbae5ec4afb0fe66aa856ced5585d7644412ddb87adb05474708ae5592f"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/connect_policy.rs",
+      "sha256": "sha256:6c3f76305ba7b948bd27844f4bbd5a43941e972eb17e381de8acda249af6faa5"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/http_proxy.rs",
+      "sha256": "sha256:7dd736d45590198ea2b4fa0a0041daf4fa79405ea4b75fc65dafbe4c3b5a53cc"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm.rs",
+      "sha256": "sha256:8d4df4c12ef4a19d2643d83c98f5bc8330be7de890740b0d12898268eabed88e"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm_hook.rs",
+      "sha256": "sha256:0b2e009ad5fee6c2d40788793965e7614c993a01b0d8e9a5d2bd4a2c575b2c2e"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/mitm_tests.rs",
+      "sha256": "sha256:91d799177e11383e146530291f270e243823ca5f5177af07e83b6f982ab02b44"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/native_certs.rs",
+      "sha256": "sha256:1ace680d53bcdea58d3db9d6ed84fef6dd5c28fc945a0b9f1408bf04c4f51530"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/runtime.rs",
+      "sha256": "sha256:3104e1ea3c8392f984882619408d3855e4e00cc2c7109d2f792c3d359a2f086d"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/socks5.rs",
+      "sha256": "sha256:2fbb670b49d89f8b0e79cfb2e4fe652a9a8de0aebab2c8528d4b79e304ebc0ee"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/upstream.rs",
+      "sha256": "sha256:ae1dfbe6bd3a8ba297a90739720deed07716e18a497f20360d6ecffb540fa902"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/upstream_tests.rs",
+      "sha256": "sha256:8ecb9c2c12fa8f640efc1ece5266c1274ce580ab5086e58afa4022633092e826"
+    },
+    {
+      "path": "codex-rs/network-proxy/src/windows_proxy_ingress.rs",
+      "sha256": "sha256:7ba169661f20b6560607076623d0e56e56a49d15f17386094bf0a8994a86a8ba"
+    },
+    {
+      "path": "codex-rs/rmcp-client/BUILD.bazel",
+      "sha256": "sha256:205450fad3d57051db6f1e870ccbb5d39dad84284fa1e20b10553924546990aa"
+    },
+    {
+      "path": "codex-rs/rmcp-client/Cargo.toml",
+      "sha256": "sha256:1d959413ce27ca987a21fc9cc5aabec84cbb1494f385c570f825a42932d95b7f"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/http_client_adapter.rs",
+      "sha256": "sha256:ff9c1aac29854c264ff729b5666f56dc455fe0365eb3f46f31befd397e9f56d2"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/http_client_redirect.rs",
+      "sha256": "sha256:a42f9c1f70944f303bc59ba5bc888185359f29c82751ac8190b8527a1d19a74a"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/lib.rs",
+      "sha256": "sha256:da3956f6c583c362b7c85f7a174f39cdee810dd508c1497f7a39cd2159f693f0"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/callback-v2-corpus.json",
+      "sha256": "sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/callback.rs",
+      "sha256": "sha256:d1a9ff85aaf780b695ad1e6474bf9b93a24a5284184a2c858befbeaf5ad9d4a4"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/evidence.rs",
+      "sha256": "sha256:27e4960fb36b97dc02be6791dc4f66e78316bff083826f372b5a4bc1ec75c419"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/http.rs",
+      "sha256": "sha256:e5595550aca9ddd48ef3bc54ed34f19988f4ae35c545e9f6ec9ca85ece6fb70c"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/mod.rs",
+      "sha256": "sha256:ad3ebead99bb99a2c0596df221b42657b450a2d17a4e9dcbd3564dffc382026a"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/recovery.rs",
+      "sha256": "sha256:54e9cc0d0fcfe30ffa374f2517b434231e0c28926d24fc430f64ba4f47fd803e"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/recovery_tests.rs",
+      "sha256": "sha256:509e235b410d51449591c2d178a663480f27fcd8144551ef16d0df9c6e850670"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/recovery_wire.rs",
+      "sha256": "sha256:4b3b22b147e42079f6024b4d21ba36f335708f25fae82f0512101e5eec386433"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/strict_json.rs",
+      "sha256": "sha256:971aae75ccd4df09f6f18fc8de62df1cf0c021840e24347e6973906aa118e2d8"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/tests.rs",
+      "sha256": "sha256:e47c5fcfdc887565c4905f66ef5c28b141f1343c005c239245fb8c99e78eb003"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/wire.rs",
+      "sha256": "sha256:4e77e2578e1b340714eba80e4785a961c2b2bb8a37b89f8ca501687ab69e2cbd"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_connection/wire_validation.rs",
+      "sha256": "sha256:1bef0415508eb164371bd90866f29a1c219cfd5cff575d98b95455f5416c2948"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_dispatch.rs",
+      "sha256": "sha256:fc240e2a6850b1ba09e2d9f960218d80a9df5bc2b0c914c44acca67951cc668c"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/native_dispatch_tests.rs",
+      "sha256": "sha256:04dadb0e03742c6886026d8e6e06f354bf0968d8867ba630d9fdbc229c036f75"
+    },
+    {
+      "path": "codex-rs/rmcp-client/src/rmcp_client.rs",
+      "sha256": "sha256:2b3d438b242ef54f2321c8534b66103498f24b9aa6404d4585d9f123a5ae5e44"
+    },
+    {
+      "path": "codex-rs/rust-toolchain.toml",
+      "sha256": "sha256:e8b379eaa492bf59d35187de269afd1c4f55d85e0322f6fea32803a3fec1a380"
+    },
+    {
+      "path": "codex-rs/test-binary-support/lib.rs",
+      "sha256": "sha256:c9493f5db6b615f279d0c45227b620aa41e77450ab7d0a35720b0ab5b3024311"
+    },
+    {
+      "path": "codex-rs/utils/pty/src/lib.rs",
+      "sha256": "sha256:0d470d48ee2e08faf2a5b69af06808bb2303c58639c1132730897e25bfada0c7"
+    },
+    {
+      "path": "codex-rs/utils/pty/src/process.rs",
+      "sha256": "sha256:9d1bbd174c580042710716ba3a4c287aeec61df4e48318b56dea23d590cbdf32"
+    },
+    {
+      "path": "codex-rs/utils/pty/src/pty.rs",
+      "sha256": "sha256:f534236a4ebad3a8d90133a6c9fb13d6b2ea91e4a22b7f829dfd8854f5f52214"
+    },
+    {
+      "path": "codex-rs/utils/pty/src/tests.rs",
+      "sha256": "sha256:baba86e665422889d1e2a25b046715d4178c26d871a12b9a7502efddb1c85337"
+    },
+    {
+      "path": "codex-rs/utils/pty/src/unix_io.rs",
+      "sha256": "sha256:74a4514ce88e8e0b076b5000bece58bee10eba3fcb4bdb503b48f8148a127a91"
+    }
+  ],
+  "remainingValidation": [
+    "derived binary FD3 inheritance, same-UID proc reopen, Linux and Darwin isolation negatives",
+    "derived native apply_patch/MCP/dynamic allow/deny, cancellation, retry and terminal integration beyond focused source tests",
+    "remote exec-server stdin actual write receipt and reconnect retry semantics",
+    "hosted MCP file upload attempts",
+    "remaining enabled catalog: view_image and native extension dispatch; pure controls classification",
+    "default Collab V1 descendant model/tool/source flows and cancellation races in a derived native binary",
+    "complete upstream suite and repository native acceptance gates",
+    "current native Connection/isolation code type checks, focused lint, all shared corpus tests and final native binaries/images",
+    "real Linux aarch64 syscall and cross-process random-sentinel memory isolation including perf_event_open",
+    "real independent OAuth identities, Connection receipts/original calls records and Provider PR workflow",
+    "Connection MCP hooks currently fail closed because original hook identity does not match fixed Connection operation identity",
+    "cross-process original evidence recovery source is implemented; native binary/isolation/GET-only/restart and full original-outbox PG/ACK proof not yet completed",
+    "exact Linux aarch64 build and owning-crate network-proxy/git-utils/http-client tests on real DNS, preserving the existing Connection and native barrier gates",
+    "fresh exact Linux artifact/source SBOM and installed Cargo.lock Trivy scans with zero blockers, zero scanner errors and zero exceptions; full native C/C++ coverage remains separate",
+    "patch 0006 owning-crate compaction integration tests and exact Linux candidate; real current-model history compatibility, differing windows/downshift, removed previous option, cancellation and unknown recovery per Runtime HLD 11",
+    "patch 0007 release-mode integration test enumeration and all six native test groups on the exact candidate head; private home selection does not relax production arg0 guards",
+    "patch 0008: preserve all 46 compact integration cases and run four new missing-channel/explicit-deny hook negatives through isolated children; exact native compilation, focused groups and real runtime acceptance pending"
+  ],
+  "currentLocks": {
+    "cargoSha256": "sha256:2d38ad4607633b1b6ef753d1a00c30abd793f124507825745ea486a4fc1c36ff",
+    "bazelSha256": "sha256:ea079d3a10ad5bd664e1f674978f9196be8272e18915600436e33cc83b24fc4f",
+    "bazelValidation": "just bazel-lock-update passed after the final dependency manifest change"
+  },
+  "callbackInputs": {
+    "callback-v1.schema.json": "sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2",
+    "callback-v2.schema.json": "sha256:62875542f3f2c43750700aa497f7c17a182573d80b5cfd86350cbfc538b7e30c",
+    "callback-v2-corpus.json": "sha256:504715ca9b68f99329077d2c29159e444669ef26392735bd074c2c55b007fa8a",
+    "coverage-v1.json": "sha256:2d511d9de17ca78960035bcdef5fe205cf927635c65fe43e0c3379a6a6dddb1c",
+    "native-barrier-v1.json": "sha256:ee4caf4e3837426618b45769bdab92ef7e77a77b3104b200997b817ab3e4dd2c"
+  },
+  "currentValidation": {
+    "format": "just fmt passed on the complete patched source with Rust 1.96.0; only the owned compact.rs and new test fixture differ from the previous frozen inventory",
+    "metadata": "current offline locked no-deps metadata passed; parsing only",
+    "bazelLock": "just bazel-lock-update passed with the final Cargo manifests",
+    "sourceExport": "All eight patches applied in order to their exact immutable upstream file bytes and matched all 110 source hashes; all 108 other prior source files and patches 0001 through 0007 unchanged; native acceptance remains pending",
+    "nativeCompilation": "Darwin network-proxy, git-utils and http-client compiled for focused tests; exact Linux native producer pending",
+    "nativeTests": "Darwin HTTP client: 85 passed with custom CA and 85 passed with CA unset; nested io certificate classification regression red then green; full current Linux Connection/barrier/network-proxy/git-utils/http-client gates pending",
+    "nativeLint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
+    "releaseAcceptance": false,
+    "nativeHttpTlsFix": {
+      "files": 4,
+      "productionChange": "Traverse io::Error inner errors for failure classification; production TLS backend and certificate verification remain unchanged",
+      "testSetup": "Native fallback tests explicitly select native TLS with a test-only reqwest feature",
+      "cargoLockUnchanged": true,
+      "bazelLockUnchanged": true,
+      "format": "just fmt passed",
+      "lint": "just fix --locked --offline -p codex-http-client passed",
+      "bazelLock": "just bazel-lock-update passed with unchanged MODULE.bazel.lock",
+      "releaseAcceptance": false
+    },
+    "modelSwitchCompaction": {
+      "scope": "Local CompHashChanged and ModelDownshift use current selection; previous/current trigger metadata and remote/TokenBudget behavior preserved",
+      "sourceTests": "Existing local switch and settings expectations updated; encrypted history and input-order regression added; Rust integration tests not yet run",
+      "nativeCompilation": "pending",
+      "realProviderCompatibility": "pending",
+      "releaseAcceptance": false
+    },
+    "releaseTestHomeRoot": {
+      "scope": "Test-only optional absolute CODEX_TEST_HOME_ROOT selects tempdir_in; builder owns a private root outside native source and system temp and cleans it on success, failure or interruption",
+      "builderTests": "Existing candidate guard tests extended with real temporary-directory permissions and cleanup checks; mocked native commands preserve all six release scopes and fail-closed evidence",
+      "productionArg0Unchanged": true,
+      "nativeIntegrationTests": "not rerun; current release integration test enumeration and assertions pending",
+      "releaseAcceptance": false
+    },
+    "nativeCompactionTestFixtures": {
+      "scope": "Test-only initial model selection and isolated child anonymous FD3 hook admission fixtures; production sources unchanged",
+      "assertions": "Retain all prior compact assertions; verify first actual request model and exact hook attempt receipts; add four missing-channel/explicit-deny negatives",
+      "nativeCompilation": "not run",
+      "nativeIntegrationTests": "not run; original 46 case identities retained in source, four negative cases added",
+      "releaseAcceptance": false,
+      "sourceValidation": "just fmt, sparse exact-upstream sequential patch application and all 110 source hashes passed; candidate guard Node tests 2 passed"
+    }
+  },
+  "dependencyUpdate": {
+    "baselineOwnerCommit": "e4ac4b77de5b1cf715ae38cfea5f25103ce90b9f",
+    "baselineCargoLockSha256": "sha256:aca08121432d92b7a164ccfc09b55b42a83da89d6c1afa9995d7d2e2f839fa59",
+    "updatedPackageCount": 100,
+    "licenseFile": "licenses/dependency-updates-NOTICE.txt",
+    "licenseSha256": "sha256:e0f5978ae399d3addbb8b44bb83d15363681b3e2a52287bb87ed449d61e4e3c2",
+    "scope": "Cargo.lock source dependency delta, including optional and target-specific crates; does not prove complete binary or C/C++ dependency coverage",
+    "validation": {
+      "darwinAffectedTests": "363 run: 360 passed including one retry-flaky HTTP test, 3 failed; two github.com DNS Fake-IP failures also reproduce on the exact old baseline; the added private-answer test fixture was corrected and its focused rerun passed",
+      "privateAnswerNegative": "1 passed: native DNS connector with deterministic resolver denies both IPv4 private and IPv4-mapped IPv6 answers for an allowlisted hostname; listener accepts no connection",
+      "lint": "just fix --locked -p codex-network-proxy -p codex-git-utils -p codex-http-client passed",
+      "format": "just fmt passed",
+      "releaseAcceptance": false
+    }
+  }
+}

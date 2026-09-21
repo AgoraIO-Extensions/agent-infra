@@ -1,0 +1,112 @@
+{
+  "format": "agent-infra-vendor-parts-v1",
+  "byteLength": 1208744,
+  "sha256": "sha256:e0f5978ae399d3addbb8b44bb83d15363681b3e2a52287bb87ed449d61e4e3c2",
+  "parts": [
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0001.part",
+      "byteLength": 64466,
+      "sha256": "sha256:4700655480c0d290804b5e31f30921e9eef37228c7f6cb430a853d3c4812d3db"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0002.part",
+      "byteLength": 55231,
+      "sha256": "sha256:52eeabab7e46dcbb512709bdb9887495ef7602629c1f71dd74bc35c0e076eddd"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0003.part",
+      "byteLength": 61284,
+      "sha256": "sha256:41a979dabf311492119e10f2b0084e9d50907fd884b1d16f7375c293f0126942"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0004.part",
+      "byteLength": 59228,
+      "sha256": "sha256:70a5907cd268daa3e4be6ed0c6ce0d4971a77832fd22c30515fab20d96ae1677"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0005.part",
+      "byteLength": 59292,
+      "sha256": "sha256:3df202eb2587adc56ce2e5d305c3a77d8096f0a42ceef18830944eded594fefe"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0006.part",
+      "byteLength": 59197,
+      "sha256": "sha256:a0d708958dd143505532f1ee300a100197be9b0c84a3282ecf5931792fc2bd0e"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0007.part",
+      "byteLength": 59170,
+      "sha256": "sha256:6a8b62e8a16222572981f19612a9fbbef158557d6a70c0442c70f8898743ace2"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0008.part",
+      "byteLength": 58655,
+      "sha256": "sha256:4abdc0fc67e989bea23830e08a3ed1dc886c4a183def9ac613a8356493c8d01f"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0009.part",
+      "byteLength": 59218,
+      "sha256": "sha256:c99e768d5c5a42971ad3524444c1b71edc7a2581b3328d19c9b88f30074586d4"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0010.part",
+      "byteLength": 59200,
+      "sha256": "sha256:d8f908fd79ab664d4ceaf99f231b98076a3fdefd9218638bbdfd8450073883c3"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0011.part",
+      "byteLength": 59230,
+      "sha256": "sha256:e19c64acd8cba73ed894255de9a209b0a5f9e053da0120c593390be2d0cae922"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0012.part",
+      "byteLength": 59284,
+      "sha256": "sha256:f5fea6d7bc3a22ba4340763cfbe5a7a78d936c90966c5c0657e31e62f3b91534"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0013.part",
+      "byteLength": 59245,
+      "sha256": "sha256:dbbc88cc98b7ca7e49a10bbe418839f6fb2246c3a42ab568651b9a43a7b92bc2"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0014.part",
+      "byteLength": 63211,
+      "sha256": "sha256:2ab7174026efae35ad9420abae7eb6f4117df14a2c779b3af729a6dcb2be8c20"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0015.part",
+      "byteLength": 58200,
+      "sha256": "sha256:6d698b6c2bb5d795ba5dc1ee107b18ab487681e60c28b9ecfbe3640968031e1b"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0016.part",
+      "byteLength": 60068,
+      "sha256": "sha256:ac11c8653162f8454d42497494ceb5125f2b5bf10ccd6cb0b3ac759a00262d36"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0017.part",
+      "byteLength": 58789,
+      "sha256": "sha256:2389d37182204292cc3d248ebb271a3f9c33d40fc6cf86527c9b7b94f6867a68"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0018.part",
+      "byteLength": 59746,
+      "sha256": "sha256:a3281bb7fbf18568a3cd8a393284d9a560984cf4285d98154f0942e537b0175c"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0019.part",
+      "byteLength": 57415,
+      "sha256": "sha256:70a956b4b1551be5e03ed03385e6c70fb18407448d528003741657f11da0c95d"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0020.part",
+      "byteLength": 64927,
+      "sha256": "sha256:648854f9f04c657fb91badb4625701aa1260f484a7df23c4779e16f143c7b684"
+    },
+    {
+      "path": "dependency-updates-NOTICE.txt.parts/0021.part",
+      "byteLength": 13688,
+      "sha256": "sha256:fd0aa6812aaeda333e62aa91f7326ca961e6d5edbc31e5626333e56a4f0eebbc"
+    }
+  ]
+}
