@@ -1300,6 +1300,7 @@ function isCodexSession(
 			)
 				return false;
 			const reservationKey = JSON.stringify([
+				journal.nativeTurnId,
 				source.reservation.childThreadId,
 				source.reservation.submissionId,
 			]);
@@ -1314,6 +1315,7 @@ function isCodexSession(
 					return false;
 				if (source.delivery === "started") {
 					const bindingKey = JSON.stringify([
+						journal.nativeTurnId,
 						source.source.threadId,
 						source.source.turnId,
 					]);

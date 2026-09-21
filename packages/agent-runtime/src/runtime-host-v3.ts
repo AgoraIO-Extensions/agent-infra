@@ -108,7 +108,11 @@ async function abortable<T>(
 export class RuntimeHostV3 {
 	private readonly recoveryGuards = new Map<
 		string,
-		Set<{ controller: AbortController; done: Promise<void> }>
+		Set<{
+			controller: AbortController;
+			done: Promise<void>;
+			recoveryGenerationKey: string;
+		}>
 	>();
 	private readonly closedRecoveryGenerations = new Set<string>();
 	private readonly lifetime = new AbortController();
@@ -134,10 +138,13 @@ export class RuntimeHostV3 {
 		if (this.closed) nativeRequired();
 	}
 
-	private async abortRecovery(key: string) {
+	private async abortRecovery(key: string, recoveryGenerationKey: string) {
 		const guards = [...(this.recoveryGuards.get(key) ?? [])];
-		for (const guard of guards) guard.controller.abort();
-		await Promise.allSettled(guards.map((guard) => guard.done));
+		const matching = guards.filter(
+			(guard) => guard.recoveryGenerationKey === recoveryGenerationKey,
+		);
+		for (const guard of matching) guard.controller.abort();
+		await Promise.allSettled(matching.map((guard) => guard.done));
 	}
 
 	private async recoverEvidence(
@@ -244,7 +251,11 @@ export class RuntimeHostV3 {
 				read,
 			);
 		};
-		const guard = { controller, done: Promise.resolve() };
+		const guard = {
+			controller,
+			done: Promise.resolve(),
+			recoveryGenerationKey,
+		};
 		const guards = this.recoveryGuards.get(key) ?? new Set();
 		this.recoveryGuards.set(key, guards);
 		guards.add(guard);
@@ -402,18 +413,17 @@ export class RuntimeHostV3 {
 			request.sessionGeneration,
 			request.executionId,
 		]);
-		await this.options.serialize(key, () => {
+		await this.options.serialize(key, async () => {
 			this.assertOpen();
 			this.validate(request, "turn.stop", verification);
-			const result = this.options.store.authorizeRequestV3(
+			await this.options.store.authorizeRequestV3(
 				claims,
 				"query",
 				(this.options.grantValidation.now ?? Date.now)(),
 			);
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
-			return result;
 		});
-		await this.abortRecovery(key);
+		await this.abortRecovery(key, recoveryGenerationKey);
 		return this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
@@ -563,7 +573,7 @@ export class RuntimeHostV3 {
 			// serialized latch prevents a new recovery from registering in the gap.
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
-		await this.abortRecovery(recoveryKey);
+		await this.abortRecovery(recoveryKey, recoveryGenerationKey);
 		let barrierActivated = false;
 		try {
 			return await this.options.serialize(
@@ -795,10 +805,10 @@ export class RuntimeHostV3 {
 						parsed.data.executionId !== request.executionId
 					)
 						invalidDriver();
-					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
 					validate();
 					options.store.checkRequestV3(claims);
 					yield parsed.data;
+					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
 				}
 			} finally {
 				clearTimeout(timer);

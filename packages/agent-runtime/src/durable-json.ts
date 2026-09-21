@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 
 export class DurableJsonFile<T> {
 	private queue: Promise<void> = Promise.resolve();
+	private closed = false;
+	private closePromise: Promise<void> | undefined;
 	private persistenceFailed = false;
 
 	private constructor(
@@ -38,11 +40,9 @@ export class DurableJsonFile<T> {
 		return this.read();
 	}
 
-	async close() {
-		await this.queue;
-	}
-
 	update<R>(change: (draft: T) => R | Promise<R>): Promise<R> {
+		if (this.closed)
+			return Promise.reject(new Error("Durable state is closed"));
 		const run = this.queue.then(async () => {
 			if (this.persistenceFailed)
 				throw new Error("Durable state requires recovery");
@@ -64,6 +64,14 @@ export class DurableJsonFile<T> {
 			() => undefined,
 		);
 		return run;
+	}
+
+	close(): Promise<void> {
+		if (!this.closePromise) {
+			this.closed = true;
+			this.closePromise = this.queue;
+		}
+		return this.closePromise;
 	}
 
 	private async exists() {

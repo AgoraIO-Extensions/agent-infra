@@ -317,7 +317,7 @@ export async function runCodexConnectionRecovery(options: {
 		const exitResult = await waitForChildExit(
 			exited,
 			options.signal,
-			recoveryShutdownTimeoutMs,
+			maximumTimeoutMs,
 		);
 		if (exitResult !== "exited") {
 			failed = true;
