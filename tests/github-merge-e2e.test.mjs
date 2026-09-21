@@ -29,8 +29,8 @@ test("merge conformance merges only run-owned disposable branches", async () => 
 		runId: "merge-run",
 	});
 	assert.deepEqual(evidence.actionVersionIds, [
-		"github.merge_branch@v8",
-		"github.merge_pull_request@v8",
+		"github.merge_branch@v9",
+		"github.merge_pull_request@v9",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.ok(calls.every(({ input }) => input.base !== "main"));
@@ -61,7 +61,7 @@ function lifecycleFetch(calls) {
 			structuredContent = {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v8`,
+					actionVersionId: `${args.actionId}@v9`,
 					effect: "WRITE",
 				},
 			};
@@ -70,7 +70,7 @@ function lifecycleFetch(calls) {
 			calls.push({ action: args.actionId, input: args.input });
 			structuredContent = {
 				action: args.actionId,
-				actionVersionId: `${args.actionId}@v8`,
+				actionVersionId: `${args.actionId}@v9`,
 				callId: `call-${++id}`,
 				result: resultFor(args.actionId, args.input, { branchMerged }),
 				status: "SUCCEEDED",

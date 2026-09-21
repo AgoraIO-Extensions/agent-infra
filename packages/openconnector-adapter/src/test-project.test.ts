@@ -13,9 +13,9 @@ import {
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
-import { githubV8VerificationEvidenceRecords } from "./verification/github-v8.ts";
-import { githubV8LowRiskWriteScenarios } from "./verification/github-v8-low-risk-write-scenarios.ts";
-import { githubV8ReadScenarios } from "./verification/github-v8-read-scenarios.ts";
+import { githubV9VerificationEvidenceRecords } from "./verification/github-v9.ts";
+import { githubV9LowRiskWriteScenarios } from "./verification/github-v9-low-risk-write-scenarios.ts";
+import { githubV9ReadScenarios } from "./verification/github-v9-read-scenarios.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -24,7 +24,7 @@ const catalogs = [
 	confluenceServerConnectionCatalog,
 ] as const;
 
-test("GitHub v8 low-risk writes have an exact isolated cleanup scenario", () => {
+test("GitHub v9 low-risk writes have an exact isolated cleanup scenario", () => {
 	const approved = [
 		"create_ref",
 		"update_ref",
@@ -54,15 +54,15 @@ test("GitHub v8 low-risk writes have an exact isolated cleanup scenario", () => 
 		"update_release",
 		"delete_release",
 	]
-		.map((name) => `github.${name}@v8`)
+		.map((name) => `github.${name}@v9`)
 		.sort();
-	const actionVersionIds = githubV8LowRiskWriteScenarios.map(
+	const actionVersionIds = githubV9LowRiskWriteScenarios.map(
 		(scenario) => scenario.actionVersionId,
 	);
 	assert.equal(actionVersionIds.length, 27);
 	assert.equal(new Set(actionVersionIds).size, actionVersionIds.length);
 	assert.deepEqual([...actionVersionIds].sort(), approved);
-	for (const scenario of githubV8LowRiskWriteScenarios) {
+	for (const scenario of githubV9LowRiskWriteScenarios) {
 		const action = githubConnectionCatalog.actions.find(
 			(item) => item.id === scenario.actionVersionId,
 		);
@@ -75,19 +75,19 @@ test("GitHub v8 low-risk writes have an exact isolated cleanup scenario", () => 
 	}
 });
 
-test("GitHub v8 read scenarios exactly cover the catalog read actions", () => {
+test("GitHub v9 read scenarios exactly cover the catalog read actions", () => {
 	const catalogReads = githubConnectionCatalog.actions
 		.filter((action) => action.effect === "READ")
 		.map((action) => action.id)
 		.sort();
-	const scenarioIds = githubV8ReadScenarios
+	const scenarioIds = githubV9ReadScenarios
 		.map((scenario) => scenario.actionVersionId)
 		.sort();
 
 	assert.equal(catalogReads.length, 78);
-	assert.equal(new Set(scenarioIds).size, githubV8ReadScenarios.length);
+	assert.equal(new Set(scenarioIds).size, githubV9ReadScenarios.length);
 	assert.deepEqual(scenarioIds, catalogReads);
-	for (const scenario of githubV8ReadScenarios) {
+	for (const scenario of githubV9ReadScenarios) {
 		assert.ok(
 			["ACCOUNT", "ORGANIZATION", "REPOSITORY"].includes(scenario.boundary),
 		);
@@ -101,12 +101,12 @@ test("GitHub v8 read scenarios exactly cover the catalog read actions", () => {
 		}
 	}
 	assert.deepEqual(
-		githubV8ReadScenarios
+		githubV9ReadScenarios
 			.filter((scenario) => scenario.execution !== "LIVE")
 			.map((scenario) => scenario.actionVersionId),
-		["github.get_pull_request_review@v8"],
+		["github.get_pull_request_review@v9"],
 	);
-	for (const scenario of githubV8ReadScenarios.filter(
+	for (const scenario of githubV9ReadScenarios.filter(
 		(item) => item.execution === "LIVE",
 	)) {
 		const action = githubConnectionCatalog.actions.find(
@@ -160,10 +160,10 @@ test("every catalog action receives a fail-closed conformance strategy", () => {
 	}
 });
 
-test("GitHub OAuth v8 verifies all 143 actions with exact live evidence", () => {
+test("GitHub OAuth v9 verifies all 143 actions with exact live evidence", () => {
 	const matrix = capabilityVerificationMatrix(
 		githubConnectionCatalog,
-		githubV8VerificationEvidenceRecords,
+		githubV9VerificationEvidenceRecords,
 	);
 	assert.equal(matrix.length, 143);
 	assert.equal(
@@ -177,7 +177,7 @@ test("GitHub OAuth v8 verifies all 143 actions with exact live evidence", () => 
 		).length,
 		78,
 	);
-	assert.ok(matrix.every((item) => item.actionVersionId.endsWith("@v8")));
+	assert.ok(matrix.every((item) => item.actionVersionId.endsWith("@v9")));
 
 	const validEvidence: LiveVerificationEvidence = {
 		actionVersionIds: [githubConnectionCatalog.actions[0]?.id ?? ""],

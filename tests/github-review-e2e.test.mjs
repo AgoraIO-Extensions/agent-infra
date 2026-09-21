@@ -21,12 +21,12 @@ test("GitHub review conformance completes an owned two-account lifecycle", async
 
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.deepEqual(evidence.primaryActionVersionIds, [
-		"github.dismiss_pull_request_review@v8",
+		"github.dismiss_pull_request_review@v9",
 	]);
 	assert.equal(evidence.pullNumber, 17);
 	assert.deepEqual(
 		evidence.actionVersionIds,
-		reviewActions.map((id) => `${id}@v8`),
+		reviewActions.map((id) => `${id}@v9`),
 	);
 	assert.ok(evidence.calls.every((call) => call.status === "SUCCEEDED"));
 	assert.doesNotMatch(JSON.stringify(evidence), /primary-token|reviewer-token/);
@@ -388,7 +388,7 @@ test("GitHub review conformance preserves an unowned fixture before reviewer mut
 			return response(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v8`,
+					actionVersionId: `${args.actionId}@v9`,
 					effect:
 						writeActions.has(args.actionId) ||
 						args.actionId === "github.dismiss_pull_request_review"
@@ -405,7 +405,7 @@ test("GitHub review conformance preserves an unowned fixture before reviewer mut
 			result.pull_requests[0].body = "someone-else";
 		return response(request.id, {
 			action: args.actionId,
-			actionVersionId: `${args.actionId}@v8`,
+			actionVersionId: `${args.actionId}@v9`,
 			callId: `call-${executed.length}`,
 			result,
 			status: "SUCCEEDED",
@@ -492,7 +492,7 @@ function lifecycleFetch(calls, options = {}) {
 			return response(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v8`,
+					actionVersionId: `${args.actionId}@v9`,
 					effect:
 						writeActions.has(args.actionId) ||
 						args.actionId === "github.dismiss_pull_request_review"
@@ -504,7 +504,7 @@ function lifecycleFetch(calls, options = {}) {
 		if (options.malformedPull && action === "github.create_pull_request") {
 			return response(request.id, {
 				action,
-				actionVersionId: `${action}@v8`,
+				actionVersionId: `${action}@v9`,
 				callId: `call-${calls.length}`,
 				result: {
 					body: options.marker,
@@ -518,7 +518,7 @@ function lifecycleFetch(calls, options = {}) {
 		if (options.malformedRef && action === "github.create_ref") {
 			return response(request.id, {
 				action,
-				actionVersionId: `${action}@v8`,
+				actionVersionId: `${action}@v9`,
 				callId: `call-${calls.length}`,
 				result: { object: { sha: "base-sha" } },
 				status: "SUCCEEDED",
@@ -545,7 +545,7 @@ function lifecycleFetch(calls, options = {}) {
 						];
 			return response(request.id, {
 				action,
-				actionVersionId: `${action}@v8`,
+				actionVersionId: `${action}@v9`,
 				callId: `call-${calls.length}`,
 				result: { comments },
 				status: "SUCCEEDED",
@@ -553,7 +553,7 @@ function lifecycleFetch(calls, options = {}) {
 		}
 		return response(request.id, {
 			action: args.actionId,
-			actionVersionId: `${args.actionId}@v8`,
+			actionVersionId: `${args.actionId}@v9`,
 			callId: `call-${calls.length}`,
 			result:
 				options.reconciliationEmpty && action === "github.list_pull_requests"

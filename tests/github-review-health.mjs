@@ -17,7 +17,7 @@ export async function runGitHubReviewHealth({ environment, fetch }) {
 	for (const actionId of actions) {
 		const guide = await client.call("get_action_guide", { actionId }, true);
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v8` ||
+			guide?.action?.actionVersionId !== `${actionId}@v9` ||
 			guide.action.effect !== "READ"
 		) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -26,7 +26,7 @@ export async function runGitHubReviewHealth({ environment, fetch }) {
 
 	const user = await client.execute("github.get_current_user", {}, true);
 	if (
-		user.actionVersionId !== "github.get_current_user@v8" ||
+		user.actionVersionId !== "github.get_current_user@v9" ||
 		String(user.result?.id) !== "329435106"
 	) {
 		throw new Error("reviewer identity does not match");
@@ -36,7 +36,7 @@ export async function runGitHubReviewHealth({ environment, fetch }) {
 		{ owner: "AgoraConnectionE2EORG", repo: "connector-conformance" },
 		true,
 	);
-	if (repository.actionVersionId !== "github.get_repository@v8") {
+	if (repository.actionVersionId !== "github.get_repository@v9") {
 		throw new Error(
 			"github.get_repository executed an unapproved ActionVersion",
 		);
@@ -44,7 +44,7 @@ export async function runGitHubReviewHealth({ environment, fetch }) {
 	assertRepository(repository.result);
 
 	return {
-		actionVersionIds: actions.map((action) => `${action}@v8`),
+		actionVersionIds: actions.map((action) => `${action}@v9`),
 		account: user.result.login,
 		repository: repository.result.full_name,
 		status: "SUCCEEDED",

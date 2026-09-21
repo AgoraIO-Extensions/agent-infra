@@ -31,7 +31,7 @@ test("GitHub ref and label conformance creates, updates, and deletes owned resou
 			return response(request.id, {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v8`,
+					actionVersionId: `${args.actionId}@v9`,
 					effect: args.actionId.startsWith("github.get_") ? "READ" : "WRITE",
 				},
 			});

@@ -22,7 +22,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 	for (const actionId of githubMergeActionIds) {
 		const guide = await client.call("get_action_guide", { actionId }, true);
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v8` ||
+			guide?.action?.actionVersionId !== `${actionId}@v9` ||
 			guide.action.effect !== "WRITE"
 		)
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -48,7 +48,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 	let pullMerged = false;
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
-		if (projection.actionVersionId !== `${actionId}@v8`)
+		if (projection.actionVersionId !== `${actionId}@v9`)
 			throw new Error(`${actionId} executed an unapproved ActionVersion`);
 		if (githubMergeActionIds.includes(actionId))
 			calls.push({
@@ -231,7 +231,7 @@ export async function runGitHubMergeConformance({ environment, fetch, runId }) {
 	if (cleanupFailure) throw cleanupFailure;
 	if (failure) throw failure;
 	return {
-		actionVersionIds: githubMergeActionIds.map((id) => `${id}@v8`),
+		actionVersionIds: githubMergeActionIds.map((id) => `${id}@v9`),
 		calls,
 		cleanup: "SUCCEEDED",
 		runId,

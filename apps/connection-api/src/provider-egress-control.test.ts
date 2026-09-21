@@ -25,7 +25,7 @@ describe("Provider Egress control plane", () => {
 			store: { prepare },
 		});
 		const result = await issue({
-			actionVersionId: "github.get_current_user@v8",
+			actionVersionId: "github.get_current_user@v9",
 			callId: "call-1",
 			certificateThumbprint: "sha256:workload",
 			connectionId: "connection-1",
@@ -33,7 +33,7 @@ describe("Provider Egress control plane", () => {
 			credentialVersionId: "credential-1",
 			effect: "READ",
 			plan: {
-				actionVersionId: "github.get_current_user@v8",
+				actionVersionId: "github.get_current_user@v9",
 				method: "GET",
 				origin: "https://api.github.com",
 				path: "/user",

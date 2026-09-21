@@ -63,11 +63,11 @@ test("pull request collaboration completes and cleans an owned lifecycle", async
 	});
 
 	assert.deepEqual(evidence.actionVersionIds, [
-		"github.create_pull_request@v8",
-		"github.update_pull_request@v8",
-		"github.request_pull_request_reviewers@v8",
-		"github.remove_pull_request_reviewers@v8",
-		"github.update_pull_request_branch@v8",
+		"github.create_pull_request@v9",
+		"github.update_pull_request@v9",
+		"github.request_pull_request_reviewers@v9",
+		"github.remove_pull_request_reviewers@v9",
+		"github.update_pull_request_branch@v9",
 	]);
 	assert.equal(evidence.cleanup, "SUCCEEDED");
 	assert.equal(evidence.pullNumber, 31);
@@ -240,14 +240,14 @@ function lifecycleFetch(calls, config = {}) {
 			structuredContent = {
 				action: {
 					actionId: args.actionId,
-					actionVersionId: `${args.actionId}@v8`,
+					actionVersionId: `${args.actionId}@v9`,
 					effect: args.actionId.startsWith("github.get_") ? "READ" : "WRITE",
 				},
 			};
 		} else {
 			const action = args.actionId;
 			const input = args.input;
-			const target = targetActions.has(action) ? `${action}@v8` : undefined;
+			const target = targetActions.has(action) ? `${action}@v9` : undefined;
 			calls.push({ action, input, target, token });
 			const actionCount = (actionCounts.get(action) ?? 0) + 1;
 			actionCounts.set(action, actionCount);
@@ -278,7 +278,7 @@ function lifecycleFetch(calls, config = {}) {
 			});
 			structuredContent = {
 				action,
-				actionVersionId: `${action}@v8`,
+				actionVersionId: `${action}@v9`,
 				callId: `call-${++executeId}`,
 				result,
 				status: "SUCCEEDED",
