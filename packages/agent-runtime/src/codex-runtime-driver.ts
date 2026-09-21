@@ -2394,6 +2394,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		{
 			nativeSessionRef: string;
 			executionId: string;
+			recoveryRequestId: string;
 			abort: AbortController;
 			finished: Promise<void>;
 		}
@@ -2459,11 +2460,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			reference.executionId,
 		]);
 		const existing = this.connectionRecoveries.get(key);
-		if (existing) return existing.finished;
+		if (existing) {
+			if (existing.recoveryRequestId !== reference.recoveryRequestId)
+				return Promise.reject(unavailableError());
+			return existing.finished;
+		}
 		const abort = new AbortController();
 		const guard = {
 			nativeSessionRef: reference.nativeSessionRef,
 			executionId: reference.executionId,
+			recoveryRequestId: reference.recoveryRequestId,
 			abort,
 			finished: Promise.resolve().then(() =>
 				this.performConnectionRecovery(reference, read, abort.signal),

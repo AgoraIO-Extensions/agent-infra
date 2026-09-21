@@ -1369,11 +1369,20 @@ describe("Runtime V3 durable authorization", () => {
 	it("acknowledges only a delivered cursor under a fresh Worker persistence grant", async () => {
 		const env = await setup();
 		const order: string[] = [];
-		vi.spyOn(env.store, "acknowledgeCursor").mockImplementation(async (...args) => {
-			order.push("store");
-			return FileRuntimeStore.prototype.acknowledgeCursor.apply(env.store, args);
-		});
-		env.driver.acknowledgeEvents = async () => {
+		vi.spyOn(env.store, "acknowledgeCursor").mockImplementation(
+			async (...args) => {
+				order.push("store");
+				return FileRuntimeStore.prototype.acknowledgeCursor.apply(
+					env.store,
+					args,
+				);
+			},
+		);
+		(
+			env.driver as typeof env.driver & {
+				acknowledgeEvents: () => Promise<void>;
+			}
+		).acknowledgeEvents = async () => {
 			order.push("driver");
 		};
 		const accepted = await submit(env.host);
