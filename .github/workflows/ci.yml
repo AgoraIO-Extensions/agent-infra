@@ -64,6 +64,7 @@ jobs:
               const release = JSON.parse(fs.readFileSync("packages/agent-runtime/src/codex-release.json", "utf8"));
               const kind = release?.distribution?.kind;
               if (kind === "derived" || kind === "upstream") process.stdout.write(kind);
+              else if (kind === undefined && release?.schemaVersion === undefined && release?.provenance?.protocolVersion === 2) process.stdout.write("upstream");
               else process.exit(1);
             } catch {
               process.exit(1);
