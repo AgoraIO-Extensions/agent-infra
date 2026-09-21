@@ -321,6 +321,7 @@ export class JenkinsAdapter
 			{
 				headers: {
 					accept: "*/*",
+					"accept-encoding": "identity",
 					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 					range: `bytes=${start}-${start + maxArtifactBytes - 1}`,
 				},
@@ -337,6 +338,14 @@ export class JenkinsAdapter
 			throw providerError(
 				`Jenkins request failed with HTTP ${response.status}`,
 				{ providerStatus: response.status },
+			);
+		}
+		const contentEncoding = response.headers
+			.get("content-encoding")
+			?.toLowerCase();
+		if (contentEncoding && contentEncoding !== "identity") {
+			throw providerError(
+				"Jenkins returned an encoded artifact representation",
 			);
 		}
 		if (start > 0 && response.status !== 206) {

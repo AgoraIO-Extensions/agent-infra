@@ -173,6 +173,7 @@ test("Jenkins reads bounded text artifacts with byte ranges", async () => {
 		"http://114.94.148.35:8010/job/AD/job/Agora-Iris/4342/artifact/logs/compile.log",
 	);
 	assert.equal(requests[0]?.headers.get("range"), "bytes=10-262153");
+	assert.equal(requests[0]?.headers.get("accept-encoding"), "identity");
 });
 
 test("Jenkins decodes text only when the complete artifact is returned", async () => {
@@ -267,6 +268,29 @@ test("Jenkins rejects artifact offsets that would overflow a range", async () =>
 		/artifact start is too large/,
 	);
 	assert.equal(called, false);
+});
+
+test("Jenkins rejects encoded artifact representations", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("encoded", {
+				headers: { "content-encoding": "gzip" },
+			}),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "compile.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/encoded artifact representation/,
+	);
 });
 
 test("Jenkins returns binary artifacts as Base64 and rejects path injection", async () => {
