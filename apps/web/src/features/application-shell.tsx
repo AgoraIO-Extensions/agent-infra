@@ -90,7 +90,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const sessionBoundaryKey = JSON.stringify([
 		session.state.kind,
 		session.state.kind === "ready"
-			? session.state.sessionGeneration ?? null
+			? (session.state.sessionGeneration ?? null)
 			: null,
 		sessionProjection,
 	]);
