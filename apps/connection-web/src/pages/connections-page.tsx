@@ -303,6 +303,78 @@ export function ConnectionsPage() {
 			) : null}
 			{data ? (
 				<div className="content-stack">
+					{data.upgradeTasks?.length ? (
+						<section
+							className="data-section"
+							aria-labelledby="upgrade-tasks-title"
+						>
+							<div className="section-heading">
+								<div>
+									<h2 id="upgrade-tasks-title">需要处理的升级</h2>
+									<p>完成连接升级后，可能还需要重新确认客户端授权。</p>
+								</div>
+							</div>
+							<div className="table-scroll">
+								<table className="management-table">
+									<thead>
+										<tr>
+											<th>平台</th>
+											<th>客户端</th>
+											<th>目标版本</th>
+											<th>状态</th>
+											<th className="table-action">操作</th>
+										</tr>
+									</thead>
+									<tbody>
+										{data.upgradeTasks.map((task) => (
+											<tr key={task.taskId}>
+												<td className="primary-cell">
+													{providerLabel(task.providerId)}
+												</td>
+												<td>{task.consumerName}</td>
+												<td>{task.targetProviderReleaseId}</td>
+												<td>
+													{task.status === "PENDING_CONNECTION"
+														? "升级连接"
+														: task.status === "PENDING_AUTHORIZATION"
+															? "重新确认授权"
+															: "已过期"}
+												</td>
+												<td className="table-action">
+													{task.status === "PENDING_CONNECTION" ? (
+														<a
+															className="button button-secondary"
+															href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
+														>
+															处理升级
+														</a>
+													) : task.status === "PENDING_AUTHORIZATION" ? (
+														<button
+															className="button button-secondary"
+															type="button"
+															onClick={() =>
+																setAuthorization({
+																	connectionId: task.connectionId,
+																	consumerId: task.consumerId,
+																	initialActionVersionIds: [],
+																	preview: null,
+																	reviewed: false,
+																})
+															}
+														>
+															确认授权
+														</button>
+													) : (
+														<span>已过期</span>
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</section>
+					) : null}
 					<section className="data-section">
 						<ConnectionsView
 							connections={data.connections}

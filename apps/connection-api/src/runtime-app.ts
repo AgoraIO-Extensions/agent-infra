@@ -69,7 +69,10 @@ export async function createConnectionRuntime(
 		confluenceServerConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
 	]) {
-		await repository.publishProviderCatalog(catalog);
+		await repository.publishProviderCatalog(catalog, {
+			mode: "USER_ACTION_REQUIRED",
+			reason: `${catalog.provider} Provider authorization contract changed`,
+		});
 	}
 	for (const consumer of [
 		config.directConsumer,

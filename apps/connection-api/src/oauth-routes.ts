@@ -1316,6 +1316,19 @@ export function createConnectionOAuthApp(
 			return context.json({ administrators });
 		});
 
+		app.get("/api/v1/connection/admin/provider-upgrades", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const campaigns = await browserApiOperation(context, () =>
+				management.service.listProviderUpgradeCampaigns(
+					session.account.principalId,
+				),
+			);
+			if (campaigns instanceof Response) return campaigns;
+			context.header("cache-control", "no-store");
+			return context.json({ campaigns });
+		});
+
 		app.put(
 			"/api/v1/connection/admin/administrators/:principalId",
 			async (context) => {

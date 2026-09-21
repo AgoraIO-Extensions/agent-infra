@@ -208,6 +208,9 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 用户完成连接或重新授权后返回原 Consumer 继续任务。
 - 重连同一外部账号后，因连接中断暂停的授权可以恢复。
 - 重连为不同外部账号时，旧授权终止，用户必须重新选择和确认。
+- Provider 升级不改变账号、scope、Action 集合或外部效果时，Connection 可以静默迁移；无法证明授权语义等价时必须创建非静默升级活动。
+- 非静默升级由 Connection 识别受影响的授权并向使用者展示站内待办；Connection 管理员可以查看按 ProviderRelease 聚合的总数、待处理数、完成数、失效数和截止时间，但不能查看 Credential 或无关外部账号信息。
+- 外部通知通道只消费 Connection 的可靠通知事件；未完成实际投递时不能显示为已通知。到期策略必须随升级活动明确，不能仅因发布新版本就静默扩大授权或切换账号。
 
 ### 8.2 Credential 保护
 

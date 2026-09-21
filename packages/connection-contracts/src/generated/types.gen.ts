@@ -128,6 +128,7 @@ export type Overview = {
     connections: Array<Connection>;
     consumers: Array<Consumer>;
     grants: Array<Grant>;
+    upgradeTasks: Array<ProviderUpgradeTask>;
 };
 
 export type ConnectionsResponse = {
@@ -202,6 +203,37 @@ export type Administrator = {
 
 export type AdministratorsResponse = {
     administrators: Array<Administrator>;
+};
+
+export type ProviderUpgradeTask = {
+    campaignId: string;
+    connectionId: string;
+    consumerId: string;
+    consumerName: string;
+    deadlineAt: string | null;
+    providerId: string;
+    reason: string;
+    status: 'PENDING_CONNECTION' | 'PENDING_AUTHORIZATION' | 'COMPLETED' | 'EXPIRED';
+    targetProviderReleaseId: string;
+    taskId: string;
+};
+
+export type ProviderUpgradeCampaign = {
+    id: string;
+    providerId: string;
+    sourceProviderReleaseId: string;
+    targetProviderReleaseId: string;
+    reason: string;
+    deadlineAt: string | null;
+    createdAt: string;
+    totalCount: number;
+    pendingCount: number;
+    completedCount: number;
+    expiredCount: number;
+};
+
+export type ProviderUpgradeCampaignsResponse = {
+    campaigns: Array<ProviderUpgradeCampaign>;
 };
 
 export type SharedConnection = {
@@ -777,6 +809,35 @@ export type ListAdministratorsResponses = {
 };
 
 export type ListAdministratorsResponse = ListAdministratorsResponses[keyof ListAdministratorsResponses];
+
+export type ListProviderUpgradeCampaignsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/provider-upgrades';
+};
+
+export type ListProviderUpgradeCampaignsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListProviderUpgradeCampaignsError = ListProviderUpgradeCampaignsErrors[keyof ListProviderUpgradeCampaignsErrors];
+
+export type ListProviderUpgradeCampaignsResponses = {
+    /**
+     * Provider upgrade campaign summaries
+     */
+    200: ProviderUpgradeCampaignsResponse;
+};
+
+export type ListProviderUpgradeCampaignsResponse = ListProviderUpgradeCampaignsResponses[keyof ListProviderUpgradeCampaignsResponses];
 
 export type RevokeAdministratorData = {
     body?: never;

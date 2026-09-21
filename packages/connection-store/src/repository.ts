@@ -22,6 +22,7 @@ import {
 	type InvocationContext,
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
+	type ProviderUpgradeCampaignSummary,
 	type ReconciliationJob,
 	type StoredCall,
 } from "@agent-infra/connection-core";
@@ -37,6 +38,12 @@ export type PublishedProviderCatalog = {
 	provider: string;
 	providerReleaseId: string;
 	sourceCommit: string;
+};
+
+export type ProviderUpgradePolicy = {
+	deadlineAt?: string;
+	mode: "USER_ACTION_REQUIRED";
+	reason: string;
 };
 
 type InvocationRow = {
@@ -325,7 +332,113 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		await this.sql.end();
 	}
 
-	async publishProviderCatalog(catalog: PublishedProviderCatalog) {
+	private async expireProviderUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+	) {
+		await sql`
+			WITH expired AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign
+				WHERE task.campaign_id = campaign.id
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND campaign.deadline_at IS NOT NULL
+					AND campaign.deadline_at <= now()
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_EXPIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM expired
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-expired-' || id, 'connection.provider-upgrade.expired', id,
+				jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+			FROM expired
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
+	private async reconcileProviderUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+	) {
+		await sql`
+			WITH superseded AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign
+				WHERE task.campaign_id = campaign.id
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND EXISTS (
+						SELECT 1 FROM connection_provider_upgrade_campaigns newer
+						WHERE newer.provider_id = campaign.provider_id
+							AND newer.source_provider_release_id = campaign.source_provider_release_id
+							AND newer.created_at > campaign.created_at
+					)
+				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_SUPERSEDED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM superseded
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-superseded-' || id,
+				'connection.provider-upgrade.superseded', id,
+				jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+			FROM superseded
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+		await sql`
+			INSERT INTO connection_provider_upgrade_tasks (
+				id, campaign_id, principal_id, connection_id,
+				authorization_root_id, consumer_id, provider_id, actor_key, status
+			)
+			SELECT 'provider-upgrade-task-' || root.id || '-' || campaign.id,
+				campaign.id, root.principal_id, account.id, root.id,
+				root.consumer_id, root.provider_id, root.actor_key, 'PENDING_CONNECTION'
+			FROM connection_provider_upgrade_campaigns campaign
+			JOIN connection_accounts account
+				ON account.provider_id = campaign.provider_id
+				AND account.provider_release_id = campaign.source_provider_release_id
+			JOIN connection_authorization_roots root ON root.provider_id = account.provider_id
+			JOIN connection_grants active_grant
+				ON active_grant.id = root.current_grant_id
+				AND active_grant.root_id = root.id
+				AND active_grant.connection_id = account.id
+				AND active_grant.status = 'ACTIVE'
+			WHERE (${principalId ?? null}::text IS NULL OR root.principal_id = ${principalId ?? null})
+				AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+				AND NOT EXISTS (
+					SELECT 1 FROM connection_provider_upgrade_campaigns newer
+					WHERE newer.provider_id = campaign.provider_id
+						AND newer.source_provider_release_id = campaign.source_provider_release_id
+						AND newer.created_at > campaign.created_at
+				)
+			ON CONFLICT (campaign_id, authorization_root_id) DO NOTHING
+		`;
+		await sql`
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-' || task.id, 'connection.provider-upgrade.required', task.id,
+				jsonb_build_object(
+					'campaignId', task.campaign_id,
+					'principalId', task.principal_id,
+					'connectionId', task.connection_id
+				)
+			FROM connection_provider_upgrade_tasks task
+			WHERE (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
+	async publishProviderCatalog(
+		catalog: PublishedProviderCatalog,
+		upgradePolicy?: ProviderUpgradePolicy,
+	) {
 		const catalogChecksum = canonicalHash(catalog.actions);
 		if (!/^sha256:[a-f0-9]{64}$/.test(catalog.executorDigest)) {
 			throw new Error("Provider executor digest is invalid");
@@ -418,6 +531,45 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					);
 				}
 			}
+			if (upgradePolicy?.mode !== "USER_ACTION_REQUIRED") return;
+			if (
+				!upgradePolicy.reason.trim() ||
+				(upgradePolicy.deadlineAt !== undefined &&
+					Number.isNaN(Date.parse(upgradePolicy.deadlineAt)))
+			) {
+				throw new Error("Provider upgrade policy is invalid");
+			}
+			const sourceReleases = await sql<{ provider_release_id: string }[]>`
+				SELECT DISTINCT account.provider_release_id
+				FROM connection_authorization_roots root
+				JOIN connection_grants active_grant
+					ON active_grant.id = root.current_grant_id
+					AND active_grant.root_id = root.id
+					AND active_grant.status = 'ACTIVE'
+				JOIN connection_accounts account
+					ON account.id = active_grant.connection_id
+				WHERE account.provider_id = ${catalog.provider}
+					AND account.provider_release_id <> ${catalog.providerReleaseId}
+			`;
+			for (const source of sourceReleases) {
+				const campaignId = `provider-upgrade-${hash(
+					`${source.provider_release_id}\0${catalog.providerReleaseId}`,
+				).slice(0, 32)}`;
+				await sql`
+					INSERT INTO connection_provider_upgrade_campaigns (
+						id, provider_id, source_provider_release_id,
+						target_provider_release_id, reason, deadline_at
+					)
+					VALUES (
+						${campaignId}, ${catalog.provider}, ${source.provider_release_id},
+						${catalog.providerReleaseId}, ${upgradePolicy.reason},
+						${upgradePolicy.deadlineAt ?? null}
+					)
+					ON CONFLICT (source_provider_release_id, target_provider_release_id)
+					DO NOTHING
+				`;
+			}
+			await this.reconcileProviderUpgradeTasks(sql);
 		});
 		this.publishedProviderReleaseIds.set(
 			catalog.provider,
@@ -426,8 +578,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	/** @deprecated Use publishProviderCatalog. */
-	publishGithubCatalog(catalog: PublishedProviderCatalog) {
-		return this.publishProviderCatalog(catalog);
+	publishGithubCatalog(
+		catalog: PublishedProviderCatalog,
+		upgradePolicy?: ProviderUpgradePolicy,
+	) {
+		return this.publishProviderCatalog(catalog, upgradePolicy);
 	}
 
 	async publishConsumerDeclaration(input: {
@@ -709,6 +864,62 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				displayName: administrator.display_name,
 				email: administrator.email,
 				principalId: administrator.principal_id,
+			}));
+		});
+	}
+
+	async listProviderUpgradeCampaigns(
+		principalId: string,
+	): Promise<ProviderUpgradeCampaignSummary[]> {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			await this.reconcileProviderUpgradeTasks(sql);
+			await this.expireProviderUpgradeTasks(sql);
+			const campaigns = await sql<
+				{
+					completed_count: string;
+					created_at: Date;
+					deadline_at: Date | null;
+					expired_count: string;
+					id: string;
+					pending_count: string;
+					provider_id: string;
+					reason: string;
+					source_provider_release_id: string;
+					target_provider_release_id: string;
+					total_count: string;
+				}[]
+			>`
+				SELECT campaign.id, campaign.provider_id,
+					campaign.source_provider_release_id,
+					campaign.target_provider_release_id, campaign.reason,
+					campaign.deadline_at, campaign.created_at,
+					count(task.id)::text AS total_count,
+					count(task.id) FILTER (
+						WHERE task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					)::text AS pending_count,
+					count(task.id) FILTER (WHERE task.status = 'COMPLETED')::text
+						AS completed_count,
+					count(task.id) FILTER (WHERE task.status = 'EXPIRED')::text
+						AS expired_count
+				FROM connection_provider_upgrade_campaigns campaign
+				LEFT JOIN connection_provider_upgrade_tasks task
+					ON task.campaign_id = campaign.id
+				GROUP BY campaign.id
+				ORDER BY campaign.created_at DESC, campaign.id
+			`;
+			return campaigns.map((campaign) => ({
+				completedCount: Number(campaign.completed_count),
+				createdAt: campaign.created_at.toISOString(),
+				deadlineAt: campaign.deadline_at?.toISOString() ?? null,
+				expiredCount: Number(campaign.expired_count),
+				id: campaign.id,
+				pendingCount: Number(campaign.pending_count),
+				providerId: campaign.provider_id,
+				reason: campaign.reason,
+				sourceProviderReleaseId: campaign.source_provider_release_id,
+				targetProviderReleaseId: campaign.target_provider_release_id,
+				totalCount: Number(campaign.total_count),
 			}));
 		});
 	}
@@ -1360,6 +1571,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						})}
 					)
 				`;
+				await sql`
+					WITH completed AS (
+						UPDATE connection_provider_upgrade_tasks task
+						SET status = 'COMPLETED', completed_at = now(), updated_at = now()
+						FROM connection_provider_upgrade_campaigns campaign
+						WHERE task.campaign_id = campaign.id
+							AND task.authorization_root_id = ${grant.root_id}
+							AND campaign.target_provider_release_id = ${target.providerReleaseId}
+							AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+						AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+						RETURNING task.id, task.campaign_id, task.principal_id
+					), audited AS (
+						INSERT INTO connection_audit_records (principal_id, event, detail)
+						SELECT principal_id, 'PROVIDER_UPGRADE_TASK_COMPLETED',
+							jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+						FROM completed
+					)
+					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+					SELECT 'outbox-completed-' || id,
+						'connection.provider-upgrade.completed', id,
+						jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+					FROM completed
+					ON CONFLICT (topic, aggregate_id) DO NOTHING
+				`;
 			} else {
 				await sql`
 					UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL'
@@ -1388,6 +1623,35 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							reason: "AUTHORIZATION_PROOF_CHANGED",
 						})}
 					)
+				`;
+				await sql`
+					WITH transitioned AS (
+						UPDATE connection_provider_upgrade_tasks task
+						SET status = 'PENDING_AUTHORIZATION', updated_at = now()
+						FROM connection_provider_upgrade_campaigns campaign,
+							connection_accounts account
+						WHERE task.campaign_id = campaign.id
+							AND account.id = task.connection_id
+							AND task.authorization_root_id = ${grant.root_id}
+							AND campaign.target_provider_release_id = account.provider_release_id
+							AND task.status = 'PENDING_CONNECTION'
+						RETURNING task.id, task.campaign_id, task.principal_id, task.connection_id
+					), audited AS (
+						INSERT INTO connection_audit_records (principal_id, event, detail)
+						SELECT principal_id, 'PROVIDER_UPGRADE_AUTHORIZATION_REQUIRED',
+							jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+						FROM transitioned
+					)
+					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+					SELECT 'outbox-authorization-required-' || id,
+						'connection.provider-upgrade.authorization-required', id,
+						jsonb_build_object(
+							'campaignId', campaign_id,
+							'principalId', principal_id,
+							'connectionId', connection_id
+						)
+					FROM transitioned
+					ON CONFLICT (topic, aggregate_id) DO NOTHING
 				`;
 			}
 		}
@@ -2061,6 +2325,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						previewId: input.previewId,
 					})}
 				)
+			`;
+			await sql`
+				WITH completed AS (
+					UPDATE connection_provider_upgrade_tasks task
+					SET status = 'COMPLETED', completed_at = now(), updated_at = now()
+					FROM connection_provider_upgrade_campaigns campaign
+					WHERE task.campaign_id = campaign.id
+						AND task.authorization_root_id = ${root.id}
+						AND campaign.target_provider_release_id = ${target.providerReleaseId}
+						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+						AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+					RETURNING task.id, task.campaign_id, task.principal_id
+				), audited AS (
+					INSERT INTO connection_audit_records (principal_id, event, detail)
+					SELECT principal_id, 'PROVIDER_UPGRADE_TASK_COMPLETED',
+						jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+					FROM completed
+				)
+				INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+				SELECT 'outbox-completed-' || id,
+					'connection.provider-upgrade.completed', id,
+					jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+				FROM completed
+				ON CONFLICT (topic, aggregate_id) DO NOTHING
 			`;
 			return { grantId };
 		});
@@ -3118,29 +3406,40 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId: string,
 		options: { includeActivity?: boolean } = {},
 	): Promise<ConnectionOverview> {
+		await this.sql.begin(async (sql) => {
+			await this.reconcileProviderUpgradeTasks(sql, principalId);
+			await this.expireProviderUpgradeTasks(sql, principalId);
+		});
 		const currentReleaseIds = new Set(
 			this.publishedProviderReleaseIds.values(),
 		);
-		const [principal, connections, actions, grants, consumers, calls] =
-			await Promise.all([
-				this.sql<{ display_name: string; id: string }[]>`
+		const [
+			principal,
+			connections,
+			actions,
+			grants,
+			consumers,
+			calls,
+			upgradeTasks,
+		] = await Promise.all([
+			this.sql<{ display_name: string; id: string }[]>`
 					SELECT id, display_name FROM connection_principals
 					WHERE id = ${principalId} AND status = 'ACTIVE'
 				`,
-				this.sql<
-					{
-						action_version_ids: unknown;
-						display_name: string;
-						credential_scope_known: boolean;
-						external_account: string;
-						id: string;
-						owner_type: "PERSONAL" | "SHARED";
-						provider_id: string;
-						provider_release_id: string;
-						release_status: "DISABLED" | "PUBLISHED";
-						status: "ACTIVE" | "DISCONNECTED";
-					}[]
-				>`
+			this.sql<
+				{
+					action_version_ids: unknown;
+					display_name: string;
+					credential_scope_known: boolean;
+					external_account: string;
+					id: string;
+					owner_type: "PERSONAL" | "SHARED";
+					provider_id: string;
+					provider_release_id: string;
+					release_status: "DISABLED" | "PUBLISHED";
+					status: "ACTIVE" | "DISCONNECTED";
+				}[]
+			>`
 					SELECT account.id, account.external_account, account.display_name,
 						account.owner_type, account.provider_id, account.provider_release_id,
 						account.status, release.status AS release_status,
@@ -3179,19 +3478,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						credential.scope_json
 					ORDER BY account.display_name, account.id
 				`,
-				options.includeActivity === false
-					? Promise.resolve([])
-					: this.sql<
-							{
-								description: string;
-								effect: "READ" | "WRITE";
-								id: string;
-								input_schema: unknown;
-								name: ActionName;
-								provider_release_id: string;
-								required_scopes: unknown;
-							}[]
-						>`
+			options.includeActivity === false
+				? Promise.resolve([])
+				: this.sql<
+						{
+							description: string;
+							effect: "READ" | "WRITE";
+							id: string;
+							input_schema: unknown;
+							name: ActionName;
+							provider_release_id: string;
+							required_scopes: unknown;
+						}[]
+					>`
 					SELECT action.id, action.name, action.description, action.effect,
 							action.input_schema, action.required_scopes,
 							action.provider_release_id
@@ -3201,26 +3500,26 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE action.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
 					ORDER BY action.id
 					`,
-				this.sql<
-					{
-						action_version_ids: unknown;
-						actions: unknown;
-						connection_id: string;
-						connection_display_name: string;
-						consumer_id: string;
-						consumer_name: string;
-						external_account: string;
-						id: string;
-						provider_id: string;
-						status:
-							| "ACTIVE"
-							| "PAUSED_CONNECTION"
-							| "PAUSED_CREDENTIAL"
-							| "REPLACED"
-							| "REVOKED"
-							| "TERMINATED";
-					}[]
-				>`
+			this.sql<
+				{
+					action_version_ids: unknown;
+					actions: unknown;
+					connection_id: string;
+					connection_display_name: string;
+					consumer_id: string;
+					consumer_name: string;
+					external_account: string;
+					id: string;
+					provider_id: string;
+					status:
+						| "ACTIVE"
+						| "PAUSED_CONNECTION"
+						| "PAUSED_CREDENTIAL"
+						| "REPLACED"
+						| "REVOKED"
+						| "TERMINATED";
+				}[]
+			>`
 					SELECT stored_grant.id, stored_grant.connection_id,
 						stored_grant.consumer_id, stored_grant.status,
 						account.provider_id,
@@ -3254,7 +3553,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						account.provider_id, account.display_name, account.external_account
 					ORDER BY stored_grant.id
 				`,
-				this.sql<{ id: string; name: string }[]>`
+			this.sql<{ id: string; name: string }[]>`
 					SELECT DISTINCT consumer.id, consumer.display_name AS name
 					FROM connection_consumers consumer
 					JOIN connection_consumer_instances instance
@@ -3264,19 +3563,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND consumer.status = 'ACTIVE'
 					ORDER BY name, id
 				`,
-				options.includeActivity === false
-					? Promise.resolve([])
-					: this.sql<
-							{
-								action_name: ActionName;
-								connection_id: string;
-								created_at: Date;
-								grant_id: string;
-								id: string;
-								result: unknown;
-								status: CallStatus;
-							}[]
-						>`
+			options.includeActivity === false
+				? Promise.resolve([])
+				: this.sql<
+						{
+							action_name: ActionName;
+							connection_id: string;
+							created_at: Date;
+							grant_id: string;
+							id: string;
+							result: unknown;
+							status: CallStatus;
+						}[]
+					>`
 					SELECT call.id, call.connection_id, call.grant_id, call.status,
 						call.result, call.created_at, action.name AS action_name
 					FROM connection_calls call
@@ -3284,7 +3583,37 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE call.principal_id = ${principalId}
 					ORDER BY call.created_at DESC LIMIT 100
 					`,
-			]);
+			this.sql<
+				{
+					campaign_id: string;
+					connection_id: string;
+					consumer_id: string;
+					consumer_name: string;
+					deadline_at: Date | null;
+					provider_id: string;
+					reason: string;
+					status:
+						| "PENDING_CONNECTION"
+						| "PENDING_AUTHORIZATION"
+						| "COMPLETED"
+						| "EXPIRED";
+					target_provider_release_id: string;
+					task_id: string;
+				}[]
+			>`
+					SELECT task.id AS task_id, task.campaign_id, task.connection_id, task.consumer_id,
+						consumer.display_name AS consumer_name, campaign.provider_id,
+						campaign.target_provider_release_id, campaign.reason,
+						campaign.deadline_at, task.status
+					FROM connection_provider_upgrade_tasks task
+					JOIN connection_provider_upgrade_campaigns campaign
+						ON campaign.id = task.campaign_id
+					JOIN connection_consumers consumer ON consumer.id = task.consumer_id
+					WHERE task.principal_id = ${principalId}
+						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					ORDER BY campaign.created_at, task.id
+				`,
+		]);
 		if (!principal[0]) forbidden();
 		return {
 			actions: actions
@@ -3357,6 +3686,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				displayName: principal[0].display_name,
 				id: principal[0].id,
 			},
+			upgradeTasks: upgradeTasks.map((task) => ({
+				campaignId: task.campaign_id,
+				connectionId: task.connection_id,
+				consumerId: task.consumer_id,
+				consumerName: task.consumer_name,
+				deadlineAt: task.deadline_at?.toISOString() ?? null,
+				providerId: task.provider_id,
+				reason: task.reason,
+				status: task.status,
+				targetProviderReleaseId: task.target_provider_release_id,
+				taskId: task.task_id,
+			})),
 		};
 	}
 

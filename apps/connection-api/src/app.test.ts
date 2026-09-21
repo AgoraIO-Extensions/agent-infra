@@ -96,6 +96,9 @@ class TestRepository implements ConnectionRepository {
 	async listConnectionAdministrators() {
 		return [];
 	}
+	async listProviderUpgradeCampaigns() {
+		return [];
+	}
 	async revokeConnectionAdministrator() {}
 	async revokeSharedScopePrincipal() {}
 	async renameSharedScope() {}
@@ -240,6 +243,7 @@ class TestRepository implements ConnectionRepository {
 			consumers: [],
 			grants: [],
 			principal: { displayName: "Alice Chen", id: "alice" },
+			upgradeTasks: [],
 		};
 	}
 
@@ -1373,6 +1377,10 @@ describe("Connection API", () => {
 					},
 				];
 			},
+			listProviderUpgradeCampaigns: async (principalId: string) => {
+				expect(principalId).toBe("principal-admin");
+				return [];
+			},
 			publishConsumerDeclarationAsAdministrator: async (
 				actorPrincipalId: string,
 				input: unknown,
@@ -1428,6 +1436,11 @@ describe("Connection API", () => {
 				messageKey: "connection.error.resource_not_found",
 			},
 		});
+		const deniedUpgrades = await app.request(
+			"/api/v1/connection/admin/provider-upgrades",
+			{ headers: { cookie: "connection_session=user-session" } },
+		);
+		expect(deniedUpgrades.status).toBe(404);
 		const deniedDeclarations = await app.request(
 			"/api/v1/connection/admin/consumers/consumer-agent/declarations",
 			{ headers: { cookie: "connection_session=user-session" } },
@@ -1444,6 +1457,12 @@ describe("Connection API", () => {
 				{ isAdministrator: false, principalId: "principal-user" },
 			],
 		});
+		const adminUpgrades = await app.request(
+			"/api/v1/connection/admin/provider-upgrades",
+			{ headers: { cookie: "connection_session=admin-session" } },
+		);
+		expect(adminUpgrades.status).toBe(200);
+		expect(await adminUpgrades.json()).toEqual({ campaigns: [] });
 		const consumers = await app.request(
 			"/api/v1/connection/admin/pat-consumers",
 			{ headers: { cookie: "connection_session=admin-session" } },

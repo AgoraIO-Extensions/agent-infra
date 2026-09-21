@@ -127,6 +127,38 @@ export type ConnectionOverview = {
 			| "TERMINATED";
 	}>;
 	principal: { displayName: string; id: string };
+	upgradeTasks: ProviderUpgradeTask[];
+};
+
+export type ProviderUpgradeTask = {
+	campaignId: string;
+	connectionId: string;
+	consumerId: string;
+	consumerName: string;
+	deadlineAt: string | null;
+	providerId: string;
+	reason: string;
+	status:
+		| "PENDING_CONNECTION"
+		| "PENDING_AUTHORIZATION"
+		| "COMPLETED"
+		| "EXPIRED";
+	targetProviderReleaseId: string;
+	taskId: string;
+};
+
+export type ProviderUpgradeCampaignSummary = {
+	completedCount: number;
+	createdAt: string;
+	deadlineAt: string | null;
+	expiredCount: number;
+	id: string;
+	pendingCount: number;
+	providerId: string;
+	reason: string;
+	sourceProviderReleaseId: string;
+	targetProviderReleaseId: string;
+	totalCount: number;
 };
 
 export type ConnectionPrincipalSummary = {
@@ -573,6 +605,9 @@ export interface ConnectionRepository {
 	listConnectionAdministrators(
 		principalId: string,
 	): Promise<ConnectionAdministrator[]>;
+	listProviderUpgradeCampaigns(
+		principalId: string,
+	): Promise<ProviderUpgradeCampaignSummary[]>;
 	revokeConnectionAdministrator(input: {
 		actorPrincipalId: string;
 		targetPrincipalId: string;
@@ -1121,6 +1156,10 @@ export class ConnectionApplicationService {
 
 	listConnectionAdministrators(principalId: string) {
 		return this.repository.listConnectionAdministrators(principalId);
+	}
+
+	listProviderUpgradeCampaigns(principalId: string) {
+		return this.repository.listProviderUpgradeCampaigns(principalId);
 	}
 
 	revokeConnectionAdministrator(input: {

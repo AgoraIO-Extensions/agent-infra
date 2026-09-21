@@ -187,6 +187,23 @@ const api = vi.hoisted(() => ({
 			},
 		],
 	})),
+	listProviderUpgradeCampaigns: vi.fn(async () => ({
+		campaigns: [
+			{
+				completedCount: 3,
+				createdAt: "2026-09-21T00:00:00.000Z",
+				deadlineAt: null,
+				expiredCount: 0,
+				id: "campaign-bitbucket-v7",
+				pendingCount: 2,
+				providerId: "bitbucket",
+				reason: "Provider authorization contract changed",
+				sourceProviderReleaseId: "connection-v6",
+				targetProviderReleaseId: "connection-v7",
+				totalCount: 5,
+			},
+		],
+	})),
 	listTokens: vi.fn(async () => ({
 		consumers: [
 			{ id: "consumer-portable-pat", name: "Portable Connection PAT" },
@@ -506,6 +523,8 @@ describe("Connection 管理 mutation wiring", () => {
 	it("管理员页面调用授予和撤销 API", async () => {
 		renderPage(<AdministratorsPage />);
 		await screen.findByText("user@agora.io");
+		expect(await screen.findByText(/connection-v6/)).toBeTruthy();
+		expect(screen.getByText("2 / 5")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "设为管理员" }));
 		fireEvent.click(screen.getByRole("button", { name: "移除管理员" }));
 		await waitFor(() => expect(api.grantAdministrator).toHaveBeenCalledOnce());
