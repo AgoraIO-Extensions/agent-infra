@@ -566,6 +566,10 @@ describe("official declaration transition", () => {
 				force: true,
 			});
 			fixture.arch = arch;
+			(payload["bundle/bin/codex"] as Buffer).writeUInt16LE(
+				arch === "x64" ? 62 : 183,
+				18,
+			);
 			fixture.release = {
 				provenance: { ...provenance },
 				artifacts: {

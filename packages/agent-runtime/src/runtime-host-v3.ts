@@ -807,8 +807,8 @@ export class RuntimeHostV3 {
 						invalidDriver();
 					validate();
 					options.store.checkRequestV3(claims);
-					yield parsed.data;
 					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
+					yield parsed.data;
 				}
 			} finally {
 				clearTimeout(timer);

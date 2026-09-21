@@ -1399,9 +1399,6 @@ describe("Runtime V3 durable authorization", () => {
 			{ ...eventBase, confirmedCursor: first.value.cursor },
 			"events.ack",
 		);
-		await expect(
-			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
-		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
 		const supplement = signV3Fixture(
 			{
 				...base(accepted.hostSessionRef),
@@ -1422,6 +1419,9 @@ describe("Runtime V3 durable authorization", () => {
 		);
 		const second = await iterator.next();
 		if (second.done) throw new Error("missing synthetic continuation");
+		await expect(
+			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
 		const nextAck = signV3Fixture(
 			{ ...eventBase, confirmedCursor: second.value.cursor },
 			"events.ack",
