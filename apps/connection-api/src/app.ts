@@ -48,6 +48,7 @@ export type ConnectionAppOptions = {
 	githubOAuthRedirectUri?: string;
 	managementIdentity?: ConnectionManagementIdentityVerifier;
 	oauthServer?: ConnectionOAuthServerOptions;
+	providerServiceHostAliases?: Readonly<Record<string, string>>;
 	service?: ConnectionApplicationService;
 	supportedProviders?: readonly string[];
 };
@@ -231,6 +232,7 @@ const openConnectorMcpTools = [
 const mcpServerInstructions = [
 	"Use Connection to discover and execute authorized provider actions through a fixed tool set.",
 	"Start with list_apps or search_actions, and use list_connections to inspect the account selected by the current Connection grant.",
+	"When a Jenkins job URL is available, pass the complete URL as service; Connection resolves its hostname to the exact Jenkins provider.",
 	"Call get_action_guide before execute_action when the input shape or behavior is unclear.",
 	"When a filtered discovery result is empty, follow its guidance reasonCode and nextAction instead of guessing the authorization state.",
 	"Connection resolves the current user, consumer, grant, account, and credential; never pass selectors or provider credentials.",
@@ -260,13 +262,54 @@ function connectionWebProviderUrl(
 	return url.toString();
 }
 
+function resolveProviderService(
+	options: ConnectionAppOptions,
+	service: string,
+) {
+	const normalizedService = service.trim().toLowerCase();
+	if (!normalizedService.includes("://")) {
+		return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedService)
+			? normalizedService
+			: "unmapped-service-value";
+	}
+	try {
+		const hostname = new URL(normalizedService).hostname
+			.toLowerCase()
+			.replace(/\.$/, "");
+		if (!hostname) return "unmapped-service-url";
+		const aliases = options.providerServiceHostAliases;
+		if (aliases && Object.hasOwn(aliases, hostname)) {
+			const provider = aliases[hostname];
+			if (typeof provider === "string" && provider.trim()) {
+				return provider.trim().toLowerCase();
+			}
+		}
+		return `unmapped-hostname:${hostname}`;
+	} catch {
+		return "unmapped-service-url";
+	}
+}
+
 async function providerGuidance(
 	options: ConnectionAppOptions,
 	identity: { consumerId: string; instanceId: string; principalId: string },
 	provider: string,
 ) {
-	const normalizedProvider = provider.toLowerCase();
+	const normalizedProvider = resolveProviderService(options, provider);
 	if (!options.supportedProviders?.includes(normalizedProvider)) {
+		const candidates = options.supportedProviders
+			?.filter((candidate) => candidate.startsWith(`${normalizedProvider}-`))
+			.sort();
+		if (candidates?.length)
+			return {
+				candidates,
+				message: `${normalizedProvider} matches supported providers. Select one candidate and retry.`,
+				messageKey: "connection.provider.selection_required",
+				nextAction: { candidates, type: "SELECT_PROVIDER" },
+				provider: normalizedProvider,
+				reasonCode: "PROVIDER_SERVICE_SELECTION_REQUIRED",
+				retryable: true,
+			};
 		return {
 			message: `${normalizedProvider} is not available in this Connection deployment. Contact the Connection administrator to request it.`,
 			messageKey: "connection.provider.unsupported",
@@ -555,9 +598,12 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 					if (tool.name === "list_apps") {
 						const query =
 							typeof input.query === "string" ? input.query : undefined;
+						const resolvedQuery = query
+							? resolveProviderService(options, query)
+							: undefined;
 						const apps = await service.listDirectAppsForIdentity(
 							identity,
-							query,
+							resolvedQuery,
 						);
 						return context.json(
 							mcpResult(
@@ -578,8 +624,11 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 						);
 					}
 					if (tool.name === "list_connections") {
-						const serviceName =
+						const requestedService =
 							typeof input.service === "string" ? input.service : undefined;
+						const serviceName = requestedService
+							? resolveProviderService(options, requestedService)
+							: undefined;
 						const connections = await service.listDirectConnectionsForIdentity(
 							identity,
 							serviceName,
@@ -603,8 +652,11 @@ export function createConnectionApp(options: ConnectionAppOptions = {}) {
 						);
 					}
 					if (tool.name === "search_actions") {
-						const serviceName =
+						const requestedService =
 							typeof input.service === "string" ? input.service : undefined;
+						const serviceName = requestedService
+							? resolveProviderService(options, requestedService)
+							: undefined;
 						const actions = await service.searchDirectActionsForIdentity(
 							identity,
 							{

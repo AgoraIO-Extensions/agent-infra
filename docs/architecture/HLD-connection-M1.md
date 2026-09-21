@@ -476,6 +476,14 @@ input schema、scope，以及当前 Connection 摘要和执行策略，确定性
 Markdown；它不是原始 input/output schema 接口。AI 只负责选择 Action，并从用户请求和可见上下文中寻找业务
 参数；Credential、账号选择、endpoint、HTTP method 和鉴权 header 仍由 Runtime 与 executor 处理。
 
+当 `service` 不是精确 Provider ID、但可作为一个或多个 runtime supported provider 的公共前缀时，
+发现接口返回 `PROVIDER_SERVICE_SELECTION_REQUIRED`、排序后的 `candidates` 和
+`nextAction.type=SELECT_PROVIDER`；调用方必须选用候选中的精确 Provider ID 重试。该提示不得激活尚未
+完成 Provider Onboarding 的 profile，也不得允许调用方选择 Connection、Credential 或 endpoint。
+Jenkins Job URL 可以直接作为 `service` 传入；Connection 只按标准 URL 解析后的规范化 hostname 查询
+服务端静态 allowlist，忽略 scheme 和 port，再转换为精确 Provider ID。URL 不作为请求 endpoint，Provider
+executor 仍只访问 profile 固定 origin；未知 hostname 或映射到尚未上线 profile 时必须 fail closed。
+
 Connection 复用 Provider/Action 元数据、schema 和 executor，但不复用上游 Runtime 的
 Credential、SQLite 或 Server。Direct MCP 复用上述五个稳定发现 tool；Action Guide 由 Connection
 依据当前已授权 ActionVersion 确定性生成，执行仍经过 Connection 的 Grant、幂等和审计边界。
