@@ -124,6 +124,8 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 	const claims = RuntimeExecutionGrantClaimsV2Schema.parse(input);
 	const command = claims.allowedCommands[0];
 	const isEvent = command === "events.persist" || command === "events.ack";
+	// The reason names the persisted authority; allowedCommands names the capability.
+	// Isolation still permits scoped stop/status and event drain/ack during recovery.
 	const controlReasonMismatch =
 		claims.purpose === "control" &&
 		command === "generation.cancel" &&

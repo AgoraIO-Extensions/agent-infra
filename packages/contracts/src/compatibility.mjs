@@ -990,7 +990,7 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"05fb778c5fc936652a2daa3e7710b2038b13895604a4ce5acd71c1a39c93860f"
+		"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1"
 	)
 		return false;
 	const normalized = structuredClone(current);

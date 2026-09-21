@@ -142,6 +142,14 @@ describe("Runtime purpose separation", () => {
 				allowedCommands: ["generation.cancel" as const],
 				reason: "generation_isolation" as const,
 			},
+			{
+				allowedCommands: ["turn.stop" as const],
+				reason: "generation_isolation" as const,
+			},
+			{
+				allowedCommands: ["session.status" as const],
+				reason: "generation_isolation" as const,
+			},
 		]) {
 			expect(
 				validateVerifiedRuntimeExecutionGrantClaimsV2(
@@ -149,6 +157,36 @@ describe("Runtime purpose separation", () => {
 					context,
 				),
 			).toMatchObject(valid);
+		}
+	});
+	it("preserves persistence and acknowledgement during generation isolation", () => {
+		for (const eventAccess of [
+			{
+				command: "events.persist",
+				consumer: "platform_worker_persistence",
+				afterCursor: null,
+			},
+			{
+				command: "events.ack",
+				consumer: "platform_worker_persistence",
+				confirmedCursor: "persisted-cursor",
+			},
+		] as const) {
+			const claims = {
+				...common,
+				purpose: "control",
+				controlRecordId: "generation-isolation",
+				reason: "generation_isolation",
+				allowedCommands: [eventAccess.command],
+				eventAccess,
+			};
+			expect(
+				validateVerifiedRuntimeExecutionGrantClaimsV2(claims, {
+					expectedIssuer: common.issuer,
+					expectedWorkerId: common.workerId,
+					now: 2_000,
+				}),
+			).toEqual(claims);
 		}
 	});
 	it("grants authorize exactly one audience and command", () => {

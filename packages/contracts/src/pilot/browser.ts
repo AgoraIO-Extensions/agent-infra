@@ -555,8 +555,9 @@ export const WecomSetupProjectionV1Schema = z.strictObject({
 		"expired",
 	]),
 });
+const wecomSetupState = z.string().min(1).max(1024);
 export const WecomSetupCredentialsV1Schema = z.strictObject({
-	state: z.string().min(1).max(1024),
+	state: wecomSetupState,
 	botId: z.string().min(1).max(1024),
 	secret: z.string().min(1).max(1024).meta({ writeOnly: true }),
 	takeoverConfirmed: z.literal(true),
@@ -596,7 +597,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 				"200": jsonResponse(
 					"Owner configuration session",
 					WecomSetupProjectionV1Schema.extend({
-						state: z.string(),
+						state: wecomSetupState,
 						qrAvailable: z.literal(false),
 						qrUnavailableReason: z.literal(
 							"authorization_correlation_unverified",

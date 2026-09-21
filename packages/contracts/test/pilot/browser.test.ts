@@ -17,6 +17,7 @@ import {
 	PlatformAuditProjectionV2Schema,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
+	WecomSetupCredentialsV1Schema,
 } from "../../src/pilot/browser.js";
 
 const requiredOperations = [
@@ -79,6 +80,35 @@ const validApplication = {
 };
 
 describe("Pilot browser contracts", () => {
+	it("returns a bounded WeCom setup state that can be submitted unchanged", () => {
+		const response =
+			pilotBrowserOpenApiPathsV1["/api/v1/agents/{agentId}/wecom-setup"].post
+				.responses["200"].content["application/json"].schema;
+		for (const state of ["s", "s".repeat(1024), "", "s".repeat(1025)]) {
+			const expected = state.length > 0 && state.length <= 1024;
+			expect(
+				response.safeParse({
+					sessionId: "setup",
+					agentId: "agent",
+					configurationRevision: 1,
+					expiresAt: "2026-09-21T00:00:00Z",
+					status: "awaiting_input",
+					state,
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				}).success,
+			).toBe(expected);
+			expect(
+				WecomSetupCredentialsV1Schema.safeParse({
+					state,
+					botId: "bot",
+					secret: "one-time-secret-input",
+					takeoverConfirmed: true,
+				}).success,
+			).toBe(expected);
+		}
+	});
+
 	it("publishes the complete approved management and text-conversation journey", () => {
 		const document = createDocument({
 			openapi: "3.1.0",
