@@ -1,7 +1,7 @@
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
 import { Duplex, PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import type { CodexConnectionBootstrapResponse } from "./codex-connection-client.js";
 import {
 	type CodexNativeCallbackHandler,
@@ -12,13 +12,7 @@ import {
 } from "./codex-native-callback.js";
 
 const corpus = JSON.parse(
-	readFileSync(
-		new URL(
-			"../../../deploy/runtime/vendor/codex/callback-v2-corpus.json",
-			import.meta.url,
-		),
-		"utf8",
-	),
+	readCallbackCorpusBytes().toString("utf8"),
 ) as {
 	cases: { id: string; frame: unknown }[];
 	framingCases: { id: string; wireUtf8?: string; wireHex?: string }[];

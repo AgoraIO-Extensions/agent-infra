@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import {
 	type FileHandle,
 	mkdtemp,
@@ -18,6 +17,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import Ajv2020 from "ajv/dist/2020.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -2458,13 +2458,7 @@ describe("Codex native source HTTP model requests", () => {
 });
 
 const connectionCorpus = JSON.parse(
-	readFileSync(
-		new URL(
-			"../../../deploy/runtime/vendor/codex/callback-v2-corpus.json",
-			import.meta.url,
-		),
-		"utf8",
-	),
+	readCallbackCorpusBytes().toString("utf8"),
 ) as {
 	cases: { id: string; frame: unknown }[];
 };

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it, vi } from "vitest";
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import { codexCallbackSchema } from "./codex-callback-schema.generated.js";
 import {
 	type CodexConnectionBootstrapRequest,
@@ -14,13 +14,7 @@ import {
 } from "./codex-connection-client.js";
 
 const corpus = JSON.parse(
-	readFileSync(
-		new URL(
-			"../../../deploy/runtime/vendor/codex/callback-v2-corpus.json",
-			import.meta.url,
-		),
-		"utf8",
-	),
+	readCallbackCorpusBytes().toString("utf8"),
 ) as {
 	cases: { id: string; frame: unknown; schemaValid: boolean }[];
 };
