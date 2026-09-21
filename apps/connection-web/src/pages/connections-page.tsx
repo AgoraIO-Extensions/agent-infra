@@ -249,10 +249,9 @@ export function ConnectionsPage() {
 					<Button
 						type="button"
 						onClick={() => {
-							document
-								.getElementById("connector-search")
-								?.scrollIntoView({ behavior: "smooth", block: "center" });
-							document.getElementById("connector-search")?.focus();
+							const search = document.getElementById("connector-search");
+							search?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+							search?.focus();
 						}}
 					>
 						<Plus aria-hidden="true" size={17} />
@@ -284,12 +283,12 @@ export function ConnectionsPage() {
 					{upgradeNotice}
 				</p>
 			) : null}
+			<ConnectorCatalog
+				connections={data?.connections ?? []}
+				onConnect={connectProvider}
+			/>
 			{data ? (
 				<div className="content-stack">
-					<ConnectorCatalog
-						connections={data.connections}
-						onConnect={connectProvider}
-					/>
 					{data.upgradeTasks?.length ? (
 						<section
 							className="data-section"

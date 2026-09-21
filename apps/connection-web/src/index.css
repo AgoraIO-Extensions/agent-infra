@@ -257,6 +257,9 @@ p {
 	border-radius: var(--radius);
 	background: var(--surface-raised);
 }
+.connector-workspace + .content-stack {
+	margin-top: 20px;
+}
 .connector-catalog-sidebar {
 	padding: 14px;
 	border-right: 1px solid var(--border);
