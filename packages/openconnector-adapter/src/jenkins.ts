@@ -334,6 +334,22 @@ export class JenkinsAdapter
 		if (response.status >= 300 && response.status < 400) {
 			throw providerError("Jenkins request redirected");
 		}
+		if (
+			response.status === 416 &&
+			start === 0 &&
+			response.headers.get("content-range")?.toLowerCase() === "bytes */0"
+		) {
+			return {
+				contentBase64: "",
+				mimeType:
+					response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
+					"application/octet-stream",
+				moreData: false,
+				nextStart: 0,
+				size: 0,
+				truncated: false,
+			};
+		}
 		if (!response.ok) {
 			throw providerError(
 				`Jenkins request failed with HTTP ${response.status}`,
@@ -460,7 +476,13 @@ function jobPath(input: JsonObject) {
 	const segments = fullName?.split("/");
 	if (
 		!segments?.length ||
-		segments.some((segment) => !segment || segment === "." || segment === "..")
+		segments.some(
+			(segment) =>
+				!segment ||
+				segment === "." ||
+				segment === ".." ||
+				segment.includes("\\"),
+		)
 	) {
 		throw providerError("Jenkins jobFullName is invalid");
 	}
@@ -474,7 +496,13 @@ function artifactPath(input: JsonObject) {
 	const segments = path?.split("/");
 	if (
 		!segments?.length ||
-		segments.some((segment) => !segment || segment === "." || segment === "..")
+		segments.some(
+			(segment) =>
+				!segment ||
+				segment === "." ||
+				segment === ".." ||
+				segment.includes("\\"),
+		)
 	) {
 		throw providerError("Jenkins artifactPath is invalid");
 	}
