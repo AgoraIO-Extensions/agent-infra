@@ -3,11 +3,54 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ConnectionsView, LoginView, Status, TokensView } from "./views";
+import {
+	ConnectionsView,
+	ConnectorCatalog,
+	LoginView,
+	Status,
+	TokensView,
+} from "./views";
 
 afterEach(cleanup);
 
 describe("Connection Web 中文界面", () => {
+	it("连接器目录支持分类、搜索和连接操作", () => {
+		const onConnect = vi.fn();
+		render(
+			<ConnectorCatalog
+				connections={[
+					{
+						actionVersionIds: [],
+						displayName: "GitHub",
+						externalAccount: "guoxianzhe",
+						id: "github",
+						ownerType: "PERSONAL",
+						providerId: "github",
+						requiresReconnect: false,
+						status: "ACTIVE",
+					},
+				]}
+				onConnect={onConnect}
+			/>,
+		);
+
+		expect(screen.getByText("已连接 1 个账号")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "知识库 1" }));
+		expect(screen.getByRole("heading", { name: "Confluence" })).toBeTruthy();
+		expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
+
+		fireEvent.change(screen.getByLabelText("搜索连接器"), {
+			target: { value: "missing" },
+		});
+		expect(screen.getByText("没有匹配的连接器")).toBeTruthy();
+
+		fireEvent.change(screen.getByLabelText("搜索连接器"), {
+			target: { value: "页面" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接 Confluence" }));
+		expect(onConnect).toHaveBeenCalledWith("confluence");
+	});
+
 	it("显示中文登录表单和错误提示", () => {
 		const onSubmit = vi.fn();
 		render(

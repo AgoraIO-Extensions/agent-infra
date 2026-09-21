@@ -25,6 +25,8 @@ import { useGithubOAuth } from "../github-oauth";
 import { ConsoleShell, PageError } from "../shell";
 import {
 	ConnectionsView,
+	ConnectorCatalog,
+	type ConnectorProviderId,
 	EmptyState,
 	PageHeader,
 	providerLabel,
@@ -192,6 +194,13 @@ export function ConnectionsPage() {
 	});
 
 	const beginOAuth = () => oauth.begin();
+	const connectProvider = (providerId: ConnectorProviderId) => {
+		if (providerId === "bitbucket") setBitbucketOpen(true);
+		else if (providerId === "jira") setJiraOpen(true);
+		else if (providerId === "confluence") setConfluenceOpen(true);
+		else if (providerId === "jenkins-release") setJenkinsOpen(true);
+		else beginOAuth();
+	};
 
 	const data = overview.data?.overview;
 	const githubConnectionHealthy = data?.connections.some(
@@ -237,44 +246,18 @@ export function ConnectionsPage() {
 			<PageHeader
 				title="我的 Connection"
 				action={
-					<div className="row-actions">
-						<Button
-							variant="secondary"
-							type="button"
-							onClick={() => setJenkinsOpen(true)}
-						>
-							<SlidersHorizontal aria-hidden="true" size={17} />
-							连接 Jenkins Release
-						</Button>
-						<Button
-							variant="secondary"
-							type="button"
-							onClick={() => setConfluenceOpen(true)}
-						>
-							<BookOpen aria-hidden="true" size={17} />
-							连接 Confluence
-						</Button>
-						<Button
-							variant="secondary"
-							type="button"
-							onClick={() => setJiraOpen(true)}
-						>
-							<KeyRound aria-hidden="true" size={17} />
-							连接 Jira
-						</Button>
-						<Button
-							variant="secondary"
-							type="button"
-							onClick={() => setBitbucketOpen(true)}
-						>
-							<GitBranch aria-hidden="true" size={17} />
-							连接 Bitbucket
-						</Button>
-						<Button type="button" onClick={beginOAuth}>
-							<Plus aria-hidden="true" size={17} />
-							连接 GitHub
-						</Button>
-					</div>
+					<Button
+						type="button"
+						onClick={() => {
+							document
+								.getElementById("connector-search")
+								?.scrollIntoView({ behavior: "smooth", block: "center" });
+							document.getElementById("connector-search")?.focus();
+						}}
+					>
+						<Plus aria-hidden="true" size={17} />
+						添加连接器
+					</Button>
 				}
 			/>
 			{overview.isPending ? (
@@ -303,6 +286,10 @@ export function ConnectionsPage() {
 			) : null}
 			{data ? (
 				<div className="content-stack">
+					<ConnectorCatalog
+						connections={data.connections}
+						onConnect={connectProvider}
+					/>
 					{data.upgradeTasks?.length ? (
 						<section
 							className="data-section"

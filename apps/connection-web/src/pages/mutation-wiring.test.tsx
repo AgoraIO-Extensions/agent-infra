@@ -273,7 +273,7 @@ describe("Connection 管理 mutation wiring", () => {
 				}).then(() => ({ connectionId })),
 		);
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("heading", { name: "Jenkins Release" });
+		await screen.findByRole("heading", { level: 2, name: "Jenkins Release" });
 
 		fireEvent.click(screen.getByRole("button", { name: "升级连接" }));
 		const pending = await screen.findByRole("button", { name: "正在升级" });
@@ -336,7 +336,9 @@ describe("Connection 管理 mutation wiring", () => {
 			screen.getByRole("heading", { name: "connectionE2E2" }),
 		).toBeTruthy();
 		expect(screen.getByText("329435106")).toBeTruthy();
-		expect(screen.getByRole("heading", { name: "Confluence" })).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { level: 2, name: "Confluence" }),
+		).toBeTruthy();
 		expect(screen.getByRole("columnheader", { name: "平台" })).toBeTruthy();
 		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
 		expect(screen.queryByText("github.get_repository")).toBeNull();
