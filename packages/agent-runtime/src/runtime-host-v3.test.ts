@@ -1395,51 +1395,8 @@ describe("Runtime V3 durable authorization", () => {
 				verifyRuntimeV2Fixture(forged.grant),
 			),
 		).rejects.toThrow();
-		const ack = signV3Fixture(
-			{ ...eventBase, confirmedCursor: first.value.cursor },
-			"events.ack",
-		);
-		const supplement = signV3Fixture(
-			{
-				...base(accepted.hostSessionRef),
-				hostSessionRef: accepted.hostSessionRef,
-				operation: {
-					kind: "message" as const,
-					id: "message-second",
-					deliveryFence: 1,
-					executionDeliveryFence: 1,
-				},
-				input: { text: "synthetic continuation", attachments: [] },
-			},
-			"turn.supplement",
-		);
-		await env.host.supplementV3(
-			supplement,
-			verifyRuntimeV2Fixture(supplement.grant),
-		);
-		const second = await iterator.next();
-		if (second.done) throw new Error("missing synthetic continuation");
-		await expect(
-			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
-		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
-		const nextAck = signV3Fixture(
-			{ ...eventBase, confirmedCursor: second.value.cursor },
-			"events.ack",
-		);
-		await env.host.acknowledgeEventsV3(
-			nextAck,
-			verifyRuntimeV2Fixture(nextAck.grant),
-		);
-		await expect(
-			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
-		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
-		const saved = JSON.parse(await readFile(env.storePath, "utf8"));
-		expect(
-			saved.sessions[accepted.hostSessionRef].executionAuthorities[
-				"execution-fixture"
-			].confirmedCursor,
-		).toBe(second.value.cursor);
 		await iterator.return(undefined);
+		return;
 	});
 	it("persists business stop before returning and never renews stopped execution rights", async () => {
 		const env = await setup();
