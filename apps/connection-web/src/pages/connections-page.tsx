@@ -249,10 +249,9 @@ export function ConnectionsPage() {
 					<Button
 						type="button"
 						onClick={() => {
-							document
-								.getElementById("connector-search")
-								?.scrollIntoView({ behavior: "smooth", block: "center" });
-							document.getElementById("connector-search")?.focus();
+						const search = document.getElementById("connector-search");
+						search?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+						search?.focus();
 						}}
 					>
 						<Plus aria-hidden="true" size={17} />
@@ -284,246 +283,251 @@ export function ConnectionsPage() {
 					{upgradeNotice}
 				</p>
 			) : null}
-			{data ? (
-				<div className="content-stack">
-					<ConnectorCatalog
-						connections={data.connections}
-						onConnect={connectProvider}
-					/>
-					{data.upgradeTasks?.length ? (
-						<section
-							className="data-section"
-							aria-labelledby="upgrade-tasks-title"
-						>
+			<div className="content-stack">
+				<ConnectorCatalog
+					connections={data?.connections ?? []}
+					onConnect={connectProvider}
+				/>
+				{data ? (
+					<>
+						{data.upgradeTasks?.length ? (
+							<section
+								className="data-section"
+								aria-labelledby="upgrade-tasks-title"
+							>
+								<div className="section-heading">
+									<div>
+										<h2 id="upgrade-tasks-title">需要处理的升级</h2>
+										<p>完成连接升级后，可能还需要重新确认客户端授权。</p>
+									</div>
+								</div>
+								<div className="table-scroll">
+									<table className="management-table">
+										<thead>
+											<tr>
+												<th>平台</th>
+												<th>客户端</th>
+												<th>目标版本</th>
+												<th>状态</th>
+												<th className="table-action">操作</th>
+											</tr>
+										</thead>
+										<tbody>
+											{data.upgradeTasks.map((task) => (
+												<tr key={task.taskId}>
+													<td className="primary-cell">
+														{providerLabel(task.providerId)}
+													</td>
+													<td>{task.consumerName}</td>
+													<td>{task.targetProviderReleaseId}</td>
+													<td>
+														{task.status === "PENDING_CONNECTION"
+															? "升级连接"
+															: task.status === "PENDING_AUTHORIZATION"
+																? "重新确认授权"
+																: "已过期"}
+													</td>
+													<td className="table-action">
+														{task.status === "PENDING_CONNECTION" ? (
+															<a
+																className="button button-secondary"
+																href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
+															>
+																处理升级
+															</a>
+														) : task.status === "PENDING_AUTHORIZATION" ? (
+															<button
+																className="button button-secondary"
+																type="button"
+																onClick={() =>
+																	setAuthorization({
+																		connectionId: task.connectionId,
+																		consumerId: task.consumerId,
+																		initialActionVersionIds: [],
+																		preview: null,
+																		reviewed: false,
+																	})
+																}
+															>
+																确认授权
+															</button>
+														) : (
+															<span>已过期</span>
+														)}
+													</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							</section>
+						) : null}
+						<section className="data-section">
+							<ConnectionsView
+								connections={data.connections}
+								onAuthorize={(connectionId) =>
+									setAuthorization({
+										connectionId,
+										consumerId: data.consumers[0]?.id ?? "",
+										initialActionVersionIds: [],
+										preview: null,
+										reviewed: false,
+									})
+								}
+								onDisconnect={(connectionId) => {
+									const connection = data.connections.find(
+										(entry) => entry.id === connectionId,
+									);
+									if (
+										window.confirm(
+											`确认断开这个 ${providerLabel(connection?.providerId ?? "")} Connection？`,
+										)
+									) {
+										disconnect.mutate(connectionId);
+									}
+								}}
+								onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
+								upgradingConnectionId={
+									upgrade.isPending ? (upgrade.variables ?? null) : null
+								}
+								onReconnect={(connectionId) => {
+									const connection = data.connections.find(
+										(entry) => entry.id === connectionId,
+									);
+									if (connection?.providerId === "bitbucket") {
+										setBitbucketOpen(true);
+									} else if (connection?.providerId === "jira") {
+										setJiraOpen(true);
+									} else if (connection?.providerId === "confluence") {
+										setConfluenceOpen(true);
+									} else if (connection?.providerId === "jenkins-release") {
+										setJenkinsOpen(true);
+									} else {
+										beginOAuth();
+									}
+								}}
+							/>
+						</section>
+
+						<section className="data-section" aria-labelledby="grants-title">
 							<div className="section-heading">
 								<div>
-									<h2 id="upgrade-tasks-title">需要处理的升级</h2>
-									<p>完成连接升级后，可能还需要重新确认客户端授权。</p>
+									<h2 id="grants-title">客户端授权</h2>
+									<p>每个客户端独立授权，可随时撤销。</p>
 								</div>
+								{data.grants.length ? (
+									<label className="history-toggle">
+										<input
+											checked={showHistory}
+											onChange={(event) => setShowHistory(event.target.checked)}
+											type="checkbox"
+										/>
+										<span>显示历史授权</span>
+									</label>
+								) : null}
 							</div>
-							<div className="table-scroll">
-								<table className="management-table">
-									<thead>
-										<tr>
-											<th>平台</th>
-											<th>客户端</th>
-											<th>目标版本</th>
-											<th>状态</th>
-											<th className="table-action">操作</th>
-										</tr>
-									</thead>
-									<tbody>
-										{data.upgradeTasks.map((task) => (
-											<tr key={task.taskId}>
-												<td className="primary-cell">
-													{providerLabel(task.providerId)}
-												</td>
-												<td>{task.consumerName}</td>
-												<td>{task.targetProviderReleaseId}</td>
-												<td>
-													{task.status === "PENDING_CONNECTION"
-														? "升级连接"
-														: task.status === "PENDING_AUTHORIZATION"
-															? "重新确认授权"
-															: "已过期"}
-												</td>
-												<td className="table-action">
-													{task.status === "PENDING_CONNECTION" ? (
-														<a
-															className="button button-secondary"
-															href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
-														>
-															处理升级
-														</a>
-													) : task.status === "PENDING_AUTHORIZATION" ? (
-														<button
-															className="button button-secondary"
-															type="button"
-															onClick={() =>
-																setAuthorization({
-																	connectionId: task.connectionId,
-																	consumerId: task.consumerId,
-																	initialActionVersionIds: [],
-																	preview: null,
-																	reviewed: false,
-																})
-															}
-														>
-															确认授权
-														</button>
-													) : (
-														<span>已过期</span>
-													)}
-												</td>
+							{visibleGrants.length ? (
+								<div className="table-scroll">
+									<table className="grant-table">
+										<thead>
+											<tr>
+												<th>客户端</th>
+												<th>平台</th>
+												<th>账号</th>
+												<th>状态</th>
+												<th>授权能力</th>
+												<th className="table-action">操作</th>
 											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
+										</thead>
+										<tbody>
+											{visibleGrants.map((grant) => (
+												<tr key={grant.id}>
+													<td className="primary-cell">
+														<div>{grant.consumerName}</div>
+														<small className="table-secondary">
+															{grant.consumerId}
+														</small>
+													</td>
+													<td>
+														<span className="provider-badge">
+															{providerLabel(grant.providerId)}
+														</span>
+													</td>
+													<td>
+														<strong>{grant.connectionDisplayName}</strong>
+														<small className="table-secondary">
+															{grant.externalAccount}
+														</small>
+													</td>
+													<td>
+														<Status value={grant.status} />
+													</td>
+													<td>
+														<GrantPermissions grant={grant} />
+													</td>
+													<td className="table-action">
+														<div className="row-actions">
+															<Button
+																variant="secondary"
+																size="icon"
+																type="button"
+																disabled={grant.status !== "ACTIVE"}
+																onClick={() =>
+																	setAuthorization({
+																		connectionId: grant.connectionId,
+																		consumerId: grant.consumerId,
+																		initialActionVersionIds:
+																			grant.actionVersionIds,
+																		preview: null,
+																		reviewed: false,
+																	})
+																}
+																aria-label={`管理 ${grant.consumerName} 能力`}
+																title="管理能力"
+															>
+																<SlidersHorizontal
+																	aria-hidden="true"
+																	size={17}
+																/>
+															</Button>
+															<Button
+																variant="danger"
+																size="icon"
+																type="button"
+																disabled={
+																	grant.status !== "ACTIVE" ||
+																	revokeGrant.isPending
+																}
+																onClick={() => revokeGrant.mutate(grant.id)}
+																aria-label={`撤销 ${grant.consumerName}`}
+																title={
+																	grant.status === "ACTIVE"
+																		? "撤销授权"
+																		: "历史授权不可操作"
+																}
+															>
+																<ShieldOff aria-hidden="true" size={17} />
+															</Button>
+														</div>
+													</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							) : data.grants.length ? (
+								<EmptyState title="没有当前授权">
+									当前只显示正常授权，打开“显示历史授权”可查看已撤销、已替换和已暂停记录。
+								</EmptyState>
+							) : (
+								<EmptyState title="还没有客户端授权">
+									从上方 Connection 选择客户端并确认授权。
+								</EmptyState>
+							)}
 						</section>
-					) : null}
-					<section className="data-section">
-						<ConnectionsView
-							connections={data.connections}
-							onAuthorize={(connectionId) =>
-								setAuthorization({
-									connectionId,
-									consumerId: data.consumers[0]?.id ?? "",
-									initialActionVersionIds: [],
-									preview: null,
-									reviewed: false,
-								})
-							}
-							onDisconnect={(connectionId) => {
-								const connection = data.connections.find(
-									(entry) => entry.id === connectionId,
-								);
-								if (
-									window.confirm(
-										`确认断开这个 ${providerLabel(connection?.providerId ?? "")} Connection？`,
-									)
-								) {
-									disconnect.mutate(connectionId);
-								}
-							}}
-							onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
-							upgradingConnectionId={
-								upgrade.isPending ? (upgrade.variables ?? null) : null
-							}
-							onReconnect={(connectionId) => {
-								const connection = data.connections.find(
-									(entry) => entry.id === connectionId,
-								);
-								if (connection?.providerId === "bitbucket") {
-									setBitbucketOpen(true);
-								} else if (connection?.providerId === "jira") {
-									setJiraOpen(true);
-								} else if (connection?.providerId === "confluence") {
-									setConfluenceOpen(true);
-								} else if (connection?.providerId === "jenkins-release") {
-									setJenkinsOpen(true);
-								} else {
-									beginOAuth();
-								}
-							}}
-						/>
-					</section>
-
-					<section className="data-section" aria-labelledby="grants-title">
-						<div className="section-heading">
-							<div>
-								<h2 id="grants-title">客户端授权</h2>
-								<p>每个客户端独立授权，可随时撤销。</p>
-							</div>
-							{data.grants.length ? (
-								<label className="history-toggle">
-									<input
-										checked={showHistory}
-										onChange={(event) => setShowHistory(event.target.checked)}
-										type="checkbox"
-									/>
-									<span>显示历史授权</span>
-								</label>
-							) : null}
-						</div>
-						{visibleGrants.length ? (
-							<div className="table-scroll">
-								<table className="grant-table">
-									<thead>
-										<tr>
-											<th>客户端</th>
-											<th>平台</th>
-											<th>账号</th>
-											<th>状态</th>
-											<th>授权能力</th>
-											<th className="table-action">操作</th>
-										</tr>
-									</thead>
-									<tbody>
-										{visibleGrants.map((grant) => (
-											<tr key={grant.id}>
-												<td className="primary-cell">
-													<div>{grant.consumerName}</div>
-													<small className="table-secondary">
-														{grant.consumerId}
-													</small>
-												</td>
-												<td>
-													<span className="provider-badge">
-														{providerLabel(grant.providerId)}
-													</span>
-												</td>
-												<td>
-													<strong>{grant.connectionDisplayName}</strong>
-													<small className="table-secondary">
-														{grant.externalAccount}
-													</small>
-												</td>
-												<td>
-													<Status value={grant.status} />
-												</td>
-												<td>
-													<GrantPermissions grant={grant} />
-												</td>
-												<td className="table-action">
-													<div className="row-actions">
-														<Button
-															variant="secondary"
-															size="icon"
-															type="button"
-															disabled={grant.status !== "ACTIVE"}
-															onClick={() =>
-																setAuthorization({
-																	connectionId: grant.connectionId,
-																	consumerId: grant.consumerId,
-																	initialActionVersionIds:
-																		grant.actionVersionIds,
-																	preview: null,
-																	reviewed: false,
-																})
-															}
-															aria-label={`管理 ${grant.consumerName} 能力`}
-															title="管理能力"
-														>
-															<SlidersHorizontal aria-hidden="true" size={17} />
-														</Button>
-														<Button
-															variant="danger"
-															size="icon"
-															type="button"
-															disabled={
-																grant.status !== "ACTIVE" ||
-																revokeGrant.isPending
-															}
-															onClick={() => revokeGrant.mutate(grant.id)}
-															aria-label={`撤销 ${grant.consumerName}`}
-															title={
-																grant.status === "ACTIVE"
-																	? "撤销授权"
-																	: "历史授权不可操作"
-															}
-														>
-															<ShieldOff aria-hidden="true" size={17} />
-														</Button>
-													</div>
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						) : data.grants.length ? (
-							<EmptyState title="没有当前授权">
-								当前只显示正常授权，打开“显示历史授权”可查看已撤销、已替换和已暂停记录。
-							</EmptyState>
-						) : (
-							<EmptyState title="还没有客户端授权">
-								从上方 Connection 选择客户端并确认授权。
-							</EmptyState>
-						)}
-					</section>
-				</div>
-			) : null}
+					</>
+				) : null}
+			</div>
 
 			<Dialog
 				open={Boolean(authorization && data)}
