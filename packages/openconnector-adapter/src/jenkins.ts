@@ -202,12 +202,14 @@ export class JenkinsAdapter
 					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/logText/progressiveText?start=${nonNegativeInteger(input.input, "start")}`,
 					nonNegativeInteger(input.input, "start"),
 				);
-			case "get_build_artifact":
+			case "get_build_artifact": {
+				const start = artifactStart(input.input);
 				return this.requestArtifact(
 					credential,
 					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/artifact/${artifactPath(input.input)}`,
-					nonNegativeInteger(input.input, "start"),
+					start,
 				);
+			}
 			case "get_queue_item":
 				return this.requestJson(
 					credential,
@@ -459,6 +461,14 @@ function artifactPath(input: JsonObject) {
 	return segments.map(encodeURIComponent).join("/");
 }
 
+function artifactStart(input: JsonObject) {
+	const start = nonNegativeInteger(input, "start");
+	if (start > Number.MAX_SAFE_INTEGER - maxArtifactBytes) {
+		throw providerError("Jenkins artifact start is too large");
+	}
+	return start;
+}
+
 function positiveInteger(input: JsonObject, name: string) {
 	const value = input[name];
 	if (!Number.isSafeInteger(value) || Number(value) < 1) {
@@ -522,10 +532,13 @@ function parseContentRange(value: string | null) {
 }
 
 function isTextMimeType(value: string) {
+	const normalized = value.toLowerCase();
 	return (
-		value.startsWith("text/") ||
-		value === "application/json" ||
-		value === "application/xml"
+		normalized.startsWith("text/") ||
+		normalized === "application/json" ||
+		normalized === "application/xml" ||
+		normalized.endsWith("+json") ||
+		normalized.endsWith("+xml")
 	);
 }
 

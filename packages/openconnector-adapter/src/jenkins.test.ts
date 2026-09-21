@@ -180,7 +180,7 @@ test("Jenkins decodes text only when the complete artifact is returned", async (
 		jenkinsReleaseProfile,
 		async () =>
 			new Response("编译成功\n", {
-				headers: { "content-type": "text/plain; charset=utf-8" },
+				headers: { "content-type": "Application/JSON; charset=utf-8" },
 			}),
 	);
 	const result = await adapter.execute({
@@ -219,6 +219,28 @@ test("Jenkins rejects mismatched artifact ranges", async () => {
 		}),
 		/invalid artifact byte range/,
 	);
+});
+
+test("Jenkins rejects artifact offsets that would overflow a range", async () => {
+	let called = false;
+	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		called = true;
+		return new Response();
+	});
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "compile.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: Number.MAX_SAFE_INTEGER,
+			},
+		}),
+		/artifact start is too large/,
+	);
+	assert.equal(called, false);
 });
 
 test("Jenkins returns binary artifacts as Base64 and rejects path injection", async () => {
