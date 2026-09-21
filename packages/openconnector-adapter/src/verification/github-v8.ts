@@ -1,7 +1,7 @@
 import type { LiveVerificationEvidence } from "../test-project.ts";
 
 const providerReleaseId =
-	"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v8";
+	"github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v9";
 
 export const githubV8PrimaryVerificationEvidence = {
 	actionVersionIds: [
