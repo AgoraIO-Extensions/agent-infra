@@ -33,7 +33,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify canonical Connection release and catalog monotonicity
+        shell: bash
+        run: |
+          baseline=$(git tag --merged HEAD --list 'v*' --sort=-version:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
+          test -n "$baseline"
+          node .github/scripts/connection-release-guard.mjs --baseline "$baseline" | tee connection-catalog-diff.txt
+          cat connection-catalog-diff.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

@@ -43,6 +43,8 @@ if [[ -n "$previous_ref" ]] && ! git diff --quiet "$previous_sha..$connection_sh
 fi
 
 echo "Preflight OK: $version -> $connection_sha (previous: ${previous_tag:-none})"
+[[ -n "$previous_tag" ]] || { echo "A previous production tag is required for catalog comparison" >&2; exit 1; }
+node .github/scripts/connection-release-guard.mjs --baseline "$previous_tag" | tee /tmp/connection-catalog-diff.txt
 
 if $publish; then
   if [[ -z "$tag_sha" ]]; then
@@ -81,6 +83,7 @@ helm upgrade "$release" "$chart" -n "$namespace" --reuse-values --no-hooks \
   --set-string "images.api=$api_image" --set-string "images.web=$web_image"
 
 deadline=$((SECONDS + 300))
+ready=false
 while (( SECONDS < deadline )); do
   api_ready=$(kubectl -n "$namespace" get deploy connection-api -o jsonpath='{.status.readyReplicas}')
   web_ready=$(kubectl -n "$namespace" get deploy connection-web -o jsonpath='{.status.readyReplicas}')
@@ -94,12 +97,18 @@ while (( SECONDS < deadline )); do
     helm -n "$namespace" status "$release"
     kubectl -n "$namespace" get pods \
       -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount'
-    echo "Deployment ready. Complete the documented harmless Connection READ acceptance."
-    exit 0
+    ready=true
+    break
   fi
   sleep 5
 done
 
-kubectl -n "$namespace" get pods -o wide
-echo "Deployment did not become ready within 300 seconds" >&2
-exit 1
+if ! $ready; then
+  kubectl -n "$namespace" get pods -o wide
+  echo "Deployment did not become ready within 300 seconds" >&2
+  exit 1
+fi
+
+node .github/scripts/connection-production-read-verify.mjs \
+  | tee /tmp/connection-production-read-result.json
+echo "Deployment and real Provider READ acceptance succeeded."

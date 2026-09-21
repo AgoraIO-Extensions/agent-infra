@@ -24,6 +24,15 @@ pnpm connection:production:bootstrap
 pnpm connection:production:up
 ```
 
+生产镜像只能由恰好指向最新 `origin/connection` 的不可变 tag 发布。发布工作流必须比较上一正式 tag
+与候选提交的 Provider catalog，拒绝 Provider 删除、Action 版本下降或 ProviderRelease 版本下降，并在
+Job Summary 输出逐 Provider diff。feature branch、旧 SHA 或 divergent SHA 不得发布生产镜像。
+
+`deploy/connection-gz3-release.sh` 在 Helm rollout 后使用 Secret Manager 注入的
+`CONNECTION_PRODUCTION_MCP_URL`、`CONNECTION_PRODUCTION_TOKEN` 和
+`CONNECTION_PRODUCTION_READ_PROBES` 执行真实 Provider READ。缺少任一配置或任一 READ 失败时，脚本
+不得标记部署完成；`ACTIVE`、Pod Ready 或 catalog 可见均不能替代 Provider 执行证据。
+
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
 Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection/*`、`/connection/v1/*`、
 `/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。API 直接启动
