@@ -20,7 +20,7 @@ fi
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-git fetch origin connection --tags --prune
+git fetch origin connection --prune
 connection_sha=$(git rev-parse origin/connection)
 head_sha=$(git rev-parse HEAD)
 if [[ "$head_sha" != "$connection_sha" ]]; then
@@ -28,14 +28,16 @@ if [[ "$head_sha" != "$connection_sha" ]]; then
   exit 1
 fi
 
-tag_sha=$(git rev-list -n 1 "$version" 2>/dev/null || true)
+tag_sha=$(git ls-remote --tags --refs origin "refs/tags/$version" | awk '{print $1}')
 if [[ -n "$tag_sha" && "$tag_sha" != "$connection_sha" ]]; then
   echo "$version already points to $tag_sha" >&2
   exit 1
 fi
 
-previous_tag=$(git tag --merged "$connection_sha" --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${version}$" | head -1)
-if [[ -n "$previous_tag" ]] && ! git diff --quiet "$previous_tag..$connection_sha" -- migrations/connection; then
+previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' | grep -v "^${version} " | sort -V | tail -1)
+previous_tag=${previous_ref%% *}
+previous_sha=${previous_ref##* }
+if [[ -n "$previous_ref" ]] && ! git diff --quiet "$previous_sha..$connection_sha" -- migrations/connection; then
   echo "Connection migrations changed since $previous_tag; run the reviewed migration path instead of --no-hooks." >&2
   exit 1
 fi
@@ -44,6 +46,10 @@ echo "Preflight OK: $version -> $connection_sha (previous: ${previous_tag:-none}
 
 if $publish; then
   if [[ -z "$tag_sha" ]]; then
+    if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+      echo "Local $version already exists while the remote tag does not" >&2
+      exit 1
+    fi
     git tag "$version" "$connection_sha"
     git push origin "$version"
   fi
