@@ -510,6 +510,10 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
+			const secretBindings = bindingsFor(state, input);
+			// Reject untrusted loader variables before contacting the registry or
+			// creating any workload resources.
+			validateSecretDataKeys(configuration, secretBindings);
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
@@ -559,8 +563,6 @@ export function createWorkloadRuntimeV1(
 					: configuration.source.interactionMode;
 			if (admission.runtimeManifest.interactionMode !== mode)
 				throw new WorkloadPreflightRejectedErrorV1();
-			const secretBindings = bindingsFor(state, input);
-			validateSecretDataKeys(configuration, secretBindings);
 			let modelProjection: unknown;
 			if (configuration.source.kind === "standard") {
 				if (!options.modelCatalog || !options.modelAccess)

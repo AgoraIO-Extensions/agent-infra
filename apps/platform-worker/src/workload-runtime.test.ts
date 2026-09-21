@@ -1106,7 +1106,7 @@ describe("assembled Workload Runtime contracts", () => {
 					{ configuration, secrets: cleanupSecrets(cleanup) },
 				);
 				await f.tick(2);
-				expect(f.state?.phase).toBe("preflight");
+				expect(f.state?.phase).toBe("cleaning");
 				expect(f.resources.size).toBe(0);
 			}
 		},
