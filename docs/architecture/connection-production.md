@@ -24,6 +24,16 @@ pnpm connection:production:bootstrap
 pnpm connection:production:up
 ```
 
+Connection 生产镜像只使用专用的 `connection-vX.Y.Z` tag，且该 tag 必须恰好指向最新
+`origin/connection`。其他产品的 `vX.Y.Z` tag 不执行 Connection catalog 门禁。发布工作流必须比较上一正式 Connection tag
+与候选提交的 Provider catalog，拒绝 Provider 删除、Action 版本下降或 ProviderRelease 版本下降，并在
+Job Summary 输出逐 Provider diff。feature branch、旧 SHA 或 divergent SHA 不得发布生产镜像。
+
+`deploy/connection-gz3-release.sh` 在 Helm rollout 后使用 Secret Manager 注入的
+`CONNECTION_PRODUCTION_MCP_URL`、`CONNECTION_PRODUCTION_TOKEN` 和
+`CONNECTION_PRODUCTION_READ_PROBES` 执行真实 Provider READ。缺少任一配置或任一 READ 失败时，脚本
+不得标记部署完成；`ACTIVE`、Pod Ready 或 catalog 可见均不能替代 Provider 执行证据。
+
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
 Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection/*`、`/connection/v1/*`、
 `/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。API 直接启动
@@ -97,7 +107,7 @@ pnpm connection:pr:preflight -- --issue <issue-number>
 PR 合并后切到对应的 `origin/connection` commit，再执行：
 
 ```bash
-pnpm connection:gz3:release -- vX.Y.Z --publish --deploy
+pnpm connection:gz3:release -- connection-vX.Y.Z --publish --deploy
 ```
 
 命令只允许 tag 指向当前 `origin/connection`，等待 GHCR workflow 完成，然后固定使用 GZ3 context、
