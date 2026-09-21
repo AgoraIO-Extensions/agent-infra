@@ -2,7 +2,7 @@
 set -eu
 
 # Refuse diagnostic preloads before Node can load any runtime configuration.
-if [ -n "${NODE_OPTIONS:-}${NODE_DEBUG:-}${NODE_DEBUG_NATIVE:-}${NODE_V8_COVERAGE:-}" ]; then
+if [ -n "${NODE_OPTIONS:-}${NODE_DEBUG:-}${NODE_DEBUG_NATIVE:-}${NODE_V8_COVERAGE:-}${NODE_PATH:-}${LD_PRELOAD:-}${LD_AUDIT:-}${LD_LIBRARY_PATH:-}${DYLD_INSERT_LIBRARIES:-}${DYLD_LIBRARY_PATH:-}${DYLD_FRAMEWORK_PATH:-}" ]; then
   printf '%s\n' '{"service":"agent-runtime-host","code":"RUNTIME_PROCESS_PROTECTION_INVALID"}' >&2
   exit 1
 fi

@@ -235,9 +235,16 @@ export async function runRuntimeLegacyMigrationCli(
 	} catch {
 		fail();
 	} finally {
-		if (ownedLock) await rm(ownedLock, { recursive: true });
-		if (temporaryDirectory)
-			await rm(temporaryDirectory, { recursive: true, force: true });
+		// Cleanup is best effort. Once the durable rename and read-back succeed,
+		// a transient cleanup failure must not turn a committed migration into an
+		// apparent failure for the caller.
+		try {
+			if (ownedLock) await rm(ownedLock, { recursive: true });
+		} catch {}
+		try {
+			if (temporaryDirectory)
+				await rm(temporaryDirectory, { recursive: true, force: true });
+		} catch {}
 	}
 }
 
