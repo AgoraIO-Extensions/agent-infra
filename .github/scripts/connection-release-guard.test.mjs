@@ -42,4 +42,8 @@ test("rejects removed providers and provider release downgrades", () => {
 		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actionVersion: 6, providerReleaseVersion: 5 } }),
 		/Provider release downgrade/,
 	);
+	assert.throws(
+		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actionVersion: 6, providerReleaseVersion: null } }),
+		/Provider release downgrade.*missing/,
+	);
 });

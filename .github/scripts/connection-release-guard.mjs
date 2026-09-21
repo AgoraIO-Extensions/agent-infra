@@ -33,10 +33,10 @@ export function compareCatalogs(baseline, candidate) {
 		}
 		if (
 			before.providerReleaseVersion !== null &&
-			after.providerReleaseVersion !== null &&
-			after.providerReleaseVersion < before.providerReleaseVersion
+			(after.providerReleaseVersion === null ||
+				after.providerReleaseVersion < before.providerReleaseVersion)
 		) {
-			throw new Error(`Provider release downgrade: ${provider} v${before.providerReleaseVersion} -> v${after.providerReleaseVersion}`);
+			throw new Error(`Provider release downgrade: ${provider} v${before.providerReleaseVersion} -> ${after.providerReleaseVersion === null ? "missing" : `v${after.providerReleaseVersion}`}`);
 		}
 		rows.push({ provider, before, after });
 	}
