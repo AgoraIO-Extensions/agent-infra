@@ -116,9 +116,12 @@ async function readIndependentInput(
 				constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
 			);
 			try {
+				const openedDirectory = await directory.stat();
 				if (
-					process.platform !== "linux" &&
-					(await realpath(inputDirectory)) !== inputDirectory
+					(await realpath(inputDirectory)) !== inputDirectory ||
+					(process.platform !== "linux" &&
+						(openedDirectory.dev !== directoryStat.dev ||
+							openedDirectory.ino !== directoryStat.ino))
 				)
 					return undefined;
 				const before = await handle.stat();

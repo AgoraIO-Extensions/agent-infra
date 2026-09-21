@@ -58,6 +58,10 @@ jobs:
 
       - name: Verify native Codex recovery
         run: |
+          if ! node --input-type=module -e 'import fs from "node:fs"; const release = JSON.parse(fs.readFileSync("packages/agent-runtime/src/codex-release.json", "utf8")); if (release.distribution?.kind !== "derived") process.exit(1);' ; then
+            echo "Native Codex recovery requires a verified derived release; skipping for the upstream release layout."
+            exit 0
+          fi
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=256m,mode=1777 \

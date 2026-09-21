@@ -1303,7 +1303,9 @@ export class FileRuntimeStore {
 			(entry) =>
 				entry.operations[action.runtimeOperationId]?.kind === "submit-turn" &&
 				entry.operations[action.runtimeOperationId]?.executionId ===
-					action.executionId,
+					action.executionId &&
+				(action.nativeSessionRef === undefined ||
+					entry.nativeSessionRef === action.nativeSessionRef),
 		);
 		if (candidates.length !== 1) runtimeAuthorizationDenied();
 		const session = candidates[0];

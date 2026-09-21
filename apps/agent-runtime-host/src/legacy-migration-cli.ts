@@ -124,6 +124,18 @@ export async function runRuntimeLegacyMigrationCli(
 		const canonicalDirectory = await realpath(dataDirectory);
 		const candidateDirectory = dirname(candidatePath);
 		const candidateParent = await realpath(candidateDirectory);
+		for (let current = candidateParent; ; current = dirname(current)) {
+			const info = await lstat(current);
+			const parent = dirname(current);
+			const stickyRootDirectory = info.uid === 0 && (info.mode & 0o1000) !== 0;
+			if (
+				!info.isDirectory() ||
+				(await realpath(current)) !== current ||
+				((info.mode & 0o022) !== 0 && !stickyRootDirectory)
+			)
+				fail();
+			if (parent === current) break;
+		}
 		const candidateLeaf = relative(candidateDirectory, candidatePath);
 		const canonicalCandidatePath = join(candidateParent, candidateLeaf);
 		const withinData = relative(canonicalDirectory, candidateParent);
