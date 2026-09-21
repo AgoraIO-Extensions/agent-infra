@@ -10,13 +10,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 const execute = promisify(execFile);
-const appDirectory = fileURLToPath(new URL("..", import.meta.url));
 const guardUrl = new URL("./process-protection.ts", import.meta.url).href;
 const launcher = new URL("../start-runtime-host.sh", import.meta.url);
 const directories: string[] = [];
@@ -63,7 +61,7 @@ async function runGuard(
 		catch (error) { console.log(error.code); process.exitCode = 17; }
 		`,
 		],
-		{ cwd: appDirectory, env: environment, timeout: 10_000 },
+		{ cwd: await directory(), env: environment, timeout: 10_000 },
 	);
 }
 
