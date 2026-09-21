@@ -45,4 +45,3 @@ CREATE TABLE connection_outbox_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (topic, aggregate_id)
 );
-
