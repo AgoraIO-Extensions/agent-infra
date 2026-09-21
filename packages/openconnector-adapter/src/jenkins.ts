@@ -74,7 +74,7 @@ const actionSpecs = [
 	},
 	{
 		description:
-			"按字节游标读取 Jenkins Build artifact，单次最多返回 256 KiB；文本同时返回 text，其他内容返回 Base64。",
+			"按字节游标读取 Jenkins Build artifact，单次最多返回 256 KiB；完整文本同时返回 text，分页或二进制内容返回 Base64。",
 		name: "get_build_artifact",
 		properties: {
 			artifactPath: { minLength: 1, type: "string" },
@@ -347,22 +347,45 @@ export class JenkinsAdapter
 		const contentRange = parseContentRange(
 			response.headers.get("content-range"),
 		);
+		if (
+			response.status === 206 &&
+			(!contentRange ||
+				contentRange.start !== start ||
+				contentRange.end - contentRange.start + 1 !== bytes.byteLength)
+		) {
+			throw providerError("Jenkins returned an invalid artifact byte range");
+		}
+		const contentLengthValue = response.headers.get("content-length");
+		const contentLength =
+			contentLengthValue === null ? undefined : Number(contentLengthValue);
 		const size =
-			contentRange?.size ?? Number(response.headers.get("content-length"));
-		const nextStart = start + bytes.byteLength;
+			contentRange?.size ??
+			(response.status === 200 &&
+			Number.isSafeInteger(contentLength) &&
+			Number(contentLength) >= bytes.byteLength
+				? Number(contentLength)
+				: undefined);
+		const nextStart = contentRange
+			? contentRange.end + 1
+			: start + bytes.byteLength;
 		const mimeType =
 			response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
 			"application/octet-stream";
+		const moreData =
+			truncated ||
+			(size !== undefined && nextStart < size) ||
+			(response.status === 206 &&
+				size === undefined &&
+				bytes.byteLength === maxArtifactBytes);
 		return {
 			contentBase64: Buffer.from(bytes).toString("base64"),
-			...(isTextMimeType(mimeType)
+			...(start === 0 && !moreData && isTextMimeType(mimeType)
 				? { text: new TextDecoder().decode(bytes) }
 				: {}),
 			mimeType,
-			moreData:
-				truncated || (Number.isSafeInteger(size) && nextStart < Number(size)),
+			moreData,
 			nextStart,
-			size: Number.isSafeInteger(size) ? Number(size) : undefined,
+			size,
 			truncated,
 		};
 	}
@@ -482,10 +505,20 @@ async function readLimitedBytes(response: Response, limit: number) {
 }
 
 function parseContentRange(value: string | null) {
-	const match = value?.match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+	const match = value?.match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/i);
 	if (!match) return undefined;
-	const size = Number(match[3]);
-	return Number.isSafeInteger(size) ? { size } : undefined;
+	const start = Number(match[1]);
+	const end = Number(match[2]);
+	const size = match[3] === "*" ? undefined : Number(match[3]);
+	if (
+		!Number.isSafeInteger(start) ||
+		!Number.isSafeInteger(end) ||
+		end < start ||
+		(size !== undefined && (!Number.isSafeInteger(size) || end >= size))
+	) {
+		return undefined;
+	}
+	return { end, size, start };
 }
 
 function isTextMimeType(value: string) {
