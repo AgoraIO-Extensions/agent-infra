@@ -188,6 +188,14 @@ function validateSecretDataKeys(
 	configuration: WorkloadReconciliationStateV1["candidate"]["configuration"],
 	bindings: readonly ResolvedWorkloadSecretBindingV1[],
 ): void {
+	if (
+		[
+			...configuration.environment,
+			...configuration.secrets,
+			...bindings.map(({ record }) => record),
+		].some(({ name }) => /^(?:LD_|DYLD_|NODE_)/.test(name))
+	)
+		throw new WorkloadPreflightRejectedErrorV1();
 	// Owner-supplied environment, including Secret-backed names, must not alter
 	// the native loader before the trusted Runtime launcher can run.
 	if (
