@@ -705,21 +705,23 @@ export class RuntimeHostV3 {
 					claims,
 					request.confirmedCursor,
 				);
-				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeRequired(),
-					request.executionId,
+				// Persist the Host watermark before asking the Driver to compact. A
+				// Driver failure can be retried from durable state; the reverse order
+				// could compact an event whose Host acknowledgement then fails.
+				await this.options.store.acknowledgeCursor(
+					claims,
 					request.confirmedCursor,
 				);
-				// The driver call can outlive the grant. Re-authorize immediately
-				// before the durable acknowledgement so an expired grant cannot
-				// advance the persisted cursor.
+				// The durable write can outlive the grant. Re-authorize immediately
+				// before the Driver call so an expired grant cannot trigger compaction.
 				await this.options.store.authorizeRequestV3(
 					claims,
 					"query",
 					(this.options.grantValidation.now ?? Date.now)(),
 				);
-				await this.options.store.acknowledgeCursor(
-					claims,
+				await this.options.driver.acknowledgeEvents?.(
+					session.nativeSessionRef ?? nativeRequired(),
+					request.executionId,
 					request.confirmedCursor,
 				);
 				return {

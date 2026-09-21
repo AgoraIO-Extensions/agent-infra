@@ -1368,6 +1368,14 @@ describe("Runtime V3 durable authorization", () => {
 
 	it("acknowledges only a delivered cursor under a fresh Worker persistence grant", async () => {
 		const env = await setup();
+		const order: string[] = [];
+		vi.spyOn(env.store, "acknowledgeCursor").mockImplementation(async (...args) => {
+			order.push("store");
+			return FileRuntimeStore.prototype.acknowledgeCursor.apply(env.store, args);
+		});
+		env.driver.acknowledgeEvents = async () => {
+			order.push("driver");
+		};
 		const accepted = await submit(env.host);
 		const eventBase = {
 			...base(accepted.hostSessionRef),
@@ -1422,6 +1430,7 @@ describe("Runtime V3 durable authorization", () => {
 		await expect(
 			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
 		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
+		expect(order.slice(0, 2)).toEqual(["store", "driver"]);
 		const nextAck = signV3Fixture(
 			{ ...eventBase, confirmedCursor: second.value.cursor },
 			"events.ack",
