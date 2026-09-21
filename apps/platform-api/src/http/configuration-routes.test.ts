@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { AgentConfigurationError } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { HttpProtocolError } from "./common.js";
 import { registerConfigurationRoutes } from "./configuration-routes.js";
 
 const agentProjection = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	agentId: "agent-1",
 	name: "Release assistant",
 	description: "Helps the release team",
@@ -24,7 +24,7 @@ const agentProjection = {
 		modelOptions: [],
 		defaultModelOptionId: null,
 		defaultReasoningLevel: null,
-		actions: [],
+
 		environment: [],
 		channels: [{ kind: "web" as const, status: "available" as const }],
 		secrets: [{ name: "MODEL_API_KEY", isSet: true, version: 2 }],
@@ -102,10 +102,10 @@ describe("configuration routes", () => {
 		const { app, update, readAgentProjection, prepareSecretReplacements } =
 			createApp();
 		const body = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			secrets: [{ name: "MODEL_API_KEY", value: "plaintext-never-returned" }],
 		};
-		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+		const response = await app.request("/api/v2/agents/agent-1/configuration", {
 			method: "PUT",
 			headers: {
 				"content-type": "application/json",
@@ -118,7 +118,7 @@ describe("configuration routes", () => {
 
 		expect(response.status).toBe(200);
 		const json = await response.json();
-		expect(AgentProjectionV1Schema.parse(json)).toEqual(agentProjection);
+		expect(AgentProjectionV2Schema.parse(json)).toEqual(agentProjection);
 		expect(JSON.stringify(json)).not.toContain("plaintext-never-returned");
 		expect(update).toHaveBeenCalledOnce();
 		const [command, actor] = update.mock.calls[0] as [
@@ -126,7 +126,7 @@ describe("configuration routes", () => {
 			Record<string, unknown>,
 		];
 		expect(command).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			agentId: "agent-1",
 			idempotencyKey: "configuration-1",
 			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
@@ -194,14 +194,14 @@ describe("configuration routes", () => {
 		});
 		for (const key of ["configuration-refresh-1", "configuration-refresh-2"]) {
 			const response = await app.request(
-				"/api/v1/agents/agent-1/configuration",
+				"/api/v2/agents/agent-1/configuration",
 				{
 					method: "PUT",
 					headers: {
 						"content-type": "application/json",
 						"Idempotency-Key": key,
 					},
-					body: JSON.stringify({ schemaVersion: 1, environment: [] }),
+					body: JSON.stringify({ schemaVersion: 2, environment: [] }),
 				},
 			);
 			expect(response.status).toBe(200);
@@ -217,14 +217,14 @@ describe("configuration routes", () => {
 
 	it("passes co-Owner input to Core without resolving access policy", async () => {
 		const { app, update, readConfiguration } = createApp();
-		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+		const response = await app.request("/api/v2/agents/agent-1/configuration", {
 			method: "PUT",
 			headers: {
 				"content-type": "application/json",
 				"Idempotency-Key": "configuration-owners",
 			},
 			body: JSON.stringify({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				coOwnerIds: ["user-2"],
 			}),
 		});
@@ -250,14 +250,14 @@ describe("configuration routes", () => {
 				attachment: { resolve: vi.fn() },
 			}),
 		});
-		const response = await app.request("/api/v1/agents/agent-1/configuration", {
+		const response = await app.request("/api/v2/agents/agent-1/configuration", {
 			method: "PUT",
 			headers: {
 				"content-type": "application/json",
 				"Idempotency-Key": "configuration-secret-metadata",
 			},
 			body: JSON.stringify({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
 			}),
 		});
@@ -277,7 +277,7 @@ describe("configuration routes", () => {
 			} as never),
 		});
 		const malformedResponse = await malformed.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -285,7 +285,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-secret-replace-false",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
 				}),
 			},
@@ -301,7 +301,7 @@ describe("configuration routes", () => {
 			} as never),
 		});
 		const malformedShapeResponse = await malformedShape.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -309,7 +309,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-secret-malformed-shape",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
 				}),
 			},
@@ -325,7 +325,7 @@ describe("configuration routes", () => {
 			}),
 		});
 		const missingAttachmentResponse = await missingAttachment.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -333,7 +333,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-secret-missing-attachment",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
 				}),
 			},
@@ -342,7 +342,7 @@ describe("configuration routes", () => {
 		expect(missingAttachment.update).not.toHaveBeenCalled();
 
 		const modelCredentialBody = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			modelConfiguration: {
 				options: [
 					{
@@ -365,7 +365,7 @@ describe("configuration routes", () => {
 			}),
 		});
 		const validModelsResponse = await validModels.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -403,7 +403,7 @@ describe("configuration routes", () => {
 			}),
 		});
 		const poisonedResponse = await poisoned.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -424,7 +424,7 @@ describe("configuration routes", () => {
 			}),
 		});
 		const proxiedResponse = await proxied.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -456,7 +456,7 @@ describe("configuration routes", () => {
 				} as never),
 			});
 			const response = await malformed.app.request(
-				"/api/v1/agents/agent-1/configuration",
+				"/api/v2/agents/agent-1/configuration",
 				{
 					method: "PUT",
 					headers: {
@@ -481,14 +481,14 @@ describe("configuration routes", () => {
 			},
 		});
 		const deniedResponse = await denied.app.request(
-			"/api/v1/agents/other-agent/configuration",
+			"/api/v2/agents/other-agent/configuration",
 			{
 				method: "PUT",
 				headers: {
 					"content-type": "application/json",
 					"Idempotency-Key": "configuration-denied",
 				},
-				body: JSON.stringify({ schemaVersion: 1, environment: [] }),
+				body: JSON.stringify({ schemaVersion: 2, environment: [] }),
 			},
 		);
 		expect(deniedResponse.status).toBe(404);
@@ -500,7 +500,7 @@ describe("configuration routes", () => {
 				.mockRejectedValue(new Error("plaintext-never-returned")),
 		});
 		const unavailableResponse = await preparation.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -508,7 +508,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-secret-failure",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [
 						{ name: "MODEL_API_KEY", value: "plaintext-never-returned" },
 					],
@@ -527,7 +527,7 @@ describe("configuration routes", () => {
 				.mockRejectedValue(new HttpProtocolError("FORBIDDEN", "adapter-trace")),
 		});
 		const forgedResponse = await forgedProtocolError.app.request(
-			"/api/v1/agents/agent-1/configuration",
+			"/api/v2/agents/agent-1/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -535,7 +535,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-forged-protocol-error",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [{ name: "MODEL_API_KEY", value: "request-value" }],
 				}),
 			},
@@ -555,7 +555,7 @@ describe("configuration routes", () => {
 			},
 		});
 		const attackResponse = await unauthorized.app.request(
-			"/api/v1/agents/other-agent/configuration",
+			"/api/v2/agents/other-agent/configuration",
 			{
 				method: "PUT",
 				headers: {
@@ -563,7 +563,7 @@ describe("configuration routes", () => {
 					"Idempotency-Key": "configuration-secret-attack",
 				},
 				body: JSON.stringify({
-					schemaVersion: 1,
+					schemaVersion: 2,
 					secrets: [
 						{ name: "MODEL_API_KEY", value: "plaintext-never-returned" },
 					],

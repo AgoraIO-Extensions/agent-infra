@@ -22,9 +22,19 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 
 const execFile = promisify(execFileCallback);
 const namespace = workloadTestPolicy.namespace;
+function targetArguments() {
+	const path = process.env.KUBECONFIG;
+	const context = process.env.WORKLOAD_KIND_CONTEXT;
+	if (!path || !context?.startsWith("kind-workload-")) {
+		throw new Error(
+			"An explicit isolated workload kubeconfig and context are required",
+		);
+	}
+	return ["--kubeconfig", path, "--context", context, "--namespace", namespace];
+}
 async function kubectl(...args: string[]) {
 	return (
-		await execFile("kubectl", ["--namespace", namespace, ...args], {
+		await execFile("kubectl", [...targetArguments(), ...args], {
 			timeout: 30_000,
 		})
 	).stdout.trim();
@@ -55,11 +65,15 @@ async function waitForReadyPods() {
 	}
 }
 function apply(object: unknown) {
-	const result = spawnSync("kubectl", ["apply", "-f", "-"], {
-		input: JSON.stringify(object),
-		encoding: "utf8",
-		timeout: 30_000,
-	});
+	const result = spawnSync(
+		"kubectl",
+		[...targetArguments(), "apply", "-f", "-"],
+		{
+			input: JSON.stringify(object),
+			encoding: "utf8",
+			timeout: 30_000,
+		},
+	);
 	if (result.status !== 0)
 		throw new Error(`Fixture apply failed: ${result.stderr}`);
 }
@@ -198,6 +212,18 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			client = createWorkerKubernetesClientV1(namespace, config);
 			const policy = {
 				...workloadTestPolicy,
+				modelEgress: [
+					{
+						destination: {
+							namespace,
+							podLabels: { component: "approved-model" },
+						},
+						port: 8088,
+					},
+				],
+				dnsEgress: [
+					{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+				],
 				imageRepository: process.env.WORKLOAD_KIND_REPOSITORY ?? "",
 				routeNamespace: namespace,
 				resources: {
@@ -255,6 +281,40 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					},
 				});
 			}
+			for (const [name, component] of [
+				["model-probe", "approved-model"],
+				["other-service-probe", "unapproved-service"],
+			]) {
+				apply({
+					apiVersion: "v1",
+					kind: "Pod",
+					metadata: { name, namespace, labels: { component } },
+					spec: {
+						automountServiceAccountToken: false,
+						containers: [
+							{
+								name: "probe",
+								image: `${policy.imageRepository}@${imageDigest}`,
+								command: [
+									"node",
+									"-e",
+									"for (const port of [8088,8089,5432,3000,3002]) require('http').createServer((q,r)=>r.end('network-destination')).listen(port,'0.0.0.0')",
+								],
+								resources: policy.resources,
+							},
+						],
+					},
+				});
+			}
+			apply({
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: { name: "model-probe", namespace },
+				spec: {
+					selector: { component: "approved-model" },
+					ports: [{ port: 8088, targetPort: 8088 }],
+				},
+			});
 			await waitForReadyPods();
 			adapter = createKubernetesRuntimeAdapterV1({
 				client,
@@ -446,6 +506,40 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			await expect(
 				connect(pod?.metadata?.name ?? "", kubeAddress, "443"),
 			).rejects.toThrow();
+			// All destinations really listen: the same Agent Pod may use only the approved model port.
+			const agentPod = pod?.metadata?.name ?? "";
+			const modelAddress = await kubectl(
+				"get",
+				"pod",
+				"model-probe",
+				"-o=jsonpath={.status.podIP}",
+			);
+			const otherAddress = await kubectl(
+				"get",
+				"pod",
+				"other-service-probe",
+				"-o=jsonpath={.status.podIP}",
+			);
+			await eventually(
+				() =>
+					request(agentPod, `http://model-probe.${namespace}.svc:8088`).catch(
+						() => null,
+					),
+				(value) => value === "network-destination",
+			);
+			for (const [host, port] of [
+				[modelAddress, "8089"],
+				[otherAddress, "8088"],
+				[otherAddress, "5432"],
+				[otherAddress, "3000"],
+				[otherAddress, "3002"],
+			] as const) {
+				await connect("worker-probe", host, port);
+				await expect(connect(agentPod, host, port)).rejects.toThrow();
+			}
+			expect(await request(agentPod, `http://${modelAddress}:8088`)).toBe(
+				"network-destination",
+			);
 			await expect(
 				kubectl(
 					"exec",

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { parseConversationOperationEventV2 } from "@agent-infra/platform-core";
 
 import postgres from "postgres";
 
@@ -48,6 +49,7 @@ export interface ConversationQueryExecutionV1 {
 }
 
 export interface ConversationQueryEventV1 {
+	readonly eventSchemaVersion?: 2;
 	readonly eventId: string;
 	readonly conversationId: string;
 	readonly executionId: string;
@@ -374,14 +376,19 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 
 function event(row: EventRow): ConversationQueryEventV1 {
 	const cursor = safeInteger(row.conversation_cursor, 1);
+	const operation =
+		row.event_type === "execution.operation"
+			? parseConversationOperationEventV2(row.event_payload)
+			: undefined;
 	return {
+		...(operation ? { eventSchemaVersion: 2 as const } : {}),
 		eventId: text(row.event_id),
 		conversationId: text(row.conversation_id),
 		executionId: text(row.execution_id),
 		sequence: safeInteger(row.sequence, 1),
 		conversationCursor: conversationCursor(row.conversation_id, cursor),
 		eventType: text(row.event_type, 128),
-		eventPayload: structuredClone(row.event_payload),
+		eventPayload: operation?.fact ?? structuredClone(row.event_payload),
 		occurredAt: timestamp(row.occurred_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
 	};

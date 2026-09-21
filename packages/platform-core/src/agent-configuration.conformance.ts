@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationSourceSelectionV1,
 	AgentConfigurationUseCaseDependenciesV1,
 	AgentConfigurationUseCaseV1,
@@ -12,9 +12,9 @@ import { pendingSecretRecordAttachmentFixtureV1 } from "./secret-record-attachme
 
 const imageDigest = `sha256:${"a".repeat(64)}`;
 
-export const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV1 =
+export const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV2 =
 	{
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: "agent_01",
 		revision: 7,
 		source: {
@@ -45,8 +45,6 @@ export const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV1 =
 			defaultOptionId: "model_primary",
 			defaultReasoningLevel: "low",
 		},
-		actions: [],
-		actionSetRevision: "actions_1",
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		secrets: [],
 		channels: [],
@@ -91,14 +89,6 @@ export const agentConfigurationConformanceAdmissionsV1 = {
 			version: 3,
 		},
 	],
-	actions: [
-		{
-			providerId: "github",
-			actionId: "issues.read",
-			actionVersion: "v3",
-		},
-	],
-	actionSetRevision: "actions_2",
 	channelBindings: [
 		{ kind: "wecom_bot" as const, bindingReference: "binding_01" },
 	],
@@ -106,7 +96,7 @@ export const agentConfigurationConformanceAdmissionsV1 = {
 };
 
 export interface AgentConfigurationConformanceSnapshotV1 {
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly authorizationRevision: string;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
@@ -131,7 +121,7 @@ export interface AgentConfigurationCustomImageUpgradeHarnessV1
 }
 
 type CustomImageSourceV1 = Extract<
-	AgentConfigurationRecordV1["source"],
+	AgentConfigurationRecordV2["source"],
 	{ kind: "custom" }
 >;
 type CustomImageSelectionV1 = Extract<
@@ -148,7 +138,7 @@ const agentConfigurationCustomImageSourceV1: CustomImageSourceV1 = {
 	connectionEnabled: false,
 };
 
-export const agentConfigurationCustomImageRecordV1: AgentConfigurationRecordV1 =
+export const agentConfigurationCustomImageRecordV1: AgentConfigurationRecordV2 =
 	{
 		...agentConfigurationConformanceRecordV1,
 		source: agentConfigurationCustomImageSourceV1,
@@ -159,7 +149,7 @@ const upgradedImageDigest = `sha256:${"c".repeat(64)}`;
 
 export function agentConfigurationCustomImageUpgradeConformance(
 	createHarness: (input: {
-		record: AgentConfigurationRecordV1;
+		record: AgentConfigurationRecordV2;
 		selection: CustomImageSelectionV1;
 		source: CustomImageSourceV1;
 	}) => Promise<AgentConfigurationCustomImageUpgradeHarnessV1>,
@@ -551,7 +541,7 @@ const actor = {
 	rawRequestDigest: "0".repeat(64),
 };
 const command = {
-	schemaVersion: 1 as const,
+	schemaVersion: 2 as const,
 	agentId: "agent_01",
 	idempotencyKey: "configuration-update-01",
 	requestId: "request_01",
@@ -584,7 +574,6 @@ export function agentConfigurationUseCaseConformance(
 							},
 							environment: [{ name: "LOG_LEVEL", value: "debug" }],
 							secrets: [{ name: "BOT_TOKEN", replace: true }],
-							actions: agentConfigurationConformanceAdmissionsV1.actions,
 							channels: [
 								{
 									kind: "wecom_bot",
@@ -602,7 +591,6 @@ export function agentConfigurationUseCaseConformance(
 				agentId: "agent_01",
 				revision: 8,
 				changedFields: [
-					"actions",
 					"channels",
 					"environment",
 					"modelConfiguration",
@@ -615,7 +603,6 @@ export function agentConfigurationUseCaseConformance(
 				revision: 8,
 				environment: [{ name: "LOG_LEVEL", value: "debug" }],
 				secrets: [{ name: "BOT_TOKEN", isSet: true, version: 3 }],
-				actionSetRevision: "actions_2",
 				channelRevision: "channels_2",
 				modelConfiguration: {
 					catalogRevision: "catalog_4",
@@ -932,11 +919,6 @@ export function agentConfigurationUseCaseConformance(
 				[
 					"secret",
 					{ secrets: [{ name: "BOT_TOKEN", replace: true }] },
-					"not_admitted",
-				],
-				[
-					"action",
-					{ actions: agentConfigurationConformanceAdmissionsV1.actions },
 					"not_admitted",
 				],
 				[

@@ -73,13 +73,20 @@ describe("task authorization boundary", () => {
 		expect(boundary?.identityRevision).toBe("directory-7");
 	});
 
-	it("rejects application principals until the #481 grant slice supplies them", () => {
-		expect(() =>
-			parseTaskAuthorizationBoundaryV1({
-				...requiredBoundary(),
-				principal: { kind: "application", id: user.userId },
+	it("does not conflate an application and user with the same ID", () => {
+		expect(
+			capture({ principal: { kind: "application", id: user.userId } }),
+		).toBeNull();
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary: {
+					...requiredBoundary(),
+					principal: { kind: "application", id: user.userId },
+				},
+				user,
+				agent,
 			}),
-		).toThrow("Task principal is invalid");
+		).toBe(false);
 	});
 
 	it.each([
@@ -121,49 +128,6 @@ describe("task authorization boundary", () => {
 					ownerIds: [user.userId],
 					availability: [{ kind: "organization", organizationId: "team-b" }],
 				},
-			}),
-		).toBe(false);
-	});
-
-	it("keeps an original organization grant usable after an unrelated Owner change", () => {
-		const boundary = requiredBoundary();
-		expect(
-			isTaskAuthorizationCurrentV1({
-				boundary,
-				user,
-				agent: {
-					...agent,
-					revision: agent.revision + 1,
-					ownerIds: ["owner-b"],
-				},
-			}),
-		).toBe(true);
-	});
-
-	it("keeps a remaining original grant but rejects replacement grants", () => {
-		const original: AgentManagementStateV1 = {
-			...agent,
-			availability: [
-				...agent.availability,
-				{ kind: "user", userId: user.userId },
-			],
-		};
-		const boundary = requiredBoundary({ agent: original });
-		expect(
-			isTaskAuthorizationCurrentV1({
-				boundary,
-				user,
-				agent: {
-					...original,
-					availability: [{ kind: "user", userId: user.userId }],
-				},
-			}),
-		).toBe(true);
-		expect(
-			isTaskAuthorizationCurrentV1({
-				boundary,
-				user,
-				agent: { ...original, ownerIds: [user.userId], availability: [] },
 			}),
 		).toBe(false);
 	});
@@ -226,9 +190,6 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary,
 				execution: {
-					executionId: "execution-1",
-					conversationId: "conversation-1",
-					sessionGeneration: 2,
 					status,
 					actorId: "user-a",
 					agentId: "agent-a",
@@ -239,11 +200,6 @@ describe("system control transaction plan", () => {
 			expect(plan).toEqual({
 				schemaVersion: 1,
 				workerId: "worker",
-				binding: {
-					executionId: "execution-1",
-					conversationId: "conversation-1",
-					sessionGeneration: 2,
-				},
 				revokeAuthorization: true,
 				ensureStop,
 				audit: {
@@ -262,9 +218,6 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary: requiredBoundary(),
 				execution: {
-					executionId: "execution-1",
-					conversationId: "conversation-1",
-					sessionGeneration: 2,
 					status: "processing",
 					actorId: "user-a",
 					agentId: "agent-a",
@@ -286,9 +239,6 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary: requiredBoundary(),
 				execution: {
-					executionId: "execution-1",
-					conversationId: "conversation-1",
-					sessionGeneration: 2,
 					status: "unknown",
 					actorId: "owner-a",
 					agentId: "agent-a",

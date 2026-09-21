@@ -7,13 +7,15 @@
 		"dist"
 	],
 	"dependencies": {
+		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
-		"@kubernetes/client-node": "2.0.0"
+		"@kubernetes/client-node": "2.0.0",
+		"@agent-infra/wecom": "workspace:*"
 	},
 	"scripts": {
 		"build": "tsdown",

@@ -8,7 +8,7 @@ import {
 	type ApplicationRevisionTransactionPortV1,
 	type ApplicationRevisionUseCaseDependenciesV1,
 	createApplicationRevisionUseCaseV1,
-	type ReviseApplicationCommandV1,
+	type ReviseApplicationCommandV2,
 } from "./application-revision.ts";
 import { FakeAgentConfigurationAdmissionsV1 } from "./fake-agent-configuration.ts";
 import type {
@@ -49,8 +49,8 @@ export const applicationRevisionStateV1: ApplicationRevisionReadStateV1 = {
 	authorizationRevision: "authorization_9",
 };
 
-export const applicationRevisionCommandV1: ReviseApplicationCommandV1 = {
-	schemaVersion: 1,
+export const applicationRevisionCommandV1: ReviseApplicationCommandV2 = {
+	schemaVersion: 2,
 	idempotencyKey: "application-revision-01",
 	requestId: "request_01",
 	traceId: "trace_01",
@@ -74,7 +74,6 @@ export const applicationRevisionCommandV1: ReviseApplicationCommandV1 = {
 	},
 	environment: [{ name: "LOG_LEVEL", value: "debug" }],
 	secrets: [],
-	actions: [],
 	channels: [],
 };
 
@@ -141,8 +140,6 @@ export function applicationRevisionAdmissionsV1(
 				version: 2,
 			},
 		],
-		actions: [],
-		actionSetRevision: "actions_1",
 		channelBindings: [],
 		channelRevision: "channels_1",
 	});
@@ -151,7 +148,6 @@ export function applicationRevisionAdmissionsV1(
 		imageAdmission: admissions,
 		modelAdmission: admissions,
 		secretAdmission: admissions,
-		actionAdmission: admissions,
 		channelAdmission: admissions,
 	};
 }
@@ -207,7 +203,7 @@ function stateWithExistingSecretAndChannel(): ApplicationRevisionReadStateV1 {
 	};
 }
 
-function commandWithoutSecretOrChannel(): ReviseApplicationCommandV1 {
+function commandWithoutSecretOrChannel(): ReviseApplicationCommandV2 {
 	const {
 		secrets: _secrets,
 		channels: _channels,
@@ -221,6 +217,124 @@ export function applicationRevisionTransactionConformance(
 		state?: ApplicationRevisionReadStateV1,
 	) => Promise<ApplicationRevisionConformanceHarnessV1>,
 ): void {
+	it.each([
+		["pending_approval", false],
+		["rejected", false],
+		["pending_approval", true],
+		["rejected", true],
+	] as const)(
+		"revises access in a %s application with Owner change=%s",
+		async (status, ownersChanged) => {
+			const revision = ownersChanged ? 8 : 7;
+			const state: ApplicationRevisionReadStateV1 = {
+				...applicationRevisionStateV1,
+				management: {
+					...applicationRevisionStateV1.management,
+					status,
+					decisionReason: status === "rejected" ? "Capacity unavailable" : null,
+				},
+			};
+			const harness = await createHarness(state);
+			try {
+				const command: ReviseApplicationCommandV2 = {
+					...applicationRevisionCommandV1,
+					name: state.application.name,
+					environment: state.configuration.environment,
+					coOwnerIds: ownersChanged ? [] : ["owner_02"],
+					availability: [{ kind: "user", userId: "owner_02" }],
+				};
+				const service = useCase(harness.transaction, state);
+				const result = await service.revise(
+					command,
+					applicationRevisionActorContextV1,
+				);
+				expect(result).toMatchObject({
+					configurationRevision: revision,
+					managementRevision: 4,
+					status: "pending_approval",
+				});
+				await expect(
+					service.revise(command, applicationRevisionActorContextV1),
+				).resolves.toEqual(result);
+				expect(await harness.snapshot()).toMatchObject({
+					commitCount: 1,
+					idempotencyCount: 1,
+					outboxCount: ownersChanged ? 2 : 1,
+					auditCount: 2,
+					state: {
+						configuration: { ...state.configuration, revision },
+						management: {
+							status: "pending_approval",
+							revision: 4,
+							ownerIds: ownersChanged ? ["owner_01"] : ["owner_01", "owner_02"],
+							availability: [{ kind: "user", userId: "owner_02" }],
+							desiredState: "stopped",
+							workloadRevision: 0,
+							fence: 0,
+						},
+					},
+					lastPlan: {
+						configuration: {
+							nextRevision: revision,
+							outboxIntent: ownersChanged
+								? { operation: "agent.configuration.revised.v1" }
+								: null,
+							auditEvent: { action: "agent.access.updated" },
+						},
+						outboxIntent: { operation: "agent.application.revised.v1" },
+					},
+				});
+			} finally {
+				await harness.close();
+			}
+		},
+	);
+
+	it("rejects a runtime change hidden in an availability-only application revision", async () => {
+		const harness = await createHarness();
+		try {
+			const service = useCase({
+				read: harness.transaction.read.bind(harness.transaction),
+				async commit(plan, attachments) {
+					if (!plan.configuration) throw new Error("Expected access change");
+					return harness.transaction.commit(
+						{
+							...plan,
+							configuration: {
+								...plan.configuration,
+								configuration: {
+									...plan.configuration.configuration,
+									environment: [{ name: "LOG_LEVEL", value: "debug" }],
+								},
+							},
+						},
+						attachments,
+					);
+				},
+			});
+			await expect(
+				service.revise(
+					{
+						...applicationRevisionCommandV1,
+						environment: applicationRevisionStateV1.configuration.environment,
+						coOwnerIds: ["owner_02"],
+						availability: [{ kind: "user", userId: "owner_02" }],
+					},
+					applicationRevisionActorContextV1,
+				),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(await harness.snapshot()).toMatchObject({
+				state: applicationRevisionStateV1,
+				commitCount: 0,
+				outboxCount: 0,
+				auditCount: 0,
+				idempotencyCount: 0,
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("preserves secret metadata and channel bindings when revision fields are omitted", async () => {
 		const state = stateWithExistingSecretAndChannel();
 		const command = commandWithoutSecretOrChannel();
@@ -256,7 +370,7 @@ export function applicationRevisionTransactionConformance(
 
 	it("does not invent a configuration revision for omitted revision fields", async () => {
 		const state = stateWithExistingSecretAndChannel();
-		const command: ReviseApplicationCommandV1 = {
+		const command: ReviseApplicationCommandV2 = {
 			...commandWithoutSecretOrChannel(),
 			environment: state.configuration.environment,
 		};
@@ -542,7 +656,6 @@ export function applicationRevisionTransactionConformance(
 			"imageAdmission",
 			"modelAdmission",
 			"secretAdmission",
-			"actionAdmission",
 			"channelAdmission",
 		] as const) {
 			const harness = await createHarness();
@@ -571,9 +684,7 @@ export function applicationRevisionTransactionConformance(
 										? "admitModels"
 										: kind === "secretAdmission"
 											? "admitSecrets"
-											: kind === "actionAdmission"
-												? "admitActions"
-												: "admitChannels"]: async (input: {
+											: "admitChannels"]: async (input: {
 									agentId: string;
 									requestId: string;
 								}) => ({

@@ -5,6 +5,7 @@ import { HttpProtocolError } from "./common";
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	resolveCurrentTaskUser,
 	resolveIdentity,
 } from "./identity";
 
@@ -37,6 +38,58 @@ async function caught(task: Promise<unknown>): Promise<HttpProtocolError> {
 }
 
 describe("trusted identity boundary", () => {
+	it("rechecks task users without resolving or retaining the browser request", async () => {
+		const currentUser = {
+			schemaVersion: 1,
+			userId: activeIdentity.userId,
+			accountStatus: "disabled",
+			organizationIds: [],
+			authorizationRevision: "identity-new",
+		};
+		const identityAdapter = {
+			...adapter(activeIdentity),
+			resolveUser: vi.fn(async () => currentUser),
+		};
+		await expect(
+			resolveCurrentTaskUser(identityAdapter, "user-01", traceId),
+		).resolves.toEqual(currentUser);
+		expect(identityAdapter.resolveUser).toHaveBeenCalledWith("user-01");
+		expect(identityAdapter.resolve).not.toHaveBeenCalled();
+		expect(identityAdapter.hydrateUsers).not.toHaveBeenCalled();
+	});
+
+	it("fails closed when the requestless directory is missing, unavailable or returns another user", async () => {
+		for (const identityAdapter of [
+			undefined,
+			adapter(activeIdentity),
+			{
+				...adapter(activeIdentity),
+				resolveUser: async () => {
+					throw new Error("private-service-credential");
+				},
+			},
+			{
+				...adapter(activeIdentity),
+				resolveUser: async () => ({
+					schemaVersion: 1,
+					userId: "admin",
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "identity-new",
+				}),
+			},
+		]) {
+			const error = await caught(
+				resolveCurrentTaskUser(identityAdapter, "user-01", traceId),
+			);
+			expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(error.status).toBe(503);
+			expect(JSON.stringify(error.body)).not.toContain(
+				"private-service-credential",
+			);
+		}
+	});
+
 	it("resolves the current identity only through the injected adapter", async () => {
 		const identityAdapter = adapter(activeIdentity);
 		const request = new Request(

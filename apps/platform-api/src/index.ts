@@ -135,11 +135,17 @@ export function createPlatformApiShutdown(
 }
 
 export {
+	createProductionPlatformApiAssemblyInputV1,
+	type ProductionPlatformApiInputV1,
+} from "./deployment.js";
+export type { IdentityAdapter, IdentityContext } from "./http/identity.js";
+export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,
 } from "./secret-preparation.js";
 export {
 	assemblePlatformApi,
+	createPlatformApp,
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 };
@@ -163,3 +169,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 			process.exitCode = 1;
 		});
 }
+
+export {
+	createProductionSingleAgentTemplateReleaseAppV1,
+	type ProductionSingleAgentTemplateReleaseInputV1,
+	type StandardTemplateReleaseDeploymentBindingV1,
+} from "./template-release.js";

@@ -59,6 +59,7 @@ import {
 	createPlatformSecretRotationWorkerV1,
 	startPlatformWorker,
 	startPlatformWorkerFromDeploymentV1,
+	startPlatformWorkerFromDeploymentV2,
 } from "./index";
 
 const sourceKeyPair = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -470,6 +471,11 @@ describe("platform worker lifecycle", () => {
 				vi.doMock("./workload-worker.js", () => ({
 					startPlatformWorkloadWorkerFromDeploymentV1: startWorkload,
 				}));
+				vi.doMock("./conversation-worker.js", () => ({
+					startPlatformConversationWorkerFromDeploymentV2: async () => ({
+						stop: async () => {},
+					}),
+				}));
 				process.argv[1] = fileURLToPath(new URL("./index.ts", import.meta.url));
 				process.exitCode = undefined;
 				process.on("unhandledRejection", onUnhandled);
@@ -528,6 +534,7 @@ describe("platform worker lifecycle", () => {
 				else process.argv[1] = originalArgv;
 				process.exitCode = originalExitCode;
 				vi.doUnmock("./workload-worker.js");
+				vi.doUnmock("./conversation-worker.js");
 				on.mockRestore();
 				exit.mockRestore();
 				info.mockRestore();
@@ -536,4 +543,38 @@ describe("platform worker lifecycle", () => {
 			}
 		},
 	);
+});
+
+describe("Platform Worker production V2 lifecycle", () => {
+	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
+		const primary = { stop: vi.fn(async () => {}) };
+		const workload = { stop: vi.fn(async () => {}) };
+		const conversation = { stop: vi.fn(async () => {}) };
+		const worker = await startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+			startConversation: async () => conversation,
+		});
+		const stopping = worker.stop();
+		expect(worker.stop()).toBe(stopping);
+		await stopping;
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+		expect(conversation.stop).toHaveBeenCalledOnce();
+	});
+	it("drains already-started loops when conversation assembly fails", async () => {
+		const primary = { stop: vi.fn(async () => {}) };
+		const workload = { stop: vi.fn(async () => {}) };
+		await expect(
+			startPlatformWorkerFromDeploymentV2({
+				startPrimary: () => primary,
+				startWorkload: async () => workload,
+				startConversation: async () => {
+					throw new Error("synthetic conversation assembly failure");
+				},
+			}),
+		).rejects.toThrow("synthetic conversation assembly failure");
+		expect(primary.stop).toHaveBeenCalledOnce();
+		expect(workload.stop).toHaveBeenCalledOnce();
+	});
 });

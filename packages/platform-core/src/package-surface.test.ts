@@ -31,7 +31,7 @@ describe("platform-core package surface", () => {
 			"utf8",
 		);
 		expect(declarations).not.toMatch(
-			/beginInitialAgentConfigurationAdmissionV1|decodeAgentConfigurationRecordV1|InitialAgentConfigurationAdmissionHandleV1/,
+			/beginInitialAgentConfigurationAdmissionV1|decodeAgentConfigurationRecordV2|InitialAgentConfigurationAdmissionHandleV1/,
 		);
 		expect(Object.keys(surface).toSorted()).toEqual([
 			"AgentConfigurationError",
@@ -46,6 +46,7 @@ describe("platform-core package surface", () => {
 			"PlatformIdempotencyError",
 			"SecretActivationError",
 			"SecretKeyRotationError",
+			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
 			"bindInputFileV1",
 			"captureTaskAuthorizationBoundaryV1",
@@ -61,23 +62,54 @@ describe("platform-core package surface", () => {
 			"createFileReconciliationV1",
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
+			"createTaskRuntimeAuthorizationUseCaseV1",
+			"createWecomAuthorizationV1",
+			"createWecomChannelV1",
+			"createWecomDeliveryV1",
+			"createWecomReceiptAccessV1",
+			"createWecomSetupV1",
 			"createWorkloadReconciliationV1",
+			"decideAgentRuntimePresentationV1",
+			"decideConversationDispatchCapacityV1",
+			"decideConversationDispatchRetryTransitionV1",
+			"hasUnverifiedWorkloadSecretRecoveryV1",
 			"immutableSecretNameV1",
+			"inheritWorkloadSecretRecoveriesV1",
+			"isAgentAccessAllowedV1",
+			"isAgentOwnerV1",
+			"isAgentRuntimePresentationVisibleV1",
 			"isConfirmedResultFileV1",
+			"isConversationGenerationBarrierConfirmedV1",
 			"isTaskAuthorizationCurrentV1",
+			"parseAgentConfigurationChangesV1",
+			"parseConversationMetadataRecoveryV1",
+			"parseConversationOperationEventV2",
+			"parseConversationOperationFactV2",
+			"parseConversationOperationHistoryV2",
 			"parseConversationPersistedEventPayloadV1",
 			"parseCurrentTaskUserV1",
+			"parseStandardTemplateReleaseTargetV1",
 			"parseTaskAuthorizationBoundaryV1",
+			"parseWorkloadExecutionCapacityV1",
+			"parseWorkloadSecretRecoveriesV1",
+			"planConversationGenerationConfirmationV1",
+			"planConversationGenerationIsolationV1",
+			"planMissingWorkloadSecretRecoveryV1",
 			"planTaskSystemControlV1",
 			"platformIdempotencyV1",
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",
+			"requireConversationOperationSuccessorV2",
 			"resolveFileLimitsV1",
 			"snapshotAgentConfigurationWritePlanV1",
 			"snapshotAgentManagementWritePlanV1",
+			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
+			"validateWorkloadSecretRecoverySourcesV1",
+			"wecomChannelIdV1",
 			"workloadManagementObservationV1",
+			"workloadSecretRecoveriesV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href
@@ -115,9 +147,9 @@ describe("platform-core package surface", () => {
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
-		).toEqual(["submit"]);
+		).toEqual(["submit", "replayLegacyV1"]);
 		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
-			["revise"],
+			["revise", "replayLegacyV1"],
 		);
 
 		const pack = JSON.parse(

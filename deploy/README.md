@@ -23,6 +23,11 @@ Ingress。真实 Agent Workload 的创建、停止、升级、回滚和失败恢
 KubernetesRuntimeAdapter 调谐；镜像发布与 release/rollback 校验属于
 [#334](https://github.com/AgoraIO-Extensions/agent-infra/issues/334)。
 
+生产 KubernetesRuntimeAdapter 为 Agent 容器固定挂载 `runtime-tmp` 到 `/tmp`，使用
+`emptyDir: { medium: Memory, sizeLimit: 128Mi }`；镜像准入探针对应 Docker
+`--tmpfs /tmp:size=128m,mode=1777`。容量计入容器内存使用，容量验证须包含该挂载。
+临时卷与隔离要求见[工程 Spec](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)。
+
 ## Helm 检查
 
 ```bash
@@ -101,9 +106,11 @@ Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 运行期候选失败则把已验证配置作为新的 Workload revision 调谐。新建失败清理完成后
 才记录创建失败。Secret 明文只在 Worker 解密和 Kubernetes Secret 写入期间存在。
 
-Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。唯一受控出站
-属于[后续生产化加固](../docs/architecture/PLAN-M1-delivery-convergence.md)，当前
-Workload 调谐不开放直接 DNS 或可选代理出站，也不宣称完成外部模型与 Connection 出站能力。
+Agent 默认拒绝全部 egress，Profile 不接受 Owner 提交的任意网络规则。部署可通过
+`modelEgress` 指定固定 IP 或明确 namespace/Pod 标签及 TCP 端口，通过 `dnsEgress`
+指定 DNS peer；由同一 Kubernetes Adapter 调谐并检查漂移。模型路径需要实际正负网络
+验证，静态规则不代表真实模型或 Connection 调用验收。完整本地入口见
+[本地 Platform 生命周期](local/README.md)。
 
 独立的生命周期与网络测试使用 kind v0.30.0、Kubernetes v1.33.4 和 Calico v3.30.3：
 

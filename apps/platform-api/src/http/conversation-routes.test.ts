@@ -1,7 +1,10 @@
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV1Schema,
+	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -52,10 +55,35 @@ const persistedEvent = {
 	traceId: "trace-1",
 };
 
+const operationEvent = {
+	...persistedEvent,
+	eventId: "operation-event-2",
+	sequence: 2,
+	conversationCursor: "cursor-2",
+	eventSchemaVersion: 2 as const,
+	eventType: "execution.operation",
+	eventPayload: {
+		kind: "model",
+		operationRef: "operation-1",
+		attemptRef: "attempt-1",
+		phase: "unknown",
+		failureCode: "response_incomplete",
+		model: {
+			configVersion: "config-1",
+			modelOptionId: "model-primary",
+			modelId: "model-1",
+			reasoningLevel: "medium",
+		},
+	},
+};
+
 function dependencies(
 	overrides: Partial<ConversationRoutesDependencies> = {},
 ): ConversationRoutesDependencies {
 	const commands = {
+		requestMetadataRecovery: vi
+			.fn()
+			.mockResolvedValue({ outcome: "not_applicable" }),
 		createConversation: vi.fn().mockResolvedValue({
 			outcome: "accepted",
 			result: {
@@ -202,12 +230,196 @@ function testApp(input = dependencies()) {
 	return { app, dependencies: input };
 }
 
+async function operationDependencies() {
+	const input = dependencies();
+	const detail = await input.query.get(
+		{ actorId: identity.userId, channelId: "web" },
+		conversation.conversationId,
+	);
+	const execution = await input.query.getExecution(
+		{ actorId: identity.userId, channelId: "web" },
+		conversation.conversationId,
+		"execution-1",
+	);
+	if (!detail || !execution) throw new Error("Missing controlled fixture");
+	vi.mocked(input.query.get)
+		.mockResolvedValue({ ...detail, events: [persistedEvent, operationEvent] })
+		.mockClear();
+	vi.mocked(input.query.getExecution)
+		.mockResolvedValue({
+			...execution,
+			execution: { ...execution.execution, status: "unknown" },
+			events: [persistedEvent, operationEvent],
+		})
+		.mockClear();
+	vi.mocked(input.query.replay)
+		.mockReset()
+		.mockResolvedValueOnce({
+			outcome: "events",
+			events: [persistedEvent, operationEvent],
+			resumeCursor: "cursor-2",
+		})
+		.mockResolvedValue({
+			outcome: "reload",
+			reason: "cursor_expired",
+			resumeCursor: "cursor-2",
+		});
+	return input;
+}
+
 const commandHeaders = {
 	"content-type": "application/json",
 	"Idempotency-Key": "Command.Aa-01",
 };
 
 describe("Conversation HTTP routes", () => {
+	it("returns complete V2 mixed history while preserving original V1 messages and events", async () => {
+		const input = await operationDependencies();
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1",
+		);
+		expect(response.status).toBe(200);
+		const detail = ConversationDetailProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(detail.schemaVersion).toBe(2);
+		expect(
+			detail.messages.find((message) => message.role === "assistant")?.text,
+		).toBe("Hello");
+		expect(
+			detail.events.map((event) => [
+				event.schemaVersion,
+				event.eventId,
+				event.sequence,
+			]),
+		).toEqual([
+			[1, "event-1", 1],
+			[2, "operation-event-2", 2],
+		]);
+		expect(detail.events[1]).toMatchObject({
+			type: "execution.operation",
+			payload: operationEvent.eventPayload,
+		});
+		const legacyResponse = await testApp(
+			await operationDependencies(),
+		).app.request("/api/v1/conversations/conversation-1");
+		expect(
+			ConversationDetailProjectionV1Schema.safeParse(
+				await legacyResponse.json(),
+			).success,
+		).toBe(true);
+	});
+
+	it("shows actual unknown facts in V2 execution detail without inventing usage or model summaries", async () => {
+		const response = await testApp(await operationDependencies()).app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(response.status).toBe(200);
+		const detail = ExecutionDetailProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(detail.schemaVersion).toBe(2);
+		expect(detail.status).toBe("unknown");
+		expect(detail.events[1]).toMatchObject({
+			type: "execution.operation",
+			payload: {
+				phase: "unknown",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+			},
+		});
+		expect(detail.events[1]?.payload).not.toHaveProperty("usage");
+		expect(detail.events[1]?.payload).not.toHaveProperty("durationMs");
+		expect(detail.processSummary).toEqual([]);
+	});
+
+	it("streams V1 and V2 events in original order under V2 with unchanged Last-Event-ID replay", async () => {
+		const input = await operationDependencies();
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+			{ headers: { "Last-Event-ID": "before-mixed-history" } },
+		);
+		expect(response.status).toBe(200);
+		const frames = (await response.text())
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			);
+		expect(frames.map((frame) => [frame.schemaVersion, frame.type])).toEqual([
+			[1, "text.delta"],
+			[2, "execution.operation"],
+			[1, "timeline.reload"],
+		]);
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			1,
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			{ kind: "last-event-id", value: "before-mixed-history" },
+		);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(5);
+	});
+
+	it("does not silently discard or relabel V2 operation facts on the V1 event stream", async () => {
+		const response = await testApp(await operationDependencies()).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+		});
+	});
+
+	it("rejects cross-conversation and cross-execution event substitution before V2 projection", async () => {
+		const streamInput = await operationDependencies();
+		vi.mocked(streamInput.query.replay)
+			.mockReset()
+			.mockResolvedValue({
+				outcome: "events",
+				events: [{ ...operationEvent, conversationId: "private-conversation" }],
+				resumeCursor: "cursor-2",
+			});
+		const stream = await testApp(streamInput).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		expect(stream.status).toBe(503);
+		expect(await stream.text()).not.toContain("private-conversation");
+		const detailInput = await operationDependencies();
+		const original = await detailInput.query.getExecution(
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			"execution-1",
+		);
+		if (!original) throw new Error("Missing execution fixture");
+		vi.mocked(detailInput.query.getExecution).mockResolvedValue({
+			...original,
+			events: [{ ...operationEvent, executionId: "private-execution" }],
+		});
+		const detail = await testApp(detailInput).app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+		expect(detail.status).toBe(503);
+		expect(await detail.text()).not.toContain("private-execution");
+	});
+
+	it("closes V2 delivery before a structured fact when current user authorization is revoked", async () => {
+		const input = await operationDependencies();
+		vi.mocked(input.authorization.authorize)
+			.mockReset()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockResolvedValueOnce({ outcome: "denied" });
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+		expect(body).toContain("id: event-1");
+		expect(body).toContain('"type":"authorization.revoked"');
+		expect(body).not.toContain("operation-event-2");
+		expect(body).not.toContain('"operationRef"');
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {
@@ -663,12 +875,13 @@ describe("Conversation persisted SSE", () => {
 			"conversation-1",
 			{ kind: "last-event-id", value: "event-before" },
 		);
-		expect(input.authorization.authorize).toHaveBeenCalledTimes(3);
+		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
 	});
 
 	it("stops before the next push when current access is revoked", async () => {
 		const authorize = vi
 			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "allowed", authority })
 			.mockResolvedValueOnce({ outcome: "denied" });
 		const input = dependencies({ authorization: { authorize } });
@@ -697,6 +910,89 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("authorization.revoked");
 		expect(body).not.toContain("private identity dependency detail");
 	});
+
+	it.each([
+		"identity revoked",
+		"access revoked",
+		"identity unavailable",
+		"authorization unavailable",
+	] as const)(
+		"closes an idle SSE stream after %s without a business event",
+		async (change) => {
+			vi.useFakeTimers();
+			const input = dependencies({ streamPollIntervalMs: 1 });
+			vi.mocked(input.query.replay).mockReset().mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-1",
+			});
+			const controller = new AbortController();
+			let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+			let reading: Promise<void> | undefined;
+			try {
+				const response = await testApp(input).app.request(
+					"/api/v2/conversations/conversation-1/events",
+					{ signal: controller.signal },
+				);
+				expect(response.status).toBe(200);
+				if (!response.body) throw new Error("missing SSE body");
+				reader = response.body.getReader();
+				const activeReader = reader;
+				const decoder = new TextDecoder();
+				let body = "";
+				let ended = false;
+				reading = (async () => {
+					while (true) {
+						const chunk = await activeReader.read();
+						if (chunk.done) {
+							ended = true;
+							return;
+						}
+						body += decoder.decode(chunk.value, { stream: true });
+					}
+				})();
+				await vi.advanceTimersByTimeAsync(5);
+				expect(ended).toBe(false);
+				expect(body).toBe("");
+
+				if (change === "identity revoked") {
+					vi.mocked(input.identity.resolve).mockResolvedValue(null);
+				} else if (change === "access revoked") {
+					vi.mocked(input.authorization.authorize).mockResolvedValue({
+						outcome: "denied",
+					});
+				} else if (change === "identity unavailable") {
+					vi.mocked(input.identity.resolve).mockRejectedValue(
+						new Error("private identity dependency detail"),
+					);
+				} else {
+					vi.mocked(input.authorization.authorize).mockResolvedValue({
+						outcome: "unavailable",
+					});
+				}
+
+				await vi.advanceTimersByTimeAsync(10);
+				expect(ended, "idle SSE must close after current access fails").toBe(
+					true,
+				);
+				if (change.endsWith("revoked")) {
+					expect(body).toContain('"type":"authorization.revoked"');
+					expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
+				} else {
+					expect(body).toBe("");
+				}
+				expect(body).not.toContain('"kind":"event"');
+				expect(body).not.toContain("user-1");
+				expect(body).not.toContain("private identity dependency detail");
+			} finally {
+				controller.abort();
+				await reader?.cancel();
+				await vi.advanceTimersByTimeAsync(1);
+				await reading;
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	it("rejects ambiguous replay selectors and non-enumerates initial access", async () => {
 		const ambiguous = await testApp().app.request(
@@ -760,5 +1056,71 @@ describe("Conversation persisted SSE", () => {
 				payload: { text: "Hello" },
 			}),
 		).toBeDefined();
+	});
+});
+
+describe("historical metadata recovery admission", () => {
+	it("registers only successful Conversation and Execution history reads", async () => {
+		const h = testApp();
+		const command = h.dependencies.commands(identity);
+		expect(
+			(await h.app.request("/api/v2/conversations/conversation-1")).status,
+		).toBe(200);
+		expect(command.requestMetadataRecovery).toHaveBeenCalledWith({
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+		});
+		vi.mocked(command.requestMetadataRecovery).mockClear();
+		expect(
+			(
+				await h.app.request(
+					"/api/v2/conversations/conversation-1/executions/execution-1",
+				)
+			).status,
+		).toBe(200);
+		expect(command.requestMetadataRecovery).toHaveBeenCalledWith({
+			schemaVersion: 1,
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		});
+		vi.mocked(command.requestMetadataRecovery).mockClear();
+		vi.mocked(h.dependencies.query.getExecution).mockResolvedValue(undefined);
+		expect(
+			(
+				await h.app.request(
+					"/api/v2/conversations/conversation-1/executions/missing",
+				)
+			).status,
+		).not.toBe(200);
+		expect(command.requestMetadataRecovery).not.toHaveBeenCalled();
+		vi.mocked(command.readConversation).mockResolvedValue({
+			outcome: "denied",
+		});
+		expect(
+			(await h.app.request("/api/v2/conversations/conversation-1")).status,
+		).not.toBe(200);
+		expect(command.requestMetadataRecovery).not.toHaveBeenCalled();
+	});
+
+	it("registers once on initial SSE subscription while ordinary polls remain read-only", async () => {
+		const h = testApp(dependencies({ streamPollIntervalMs: 1 }));
+		const command = h.dependencies.commands(identity);
+		const controller = new AbortController();
+		const response = await h.app.request(
+			"/api/v2/conversations/conversation-1/events",
+			{ signal: controller.signal },
+		);
+		expect(response.status).toBe(200);
+		if (!response.body) throw new Error("missing SSE body");
+		const reader = response.body.getReader();
+		await reader.read();
+		await vi.waitFor(() =>
+			expect(
+				vi.mocked(h.dependencies.query.replay).mock.calls.length,
+			).toBeGreaterThan(1),
+		);
+		controller.abort();
+		await reader.cancel();
+		expect(command.requestMetadataRecovery).toHaveBeenCalledTimes(1);
 	});
 });
