@@ -158,7 +158,7 @@ export function runtimeRequestSigningPayloadV3(request: {
 			return Object.fromEntries(
 				Object.entries(value)
 					.filter(([, entry]) => entry !== undefined)
-					.sort(([a], [b]) => a.localeCompare(b, "en"))
+					.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 					.map(([key, entry]) => [key, canonical(entry)]),
 			);
 		}
