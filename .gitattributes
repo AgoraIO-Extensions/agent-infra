@@ -8,6 +8,9 @@ deploy/runtime/vendor/codex/patches/0004-native-dependency-security-updates.patc
 deploy/runtime/vendor/codex/patches/0006-current-model-switch-compaction.patch whitespace=-blank-at-eol,-blank-at-eof
 
 # Preserve verbatim upstream license texts, including original line endings.
+deploy/runtime/vendor/codex/UPSTREAM-LICENSE -text whitespace=-blank-at-eol,-blank-at-eof
+deploy/runtime/vendor/codex/UPSTREAM-NOTICE -text whitespace=-blank-at-eol,-blank-at-eof
+deploy/runtime/vendor/codex/licenses/*.txt -text whitespace=-blank-at-eol,-blank-at-eof
 deploy/runtime/vendor/codex/licenses/dependency-updates-NOTICE.txt -text whitespace=-blank-at-eol,-blank-at-eof
 
 # Ordered input fragments must reconstruct the exact pinned bytes, including CRLF.
