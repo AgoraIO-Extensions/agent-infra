@@ -795,7 +795,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	async listConnectionAdministrators(principalId: string) {
 		return this.sql.begin(async (sql) => {
 			await this.requireConnectionAdministrator(sql, principalId);
-			await this.expireProviderUpgradeTasks(sql);
 			const administrators = await sql<
 				{ display_name: string; email: string | null; principal_id: string }[]
 			>`
@@ -825,6 +824,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	): Promise<ProviderUpgradeCampaignSummary[]> {
 		return this.sql.begin(async (sql) => {
 			await this.requireConnectionAdministrator(sql, principalId);
+			await this.expireProviderUpgradeTasks(sql);
 			const campaigns = await sql<
 				{
 					completed_count: string;
@@ -1570,15 +1570,28 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					)
 				`;
 				await sql`
-					UPDATE connection_provider_upgrade_tasks task
-					SET status = 'PENDING_AUTHORIZATION', updated_at = now()
-					FROM connection_provider_upgrade_campaigns campaign,
-						connection_accounts account
-					WHERE task.campaign_id = campaign.id
-						AND account.id = task.connection_id
-						AND task.authorization_root_id = ${grant.root_id}
-						AND campaign.target_provider_release_id = account.provider_release_id
-						AND task.status = 'PENDING_CONNECTION'
+					WITH transitioned AS (
+						UPDATE connection_provider_upgrade_tasks task
+						SET status = 'PENDING_AUTHORIZATION', updated_at = now()
+						FROM connection_provider_upgrade_campaigns campaign,
+							connection_accounts account
+						WHERE task.campaign_id = campaign.id
+							AND account.id = task.connection_id
+							AND task.authorization_root_id = ${grant.root_id}
+							AND campaign.target_provider_release_id = account.provider_release_id
+							AND task.status = 'PENDING_CONNECTION'
+						RETURNING task.id, task.campaign_id, task.principal_id, task.connection_id
+					)
+					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+					SELECT 'outbox-authorization-required-' || id,
+						'connection.provider-upgrade.authorization-required', id,
+						jsonb_build_object(
+							'campaignId', campaign_id,
+							'principalId', principal_id,
+							'connectionId', connection_id
+						)
+					FROM transitioned
+					ON CONFLICT (topic, aggregate_id) DO NOTHING
 				`;
 			}
 		}
@@ -3528,9 +3541,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						ON campaign.id = task.campaign_id
 					JOIN connection_consumers consumer ON consumer.id = task.consumer_id
 					WHERE task.principal_id = ${principalId}
-						AND task.status IN (
-							'PENDING_CONNECTION', 'PENDING_AUTHORIZATION', 'EXPIRED'
-						)
+						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
 					ORDER BY campaign.created_at, task.id
 				`,
 		]);
