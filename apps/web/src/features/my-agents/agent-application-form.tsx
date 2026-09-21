@@ -1,5 +1,5 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -11,12 +11,11 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationProjectionV1,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationProjectionV2,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
-	type AgentApplicationActionDraft,
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationModelDraft,
 	type AgentApplicationSourceKind,
@@ -29,19 +28,20 @@ import {
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
 
-type AgentApplicationFormProps =
+type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 	| {
 			mode: "create";
-			onSubmit: (body: AgentApplicationCreateRequestV1Writable) => void;
+			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			submitting: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
-			application: AgentApplicationProjectionV1;
+			application: AgentApplicationProjectionV2;
 			mode: "update";
-			onSubmit: (body: AgentApplicationUpdateRequestV1Writable) => void;
+			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			submitting: boolean;
-	  };
+	  }
+);
 
 type DraftField<T extends string> = {
 	key: T;
@@ -60,10 +60,6 @@ type DraftRowsProps<T extends string> = {
 	onRemove: (index: number) => void;
 	rows: readonly Record<T, string>[];
 };
-
-function blankAction(): AgentApplicationActionDraft {
-	return { providerId: "", actionId: "", actionVersion: "" };
-}
 
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
 	return { name: "", value: "" };
@@ -91,7 +87,13 @@ function DraftRows<T extends string>({
 	return (
 		<>
 			{rows.map((row, index) => (
-				<div className="grid gap-3 sm:grid-cols-3" key={`${label}-${index}`}>
+				<fieldset
+					className="grid min-w-0 gap-3 sm:grid-cols-2"
+					key={`${label}-${index}`}
+				>
+					<legend className="mb-3 font-medium">
+						{label} {index + 1}
+					</legend>
 					{fields.map((field) => (
 						<div className="space-y-2" key={field.key}>
 							<Label htmlFor={`application-${idPrefix}-${field.key}-${index}`}>
@@ -131,10 +133,10 @@ function DraftRows<T extends string>({
 							type="button"
 						>
 							<Trash2Icon aria-hidden="true" data-icon="inline-start" />
-							Remove {label}
+							移除{label}
 						</Button>
 					) : null}
-				</div>
+				</fieldset>
 			))}
 		</>
 	);
@@ -184,9 +186,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				.map((target) => target.organizationId)
 				.join("\n") ?? "",
 		);
-	const [actions, setActions] = useState<AgentApplicationActionDraft[]>(
-		configuration?.actions.map((action) => ({ ...action })) ?? [],
-	);
 	const [environment, setEnvironment] = useState<
 		AgentApplicationEnvironmentDraft[]
 	>(configuration?.environment.map((value) => ({ ...value })) ?? []);
@@ -219,7 +218,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			coOwnerIds,
 			userAvailabilityIds,
 			organizationAvailabilityIds,
-			actions,
 			environment,
 			secrets,
 			source: application?.source,
@@ -251,36 +249,48 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			<fieldset
 				disabled={props.submitting}
 				className="min-w-0 space-y-6"
-				aria-label="Agent application"
+				aria-label="Agent 申请"
 			>
-				<div className="grid gap-4 sm:grid-cols-2">
-					<div className="space-y-2">
-						<Label htmlFor="application-name">Application name</Label>
-						<Input
-							id="application-name"
-							onChange={(event) => setName(event.target.value)}
-							required
-							value={name}
-						/>
-					</div>
-					<div className="space-y-2 sm:col-span-2">
-						<Label htmlFor="application-description">Description</Label>
-						<Textarea
-							className="min-h-28"
-							id="application-description"
-							onChange={(event) => setDescription(event.target.value)}
-							required
-							value={description}
-						/>
-					</div>
-				</div>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Source
-					</legend>
-					<div className="grid gap-4 sm:grid-cols-2">
+				<fieldset className="form-section">
+					<legend className="font-semibold text-lg">基本信息</legend>
+					<p className="text-muted-foreground text-sm">
+						说明 Agent 的用途，便于管理员审阅和使用者了解。
+					</p>
+					<div className="form-grid">
 						<div className="space-y-2">
-							<Label htmlFor="application-source-kind">Source kind</Label>
+							<Label htmlFor="application-name">Agent 名称</Label>
+							<Input
+								id="application-name"
+								onChange={(event) => setName(event.target.value)}
+								required
+								value={name}
+							/>
+						</div>
+						<div className="space-y-2 sm:col-span-2">
+							<Label htmlFor="application-description">用途说明</Label>
+							<Textarea
+								className="min-h-28"
+								id="application-description"
+								onChange={(event) => setDescription(event.target.value)}
+								required
+								value={description}
+							/>
+						</div>
+					</div>
+				</fieldset>
+				<fieldset className="form-section">
+					<legend className="font-semibold text-foreground text-lg">
+						Agent 来源
+					</legend>
+					<p
+						className="text-muted-foreground text-sm"
+						id="application-source-help"
+					>
+						填写部署提供的标准模板 ID 或镜像地址。已有申请的来源不能更改。
+					</p>
+					<div className="form-grid">
+						<div className="space-y-2">
+							<Label htmlFor="application-source-kind">Agent 来源</Label>
 							<NativeSelect
 								disabled={props.mode === "update"}
 								id="application-source-kind"
@@ -296,24 +306,23 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								value={sourceKind}
 							>
 								<NativeSelectOption value="standard">
-									Standard template
+									标准模板
 								</NativeSelectOption>
 								<NativeSelectOption value="custom-platform-adapter">
-									Custom platform interaction
+									自定义 Agent · 平台交互入口
 								</NativeSelectOption>
 								<NativeSelectOption value="custom-self-managed">
-									Custom self-managed interaction
+									自定义 Agent · 自有交互入口
 								</NativeSelectOption>
 							</NativeSelect>
 						</div>
 						{sourceKind === "standard" ? (
 							<div className="space-y-2">
-								<Label htmlFor="application-template-id">
-									Standard template ID
-								</Label>
+								<Label htmlFor="application-template-id">标准模板 ID</Label>
 								<Input
 									disabled={props.mode === "update"}
 									id="application-template-id"
+									aria-describedby="application-source-help"
 									onChange={(event) => setTemplateId(event.target.value)}
 									required
 									value={templateId}
@@ -321,9 +330,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							</div>
 						) : (
 							<div className="space-y-2">
-								<Label htmlFor="application-image-reference">
-									Image reference
-								</Label>
+								<Label htmlFor="application-image-reference">镜像地址</Label>
 								<Input
 									disabled={props.mode === "update"}
 									id="application-image-reference"
@@ -336,7 +343,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						{sourceKind === "custom-self-managed" ? (
 							<div className="space-y-2">
 								<Label htmlFor="application-identity-responsibility">
-									Identity responsibility
+									入口身份校验
 								</Label>
 								<NativeSelect
 									disabled={props.mode === "update"}
@@ -349,48 +356,60 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									value={identityResponsibility}
 								>
 									<NativeSelectOption value="platform-managed">
-										Platform-managed
+										由平台校验
 									</NativeSelectOption>
 									<NativeSelectOption value="self-managed">
-										Self-managed
+										由自有入口校验
 									</NativeSelectOption>
 								</NativeSelect>
 							</div>
 						) : null}
 					</div>
 				</fieldset>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Access
+				<fieldset className="form-section">
+					<legend className="font-semibold text-foreground text-lg">
+						Owner 与使用范围
 					</legend>
-					<div className="grid gap-4 sm:grid-cols-2">
+					<p
+						className="text-muted-foreground text-sm"
+						id="application-access-help"
+					>
+						当前申请人自动成为 Owner。可补充共同 Owner
+						及使用范围，每行填写一个用户或组织 ID。
+					</p>
+					<div className="form-grid">
 						<div className="space-y-2">
-							<Label htmlFor="application-co-owner-ids">Co-owner IDs</Label>
+							<Label htmlFor="application-co-owner-ids">
+								共同 Owner 用户 ID
+							</Label>
 							<Textarea
 								className="min-h-24"
 								id="application-co-owner-ids"
+								aria-describedby="application-access-help"
 								onChange={(event) => setCoOwnerIds(event.target.value)}
 								value={coOwnerIds}
 							/>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor="application-user-availability-ids">
-								User availability IDs
+								可使用的用户 ID
 							</Label>
 							<Textarea
 								className="min-h-24"
 								id="application-user-availability-ids"
+								aria-describedby="application-access-help"
 								onChange={(event) => setUserAvailabilityIds(event.target.value)}
 								value={userAvailabilityIds}
 							/>
 						</div>
 						<div className="space-y-2 sm:col-span-2">
 							<Label htmlFor="application-organization-availability-ids">
-								Organization availability IDs
+								可使用的组织 ID
 							</Label>
 							<Textarea
 								className="min-h-24"
 								id="application-organization-availability-ids"
+								aria-describedby="application-access-help"
 								onChange={(event) =>
 									setOrganizationAvailabilityIds(event.target.value)
 								}
@@ -399,60 +418,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</div>
 					</div>
 				</fieldset>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Actions
+				<fieldset className="form-section">
+					<legend className="font-semibold text-foreground text-lg">
+						环境变量
 					</legend>
+					<p className="text-muted-foreground text-sm">
+						仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
+					</p>
 					<DraftRows
 						fields={[
-							{
-								key: "providerId",
-								label: "Action provider ID",
-								required: true,
-							},
-							{ key: "actionId", label: "Action ID", required: true },
-							{
-								key: "actionVersion",
-								label: "Action version",
-								required: true,
-							},
-						]}
-						idPrefix="action"
-						label="action"
-						onChange={(index, key, value) =>
-							setActions((current) =>
-								current.map((item, itemIndex) =>
-									itemIndex === index ? { ...item, [key]: value } : item,
-								),
-							)
-						}
-						onRemove={(index) =>
-							setActions((current) =>
-								current.filter((_, itemIndex) => itemIndex !== index),
-							)
-						}
-						rows={actions}
-					/>
-					<Button
-						variant="outline"
-						onClick={() => setActions((current) => [...current, blankAction()])}
-						type="button"
-					>
-						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						Add action
-					</Button>
-				</fieldset>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Environment
-					</legend>
-					<DraftRows
-						fields={[
-							{ key: "name", label: "Environment name", required: true },
-							{ key: "value", label: "Environment value", required: true },
+							{ key: "name", label: "变量名称", required: true },
+							{ key: "value", label: "变量值", required: true },
 						]}
 						idPrefix="environment"
-						label="environment value"
+						label="环境变量"
 						onChange={(index, key, value) =>
 							setEnvironment((current) =>
 								current.map((item, itemIndex) =>
@@ -475,25 +454,29 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						type="button"
 					>
 						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						Add environment value
+						添加环境变量
 					</Button>
 				</fieldset>
-				<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-					<legend className="font-semibold text-slate-950 text-sm">
-						Secrets
+				<fieldset className="form-section">
+					<legend className="font-semibold text-foreground text-lg">
+						Secret
 					</legend>
+					<p className="text-muted-foreground text-sm">
+						只提交新增或替换值，已有 Secret
+						不回显。提交后会清空输入，重试时需重新填写替换值。
+					</p>
 					<DraftRows
 						fields={[
-							{ key: "name", label: "Secret name", required: true },
+							{ key: "name", label: "Secret 名称", required: true },
 							{
 								key: "value",
-								label: "Secret value",
+								label: "替换值",
 								required: true,
 								type: "password",
 							},
 						]}
 						idPrefix="secret"
-						label="secret"
+						label="Secret"
 						onChange={(index, key, value) =>
 							setSecrets((current) =>
 								current.map((item, itemIndex) =>
@@ -516,14 +499,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						type="button"
 					>
 						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						Add secret
+						添加 Secret
 					</Button>
 				</fieldset>
 				{sourceKind === "standard" ? (
-					<fieldset className="space-y-4 border-slate-200 border-t pt-5">
-						<legend className="font-semibold text-slate-950 text-sm">
-							Models
+					<fieldset className="form-section">
+						<legend className="font-semibold text-foreground text-lg">
+							模型配置
 						</legend>
+						<p className="text-muted-foreground text-sm">
+							标准模板在申请时必须配置模型。填写获准端点和模型
+							ID，允许的推理档位每行一项；默认项须属于本次配置。
+						</p>
 						{props.mode === "update" ? (
 							<Label className="min-h-11 gap-3">
 								<Checkbox
@@ -536,7 +523,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										}
 									}}
 								/>
-								Configure models
+								修改模型配置
 							</Label>
 						) : null}
 						{modelConfigurationVisible ? (
@@ -545,30 +532,30 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									fields={[
 										{
 											key: "optionId",
-											label: "Model option ID",
+											label: "模型选项 ID",
 											required: true,
 										},
 										{
 											key: "endpointId",
-											label: "Model endpoint ID",
+											label: "获准端点 ID",
 											required: true,
 										},
-										{ key: "modelId", label: "Model ID", required: true },
+										{ key: "modelId", label: "模型 ID", required: true },
 										{
 											key: "reasoningLevels",
-											label: "Reasoning levels",
+											label: "允许的推理档位",
 											multiline: true,
 											required: true,
 										},
 										{
 											key: "credentialValue",
-											label: "Credential value",
+											label: "模型凭证",
 											required: requiresReplacementCredential,
 											type: "password",
 										},
 									]}
 									idPrefix="model-option"
-									label="model option"
+									label="模型选项"
 									minimumRows={1}
 									onChange={(index, key, value) =>
 										setModels((current) =>
@@ -584,10 +571,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									}
 									rows={models}
 								/>
-								<div className="grid gap-4 sm:grid-cols-2">
+								<div className="form-grid">
 									<div className="space-y-2">
 										<Label htmlFor="application-default-model-option">
-											Default model option ID
+											默认模型选项 ID
 										</Label>
 										<Input
 											id="application-default-model-option"
@@ -600,7 +587,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="application-default-reasoning-level">
-											Default reasoning level
+											默认推理档位
 										</Label>
 										<Input
 											id="application-default-reasoning-level"
@@ -620,19 +607,22 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									type="button"
 								>
 									<PlusIcon aria-hidden="true" data-icon="inline-start" />
-									Add model option
+									添加模型选项
 								</Button>
 							</>
 						) : null}
 					</fieldset>
 				) : null}
-				<Button disabled={props.submitting} type="submit">
-					{props.submitting
-						? "Submitting..."
-						: props.mode === "update"
-							? agentApplicationEditActionLabels[props.action]
-							: "Create application"}
-				</Button>
+				<div className="form-footer">
+					<Button disabled={props.submitting} type="submit">
+						{props.submitting
+							? "正在提交…"
+							: props.mode === "update"
+								? agentApplicationEditActionLabels[props.action]
+								: "提交申请"}
+					</Button>
+					{props.cancelAction}
+				</div>
 			</fieldset>
 		</form>
 	);

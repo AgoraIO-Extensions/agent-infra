@@ -1,19 +1,13 @@
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationProjectionV1,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationProjectionV2,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 
 export type AgentApplicationSourceKind =
 	| "standard"
 	| "custom-platform-adapter"
 	| "custom-self-managed";
-
-export type AgentApplicationActionDraft = {
-	actionId: string;
-	actionVersion: string;
-	providerId: string;
-};
 
 export type AgentApplicationEnvironmentDraft = {
 	name: string;
@@ -29,7 +23,6 @@ export type AgentApplicationModelDraft = {
 };
 
 export type AgentApplicationFormDraft = {
-	actions: readonly AgentApplicationActionDraft[];
 	coOwnerIds: string;
 	configureModels: boolean;
 	defaultModelOptionId: string;
@@ -42,7 +35,7 @@ export type AgentApplicationFormDraft = {
 	name: string;
 	organizationAvailabilityIds: string;
 	secrets: readonly AgentApplicationEnvironmentDraft[];
-	source?: AgentApplicationCreateRequestV1Writable["source"];
+	source?: AgentApplicationCreateRequestV2Writable["source"];
 	sourceKind: AgentApplicationSourceKind;
 	templateId: string;
 	userAvailabilityIds: string;
@@ -56,7 +49,7 @@ function splitValues(value: string) {
 }
 
 export function sourceKindFor(
-	source: AgentApplicationProjectionV1["source"] | undefined,
+	source: AgentApplicationProjectionV2["source"] | undefined,
 ): AgentApplicationSourceKind {
 	if (!source || source.kind === "standard") return "standard";
 	return source.interactionMode === "platform-adapter"
@@ -76,7 +69,7 @@ function requestBody(
 	mode: "create" | "update",
 	draft: AgentApplicationFormDraft,
 ) {
-	const source: AgentApplicationCreateRequestV1Writable["source"] =
+	const source: AgentApplicationCreateRequestV2Writable["source"] =
 		draft.source ??
 		(draft.sourceKind === "standard"
 			? { kind: "standard", templateId: draft.templateId.trim() }
@@ -113,7 +106,7 @@ function requestBody(
 		: undefined;
 
 	return {
-		schemaVersion: 1 as const,
+		schemaVersion: 2 as const,
 		name: draft.name.trim(),
 		description: draft.description.trim(),
 		source,
@@ -130,11 +123,6 @@ function requestBody(
 				}),
 			),
 		],
-		actions: draft.actions.map((action) => ({
-			providerId: action.providerId.trim(),
-			actionId: action.actionId.trim(),
-			actionVersion: action.actionVersion.trim(),
-		})),
 		environment: draft.environment.map((value) => ({
 			name: value.name.trim(),
 			value: value.value,
@@ -153,11 +141,11 @@ function secretValues(draft: AgentApplicationFormDraft) {
 export function buildAgentApplicationRequest(
 	mode: "create",
 	draft: AgentApplicationFormDraft,
-): AgentApplicationCreateRequestV1Writable;
+): AgentApplicationCreateRequestV2Writable;
 export function buildAgentApplicationRequest(
 	mode: "update",
 	draft: AgentApplicationFormDraft,
-): AgentApplicationUpdateRequestV1Writable;
+): AgentApplicationUpdateRequestV2Writable;
 export function buildAgentApplicationRequest(
 	mode: "create" | "update",
 	draft: AgentApplicationFormDraft,
