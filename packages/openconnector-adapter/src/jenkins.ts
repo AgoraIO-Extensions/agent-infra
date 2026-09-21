@@ -103,7 +103,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v5`,
+			id: `${profile.providerId}.${action.name}@v6`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
