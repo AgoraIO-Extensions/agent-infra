@@ -50,4 +50,4 @@ RUN chmod 0755 ./start-runtime-host.sh
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 VOLUME ["/var/lib/agent-runtime"]
 USER node
-CMD ["sh", "./start-runtime-host.sh"]
+CMD ["/bin/sh", "./start-runtime-host.sh"]
