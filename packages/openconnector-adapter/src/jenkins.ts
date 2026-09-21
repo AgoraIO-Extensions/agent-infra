@@ -99,7 +99,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v4`,
+			id: `${profile.providerId}.${action.name}@v5`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -122,7 +122,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v4`,
+		providerReleaseId: `${profile.providerId}-connection-v5`,
 		sourceCommit,
 	} as const;
 }

@@ -124,6 +124,10 @@ v1 catalog。真实 E2E 发现 Job 详情响应加安全检查可能超过 8 秒
 每次 READ 尝试上限 30 秒，仅在未获得 HTTP 响应的 `AbortError`/`TypeError` 传输失败时重试一次，
 HTTP 响应不重试；console 分页按每页独立计算。既有 Connection/Grant 不自动扩权，用户必须通过
 credential-preserving upgrade 并确认新 Action 集合。
+Build artifact 有界读取发布为新的 `jenkins-release-connection-v5` 和 `@v5` ActionVersion，
+不修改 immutable v4 catalog。Artifact path 逐段校验，响应固定为 identity representation，单页最多
+256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
+Connection/Grant 同样不自动获得该新增 Action。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
