@@ -193,7 +193,9 @@ export class RuntimeHostV3 {
 				now() >= expiresAt
 			)
 				nativeRequired();
-			this.validate(request, claims.allowedCommands[0], verification);
+			const allowedCommand = claims.allowedCommands[0];
+			if (!allowedCommand) nativeRequired();
+			this.validate(request, allowedCommand, verification);
 			return this.options.store.assertOriginalEvidenceBinding(
 				queryClaims,
 				request.requestId,
@@ -219,7 +221,9 @@ export class RuntimeHostV3 {
 			await abortable(
 				this.options.serialize(key, async () => {
 					active.throwIfAborted();
-					this.validate(request, claims.allowedCommands[0], verification);
+					const allowedCommand = claims.allowedCommands[0];
+					if (!allowedCommand) nativeRequired();
+					this.validate(request, allowedCommand, verification);
 					if (this.closedRecoveryGenerations.has(recoveryGenerationKey))
 						nativeRequired();
 					await this.options.store.latchOriginalEvidenceQuery(

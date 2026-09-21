@@ -1053,9 +1053,8 @@ export class FileRuntimeStore {
 			if (
 				checked.generationBarrier ||
 				!checked.nativeSessionRef ||
-				!["session.status", "events.persist"].includes(
-					claims.allowedCommands[0],
-				) ||
+				(!claims.allowedCommands.includes("session.status") &&
+					!claims.allowedCommands.includes("events.persist")) ||
 				(claims.purpose === "control" &&
 					claims.reason === "generation_isolation")
 			)
