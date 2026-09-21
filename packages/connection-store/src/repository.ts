@@ -332,7 +332,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		await this.sql.end();
 	}
 
-	private async expireProviderUpgradeTasks(sql: postgres.TransactionSql) {
+	private async expireProviderUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+	) {
 		await sql`
 			WITH expired AS (
 				UPDATE connection_provider_upgrade_tasks task
@@ -342,12 +345,57 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
 					AND campaign.deadline_at IS NOT NULL
 					AND campaign.deadline_at <= now()
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
 				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_EXPIRED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM expired
 			)
 			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
 			SELECT 'outbox-expired-' || id, 'connection.provider-upgrade.expired', id,
 				jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
 			FROM expired
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
+	private async reconcileProviderUpgradeTasks(
+		sql: postgres.TransactionSql,
+		principalId?: string,
+	) {
+		await sql`
+			INSERT INTO connection_provider_upgrade_tasks (
+				id, campaign_id, principal_id, connection_id,
+				authorization_root_id, consumer_id, provider_id, actor_key, status
+			)
+			SELECT 'provider-upgrade-task-' || root.id || '-' || campaign.id,
+				campaign.id, root.principal_id, account.id, root.id,
+				root.consumer_id, root.provider_id, root.actor_key, 'PENDING_CONNECTION'
+			FROM connection_provider_upgrade_campaigns campaign
+			JOIN connection_accounts account
+				ON account.provider_id = campaign.provider_id
+				AND account.provider_release_id = campaign.source_provider_release_id
+			JOIN connection_authorization_roots root ON root.provider_id = account.provider_id
+			JOIN connection_grants active_grant
+				ON active_grant.id = root.current_grant_id
+				AND active_grant.root_id = root.id
+				AND active_grant.connection_id = account.id
+				AND active_grant.status = 'ACTIVE'
+			WHERE (${principalId ?? null}::text IS NULL OR root.principal_id = ${principalId ?? null})
+			ON CONFLICT (campaign_id, authorization_root_id) DO NOTHING
+		`;
+		await sql`
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-' || task.id, 'connection.provider-upgrade.required', task.id,
+				jsonb_build_object(
+					'campaignId', task.campaign_id,
+					'principalId', task.principal_id,
+					'connectionId', task.connection_id
+				)
+			FROM connection_provider_upgrade_tasks task
+			WHERE (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
 			ON CONFLICT (topic, aggregate_id) DO NOTHING
 		`;
 	}
@@ -485,42 +533,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					ON CONFLICT (source_provider_release_id, target_provider_release_id)
 					DO NOTHING
 				`;
-				await sql`
-					INSERT INTO connection_provider_upgrade_tasks (
-						id, campaign_id, principal_id, connection_id,
-						authorization_root_id, consumer_id, status
-					)
-					SELECT
-						'provider-upgrade-task-' || root.id || '-' || ${campaignId},
-						${campaignId}, root.principal_id, account.id, root.id,
-						root.consumer_id, 'PENDING_CONNECTION'
-					FROM connection_authorization_roots root
-					JOIN connection_grants active_grant
-						ON active_grant.id = root.current_grant_id
-						AND active_grant.root_id = root.id
-						AND active_grant.status = 'ACTIVE'
-					JOIN connection_accounts account
-						ON account.id = active_grant.connection_id
-					WHERE account.provider_id = ${catalog.provider}
-						AND account.provider_release_id = ${source.provider_release_id}
-					ON CONFLICT (campaign_id, authorization_root_id) DO NOTHING
-				`;
-				await sql`
-					INSERT INTO connection_outbox_events (
-						id, topic, aggregate_id, payload
-					)
-					SELECT
-						'outbox-' || task.id, 'connection.provider-upgrade.required', task.id,
-						jsonb_build_object(
-							'campaignId', task.campaign_id,
-							'principalId', task.principal_id,
-							'connectionId', task.connection_id
-						)
-					FROM connection_provider_upgrade_tasks task
-					WHERE task.campaign_id = ${campaignId}
-					ON CONFLICT (topic, aggregate_id) DO NOTHING
-				`;
 			}
+			await this.reconcileProviderUpgradeTasks(sql);
 		});
 		this.publishedProviderReleaseIds.set(
 			catalog.provider,
@@ -824,6 +838,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	): Promise<ProviderUpgradeCampaignSummary[]> {
 		return this.sql.begin(async (sql) => {
 			await this.requireConnectionAdministrator(sql, principalId);
+			await this.reconcileProviderUpgradeTasks(sql);
 			await this.expireProviderUpgradeTasks(sql);
 			const campaigns = await sql<
 				{
@@ -1530,8 +1545,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							AND task.authorization_root_id = ${grant.root_id}
 							AND campaign.target_provider_release_id = ${target.providerReleaseId}
 							AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
-							AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+						AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
 						RETURNING task.id, task.campaign_id, task.principal_id
+					), audited AS (
+						INSERT INTO connection_audit_records (principal_id, event, detail)
+						SELECT principal_id, 'PROVIDER_UPGRADE_TASK_COMPLETED',
+							jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+						FROM completed
 					)
 					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
 					SELECT 'outbox-completed-' || id,
@@ -1581,6 +1601,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							AND campaign.target_provider_release_id = account.provider_release_id
 							AND task.status = 'PENDING_CONNECTION'
 						RETURNING task.id, task.campaign_id, task.principal_id, task.connection_id
+					), audited AS (
+						INSERT INTO connection_audit_records (principal_id, event, detail)
+						SELECT principal_id, 'PROVIDER_UPGRADE_AUTHORIZATION_REQUIRED',
+							jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+						FROM transitioned
 					)
 					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
 					SELECT 'outbox-authorization-required-' || id,
@@ -2277,6 +2302,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
 						AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
 					RETURNING task.id, task.campaign_id, task.principal_id
+				), audited AS (
+					INSERT INTO connection_audit_records (principal_id, event, detail)
+					SELECT principal_id, 'PROVIDER_UPGRADE_TASK_COMPLETED',
+						jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+					FROM completed
 				)
 				INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
 				SELECT 'outbox-completed-' || id,
@@ -3341,7 +3371,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId: string,
 		options: { includeActivity?: boolean } = {},
 	): Promise<ConnectionOverview> {
-		await this.sql.begin((sql) => this.expireProviderUpgradeTasks(sql));
+		await this.sql.begin(async (sql) => {
+			await this.reconcileProviderUpgradeTasks(sql, principalId);
+			await this.expireProviderUpgradeTasks(sql, principalId);
+		});
 		const currentReleaseIds = new Set(
 			this.publishedProviderReleaseIds.values(),
 		);
