@@ -85,7 +85,9 @@
 
 GitHub 的当前 **[设计决策]** profile 固定为 OAuth App 与 classic scopes
 `read:user`、`user:email`、`repo`、`workflow`、`delete_repo`。对应的
-`connection-v8` ProviderRelease 只发布已由该 credential mode 真实验证的 143 个 ActionVersion。
+`connection-v9` ProviderRelease 只发布已由该 credential mode 真实验证的 143 个 `@v8`
+ActionVersion。v9 轮换用于绑定当前已评审 executor digest，不改变 Action schema、effect、scope 或
+授权集合；既有 v8 ActionVersion 与 Grant 不扩权。
 `rerequest_check_run` 与 `rerequest_check_suite` 要求 GitHub `Checks: write`，且目标 Check 必须属于
 对应 GitHub App；它们不能用 `workflow` scope 代替，也不进入 OAuth ProviderRelease。旧
 `connection-v7` Release 及其两个不兼容 ActionVersion 在 v8 发布时整体停用，既有 v7 Grant
@@ -124,6 +126,10 @@ v1 catalog。真实 E2E 发现 Job 详情响应加安全检查可能超过 8 秒
 每次 READ 尝试上限 30 秒，仅在未获得 HTTP 响应的 `AbortError`/`TypeError` 传输失败时重试一次，
 HTTP 响应不重试；console 分页按每页独立计算。既有 Connection/Grant 不自动扩权，用户必须通过
 credential-preserving upgrade 并确认新 Action 集合。
+Build artifact 有界读取发布为新的 `jenkins-release-connection-v5` 和 `@v5` ActionVersion，
+不修改 immutable v4 catalog。Artifact path 逐段校验，响应固定为 identity representation，单页最多
+256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
+Connection/Grant 同样不自动获得该新增 Action。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
@@ -475,6 +481,14 @@ Credential、OAuth transaction 或 Consumer endpoint。
 input schema、scope，以及当前 Connection 摘要和执行策略，确定性生成包含参数表、调用示例和权限状态的
 Markdown；它不是原始 input/output schema 接口。AI 只负责选择 Action，并从用户请求和可见上下文中寻找业务
 参数；Credential、账号选择、endpoint、HTTP method 和鉴权 header 仍由 Runtime 与 executor 处理。
+
+当 `service` 不是精确 Provider ID、但可作为一个或多个 runtime supported provider 的公共前缀时，
+发现接口返回 `PROVIDER_SERVICE_SELECTION_REQUIRED`、排序后的 `candidates` 和
+`nextAction.type=SELECT_PROVIDER`；调用方必须选用候选中的精确 Provider ID 重试。该提示不得激活尚未
+完成 Provider Onboarding 的 profile，也不得允许调用方选择 Connection、Credential 或 endpoint。
+Jenkins Job URL 可以直接作为 `service` 传入；Connection 只按标准 URL 解析后的规范化 hostname 查询
+服务端静态 allowlist，忽略 scheme 和 port，再转换为精确 Provider ID。URL 不作为请求 endpoint，Provider
+executor 仍只访问 profile 固定 origin；未知 hostname 或映射到尚未上线 profile 时必须 fail closed。
 
 Connection 复用 Provider/Action 元数据、schema 和 executor，但不复用上游 Runtime 的
 Credential、SQLite 或 Server。Direct MCP 复用上述五个稳定发现 tool；Action Guide 由 Connection

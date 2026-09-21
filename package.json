@@ -30,6 +30,8 @@
 		"docker:down": "docker compose down",
 		"connection:production:up": "docker compose -f docker-compose.production.yml up -d --build",
 		"connection:production:bootstrap": "docker compose -f docker-compose.production.yml run --rm connection-bootstrap",
+		"connection:pr:preflight": "node .github/scripts/connection-pr-preflight.mjs",
+		"connection:gz3:release": "bash deploy/connection-gz3-release.sh",
 		"docker:logs": "docker compose logs -f"
 	},
 	"devDependencies": {

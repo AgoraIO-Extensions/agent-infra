@@ -192,6 +192,11 @@ export async function createConnectionRuntime(
 			resource: config.resourceUrl,
 			service: oauth,
 		},
+		providerServiceHostAliases: {
+			"10.80.1.129": jenkinsReleaseConnectionCatalog.provider,
+			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
+			"jenkins-ci.agoralab.co": "jenkins-ci",
+		},
 		service,
 		supportedProviders: [
 			githubConnectionCatalog.provider,

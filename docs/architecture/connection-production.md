@@ -82,3 +82,29 @@ Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、Postgr
 `.env.conformance.example`；本机验收可使用被 Git 忽略的 `.env.conformance.local`，部署环境必须由
 Secret Manager 注入。实际值不得进入已跟踪文件、日志或聊天。不能仅凭 test double 或本机 unit
 test 验收。
+
+## GZ3 受监督发布
+
+创建 PR 前先运行：
+
+```bash
+pnpm connection:pr:preflight -- --issue <issue-number>
+```
+
+该命令校验受监督分支没有占用 Worker branch namespace、Issue 契约与 `ready-for-human` 标签完整、
+工作区干净且分支基于当前 `origin/connection`，并报告 base commit 已存在的失败 checks。
+
+PR 合并后切到对应的 `origin/connection` commit，再执行：
+
+```bash
+pnpm connection:gz3:release -- vX.Y.Z --publish --deploy
+```
+
+命令只允许 tag 指向当前 `origin/connection`，等待 GHCR workflow 完成，然后固定使用 GZ3 context、
+`gz3-agent-connector-prod` namespace 和 `connection-gz3` release。无 migration 的发布从一开始使用
+`--no-hooks`，并通过无 watch 的 Deployment image/readyReplica 轮询验收，避免旧 Kubernetes 的
+`event bookmark expired` 造成伪失败。检测到 `migrations/connection` 变化时命令 fail closed，必须改走
+经过评审的 migration 发布流程。脚本不会读取 Secret、自动合并 PR 或执行 Provider WRITE Action。
+
+脚本 Ready 后仍必须通过 Connection 执行与变更相关的 harmless READ。例如 Jenkins 发现变更应以真实
+Job URL 调用 `search_actions`，随后执行 `get_build`，并记录 resolved provider、call ID 和结果。

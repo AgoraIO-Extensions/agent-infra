@@ -54,7 +54,7 @@ export const githubConnectionCatalog = {
 	},
 	executorDigest: githubExecutorDigest,
 	provider: "github",
-	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v8`,
+	providerReleaseId: `github-openconnector-${githubSourceCommit}-connection-v9`,
 	sourceCommit: githubSourceCommit,
 	actions: githubActions
 		.filter((action) => !githubAppOnlyActions.has(action.id))
