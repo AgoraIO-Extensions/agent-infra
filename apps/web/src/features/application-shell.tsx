@@ -17,7 +17,6 @@ import {
 	type ReactNode,
 	useContext,
 	useLayoutEffect,
-	useRef,
 	useState,
 } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -84,29 +83,17 @@ function AuthenticatedContent({
 
 export function ApplicationShell({ children }: { children: ReactNode }) {
 	const session = useBrowserSession();
-	const sessionProjectionEpoch = useRef<{
-		projection?: string;
-		ready: boolean;
-		key: string;
-	}>({ ready: false, key: crypto.randomUUID() });
-	if (session.state.kind === "ready") {
-		const projection = JSON.stringify(session.state.session);
-		if (
-			!sessionProjectionEpoch.current.ready ||
-			sessionProjectionEpoch.current.projection !== projection
-		) {
-			sessionProjectionEpoch.current = {
-				projection,
-				ready: true,
-				key: crypto.randomUUID(),
-			};
-		}
-	} else {
-		sessionProjectionEpoch.current = {
-			ready: false,
-			key: crypto.randomUUID(),
-		};
-	}
+	const sessionProjection =
+		session.state.kind === "ready"
+			? JSON.stringify(session.state.session)
+			: null;
+	const sessionBoundaryKey = JSON.stringify([
+		session.state.kind,
+		session.state.kind === "ready"
+			? session.state.sessionGeneration ?? null
+			: null,
+		sessionProjection,
+	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
 	const [sheet, setSheet] = useState(false);
 	const user =
@@ -234,10 +221,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<AuthenticatedContent
 							// A login generation can outlive a role change. Both boundaries
 							// must reset feature caches and drafts, including older deployments.
-							key={JSON.stringify([
-								session.state.sessionGeneration ?? null,
-								sessionProjectionEpoch.current.key,
-							])}
+							key={sessionBoundaryKey}
 							session={session.state.session}
 						>
 							{children}
