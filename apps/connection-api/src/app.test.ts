@@ -2546,7 +2546,7 @@ describe("Connection API", () => {
 		const jenkinsAction: ActionDefinition = {
 			description: "Get build",
 			effect: "READ",
-			id: "jenkins-release.get_build@v4",
+			id: "jenkins-release.get_build@v5",
 			inputSchema: { required: ["jobFullName", "buildNumber"] },
 			name: "jenkins-release.get_build",
 			requiredScopes: ["jenkins.read"],
