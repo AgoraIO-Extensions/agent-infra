@@ -327,7 +327,7 @@ export function ConnectionsPage() {
 									</thead>
 									<tbody>
 										{data.upgradeTasks.map((task) => (
-											<tr key={`${task.campaignId}:${task.consumerId}`}>
+											<tr key={task.taskId}>
 												<td className="primary-cell">
 													{providerLabel(task.providerId)}
 												</td>

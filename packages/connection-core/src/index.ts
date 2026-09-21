@@ -144,6 +144,7 @@ export type ProviderUpgradeTask = {
 		| "COMPLETED"
 		| "EXPIRED";
 	targetProviderReleaseId: string;
+	taskId: string;
 };
 
 export type ProviderUpgradeCampaignSummary = {

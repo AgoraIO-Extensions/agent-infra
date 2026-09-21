@@ -1014,7 +1014,8 @@
 					"providerId",
 					"reason",
 					"status",
-					"targetProviderReleaseId"
+					"targetProviderReleaseId",
+					"taskId"
 				],
 				"properties": {
 					"campaignId": { "type": "string" },
@@ -1033,7 +1034,8 @@
 							"EXPIRED"
 						]
 					},
-					"targetProviderReleaseId": { "type": "string" }
+					"targetProviderReleaseId": { "type": "string" },
+					"taskId": { "type": "string" }
 				}
 			},
 			"ProviderUpgradeCampaign": {

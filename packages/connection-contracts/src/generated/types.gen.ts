@@ -215,6 +215,7 @@ export type ProviderUpgradeTask = {
     reason: string;
     status: 'PENDING_CONNECTION' | 'PENDING_AUTHORIZATION' | 'COMPLETED' | 'EXPIRED';
     targetProviderReleaseId: string;
+    taskId: string;
 };
 
 export type ProviderUpgradeCampaign = {

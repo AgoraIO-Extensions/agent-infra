@@ -366,6 +366,34 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId?: string,
 	) {
 		await sql`
+			WITH superseded AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign
+				WHERE task.campaign_id = campaign.id
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND (${principalId ?? null}::text IS NULL OR task.principal_id = ${principalId ?? null})
+					AND EXISTS (
+						SELECT 1 FROM connection_provider_upgrade_campaigns newer
+						WHERE newer.provider_id = campaign.provider_id
+							AND newer.source_provider_release_id = campaign.source_provider_release_id
+							AND newer.created_at > campaign.created_at
+					)
+				RETURNING task.id, task.campaign_id, task.principal_id
+			), audited AS (
+				INSERT INTO connection_audit_records (principal_id, event, detail)
+				SELECT principal_id, 'PROVIDER_UPGRADE_TASK_SUPERSEDED',
+					jsonb_build_object('taskId', id, 'campaignId', campaign_id)
+				FROM superseded
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-superseded-' || id,
+				'connection.provider-upgrade.superseded', id,
+				jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+			FROM superseded
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+		await sql`
 			INSERT INTO connection_provider_upgrade_tasks (
 				id, campaign_id, principal_id, connection_id,
 				authorization_root_id, consumer_id, provider_id, actor_key, status
@@ -384,6 +412,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND active_grant.connection_id = account.id
 				AND active_grant.status = 'ACTIVE'
 			WHERE (${principalId ?? null}::text IS NULL OR root.principal_id = ${principalId ?? null})
+				AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
+				AND NOT EXISTS (
+					SELECT 1 FROM connection_provider_upgrade_campaigns newer
+					WHERE newer.provider_id = campaign.provider_id
+						AND newer.source_provider_release_id = campaign.source_provider_release_id
+						AND newer.created_at > campaign.created_at
+				)
 			ON CONFLICT (campaign_id, authorization_root_id) DO NOTHING
 		`;
 		await sql`
@@ -3563,9 +3598,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						| "COMPLETED"
 						| "EXPIRED";
 					target_provider_release_id: string;
+					task_id: string;
 				}[]
 			>`
-					SELECT task.campaign_id, task.connection_id, task.consumer_id,
+					SELECT task.id AS task_id, task.campaign_id, task.connection_id, task.consumer_id,
 						consumer.display_name AS consumer_name, campaign.provider_id,
 						campaign.target_provider_release_id, campaign.reason,
 						campaign.deadline_at, task.status
@@ -3660,6 +3696,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				reason: task.reason,
 				status: task.status,
 				targetProviderReleaseId: task.target_provider_release_id,
+				taskId: task.task_id,
 			})),
 		};
 	}
