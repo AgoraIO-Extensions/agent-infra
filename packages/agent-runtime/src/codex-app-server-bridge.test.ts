@@ -46,14 +46,13 @@ vi.mock("node:crypto", async (importOriginal) => {
 	};
 });
 
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
-	validateModelAccess,
 	runCodexConnectionRecovery,
+	validateModelAccess,
 } from "./codex-app-server-bridge.js";
-
-import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import type { CodexConnectionRecoveryResponse } from "./codex-connection-client.js";
 
 const directories: string[] = [];
