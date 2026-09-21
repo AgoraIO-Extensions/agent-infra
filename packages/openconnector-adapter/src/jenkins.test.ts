@@ -135,6 +135,318 @@ test("Jenkins truncates a console page at 256 KiB", async () => {
 	assert.equal(result.truncated, true);
 });
 
+test("Jenkins reads bounded text artifacts with byte ranges", async () => {
+	const requests: Request[] = [];
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async (input, init) => {
+			requests.push(new Request(input, init));
+			return new Response("compile error\n", {
+				headers: {
+					"content-range": "bytes 10-23/24",
+					"content-type": "text/plain; charset=utf-8",
+				},
+				status: 206,
+			});
+		},
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "logs/compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 10,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: Buffer.from("compile error\n").toString("base64"),
+		mimeType: "text/plain",
+		moreData: false,
+		nextStart: 24,
+		size: 24,
+		truncated: false,
+	});
+	assert.equal(
+		requests[0]?.url,
+		"http://114.94.148.35:8010/job/AD/job/Agora-Iris/4342/artifact/logs/compile.log",
+	);
+	assert.equal(requests[0]?.headers.get("range"), "bytes=10-262153");
+	assert.equal(requests[0]?.headers.get("accept-encoding"), "identity");
+});
+
+test("Jenkins decodes text only when the complete artifact is returned", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("编译成功\n", {
+				headers: { "content-type": "Application/JSON; charset=utf-8" },
+			}),
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	});
+	assert.equal((result as { text?: string }).text, "编译成功\n");
+	assert.equal((result as { size?: number }).size, undefined);
+});
+
+test("Jenkins rejects mismatched artifact ranges", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("wrong", {
+				headers: { "content-range": "bytes 11-15/16" },
+				status: 206,
+			}),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "compile.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 10,
+			},
+		}),
+		/invalid artifact byte range/,
+	);
+});
+
+test("Jenkins keeps unknown-total artifact ranges open", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("partial", {
+				headers: {
+					"content-range": "bytes 0-6/*",
+					"content-type": "text/plain",
+				},
+				status: 206,
+			}),
+	);
+	const result = (await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	})) as { moreData: boolean; text?: string };
+	assert.equal(result.moreData, true);
+	assert.equal(result.text, undefined);
+});
+
+test("Jenkins rejects artifact offsets that would overflow a range", async () => {
+	let called = false;
+	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		called = true;
+		return new Response();
+	});
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "compile.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: Number.MAX_SAFE_INTEGER,
+			},
+		}),
+		/artifact start is too large/,
+	);
+	assert.equal(called, false);
+});
+
+test("Jenkins rejects encoded artifact representations", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("encoded", {
+				headers: { "content-encoding": "gzip" },
+			}),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "compile.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/encoded artifact representation/,
+	);
+});
+
+test("Jenkins omits text for unsupported charsets", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(new Uint8Array([0xe9]), {
+				headers: { "content-type": "text/plain; charset=iso-8859-1" },
+			}),
+	);
+	const result = (await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	})) as { text?: string };
+	assert.equal(result.text, undefined);
+});
+
+test("Jenkins rejects truncated artifacts when range requests are ignored", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () => new Response("x".repeat(256 * 1024 + 1)),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "large.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifact does not support ranged reads/,
+	);
+});
+
+test("Jenkins returns binary artifacts as Base64 and rejects path injection", async () => {
+	let requests = 0;
+	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
+		requests += 1;
+		return new Response(new Uint8Array([0, 255]), {
+			headers: { "content-length": "2" },
+		});
+	});
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "output.zip",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "AP8=",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 2,
+		size: 2,
+		truncated: false,
+	});
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "../secrets.txt",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifactPath is invalid/,
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "..\\secrets.txt",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifactPath is invalid/,
+	);
+	assert.equal(requests, 1);
+});
+
+test("Jenkins returns an empty artifact from an unsatisfied initial range", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(null, {
+				headers: { "content-range": "bytes */0" },
+				status: 416,
+			}),
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "empty.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 0,
+		size: 0,
+		truncated: false,
+	});
+});
+
+test("Jenkins completes unknown-total pagination at an unsatisfied EOF range", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(null, {
+				headers: { "content-range": "bytes */7" },
+				status: 416,
+			}),
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 7,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 7,
+		size: 7,
+		truncated: false,
+	});
+});
+
 test("Jenkins credential validation fails closed on auth errors and redirects", async () => {
 	for (const response of [
 		new Response("denied", { status: 401 }),
