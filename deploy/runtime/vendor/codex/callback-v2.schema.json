@@ -1142,7 +1142,8 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "$ref": "#/$defs/boundedId"
+          "minLength": 1,
+          "type": "string"
         },
         "kind": {
           "enum": [
@@ -1290,7 +1291,8 @@
       "additionalProperties": false,
       "required": [
         "revision",
-        "expiresAt"
+        "expiresAt",
+        "accessToken"
       ],
       "properties": {
         "revision": {
@@ -1298,6 +1300,12 @@
         },
         "expiresAt": {
           "$ref": "#/$defs/timestamp"
+        },
+        "accessToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^[A-Za-z0-9\\-._~+/]+=*$"
         }
       }
     },
@@ -1965,7 +1973,6 @@
         "requestId",
         "phase",
         "identity",
-        "permitId",
         "connectionRequest",
         "decision"
       ],
@@ -1983,13 +1990,10 @@
           "$ref": "#/$defs/identity"
         },
         "connectionRequest": {
-          "$ref": "#/$defs/connectionExecuteRequest"
+          "$ref": "#/$defs/connectionRequest"
         },
         "decision": {
           "const": "ack"
-        },
-        "permitId": {
-          "$ref": "#/$defs/canonicalUuid"
         }
       }
     },
