@@ -13,9 +13,9 @@ import {
 	runTestProjectRead,
 	testResourceMarker,
 } from "./test-project.ts";
-import { githubV9VerificationEvidenceRecords } from "./verification/github-v9.ts";
-import { githubV9LowRiskWriteScenarios } from "./verification/github-v9-low-risk-write-scenarios.ts";
-import { githubV9ReadScenarios } from "./verification/github-v9-read-scenarios.ts";
+import { githubV9VerificationEvidenceRecords } from "./verification/github-v8.ts";
+import { githubV9LowRiskWriteScenarios } from "./verification/github-v8-low-risk-write-scenarios.ts";
+import { githubV9ReadScenarios } from "./verification/github-v8-read-scenarios.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
