@@ -292,6 +292,7 @@ function createTestApp(
 		connectionWebUrl?: string;
 		executor?: GitHubExecutor;
 		oauth?: GitHubOAuthProvider;
+		providerServiceHostAliases?: Readonly<Record<string, string>>;
 		repository?: ConnectionRepository;
 		supportedProviders?: readonly string[];
 	} = {},
@@ -317,6 +318,7 @@ function createTestApp(
 		managementIdentity: {
 			principalFromAuthorization: async () => "alice",
 		},
+		providerServiceHostAliases: options.providerServiceHostAliases,
 		connectionWebUrl: options.connectionWebUrl,
 		service: new ConnectionApplicationService(
 			options.repository ?? new TestRepository(options.actions),
@@ -2482,6 +2484,186 @@ describe("Connection API", () => {
 			},
 		});
 		expect(JSON.stringify(payload)).not.toContain("connection-alice");
+	});
+
+	it.each([
+		{
+			candidates: ["jenkins-release"],
+			supportedProviders: ["github", "jenkins-release"],
+		},
+		{
+			candidates: ["jenkins-ci", "jenkins-release"],
+			supportedProviders: ["github", "jenkins-release", "jenkins-ci"],
+		},
+	])(
+		"returns supported candidates for a Provider service prefix: $candidates",
+		async ({ candidates, supportedProviders }) => {
+			const app = createTestApp({
+				supportedProviders,
+			});
+			const response = await app.request("/mcp", {
+				body: JSON.stringify({
+					id: 1,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: {
+						arguments: { service: "jenkins" },
+						name: "search_actions",
+					},
+				}),
+				headers: {
+					authorization: "Bearer test",
+					"content-type": "application/json",
+				},
+				method: "POST",
+			});
+
+			expect(await response.json()).toMatchObject({
+				result: {
+					structuredContent: {
+						actions: [],
+						guidance: {
+							candidates,
+							nextAction: {
+								candidates,
+								type: "SELECT_PROVIDER",
+							},
+							provider: "jenkins",
+							reasonCode: "PROVIDER_SERVICE_SELECTION_REQUIRED",
+							retryable: true,
+						},
+					},
+				},
+			});
+		},
+	);
+
+	it.each([
+		"http://114.94.148.35:8010/job/Rehoboam/job/build_and_deploy/724/",
+		"https://10.80.1.129:9443/job/Rehoboam/job/build_and_deploy/724/",
+		"jenkins+ssh://10.80.1.129/job/Rehoboam/job/build_and_deploy/724/",
+	])("resolves a Jenkins service URL by hostname: %s", async (serviceUrl) => {
+		const jenkinsAction: ActionDefinition = {
+			description: "Get build",
+			effect: "READ",
+			id: "jenkins-release.get_build@v4",
+			inputSchema: { required: ["jobFullName", "buildNumber"] },
+			name: "jenkins-release.get_build",
+			requiredScopes: ["jenkins.read"],
+		};
+		const app = createTestApp({
+			actions: [jenkinsAction],
+			providerServiceHostAliases: {
+				"10.80.1.129": "jenkins-release",
+				"114.94.148.35": "jenkins-release",
+				"jenkins-ci.agoralab.co": "jenkins-ci",
+			},
+			supportedProviders: ["jenkins-release"],
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 1,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: { service: serviceUrl },
+					name: "search_actions",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		expect(await response.json()).toMatchObject({
+			result: {
+				structuredContent: {
+					actions: [{ actionId: "jenkins-release.get_build" }],
+				},
+			},
+		});
+	});
+
+	it("keeps a routed but unavailable Jenkins provider fail closed", async () => {
+		const app = createTestApp({
+			providerServiceHostAliases: {
+				"jenkins-ci.agoralab.co": "jenkins-ci",
+			},
+			supportedProviders: ["jenkins-release"],
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 1,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: {
+						service: "https://jenkins-ci.agoralab.co/job/SDK/job/build/42/",
+					},
+					name: "search_actions",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+
+		expect(await response.json()).toMatchObject({
+			result: {
+				structuredContent: {
+					actions: [],
+					guidance: {
+						provider: "jenkins-ci",
+						reasonCode: "PROVIDER_UNSUPPORTED",
+					},
+				},
+			},
+		});
+	});
+
+	it("fails closed on an unknown service URL without echoing its path", async () => {
+		const app = createTestApp({
+			providerServiceHostAliases: {
+				"10.80.1.129": "jenkins-release",
+			},
+			supportedProviders: ["jenkins-release"],
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 1,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: {
+					arguments: {
+						service: "custom://unknown.example/secret-job?token=hidden",
+					},
+					name: "search_actions",
+				},
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+		const payload = await response.json();
+
+		expect(payload).toMatchObject({
+			result: {
+				structuredContent: {
+					guidance: {
+						provider: "unknown.example",
+						reasonCode: "PROVIDER_UNSUPPORTED",
+					},
+				},
+			},
+		});
+		expect(JSON.stringify(payload)).not.toContain("secret-job");
+		expect(JSON.stringify(payload)).not.toContain("hidden");
 	});
 
 	it("distinguishes reauthorization, missing client authorization, and an empty search", async () => {
