@@ -105,6 +105,16 @@ describe("Runtime V2 grant trust boundary", () => {
 		).toThrow();
 	});
 
+	it("rejects compact tokens with extra JWS segments", () => {
+		const request = signV3Fixture(submitV3Fixture(), "turn.submit");
+		expect(() =>
+			verifyRuntimeV2Fixture({
+				...request.grant,
+				token: `${request.grant.token}.extra`,
+			}),
+		).toThrow();
+	});
+
 	it("rejects duplicate attachment IDs in the request", () => {
 		const request = signV3Fixture(submitV3Fixture(), "turn.submit");
 		expect(() =>

@@ -33,7 +33,9 @@ export function createRuntimeExecutionGrantVerifierV2(
 	return (value: RuntimeExecutionGrantV2) => {
 		try {
 			const grant = RuntimeExecutionGrantV2Schema.parse(value);
-			const [headerPart, claimsPart, signaturePart] = grant.token.split(".");
+			const parts = grant.token.split(".");
+			if (parts.length !== 3) runtimeAuthorizationDenied();
+			const [headerPart, claimsPart, signaturePart] = parts;
 			if (!headerPart || !claimsPart || !signaturePart)
 				runtimeAuthorizationDenied();
 			const header = JSON.parse(utf8.decode(decode(headerPart))) as {

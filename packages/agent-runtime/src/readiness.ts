@@ -17,6 +17,7 @@ function denied(): never {
 }
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 function decode(value: string) {
+	if (!value) denied();
 	const bytes = Buffer.from(value, "base64url");
 	if (bytes.toString("base64url") !== value) denied();
 	return bytes;
@@ -35,8 +36,9 @@ export function createWorkloadReadinessVerifierV1(options: {
 	return (value: WorkloadReadinessRequestV1, authenticatedWorkerId: string) => {
 		try {
 			const request = WorkloadReadinessRequestV1Schema.parse(value);
-			const [headerPart, payloadPart, signaturePart] =
-				request.grant.token.split(".");
+			const parts = request.grant.token.split(".");
+			if (parts.length !== 3) denied();
+			const [headerPart, payloadPart, signaturePart] = parts;
 			if (!headerPart || !payloadPart || !signaturePart) denied();
 			const header = JSON.parse(utf8.decode(decode(headerPart)));
 			if (

@@ -58,8 +58,22 @@ jobs:
 
       - name: Verify native Codex recovery
         run: |
-          if ! node --input-type=module -e 'import fs from "node:fs"; const release = JSON.parse(fs.readFileSync("packages/agent-runtime/src/codex-release.json", "utf8")); if (release.distribution?.kind !== "derived") process.exit(1);' ; then
-            echo "Native Codex recovery requires a verified derived release; skipping for the upstream release layout."
+          release_kind="$(node --input-type=module -e '
+            import fs from "node:fs";
+            try {
+              const release = JSON.parse(fs.readFileSync("packages/agent-runtime/src/codex-release.json", "utf8"));
+              const kind = release?.distribution?.kind;
+              if (kind === "derived" || kind === "upstream") process.stdout.write(kind);
+              else process.exit(1);
+            } catch {
+              process.exit(1);
+            }
+          ' 2>/dev/null)" || {
+            echo "Invalid Codex release manifest: expected distribution.kind=derived or upstream." >&2
+            exit 1
+          }
+          if [ "$release_kind" = "upstream" ]; then
+            echo "Native Codex recovery is not applicable to the upstream release layout; skipping."
             exit 0
           fi
           docker run --rm --pull=never --network=none --read-only \

@@ -108,6 +108,18 @@ describe("Workload readiness proof isolation", () => {
 		])
 			expect(() => verify(signed(claims, header), "worker-a")).toThrow();
 	});
+	it("rejects compact tokens with extra JWS segments", () => {
+		const proof = signed();
+		expect(() =>
+			verify(
+				{
+					...proof,
+					grant: { ...proof.grant, token: `${proof.grant.token}.extra` },
+				},
+				"worker-a",
+			),
+		).toThrow();
+	});
 	it("cannot be parsed or verified as a business Execution Grant", () => {
 		const proof = signed().grant;
 		expect(ExecutionGrantV1Schema.safeParse(proof).success).toBe(false);
