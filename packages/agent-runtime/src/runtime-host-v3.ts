@@ -830,7 +830,11 @@ export class RuntimeHostV3 {
 					validate();
 					options.store.checkRequestV3(claims);
 					bounded.throwIfAborted();
-					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
+					await options.store.recordDeliveredCursor(
+						claims,
+						parsed.data.cursor,
+						(options.grantValidation.now ?? Date.now)(),
+					);
 					validate();
 					options.store.checkRequestV3(claims);
 					yield parsed.data;

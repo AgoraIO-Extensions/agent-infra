@@ -1110,7 +1110,11 @@ export class FileRuntimeStore {
 		};
 	}
 
-	recordDeliveredCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+	recordDeliveredCursor(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursor: string,
+		now = Date.now(),
+	) {
 		return this.file.update((state) => {
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
@@ -1122,6 +1126,7 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
+				authority.expiresAt <= now ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
 				authority.workerId !== claims.workerId ||
