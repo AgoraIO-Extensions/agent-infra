@@ -126,7 +126,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v5`,
+		providerReleaseId: `${profile.providerId}-connection-v6`,
 		sourceCommit,
 	} as const;
 }
