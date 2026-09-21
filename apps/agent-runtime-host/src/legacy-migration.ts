@@ -44,7 +44,32 @@ async function readMountedFile(
 			!withinData.startsWith("../"))
 	)
 		fail();
-	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	const parentPath = resolve(path, "..");
+	const parentInfo = await lstat(parentPath);
+	if (!parentInfo.isDirectory() || (parentInfo.mode & 0o022) !== 0) fail();
+	const parent = await open(
+		parentPath,
+		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+	);
+	const leaf = relative(parentPath, path);
+	if (!leaf || leaf.includes("/") || leaf.includes("\\")) {
+		await parent.close();
+		fail();
+	}
+	let handle: Awaited<ReturnType<typeof open>>;
+	try {
+		const descriptorRoot =
+			process.platform === "linux" ? `/proc/self/fd/${parent.fd}` : undefined;
+		handle = descriptorRoot
+			? await open(
+					`${descriptorRoot}/${leaf}`,
+					constants.O_RDONLY | constants.O_NOFOLLOW,
+				)
+			: await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	} catch (error) {
+		await parent.close();
+		throw error;
+	}
 	try {
 		// Re-resolve and compare the path after opening. Parsing always uses the
 		// already-open descriptor, so a later replacement cannot change the bytes.
@@ -88,6 +113,7 @@ async function readMountedFile(
 		return bytes.subarray(0, length);
 	} finally {
 		await handle.close();
+		await parent.close();
 	}
 }
 

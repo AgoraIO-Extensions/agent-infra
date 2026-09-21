@@ -152,7 +152,8 @@ async function readProtectedFile(
 						.subarray(0, 6)
 						.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1])) &&
 					[2, 3].includes(header.readUInt16LE(16)) &&
-					header.readUInt16LE(18) === 183,
+					header.readUInt16LE(18) ===
+						(arch === "arm64" ? 183 : arch === "x64" ? 62 : 0),
 			);
 		}
 		return Buffer.concat(chunks);

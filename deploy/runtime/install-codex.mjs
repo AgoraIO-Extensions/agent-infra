@@ -39,7 +39,14 @@ if (!artifact || !destination || extra.length) {
 		"usage: install-codex.mjs <amd64|arm64> <destination> [complete-archive.tar.gz]",
 	);
 }
-if (release.schemaVersion === 2 || release.distribution !== undefined) {
+const isDerivedRelease =
+	release.schemaVersion === 2 && release.distribution?.kind === "derived";
+const isLegacyRelease =
+	release.schemaVersion === undefined && release.distribution === undefined;
+if (!isDerivedRelease && !isLegacyRelease) {
+	throw new Error("Unsupported Codex release manifest");
+}
+if (isDerivedRelease) {
 	if (
 		!archiveInput ||
 		release.schemaVersion !== 2 ||
