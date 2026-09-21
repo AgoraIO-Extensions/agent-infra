@@ -23,6 +23,9 @@ const pageQuery = z.strictObject({
 	cursor: OpaqueCursorV1Schema.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional(),
 });
+const agentListQuery = pageQuery.extend({
+	scope: z.literal("owner").optional(),
+});
 const jsonContent = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
@@ -260,6 +263,32 @@ export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
 	secrets: z.array(SecretValueInputV1Schema).optional(),
 });
 
+// Independent Connection authorization retires Platform-owned Action selection.
+// Keep the published V1 schemas intact for historical consumers.
+export const AgentApplicationCreateRequestV2Schema =
+	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentApplicationUpdateRequestV2Schema =
+	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentConfigurationUpdateRequestV2Schema =
+	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(2),
+	});
+export const AgentConfigurationProjectionV2Schema =
+	AgentConfigurationProjectionV1Schema.omit({ actions: true });
+export const AgentApplicationProjectionV2Schema =
+	AgentApplicationProjectionV1Schema.extend({
+		schemaVersion: z.literal(2),
+		configuration: AgentConfigurationProjectionV2Schema,
+	});
+export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
+	schemaVersion: z.literal(2),
+	configuration: AgentConfigurationProjectionV2Schema,
+});
+
 export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(
 	"command",
 	[
@@ -468,6 +497,12 @@ export const ConversationPageV1Schema = z.strictObject({
 	items: z.array(ConversationProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
+const applicationPageV2 = applicationPage.extend({
+	items: z.array(AgentApplicationProjectionV2Schema),
+});
+const agentPageV2 = agentPage.extend({
+	items: z.array(AgentProjectionV2Schema),
+});
 const auditPage = z.strictObject({
 	items: z.array(PlatformAuditProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
@@ -487,7 +522,183 @@ export const CreateConversationRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 });
 
+export const WecomReceiptProjectionV1Schema = z.strictObject({
+	receiptId: OpaqueIdV1Schema,
+	status: z.enum(["accepted", "busy", "unavailable"]),
+	conversationId: OpaqueIdV1Schema.nullable(),
+	executionId: OpaqueIdV1Schema.nullable(),
+	deliveryStatus: z.enum([
+		"pending",
+		"claimed",
+		"sending",
+		"sent",
+		"failed",
+		"unknown",
+		"cancelled",
+		"expired",
+		"abandoned",
+	]),
+});
+const wecomReceiptPath = z.strictObject({ receiptId: pathId() });
+export const WecomSetupProjectionV1Schema = z.strictObject({
+	sessionId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	configurationRevision: z.number().int().positive(),
+	expiresAt: Rfc3339TimestampV1Schema,
+	status: z.enum([
+		"awaiting_input",
+		"verifying",
+		"active",
+		"auth_failed",
+		"conflict",
+		"cancelled",
+		"expired",
+	]),
+});
+const wecomSetupState = z.string().min(1).max(1024);
+export const WecomSetupCredentialsV1Schema = z.strictObject({
+	state: wecomSetupState,
+	botId: z.string().min(1).max(1024),
+	secret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+	takeoverConfirmed: z.literal(true),
+});
+const wecomSetupPath = z.strictObject({
+	agentId: pathId(),
+	sessionId: pathId(),
+});
 export const pilotBrowserHttpOpenApiPathsV1 = {
+	"/api/v1/agents/{agentId}/wecom-bot": {
+		get: {
+			operationId: "getWecomBotConnection",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner bot connection status",
+					z.strictObject({
+						status: z.enum([
+							"not_configured",
+							"callback",
+							"verifying",
+							"connected",
+							"disconnected",
+							"auth_failed",
+						]),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup": {
+		post: {
+			operationId: "beginWecomSetup",
+			requestParams: { path: z.strictObject({ agentId: pathId() }) },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration session",
+					WecomSetupProjectionV1Schema.extend({
+						state: wecomSetupState,
+						qrAvailable: z.literal(false),
+						qrUnavailableReason: z.literal(
+							"authorization_correlation_unverified",
+						),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}": {
+		get: {
+			operationId: "getWecomSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Owner configuration status",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials": {
+		post: {
+			operationId: "submitWecomCredentials",
+			requestParams: { path: wecomSetupPath },
+			requestBody: requiredJsonRequestBody(WecomSetupCredentialsV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Candidate pending Worker validation",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel": {
+		post: {
+			operationId: "cancelWecomSetup",
+			requestParams: { path: wecomSetupPath },
+			responses: {
+				"200": jsonResponse(
+					"Cancelled configuration session",
+					WecomSetupProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
+	"/api/v1/wecom/receipts": {
+		get: {
+			operationId: "listWecomReceipts",
+			requestParams: {
+				query: z.strictObject({ cursor: OpaqueCursorV1Schema.optional() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery statuses",
+					z.strictObject({
+						items: z.array(WecomReceiptProjectionV1Schema),
+						nextCursor: OpaqueCursorV1Schema.nullable(),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}": {
+		get: {
+			operationId: "getWecomReceipt",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Current sender's delivery status",
+					WecomReceiptProjectionV1Schema.extend({
+						schemaVersion: SchemaVersionV1Schema,
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/wecom/receipts/{receiptId}/abandon": {
+		post: {
+			operationId: "abandonUnknownWecomDelivery",
+			requestParams: { path: wecomReceiptPath },
+			responses: {
+				"200": jsonResponse(
+					"Abandoned without resending",
+					z.strictObject({
+						schemaVersion: SchemaVersionV1Schema,
+						status: z.literal("abandoned"),
+					}),
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v1/session": {
 		get: {
 			operationId: "getCurrentSession",
@@ -753,6 +964,144 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/agent-applications": {
+		get: {
+			operationId: "listAgentApplicationsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Current user's applications", applicationPageV2),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "createAgentApplicationV2",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV2Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Application submitted",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agent-applications/{applicationId}": {
+		get: {
+			operationId: "getAgentApplicationV2",
+			requestParams: { path: applicationPath },
+			responses: {
+				"200": jsonResponse(
+					"Application detail",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "updateAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationUpdateRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Application updated",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agent-applications/{applicationId}/withdraw": {
+		post: {
+			operationId: "withdrawAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			responses: {
+				"200": jsonResponse(
+					"Application withdrawn",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/agent-applications": {
+		get: {
+			operationId: "listPendingAgentApplicationsV2",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("Pending applications", applicationPageV2),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/agent-applications/{applicationId}/decision": {
+		post: {
+			operationId: "decideAgentApplicationV2",
+			requestParams: { path: applicationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(ApprovalDecisionRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Application decision",
+					AgentApplicationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents": {
+		get: {
+			operationId: "listAgentsV2",
+			requestParams: { query: agentListQuery },
+			responses: {
+				"200": jsonResponse("Visible agents", agentPageV2),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}": {
+		get: {
+			operationId: "getAgentV2",
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse("Agent detail", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/configuration": {
+		put: {
+			operationId: "updateAgentConfigurationV2",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentConfigurationUpdateRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse("Agent configuration", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/lifecycle": {
+		post: {
+			operationId: "commandAgentLifecycleV2",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentLifecycleCommandRequestV1Schema,
+			),
+			responses: {
+				"202": jsonResponse(
+					"Lifecycle command accepted",
+					AgentProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v2/admin/audit": {
 		get: {
 			operationId: "listPlatformAuditV2",
@@ -797,6 +1146,15 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
+	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
+	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
+	AgentApplicationUpdateRequestV2: AgentApplicationUpdateRequestV2Schema,
+	AgentConfigurationUpdateRequestV2: AgentConfigurationUpdateRequestV2Schema,
+	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,
+	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
+	AgentProjectionV2: AgentProjectionV2Schema,
+
 	PilotInternalErrorV1: PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1: PilotProtocolErrorV1Schema,
 	PlatformAuditProjectionV2: PlatformAuditProjectionV2Schema,

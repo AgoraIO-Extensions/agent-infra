@@ -13,17 +13,23 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/kubernetes-workload.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-delegated.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/pilot-sse.v1.schema.json",
+	"packages/contracts/artifacts/json-schema/pilot-sse.v2.schema.json",
 	"packages/contracts/artifacts/json-schema/registry-manifest.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/secret-lifecycle.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/worker-result.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime.v3.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/pilot-delegated.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 ];
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
@@ -770,6 +776,100 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #504 adds versioned management routes. Preserve the published audit contract
+// exactly and admit only this immutable addition, as for Runtime recovery above.
+function withoutAgentOwnerScope(operation) {
+	const normalized = structuredClone(operation);
+	if (Array.isArray(normalized?.parameters)) {
+		normalized.parameters = normalized.parameters.filter(
+			(parameter) =>
+				!(parameter?.in === "query" && parameter?.name === "scope"),
+		);
+	}
+	return normalized;
+}
+
+// The owner projection is an optional, server-authorized narrowing of the
+// existing Agent list. It does not change the default visible-Agent contract.
+function isAgentOwnerScopeOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents";
+	const previousOperation = previous.paths?.[path]?.get;
+	const currentOperation = current.paths?.[path]?.get;
+	if (!previousOperation || !currentOperation) return false;
+	const addedParameters = (currentOperation.parameters ?? []).filter(
+		(parameter) =>
+			!(previousOperation.parameters ?? []).some((previousParameter) =>
+				sameValue(previousParameter, parameter),
+			),
+	);
+	if (
+		addedParameters.length !== 1 ||
+		!sameValue(addedParameters[0], {
+			in: "query",
+			name: "scope",
+			schema: { const: "owner", type: "string" },
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.paths[path].get = withoutAgentOwnerScope(currentOperation);
+	return sameValue(previous, normalized);
+}
+
+function isAgentLifecycleV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/admin/agent-applications",
+		"/api/v2/admin/agent-applications/{applicationId}/decision",
+		"/api/v2/agent-applications",
+		"/api/v2/agent-applications/{applicationId}",
+		"/api/v2/agent-applications/{applicationId}/withdraw",
+		"/api/v2/agents",
+		"/api/v2/agents/{agentId}",
+		"/api/v2/agents/{agentId}/configuration",
+		"/api/v2/agents/{agentId}/lifecycle",
+	];
+	const schemas = [
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationProjectionV2",
+		"AgentApplicationUpdateRequestV2",
+		"AgentConfigurationProjectionV2",
+		"AgentConfigurationUpdateRequestV2",
+		"AgentLifecycleCommandRequestV1",
+		"AgentProjectionV2",
+		"ApprovalDecisionRequestV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const normalizedAgentsPath = withoutAgentOwnerScope(
+		current.paths["/api/v2/agents"]?.get,
+	);
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [
+				path,
+				path === "/api/v2/agents"
+					? { ...current.paths?.[path], get: normalizedAgentsPath }
+					: current.paths?.[path],
+			]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"75bcba81cd9d5ab09407ea0ad48f23bc086bb9d9545f25796a0e1fce737a8a58"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // Only the reviewed #442 additive file surface may differ; every old contract remains exact.
 function isFileAuthorityOpenApiAddition(previous, current) {
 	const paths = [
@@ -821,6 +921,83 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #508 adds V2 operation history/SSE without altering published management/audit.
+function isConversationFactsV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/conversations/{conversationId}",
+		"/api/v2/conversations/{conversationId}/events",
+		"/api/v2/conversations/{conversationId}/executions/{executionId}",
+	];
+	const schemas = [
+		"AuthorizationRevokedSignalV1",
+		"ConversationDetailProjectionV2",
+		"ConversationSseMessageV1",
+		"ConversationSseMessageV2",
+		"ExecutionDetailProjectionV2",
+		"ExecutionOperationEventV2",
+		"HeartbeatSignalV1",
+		"ModelSelectionFallbackEventV1",
+		"PersistedConversationEventV1",
+		"PersistedConversationEventV2",
+		"RuntimeConnectionAssociationV1",
+		"RuntimeOperationFactV2",
+		"RuntimeOperationFailureV2",
+		"SseEventIdV1",
+		"TimelineReloadSignalV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return (
+		sameValue(previous, normalized) ||
+		isAgentLifecycleV2OpenApiAddition(previous, normalized)
+	);
+}
+
+// #440 adds bounded receipt management and Owner-scoped bot setup.
+function isWecomReceiptOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/wecom/receipts",
+		"/api/v1/wecom/receipts/{receiptId}",
+		"/api/v1/wecom/receipts/{receiptId}/abandon",
+		"/api/v1/agents/{agentId}/wecom-bot",
+		"/api/v1/agents/{agentId}/wecom-setup",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+		"/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -829,6 +1006,10 @@ function findBreakingChanges(previous, current) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
+			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
+			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
