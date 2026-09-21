@@ -1,0 +1,131 @@
+@@ -364,7 +367,7 @@ async fn spawn_process_preserving_fds(
+     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
+     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
+     let (_stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(1);
+-    let (reader_handle, writer_handle) = io.spawn(
++    let (reader_handle, writer_handle, confirmed_tx) = io.spawn(
+         stdout_tx,
+         writer_rx,
+         crate::unix_io::StdinCloseBehavior::NoEof,
+@@ -408,6 +411,9 @@ async fn spawn_process_preserving_fds(
+         /*resizer*/ None,
+     );
+ 
++    #[cfg(unix)]
++    let handle = handle.with_confirmed_writer(confirmed_tx);
++
+     Ok(SpawnedProcess {
+         session: handle,
+         stdout_rx,
+diff --git a/codex-rs/utils/pty/src/tests.rs b/codex-rs/utils/pty/src/tests.rs
+index b3d732b..a4f2521 100644
+--- a/codex-rs/utils/pty/src/tests.rs
++++ b/codex-rs/utils/pty/src/tests.rs
+@@ -1604,3 +1604,40 @@ async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()>
+ 
+     Ok(())
+ }
++
++#[cfg(unix)]
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn confirmed_pty_write_waits_for_actual_io_and_denied_input_never_arrives()
++-> anyhow::Result<()> {
++    let env_map: HashMap<String, String> = std::env::vars().collect();
++    let spawned = spawn_pty_process(
++        "/bin/sh",
++        &[
++            "-c".to_string(),
++            "read value; printf '<%s>' \"$value\"".to_string(),
++        ],
++        Path::new("."),
++        &env_map,
++        &None,
++        TerminalSize::default(),
++        &[],
++    )
++    .await?;
++    let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
++    let denied = session
++        .write_confirmed(b"forbidden\n".to_vec(), Box::new(|| false))
++        .await?;
++    assert!(!denied.completed);
++    assert!(denied.started_at.is_none());
++    let allowed = session
++        .write_confirmed(b"allowed\n".to_vec(), Box::new(|| true))
++        .await?;
++    assert!(allowed.completed);
++    assert!(allowed.started_at.is_some());
++    let (output, code) = collect_output_until_exit(output_rx, exit_rx, 5000).await;
++    let output = String::from_utf8_lossy(&output);
++    assert!(!output.contains("forbidden"));
++    assert!(output.contains("<allowed>"));
++    assert_eq!(code, 0);
++    Ok(())
++}
+diff --git a/codex-rs/utils/pty/src/unix_io.rs b/codex-rs/utils/pty/src/unix_io.rs
+index 315c2b6..7b4f204 100644
+--- a/codex-rs/utils/pty/src/unix_io.rs
++++ b/codex-rs/utils/pty/src/unix_io.rs
+@@ -45,7 +45,13 @@ impl PtyIo {
+         stdout_tx: mpsc::Sender<Vec<u8>>,
+         mut writer_rx: mpsc::Receiver<Vec<u8>>,
+         stdin_close: StdinCloseBehavior,
+-    ) -> (JoinHandle<()>, JoinHandle<()>) {
++    ) -> (
++        JoinHandle<()>,
++        JoinHandle<()>,
++        mpsc::Sender<crate::process::ConfirmedWriteRequest>,
++    ) {
++        let (confirmed_tx, mut confirmed_rx) =
++            mpsc::channel::<crate::process::ConfirmedWriteRequest>(128);
+         let fd = self.fd;
+         let reader = Arc::clone(&fd);
+         let reader_handle = tokio::spawn(async move {
+@@ -67,9 +73,35 @@ impl PtyIo {
+             }
+         });
+         let writer_handle = tokio::spawn(async move {
+-            while let Some(bytes) = writer_rx.recv().await {
+-                if write_all(&fd, &bytes).await.is_err() {
+-                    return;
++            loop {
++                tokio::select! {
++                    bytes = writer_rx.recv() => {
++                        let Some(bytes) = bytes else { break; };
++                        if write_all(&fd, &bytes).await.is_err() { return; }
++                    }
++                    Some(request) = confirmed_rx.recv() => {
++                        let mut remaining = request.bytes.as_slice();
++                        let mut started_at = None;
++                        let mut completed = true;
++                        while !remaining.is_empty() {
++                            let result = fd.async_io(Interest::WRITABLE, |mut file| {
++                                if started_at.is_none() && !(request.allow_dispatch)() {
++                                    return Err(io::Error::from(io::ErrorKind::PermissionDenied));
++                                }
++                                file.write(remaining)
++                            }).await;
++                            match result {
++                                Ok(0) => { completed = false; break; }
++                                Ok(count) => {
++                                    started_at.get_or_insert_with(std::time::SystemTime::now);
++                                    remaining = &remaining[count..];
++                                }
++                                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
++                                Err(_) => { completed = false; break; }
++                            }
++                        }
++                        let _ = request.receipt.send(crate::process::ConfirmedWriteResult { started_at, completed });
++                    }
+                 }
+             }
+             match stdin_close {
+@@ -89,7 +121,7 @@ impl PtyIo {
+                 StdinCloseBehavior::NoEof => {}
+             }
+         });
+-        (reader_handle, writer_handle)
++        (reader_handle, writer_handle, confirmed_tx)
+     }
+ }
+ 
