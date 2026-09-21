@@ -308,6 +308,12 @@ class VendorInputTests(unittest.TestCase):
         result = subprocess.run([*command, "--verify-existing"], env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Untracked files", result.stderr)
+        (source / "untracked.txt").unlink()
+        (source / "extra.txt").write_text("tracked but unrecorded\n")
+        git("add", "extra.txt")
+        result = subprocess.run([*command, "--verify-existing"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unrecorded tracked changes", result.stderr)
         self.assertEqual(git("rev-parse", "HEAD"), head)
 
 

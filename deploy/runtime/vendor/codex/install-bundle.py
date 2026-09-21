@@ -94,7 +94,9 @@ def pinned_release(architecture):
             and provenance['upstreamTag'] == 'rust-v' + provenance['codexVersion']
             and re.fullmatch(r'[a-f0-9]{40}', provenance['upstreamCommit'])
             and valid_sha(provenance['schemaSha256']), 'Invalid upstream compatibility provenance')
-    artifact = release['artifacts'].get(architecture)
+    artifacts = release.get('artifacts')
+    require(isinstance(artifacts, dict), 'Invalid derived artifact container')
+    artifact = artifacts.get(architecture)
     require(architecture == 'arm64' and isinstance(artifact, dict)
             and artifact.get('target') == TARGET, 'Unsupported derived target')
     require(all(valid_sha(artifact.get(key)) for key in

@@ -35,6 +35,13 @@ for patch in manifest["patches"]:
 status = git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
 if any(line.startswith(("??", "!!")) for line in status):
     raise SystemExit("Untracked files are not allowed in the upstream checkout")
+changed = set(git("diff", "--name-only", "HEAD").decode().splitlines())
+recorded = {entry["path"] for entry in manifest["sourceFiles"]}
+if args.verify_existing:
+    if not changed <= recorded:
+        raise SystemExit("Unrecorded tracked changes are not allowed")
+elif changed:
+    raise SystemExit("Tracked changes are not allowed in the upstream checkout")
 if not args.verify_existing:
     for raw in patches:
         git("apply", "--check", "-", data=raw)
