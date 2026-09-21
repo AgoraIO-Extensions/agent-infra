@@ -26,7 +26,9 @@ vi.mock("node:process", async (importOriginal) => ({
 	platform: "linux",
 }));
 
-vi.mock("node:crypto", () => ({
+vi.mock("node:crypto", async (importOriginal) => {
+ const original = await importOriginal<typeof import("node:crypto")>();
+ return ({
 	createHash: () => {
 		let value = "";
 		return {
@@ -36,18 +38,23 @@ vi.mock("node:crypto", () => ({
 					digest: () =>
 						value === "schema-matches"
 							? "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
-							: "0".repeat(64),
+							: original.createHash("sha256").update(value).digest("hex"),
 				};
 			},
 		};
 	},
-}));
+});
+});
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
 	validateModelAccess,
+ runCodexConnectionRecovery,
 } from "./codex-app-server-bridge.js";
+
+import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
+import type { CodexConnectionRecoveryResponse } from "./codex-connection-client.js";
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
@@ -123,6 +130,23 @@ if (args[0] === "--agent-infra-native-barrier-info") {
   if (mode === "barrier-extra-field") info.unexpected = true;
   process.stdout.write(JSON.stringify(info) + "\\n");
   process.exit(0);
+}
+if (args.includes("--agent-infra-connection-recovery")) {
+ const { Socket } = require("node:net");
+ const { randomUUID } = require("node:crypto");
+ const socket = new Socket({ fd: 3 });
+ let count = 0;
+ const profile = JSON.parse(args[args.indexOf("--agent-infra-connection-profile") + 1]);
+ const processNonce = randomUUID();
+ const pull = (previousRecoveryId) => socket.write(JSON.stringify({schemaVersion:2,phase:"connection-recovery",requestId:randomUUID(),profileRef:profile.profileRef,processNonce,...(previousRecoveryId ? {previousRecoveryId} : {})}) + "\\n");
+ socket.on("data", (chunk) => {
+  const response = JSON.parse(chunk.toString());
+  count++;
+  if (response.decision === "done" || (count === 16 && mode === "recovery-premature")) socket.end(() => process.exit(0));
+  else pull(response.recoveryId);
+ });
+ pull();
+ return;
 }
 if (mode === "startup-exit") process.exit(9);
 if (mode === "malformed-frame") process.stdout.write("not-json\\n");
@@ -1401,4 +1425,22 @@ describe("model access admission", () => {
 			})?.endpoint,
 		).toBe(endpoint);
 	});
+});
+
+
+it.each(["recovery-premature", "recovery-done"])("requires terminal done after recovery budget: %s", async (mode) => {
+ await installFakeCodex(mode);
+ const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+ const fixture = corpus.cases.find((entry: {id:string}) => entry.id === "recovery-verify-valid").frame as Extract<CodexConnectionRecoveryResponse, {decision:"verify"}>;
+ const recovery = vi.fn(async (request: typeof fixture.request) => {
+  if (recovery.mock.calls.length > 16) return {schemaVersion:2 as const, phase:"connection-recovery" as const, requestId:request.requestId, request, decision:"done" as const};
+  return {...structuredClone(fixture), request, requestId:request.requestId, expiresAt:Date.now()+20_000, currentClient:{...fixture.currentClient, credential:{...fixture.currentClient.credential,expiresAt:Date.now()+30_000}}};
+ });
+ const launch = runCodexConnectionRecovery({
+  ...options(), profile:{serviceRef:"connection",profileRef:fixture.request.profileRef,issuer:"https://connection.example.test",resource:"https://connection.example.test/mcp"},
+  signal:new AbortController().signal,recovery,evidence:vi.fn(),
+ });
+ if (mode === "recovery-premature") await expect(launch).rejects.toThrow();
+ else await expect(launch).resolves.toBeUndefined();
+ expect(recovery).toHaveBeenCalledTimes(mode === "recovery-premature" ? 16 : 17);
 });

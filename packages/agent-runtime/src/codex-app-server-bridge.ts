@@ -286,7 +286,10 @@ export async function runCodexConnectionRecovery(options: {
 		let failed = false;
 		let terminal = false;
 		let issued = 0;
-		const complete = () => terminal || issued >= 16;
+		// Issuing the last verification is not evidence that it was persisted.
+		// Require the final pull, which the Driver accepts only after its evidence
+		// handler has durably acknowledged the preceding verification.
+		const complete = () => terminal;
 		process.on("error", () => {
 			failed = true;
 		});
@@ -304,9 +307,12 @@ export async function runCodexConnectionRecovery(options: {
 				abort();
 			},
 			async (request, signal) => {
-				if (terminal || issued >= 16) throw unavailable();
+				if (terminal) throw unavailable();
 				const response = await options.recovery(request, signal);
-				if (response.decision === "verify") issued++;
+				if (response.decision === "verify") {
+					if (issued >= 16) throw unavailable();
+					issued++;
+				}
 				else if (response.decision === "done") terminal = true;
 				else failed = true;
 				return response;
