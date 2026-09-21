@@ -195,7 +195,21 @@ function validateSecretDataKeys(
 			...configuration.environment,
 			...configuration.secrets,
 			...bindings.map(({ record }) => record),
-		].some(({ name }) => /^(?:LD_|DYLD_|NODE_)/.test(name))
+		].some(({ name }) =>
+			[
+				"NODE_OPTIONS",
+				"NODE_DEBUG",
+				"NODE_DEBUG_NATIVE",
+				"NODE_V8_COVERAGE",
+				"NODE_PATH",
+				"LD_PRELOAD",
+				"LD_AUDIT",
+				"LD_LIBRARY_PATH",
+				"DYLD_INSERT_LIBRARIES",
+				"DYLD_LIBRARY_PATH",
+				"DYLD_FRAMEWORK_PATH",
+			].includes(name),
+		)
 	)
 		throw new WorkloadPreflightRejectedErrorV1();
 	const environmentNames = new Set(
