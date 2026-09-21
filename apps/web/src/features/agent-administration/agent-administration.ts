@@ -1,9 +1,13 @@
+export {
+	type BrowserSessionState,
+	loadBrowserSession,
+} from "../browser-session.js";
+
 import type {
 	Client,
 	RequestResult,
 } from "../../pilot/generated/client/index.js";
 import {
-	getCurrentSession,
 	listPendingAgentApplications,
 	commandAgentLifecycle as requestAgentLifecycle,
 	decideAgentApplication as requestApplicationDecision,
@@ -13,13 +17,10 @@ import type {
 	AgentLifecycleCommandRequestV1,
 	AgentProjectionV1,
 	ApprovalDecisionRequestV1,
-	BrowserSessionProjectionV1,
 	CommandAgentLifecycleErrors,
 	CommandAgentLifecycleResponses,
 	DecideAgentApplicationErrors,
 	DecideAgentApplicationResponses,
-	GetCurrentSessionErrors,
-	GetCurrentSessionResponses,
 	ListPendingAgentApplicationsData,
 	ListPendingAgentApplicationsErrors,
 	ListPendingAgentApplicationsResponses,
@@ -32,10 +33,6 @@ type UnavailableState = {
 
 export type PendingAgentApplicationsState =
 	| { kind: "ready"; applications: AgentApplicationProjectionV1[] }
-	| UnavailableState;
-
-export type BrowserSessionState =
-	| { kind: "ready"; session: BrowserSessionProjectionV1 }
 	| UnavailableState;
 
 export type AgentApplicationDecision =
@@ -72,21 +69,6 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 	if (error?.retryable !== false) throw retryableError();
 
 	return { kind: "unavailable" as const, retryable: false };
-}
-
-export async function loadBrowserSession(
-	client?: Client,
-): Promise<BrowserSessionState> {
-	const result: Awaited<
-		RequestResult<GetCurrentSessionResponses, GetCurrentSessionErrors, false>
-	> = await getCurrentSession<false>({
-		client,
-		responseStyle: "fields",
-		throwOnError: false,
-	});
-	return result.data
-		? { kind: "ready", session: result.data }
-		: unavailable(result.error);
 }
 
 export async function loadPendingAgentApplications(

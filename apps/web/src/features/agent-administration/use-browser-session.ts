@@ -1,12 +1,21 @@
-import { useQuery } from "@tanstack/react-query";
+import { type QueryClient, useQuery } from "@tanstack/react-query";
+import { createContext, useContext } from "react";
 
-import { loadBrowserSession } from "./agent-administration.js";
+import { loadBrowserSession } from "../browser-session.js";
+
+export const BrowserSessionQueryContext = createContext<
+	QueryClient | undefined
+>(undefined);
 
 export function useBrowserSession() {
-	const query = useQuery({
-		queryKey: ["browser-session"],
-		queryFn: () => loadBrowserSession(),
-	});
+	const sessionClient = useContext(BrowserSessionQueryContext);
+	const query = useQuery(
+		{
+			queryKey: ["browser-session"],
+			queryFn: () => loadBrowserSession(),
+		},
+		sessionClient,
+	);
 
 	return {
 		...query,
