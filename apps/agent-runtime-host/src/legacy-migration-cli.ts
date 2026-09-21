@@ -240,11 +240,25 @@ export async function runRuntimeLegacyMigrationCli(
 		// apparent failure for the caller.
 		try {
 			if (ownedLock) await rm(ownedLock, { recursive: true });
-		} catch {}
+		} catch {
+			console.warn(
+				JSON.stringify({
+					service: "agent-runtime-host",
+					code: "RUNTIME_LEGACY_MIGRATION_LOCK_CLEANUP_FAILED",
+				}),
+			);
+		}
 		try {
 			if (temporaryDirectory)
 				await rm(temporaryDirectory, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			console.warn(
+				JSON.stringify({
+					service: "agent-runtime-host",
+					code: "RUNTIME_LEGACY_MIGRATION_TEMP_CLEANUP_FAILED",
+				}),
+			);
+		}
 	}
 }
 

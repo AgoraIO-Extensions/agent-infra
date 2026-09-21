@@ -1082,6 +1082,36 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
+	it.each([
+		"LD_PRELOAD",
+		"LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES",
+		"NODE_OPTIONS",
+		"NODE_PATH",
+	])(
+		"rejects loader environment %s before creating workload resources",
+		async (name) => {
+			const record = pendingSecretRecord();
+			const cleanup = secretCleanupStore(record);
+			for (const secret of [false, true]) {
+				const configuration = secretConfiguration({
+					environment: secret ? [] : [{ name, value: "synthetic-loader" }],
+				});
+				if (secret)
+					Object.assign(configuration, {
+						environment: [{ name, value: "synthetic-loader" }],
+					});
+				const f = fixture(
+					{},
+					{ configuration, secrets: cleanupSecrets(cleanup) },
+				);
+				await f.tick(2);
+				expect(f.state?.phase).toBe("preflight");
+				expect(f.resources.size).toBe(0);
+			}
+		},
+	);
+
 	it("rejects preflight when environment shadows a generated model credential key", async () => {
 		const record = pendingSecretRecord({
 			name: "model:primary",

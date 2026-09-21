@@ -26,12 +26,18 @@ export function assertRuntimeProcessProtection() {
 					normalized !== "--disable-sigusr1")
 			);
 		}) ||
-		[
-			"NODE_OPTIONS",
-			"NODE_DEBUG",
-			"NODE_DEBUG_NATIVE",
-			"NODE_V8_COVERAGE",
-		].some((name) => Boolean(process.env[name])) ||
+		Object.keys(process.env).some(
+			(name) =>
+				(/^(?:LD_|DYLD_)/.test(name) ||
+					[
+						"NODE_OPTIONS",
+						"NODE_DEBUG",
+						"NODE_DEBUG_NATIVE",
+						"NODE_V8_COVERAGE",
+						"NODE_PATH",
+					].includes(name)) &&
+				Boolean(process.env[name]),
+		) ||
 		inspectorUrl() !== undefined ||
 		process.report?.reportOnFatalError ||
 		process.report?.reportOnSignal ||
