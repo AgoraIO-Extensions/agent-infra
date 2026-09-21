@@ -2625,46 +2625,53 @@ describe("Connection API", () => {
 		});
 	});
 
-	it("fails closed on an unknown service URL without echoing its path", async () => {
-		const app = createTestApp({
-			providerServiceHostAliases: {
-				"10.80.1.129": "jenkins-release",
-			},
-			supportedProviders: ["jenkins-release"],
-		});
-		const response = await app.request("/mcp", {
-			body: JSON.stringify({
-				id: 1,
-				jsonrpc: "2.0",
-				method: "tools/call",
-				params: {
-					arguments: {
-						service: "custom://unknown.example/secret-job?token=hidden",
-					},
-					name: "search_actions",
+	it.each([
+		"custom://unknown.example/secret-job?token=hidden",
+		"https://github/private?token=hidden",
+		"custom://constructor/private?token=hidden",
+	])(
+		"fails closed on an unmapped service URL without echoing its path: %s",
+		async (serviceUrl) => {
+			const app = createTestApp({
+				providerServiceHostAliases: {
+					"10.80.1.129": "jenkins-release",
 				},
-			}),
-			headers: {
-				authorization: "Bearer test",
-				"content-type": "application/json",
-			},
-			method: "POST",
-		});
-		const payload = await response.json();
+				supportedProviders: ["github", "jenkins-release"],
+			});
+			const response = await app.request("/mcp", {
+				body: JSON.stringify({
+					id: 1,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: {
+						arguments: {
+							service: serviceUrl,
+						},
+						name: "search_actions",
+					},
+				}),
+				headers: {
+					authorization: "Bearer test",
+					"content-type": "application/json",
+				},
+				method: "POST",
+			});
+			const payload = await response.json();
 
-		expect(payload).toMatchObject({
-			result: {
-				structuredContent: {
-					guidance: {
-						provider: "unknown.example",
-						reasonCode: "PROVIDER_UNSUPPORTED",
+			expect(payload).toMatchObject({
+				result: {
+					structuredContent: {
+						guidance: {
+							provider: expect.stringMatching(/^unmapped-hostname:/),
+							reasonCode: "PROVIDER_UNSUPPORTED",
+						},
 					},
 				},
-			},
-		});
-		expect(JSON.stringify(payload)).not.toContain("secret-job");
-		expect(JSON.stringify(payload)).not.toContain("hidden");
-	});
+			});
+			expect(JSON.stringify(payload)).not.toContain("secret-job");
+			expect(JSON.stringify(payload)).not.toContain("hidden");
+		},
+	);
 
 	it("distinguishes reauthorization, missing client authorization, and an empty search", async () => {
 		const repository = new (class extends TestRepository {

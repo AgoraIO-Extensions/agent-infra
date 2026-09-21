@@ -267,13 +267,22 @@ function resolveProviderService(
 	service: string,
 ) {
 	const normalizedService = service.trim().toLowerCase();
+	if (!normalizedService.includes("://")) return normalizedService;
 	try {
 		const hostname = new URL(normalizedService).hostname
 			.toLowerCase()
 			.replace(/\.$/, "");
-		return options.providerServiceHostAliases?.[hostname] ?? hostname;
+		if (!hostname) return "unmapped-service-url";
+		const aliases = options.providerServiceHostAliases;
+		if (aliases && Object.hasOwn(aliases, hostname)) {
+			const provider = aliases[hostname];
+			if (typeof provider === "string" && provider.trim()) {
+				return provider.trim().toLowerCase();
+			}
+		}
+		return `unmapped-hostname:${hostname}`;
 	} catch {
-		return normalizedService;
+		return "unmapped-service-url";
 	}
 }
 
