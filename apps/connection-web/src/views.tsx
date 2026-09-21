@@ -5,15 +5,21 @@ import type {
 	TokenRecord,
 } from "@agent-infra/connection-contracts";
 import {
+	BookOpen,
+	Boxes,
+	Code2,
 	Copy,
+	GitBranch,
 	KeyRound,
 	Link2,
 	LogIn,
 	RefreshCw,
+	Search,
 	ShieldCheck,
+	SlidersHorizontal,
 	Trash2,
 } from "lucide-react";
-import type { FormEvent, ReactNode } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 export function LoginView(props: {
 	busy: boolean;
@@ -320,6 +326,173 @@ export function ConnectionsView(props: {
 				);
 			})}
 		</div>
+	);
+}
+
+export type ConnectorProviderId =
+	| "bitbucket"
+	| "confluence"
+	| "github"
+	| "jenkins-release"
+	| "jira";
+
+const connectorDefinitions: Array<{
+	category: "代码托管" | "研发协作" | "知识库" | "CI/CD";
+	description: string;
+	icon: typeof Boxes;
+	name: string;
+	providerId: ConnectorProviderId;
+}> = [
+	{
+		category: "代码托管",
+		description: "仓库、Issue 与 Pull Request",
+		icon: Code2,
+		name: "GitHub",
+		providerId: "github",
+	},
+	{
+		category: "代码托管",
+		description: "公司仓库与 Pull Request",
+		icon: GitBranch,
+		name: "Bitbucket",
+		providerId: "bitbucket",
+	},
+	{
+		category: "研发协作",
+		description: "Issue、项目与研发流程",
+		icon: KeyRound,
+		name: "Jira",
+		providerId: "jira",
+	},
+	{
+		category: "知识库",
+		description: "空间、页面与团队知识",
+		icon: BookOpen,
+		name: "Confluence",
+		providerId: "confluence",
+	},
+	{
+		category: "CI/CD",
+		description: "发布 Job、Build 与 Queue",
+		icon: SlidersHorizontal,
+		name: "Jenkins Release",
+		providerId: "jenkins-release",
+	},
+];
+
+export function ConnectorCatalog(props: {
+	connections: Connection[];
+	onConnect: (providerId: ConnectorProviderId) => void;
+}) {
+	const [category, setCategory] = useState("全部");
+	const [query, setQuery] = useState("");
+	const categories = ["全部", "代码托管", "研发协作", "知识库", "CI/CD"];
+	const visibleConnectors = useMemo(() => {
+		const normalized = query.trim().toLowerCase();
+		return connectorDefinitions.filter(
+			(connector) =>
+				(category === "全部" || connector.category === category) &&
+				(!normalized ||
+					`${connector.name} ${connector.category} ${connector.description}`
+						.toLowerCase()
+						.includes(normalized)),
+		);
+	}, [category, query]);
+
+	return (
+		<section className="connector-workspace" aria-labelledby="connector-title">
+			<aside className="connector-catalog-sidebar">
+				<label className="connector-search" htmlFor="connector-search">
+					<Search aria-hidden="true" size={17} />
+					<span className="sr-only">搜索连接器</span>
+					<input
+						id="connector-search"
+						maxLength={120}
+						onChange={(event) => setQuery(event.target.value)}
+						placeholder="搜索连接器"
+						type="search"
+						value={query}
+					/>
+				</label>
+				<nav aria-label="连接器分类" className="connector-categories">
+					{categories.map((item) => {
+						const count =
+							item === "全部"
+								? connectorDefinitions.length
+								: connectorDefinitions.filter(
+										(connector) => connector.category === item,
+									).length;
+						return (
+							<button
+								aria-pressed={category === item}
+								className="connector-category"
+								key={item}
+								onClick={() => setCategory(item)}
+								type="button"
+							>
+								<span>{item}</span>
+								<small>{count}</small>
+							</button>
+						);
+					})}
+				</nav>
+			</aside>
+			<div className="connector-catalog-main">
+				<div className="connector-catalog-heading">
+					<div>
+						<h2 id="connector-title">
+							{query ? `“${query}” 的结果` : `${category}连接器`}
+						</h2>
+						<p>选择服务后进入对应的安全连接流程。</p>
+					</div>
+					<span className="connector-result-count">
+						{visibleConnectors.length} 个
+					</span>
+				</div>
+				{visibleConnectors.length ? (
+					<div className="connector-grid">
+						{visibleConnectors.map((connector) => {
+							const connectionCount = props.connections.filter(
+								(connection) =>
+									connection.providerId === connector.providerId &&
+									connection.status === "ACTIVE",
+							).length;
+							const Icon = connector.icon;
+							return (
+								<article className="connector-card" key={connector.providerId}>
+									<div className="connector-logo" aria-hidden="true">
+										<Icon size={20} />
+									</div>
+									<div className="connector-card-copy">
+										<h3>{connector.name}</h3>
+										<p>{connector.description}</p>
+										<span>
+											{connectionCount
+												? `已连接 ${connectionCount} 个账号`
+												: connector.category}
+										</span>
+									</div>
+									<button
+										aria-label={`连接 ${connector.name}`}
+										className={`button ${connectionCount ? "button-secondary" : "button-primary"}`}
+										onClick={() => props.onConnect(connector.providerId)}
+										type="button"
+									>
+										{connectionCount ? "再连接" : "连接"}
+									</button>
+								</article>
+							);
+						})}
+					</div>
+				) : (
+					<div className="connector-empty">
+						<Boxes aria-hidden="true" size={22} />
+						<strong>没有匹配的连接器</strong>
+						<p>尝试搜索名称或切换分类。</p>
+					</div>
+				)}
+			</div>
+		</section>
 	);
 }
 
