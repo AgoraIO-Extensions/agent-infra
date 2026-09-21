@@ -1030,18 +1030,18 @@ describe("Connection API", () => {
 					});
 					return { connectionId: "connection-jira" };
 				}
-				if (providerId === "jenkins-release") {
+				if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
 					expect(accessToken).toBe(
 						JSON.stringify({
-							apiToken: "jenkins-api-token",
-							username: "jenkins-user",
+							apiToken: `${providerId}-api-token`,
+							username: `${providerId}-user`,
 						}),
 					);
 					calls.push({
 						name: "connect-jenkins",
 						value: { principalId, providerId },
 					});
-					return { connectionId: "connection-jenkins-release" };
+					return { connectionId: `connection-${providerId}` };
 				}
 				expect(accessToken).toBe("test-bitbucket-pat");
 				calls.push({
@@ -1139,14 +1139,28 @@ describe("Connection API", () => {
 			}),
 			await app.request("/api/v1/connection/provider-credentials", {
 				body: JSON.stringify({
-					apiToken: "jenkins-api-token",
+					apiToken: "jenkins-release-api-token",
 					providerId: "jenkins-release",
-					username: "jenkins-user",
+					username: "jenkins-release-user",
 				}),
 				headers: {
 					"content-type": "application/json",
 					cookie,
 					"idempotency-key": "test-jenkins-connect",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
+			await app.request("/api/v1/connection/provider-credentials", {
+				body: JSON.stringify({
+					apiToken: "jenkins-ci-api-token",
+					providerId: "jenkins-ci",
+					username: "jenkins-ci-user",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-jenkins-ci-connect",
 					origin: "https://connection.example",
 				},
 				method: "POST",
@@ -1207,7 +1221,7 @@ describe("Connection API", () => {
 			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 200, 201, 204, 204,
+			200, 201, 201, 201, 201, 201, 200, 201, 204, 204,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -1221,11 +1235,14 @@ describe("Connection API", () => {
 		expect(await apiResponses[3]?.json()).toEqual({
 			connectionId: "connection-jenkins-release",
 		});
-		expect(await apiResponses[4]?.json()).toMatchObject({
+		expect(await apiResponses[4]?.json()).toEqual({
+			connectionId: "connection-jenkins-ci",
+		});
+		expect(await apiResponses[5]?.json()).toMatchObject({
 			idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
 			preview: { previewId: "preview-1" },
 		});
-		expect(await apiResponses[5]?.json()).toEqual({
+		expect(await apiResponses[6]?.json()).toEqual({
 			connectionId: "connection-old",
 		});
 		expect(calls).toEqual([
@@ -1255,6 +1272,13 @@ describe("Connection API", () => {
 				value: {
 					principalId: "principal-user",
 					providerId: "jenkins-release",
+				},
+			},
+			{
+				name: "connect-jenkins",
+				value: {
+					principalId: "principal-user",
+					providerId: "jenkins-ci",
 				},
 			},
 			{

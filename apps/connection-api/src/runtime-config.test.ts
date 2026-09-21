@@ -36,6 +36,10 @@ const accountBase = {
 	JIRA_TOKEN_PASSWORD: "jira-token-password",
 	JIRA_TOKEN_SERVER_URL: "https://oauth.agoralab.co/oauth/token",
 	JIRA_TOKEN_USERNAME: "jira-token-user",
+	JENKINS_CI_TOKEN_CLIENT_ID: "jenkins-ci-client",
+	JENKINS_CI_TOKEN_CLIENT_SECRET: "jenkins-ci-secret",
+	JENKINS_CI_TOKEN_PASSWORD: "jenkins-ci-token-password",
+	JENKINS_CI_TOKEN_USERNAME: "jenkins-ci-token-user",
 };
 
 describe("Connection runtime configuration", () => {
@@ -117,6 +121,13 @@ describe("Connection runtime configuration", () => {
 		expect(config.jiraToken.tokenUrl).toBe(
 			"https://oauth.agoralab.co/oauth/token",
 		);
+		expect(config.jenkinsCiToken).toEqual({
+			clientId: "jenkins-ci-client",
+			clientSecret: "jenkins-ci-secret",
+			password: "jenkins-ci-token-password",
+			tokenUrl: "https://oauth.agoralab.co/oauth/token",
+			username: "jenkins-ci-token-user",
+		});
 	});
 
 	it("requires a primary GitHub egress before configuring READ fallback", () => {

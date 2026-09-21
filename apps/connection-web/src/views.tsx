@@ -333,6 +333,7 @@ export type ConnectorProviderId =
 	| "bitbucket"
 	| "confluence"
 	| "github"
+	| "jenkins-ci"
 	| "jenkins-release"
 	| "jira";
 
@@ -377,6 +378,13 @@ const connectorDefinitions: Array<{
 		icon: SlidersHorizontal,
 		name: "Jenkins Release",
 		providerId: "jenkins-release",
+	},
+	{
+		category: "CI/CD",
+		description: "研发 Job、Build 与 Console",
+		icon: SlidersHorizontal,
+		name: "Jenkins CI",
+		providerId: "jenkins-ci",
 	},
 ];
 
@@ -526,6 +534,7 @@ export function providerLabel(value: string) {
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
 			github: "GitHub",
+			"jenkins-ci": "Jenkins CI",
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 		}[value] ?? value

@@ -49,6 +49,30 @@ test("Jenkins validates identity without returning the API Token", async () => {
 	assert.equal("accessToken" in visible, false);
 });
 
+test("Jenkins sends the HCI access token with user Basic Auth", async () => {
+	const requests: Request[] = [];
+	const adapter = new JenkinsAdapter(
+		jenkinsCiProfile,
+		async (input, init) => {
+			requests.push(new Request(input, init));
+			return Response.json({
+				authenticated: true,
+				anonymous: false,
+				name: "alice",
+			});
+		},
+		{ getAccessToken: async () => "hci-access-token" },
+	);
+
+	await adapter.validateCredential(credential);
+
+	assert.equal(requests[0]?.headers.get("accessToken"), "hci-access-token");
+	assert.equal(
+		requests[0]?.headers.get("authorization"),
+		`Basic ${Buffer.from("alice:api-token").toString("base64")}`,
+	);
+});
+
 test("Jenkins encodes folder jobs and only uses the fixed deployment origin", async () => {
 	const urls: string[] = [];
 	const adapter = new JenkinsAdapter(jenkinsCiProfile, async (input) => {
