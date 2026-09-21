@@ -31,7 +31,7 @@ export async function runGitHubCommitReactionConformance({
 	for (const actionId of githubCommitReactionActionIds) {
 		const guide = await client.call("get_action_guide", { actionId }, true);
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v8` ||
+			guide?.action?.actionVersionId !== `${actionId}@v9` ||
 			guide.action.effect !== "WRITE"
 		)
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -54,7 +54,7 @@ export async function runGitHubCommitReactionConformance({
 	let issueCreationStarted = false;
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
-		if (projection.actionVersionId !== `${actionId}@v8`)
+		if (projection.actionVersionId !== `${actionId}@v9`)
 			throw new Error(`${actionId} executed an unapproved ActionVersion`);
 		if (githubCommitReactionActionIds.includes(actionId))
 			calls.push({
@@ -313,7 +313,7 @@ export async function runGitHubCommitReactionConformance({
 	if (cleanupFailure) throw cleanupFailure;
 	if (failure) throw failure;
 	return {
-		actionVersionIds: githubCommitReactionActionIds.map((id) => `${id}@v8`),
+		actionVersionIds: githubCommitReactionActionIds.map((id) => `${id}@v9`),
 		calls,
 		cleanup: "SUCCEEDED",
 		runId,

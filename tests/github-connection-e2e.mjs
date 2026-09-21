@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
-import { githubV8ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v8-read-scenarios.ts";
+import { githubV9ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v9-read-scenarios.ts";
 import { connectionMcpEndpoint } from "./connection-endpoint.mjs";
 
 const target = {
@@ -86,11 +86,11 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 		);
 	}
 
-	const runnable = githubV8ReadScenarios.filter(
+	const runnable = githubV9ReadScenarios.filter(
 		(scenario) => scenario.execution === "LIVE",
 	);
 	const repositoryScenario = runnable.find(
-		(scenario) => scenario.actionVersionId === "github.get_repository@v8",
+		(scenario) => scenario.actionVersionId === "github.get_repository@v9",
 	);
 	if (!repositoryScenario)
 		throw new Error("repository preflight scenario is missing");
@@ -100,7 +100,7 @@ export async function runGitHubReadConformance({ environment, fetch, runId }) {
 	];
 	const calls = [];
 	const failures = [];
-	const skipped = githubV8ReadScenarios
+	const skipped = githubV9ReadScenarios
 		.filter((scenario) => scenario.execution !== "LIVE")
 		.map((scenario) => ({
 			actionVersionId: scenario.actionVersionId,
@@ -473,7 +473,7 @@ export async function runGitHubIssueConformance({ environment, fetch, runId }) {
 	const actionVersions = {};
 	for (const [actionId, effect] of Object.entries(actionEffects)) {
 		const guide = await call("get_action_guide", { actionId }, true);
-		const approvedVersion = `${actionId}@v8`;
+		const approvedVersion = `${actionId}@v9`;
 		if (guide?.action?.actionVersionId !== approvedVersion) {
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
 		}

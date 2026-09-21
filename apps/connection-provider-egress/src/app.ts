@@ -50,7 +50,7 @@ export type ProviderEgressDependencies = {
 
 const githubPolicies = new Map([
 	[
-		"github.get_current_user@v8",
+		"github.get_current_user@v9",
 		{
 			method: "GET",
 			origin: "https://api.github.com",

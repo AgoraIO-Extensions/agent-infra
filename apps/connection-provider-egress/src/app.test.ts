@@ -14,7 +14,7 @@ const nowSeconds = 1_800_000_000;
 const assertionKeys = generateKeyPairSync("ed25519");
 const receiptKeys = generateKeyPairSync("ed25519");
 const plan: ProviderRequestPlanV1 = {
-	actionVersionId: "github.get_current_user@v8",
+	actionVersionId: "github.get_current_user@v9",
 	method: "GET",
 	origin: "https://api.github.com",
 	path: "/user",

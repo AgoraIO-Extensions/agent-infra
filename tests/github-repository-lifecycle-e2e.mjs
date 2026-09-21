@@ -36,7 +36,7 @@ export async function runGitHubRepositoryLifecycle({
 	for (const actionId of githubRepositoryLifecycleActionIds) {
 		const guide = await client.call("get_action_guide", { actionId }, true);
 		if (
-			guide?.action?.actionVersionId !== `${actionId}@v8` ||
+			guide?.action?.actionVersionId !== `${actionId}@v9` ||
 			guide.action.effect !== "WRITE"
 		)
 			throw new Error(`${actionId} has an unapproved ActionVersion`);
@@ -65,7 +65,7 @@ export async function runGitHubRepositoryLifecycle({
 	const calls = [];
 	const execute = async (actionId, input, retrySafe = false) => {
 		const projection = await client.execute(actionId, input, retrySafe);
-		if (projection.actionVersionId !== `${actionId}@v8`)
+		if (projection.actionVersionId !== `${actionId}@v9`)
 			throw new Error(`${actionId} executed an unapproved ActionVersion`);
 		if (githubRepositoryLifecycleActionIds.includes(actionId))
 			calls.push({
@@ -658,7 +658,7 @@ export async function runGitHubRepositoryLifecycle({
 	if (failure) throw failure;
 	return {
 		actionVersionIds: githubRepositoryLifecycleActionIds.map(
-			(id) => `${id}@v8`,
+			(id) => `${id}@v9`,
 		),
 		calls,
 		cleanup: "SUCCEEDED",

@@ -140,7 +140,7 @@ test("GitHub OAuth refresh rotates expiring credentials", async () => {
 	]);
 });
 
-test("GitHub OAuth v9 release reuses only its 143 compatible v8 actions", () => {
+test("GitHub OAuth v9 release reuses only its 143 v9 actions", () => {
 	assert.match(githubConnectionCatalog.providerReleaseId, /-connection-v9$/);
 	assert.equal(githubConnectionCatalog.actions.length, 143);
 	assert.deepEqual(
@@ -154,6 +154,6 @@ test("GitHub OAuth v9 release reuses only its 143 compatible v8 actions", () => 
 		[],
 	);
 	for (const action of githubConnectionCatalog.actions) {
-		assert.match(action.id, /@v8$/);
+		assert.match(action.id, /@v9$/);
 	}
 });
