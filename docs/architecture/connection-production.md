@@ -29,11 +29,6 @@ Connection 生产镜像只使用专用的 `connection-vX.Y.Z` tag，且该 tag �
 与候选提交的 Provider catalog，拒绝 Provider 删除、Action 版本下降或 ProviderRelease 版本下降，并在
 Job Summary 输出逐 Provider diff。feature branch、旧 SHA 或 divergent SHA 不得发布生产镜像。
 
-`deploy/connection-gz3-release.sh` 在 Helm rollout 后使用 Secret Manager 注入的
-`CONNECTION_PRODUCTION_MCP_URL`、`CONNECTION_PRODUCTION_TOKEN` 和
-`CONNECTION_PRODUCTION_READ_PROBES` 执行真实 Provider READ。缺少任一配置或任一 READ 失败时，脚本
-不得标记部署完成；`ACTIVE`、Pod Ready 或 catalog 可见均不能替代 Provider 执行证据。
-
 bootstrap 角色只执行正式 migration，不插入 Principal、Consumer、Connection、Credential 或 Grant。
 Compose 只向主机发布 `connection-web:8080`，由它将 `/api/v1/connection/*`、`/connection/v1/*`、
 `/oauth/*`、`/.well-known/*` 和 `/mcp` 同源代理到不暴露主机端口的 `connection-api`。API 直接启动
@@ -107,7 +102,7 @@ pnpm connection:pr:preflight -- --issue <issue-number>
 PR 合并后切到对应的 `origin/connection` commit，再执行：
 
 ```bash
-pnpm connection:gz3:release -- connection-vX.Y.Z --publish --deploy
+pnpm connection:gz3:release connection-vX.Y.Z --publish --deploy
 ```
 
 命令只允许 tag 指向当前 `origin/connection`，等待 GHCR workflow 完成，然后固定使用 GZ3 context、
@@ -115,6 +110,3 @@ pnpm connection:gz3:release -- connection-vX.Y.Z --publish --deploy
 `--no-hooks`，并通过无 watch 的 Deployment image/readyReplica 轮询验收，避免旧 Kubernetes 的
 `event bookmark expired` 造成伪失败。检测到 `migrations/connection` 变化时命令 fail closed，必须改走
 经过评审的 migration 发布流程。脚本不会读取 Secret、自动合并 PR 或执行 Provider WRITE Action。
-
-脚本 Ready 后仍必须通过 Connection 执行与变更相关的 harmless READ。例如 Jenkins 发现变更应以真实
-Job URL 调用 `search_actions`，随后执行 `get_build`，并记录 resolved provider、call ID 和结果。

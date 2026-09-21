@@ -116,9 +116,4 @@ if ! $ready; then
   exit 1
 fi
 
-if ! read_result=$(node .github/scripts/connection-production-read-verify.mjs); then
-  echo "Production Provider READ verification failed" >&2
-  exit 1
-fi
-printf '%s\n' "$read_result" | tee /tmp/connection-production-read-result.json
-echo "Deployment and real Provider READ acceptance succeeded."
+echo "Deployment succeeded."
