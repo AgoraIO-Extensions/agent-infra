@@ -17,9 +17,8 @@ CREATE TABLE connection_provider_upgrade_tasks (
   campaign_id TEXT NOT NULL
     REFERENCES connection_provider_upgrade_campaigns(id) ON DELETE RESTRICT,
   principal_id TEXT NOT NULL REFERENCES connection_principals(id) ON DELETE RESTRICT,
-  connection_id TEXT NOT NULL REFERENCES connection_accounts(id) ON DELETE RESTRICT,
-  authorization_root_id TEXT NOT NULL
-    REFERENCES connection_authorization_roots(id) ON DELETE RESTRICT,
+  connection_id TEXT NOT NULL,
+  authorization_root_id TEXT NOT NULL,
   consumer_id TEXT NOT NULL REFERENCES connection_consumers(id) ON DELETE RESTRICT,
   provider_id TEXT NOT NULL,
   actor_key TEXT NOT NULL,
@@ -34,8 +33,8 @@ CREATE TABLE connection_provider_upgrade_tasks (
   FOREIGN KEY (authorization_root_id, principal_id, consumer_id, actor_key, provider_id)
     REFERENCES connection_authorization_roots
       (id, principal_id, consumer_id, actor_key, provider_id) ON DELETE RESTRICT,
-  FOREIGN KEY (connection_id, principal_id, provider_id)
-    REFERENCES connection_accounts(id, principal_id, provider_id) ON DELETE RESTRICT,
+  FOREIGN KEY (connection_id, provider_id)
+    REFERENCES connection_accounts(id, provider_id) ON DELETE RESTRICT,
   UNIQUE (campaign_id, authorization_root_id)
 );
 
