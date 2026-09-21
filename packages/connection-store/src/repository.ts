@@ -421,13 +421,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			}
 			const sourceReleases = await sql<{ provider_release_id: string }[]>`
 				SELECT DISTINCT account.provider_release_id
-				FROM connection_accounts account
-				JOIN connection_authorization_roots root
-					ON root.connection_id = account.id
+				FROM connection_authorization_roots root
 				JOIN connection_grants active_grant
 					ON active_grant.id = root.current_grant_id
 					AND active_grant.root_id = root.id
 					AND active_grant.status = 'ACTIVE'
+				JOIN connection_accounts account
+					ON account.id = active_grant.connection_id
 				WHERE account.provider_id = ${catalog.provider}
 					AND account.provider_release_id <> ${catalog.providerReleaseId}
 			`;
@@ -456,13 +456,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						'provider-upgrade-task-' || root.id || '-' || ${campaignId},
 						${campaignId}, root.principal_id, account.id, root.id,
 						root.consumer_id, 'PENDING_CONNECTION'
-					FROM connection_accounts account
-					JOIN connection_authorization_roots root
-						ON root.connection_id = account.id
+					FROM connection_authorization_roots root
 					JOIN connection_grants active_grant
 						ON active_grant.id = root.current_grant_id
 						AND active_grant.root_id = root.id
 						AND active_grant.status = 'ACTIVE'
+					JOIN connection_accounts account
+						ON account.id = active_grant.connection_id
 					WHERE account.provider_id = ${catalog.provider}
 						AND account.provider_release_id = ${source.provider_release_id}
 					ON CONFLICT (campaign_id, authorization_root_id) DO NOTHING
