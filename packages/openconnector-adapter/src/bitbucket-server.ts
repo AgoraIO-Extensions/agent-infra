@@ -11,7 +11,7 @@ import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
 const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
 const providerId = "bitbucket";
 const apiOrigin = "https://bitbucket-api.agoralab.co";
-const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v5`;
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v6`;
 const credentialScope = "bitbucket.server.pat";
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 8_000;
@@ -325,7 +325,7 @@ export const bitbucketServerConnectionCatalog = {
 	actions: actionSpecs.map((action) => ({
 		description: action.description,
 		effect: action.effect,
-		id: `${providerId}.${action.name}@v5`,
+		id: `${providerId}.${action.name}@v6`,
 		inputSchema: {
 			additionalProperties: false,
 			properties: action.properties ?? {},
@@ -555,10 +555,24 @@ export class BitbucketServerAdapter
 				return this.requestJson(token, `${pullRequestPath()}/approve`, {
 					method: "DELETE",
 				});
-			case "list_pull_request_comments":
-				return this.requestJson(token, `${pullRequestPath()}/comments`, {
-					query: pagination(value),
-				});
+			case "list_pull_request_comments": {
+				const page = await this.requestJson(
+					token,
+					`${pullRequestPath()}/activities`,
+					{ query: pagination(value) },
+				);
+				return {
+					...page,
+					values: pageValues(page)
+						.map((activity) => activity.comment)
+						.filter(
+							(comment): comment is JsonObject =>
+								typeof comment === "object" &&
+								comment !== null &&
+								!Array.isArray(comment),
+						),
+				};
+			}
 			case "get_pull_request_comment":
 				return this.requestJson(token, commentPath());
 			case "create_pull_request_comment":

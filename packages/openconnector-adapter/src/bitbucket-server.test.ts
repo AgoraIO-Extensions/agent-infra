@@ -52,7 +52,7 @@ test("Bitbucket Server catalog exposes the reviewed OpenConnector-compatible act
 		[...expectedActions].sort(),
 	);
 	for (const action of bitbucketServerConnectionCatalog.actions) {
-		assert.match(action.id, /^bitbucket\.[a-z_]+@v5$/);
+		assert.match(action.id, /^bitbucket\.[a-z_]+@v6$/);
 		assert.equal("endpoint" in action.inputSchema.properties, false);
 		assert.deepEqual(action.requiredScopes, ["bitbucket.server.pat"]);
 	}
@@ -133,6 +133,51 @@ test("Bitbucket execution encodes path segments and never returns the PAT", asyn
 			input: { project: "A B", repository: "repo/name" },
 		});
 		assert.deepEqual(repository, { name: "Repository" });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
+test("Bitbucket lists pull request comments from paged activities", async () => {
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async (input) => {
+		assert.equal(
+			String(input),
+			"https://bitbucket-api.agoralab.co/rest/api/1.0/projects/TOOL/repos/rehoboam/pull-requests/639/activities?limit=50&start=25",
+		);
+		return Response.json({
+			isLastPage: false,
+			limit: 50,
+			nextPageStart: 75,
+			size: 2,
+			start: 25,
+			values: [
+				{ action: "COMMENTED", comment: { id: 12, text: "review" } },
+				{ action: "APPROVED" },
+			],
+		});
+	};
+
+	try {
+		const page = await createAdapter().execute({
+			action: "bitbucket.list_pull_request_comments",
+			credential: { accessToken: "test-personal-access-token" },
+			input: {
+				limit: 50,
+				project: "TOOL",
+				pullRequestId: 639,
+				repository: "rehoboam",
+				start: 25,
+			},
+		});
+		assert.deepEqual(page, {
+			isLastPage: false,
+			limit: 50,
+			nextPageStart: 75,
+			size: 2,
+			start: 25,
+			values: [{ id: 12, text: "review" }],
+		});
 	} finally {
 		globalThis.fetch = originalFetch;
 	}
