@@ -10,20 +10,24 @@ import {
 test("parses action and provider release versions", () => {
 	assert.deepEqual(
 		parseCatalogSource('const id = "bitbucket.get@v6"; const release = "connection-v6";'),
-		{ actionVersion: 6, providerReleaseVersion: 6 },
+		{
+			actions: { "bitbucket.get": 6 },
+			actionVersion: 6,
+			providerReleaseVersion: 6,
+		},
 	);
 });
 
 test("rejects action and provider release downgrades", () => {
 	assert.throws(
-		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actionVersion: 5, providerReleaseVersion: 5 } }),
+		() => compareCatalogs({ bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actions: { "bitbucket.get": 5 }, actionVersion: 5, providerReleaseVersion: 5 } }),
 		/Action version downgrade/,
 	);
 });
 
 test("accepts monotonic catalog versions", () => {
 	assert.equal(
-		compareCatalogs({ jira: { actionVersion: 8, providerReleaseVersion: 8 } }, { jira: { actionVersion: 9, providerReleaseVersion: 9 } }).length,
+		compareCatalogs({ jira: { actions: { "jira.get": 8 }, actionVersion: 8, providerReleaseVersion: 8 } }, { jira: { actions: { "jira.get": 9 }, actionVersion: 9, providerReleaseVersion: 9 } }).length,
 		1,
 	);
 });
@@ -35,15 +39,25 @@ test("requires the deployment SHA to equal canonical connection head", () => {
 
 test("rejects removed providers and provider release downgrades", () => {
 	assert.throws(
-		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, {}),
+		() => compareCatalogs({ bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: 6 } }, {}),
 		/Provider removed/,
 	);
 	assert.throws(
-		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actionVersion: 6, providerReleaseVersion: 5 } }),
+		() => compareCatalogs({ bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: 5 } }),
 		/Provider release downgrade/,
 	);
 	assert.throws(
-		() => compareCatalogs({ bitbucket: { actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actionVersion: 6, providerReleaseVersion: null } }),
+		() => compareCatalogs({ bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: 6 } }, { bitbucket: { actions: { "bitbucket.get": 6 }, actionVersion: 6, providerReleaseVersion: null } }),
 		/Provider release downgrade.*missing/,
 	);
+});
+
+test("compares every action instead of only the maximum version", () => {
+	const baseline = parseCatalogSource(
+		'const ids = ["provider.a@v6", "provider.b@v5"]; const release = "connection-v6";',
+	);
+	const candidate = parseCatalogSource(
+		'const ids = ["provider.a@v6", "provider.b@v4"]; const release = "connection-v6";',
+	);
+	assert.throws(() => compareCatalogs({ provider: baseline }, { provider: candidate }), /provider\.b v5 -> v4/);
 });

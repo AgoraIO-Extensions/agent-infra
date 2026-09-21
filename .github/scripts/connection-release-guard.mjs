@@ -12,11 +12,29 @@ const providers = {
 const git = (...args) =>
 	execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-export function parseCatalogSource(source) {
-	const actionVersions = [...source.matchAll(/@v(\d+)/g)].map((match) => Number(match[1]));
+export function parseCatalogSource(source, providerHint) {
+	const explicitActions = Object.fromEntries(
+		[...source.matchAll(/["'`]([a-z0-9-]+\.[a-z0-9_]+)@v(\d+)["'`]/g)].map(
+			(match) => [match[1], Number(match[2])],
+		),
+	);
+	const actionSpecSource = source.match(/const actionSpecs[\s\S]*?\] as const;/)?.[0] ?? "";
+	const sharedVersion = Math.max(
+		0,
+		...[...source.matchAll(/@v(\d+)/g)].map((match) => Number(match[1])),
+	);
+	const providerId = source.match(/const providerId = ["']([^"']+)["']/)?.[1] ?? providerHint;
+	const dynamicActions = Object.fromEntries(
+		[...actionSpecSource.matchAll(/\bname:\s*["']([a-z][a-z0-9_]*)["']/g)].map(
+			(match) => [`${providerId}.${match[1]}`, sharedVersion],
+		),
+	);
+	const actions = Object.keys(explicitActions).length ? explicitActions : dynamicActions;
+	const actionVersions = Object.values(actions);
 	const releaseVersions = [...source.matchAll(/connection-v(\d+)/g)].map((match) => Number(match[1]));
 	if (actionVersions.length === 0) throw new Error("Provider source has no versioned actions");
 	return {
+		actions,
 		actionVersion: Math.max(...actionVersions),
 		providerReleaseVersion: releaseVersions.length ? Math.max(...releaseVersions) : null,
 	};
@@ -28,6 +46,13 @@ export function compareCatalogs(baseline, candidate) {
 		if (!candidate[provider]) throw new Error(`Provider removed: ${provider}`);
 		const before = baseline[provider];
 		const after = candidate[provider];
+		for (const [actionId, beforeVersion] of Object.entries(before.actions)) {
+			const afterVersion = after.actions[actionId];
+			if (afterVersion === undefined) throw new Error(`Action removed: ${actionId}`);
+			if (afterVersion < beforeVersion) {
+				throw new Error(`Action version downgrade: ${actionId} v${beforeVersion} -> v${afterVersion}`);
+			}
+		}
 		if (after.actionVersion < before.actionVersion) {
 			throw new Error(`Action version downgrade: ${provider} v${before.actionVersion} -> v${after.actionVersion}`);
 		}
@@ -47,7 +72,7 @@ export function readCatalog(ref) {
 	return Object.fromEntries(
 		Object.entries(providers).map(([provider, file]) => [
 			provider,
-			parseCatalogSource(git("show", `${ref}:${file}`)),
+			parseCatalogSource(git("show", `${ref}:${file}`), provider),
 		]),
 	);
 }
