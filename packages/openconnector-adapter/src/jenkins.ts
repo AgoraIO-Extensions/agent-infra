@@ -355,6 +355,9 @@ export class JenkinsAdapter
 			response,
 			maxArtifactBytes,
 		);
+		if (response.status !== 206 && truncated) {
+			throw providerError("Jenkins artifact does not support ranged reads");
+		}
 		const contentRange = parseContentRange(
 			response.headers.get("content-range"),
 		);
@@ -379,18 +382,28 @@ export class JenkinsAdapter
 		const nextStart = contentRange
 			? contentRange.end + 1
 			: start + bytes.byteLength;
+		const contentType = response.headers.get("content-type") ?? "";
 		const mimeType =
-			response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
-			"application/octet-stream";
+			contentType.split(";", 1)[0]?.trim() || "application/octet-stream";
 		const moreData =
 			truncated ||
 			(size !== undefined && nextStart < size) ||
 			(response.status === 206 && size === undefined);
+		const charset = contentType.match(/;\s*charset\s*=\s*"?([^";\s]+)"?/i)?.[1];
+		let text: string | undefined;
+		if (
+			start === 0 &&
+			!moreData &&
+			isTextMimeType(mimeType) &&
+			(!charset || /^utf-?8$/i.test(charset))
+		) {
+			try {
+				text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+			} catch {}
+		}
 		return {
 			contentBase64: Buffer.from(bytes).toString("base64"),
-			...(start === 0 && !moreData && isTextMimeType(mimeType)
-				? { text: new TextDecoder().decode(bytes) }
-				: {}),
+			...(text === undefined ? {} : { text }),
 			mimeType,
 			moreData,
 			nextStart,

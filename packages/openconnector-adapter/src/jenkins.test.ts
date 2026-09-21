@@ -293,6 +293,47 @@ test("Jenkins rejects encoded artifact representations", async () => {
 	);
 });
 
+test("Jenkins omits text for unsupported charsets", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(new Uint8Array([0xe9]), {
+				headers: { "content-type": "text/plain; charset=iso-8859-1" },
+			}),
+	);
+	const result = (await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	})) as { text?: string };
+	assert.equal(result.text, undefined);
+});
+
+test("Jenkins rejects truncated artifacts when range requests are ignored", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () => new Response("x".repeat(256 * 1024 + 1)),
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "large.log",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifact does not support ranged reads/,
+	);
+});
+
 test("Jenkins returns binary artifacts as Base64 and rejects path injection", async () => {
 	let requests = 0;
 	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
