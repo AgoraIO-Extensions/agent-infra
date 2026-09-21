@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 const providers = {
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
 	confluence: "packages/openconnector-adapter/src/confluence-server.ts",
-	github: "packages/openconnector-adapter/src/verification/github-v9.ts",
+	github: "packages/openconnector-adapter/src/verification/github-v8.ts",
 	jenkins: "packages/openconnector-adapter/src/jenkins.ts",
 	jira: "packages/openconnector-adapter/src/jira-server.ts",
 };

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { githubConnectionCatalog } from "../packages/openconnector-adapter/src/index.ts";
-import { githubV9ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v9-read-scenarios.ts";
+import { githubV9ReadScenarios } from "../packages/openconnector-adapter/src/verification/github-v8-read-scenarios.ts";
 import { connectionMcpEndpoint } from "./connection-endpoint.mjs";
 
 const target = {
