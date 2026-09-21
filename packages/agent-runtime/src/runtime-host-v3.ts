@@ -710,6 +710,14 @@ export class RuntimeHostV3 {
 					request.executionId,
 					request.confirmedCursor,
 				);
+				// The driver call can outlive the grant. Re-authorize immediately
+				// before the durable acknowledgement so an expired grant cannot
+				// advance the persisted cursor.
+				await this.options.store.authorizeRequestV3(
+					claims,
+					"query",
+					(this.options.grantValidation.now ?? Date.now)(),
+				);
 				await this.options.store.acknowledgeCursor(
 					claims,
 					request.confirmedCursor,
@@ -818,11 +826,11 @@ export class RuntimeHostV3 {
 						invalidDriver();
 					validate();
 					options.store.checkRequestV3(claims);
-					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
 					bounded.throwIfAborted();
 					validate();
 					options.store.checkRequestV3(claims);
 					yield parsed.data;
+					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
 				}
 			} finally {
 				clearTimeout(timer);
