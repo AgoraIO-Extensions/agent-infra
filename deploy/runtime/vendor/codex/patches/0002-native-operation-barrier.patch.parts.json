@@ -1,0 +1,32 @@
+{
+  "format": "agent-infra-vendor-parts-v1",
+  "byteLength": 248403,
+  "sha256": "sha256:542f22aa43817cbcadb8a3a84f496df74f57c8cf749e06d5e7caf0192e57fde0",
+  "parts": [
+    {
+      "path": "0002-native-operation-barrier.patch.parts/0001.part",
+      "byteLength": 59994,
+      "sha256": "sha256:90c74dfe2934ff51e180984bd1c025d7683a1ea2a185f918f25465e71e1f4822"
+    },
+    {
+      "path": "0002-native-operation-barrier.patch.parts/0002.part",
+      "byteLength": 64339,
+      "sha256": "sha256:06df4ae68c656e39f66a5fa95ba2fcc3069ae7db85d322aec2507d8332f6ac1c"
+    },
+    {
+      "path": "0002-native-operation-barrier.patch.parts/0003.part",
+      "byteLength": 53457,
+      "sha256": "sha256:b2a95d8d501a576038945749a4d6dd9ec315f95d759e59073b40873bb1154ca8"
+    },
+    {
+      "path": "0002-native-operation-barrier.patch.parts/0004.part",
+      "byteLength": 65273,
+      "sha256": "sha256:be66e9d9c37639c4aa2f0bc2eb52678ffc6098db3f7ca0308fb123d3b0b1d436"
+    },
+    {
+      "path": "0002-native-operation-barrier.patch.parts/0005.part",
+      "byteLength": 5340,
+      "sha256": "sha256:92548880e22070b4ac74a477c4227642decfec5967d360e48681c82e32dc74c2"
+    }
+  ]
+}

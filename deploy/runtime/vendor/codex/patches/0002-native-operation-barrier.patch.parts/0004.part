@@ -1,0 +1,1834 @@
+@@ -0,0 +1,579 @@
++use std::collections::HashMap;
++use std::future::pending;
++use std::io;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::atomic::AtomicUsize;
++use std::sync::atomic::Ordering;
++
++use codex_protocol::ThreadId;
++use codex_protocol::protocol::HookEventName;
++use codex_protocol::protocol::HookSource;
++use codex_utils_absolute_path::AbsolutePathBuf;
++use codex_utils_absolute_path::test_support::PathBufExt;
++use futures::future::BoxFuture;
++use pretty_assertions::assert_eq;
++use tempfile::tempdir;
++use tokio::sync::Notify;
++use tokio::sync::oneshot;
++
++use super::CommandHookRuntime;
++use super::CommandShell;
++use super::ConfiguredHandler;
++use super::ConfiguredHandlerKind;
++use super::run_command;
++use crate::HookMcpCall;
++use crate::HookMcpExecutor;
++use crate::NativeHookAttempt;
++use crate::NativeHookFactory;
++use crate::NativeHookResult;
++use crate::NativeHookTask;
++use crate::drain_native_hook_tasks;
++use crate::engine::mcp_runner::run_mcp_tool;
++use crate::with_native_hook_factory;
++
++#[derive(Clone, Default)]
++struct RecordingFactory {
++    events: Arc<Mutex<Vec<String>>>,
++    reject_intent: bool,
++    reject_dispatch: bool,
++    reject_started: bool,
++    cancellation: Option<Arc<Notify>>,
++    started_signal: Arc<Notify>,
++    scheduled_count: Arc<AtomicUsize>,
++    drained: Arc<Notify>,
++}
++
++impl RecordingFactory {
++    fn record(&self, event: String) {
++        self.events
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner)
++            .push(event);
++    }
++
++    fn events(&self) -> Vec<String> {
++        self.events
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner)
++            .clone()
++    }
++}
++
++struct ScheduledTask {
++    count: Arc<AtomicUsize>,
++    drained: Arc<Notify>,
++}
++impl NativeHookTask for ScheduledTask {}
++impl Drop for ScheduledTask {
++    fn drop(&mut self) {
++        self.count.fetch_sub(1, Ordering::SeqCst);
++        self.drained.notify_waiters();
++    }
++}
++
++impl NativeHookFactory for RecordingFactory {
++    fn scheduled(&self) -> io::Result<Box<dyn NativeHookTask>> {
++        self.scheduled_count.fetch_add(1, Ordering::SeqCst);
++        Ok(Box::new(ScheduledTask {
++            count: Arc::clone(&self.scheduled_count),
++            drained: Arc::clone(&self.drained),
++        }))
++    }
++
++    fn drain(&self) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async {
++            loop {
++                let notified = self.drained.notified();
++                tokio::pin!(notified);
++                notified.as_mut().enable();
++                if self.scheduled_count.load(Ordering::SeqCst) == 0 {
++                    return Ok(());
++                }
++                notified.await;
++            }
++        })
++    }
++
++    fn cancelled(&self) -> BoxFuture<'_, ()> {
++        NativeHookAttempt::cancelled(self)
++    }
++
++    fn begin_command(
++        &self,
++        run_id: String,
++        event_name: &'static str,
++    ) -> BoxFuture<'_, io::Result<Arc<dyn NativeHookAttempt>>> {
++        Box::pin(async move {
++            self.record(format!("intent:{event_name}:{run_id}"));
++            if self.reject_intent {
++                return Err(io::Error::other("intent rejected"));
++            }
++            Ok(Arc::new(self.clone()) as Arc<dyn NativeHookAttempt>)
++        })
++    }
++
++    fn execute_mcp<'a>(
++        &'a self,
++        run_id: String,
++        event_name: &'static str,
++        executor: &'a dyn HookMcpExecutor,
++        call: HookMcpCall,
++    ) -> BoxFuture<'a, anyhow::Result<String>> {
++        Box::pin(async move {
++            self.record(format!("mcp:{event_name}:{run_id}"));
++            if self.reject_intent {
++                anyhow::bail!("intent rejected");
++            }
++            executor.execute(call).await
++        })
++    }
++}
++
++impl NativeHookAttempt for RecordingFactory {
++    fn check_dispatch(&self) -> io::Result<()> {
++        self.record("check".to_owned());
++        if self.reject_dispatch {
++            Err(io::Error::other("dispatch rejected"))
++        } else {
++            Ok(())
++        }
++    }
++
++    fn started(&self) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async {
++            self.record("started".to_owned());
++            self.started_signal.notify_one();
++            if self.reject_started {
++                Err(io::Error::other("started receipt rejected"))
++            } else {
++                Ok(())
++            }
++        })
++    }
++
++    fn cancelled(&self) -> BoxFuture<'_, ()> {
++        Box::pin(async {
++            match &self.cancellation {
++                Some(cancellation) => cancellation.notified().await,
++                None => pending().await,
++            }
++        })
++    }
++
++    fn finish(&self, result: NativeHookResult) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async move {
++            self.record(
++                match result {
++                    NativeHookResult::Completed => "completed",
++                    NativeHookResult::Failed => "failed",
++                    NativeHookResult::Unknown => "unknown",
++                }
++                .to_owned(),
++            );
++            Ok(())
++        })
++    }
++}
++
++fn fixture(cwd: &std::path::Path, command: &str) -> (CommandHookRuntime, ConfiguredHandler) {
++    let (sender, _receiver) = async_channel::unbounded();
++    let runtime = CommandHookRuntime::new(
++        CommandShell {
++            program: "/bin/sh".to_owned(),
++            args: vec!["-c".to_owned()],
++        },
++        Arc::new(std::env::vars_os().collect()),
++        ThreadId::new(),
++        sender,
++    );
++    let handler = ConfiguredHandler {
++        builtin: false,
++        event_name: HookEventName::PreToolUse,
++        matcher: None,
++        timeout_sec: 5,
++        status_message: None,
++        additional_context_limit: Default::default(),
++        source_path: cwd.join("hooks.json").abs().into(),
++        source: HookSource::User,
++        display_order: 2,
++        kind: ConfiguredHandlerKind::Command {
++            command: command.to_owned(),
++            env: HashMap::new(),
++            r#async: false,
++        },
++    };
++    (runtime, handler)
++}
++
++#[tokio::test]
++async fn missing_original_task_context_never_spawns_a_command() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, handler) = fixture(temp.path(), "touch executed");
++    let result = run_command(
++        &runtime,
++        &handler,
++        "touch executed",
++        &HashMap::new(),
++        "{}",
++        temp.path(),
++    )
++    .await;
++    assert_eq!(
++        result.error.as_deref(),
++        Some("NATIVE_HOOK_EXECUTION_CONTEXT_UNAVAILABLE")
++    );
++    assert!(!temp.path().join("executed").exists());
++}
++
++#[tokio::test]
++async fn rejected_intent_and_expired_dispatch_never_spawn() {
++    for reject_intent in [true, false] {
++        let temp = tempdir().expect("tempdir");
++        let (runtime, handler) = fixture(temp.path(), "touch executed");
++        let factory = Arc::new(RecordingFactory {
++            reject_intent,
++            reject_dispatch: !reject_intent,
++            ..Default::default()
++        });
++        let result = with_native_hook_factory(
++            factory.clone(),
++            run_command(
++                &runtime,
++                &handler,
++                "touch executed",
++                &HashMap::new(),
++                "{}",
++                temp.path(),
++            ),
++        )
++        .await;
++        assert!(result.error.is_some());
++        assert!(!temp.path().join("executed").exists());
++        let mut expected = vec![format!("intent:pre-tool-use:{}", handler.run_id())];
++        if !reject_intent {
++            expected.extend(["check".to_owned(), "failed".to_owned()]);
++        }
++        assert_eq!(factory.events(), expected);
++    }
++}
++
++#[tokio::test]
++async fn real_command_terminal_status_is_recorded_after_spawn() {
++    for (command, outcome) in [("printf result", "completed"), ("exit 7", "failed")] {
++        let temp = tempdir().expect("tempdir");
++        let (runtime, handler) = fixture(temp.path(), command);
++        let factory = Arc::new(RecordingFactory::default());
++        let result = with_native_hook_factory(
++            factory.clone(),
++            run_command(
++                &runtime,
++                &handler,
++                command,
++                &HashMap::new(),
++                "secret hook input",
++                temp.path(),
++            ),
++        )
++        .await;
++        assert!(result.error.is_none());
++        assert_eq!(
++            factory.events(),
++            vec![
++                format!("intent:pre-tool-use:{}", handler.run_id()),
++                "check".to_owned(),
++                "started".to_owned(),
++                outcome.to_owned(),
++            ]
++        );
++    }
++}
++
++#[tokio::test]
++async fn spawn_error_has_no_started_receipt() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, handler) = fixture(temp.path(), "touch executed");
++    let runtime = runtime.reconfigured(CommandShell {
++        program: temp.path().join("absent-shell").display().to_string(),
++        args: vec![],
++    });
++    let factory = Arc::new(RecordingFactory::default());
++    let result = with_native_hook_factory(
++        factory.clone(),
++        run_command(
++            &runtime,
++            &handler,
++            "touch executed",
++            &HashMap::new(),
++            "{}",
++            temp.path(),
++        ),
++    )
++    .await;
++    assert!(result.error.is_some());
++    assert_eq!(
++        factory.events(),
++        vec![
++            format!("intent:pre-tool-use:{}", handler.run_id()),
++            "check".to_owned(),
++            "failed".to_owned(),
++        ]
++    );
++}
++
++#[tokio::test]
++async fn missing_started_receipt_never_exposes_successful_output() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, handler) = fixture(temp.path(), "printf secret-output");
++    let factory = Arc::new(RecordingFactory {
++        reject_started: true,
++        ..Default::default()
++    });
++    let result = with_native_hook_factory(
++        factory.clone(),
++        run_command(
++            &runtime,
++            &handler,
++            "printf secret-output",
++            &HashMap::new(),
++            "{}",
++            temp.path(),
++        ),
++    )
++    .await;
++    assert_eq!(result.error.as_deref(), Some("started receipt rejected"));
++    assert!(result.stdout.is_empty());
++    assert_eq!(factory.events().last().map(String::as_str), Some("unknown"));
++}
++
++#[tokio::test]
++async fn async_hook_keeps_the_scheduling_context_after_scope_exits() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, handler) = fixture(temp.path(), "touch executed");
++    let factory = Arc::new(RecordingFactory::default());
++    let (release, wait) = oneshot::channel();
++    let (done, result) = oneshot::channel();
++    let task_runtime = runtime.clone();
++    let cwd = temp.path().to_owned();
++    with_native_hook_factory(factory.clone(), async {
++        runtime.schedule_async_task(async move {
++            wait.await.expect("release");
++            let output = run_command(
++                &task_runtime,
++                &handler,
++                "touch executed",
++                &HashMap::new(),
++                "{}",
++                &cwd,
++            )
++            .await;
++            done.send(output).expect("done");
++        });
++    })
++    .await;
++    release.send(()).expect("release");
++    assert!(result.await.expect("result").error.is_none());
++    assert!(temp.path().join("executed").exists());
++    assert_eq!(
++        factory.events().last().map(String::as_str),
++        Some("completed")
++    );
++    runtime.shutdown().await;
++}
++
++#[derive(Default)]
++struct Executor(Mutex<Vec<HookMcpCall>>);
++impl HookMcpExecutor for Executor {
++    fn execute(&self, call: HookMcpCall) -> BoxFuture<'_, anyhow::Result<String>> {
++        Box::pin(async move {
++            self.0
++                .lock()
++                .unwrap_or_else(std::sync::PoisonError::into_inner)
++                .push(call);
++            Ok("{}".to_owned())
++        })
++    }
++}
++
++#[tokio::test]
++async fn mcp_hook_requires_context_and_preserves_native_run_id() {
++    let temp = tempdir().expect("tempdir");
++    let (_, handler) = fixture(temp.path(), "");
++    let executor = Executor::default();
++    let input = serde_json::Map::new();
++    let result = run_mcp_tool(&executor, &handler, "server", "tool", &input, "{}", None).await;
++    assert!(result.error.is_some());
++    assert!(executor.0.lock().expect("calls").is_empty());
++    let rejected = Arc::new(RecordingFactory {
++        reject_intent: true,
++        ..Default::default()
++    });
++    let result = with_native_hook_factory(
++        rejected,
++        run_mcp_tool(&executor, &handler, "server", "tool", &input, "{}", None),
++    )
++    .await;
++    assert!(result.error.is_some());
++    assert!(executor.0.lock().expect("calls").is_empty());
++    let factory = Arc::new(RecordingFactory::default());
++    let result = with_native_hook_factory(
++        factory.clone(),
++        run_mcp_tool(&executor, &handler, "server", "tool", &input, "{}", None),
++    )
++    .await;
++    assert!(result.error.is_none());
++    assert_eq!(
++        factory.events(),
++        vec![format!("mcp:pre-tool-use:{}", handler.run_id())]
++    );
++    assert_eq!(executor.0.lock().expect("calls").len(), 1);
++}
++
++#[tokio::test]
++async fn cancellation_of_original_task_stops_running_hook() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, handler) = fixture(temp.path(), "sleep 30; touch late");
++    let cancellation = Arc::new(Notify::new());
++    let factory = Arc::new(RecordingFactory {
++        cancellation: Some(cancellation.clone()),
++        ..Default::default()
++    });
++    let cwd = temp.path().to_owned();
++    let task_factory = factory.clone();
++    let task = tokio::spawn(async move {
++        with_native_hook_factory(
++            task_factory,
++            run_command(
++                &runtime,
++                &handler,
++                "sleep 30; touch late",
++                &HashMap::new(),
++                "{}",
++                &cwd,
++            ),
++        )
++        .await
++    });
++    factory.started_signal.notified().await;
++    cancellation.notify_one();
++    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
++        .await
++        .expect("hook must observe cancellation")
++        .expect("task");
++    assert_eq!(
++        result.error.as_deref(),
++        Some("NATIVE_HOOK_EXECUTION_CANCELLED")
++    );
++    assert!(!temp.path().join("late").exists());
++    assert_eq!(factory.events().last().map(String::as_str), Some("unknown"));
++}
++
++#[tokio::test]
++async fn unsupported_legacy_notify_never_spawns() {
++    let temp = tempdir().expect("tempdir");
++    let thread_id = ThreadId::new();
++    let payload = crate::HookPayload {
++        session_id: thread_id,
++        cwd: AbsolutePathBuf::try_from(temp.path()).expect("absolute path"),
++        client: None,
++        triggered_at: chrono::Utc::now(),
++        hook_event: crate::HookEvent::AfterAgent {
++            event: crate::HookEventAfterAgent {
++                thread_id,
++                turn_id: "original-turn".to_owned(),
++                input_messages: vec![],
++                last_assistant_message: None,
++            },
++        },
++    };
++    let marker = temp.path().join("legacy-executed");
++    let hook = crate::legacy_notify::notify_hook(
++        vec!["/usr/bin/touch".to_owned(), marker.display().to_string()],
++        Arc::new(std::env::vars_os().collect()),
++    );
++    let response = hook.execute(&payload).await;
++    let crate::HookResult::FailedContinue(error) = response.result else {
++        panic!("legacy notify must be explicitly unsupported");
++    };
++    assert_eq!(error.to_string(), "NATIVE_LEGACY_NOTIFY_UNSUPPORTED");
++    assert!(!marker.exists());
++}
++
++#[tokio::test]
++async fn original_task_drain_waits_for_queued_and_running_hooks() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, _) = fixture(temp.path(), "");
++    let capacity = Arc::clone(&runtime.lock_state().concurrency_limit);
++    let held = capacity
++        .acquire_many_owned(super::MAX_CONCURRENT_ASYNC_HOOKS as u32)
++        .await
++        .expect("hold all session hook capacity");
++    let factory = Arc::new(RecordingFactory::default());
++    let (started, received) = oneshot::channel();
++    let (finish, finishing) = oneshot::channel();
++    with_native_hook_factory(factory.clone(), async {
++        runtime.schedule_async_task(async move {
++            started.send(()).expect("started");
++            finishing.await.expect("finish");
++        });
++    })
++    .await;
++    assert_eq!(factory.scheduled_count.load(Ordering::SeqCst), 1);
++    let drain = with_native_hook_factory(factory.clone(), drain_native_hook_tasks());
++    tokio::pin!(drain);
++    assert!(
++        tokio::time::timeout(std::time::Duration::from_millis(20), &mut drain)
++            .await
++            .is_err()
++    );
++    drop(held);
++    received.await.expect("queued task starts");
++    assert!(
++        tokio::time::timeout(std::time::Duration::from_millis(20), &mut drain)
++            .await
++            .is_err()
++    );
++    finish.send(()).expect("finish");
++    tokio::time::timeout(std::time::Duration::from_secs(2), drain)
++        .await
++        .expect("drained")
++        .expect("accounting");
++    assert_eq!(factory.scheduled_count.load(Ordering::SeqCst), 0);
++    runtime.shutdown().await;
++}
++
++#[tokio::test]
++async fn cancelled_queued_original_task_drains_without_session_capacity() {
++    let temp = tempdir().expect("tempdir");
++    let (runtime, _) = fixture(temp.path(), "");
++    let capacity = Arc::clone(&runtime.lock_state().concurrency_limit);
++    let held = capacity
++        .acquire_many_owned(super::MAX_CONCURRENT_ASYNC_HOOKS as u32)
++        .await
++        .expect("hold all session hook capacity");
++    let cancellation = Arc::new(Notify::new());
++    let factory = Arc::new(RecordingFactory {
++        cancellation: Some(cancellation.clone()),
++        ..Default::default()
++    });
++    let (started, received) = oneshot::channel();
++    with_native_hook_factory(factory.clone(), async {
++        runtime.schedule_async_task(async move {
++            let _ = started.send(());
++        });
++    })
++    .await;
++    assert_eq!(factory.scheduled_count.load(Ordering::SeqCst), 1);
++    cancellation.notify_one();
++    tokio::time::timeout(
++        std::time::Duration::from_secs(2),
++        with_native_hook_factory(factory.clone(), drain_native_hook_tasks()),
++    )
++    .await
++    .expect("cancelled queue must drain")
++    .expect("accounting");
++    assert!(received.await.is_err());
++    assert_eq!(factory.scheduled_count.load(Ordering::SeqCst), 0);
++    drop(held);
++    runtime.shutdown().await;
++}
+diff --git a/codex-rs/hooks/src/legacy_notify.rs b/codex-rs/hooks/src/legacy_notify.rs
+index 5be7d7b..e93a76a 100644
+--- a/codex-rs/hooks/src/legacy_notify.rs
++++ b/codex-rs/hooks/src/legacy_notify.rs
+@@ -63,10 +63,11 @@ pub(crate) fn notify_hook(argv: Vec<String>, environment: Arc<Vec<(OsString, OsS
+                     .stdout(Stdio::null())
+                     .stderr(Stdio::null());
+ 
+-                match command.spawn() {
+-                    Ok(_) => HookResult::Success,
+-                    Err(err) => HookResult::FailedContinue(err.into()),
+-                }
++                // Legacy notify has no native run identity and does not await termination.
++                // It cannot be assigned a fabricated operation or report completion.
++                HookResult::FailedContinue(
++                    std::io::Error::other("NATIVE_LEGACY_NOTIFY_UNSUPPORTED").into(),
++                )
+             })
+         }),
+     }
+diff --git a/codex-rs/hooks/src/lib.rs b/codex-rs/hooks/src/lib.rs
+index 6abc173..a23640e 100644
+--- a/codex-rs/hooks/src/lib.rs
++++ b/codex-rs/hooks/src/lib.rs
+@@ -4,6 +4,7 @@ mod engine;
+ pub(crate) mod events;
+ mod legacy_notify;
+ mod mcp;
++mod native_dispatch;
+ mod output_spill;
+ mod registry;
+ mod schema;
+@@ -79,6 +80,12 @@ pub use events::user_prompt_submit::UserPromptSubmitRequest;
+ pub use legacy_notify::legacy_notify_json;
+ pub use mcp::HookMcpCall;
+ pub use mcp::HookMcpExecutor;
++pub use native_dispatch::NativeHookAttempt;
++pub use native_dispatch::NativeHookFactory;
++pub use native_dispatch::NativeHookResult;
++pub use native_dispatch::NativeHookTask;
++pub use native_dispatch::drain_native_hook_tasks;
++pub use native_dispatch::with_native_hook_factory;
+ pub use registry::HookListOutcome;
+ pub use registry::Hooks;
+ pub use registry::HooksConfig;
+diff --git a/codex-rs/hooks/src/native_dispatch.rs b/codex-rs/hooks/src/native_dispatch.rs
+new file mode 100644
+index 0000000..2f7c754
+--- /dev/null
++++ b/codex-rs/hooks/src/native_dispatch.rs
+@@ -0,0 +1,112 @@
++//! In-process native hook ownership. No hook input or wire contract is extended.
++use std::future::Future;
++use std::io;
++use std::sync::Arc;
++
++use futures::future::BoxFuture;
++
++use crate::HookMcpCall;
++use crate::HookMcpExecutor;
++
++/// Core captures the original task identity and cancellation token before scheduling hooks.
++/// Implementations must obtain a fresh permit at each command or MCP transport dispatch.
++pub trait NativeHookFactory: Send + Sync {
++    /// Reserve original-task activity before spawning; dropping the guard releases it.
++    fn scheduled(&self) -> io::Result<Box<dyn NativeHookTask>>;
++    /// Wait until all scheduled work for the original task has finished.
++    fn drain(&self) -> BoxFuture<'_, io::Result<()>>;
++    /// Observe the original task's cancellation while waiting for session capacity.
++    fn cancelled(&self) -> BoxFuture<'_, ()>;
++
++    fn begin_command(
++        &self,
++        run_id: String,
++        event_name: &'static str,
++    ) -> BoxFuture<'_, io::Result<Arc<dyn NativeHookAttempt>>>;
++
++    fn execute_mcp<'a>(
++        &'a self,
++        run_id: String,
++        event_name: &'static str,
++        executor: &'a dyn HookMcpExecutor,
++        call: HookMcpCall,
++    ) -> BoxFuture<'a, anyhow::Result<String>>;
++}
++
++/// A scheduling reservation owned by the original native task. Implementations release
++/// their activity count in Drop; the guard must outlive queued and executing hook work.
++pub trait NativeHookTask: Send {}
++
++/// Receipts describe process lifecycle only; command input and output never enter facts.
++pub trait NativeHookAttempt: Send + Sync {
++    fn check_dispatch(&self) -> io::Result<()>;
++    fn started(&self) -> BoxFuture<'_, io::Result<()>>;
++    fn cancelled(&self) -> BoxFuture<'_, ()>;
++    fn finish(&self, result: NativeHookResult) -> BoxFuture<'_, io::Result<()>>;
++}
++
++#[derive(Clone, Copy)]
++pub enum NativeHookResult {
++    Completed,
++    Failed,
++    Unknown,
++}
++
++tokio::task_local! { static FACTORY: Arc<dyn NativeHookFactory>; }
++
++pub async fn with_native_hook_factory<T>(
++    factory: Arc<dyn NativeHookFactory>,
++    work: impl Future<Output = T>,
++) -> T {
++    FACTORY.scope(factory, work).await
++}
++
++pub async fn drain_native_hook_tasks() -> io::Result<()> {
++    current()?.drain().await
++}
++
++pub(crate) fn current() -> io::Result<Arc<dyn NativeHookFactory>> {
++    FACTORY
++        .try_with(Arc::clone)
++        .map_err(|_| io::Error::other("NATIVE_HOOK_EXECUTION_CONTEXT_UNAVAILABLE"))
++}
++
++pub(crate) struct CommandAttempt {
++    pub attempt: Arc<dyn NativeHookAttempt>,
++    pub dispatched: bool,
++    finished: bool,
++}
++
++impl CommandAttempt {
++    pub async fn begin(run_id: String, event_name: &'static str) -> io::Result<Self> {
++        Ok(Self {
++            attempt: current()?.begin_command(run_id, event_name).await?,
++            dispatched: false,
++            finished: false,
++        })
++    }
++
++    pub async fn finish(&mut self, result: NativeHookResult) -> io::Result<()> {
++        self.attempt.finish(result).await?;
++        self.finished = true;
++        Ok(())
++    }
++}
++
++impl Drop for CommandAttempt {
++    fn drop(&mut self) {
++        if !self.finished
++            && let Ok(runtime) = tokio::runtime::Handle::try_current()
++        {
++            let attempt = Arc::clone(&self.attempt);
++            let result = if self.dispatched {
++                NativeHookResult::Unknown
++            } else {
++                NativeHookResult::Failed
++            };
++            runtime.spawn(async move {
++                let _ = attempt.finish(result).await;
++            });
++        }
++    }
++}
+diff --git a/codex-rs/rmcp-client/src/http_client_adapter.rs b/codex-rs/rmcp-client/src/http_client_adapter.rs
+index 0371341..3f7b21d 100644
+--- a/codex-rs/rmcp-client/src/http_client_adapter.rs
++++ b/codex-rs/rmcp-client/src/http_client_adapter.rs
+@@ -142,11 +142,18 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
+     async fn post_message(
+         &self,
+         uri: Arc<str>,
+-        message: ClientJsonRpcMessage,
++        mut message: ClientJsonRpcMessage,
+         session_id: Option<Arc<str>>,
+         auth_token: Option<String>,
+         custom_headers: HashMap<HeaderName, HeaderValue>,
+     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
++        let native_dispatch =
++            crate::native_dispatch::Dispatch::from_message(&mut message, /*strip_tag*/ true)
++                .map_err(|_| {
++                    StreamableHttpError::UnexpectedServerResponse(
++                        "NATIVE_OPERATION_BARRIER_UNAVAILABLE".into(),
++                    )
++                })?;
+         let (mcp_method, mcp_request_id) = client_jsonrpc_message_fields(&message);
+         let has_session_id = session_id.is_some();
+         let mut headers = self.default_headers.clone();
+@@ -243,6 +250,12 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
+             request_id: "buffered-request".to_string(),
+             stream_response: true,
+         });
++        let request = async {
++            match &native_dispatch {
++                Some(dispatch) => dispatch.scope_http(request).await,
++                None => request.await,
++            }
++        };
+         let response = if is_event_stream_request {
+             tokio::time::timeout(EVENT_STREAM_RESPONSE_TIMEOUT, request)
+                 .await
+@@ -257,6 +270,16 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
+         let (response, mut body_stream) = match response {
+             Ok(response) => response,
+             Err(error) => {
++                if let Some(dispatch) = &native_dispatch {
++                    dispatch
++                        .finish(crate::native_dispatch::NativeMcpResult::Unknown)
++                        .await
++                        .map_err(|_| {
++                            StreamableHttpError::UnexpectedServerResponse(
++                                "NATIVE_OPERATION_BARRIER_UNAVAILABLE".into(),
++                            )
++                        })?;
++                }
+                 log_post_message_http_error(
+                     &uri,
+                     mcp_method.as_deref(),
+@@ -270,6 +293,18 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
+             }
+         };
+ 
++        if !status_is_success(response.status)
++            && let Some(dispatch) = &native_dispatch
++        {
++            dispatch
++                .finish(crate::native_dispatch::NativeMcpResult::Failed)
++                .await
++                .map_err(|_| {
++                    StreamableHttpError::UnexpectedServerResponse(
++                        "NATIVE_OPERATION_BARRIER_UNAVAILABLE".into(),
++                    )
++                })?;
++        }
+         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
+             return Err(StreamableHttpError::Client(
+                 StreamableHttpClientAdapterError::SessionExpired404,
+diff --git a/codex-rs/rmcp-client/src/http_client_redirect.rs b/codex-rs/rmcp-client/src/http_client_redirect.rs
+index 5d8cfee..e1df6ea 100644
+--- a/codex-rs/rmcp-client/src/http_client_redirect.rs
++++ b/codex-rs/rmcp-client/src/http_client_redirect.rs
+@@ -67,12 +67,36 @@ impl SameOriginRedirectHttpClient {
+                 );
+             }
+ 
++            let native_dispatch = crate::native_dispatch::current_http_dispatch();
++            if let Some(dispatch) = &native_dispatch {
++                dispatch.begin().await.map_err(|_| {
++                    ExecServerError::HttpRequest("NATIVE_OPERATION_BARRIER_UNAVAILABLE".to_owned())
++                })?;
++            }
+             let result = if params.stream_response {
+-                let (response, stream) = self.inner.http_request_stream(params.clone()).await?;
+-                RedirectResponse::Streaming(response, stream)
++                self.inner
++                    .http_request_stream(params.clone())
++                    .await
++                    .map(|(response, stream)| RedirectResponse::Streaming(response, stream))
+             } else {
+-                RedirectResponse::Buffered(self.inner.http_request(params.clone()).await?)
++                self.inner
++                    .http_request(params.clone())
++                    .await
++                    .map(RedirectResponse::Buffered)
+             };
++            if let Some(dispatch) = &native_dispatch {
++                if result.is_ok() {
++                    dispatch.started().await
++                } else {
++                    dispatch
++                        .finish(crate::native_dispatch::NativeMcpResult::Unknown)
++                        .await
++                }
++                .map_err(|_| {
++                    ExecServerError::HttpRequest("NATIVE_OPERATION_BARRIER_UNAVAILABLE".to_owned())
++                })?;
++            }
++            let result = result?;
+             let response = match &result {
+                 RedirectResponse::Buffered(response) | RedirectResponse::Streaming(response, _) => {
+                     response
+@@ -126,6 +150,16 @@ impl SameOriginRedirectHttpClient {
+                 ));
+             }
+ 
++            if let Some(dispatch) = native_dispatch {
++                dispatch
++                    .finish(crate::native_dispatch::NativeMcpResult::Failed)
++                    .await
++                    .map_err(|_| {
++                        ExecServerError::HttpRequest(
++                            "NATIVE_OPERATION_BARRIER_UNAVAILABLE".to_owned(),
++                        )
++                    })?;
++            }
+             // Preserve normal HTTP behavior: 307/308 retain the method and body;
+             // 303 and legacy 301/302 POST redirects switch to a bodyless GET.
+             let drop_body = matches!(
+diff --git a/codex-rs/rmcp-client/src/lib.rs b/codex-rs/rmcp-client/src/lib.rs
+index 4c41f08..56bbd87 100644
+--- a/codex-rs/rmcp-client/src/lib.rs
++++ b/codex-rs/rmcp-client/src/lib.rs
+@@ -1,3 +1,8 @@
++mod native_dispatch;
++pub use native_dispatch::NativeMcpAttempt;
++pub use native_dispatch::NativeMcpFactory;
++pub use native_dispatch::NativeMcpResult;
++pub use native_dispatch::with_native_mcp_factory;
+ mod auth_status;
+ mod bounded_stdio_transport;
+ mod elicitation_client_service;
+diff --git a/codex-rs/rmcp-client/src/native_dispatch.rs b/codex-rs/rmcp-client/src/native_dispatch.rs
+new file mode 100644
+index 0000000..a0b0ad3
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_dispatch.rs
+@@ -0,0 +1,402 @@
++//! Private correlation through existing rmcp transports; no new MCP wire method.
++use rmcp::model::ClientRequest;
++use rmcp::model::JsonRpcMessage;
++use rmcp::model::RequestId;
++use rmcp::model::ServerResult;
++use rmcp::service::RoleClient;
++use rmcp::service::RxJsonRpcMessage;
++use rmcp::service::TxJsonRpcMessage;
++use rmcp::transport::IntoTransport;
++use rmcp::transport::Transport;
++use std::collections::HashMap;
++use std::future::Future;
++use std::io;
++use std::pin::Pin;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++use std::sync::atomic::AtomicBool;
++use std::sync::atomic::Ordering;
++
++const TAG: &str = "_agentInfraNativeDispatch";
++type Callback<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
++
++/// Core supplies immutable native identity. Transports request a fresh attempt
++/// for each actual write/HTTP dispatch, including existing SDK retries.
++pub trait NativeMcpFactory: Send + Sync {
++    fn begin(&self) -> Callback<'_, Arc<dyn NativeMcpAttempt>>;
++}
++/// Persistence callbacks contain no arguments, transport bytes, or credentials.
++pub trait NativeMcpAttempt: Send + Sync {
++    fn check_dispatch(&self) -> io::Result<()>;
++    fn started(&self) -> Callback<'_, ()>;
++    fn finish(&self, result: NativeMcpResult) -> Callback<'_, ()>;
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum NativeMcpResult {
++    Completed,
++    Failed,
++    UnconfirmedResponse,
++    Unknown,
++    CancelledBeforeDispatch,
++}
++
++tokio::task_local! { static FACTORY: Arc<dyn NativeMcpFactory>; }
++pub async fn with_native_mcp_factory<T>(
++    factory: Arc<dyn NativeMcpFactory>,
++    work: impl Future<Output = T>,
++) -> T {
++    FACTORY.scope(factory, work).await
++}
++
++struct Call {
++    factory: Arc<dyn NativeMcpFactory>,
++    active: AtomicBool,
++    attempts: Mutex<HashMap<RequestId, Arc<dyn NativeMcpAttempt>>>,
++}
++fn calls() -> &'static Mutex<HashMap<String, Arc<Call>>> {
++    static CALLS: OnceLock<Mutex<HashMap<String, Arc<Call>>>> = OnceLock::new();
++    CALLS.get_or_init(Mutex::default)
++}
++fn unavailable() -> io::Error {
++    io::Error::other("NATIVE_OPERATION_BARRIER_UNAVAILABLE")
++}
++
++pub(crate) struct Registration {
++    token: String,
++    call: Arc<Call>,
++}
++impl Registration {
++    pub(crate) fn bind(meta: &mut Option<rmcp::model::RequestMetaObject>) -> io::Result<Self> {
++        let factory = FACTORY.try_with(Arc::clone).map_err(|_| unavailable())?;
++        static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++        let token = NEXT_TOKEN
++            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
++                value.checked_add(1)
++            })
++            .map_err(|_| unavailable())?
++            .to_string();
++        let call = Arc::new(Call {
++            factory,
++            active: AtomicBool::new(true),
++            attempts: Mutex::default(),
++        });
++        let mut calls = calls().lock().map_err(|_| unavailable())?;
++        if calls.len() >= 1024 {
++            return Err(unavailable());
++        }
++        let meta = meta.get_or_insert_with(Default::default);
++        if meta.contains_key(TAG) {
++            return Err(unavailable());
++        }
++        meta.insert(TAG.to_owned(), serde_json::Value::String(token.clone()));
++        calls.insert(token.clone(), Arc::clone(&call));
++        Ok(Self { token, call })
++    }
++    pub(crate) async fn finish_pending(&self) -> io::Result<()> {
++        let attempts = self
++            .call
++            .attempts
++            .lock()
++            .map_err(|_| unavailable())?
++            .iter()
++            .map(|(id, attempt)| (id.clone(), Arc::clone(attempt)))
++            .collect::<Vec<_>>();
++        let mut result = Ok(());
++        for (id, attempt) in attempts {
++            if let Err(error) = attempt.finish(NativeMcpResult::Unknown).await {
++                result = Err(error);
++            } else {
++                self.call
++                    .attempts
++                    .lock()
++                    .map_err(|_| unavailable())?
++                    .remove(&id);
++            }
++        }
++        result
++    }
++}
++impl Drop for Registration {
++    fn drop(&mut self) {
++        self.call.active.store(false, Ordering::Release);
++        if let Ok(mut calls) = calls().lock() {
++            calls.remove(&self.token);
++        }
++        let attempts = self
++            .call
++            .attempts
++            .lock()
++            .map(|mut a| a.drain().map(|(_, a)| a).collect::<Vec<_>>())
++            .unwrap_or_default();
++        if !attempts.is_empty()
++            && let Ok(runtime) = tokio::runtime::Handle::try_current()
++        {
++            // Drain facts after a cancelled caller; never retry the business action.
++            runtime.spawn(async move {
++                for attempt in attempts {
++                    let _ = attempt.finish(NativeMcpResult::Unknown).await;
++                }
++            });
++        }
++    }
++}
++
++#[derive(Clone)]
++pub(crate) struct Dispatch {
++    call: Arc<Call>,
++    id: RequestId,
++}
++impl Dispatch {
++    pub(crate) fn from_message(
++        message: &mut TxJsonRpcMessage<RoleClient>,
++        strip_tag: bool,
++    ) -> io::Result<Option<Self>> {
++        let JsonRpcMessage::Request(envelope) = message else {
++            return Ok(None);
++        };
++        let ClientRequest::CallToolRequest(request) = &mut envelope.request else {
++            return Ok(None);
++        };
++        let meta = request.params.meta.as_mut().ok_or_else(unavailable)?;
++        let token = meta
++            .get(TAG)
++            .and_then(serde_json::Value::as_str)
++            .ok_or_else(unavailable)?
++            .to_owned();
++        let call = calls()
++            .lock()
++            .map_err(|_| unavailable())?
++            .get(&token)
++            .cloned()
++            .ok_or_else(unavailable)?;
++        if strip_tag {
++            meta.remove(TAG);
++            if let Some(meta) = request
++                .extensions
++                .get_mut::<rmcp::model::RequestMetaObject>()
++            {
++                meta.remove(TAG);
++            }
++        }
++        Ok(Some(Self {
++            call,
++            id: envelope.id.clone(),
++        }))
++    }
++    pub(crate) async fn begin(&self) -> io::Result<()> {
++        if !self.call.active.load(Ordering::Acquire) {
++            return Err(unavailable());
++        }
++        // A retry cannot overwrite an unconfirmed earlier side effect.
++        if self
++            .call
++            .attempts
++            .lock()
++            .map_err(|_| unavailable())?
++            .contains_key(&self.id)
++        {
++            return Err(unavailable());
++        }
++        let attempt = self.call.factory.begin().await?;
++        if !self.call.active.load(Ordering::Acquire) {
++            attempt
++                .finish(NativeMcpResult::CancelledBeforeDispatch)
++                .await?;
++            return Err(unavailable());
++        }
++        if attempt.check_dispatch().is_err() {
++            attempt
++                .finish(NativeMcpResult::CancelledBeforeDispatch)
++                .await?;
++            return Err(unavailable());
++        }
++        self.call
++            .attempts
++            .lock()
++            .map_err(|_| unavailable())?
++            .insert(self.id.clone(), attempt);
++        Ok(())
++    }
++    pub(crate) async fn started(&self) -> io::Result<()> {
++        let attempt = self
++            .call
++            .attempts
++            .lock()
++            .map_err(|_| unavailable())?
++            .get(&self.id)
++            .cloned()
++            .ok_or_else(unavailable)?;
++        attempt.started().await
++    }
++    pub(crate) async fn finish(&self, result: NativeMcpResult) -> io::Result<()> {
++        let attempt = self
++            .call
++            .attempts
++            .lock()
++            .map_err(|_| unavailable())?
++            .get(&self.id)
++            .cloned();
++        if let Some(attempt) = attempt {
++            attempt.finish(result).await?;
++            self.call
++                .attempts
++                .lock()
++                .map_err(|_| unavailable())?
++                .remove(&self.id);
++        }
++        Ok(())
++    }
++}
++
++tokio::task_local! { static HTTP_DISPATCH: Dispatch; }
++pub(crate) fn current_http_dispatch() -> Option<Dispatch> {
++    HTTP_DISPATCH.try_with(Clone::clone).ok()
++}
++impl Dispatch {
++    pub(crate) async fn scope_http<T>(&self, work: impl Future<Output = T>) -> T {
++        HTTP_DISPATCH.scope(self.clone(), work).await
++    }
++}
++
++/// Wraps the existing transport; HTTP waits for its adapter's actual HTTP receipt.
++pub(crate) fn transport<T, E, A>(
++    inner: T,
++    http: bool,
++) -> impl Transport<RoleClient, Error = io::Error> + 'static
++where
++    T: IntoTransport<RoleClient, E, A>,
++    E: std::error::Error + Send + Sync + 'static,
++{
++    NativeTransport {
++        inner: inner.into_transport(),
++        http,
++        routes: Arc::new(Mutex::new(HashMap::new())),
++        pending_message: None,
++    }
++}
++struct NativeTransport<T> {
++    inner: T,
++    http: bool,
++    routes: Arc<Mutex<HashMap<RequestId, Dispatch>>>,
++    pending_message: Option<RxJsonRpcMessage<RoleClient>>,
++}
++impl<T> NativeTransport<T> {
++    async fn finish_routes(&mut self) -> io::Result<()> {
++        let routes = self
++            .routes
++            .lock()
++            .map_err(|_| unavailable())?
++            .values()
++            .cloned()
++            .collect::<Vec<_>>();
++        let mut result = Ok(());
++        for dispatch in routes {
++            if let Err(error) = dispatch.finish(NativeMcpResult::Unknown).await {
++                result = Err(error);
++            } else {
++                self.routes
++                    .lock()
++                    .map_err(|_| unavailable())?
++                    .remove(&dispatch.id);
++            }
++        }
++        result
++    }
++}
++impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for NativeTransport<T> {
++    type Error = io::Error;
++    fn send(
++        &mut self,
++        mut message: TxJsonRpcMessage<RoleClient>,
++    ) -> impl Future<Output = io::Result<()>> + Send + 'static {
++        let dispatch = Dispatch::from_message(&mut message, !self.http).and_then(|dispatch| {
++            if let Some(dispatch) = &dispatch {
++                let mut routes = self.routes.lock().map_err(|_| unavailable())?;
++                routes.retain(|_, route| route.call.active.load(Ordering::Acquire));
++                if routes.len() >= 1024 || routes.contains_key(&dispatch.id) {
++                    return Err(unavailable());
++                }
++                routes.insert(dispatch.id.clone(), dispatch.clone());
++            }
++            Ok(dispatch)
++        });
++        let http = self.http;
++        // Even eager transport setup must not observe an invalid or duplicate call.
++        let send = dispatch.as_ref().ok().map(|_| self.inner.send(message));
++        let routes = Arc::clone(&self.routes);
++        async move {
++            let dispatch = dispatch?;
++            let result = async {
++                if !http && let Some(dispatch) = &dispatch {
++                    dispatch.begin().await?;
++                }
++                send.ok_or_else(unavailable)?
++                    .await
++                    .map_err(io::Error::other)?;
++                if !http && let Some(dispatch) = &dispatch {
++                    dispatch.started().await?;
++                }
++                Ok(())
++            }
++            .await;
++            if result.is_err()
++                && let Some(dispatch) = dispatch
++            {
++                routes
++                    .lock()
++                    .map_err(|_| unavailable())?
++                    .remove(&dispatch.id);
++                dispatch.finish(NativeMcpResult::Unknown).await?;
++            }
++            result
++        }
++    }
++    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
++        if self.pending_message.is_none() {
++            self.pending_message = self.inner.receive().await;
++        }
++        let Some(message) = self.pending_message.as_ref() else {
++            let _ = self.finish_routes().await;
++            return None;
++        };
++        let (id, result) = match message {
++            JsonRpcMessage::Response(response) => (
++                Some(&response.id),
++                match &response.result {
++                    ServerResult::CallToolResult(result) if result.is_error.unwrap_or(false) => {
++                        NativeMcpResult::Failed
++                    }
++                    ServerResult::CallToolResult(_) => NativeMcpResult::Completed,
++                    // MRTR input_required, task acknowledgements and unrelated
++                    // result shapes do not establish tools/call completion.
++                    _ => NativeMcpResult::UnconfirmedResponse,
++                },
++            ),
++            JsonRpcMessage::Error(error) => (error.id.as_ref(), NativeMcpResult::Failed),
++            _ => (None, NativeMcpResult::Unknown),
++        };
++        let dispatch = match id {
++            Some(id) => self.routes.lock().ok()?.get(id).cloned(),
++            None => None,
++        };
++        if let Some(dispatch) = dispatch {
++            if dispatch.finish(result).await.is_err() {
++                return None;
++            }
++            self.routes.lock().ok()?.remove(&dispatch.id);
++        }
++        // rmcp polls receive inside select!: cancellation while saving a fact
++        // must preserve both this consumed response and its route for the next poll.
++        self.pending_message.take()
++    }
++    async fn close(&mut self) -> io::Result<()> {
++        let close = self.inner.close().await.map_err(io::Error::other);
++        self.finish_routes().await?;
++        close
++    }
++}
++
++#[cfg(test)]
++#[path = "native_dispatch_tests.rs"]
++mod tests;
+diff --git a/codex-rs/rmcp-client/src/native_dispatch_tests.rs b/codex-rs/rmcp-client/src/native_dispatch_tests.rs
+new file mode 100644
+index 0000000..34aa9a2
+--- /dev/null
++++ b/codex-rs/rmcp-client/src/native_dispatch_tests.rs
+@@ -0,0 +1,311 @@
++use super::*;
++use pretty_assertions::assert_eq;
++use rmcp::transport::async_rw::AsyncRwTransport;
++use tokio::io::AsyncBufReadExt;
++use tokio::io::AsyncReadExt;
++use tokio::io::AsyncWriteExt;
++use tokio::io::BufReader;
++
++#[derive(Debug, PartialEq, Eq)]
++enum Fact {
++    Intent,
++    Started,
++    Outcome(NativeMcpResult),
++}
++
++struct Recorder {
++    allow: bool,
++    facts: Arc<Mutex<Vec<Fact>>>,
++    finish_gate: Option<Arc<tokio::sync::Semaphore>>,
++}
++
++impl NativeMcpFactory for Recorder {
++    fn begin(&self) -> Callback<'_, Arc<dyn NativeMcpAttempt>> {
++        Box::pin(async {
++            self.facts.lock().unwrap().push(Fact::Intent);
++            Ok(Arc::new(Self {
++                allow: self.allow,
++                facts: Arc::clone(&self.facts),
++                finish_gate: self.finish_gate.clone(),
++            }) as Arc<dyn NativeMcpAttempt>)
++        })
++    }
++}
++
++impl NativeMcpAttempt for Recorder {
++    fn check_dispatch(&self) -> io::Result<()> {
++        if self.allow {
++            Ok(())
++        } else {
++            Err(unavailable())
++        }
++    }
++
++    fn started(&self) -> Callback<'_, ()> {
++        Box::pin(async {
++            self.facts.lock().unwrap().push(Fact::Started);
++            Ok(())
++        })
++    }
++
++    fn finish(&self, result: NativeMcpResult) -> Callback<'_, ()> {
++        Box::pin(async move {
++            if let Some(gate) = &self.finish_gate {
++                gate.acquire().await.map_err(|_| unavailable())?.forget();
++            }
++            self.facts.lock().unwrap().push(Fact::Outcome(result));
++            Ok(())
++        })
++    }
++}
++
++fn request(id: i64) -> TxJsonRpcMessage<RoleClient> {
++    serde_json::from_value(serde_json::json!({
++        "jsonrpc": "2.0", "id": id, "method": "tools/call",
++        "params": { "name": "test", "arguments": {} }
++    }))
++    .unwrap()
++}
++
++fn bind(message: &mut TxJsonRpcMessage<RoleClient>) -> Registration {
++    let JsonRpcMessage::Request(envelope) = message else {
++        panic!("expected request")
++    };
++    let ClientRequest::CallToolRequest(request) = &mut envelope.request else {
++        panic!("expected tools/call")
++    };
++    Registration::bind(&mut request.params.meta).unwrap()
++}
++
++#[tokio::test]
++async fn stdio_waits_for_permit_and_strips_private_correlation_from_wire() {
++    let facts = Arc::new(Mutex::new(Vec::new()));
++    let factory = Arc::new(Recorder {
++        allow: true,
++        facts: Arc::clone(&facts),
++        finish_gate: None,
++    });
++    with_native_mcp_factory(factory, async {
++        let mut message = request(1);
++        let _registration = bind(&mut message);
++        let (client, peer) = tokio::io::duplex(4096);
++        let (read, write) = tokio::io::split(client);
++        let mut transport = transport(
++            AsyncRwTransport::new_client(read, write),
++            /*http*/ false,
++        );
++        let mut peer = BufReader::new(peer);
++        transport.send(message).await.unwrap();
++        let mut line = String::new();
++        peer.read_line(&mut line).await.unwrap();
++        assert!(!line.contains(TAG));
++        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
++        assert_eq!(value["method"], "tools/call");
++        assert_eq!(*facts.lock().unwrap(), vec![Fact::Intent, Fact::Started]);
++        peer.get_mut()
++            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}\n")
++            .await
++            .unwrap();
++        assert!(transport.receive().await.is_some());
++        assert_eq!(
++            *facts.lock().unwrap(),
++            vec![
++                Fact::Intent,
++                Fact::Started,
++                Fact::Outcome(NativeMcpResult::Completed)
++            ]
++        );
++    })
++    .await;
++}
++
++#[tokio::test]
++async fn denied_stdio_request_writes_no_bytes() {
++    let facts = Arc::new(Mutex::new(Vec::new()));
++    let factory = Arc::new(Recorder {
++        allow: false,
++        facts: Arc::clone(&facts),
++        finish_gate: None,
++    });
++    with_native_mcp_factory(factory, async {
++        let mut message = request(1);
++        let _registration = bind(&mut message);
++        let (client, mut peer) = tokio::io::duplex(4096);
++        let (read, write) = tokio::io::split(client);
++        let mut transport = transport(
++            AsyncRwTransport::new_client(read, write),
++            /*http*/ false,
++        );
++        assert!(transport.send(message).await.is_err());
++        transport.close().await.unwrap();
++        drop(transport);
++        let mut bytes = Vec::new();
++        peer.read_to_end(&mut bytes).await.unwrap();
++        assert!(bytes.is_empty());
++        assert_eq!(
++            *facts.lock().unwrap(),
++            vec![
++                Fact::Intent,
++                Fact::Outcome(NativeMcpResult::CancelledBeforeDispatch)
++            ]
++        );
++    })
++    .await;
++}
++
++#[tokio::test]
++async fn send_failure_removes_route_and_records_unconfirmed_outcome() {
++    let facts = Arc::new(Mutex::new(Vec::new()));
++    let factory = Arc::new(Recorder {
++        allow: true,
++        facts: Arc::clone(&facts),
++        finish_gate: None,
++    });
++    with_native_mcp_factory(factory, async {
++        let mut message = request(1);
++        let _registration = bind(&mut message);
++        let (client, peer) = tokio::io::duplex(4096);
++        drop(peer);
++        let (read, write) = tokio::io::split(client);
++        let mut transport = NativeTransport {
++            inner: AsyncRwTransport::new_client(read, write),
++            http: false,
++            routes: Arc::new(Mutex::new(HashMap::new())),
++            pending_message: None,
++        };
++        assert!(transport.send(message).await.is_err());
++        assert!(transport.routes.lock().unwrap().is_empty());
++        assert_eq!(
++            *facts.lock().unwrap(),
++            vec![Fact::Intent, Fact::Outcome(NativeMcpResult::Unknown)]
++        );
++    })
++    .await;
++}
++
++#[tokio::test]
++async fn duplicate_request_cannot_replace_route_and_eof_drains_original() {
++    let facts = Arc::new(Mutex::new(Vec::new()));
++    let factory = Arc::new(Recorder {
++        allow: true,
++        facts: Arc::clone(&facts),
++        finish_gate: None,
++    });
++    with_native_mcp_factory(factory, async {
++        let mut message = request(1);
++        let _registration = bind(&mut message);
++        let duplicate = message.clone();
++        let (client, peer) = tokio::io::duplex(4096);
++        let (read, write) = tokio::io::split(client);
++        let mut transport = NativeTransport {
++            inner: AsyncRwTransport::new_client(read, write),
++            http: false,
++            routes: Arc::new(Mutex::new(HashMap::new())),
++            pending_message: None,
++        };
++        transport.send(message).await.unwrap();
++        assert!(transport.send(duplicate).await.is_err());
++        assert_eq!(transport.routes.lock().unwrap().len(), 1);
++        drop(peer);
++        assert!(transport.receive().await.is_none());
++        assert!(transport.routes.lock().unwrap().is_empty());
++        assert_eq!(
++            *facts.lock().unwrap(),
++            vec![
++                Fact::Intent,
++                Fact::Started,
++                Fact::Outcome(NativeMcpResult::Unknown)
++            ]
++        );
++    })
++    .await;
++}
++
++#[tokio::test]
++async fn input_required_and_unrelated_responses_never_claim_tool_completion() {
++    for result in [
++        serde_json::json!({"resultType":"input_required","requestState":"next"}),
++        serde_json::json!({}),
++    ] {
++        let facts = Arc::new(Mutex::new(Vec::new()));
++        let factory = Arc::new(Recorder {
++            allow: true,
++            facts: Arc::clone(&facts),
++            finish_gate: None,
++        });
++        with_native_mcp_factory(factory, async {
++            let mut message = request(1);
++            let _registration = bind(&mut message);
++            let (client, mut peer) = tokio::io::duplex(4096);
++            let (read, write) = tokio::io::split(client);
++            let mut transport = transport(
++                AsyncRwTransport::new_client(read, write),
++                /*http*/ false,
++            );
++            transport.send(message).await.unwrap();
++            let mut response =
++                serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","id":1,"result":result}))
++                    .unwrap();
++            response.push(b'\n');
++            peer.write_all(&response).await.unwrap();
++            assert!(transport.receive().await.is_some());
++            assert_eq!(
++                *facts.lock().unwrap(),
++                vec![
++                    Fact::Intent,
++                    Fact::Started,
++                    Fact::Outcome(NativeMcpResult::UnconfirmedResponse)
++                ]
++            );
++        })
++        .await;
++    }
++}
++
++#[tokio::test]
++async fn cancelled_receive_preserves_consumed_response_until_fact_is_saved() {
++    let facts = Arc::new(Mutex::new(Vec::new()));
++    let gate = Arc::new(tokio::sync::Semaphore::new(0));
++    let factory = Arc::new(Recorder {
++        allow: true,
++        facts: Arc::clone(&facts),
++        finish_gate: Some(Arc::clone(&gate)),
++    });
++    with_native_mcp_factory(factory, async {
++        let mut message = request(1);
++        let _registration = bind(&mut message);
++        let (client, mut peer) = tokio::io::duplex(4096);
++        let (read, write) = tokio::io::split(client);
++        let mut transport = NativeTransport {
++            inner: AsyncRwTransport::new_client(read, write),
++            http: false,
++            routes: Arc::new(Mutex::new(HashMap::new())),
++            pending_message: None,
++        };
++        transport.send(message).await.unwrap();
++        peer.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}\n")
++            .await
++            .unwrap();
++        assert!(
++            tokio::time::timeout(std::time::Duration::from_millis(20), transport.receive())
++                .await
++                .is_err()
++        );
++        assert!(transport.pending_message.is_some());
++        assert_eq!(transport.routes.lock().unwrap().len(), 1);
++        assert_eq!(*facts.lock().unwrap(), vec![Fact::Intent, Fact::Started]);
++        gate.add_permits(1);
++        assert!(transport.receive().await.is_some());
++        assert!(transport.pending_message.is_none());
++        assert!(transport.routes.lock().unwrap().is_empty());
++        assert_eq!(
++            *facts.lock().unwrap(),
++            vec![
++                Fact::Intent,
++                Fact::Started,
++                Fact::Outcome(NativeMcpResult::Completed)
++            ]
++        );
++    })
++    .await;
++}
+diff --git a/codex-rs/rmcp-client/src/rmcp_client.rs b/codex-rs/rmcp-client/src/rmcp_client.rs
+index b549a06..51f8076 100644
+--- a/codex-rs/rmcp-client/src/rmcp_client.rs
++++ b/codex-rs/rmcp-client/src/rmcp_client.rs
+@@ -792,7 +792,7 @@ impl RmcpClient {
+             }
+             None => None,
+         };
+-        let meta = match meta {
++        let mut meta = match meta {
+             Some(Value::Object(map)) => Some(RequestMetaObject::from(map)),
+             Some(other) => {
+                 return Err(anyhow!(
+@@ -801,7 +801,9 @@ impl RmcpClient {
+             }
+             None => None,
+         };
++        let native_registration = crate::native_dispatch::Registration::bind(&mut meta)?;
+         let mut rmcp_params = CallToolRequestParams::new(name);
++        rmcp_params.meta = meta.clone();
+         rmcp_params.arguments = arguments;
+         let requested_modern = self.protocol_mode == McpProtocolMode::V20260728;
+         let result = self
+@@ -837,7 +839,9 @@ impl RmcpClient {
+                 }
+                 .boxed()
+             })
+-            .await?;
++            .await;
++        native_registration.finish_pending().await?;
++        let result = result?;
+         self.persist_oauth_tokens().await;
+         Ok(result)
+     }
+@@ -1201,19 +1205,31 @@ impl RmcpClient {
+         let (transport, oauth_persistor) = match pending_transport {
+             PendingTransport::InProcess { transport } => (
+                 client_service
+-                    .serve_with_lifecycle(transport, lifecycle)
++                    .serve_with_lifecycle(
++                        crate::native_dispatch::transport(transport, /*http*/ false),
++                        lifecycle,
++                    )
+                     .boxed(),
+                 None,
+             ),
+             PendingTransport::Stdio { transport } => (
+                 client_service
+-                    .serve_with_lifecycle(*transport, lifecycle)
++                    .serve_with_lifecycle(
++                        crate::native_dispatch::transport(*transport, /*http*/ false),
++                        lifecycle,
++                    )
+                     .boxed(),
+                 None,
+             ),
+             PendingTransport::StreamableHttp { transport } => (
+                 client_service
+-                    .serve_with_lifecycle(capture_event_notifications(transport), lifecycle)
++                    .serve_with_lifecycle(
++                        crate::native_dispatch::transport(
++                            capture_event_notifications(transport),
++                            /*http*/ true,
++                        ),
++                        lifecycle,
++                    )
+                     .boxed(),
+                 None,
+             ),
+@@ -1222,13 +1238,19 @@ impl RmcpClient {
+                 oauth_persistor,
+             } => (
+                 client_service
+-                    .serve_with_lifecycle(transport, lifecycle)
++                    .serve_with_lifecycle(
++                        crate::native_dispatch::transport(transport, /*http*/ true),
++                        lifecycle,
++                    )
+                     .boxed(),
+                 Some(oauth_persistor),
+             ),
+             PendingTransport::StreamableHttpWithAccessTokenOnly { transport } => (
+                 client_service
+-                    .serve_with_lifecycle(transport, lifecycle)
++                    .serve_with_lifecycle(
++                        crate::native_dispatch::transport(transport, /*http*/ true),
++                        lifecycle,
++                    )
+                     .boxed(),
+                 None,
+             ),
+@@ -1402,6 +1424,9 @@ impl RmcpClient {
+ 
+         error
+             .error
++            .downcast_ref::<std::io::Error>()
++            .and_then(std::io::Error::get_ref)
++            .unwrap_or(error.error.as_ref())
+             .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+             .is_some_and(Self::is_retryable_streamable_http_error)
+     }
+@@ -1415,6 +1440,9 @@ impl RmcpClient {
+ 
+         error
+             .error
++            .downcast_ref::<std::io::Error>()
++            .and_then(std::io::Error::get_ref)
++            .unwrap_or(error.error.as_ref())
+             .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+             .is_some_and(|error| {
+                 matches!(
+diff --git a/codex-rs/utils/pty/src/lib.rs b/codex-rs/utils/pty/src/lib.rs
+index 1200c11..b2c75df 100644
+--- a/codex-rs/utils/pty/src/lib.rs
++++ b/codex-rs/utils/pty/src/lib.rs
+@@ -17,6 +17,7 @@ pub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;
+ pub use pipe::spawn_process as spawn_pipe_process;
+ /// Spawn a non-interactive process using regular pipes, but close stdin immediately.
+ pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
++pub use process::ConfirmedWriteResult;
+ /// Driver-backed process adapter used by integrations with their own process transport.
+ pub use process::ProcessDriver;
+ /// Handle for interacting with a spawned process (PTY or pipe).
+diff --git a/codex-rs/utils/pty/src/process.rs b/codex-rs/utils/pty/src/process.rs
+index 5593450..ac0c145 100644
+--- a/codex-rs/utils/pty/src/process.rs
++++ b/codex-rs/utils/pty/src/process.rs
+@@ -107,8 +107,22 @@ impl fmt::Debug for PtyHandles {
+ /// there is no local `PtyHandles` instance to resize directly.
+ type ResizeFn = Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send>;
+ 
++/// Receipt from the actual local PTY write loop, not channel enqueue.
++#[derive(Debug)]
++pub struct ConfirmedWriteResult {
++    pub started_at: Option<std::time::SystemTime>,
++    pub completed: bool,
++}
++
++pub(crate) struct ConfirmedWriteRequest {
++    pub bytes: Vec<u8>,
++    pub allow_dispatch: Box<dyn Fn() -> bool + Send + Sync>,
++    pub receipt: oneshot::Sender<ConfirmedWriteResult>,
++}
++
+ /// Handle for driving an interactive process (PTY or pipe).
+ pub struct ProcessHandle {
++    confirmed_writer: Option<mpsc::Sender<ConfirmedWriteRequest>>,
+     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
+     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
+     reader_handle: StdMutex<Option<JoinHandle<()>>>,
+@@ -146,6 +160,7 @@ impl ProcessHandle {
+         resizer: Option<ResizeFn>,
+     ) -> Self {
+         Self {
++            confirmed_writer: None,
+             writer_tx: StdMutex::new(Some(writer_tx)),
+             killer: StdMutex::new(Some(killer)),
+             reader_handle: StdMutex::new(Some(reader_handle)),
+@@ -159,6 +174,37 @@ impl ProcessHandle {
+         }
+     }
+ 
++    pub(crate) fn with_confirmed_writer(
++        mut self,
++        sender: mpsc::Sender<ConfirmedWriteRequest>,
++    ) -> Self {
++        self.confirmed_writer = Some(sender);
++        self
++    }
++
++    pub async fn write_confirmed(
++        &self,
++        bytes: Vec<u8>,
++        allow_dispatch: Box<dyn Fn() -> bool + Send + Sync>,
++    ) -> io::Result<ConfirmedWriteResult> {
++        let sender = self
++            .confirmed_writer
++            .as_ref()
++            .ok_or_else(|| io::Error::other("confirmed PTY write unavailable"))?;
++        let (receipt, result) = oneshot::channel();
++        sender
++            .send(ConfirmedWriteRequest {
++                bytes,
++                allow_dispatch,
++                receipt,
++            })
++            .await
++            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
++        result
++            .await
++            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
++    }
++
+     /// Returns a channel sender for writing raw bytes to the child stdin.
+     pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+         if let Ok(writer_tx) = self.writer_tx.lock()
+diff --git a/codex-rs/utils/pty/src/pty.rs b/codex-rs/utils/pty/src/pty.rs
+index 1b848b3..cff0769 100644
+--- a/codex-rs/utils/pty/src/pty.rs
++++ b/codex-rs/utils/pty/src/pty.rs
+@@ -189,7 +189,7 @@ async fn spawn_process_portable(
+     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
+     let (_stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(1);
+     #[cfg(unix)]
+-    let (reader_handle, writer_handle) = io.spawn(
++    let (reader_handle, writer_handle, confirmed_tx) = io.spawn(
+         stdout_tx,
+         writer_rx,
+         crate::unix_io::StdinCloseBehavior::SendEof,
+@@ -279,6 +279,9 @@ async fn spawn_process_portable(
+         /*resizer*/ None,
+     );
+ 
++    #[cfg(unix)]
++    let handle = handle.with_confirmed_writer(confirmed_tx);
++
+     Ok(SpawnedProcess {
+         session: handle,
+         stdout_rx,

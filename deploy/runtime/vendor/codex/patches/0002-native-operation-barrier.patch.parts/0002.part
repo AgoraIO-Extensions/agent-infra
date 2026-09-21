@@ -1,0 +1,1788 @@
+@@ -0,0 +1,216 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++#[cfg(unix)]
++#[tokio::test]
++async fn cancelling_an_exchange_poison_closes_the_partially_consumed_channel() {
++    use tokio::io::AsyncBufReadExt;
++
++    let (client, peer) = tokio::net::UnixStream::pair().unwrap();
++    let transport = Arc::new(Transport {
++        stream: Mutex::new(BufReader::new(client)),
++        poisoned: AtomicBool::new(false),
++    });
++    let running_transport = Arc::clone(&transport);
++    let request = request();
++    let task = tokio::spawn(async move {
++        running_transport
++            .exchange(&request, Response::validate)
++            .await
++    });
++    let mut peer = BufReader::new(peer);
++    let mut frame = Vec::new();
++    peer.read_until(b'\n', &mut frame).await.unwrap();
++    assert!(!frame.is_empty());
++    task.abort();
++    assert!(task.await.unwrap_err().is_cancelled());
++    assert!(transport.poisoned.load(Ordering::Acquire));
++    assert!(CHANNEL_POISONED.load(Ordering::Acquire));
++    assert!(
++        transport
++            .exchange(&super::tests::request(), Response::validate)
++            .await
++            .is_err()
++    );
++}
++
++fn request() -> Request {
++    Request {
++        schema_version: 1,
++        request_id: Uuid::new_v4(),
++        phase: Phase::Intent,
++        identity: Identity {
++            session_id: "session".into(),
++            turn_id: "turn".into(),
++            call_id: "call".into(),
++            attempt_ref: Uuid::new_v4(),
++            tool_name: "exec_command".into(),
++            parent_attempt_ref: None,
++        },
++        occurred_at: 1,
++        permit_id: None,
++        outcome: None,
++        reason: None,
++    }
++}
++
++#[test]
++fn a_permit_is_bound_to_the_full_attempt_and_deadline() {
++    let request = request();
++    let mut response = Response {
++        schema_version: 1,
++        request_id: request.request_id,
++        phase: Phase::Intent,
++        identity: request.identity.clone(),
++        decision: "permit".into(),
++        permit_id: Some(Uuid::new_v4()),
++        expires_at: Some(5001),
++        reason: None,
++        source_owner: Some(SourceOwner {
++            root_thread_id: "session".into(),
++            root_turn_id: "turn".into(),
++        }),
++    };
++    assert!(response.validate(&request, 1).is_ok());
++    response.identity.attempt_ref = Uuid::new_v4();
++    assert!(response.validate(&request, 1).is_err());
++    response.identity = request.identity.clone();
++    response.expires_at = Some(1);
++    assert!(response.validate(&request, 1).is_err());
++    response.expires_at = Some(5002);
++    assert!(response.validate(&request, 1).is_err());
++}
++
++#[test]
++fn a_started_ack_cannot_authorize_an_intent() {
++    let request = request();
++    let response = Response {
++        schema_version: 1,
++        request_id: request.request_id,
++        phase: Phase::Intent,
++        identity: request.identity.clone(),
++        decision: "ack".into(),
++        permit_id: None,
++        expires_at: None,
++        reason: None,
++        source_owner: None,
++    };
++    assert!(response.validate(&request, 1).is_err());
++}
++
++#[test]
++fn wire_rejects_null_noncanonical_uuid_and_extra_response_fields() {
++    let request = request();
++    let base = serde_json::json!({
++        "schemaVersion": 1,
++        "requestId": request.request_id,
++        "phase": "intent",
++        "identity": request.identity,
++        "decision": "permit",
++        "permitId": "00000000-0000-4000-8000-abcdef000001",
++        "expiresAt": 5001,
++    });
++    assert!(serde_json::from_value::<Response>(base.clone()).is_ok());
++    for field in ["reason", "permitId", "expiresAt"] {
++        let mut invalid = base.clone();
++        invalid[field] = serde_json::Value::Null;
++        assert!(serde_json::from_value::<Response>(invalid).is_err());
++    }
++    let mut invalid = base.clone();
++    invalid["permitId"] = serde_json::json!("00000000-0000-4000-8000-ABCDEF000001");
++    assert!(serde_json::from_value::<Response>(invalid).is_err());
++    let mut invalid = base.clone();
++    invalid["identity"]["parentAttemptRef"] = serde_json::Value::Null;
++    assert!(serde_json::from_value::<Response>(invalid).is_err());
++    let mut invalid = base;
++    invalid["ignored"] = serde_json::json!(true);
++    assert!(serde_json::from_value::<Response>(invalid).is_err());
++}
++
++#[test]
++fn callback_identity_rejects_unbounded_and_control_text() {
++    let mut identity = request().identity;
++    assert!(identity.valid());
++    identity.call_id = "x".repeat(257);
++    assert!(!identity.valid());
++    identity.call_id = "bad\nframe".into();
++    assert!(!identity.valid());
++}
++
++fn attempt() -> Attempt {
++    let identity = request().identity;
++    Attempt(Arc::new(AttemptInner {
++        source_owner: SourceOwner {
++            root_thread_id: identity.session_id.clone(),
++            root_turn_id: identity.turn_id.clone(),
++        },
++        identity,
++        permit_id: Uuid::new_v4(),
++        expires_at: now_ms().unwrap() + 5000,
++        cancelled: CancellationToken::new(),
++        state: Mutex::new(AttemptState::default()),
++        started_notification: tokio::sync::Notify::new(),
++    }))
++}
++
++#[tokio::test]
++async fn already_started_spawn_can_submit_after_permit_expiry_but_not_after_cancellation() {
++    let mut attempt = attempt();
++    let inner = Arc::get_mut(&mut attempt.0).unwrap();
++    inner.expires_at = 1;
++    inner.state.get_mut().started = true;
++    assert!(attempt.check_dispatch().is_err());
++    assert!(attempt.check_source_submission().await.is_ok());
++    attempt.0.cancelled.cancel();
++    assert!(attempt.check_source_submission().await.is_err());
++}
++
++#[tokio::test]
++async fn control_rechecks_target_owner_after_waiting_for_the_native_queue() {
++    use std::sync::atomic::AtomicBool;
++    use tokio::sync::Notify;
++
++    let attempt = attempt();
++    let mut target = attempt.identity().clone();
++    target.session_id = Uuid::new_v4().to_string();
++    crate::native_sources::remember_owner(&target, attempt.source_owner()).unwrap();
++    let entered = Arc::new(Notify::new());
++    let release = Arc::new(Notify::new());
++    let dispatched = Arc::new(AtomicBool::new(false));
++    let thread_id = target.session_id.clone();
++    let task_entered = Arc::clone(&entered);
++    let task_release = Arc::clone(&release);
++    let task_dispatched = Arc::clone(&dispatched);
++    let running = tokio::spawn(async move {
++        attempt
++            .scope(crate::native_sources::control_dispatch(
++                &thread_id,
++                async move {
++                    task_entered.notify_one();
++                    task_release.notified().await;
++                    task_dispatched.store(true, Ordering::Release);
++                    Ok::<(), ()>(())
++                },
++            ))
++            .await
++    });
++    entered.notified().await;
++    let source = crate::native_sources::NativeSource {
++        thread_id: target.session_id.clone(),
++        turn_id: target.turn_id.clone(),
++    };
++    crate::native_sources::finished(&source, crate::native_sources::NativeStatus::Completed)
++        .await
++        .unwrap();
++    crate::native_sources::remember_owner(
++        &target,
++        &SourceOwner {
++            root_thread_id: "another-root".into(),
++            root_turn_id: "another-turn".into(),
++        },
++    )
++    .unwrap();
++    release.notify_one();
++    assert_eq!(running.await.unwrap(), Err(BarrierError));
++    assert!(!dispatched.load(Ordering::Acquire));
++}
+diff --git a/codex-rs/core/src/native_sources/control.rs b/codex-rs/core/src/native_sources/control.rs
+new file mode 100644
+index 0000000..ed87015
+--- /dev/null
++++ b/codex-rs/core/src/native_sources/control.rs
+@@ -0,0 +1,77 @@
++//! Original native control attempts and known target ownership checks.
++use super::sources;
++use crate::native_operation_barrier::Attempt;
++use crate::native_operation_barrier::BarrierError;
++use crate::native_operation_barrier::Identity;
++use crate::native_operation_barrier::current;
++use std::future::Future;
++use uuid::Uuid;
++
++pub(crate) async fn run_control<
++    T,
++    F: Future<Output = Result<T, crate::function_tool::FunctionCallError>>,
++>(
++    invocation: crate::tools::context::ToolInvocation,
++    work: impl FnOnce(crate::tools::context::ToolInvocation) -> F,
++) -> Result<T, crate::function_tool::FunctionCallError> {
++    let error = |err: BarrierError| {
++        crate::function_tool::FunctionCallError::RespondToModel(err.to_string())
++    };
++    let attempt = Attempt::begin(
++        Identity {
++            session_id: invocation.session.thread_id.to_string(),
++            turn_id: invocation.turn.sub_id.clone(),
++            call_id: invocation.call_id.clone(),
++            attempt_ref: Uuid::new_v4(),
++            tool_name: crate::tools::flat_tool_name(&invocation.tool_name).into_owned(),
++            parent_attempt_ref: None,
++        },
++        invocation.cancellation_token.clone(),
++    )
++    .await
++    .map_err(error)?;
++    let result = attempt.scope(work(invocation)).await;
++    attempt
++        .finish_runtime(result.is_ok())
++        .await
++        .map_err(error)?;
++    result
++}
++
++/// Existing control dispatches keep their implementation and return value.
++/// Model-issued controls are scoped by run_control; service-owned cleanup has
++/// no synthetic model call identity.
++pub(crate) fn check_control_target(thread_id: &str) -> Result<(), BarrierError> {
++    let Ok(attempt) = current() else {
++        return Ok(());
++    };
++    attempt.check_dispatch()?;
++    let records = sources().lock().map_err(|_| BarrierError)?;
++    if records.iter().any(|(source, record)| {
++        source.thread_id == thread_id && record.owner != *attempt.source_owner()
++    }) {
++        return Err(BarrierError);
++    }
++    Ok(())
++}
++
++pub(crate) async fn control_dispatch<T, E>(
++    thread_id: &str,
++    work: impl Future<Output = Result<T, E>>,
++) -> Result<Result<T, E>, BarrierError> {
++    let attempt = current().ok();
++    tokio::pin!(work);
++    let result = std::future::poll_fn(|context| {
++        if check_control_target(thread_id).is_err() {
++            return std::task::Poll::Ready(Err(BarrierError));
++        }
++        work.as_mut().poll(context).map(Ok)
++    })
++    .await?;
++    if result.is_ok()
++        && let Some(attempt) = attempt
++    {
++        attempt.started().await?;
++    }
++    Ok(result)
++}
+diff --git a/codex-rs/core/src/native_sources/mod.rs b/codex-rs/core/src/native_sources/mod.rs
+new file mode 100644
+index 0000000..4ff1ea6
+--- /dev/null
++++ b/codex-rs/core/src/native_sources/mod.rs
+@@ -0,0 +1,422 @@
++//! Trusted handoff across Core's existing submission queue and task lifecycle.
++//! No input bodies, business queue, public RPC, or inference loop lives here.
++mod control;
++mod wire;
++pub(crate) use control::check_control_target;
++pub(crate) use control::control_dispatch;
++pub(crate) use control::run_control;
++
++use std::collections::HashMap;
++use std::future::Future;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++use std::sync::atomic::AtomicU8;
++use std::sync::atomic::Ordering;
++
++use codex_protocol::turn_input::TurnInputSubmission;
++use tokio::sync::Notify;
++use uuid::Uuid;
++
++use crate::native_operation_barrier::Attempt;
++use crate::native_operation_barrier::BarrierError;
++use crate::native_operation_barrier::Identity;
++use crate::native_operation_barrier::current;
++use wire::Delivery;
++pub(crate) use wire::NativeSource;
++pub(crate) use wire::NativeStatus;
++use wire::Phase;
++use wire::Reason;
++use wire::Request;
++use wire::Reservation;
++pub(crate) use wire::SourceOwner;
++use wire::Stage;
++
++const MAX_SOURCES: usize = 1024;
++const PROVISIONAL: u8 = 0;
++const BOUND: u8 = 1;
++const DENIED: u8 = 2;
++const UNKNOWN: u8 = 3;
++
++struct SourceRecord {
++    owner: SourceOwner,
++    lifecycle: Option<Arc<Lifecycle>>,
++}
++fn sources() -> &'static Mutex<HashMap<NativeSource, SourceRecord>> {
++    static SOURCES: OnceLock<Mutex<HashMap<NativeSource, SourceRecord>>> = OnceLock::new();
++    SOURCES.get_or_init(Mutex::default)
++}
++fn submissions() -> &'static Mutex<HashMap<NativeSource, Arc<Handoff>>> {
++    static SUBMISSIONS: OnceLock<Mutex<HashMap<NativeSource, Arc<Handoff>>>> = OnceLock::new();
++    SUBMISSIONS.get_or_init(Mutex::default)
++}
++
++pub(crate) fn remember_owner(identity: &Identity, owner: &SourceOwner) -> Result<(), BarrierError> {
++    let source = NativeSource {
++        thread_id: identity.session_id.clone(),
++        turn_id: identity.turn_id.clone(),
++    };
++    let mut records = sources().lock().map_err(|_| BarrierError)?;
++    if let Some(existing) = records.get(&source) {
++        return if existing.owner == *owner {
++            Ok(())
++        } else {
++            Err(BarrierError)
++        };
++    }
++    if records.len() >= MAX_SOURCES {
++        return Err(BarrierError);
++    }
++    records.insert(
++        source,
++        SourceRecord {
++            owner: owner.clone(),
++            lifecycle: None,
++        },
++    );
++    Ok(())
++}
++
++pub(crate) fn may_run_actions(
++    thread_id: &str,
++    turn: &crate::session::turn_context::TurnContext,
++) -> bool {
++    let Ok(records) = sources().lock() else {
++        return false;
++    };
++    let source = NativeSource {
++        thread_id: thread_id.into(),
++        turn_id: turn.sub_id.clone(),
++    };
++    if let Some(lifecycle) = records
++        .get(&source)
++        .and_then(|record| record.lifecycle.as_ref())
++    {
++        return lifecycle.state.load(Ordering::Acquire) == BOUND;
++    }
++    !matches!(
++        &turn.session_source,
++        codex_protocol::protocol::SessionSource::SubAgent(_)
++    )
++}
++
++tokio::task_local! { static TARGET: String; static ROUTING: Arc<Handoff>; }
++pub(crate) async fn with_target<T>(target: String, work: impl Future<Output = T>) -> T {
++    TARGET.scope(target, work).await
++}
++
++pub(crate) struct Handoff {
++    parent: Attempt,
++    reservation: Reservation,
++    delivery_result: OnceLock<Result<(), BarrierError>>,
++    delivery_ready: Notify,
++}
++
++impl Handoff {
++    pub(crate) async fn reserve(submission_id: &str) -> Result<Option<Arc<Self>>, BarrierError> {
++        let target = TARGET.try_with(Clone::clone).ok();
++        let parent = current().ok();
++        let (target, parent) = match (target, parent) {
++            (None, None) => return Ok(None),
++            (Some(target), Some(parent)) => (target, parent),
++            _ => return Err(BarrierError),
++        };
++        parent.check_source_submission().await?;
++        let handoff = Arc::new(Self {
++            reservation: Reservation {
++                reservation_id: Uuid::new_v4(),
++                parent: parent.identity().clone(),
++                parent_permit_id: parent.permit_id(),
++                child_thread_id: target,
++                submission_id: submission_id.to_owned(),
++            },
++            parent,
++            delivery_result: OnceLock::new(),
++            delivery_ready: Notify::new(),
++        });
++        let key = handoff.target();
++        {
++            let mut pending = submissions().lock().map_err(|_| BarrierError)?;
++            if pending.len() >= MAX_SOURCES || pending.contains_key(&key) {
++                return Err(BarrierError);
++            }
++            pending.insert(key.clone(), Arc::clone(&handoff));
++        }
++        let response = Request::new(Phase::SourceReserve, &handoff.reservation)?
++            .exchange(handoff.parent.source_owner())
++            .await;
++        if !matches!(response, Ok(true)) {
++            submissions().lock().map_err(|_| BarrierError)?.remove(&key);
++            return Err(BarrierError);
++        }
++        Ok(Some(handoff))
++    }
++
++    fn target(&self) -> NativeSource {
++        NativeSource {
++            thread_id: self.reservation.child_thread_id.clone(),
++            turn_id: self.reservation.submission_id.clone(),
++        }
++    }
++
++    pub(crate) async fn before_queue(&self) -> Result<(), BarrierError> {
++        self.parent.check_source_submission().await
++    }
++
++    pub(crate) async fn queued(&self) -> Result<(), BarrierError> {
++        self.parent.started().await
++    }
++
++    pub(crate) async fn queue_rejected(&self, cancelled: bool) -> Result<(), BarrierError> {
++        let reason = if cancelled {
++            Reason::CancelledBeforeStart
++        } else {
++            Reason::QueueClosed
++        };
++        let result = self.not_started(Stage::NotQueued, reason, None).await;
++        submissions()
++            .lock()
++            .map_err(|_| BarrierError)?
++            .remove(&self.target());
++        result
++    }
++
++    async fn not_started(
++        &self,
++        stage: Stage,
++        reason: Reason,
++        source: Option<NativeSource>,
++    ) -> Result<(), BarrierError> {
++        let mut request = Request::new(Phase::SourceNotStarted, &self.reservation)?;
++        request.stage = Some(stage);
++        request.reason = Some(reason);
++        request.source = source;
++        if request.exchange(self.parent.source_owner()).await? {
++            Ok(())
++        } else {
++            Err(BarrierError)
++        }
++    }
++
++    pub(crate) async fn await_routing_receipt(&self) -> Result<(), BarrierError> {
++        let notified = self.delivery_ready.notified();
++        tokio::pin!(notified);
++        notified.as_mut().enable();
++        if self.delivery_result.get().is_none() {
++            tokio::time::timeout(std::time::Duration::from_secs(5), notified)
++                .await
++                .map_err(|_| BarrierError)?;
++        }
++        self.delivery_result
++            .get()
++            .copied()
++            .unwrap_or(Err(BarrierError))
++    }
++}
++
++/// Runs only the existing routing future; fact persistence is drained outside the
++/// submission consumer so stdio stop remains independently serviceable.
++pub(crate) async fn route(
++    source: NativeSource,
++    work: impl Future<Output = codex_protocol::error::Result<TurnInputSubmission>>,
++) -> codex_protocol::error::Result<TurnInputSubmission> {
++    let handoff = submissions()
++        .lock()
++        .map_err(|_| codex_protocol::error::CodexErr::InvalidRequest(BarrierError.to_string()))?
++        .get(&source)
++        .cloned();
++    let Some(handoff) = handoff else {
++        return work.await;
++    };
++    let result = ROUTING.scope(Arc::clone(&handoff), work).await;
++    if let Ok(mut pending) = submissions().lock() {
++        pending.remove(&source);
++    }
++    let steered = match &result {
++        Ok(TurnInputSubmission::Steered { turn_id }) => Some(turn_id.clone()),
++        _ => None,
++    };
++    if !matches!(result, Ok(TurnInputSubmission::Started { .. })) {
++        tokio::spawn(async move {
++            let saved = async {
++                if let Some(turn_id) = steered {
++                    handoff.parent.await_started_receipt().await?;
++                    let mut request = Request::new(Phase::SourceBind, &handoff.reservation)?;
++                    request.source = Some(NativeSource {
++                        thread_id: handoff.reservation.child_thread_id.clone(),
++                        turn_id,
++                    });
++                    request.delivery = Some(Delivery::Steered);
++                    if !request.exchange(handoff.parent.source_owner()).await? {
++                        return Err(BarrierError);
++                    }
++                    Ok(())
++                } else {
++                    handoff
++                        .not_started(Stage::NotRouted, Reason::RoutingRejected, None)
++                        .await
++                }
++            }
++            .await;
++            let _ = handoff.delivery_result.set(saved);
++            handoff.delivery_ready.notify_waiters();
++        });
++    }
++    result
++}
++
++/// Must be called while the original active_turn lock still identifies the
++/// destination, immediately before its real pending-input append. Never awaits.
++pub(crate) fn check_steer(source: &NativeSource) -> Result<(), BarrierError> {
++    let Ok(handoff) = ROUTING.try_with(Arc::clone) else {
++        return Ok(());
++    };
++    handoff.parent.check_dispatch()?;
++    let records = sources().lock().map_err(|_| BarrierError)?;
++    let target = records.get(source).ok_or(BarrierError)?;
++    if target.owner != *handoff.parent.source_owner() {
++        return Err(BarrierError);
++    }
++    if target
++        .lifecycle
++        .as_ref()
++        .is_some_and(|lifecycle| lifecycle.state.load(Ordering::Acquire) != BOUND)
++    {
++        return Err(BarrierError);
++    }
++    Ok(())
++}
++
++pub(crate) struct Lifecycle {
++    source: NativeSource,
++    handoff: Arc<Handoff>,
++    state: AtomicU8,
++    terminal: tokio::sync::Mutex<Option<(Request, bool)>>,
++}
++
++impl Lifecycle {
++    pub(crate) fn install(
++        source: NativeSource,
++        child: bool,
++    ) -> Result<Option<Arc<Self>>, BarrierError> {
++        let Ok(handoff) = ROUTING.try_with(Arc::clone) else {
++            return if child { Err(BarrierError) } else { Ok(None) };
++        };
++        if handoff.target() != source {
++            return Err(BarrierError);
++        }
++        let mut records = sources().lock().map_err(|_| BarrierError)?;
++        if records.len() >= MAX_SOURCES || records.contains_key(&source) {
++            return Err(BarrierError);
++        }
++        let owner_conflict = records.iter().any(|(existing, record)| {
++            existing.thread_id == source.thread_id && record.owner != *handoff.parent.source_owner()
++        });
++        let lifecycle = Arc::new(Self {
++            source: source.clone(),
++            handoff,
++            state: AtomicU8::new(PROVISIONAL),
++            terminal: tokio::sync::Mutex::new(None),
++        });
++        if owner_conflict {
++            lifecycle.state.store(DENIED, Ordering::Release);
++        }
++        records.insert(
++            source,
++            SourceRecord {
++                owner: lifecycle.handoff.parent.source_owner().clone(),
++                lifecycle: Some(Arc::clone(&lifecycle)),
++            },
++        );
++        Ok(Some(lifecycle))
++    }
++
++    pub(crate) async fn gate(&self) -> Result<(), BarrierError> {
++        let result = async {
++            if self.state.load(Ordering::Acquire) == DENIED {
++                return Err(BarrierError);
++            }
++            self.state.store(UNKNOWN, Ordering::Release);
++            self.handoff.parent.await_started_receipt().await?;
++            let mut request = Request::new(Phase::SourceBind, &self.handoff.reservation)?;
++            request.source = Some(self.source.clone());
++            request.delivery = Some(Delivery::Started);
++            if request.exchange(self.handoff.parent.source_owner()).await? {
++                self.state.store(BOUND, Ordering::Release);
++                Ok(())
++            } else {
++                self.state.store(DENIED, Ordering::Release);
++                Err(BarrierError)
++            }
++        }
++        .await;
++        let _ = self.handoff.delivery_result.set(result);
++        self.handoff.delivery_ready.notify_waiters();
++        result
++    }
++
++    #[allow(
++        clippy::await_holding_invalid_type,
++        reason = "The source retains one serialized terminal message through its bounded durable ACK exchange"
++    )]
++    async fn finish(&self, status: NativeStatus) -> Result<(), BarrierError> {
++        let mut terminal = self.terminal.lock().await;
++        if terminal.as_ref().is_some_and(|(_, saved)| *saved) {
++            return Ok(());
++        }
++        if terminal.is_none() {
++            let state = self.state.load(Ordering::Acquire);
++            if state == UNKNOWN && crate::native_operation_barrier::channel_poisoned() {
++                return Err(BarrierError);
++            }
++            let mut request = Request::new(
++                if state == BOUND {
++                    Phase::SourceTerminal
++                } else {
++                    Phase::SourceNotStarted
++                },
++                &self.handoff.reservation,
++            )?;
++            request.source = Some(self.source.clone());
++            if state == BOUND {
++                request.native_status = Some(status);
++            } else {
++                request.stage = Some(Stage::GateRejected);
++                request.reason = Some(if state == DENIED {
++                    Reason::BindingDenied
++                } else {
++                    Reason::CancelledBeforeStart
++                });
++            }
++            *terminal = Some((request, false));
++        }
++        let (request, saved) = terminal.as_mut().ok_or(BarrierError)?;
++        if !request.exchange(self.handoff.parent.source_owner()).await? {
++            return Err(BarrierError);
++        }
++        *saved = true;
++        Ok(())
++    }
++}
++
++/// Call after the original task and all its action-capable finish/abort hooks.
++/// Source completion never synthesizes outcomes for surviving background tools.
++pub(crate) async fn finished(
++    source: &NativeSource,
++    status: NativeStatus,
++) -> Result<(), BarrierError> {
++    let lifecycle = sources()
++        .lock()
++        .map_err(|_| BarrierError)?
++        .get(source)
++        .and_then(|record| record.lifecycle.clone());
++    if let Some(lifecycle) = lifecycle {
++        lifecycle.finish(status).await?;
++    }
++    sources().lock().map_err(|_| BarrierError)?.remove(source);
++    Ok(())
++}
++
++#[cfg(all(test, unix))]
++#[path = "queue_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/native_sources/queue_tests.rs b/codex-rs/core/src/native_sources/queue_tests.rs
+new file mode 100644
+index 0000000..882680e
+--- /dev/null
++++ b/codex-rs/core/src/native_sources/queue_tests.rs
+@@ -0,0 +1,241 @@
++#![allow(
++    clippy::expect_used,
++    reason = "An isolated test child must fail with the specific queue or wire assertion"
++)]
++
++use super::*;
++use codex_protocol::protocol::AgentStatus;
++use codex_protocol::protocol::Op;
++use codex_protocol::turn_input::TurnInputMode;
++use codex_protocol::turn_input::TurnInputRequest;
++use futures::FutureExt;
++use pretty_assertions::assert_eq;
++use std::io::BufRead;
++use std::io::Write;
++use std::os::fd::AsRawFd;
++use std::os::unix::process::CommandExt;
++use std::process::Command;
++use std::process::Stdio;
++use tokio_util::sync::CancellationToken;
++
++fn run_isolated_queue_test(name: &str, scenario: &str) {
++    if std::env::var("AGENT_INFRA_NATIVE_QUEUE_TEST").as_deref() == Ok(scenario) {
++        crate::native_operation_barrier::initialize_native_operation_barrier();
++        tokio::runtime::Runtime::new()
++            .expect("create isolated test runtime")
++            .block_on(queue_scenario(scenario));
++        return;
++    }
++    let (child_socket, mut driver) =
++        std::os::unix::net::UnixStream::pair().expect("create private socket pair");
++    driver
++        .set_read_timeout(Some(std::time::Duration::from_secs(15)))
++        .expect("bound driver read");
++    let fd = child_socket.as_raw_fd();
++    let mut command = Command::new(std::env::current_exe().expect("locate isolated test binary"));
++    command
++        .args(["--exact", name, "--nocapture", "--test-threads=1"])
++        .env("AGENT_INFRA_NATIVE_QUEUE_TEST", scenario)
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped());
++    // Only the isolated test child replaces FD3. Production bootstrap still owns
++    // validation/CLOEXEC, and the parent test runner's descriptor is untouched.
++    unsafe {
++        command.pre_exec(move || {
++            if libc::dup2(fd, 3) < 0 || libc::fcntl(3, libc::F_SETFD, 0) < 0 {
++                return Err(std::io::Error::last_os_error());
++            }
++            Ok(())
++        });
++    }
++    let child = command.spawn().expect("spawn isolated native child");
++    drop(child_socket);
++    let mut reader = std::io::BufReader::new(driver.try_clone().expect("clone driver socket"));
++    let owner = serde_json::json!({"rootThreadId":"root", "rootTurnId":"turn"});
++    let permit = Uuid::new_v4();
++    let mut phases = Vec::new();
++    loop {
++        let mut line = String::new();
++        if reader.read_line(&mut line).expect("read native frame") == 0 {
++            break;
++        }
++        let request: serde_json::Value = serde_json::from_str(&line).expect("decode native frame");
++        let phase = request["phase"].as_str().expect("native frame has a phase");
++        let mut response = serde_json::json!({"schemaVersion":1,"requestId":request["requestId"],"phase":phase,"decision":"ack"});
++        if phase.starts_with("source-") {
++            response["request"] = request.clone();
++            if matches!(phase, "source-reserve" | "source-bind") {
++                response["sourceOwner"] = owner.clone();
++            }
++            if phase == "source-bind" {
++                assert!(
++                    phases.iter().any(|phase| phase == "started"),
++                    "child bind preceded durable parent started ACK"
++                );
++            }
++        } else {
++            response["identity"] = request["identity"].clone();
++            if phase == "intent" {
++                response["decision"] = "permit".into();
++                response["permitId"] = serde_json::json!(permit);
++                response["expiresAt"] = serde_json::json!(
++                    crate::native_operation_barrier::now_ms().expect("read valid clock") + 5000
++                );
++                response["sourceOwner"] = owner.clone();
++            }
++        }
++        driver
++            .write_all(
++                serde_json::to_string(&response)
++                    .expect("encode driver receipt")
++                    .as_bytes(),
++            )
++            .expect("write driver receipt");
++        driver
++            .write_all(b"\n")
++            .expect("finish driver receipt frame");
++        phases.push(phase.to_owned());
++    }
++    let output = child
++        .wait_with_output()
++        .expect("join isolated native child");
++    assert!(
++        output.status.success(),
++        "{}\n{}",
++        String::from_utf8_lossy(&output.stdout),
++        String::from_utf8_lossy(&output.stderr)
++    );
++    assert_eq!(
++        &phases[..4],
++        &["intent", "source-reserve", "started", "source-bind"]
++    );
++    assert!(phases.iter().any(|phase| phase == "source-terminal"));
++}
++
++async fn queue_scenario(scenario: &str) {
++    let attempt = Attempt::begin(
++        Identity {
++            session_id: "root".into(),
++            turn_id: "turn".into(),
++            call_id: "send-call".into(),
++            attempt_ref: Uuid::new_v4(),
++            tool_name: "send_input".into(),
++            parent_attempt_ref: None,
++        },
++        CancellationToken::new(),
++    )
++    .await
++    .expect("admit original native attempt");
++    let (sender, receiver) = async_channel::bounded(1);
++    let (_events, event_receiver) = async_channel::unbounded();
++    let io = crate::session::SessionIo {
++        tx_sub: sender,
++        rx_event: event_receiver,
++        agent_status: tokio::sync::watch::channel(AgentStatus::PendingInit).1,
++        session_loop_termination: futures::future::pending().boxed().shared(),
++    };
++    let sender_attempt = attempt.clone();
++    let sender_task = tokio::spawn(async move {
++        sender_attempt
++            .scope(with_target(
++                "child".into(),
++                io.submit_turn_input(
++                    TurnInputRequest::user_input(Vec::new()),
++                    TurnInputMode::StartOrSteer,
++                ),
++            ))
++            .await
++    });
++    let submission = receiver
++        .recv()
++        .await
++        .expect("receive original queued input");
++    let Op::TurnInput { reply, .. } = submission.op else {
++        panic!("unexpected queued input");
++    };
++    let source = NativeSource {
++        thread_id: "child".into(),
++        turn_id: submission.id,
++    };
++    let source_for_task = source.clone();
++    let (gate_sender, gate_receiver) = tokio::sync::oneshot::channel();
++    let (finish_sender, finish_receiver) = tokio::sync::oneshot::channel();
++    let result = route(source.clone(), async {
++        let lifecycle = Lifecycle::install(source_for_task.clone(), true)
++            .expect("install original child lifecycle")
++            .expect("child has a source lifecycle");
++        tokio::spawn(async move {
++            lifecycle.gate().await.expect("admit child source");
++            gate_sender.send(()).expect("publish gate admission");
++            finish_receiver
++                .await
++                .expect("receive original task completion");
++            finished(&source_for_task, NativeStatus::Completed)
++                .await
++                .expect("persist source terminal");
++        });
++        Ok(TurnInputSubmission::Started {
++            turn_id: source.turn_id.clone(),
++        })
++    })
++    .await;
++    gate_receiver.await.expect("wait for gate admission");
++    if scenario == "drop-waiter" {
++        sender_task.abort();
++        assert!(
++            sender_task
++                .await
++                .expect_err("original sender is aborted")
++                .is_cancelled()
++        );
++        drop(reply);
++    } else {
++        reply.send(result).expect("deliver original queue result");
++        assert_eq!(
++            sender_task
++                .await
++                .expect("join original sender")
++                .expect("receive queued child admission"),
++            TurnInputSubmission::Started {
++                turn_id: source.turn_id.clone()
++            }
++        );
++        attempt
++            .finish_runtime(true)
++            .await
++            .expect("persist original sender terminal");
++    }
++    finish_sender
++        .send(())
++        .expect("complete original child task");
++    tokio::time::timeout(std::time::Duration::from_secs(5), async {
++        loop {
++            if !sources()
++                .lock()
++                .expect("read native sources")
++                .contains_key(&source)
++            {
++                break;
++            }
++            tokio::task::yield_now().await;
++        }
++    })
++    .await
++    .expect("source terminal is acknowledged before timeout");
++}
++
++#[test]
++fn native_sender_waits_for_child_gate_after_durable_parent_started() {
++    run_isolated_queue_test(
++        "native_sources::tests::native_sender_waits_for_child_gate_after_durable_parent_started",
++        "ordinary",
++    );
++}
++
++#[test]
++fn native_queued_child_finishes_after_original_sender_is_dropped() {
++    run_isolated_queue_test(
++        "native_sources::tests::native_queued_child_finishes_after_original_sender_is_dropped",
++        "drop-waiter",
++    );
++}
+diff --git a/codex-rs/core/src/native_sources/wire.rs b/codex-rs/core/src/native_sources/wire.rs
+new file mode 100644
+index 0000000..8a84ac8
+--- /dev/null
++++ b/codex-rs/core/src/native_sources/wire.rs
+@@ -0,0 +1,220 @@
++//! Frozen private source messages. These are lifecycle facts, never tool permits.
++use serde::Deserialize;
++use serde::Serialize;
++use uuid::Uuid;
++
++use crate::native_operation_barrier::BarrierError;
++use crate::native_operation_barrier::Identity;
++use crate::native_operation_barrier::canonical_uuid;
++use crate::native_operation_barrier::exchange_validated;
++use crate::native_operation_barrier::now_ms;
++use crate::native_operation_barrier::present;
++
++pub(super) fn valid_id(value: &str) -> bool {
++    !value.is_empty()
++        && value.len() <= 1024
++        && value.chars().count() <= 256
++        && !value.chars().any(char::is_control)
++}
++
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(crate) struct SourceOwner {
++    pub root_thread_id: String,
++    pub root_turn_id: String,
++}
++impl SourceOwner {
++    pub(crate) fn valid(&self) -> bool {
++        valid_id(&self.root_thread_id) && valid_id(&self.root_turn_id)
++    }
++}
++
++#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(crate) struct NativeSource {
++    pub thread_id: String,
++    pub turn_id: String,
++}
++
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Reservation {
++    #[serde(deserialize_with = "canonical_uuid")]
++    pub reservation_id: Uuid,
++    pub parent: Identity,
++    #[serde(deserialize_with = "canonical_uuid")]
++    pub parent_permit_id: Uuid,
++    pub child_thread_id: String,
++    pub submission_id: String,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "kebab-case")]
++#[allow(
++    clippy::enum_variant_names,
++    reason = "Names mirror the frozen source-* protocol phases"
++)]
++pub(super) enum Phase {
++    SourceReserve,
++    SourceBind,
++    SourceNotStarted,
++    SourceTerminal,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(super) enum Delivery {
++    Started,
++    Steered,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(super) enum Stage {
++    NotQueued,
++    NotRouted,
++    GateRejected,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(super) enum Reason {
++    QueueClosed,
++    RoutingRejected,
++    CancelledBeforeStart,
++    BindingDenied,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(crate) enum NativeStatus {
++    Completed,
++    Failed,
++    Cancelled,
++}
++
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(super) struct Request {
++    pub schema_version: u8,
++    #[serde(deserialize_with = "canonical_uuid")]
++    pub request_id: Uuid,
++    pub phase: Phase,
++    pub occurred_at: u64,
++    pub reservation: Reservation,
++    #[serde(
++        default,
++        deserialize_with = "present",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub source: Option<NativeSource>,
++    #[serde(
++        default,
++        deserialize_with = "present",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub delivery: Option<Delivery>,
++    #[serde(
++        default,
++        deserialize_with = "present",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub stage: Option<Stage>,
++    #[serde(
++        default,
++        deserialize_with = "present",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub reason: Option<Reason>,
++    #[serde(
++        default,
++        deserialize_with = "present",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub native_status: Option<NativeStatus>,
++}
++
++impl Request {
++    pub(super) fn new(phase: Phase, reservation: &Reservation) -> Result<Self, BarrierError> {
++        Ok(Self {
++            schema_version: 1,
++            request_id: Uuid::new_v4(),
++            phase,
++            occurred_at: now_ms()?,
++            reservation: reservation.clone(),
++            source: None,
++            delivery: None,
++            stage: None,
++            reason: None,
++            native_status: None,
++        })
++    }
++
++    pub(super) async fn exchange(&self, owner: &SourceOwner) -> Result<bool, BarrierError> {
++        let response: Response = exchange_validated(self, |response: &Response, request, _now| {
++            response.validate(request, owner)
++        })
++        .await?;
++        Ok(response.decision == "ack")
++    }
++}
++
++#[derive(Debug, Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct Response {
++    schema_version: u8,
++    #[serde(deserialize_with = "canonical_uuid")]
++    request_id: Uuid,
++    phase: Phase,
++    request: Request,
++    decision: String,
++    #[serde(default, deserialize_with = "present")]
++    source_owner: Option<SourceOwner>,
++    #[serde(default, deserialize_with = "present")]
++    reason: Option<String>,
++}
++
++impl Response {
++    fn validate(&self, request: &Request, owner: &SourceOwner) -> Result<(), BarrierError> {
++        if self.schema_version != 1
++            || self.request_id != request.request_id
++            || self.phase != request.phase
++            || self.request != *request
++        {
++            return Err(BarrierError);
++        }
++        let valid = match self.decision.as_str() {
++            "ack" => {
++                self.reason.is_none()
++                    && match request.phase {
++                        Phase::SourceReserve | Phase::SourceBind => {
++                            self.source_owner.as_ref() == Some(owner)
++                        }
++                        Phase::SourceNotStarted | Phase::SourceTerminal => {
++                            self.source_owner.is_none()
++                        }
++                    }
++            }
++            "deny" => {
++                self.source_owner.is_none()
++                    && (request.phase == Phase::SourceReserve
++                        || (request.phase == Phase::SourceBind
++                            && request.delivery == Some(Delivery::Started)))
++                    && matches!(
++                        self.reason.as_deref(),
++                        Some(
++                            "authorization_denied"
++                                | "authorization_unavailable"
++                                | "persistence_unavailable"
++                        )
++                    )
++            }
++            _ => false,
++        };
++        if valid { Ok(()) } else { Err(BarrierError) }
++    }
++}
++
++#[cfg(test)]
++#[path = "wire_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/native_sources/wire_tests.rs b/codex-rs/core/src/native_sources/wire_tests.rs
+new file mode 100644
+index 0000000..839da1f
+--- /dev/null
++++ b/codex-rs/core/src/native_sources/wire_tests.rs
+@@ -0,0 +1,166 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++fn owner() -> SourceOwner {
++    SourceOwner {
++        root_thread_id: "root-thread".into(),
++        root_turn_id: "root-turn".into(),
++    }
++}
++
++fn request(phase: Phase) -> Request {
++    let reservation = Reservation {
++        reservation_id: Uuid::new_v4(),
++        parent: Identity {
++            session_id: "parent-thread".into(),
++            turn_id: "parent-turn".into(),
++            call_id: "spawn-call".into(),
++            attempt_ref: Uuid::new_v4(),
++            tool_name: "spawn_agent".into(),
++            parent_attempt_ref: None,
++        },
++        parent_permit_id: Uuid::new_v4(),
++        child_thread_id: "child-thread".into(),
++        submission_id: "actual-submission".into(),
++    };
++    let mut request = Request::new(phase, &reservation).unwrap();
++    if phase != Phase::SourceReserve {
++        request.source = Some(NativeSource {
++            thread_id: "child-thread".into(),
++            turn_id: "actual-submission".into(),
++        });
++    }
++    match phase {
++        Phase::SourceBind => request.delivery = Some(Delivery::Started),
++        Phase::SourceTerminal => request.native_status = Some(NativeStatus::Completed),
++        Phase::SourceNotStarted => {
++            request.stage = Some(Stage::GateRejected);
++            request.reason = Some(Reason::BindingDenied);
++        }
++        Phase::SourceReserve => {}
++    }
++    request
++}
++
++fn response(request: &Request) -> Response {
++    Response {
++        schema_version: 1,
++        request_id: request.request_id,
++        phase: request.phase,
++        request: request.clone(),
++        decision: "ack".into(),
++        reason: None,
++        source_owner: matches!(request.phase, Phase::SourceReserve | Phase::SourceBind).then(owner),
++    }
++}
++
++#[test]
++fn source_reply_cannot_rebind_any_part_of_the_original_delivery() {
++    let request = request(Phase::SourceBind);
++    assert!(response(&request).validate(&request, &owner()).is_ok());
++    let mut mutations = Vec::new();
++    let mut changed = request.clone();
++    changed.reservation.parent.call_id = "different-call".into();
++    mutations.push(changed);
++    let mut changed = request.clone();
++    changed.reservation.parent_permit_id = Uuid::new_v4();
++    mutations.push(changed);
++    let mut changed = request.clone();
++    changed.reservation.submission_id = "different-submission".into();
++    mutations.push(changed);
++    let mut changed = request.clone();
++    changed.source.as_mut().unwrap().turn_id = "different-turn".into();
++    mutations.push(changed);
++    let mut changed = request.clone();
++    changed.delivery = Some(Delivery::Steered);
++    mutations.push(changed);
++    let mut changed = request.clone();
++    changed.occurred_at += 1;
++    mutations.push(changed);
++    for changed in mutations {
++        let mut reply = response(&request);
++        reply.request = changed;
++        assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++    }
++    let mut reply = response(&request);
++    reply.source_owner.as_mut().unwrap().root_turn_id = "different-root".into();
++    assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++}
++
++#[test]
++fn an_already_delivered_steer_cannot_be_retroactively_denied() {
++    let mut request = request(Phase::SourceBind);
++    let mut reply = response(&request);
++    reply.source_owner = None;
++    reply.decision = "deny".into();
++    reply.reason = Some("authorization_denied".into());
++    assert_eq!(reply.validate(&request, &owner()), Ok(()));
++    request.delivery = Some(Delivery::Steered);
++    reply.request = request.clone();
++    assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++    assert_eq!(response(&request).validate(&request, &owner()), Ok(()));
++}
++
++#[test]
++fn terminal_receipts_cannot_grant_authority_or_erase_a_failure() {
++    for phase in [Phase::SourceNotStarted, Phase::SourceTerminal] {
++        let request = request(phase);
++        assert_eq!(response(&request).validate(&request, &owner()), Ok(()));
++        let mut reply = response(&request);
++        reply.source_owner = Some(owner());
++        assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++        let mut reply = response(&request);
++        reply.decision = "deny".into();
++        reply.reason = Some("authorization_denied".into());
++        assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++    }
++    let request = request(Phase::SourceTerminal);
++    let mut reply = response(&request);
++    reply.request.native_status = Some(NativeStatus::Failed);
++    assert_eq!(reply.validate(&request, &owner()), Err(BarrierError));
++}
++
++#[test]
++fn source_wire_rejects_extra_fields_null_and_noncanonical_ids() {
++    let request = request(Phase::SourceBind);
++    let value = serde_json::json!({
++        "schemaVersion": 1, "requestId": request.request_id, "phase": request.phase,
++        "request": request, "decision": "ack", "sourceOwner": owner(),
++    });
++    assert!(serde_json::from_value::<Response>(value.clone()).is_ok());
++    for pointer in [
++        "/sourceOwner",
++        "/request/source",
++        "/request/delivery",
++        "/request/reservation/parent/parentAttemptRef",
++    ] {
++        let mut invalid = value.clone();
++        if pointer.ends_with("parentAttemptRef") {
++            invalid["request"]["reservation"]["parent"]["parentAttemptRef"] =
++                serde_json::Value::Null;
++        } else {
++            *invalid.pointer_mut(pointer).unwrap() = serde_json::Value::Null;
++        }
++        assert!(serde_json::from_value::<Response>(invalid).is_err());
++    }
++    let mut invalid = value.clone();
++    invalid["request"]["reservation"]["reservationId"] =
++        serde_json::json!("00000000-0000-4000-8000-ABCDEF000001");
++    assert!(serde_json::from_value::<Response>(invalid).is_err());
++    for pointer in [
++        "",
++        "/request",
++        "/request/reservation",
++        "/request/source",
++        "/sourceOwner",
++    ] {
++        let mut invalid = value.clone();
++        invalid
++            .pointer_mut(pointer)
++            .unwrap()
++            .as_object_mut()
++            .unwrap()
++            .insert("ignored".into(), true.into());
++        assert!(serde_json::from_value::<Response>(invalid).is_err());
++    }
++}
+diff --git a/codex-rs/core/src/session/handlers.rs b/codex-rs/core/src/session/handlers.rs
+index e4594f7..775bece 100644
+--- a/codex-rs/core/src/session/handlers.rs
++++ b/codex-rs/core/src/session/handlers.rs
+@@ -587,7 +587,14 @@ pub(super) async fn submission_loop(
+                     mode,
+                     reply,
+                 } => {
+-                    let result = turn_input::handle(&sess, *request, mode, sub.id.clone()).await;
++                    let result = crate::native_sources::route(
++                        crate::native_sources::NativeSource {
++                            thread_id: sess.thread_id.to_string(),
++                            turn_id: sub.id.clone(),
++                        },
++                        turn_input::handle(&sess, *request, mode, sub.id.clone()),
++                    )
++                    .await;
+                     let _ = reply.send(result);
+                     false
+                 }
+diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
+index 9130036..eb76073 100644
+--- a/codex-rs/core/src/session/mod.rs
++++ b/codex-rs/core/src/session/mod.rs
+@@ -891,21 +891,55 @@ impl SessionIo {
+         mode: TurnInputMode,
+     ) -> CodexResult<TurnInputSubmission> {
+         let id = new_submission_id();
++        let native_handoff = crate::native_sources::Handoff::reserve(&id)
++            .await
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+         let (reply_tx, reply_rx) = oneshot::channel();
+         let trace = request.trace.take();
+-        self.submit_with_id(Submission {
+-            id,
+-            op: Op::TurnInput {
+-                request: Box::new(request),
+-                mode,
+-                reply: reply_tx,
+-            },
+-            trace,
+-            parent_turn_id: None,
+-            root_turn_id: None,
+-        })
+-        .await?;
+-        reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
++        if let Some(handoff) = &native_handoff
++            && handoff.before_queue().await.is_err()
++        {
++            handoff
++                .queue_rejected(/*cancelled*/ true)
++                .await
++                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++            return Err(CodexErr::TurnAborted);
++        }
++        let submitted = self
++            .submit_with_id(Submission {
++                id,
++                op: Op::TurnInput {
++                    request: Box::new(request),
++                    mode,
++                    reply: reply_tx,
++                },
++                trace,
++                parent_turn_id: None,
++                root_turn_id: None,
++            })
++            .await;
++        if let Some(handoff) = &native_handoff {
++            if submitted.is_err() {
++                handoff
++                    .queue_rejected(/*cancelled*/ false)
++                    .await
++                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++            } else {
++                handoff
++                    .queued()
++                    .await
++                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++            }
++        }
++        submitted?;
++        let result = reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied));
++        if let Some(handoff) = native_handoff {
++            handoff
++                .await_routing_receipt()
++                .await
++                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++        }
++        result
+     }
+ 
+     pub(crate) async fn submit_recover_turn(
+diff --git a/codex-rs/core/src/session/native_source_tests.rs b/codex-rs/core/src/session/native_source_tests.rs
+new file mode 100644
+index 0000000..2fb41d3
+--- /dev/null
++++ b/codex-rs/core/src/session/native_source_tests.rs
+@@ -0,0 +1,196 @@
++use super::*;
++use codex_extension_api::ExtensionFuture;
++use codex_extension_api::ThreadIdleInput;
++use codex_extension_api::ThreadLifecycleContributor;
++use codex_extension_api::TurnAbortInput;
++use codex_extension_api::TurnErrorInput;
++use codex_extension_api::TurnLifecycleContributor;
++use codex_extension_api::TurnStartInput;
++use codex_extension_api::TurnStopInput;
++use codex_protocol::protocol::SubAgentSource;
++
++struct FinishesImmediately;
++impl SessionTask for FinishesImmediately {
++    fn kind(&self) -> TaskKind {
++        TaskKind::Regular
++    }
++    fn span_name(&self) -> &'static str {
++        "session_task.native_terminal_test"
++    }
++    async fn run(
++        self: Arc<Self>,
++        _session: Arc<Session>,
++        _ctx: Arc<TurnContext>,
++        _input: Vec<TurnInput>,
++        _cancellation_token: CancellationToken,
++    ) -> SessionTaskResult {
++        Ok(None)
++    }
++}
++
++struct CleanupGate {
++    entered: tokio::sync::Notify,
++    release: tokio::sync::Notify,
++}
++impl ThreadLifecycleContributor<crate::config::Config> for CleanupGate {
++    fn on_thread_idle<'a>(&'a self, _input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
++        Box::pin(async move {
++            self.entered.notify_one();
++            self.release.notified().await;
++        })
++    }
++}
++impl TurnLifecycleContributor for CleanupGate {
++    fn on_turn_abort<'a>(&'a self, _input: TurnAbortInput<'a>) -> ExtensionFuture<'a, ()> {
++        Box::pin(async move {
++            self.entered.notify_one();
++            self.release.notified().await;
++        })
++    }
++}
++
++#[tokio::test]
++async fn native_root_completion_waits_for_idle_cleanup() {
++    let (mut session, turn, events) = make_session_and_context_with_rx().await;
++    let gate = Arc::new(CleanupGate {
++        entered: tokio::sync::Notify::new(),
++        release: tokio::sync::Notify::new(),
++    });
++    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
++    builder.thread_lifecycle_contributor(gate.clone());
++    Arc::get_mut(&mut session).unwrap().services.extensions = Arc::new(builder.build());
++    session
++        .spawn_task(turn, Vec::new(), FinishesImmediately)
++        .await;
++    timeout(StdDuration::from_secs(5), gate.entered.notified())
++        .await
++        .unwrap();
++    while let Ok(event) = events.try_recv() {
++        assert!(
++            !matches!(
++                event.msg,
++                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
++            ),
++            "terminal event preceded cleanup"
++        );
++    }
++    gate.release.notify_one();
++    timeout(StdDuration::from_secs(5), async {
++        loop {
++            if matches!(events.recv().await.unwrap().msg, EventMsg::TurnComplete(_)) {
++                break;
++            }
++        }
++    })
++    .await
++    .unwrap();
++}
++
++#[tokio::test]
++async fn native_root_abort_waits_for_abort_cleanup() {
++    let (mut session, turn, events) = make_session_and_context_with_rx().await;
++    let gate = Arc::new(CleanupGate {
++        entered: tokio::sync::Notify::new(),
++        release: tokio::sync::Notify::new(),
++    });
++    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
++    builder.turn_lifecycle_contributor(gate.clone());
++    Arc::get_mut(&mut session).unwrap().services.extensions = Arc::new(builder.build());
++    session
++        .spawn_task(
++            turn,
++            Vec::new(),
++            NeverEndingTask {
++                kind: TaskKind::Regular,
++                listen_to_cancellation_token: true,
++            },
++        )
++        .await;
++    let aborting = tokio::spawn(async move {
++        session.abort_all_tasks(TurnAbortReason::Interrupted).await;
++    });
++    timeout(StdDuration::from_secs(5), gate.entered.notified())
++        .await
++        .unwrap();
++    while let Ok(event) = events.try_recv() {
++        assert!(
++            !matches!(
++                event.msg,
++                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
++            ),
++            "terminal event preceded cleanup"
++        );
++    }
++    gate.release.notify_one();
++    aborting.await.unwrap();
++    let terminal = timeout(StdDuration::from_secs(5), events.recv())
++        .await
++        .unwrap()
++        .unwrap();
++    assert!(matches!(terminal.msg, EventMsg::TurnAborted(_)));
++}
++
++struct RejectUnexpectedActions;
++impl TurnLifecycleContributor for RejectUnexpectedActions {
++    fn on_turn_start<'a>(&'a self, _input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
++        Box::pin(async {
++            panic!("unadmitted start hook");
++        })
++    }
++    fn on_turn_stop<'a>(&'a self, _input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
++        Box::pin(async {
++            panic!("unadmitted stop hook");
++        })
++    }
++    fn on_turn_error<'a>(&'a self, _input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
++        Box::pin(async {
++            panic!("unadmitted error hook");
++        })
++    }
++}
++impl SessionTask for RejectUnexpectedActions {
++    fn kind(&self) -> TaskKind {
++        TaskKind::Regular
++    }
++    fn span_name(&self) -> &'static str {
++        "session_task.native_denial_test"
++    }
++    async fn run(
++        self: Arc<Self>,
++        _session: Arc<Session>,
++        _ctx: Arc<TurnContext>,
++        _input: Vec<TurnInput>,
++        _cancellation_token: CancellationToken,
++    ) -> SessionTaskResult {
++        panic!("child ran without trusted source handoff");
++    }
++}
++
++#[tokio::test]
++async fn native_child_without_handoff_cannot_run_task_or_lifecycle_actions() {
++    let (mut session, mut turn, events) = make_session_and_context_with_rx().await;
++    Arc::get_mut(&mut turn).unwrap().session_source =
++        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++            parent_thread_id: ThreadId::new(),
++            depth: 1,
++            agent_path: None,
++            agent_nickname: None,
++            agent_role: None,
++        });
++    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
++    builder.turn_lifecycle_contributor(Arc::new(RejectUnexpectedActions));
++    Arc::get_mut(&mut session).unwrap().services.extensions = Arc::new(builder.build());
++    session
++        .spawn_task(turn, Vec::new(), RejectUnexpectedActions)
++        .await;
++    timeout(StdDuration::from_secs(5), async {
++        loop {
++            if let EventMsg::TurnComplete(event) = events.recv().await.unwrap().msg {
++                assert!(event.error.is_some());
++                break;
++            }
++        }
++    })
++    .await
++    .unwrap();
++}
+diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
+index b5931b3..b6e82f6 100644
+--- a/codex-rs/core/src/session/tests.rs
++++ b/codex-rs/core/src/session/tests.rs
+@@ -11069,6 +11069,9 @@ async fn recv_terminal_event(
+     .expect("terminal event should be delivered")
+ }
+ 
++#[path = "native_source_tests.rs"]
++mod native_source_tests;
++
+ #[derive(Clone, Copy)]
+ struct NeverEndingTask {
+     kind: TaskKind,
+diff --git a/codex-rs/core/src/session/turn_input.rs b/codex-rs/core/src/session/turn_input.rs
+index 2882931..f840f26 100644
+--- a/codex-rs/core/src/session/turn_input.rs
++++ b/codex-rs/core/src/session/turn_input.rs
+@@ -566,6 +566,11 @@ impl Session {
+             return Err(NotSubmittedReason::NoActiveTurn);
+         };
+         let active_turn_id = &active_task.turn_context.sub_id;
++        crate::native_sources::check_steer(&crate::native_sources::NativeSource {
++            thread_id: self.thread_id.to_string(),
++            turn_id: active_turn_id.clone(),
++        })
++        .map_err(|_| NotSubmittedReason::NotIdle)?;
+ 
+         if let Some(expected_turn_id) = expected_turn_id
+             && expected_turn_id != active_turn_id
+@@ -636,6 +641,11 @@ impl Session {
+                 .turn_metadata_state
+                 .set_root_turn_id(incoming_root_turn_id);
+         }
++        crate::native_sources::check_steer(&crate::native_sources::NativeSource {
++            thread_id: self.thread_id.to_string(),
++            turn_id: active_turn_id.clone(),
++        })
++        .map_err(|_| NotSubmittedReason::NotIdle)?;
+         self.input_queue
+             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                 active_turn.turn_state.as_ref(),
+diff --git a/codex-rs/core/src/tasks/mod.rs b/codex-rs/core/src/tasks/mod.rs
+index 5bf4101..cb37e0f 100644
+--- a/codex-rs/core/src/tasks/mod.rs
++++ b/codex-rs/core/src/tasks/mod.rs
+@@ -325,8 +325,21 @@ impl Session {
+         self.input_queue
+             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
+             .await;
+-        self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
+-            .await;
++        let native_lifecycle = crate::native_sources::Lifecycle::install(
++            crate::native_sources::NativeSource {
++                thread_id: self.thread_id.to_string(),
++                turn_id: turn_context.sub_id.clone(),
++            },
++            matches!(
++                &turn_context.session_source,
++                codex_protocol::protocol::SessionSource::SubAgent(_)
++            ),
++        );
++        let root_lifecycle_started = matches!(native_lifecycle, Ok(None));
++        if root_lifecycle_started {
++            self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
++                .await;
++        }
+ 
+         let mut active = self.active_turn.lock().await;
+         let turn = active.get_or_insert_with(ActiveTurn::default);
+@@ -360,9 +373,24 @@ impl Session {
+             codex.turn.token_usage.total_tokens = field::Empty,
+         );
+         let handle = tokio::spawn(
+-            async move {
++            crate::hook_runtime::with_native_hook_context(
++                self.thread_id.to_string(), ctx.sub_id.clone(), task_cancellation_token.clone(),
++                async move {
+                 let ctx_for_finish = Arc::clone(&ctx);
+-                let task_result = task_for_run
++                let gate = async {
++                    if let Some(lifecycle) = native_lifecycle? { lifecycle.gate().await?; }
++                    Ok::<(), crate::native_operation_barrier::BarrierError>(())
++                };
++                let admitted = tokio::select! {
++                    biased;
++                    _ = task_cancellation_token.cancelled() => Err(crate::native_operation_barrier::BarrierError),
++                    result = gate => result,
++                };
++                let task_result = if admitted.is_ok() {
++                    if !root_lifecycle_started {
++                        session.emit_turn_start_lifecycle(ctx.as_ref(), &token_usage_at_turn_start).await;
++                    }
++                    task_for_run
+                     .run(
+                         Arc::clone(&session),
+                         ctx,
+@@ -370,7 +398,12 @@ impl Session {
+                         task_cancellation_token.child_token(),
+                     )
+                     .instrument(trace_span!("session_task.run"))
+-                    .await;
++                    .await
++                } else {
++                    Err(codex_protocol::error::CodexErr::InvalidRequest(
++                        crate::native_operation_barrier::BarrierError.to_string(),
++                    ))
++                };
+                 let sess = Arc::clone(&session);
+                 if let Err(err) = sess.flush_rollout().await {
+                     warn!("failed to flush rollout before completing turn: {err}");
+@@ -390,7 +423,7 @@ impl Session {
+                         .await;
+                 }
+                 done_clone.notify_waiters();
+-            }
++            })
+             .instrument(task_span),
+         );
+         let timer = turn_context
