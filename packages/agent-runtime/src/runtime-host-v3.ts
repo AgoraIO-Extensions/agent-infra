@@ -472,7 +472,7 @@ export class RuntimeHostV3 {
 			},
 		);
 		if (
-			response.result.outcome === "accepted" &&
+			response.result.outcome !== "accepted" ||
 			["completed", "failed", "cancelled"].includes(response.result.status)
 		)
 			this.closedRecoveryGenerations.delete(recoveryGenerationKey);
