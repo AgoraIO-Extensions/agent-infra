@@ -40,6 +40,12 @@ export type PublishedProviderCatalog = {
 	sourceCommit: string;
 };
 
+export type ProviderUpgradePolicy = {
+	deadlineAt?: string;
+	mode: "USER_ACTION_REQUIRED";
+	reason: string;
+};
+
 type InvocationRow = {
 	connection_id: string;
 	consumer_id: string;
@@ -326,7 +332,30 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		await this.sql.end();
 	}
 
-	async publishProviderCatalog(catalog: PublishedProviderCatalog) {
+	private async expireProviderUpgradeTasks(sql: postgres.TransactionSql) {
+		await sql`
+			WITH expired AS (
+				UPDATE connection_provider_upgrade_tasks task
+				SET status = 'EXPIRED', updated_at = now()
+				FROM connection_provider_upgrade_campaigns campaign
+				WHERE task.campaign_id = campaign.id
+					AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+					AND campaign.deadline_at IS NOT NULL
+					AND campaign.deadline_at <= now()
+				RETURNING task.id, task.campaign_id, task.principal_id
+			)
+			INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+			SELECT 'outbox-expired-' || id, 'connection.provider-upgrade.expired', id,
+				jsonb_build_object('campaignId', campaign_id, 'principalId', principal_id)
+			FROM expired
+			ON CONFLICT (topic, aggregate_id) DO NOTHING
+		`;
+	}
+
+	async publishProviderCatalog(
+		catalog: PublishedProviderCatalog,
+		upgradePolicy?: ProviderUpgradePolicy,
+	) {
 		const catalogChecksum = canonicalHash(catalog.actions);
 		if (!/^sha256:[a-f0-9]{64}$/.test(catalog.executorDigest)) {
 			throw new Error("Provider executor digest is invalid");
@@ -419,6 +448,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					);
 				}
 			}
+			if (upgradePolicy?.mode !== "USER_ACTION_REQUIRED") return;
+			if (
+				!upgradePolicy.reason.trim() ||
+				(upgradePolicy.deadlineAt !== undefined &&
+					Number.isNaN(Date.parse(upgradePolicy.deadlineAt)))
+			) {
+				throw new Error("Provider upgrade policy is invalid");
+			}
 			const sourceReleases = await sql<{ provider_release_id: string }[]>`
 				SELECT DISTINCT account.provider_release_id
 				FROM connection_authorization_roots root
@@ -438,11 +475,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				await sql`
 					INSERT INTO connection_provider_upgrade_campaigns (
 						id, provider_id, source_provider_release_id,
-						target_provider_release_id, reason
+						target_provider_release_id, reason, deadline_at
 					)
 					VALUES (
 						${campaignId}, ${catalog.provider}, ${source.provider_release_id},
-						${catalog.providerReleaseId}, 'Provider authorization contract changed'
+						${catalog.providerReleaseId}, ${upgradePolicy.reason},
+						${upgradePolicy.deadlineAt ?? null}
 					)
 					ON CONFLICT (source_provider_release_id, target_provider_release_id)
 					DO NOTHING
@@ -491,8 +529,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	/** @deprecated Use publishProviderCatalog. */
-	publishGithubCatalog(catalog: PublishedProviderCatalog) {
-		return this.publishProviderCatalog(catalog);
+	publishGithubCatalog(
+		catalog: PublishedProviderCatalog,
+		upgradePolicy?: ProviderUpgradePolicy,
+	) {
+		return this.publishProviderCatalog(catalog, upgradePolicy);
 	}
 
 	async publishConsumerDeclaration(input: {
@@ -754,6 +795,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	async listConnectionAdministrators(principalId: string) {
 		return this.sql.begin(async (sql) => {
 			await this.requireConnectionAdministrator(sql, principalId);
+			await this.expireProviderUpgradeTasks(sql);
 			const administrators = await sql<
 				{ display_name: string; email: string | null; principal_id: string }[]
 			>`
@@ -1487,7 +1529,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						WHERE task.campaign_id = campaign.id
 							AND task.authorization_root_id = ${grant.root_id}
 							AND campaign.target_provider_release_id = ${target.providerReleaseId}
-							AND task.status <> 'COMPLETED'
+							AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+							AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
 						RETURNING task.id, task.campaign_id, task.principal_id
 					)
 					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
@@ -2218,7 +2261,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE task.campaign_id = campaign.id
 						AND task.authorization_root_id = ${root.id}
 						AND campaign.target_provider_release_id = ${target.providerReleaseId}
-						AND task.status <> 'COMPLETED'
+						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+						AND (campaign.deadline_at IS NULL OR campaign.deadline_at > now())
 					RETURNING task.id, task.campaign_id, task.principal_id
 				)
 				INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
@@ -3284,6 +3328,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId: string,
 		options: { includeActivity?: boolean } = {},
 	): Promise<ConnectionOverview> {
+		await this.sql.begin((sql) => this.expireProviderUpgradeTasks(sql));
 		const currentReleaseIds = new Set(
 			this.publishedProviderReleaseIds.values(),
 		);
@@ -3483,7 +3528,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						ON campaign.id = task.campaign_id
 					JOIN connection_consumers consumer ON consumer.id = task.consumer_id
 					WHERE task.principal_id = ${principalId}
-						AND task.status IN ('PENDING_CONNECTION', 'PENDING_AUTHORIZATION')
+						AND task.status IN (
+							'PENDING_CONNECTION', 'PENDING_AUTHORIZATION', 'EXPIRED'
+						)
 					ORDER BY campaign.created_at, task.id
 				`,
 		]);

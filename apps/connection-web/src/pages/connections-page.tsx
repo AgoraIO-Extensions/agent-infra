@@ -336,17 +336,19 @@ export function ConnectionsPage() {
 												<td>
 													{task.status === "PENDING_CONNECTION"
 														? "升级连接"
-														: "重新确认授权"}
+														: task.status === "PENDING_AUTHORIZATION"
+															? "重新确认授权"
+															: "已过期"}
 												</td>
 												<td className="table-action">
 													{task.status === "PENDING_CONNECTION" ? (
 														<a
 															className="button button-secondary"
-															href={`/connection/connections?provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
+															href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
 														>
 															处理升级
 														</a>
-													) : (
+													) : task.status === "PENDING_AUTHORIZATION" ? (
 														<button
 															className="button button-secondary"
 															type="button"
@@ -362,6 +364,8 @@ export function ConnectionsPage() {
 														>
 															确认授权
 														</button>
+													) : (
+														<span>已过期</span>
 													)}
 												</td>
 											</tr>

@@ -856,7 +856,10 @@ describe("PostgreSQL Connection business authority", () => {
 				});
 				const directIdentity = { consumerId, instanceId, principalId };
 
-				await repository.publishGithubCatalog(v2);
+				await repository.publishGithubCatalog(v2, {
+					mode: "USER_ACTION_REQUIRED",
+					reason: "Catalog test requires user action",
+				});
 				const overview = await repository.getOverview(principalId);
 				const pinnedConnection = overview.connections.find(
 					(entry) => entry.id === connection.connectionId,
