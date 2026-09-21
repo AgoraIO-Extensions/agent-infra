@@ -255,6 +255,16 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/provider-upgrades": {
+			"get": {
+				"operationId": "listProviderUpgradeCampaigns",
+				"responses": {
+					"200": { "$ref": "#/components/responses/ProviderUpgradeCampaigns" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/administrators/{principalId}": {
 			"put": {
 				"operationId": "grantAdministrator",
@@ -501,6 +511,16 @@
 				"content": {
 					"application/json": {
 						"schema": { "$ref": "#/components/schemas/AdministratorsResponse" }
+					}
+				}
+			},
+			"ProviderUpgradeCampaigns": {
+				"description": "Provider upgrade campaign summaries",
+				"content": {
+					"application/json": {
+						"schema": {
+							"$ref": "#/components/schemas/ProviderUpgradeCampaignsResponse"
+						}
 					}
 				}
 			},
@@ -766,7 +786,14 @@
 			"Overview": {
 				"type": "object",
 				"additionalProperties": false,
-				"required": ["actions", "calls", "connections", "consumers", "grants"],
+				"required": [
+					"actions",
+					"calls",
+					"connections",
+					"consumers",
+					"grants",
+					"upgradeTasks"
+				],
 				"properties": {
 					"actions": {
 						"type": "array",
@@ -787,6 +814,10 @@
 					"grants": {
 						"type": "array",
 						"items": { "$ref": "#/components/schemas/Grant" }
+					},
+					"upgradeTasks": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/ProviderUpgradeTask" }
 					}
 				}
 			},
@@ -968,6 +999,81 @@
 					"administrators": {
 						"type": "array",
 						"items": { "$ref": "#/components/schemas/Administrator" }
+					}
+				}
+			},
+			"ProviderUpgradeTask": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"campaignId",
+					"connectionId",
+					"consumerId",
+					"consumerName",
+					"deadlineAt",
+					"providerId",
+					"reason",
+					"status",
+					"targetProviderReleaseId"
+				],
+				"properties": {
+					"campaignId": { "type": "string" },
+					"connectionId": { "type": "string" },
+					"consumerId": { "type": "string" },
+					"consumerName": { "type": "string" },
+					"deadlineAt": { "type": ["string", "null"], "format": "date-time" },
+					"providerId": { "type": "string" },
+					"reason": { "type": "string" },
+					"status": {
+						"type": "string",
+						"enum": [
+							"PENDING_CONNECTION",
+							"PENDING_AUTHORIZATION",
+							"COMPLETED",
+							"EXPIRED"
+						]
+					},
+					"targetProviderReleaseId": { "type": "string" }
+				}
+			},
+			"ProviderUpgradeCampaign": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"id",
+					"providerId",
+					"sourceProviderReleaseId",
+					"targetProviderReleaseId",
+					"reason",
+					"deadlineAt",
+					"createdAt",
+					"totalCount",
+					"pendingCount",
+					"completedCount",
+					"expiredCount"
+				],
+				"properties": {
+					"id": { "type": "string" },
+					"providerId": { "type": "string" },
+					"sourceProviderReleaseId": { "type": "string" },
+					"targetProviderReleaseId": { "type": "string" },
+					"reason": { "type": "string" },
+					"deadlineAt": { "type": ["string", "null"], "format": "date-time" },
+					"createdAt": { "type": "string", "format": "date-time" },
+					"totalCount": { "type": "integer", "minimum": 0 },
+					"pendingCount": { "type": "integer", "minimum": 0 },
+					"completedCount": { "type": "integer", "minimum": 0 },
+					"expiredCount": { "type": "integer", "minimum": 0 }
+				}
+			},
+			"ProviderUpgradeCampaignsResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["campaigns"],
+				"properties": {
+					"campaigns": {
+						"type": "array",
+						"items": { "$ref": "#/components/schemas/ProviderUpgradeCampaign" }
 					}
 				}
 			},

@@ -192,6 +192,9 @@ class MemoryRepository implements ConnectionRepository {
 	async listConnectionAdministrators() {
 		return [];
 	}
+	async listProviderUpgradeCampaigns() {
+		return [];
+	}
 	async revokeConnectionAdministrator() {}
 	async revokeSharedScopePrincipal() {}
 	async renameSharedScope() {}
@@ -390,6 +393,7 @@ class MemoryRepository implements ConnectionRepository {
 			consumers: [],
 			grants: [],
 			principal: { displayName: "Alice", id: "alice" },
+			upgradeTasks: [],
 		};
 	}
 	async listAuthorizedActions() {

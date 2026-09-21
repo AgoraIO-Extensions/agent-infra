@@ -849,6 +849,12 @@ describe("PostgreSQL Connection business authority", () => {
 					grantedScopes: ["repo"],
 					principalId,
 				});
+				await authorizeCurrentConsumer(repository, {
+					connectionId: connection.connectionId,
+					consumerId,
+					principalId,
+				});
+				const directIdentity = { consumerId, instanceId, principalId };
 
 				await repository.publishGithubCatalog(v2);
 				const overview = await repository.getOverview(principalId);
@@ -862,12 +868,23 @@ describe("PostgreSQL Connection business authority", () => {
 					actionVersionIds: [v1ActionId, undeclaredActionId].sort(),
 					requiresReconnect: true,
 				});
-				await authorizeCurrentConsumer(repository, {
-					connectionId: connection.connectionId,
-					consumerId,
-					principalId,
-				});
-				const directIdentity = { consumerId, instanceId, principalId };
+				expect(overview.upgradeTasks).toEqual([
+					expect.objectContaining({
+						connectionId: connection.connectionId,
+						consumerId,
+						status: "PENDING_CONNECTION",
+						targetProviderReleaseId: v2.providerReleaseId,
+					}),
+				]);
+				const [requiredOutbox] = await sql<{ status: string }[]>`
+					SELECT outbox.status
+					FROM connection_outbox_events outbox
+					JOIN connection_provider_upgrade_tasks task
+						ON task.id = outbox.aggregate_id
+					WHERE task.principal_id = ${principalId}
+						AND outbox.topic = 'connection.provider-upgrade.required'
+				`;
+				expect(requiredOutbox?.status).toBe("PENDING");
 				expect(
 					(
 						await repository.listAuthorizedActions(
@@ -909,6 +926,14 @@ describe("PostgreSQL Connection business authority", () => {
 					consumerId,
 					principalId,
 				});
+				expect(
+					(await repository.getOverview(principalId)).upgradeTasks,
+				).toEqual([]);
+				const [completedTask] = await sql<{ status: string }[]>`
+					SELECT status FROM connection_provider_upgrade_tasks
+					WHERE principal_id = ${principalId}
+				`;
+				expect(completedTask?.status).toBe("COMPLETED");
 				expect(
 					(
 						await repository.listAuthorizedActions(

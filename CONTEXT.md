@@ -40,6 +40,10 @@ _Avoid_: PAT、ConsumerInstance
 在认证方式、Credential scope 与稳定外部账号兼容时，复用 current Credential 将 Provider Connection 迁移到新的 ProviderRelease。
 _Avoid_: Credential Rotation、Consumer 授权
 
+**Provider Upgrade Campaign**:
+一次需要使用者操作的 ProviderRelease 迁移，记录受影响的 Connection Grant、使用者待办和整体完成进度。
+_Avoid_: Provider Connection Upgrade、静默部署、外部通知投递
+
 **Credential Rotation**:
 用户为同一 Provider Connection 提交新 Credential 并替换 current CredentialVersion 的过程。
 _Avoid_: Provider Connection Upgrade、重新授权客户端

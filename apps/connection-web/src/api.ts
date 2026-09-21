@@ -26,6 +26,7 @@ import {
 	issueTokenRequestSchema,
 	type LoginRequest,
 	listAdministrators,
+	listProviderUpgradeCampaigns,
 	listTokens,
 	login,
 	loginRequestSchema,
@@ -33,6 +34,7 @@ import {
 	type OAuthTransaction,
 	oauthTransactionRequestSchema,
 	type ProviderCredentialRequest,
+	type ProviderUpgradeCampaignsResponse,
 	providerCredentialRequestSchema,
 	renameSharedScope,
 	revokeAdministrator,
@@ -300,6 +302,8 @@ export const connectionApi = {
 		),
 	listAdministrators: () =>
 		unwrap<AdministratorsResponse>(listAdministrators()),
+	listProviderUpgradeCampaigns: () =>
+		unwrap<ProviderUpgradeCampaignsResponse>(listProviderUpgradeCampaigns()),
 	grantAdministrator: (principalId: string) =>
 		unwrap<void>(
 			grantAdministrator({

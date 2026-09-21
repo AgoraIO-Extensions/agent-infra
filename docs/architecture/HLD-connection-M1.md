@@ -2351,6 +2351,14 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 
 ## 30. 迁移、升级与回滚
 
+### 30.0 Provider Upgrade Campaign
+
+ProviderRelease 发布必须先分类为静默兼容或需要使用者操作。只有 stable account proof、Credential scope、已确认 ActionVersion 集合、effect 与 authorization digest 均保持等价时才允许静默迁移；任一条件无法证明时创建 `ProviderUpgradeCampaign`。
+
+Campaign 绑定 source/target ProviderRelease、原因、可选截止时间和创建时间。每个受影响 AuthorizationRoot 创建唯一 `ProviderUpgradeTask`，状态只允许按 `PENDING_CONNECTION -> PENDING_AUTHORIZATION -> COMPLETED` 收敛，截止后未完成可进入 `EXPIRED`。发布事务同时写入 task 和 `connection.provider-upgrade.required` outbox event；重复发布按 source/target release 与 AuthorizationRoot 幂等。连接升级后若原 Consent 可复用则直接完成，否则进入待重新确认，新的 Grant 提交后完成。状态变化写 audit/outbox，外部通知投递失败不得伪造完成状态。
+
+普通使用者只能读取自己的未完成 task 和精确 Connection 操作入口。Connection 管理员只读取 Provider、source/target release、原因、截止时间及聚合计数，不读取 Credential、授权快照正文或无关外部账号。M1 的 Connection Web 提供站内待办；邮件、企微等通道可后续消费 outbox，但不属于 Campaign 的完成条件。
+
 ### 30.1 起点
 
 仓库已有工程骨架，尚无 Connection 领域实现；这不能证明生产环境没有 legacy 数据。WP0 必须关闭 G-08 inventory：系统、表、Credential format、账号数、Grant/调用记录和 Owner 签字。

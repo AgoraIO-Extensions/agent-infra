@@ -218,6 +218,13 @@
       "when": 1789790400000,
       "tag": "0030_github_oauth_refresh",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790136000000,
+      "tag": "0031_provider_upgrade_campaigns",
+      "breakpoints": true
     }
   ]
 }
