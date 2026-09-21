@@ -1,0 +1,1258 @@
+@@ -512,28 +545,72 @@ impl Session {
+         let mut aborted_turn = false;
+         let mut active_turn_to_clear = None;
+         let mut turn_context = None;
++        let mut terminal_event = None;
++        let mut native_hook_cancellation = None;
+         if let Some(mut active_turn) = self.take_active_turn(&reason).await {
+             let task = active_turn.task.take();
+             aborted_turn = task.is_some();
+             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
++            native_hook_cancellation = task.as_ref().map(|task| task.cancellation_token.clone());
+             if let Some(task) = task {
+-                self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
+-                    .await;
++                terminal_event = Some(
++                    crate::hook_runtime::with_native_hook_context(
++                        self.thread_id.to_string(),
++                        task.turn_context.sub_id.clone(),
++                        task.cancellation_token.clone(),
++                        self.handle_task_abort(task, reason.clone(), &active_turn.turn_state),
++                    )
++                    .await,
++                );
+             }
+             if aborted_turn {
+                 active_turn_to_clear = Some(active_turn);
+             }
+         }
+ 
+-        if let Some(turn_context) = turn_context.as_deref() {
+-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+-                .await;
++        if let Some(turn_context) = turn_context.as_deref()
++            && crate::native_sources::may_run_actions(&self.thread_id.to_string(), turn_context)
++            && let Some(cancelled) = native_hook_cancellation
++        {
++            crate::hook_runtime::with_native_hook_context(
++                self.thread_id.to_string(),
++                turn_context.sub_id.clone(),
++                cancelled,
++                self.emit_turn_abort_lifecycle(
++                    reason.clone(),
++                    turn_context.extension_data.as_ref(),
++                ),
++            )
++            .await;
+         }
+         if let Some(active_turn) = active_turn_to_clear {
+             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+             self.input_queue.clear_pending(&active_turn).await;
+         }
++        if let Some(turn_context) = turn_context.as_deref() {
++            if crate::hook_runtime::drain_native_hook_context(
++                &self.thread_id.to_string(),
++                &turn_context.sub_id,
++            )
++            .await
++            .is_err()
++            {
++                return;
++            }
++            if let Some(event) = terminal_event {
++                self.send_event(turn_context, event).await;
++                let _ = self.flush_rollout().await;
++            }
++            let _ = crate::native_sources::finished(
++                &crate::native_sources::NativeSource {
++                    thread_id: self.thread_id.to_string(),
++                    turn_id: turn_context.sub_id.clone(),
++                },
++                crate::native_sources::NativeStatus::Cancelled,
++            )
++            .await;
++        }
+         if reason == TurnAbortReason::Interrupted && aborted_turn {
+             self.maybe_start_turn_for_pending_work().await;
+         }
+@@ -568,17 +645,61 @@ impl Session {
+ 
+         let task = active_turn.task.take();
+         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
+-        if let Some(task) = task {
+-            self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
+-                .await;
+-        }
+-        if let Some(turn_context) = turn_context.as_deref() {
+-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
+-                .await;
++        let native_hook_cancellation = task.as_ref().map(|task| task.cancellation_token.clone());
++        let terminal_event = if let Some(task) = task {
++            Some(
++                crate::hook_runtime::with_native_hook_context(
++                    self.thread_id.to_string(),
++                    task.turn_context.sub_id.clone(),
++                    task.cancellation_token.clone(),
++                    self.handle_task_abort(task, reason.clone(), &active_turn.turn_state),
++                )
++                .await,
++            )
++        } else {
++            None
++        };
++        if let Some(turn_context) = turn_context.as_deref()
++            && crate::native_sources::may_run_actions(&self.thread_id.to_string(), turn_context)
++            && let Some(cancelled) = native_hook_cancellation
++        {
++            crate::hook_runtime::with_native_hook_context(
++                self.thread_id.to_string(),
++                turn_context.sub_id.clone(),
++                cancelled,
++                self.emit_turn_abort_lifecycle(
++                    reason.clone(),
++                    turn_context.extension_data.as_ref(),
++                ),
++            )
++            .await;
+         }
+         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
+         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
+         self.input_queue.clear_pending(&active_turn).await;
++        if let Some(turn_context) = turn_context.as_deref() {
++            if crate::hook_runtime::drain_native_hook_context(
++                &self.thread_id.to_string(),
++                &turn_context.sub_id,
++            )
++            .await
++            .is_err()
++            {
++                return true;
++            }
++            if let Some(event) = terminal_event {
++                self.send_event(turn_context, event).await;
++                let _ = self.flush_rollout().await;
++            }
++            let _ = crate::native_sources::finished(
++                &crate::native_sources::NativeSource {
++                    thread_id: self.thread_id.to_string(),
++                    turn_id: turn_context.sub_id.clone(),
++                },
++                crate::native_sources::NativeStatus::Cancelled,
++            )
++            .await;
++        }
+ 
+         if reason == TurnAbortReason::Interrupted {
+             self.maybe_start_turn_for_pending_work().await;
+@@ -592,6 +713,21 @@ impl Session {
+         turn_context: Arc<TurnContext>,
+         task_result: SessionTaskResult,
+     ) {
++        let native_admitted =
++            crate::native_sources::may_run_actions(&self.thread_id.to_string(), &turn_context);
++        let native_status = if matches!(
++            task_result
++                .as_ref()
++                .err()
++                .map(codex_protocol::error::CodexErr::details),
++            Some(CodexErrorDetails::TurnAborted)
++        ) {
++            crate::native_sources::NativeStatus::Cancelled
++        } else if task_result.is_err() {
++            crate::native_sources::NativeStatus::Failed
++        } else {
++            crate::native_sources::NativeStatus::Completed
++        };
+         let (last_agent_message, abort_reason) = match task_result {
+             Ok(last_agent_message) => (last_agent_message, None),
+             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
+@@ -599,11 +735,13 @@ impl Session {
+             }
+             Err(err) => {
+                 warn!(%err, "session task returned an unexpected error");
+-                self.emit_turn_error_lifecycle(
+-                    turn_context.as_ref(),
+-                    err.to_codex_protocol_error(),
+-                )
+-                .await;
++                if native_admitted {
++                    self.emit_turn_error_lifecycle(
++                        turn_context.as_ref(),
++                        err.to_codex_protocol_error(),
++                    )
++                    .await;
++                }
+                 self.track_turn_codex_error(turn_context.as_ref(), &err);
+                 self.send_event(
+                     turn_context.as_ref(),
+@@ -640,13 +778,15 @@ impl Session {
+                 ts.token_usage_at_turn_start.clone(),
+             )
+         };
+-        run_hooks_and_record_inputs(
+-            self,
+-            &turn_context,
+-            &pending_input,
+-            PersistContext::Standard,
+-        )
+-        .await;
++        if native_admitted {
++            run_hooks_and_record_inputs(
++                self,
++                &turn_context,
++                &pending_input,
++                PersistContext::Standard,
++            )
++            .await;
++        }
+         // Emit token usage metrics.
+         {
+             // TODO(jif): drop this
+@@ -805,11 +945,16 @@ impl Session {
+             ThreadIdleCause::Completed
+         };
+         let event = if let Some(reason) = abort_reason {
+-            if reason == TurnAbortReason::Interrupted {
++            if native_admitted && reason == TurnAbortReason::Interrupted {
+                 run_turn_interrupt_hooks(self, &turn_context, &turn_state).await;
+             }
+-            self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
++            if native_admitted {
++                self.emit_turn_abort_lifecycle(
++                    reason.clone(),
++                    turn_context.extension_data.as_ref(),
++                )
+                 .await;
++            }
+             EventMsg::TurnAborted(TurnAbortedEvent {
+                 turn_id: Some(turn_context.sub_id.clone()),
+                 reason,
+@@ -823,8 +968,10 @@ impl Session {
+                 .time_to_first_token_ms()
+                 .await;
+             let error = turn_context.terminal_error.lock().await.clone();
+-            self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
+-                .await;
++            if native_admitted {
++                self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
++                    .await;
++            }
+             EventMsg::TurnComplete(TurnCompleteEvent {
+                 turn_id: turn_context.sub_id.clone(),
+                 last_agent_message,
+@@ -835,7 +982,6 @@ impl Session {
+                 time_to_first_token_ms,
+             })
+         };
+-        self.send_event(turn_context.as_ref(), event).await;
+         self.services
+             .guardian_rejection_circuit_breaker
+             .lock()
+@@ -854,14 +1000,46 @@ impl Session {
+                 false
+             }
+         };
+-        if cleared_active_turn {
++        if native_admitted && cleared_active_turn {
+             self.emit_thread_idle_lifecycle_if_idle(idle_cause).await;
+         }
++        if crate::hook_runtime::drain_native_hook_context(
++            &self.thread_id.to_string(),
++            &turn_context.sub_id,
++        )
++        .await
++        .is_err()
++        {
++            return;
++        }
++        // Root Driver completion follows this existing event; publish only after
++        // all action-capable lifecycle contributors have returned.
++        self.send_event(turn_context.as_ref(), event).await;
+         // Regular items were flushed before this terminal event was appended; buffering
+         // thread writers may not flush it without another explicit barrier.
+         if let Err(err) = self.flush_rollout().await {
+             warn!("failed to flush rollout after emitting terminal turn event: {err}");
+         }
++        let native_status = if native_status == crate::native_sources::NativeStatus::Completed
++            && turn_context.terminal_error.lock().await.is_some()
++        {
++            crate::native_sources::NativeStatus::Failed
++        } else {
++            native_status
++        };
++        if crate::native_sources::finished(
++            &crate::native_sources::NativeSource {
++                thread_id: self.thread_id.to_string(),
++                turn_id: turn_context.sub_id.clone(),
++            },
++            native_status,
++        )
++        .await
++        .is_err()
++        {
++            // The Driver keeps this source unresolved; never fabricate a terminal ACK.
++            return;
++        }
+         if cleared_active_turn {
+             self.maybe_start_turn_for_pending_work().await;
+         }
+@@ -904,11 +1082,10 @@ impl Session {
+         task: RunningTask,
+         reason: TurnAbortReason,
+         turn_state: &Mutex<TurnState>,
+-    ) {
++    ) -> EventMsg {
+         let sub_id = task.turn_context.sub_id.clone();
+-        if task.cancellation_token.is_cancelled() {
+-            return;
+-        }
++        let native_admitted =
++            crate::native_sources::may_run_actions(&self.thread_id.to_string(), &task.turn_context);
+ 
+         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
+         task.cancellation_token.cancel();
+@@ -938,10 +1115,13 @@ impl Session {
+         }
+ 
+         task.handle.abort();
++        let _ = task.handle.await;
+ 
+-        session_task
+-            .abort(Arc::clone(self), Arc::clone(&task.turn_context))
+-            .await;
++        if native_admitted {
++            session_task
++                .abort(Arc::clone(self), Arc::clone(&task.turn_context))
++                .await;
++        }
+ 
+         if reason == TurnAbortReason::Interrupted
+             && let Some(marker) = interrupted_turn_history_marker(
+@@ -963,7 +1143,7 @@ impl Session {
+             }
+         }
+ 
+-        if reason == TurnAbortReason::Interrupted {
++        if native_admitted && reason == TurnAbortReason::Interrupted {
+             run_turn_interrupt_hooks(self, &task.turn_context, turn_state).await;
+         }
+ 
+@@ -990,17 +1170,12 @@ impl Session {
+             completed_at,
+             duration_ms,
+         });
+-        self.send_event(task.turn_context.as_ref(), event).await;
+         self.services
+             .guardian_rejection_circuit_breaker
+             .lock()
+             .await
+             .clear_turn(&task.turn_context.sub_id);
+-        // Regular items were flushed before this terminal event was appended; buffering
+-        // thread writers may not flush it without another explicit barrier.
+-        if let Err(err) = self.flush_rollout().await {
+-            warn!("failed to flush rollout after emitting terminal turn event: {err}");
+-        }
++        event
+     }
+ }
+ 
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index cfa6196..7f11e50 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -1533,16 +1533,24 @@ impl ThreadManagerState {
+         root_turn_id: Option<String>,
+     ) -> CodexResult<String> {
+         let thread = self.get_thread(thread_id).await?;
++        let native_control = matches!(&op, Op::Interrupt | Op::Shutdown);
+         if let Some(ops_log) = &self.ops_log
+             && let Ok(mut log) = ops_log.lock()
+             && let Some(captured_op) = capture_test_op(&op)
+         {
+             log.push((thread_id, captured_op));
+         }
+-        thread
+-            .io
+-            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+-            .await
++        let submission =
++            thread
++                .io
++                .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id);
++        if native_control {
++            crate::native_sources::control_dispatch(&thread_id.to_string(), submission)
++                .await
++                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
++        } else {
++            submission.await
++        }
+     }
+ 
+     /// Remove a thread from the manager by ID, returning it when present.
+diff --git a/codex-rs/core/src/tools/handlers/dynamic.rs b/codex-rs/core/src/tools/handlers/dynamic.rs
+index f2b7860..3fbb125 100644
+--- a/codex-rs/core/src/tools/handlers/dynamic.rs
++++ b/codex-rs/core/src/tools/handlers/dynamic.rs
+@@ -123,6 +123,7 @@ impl DynamicToolHandler {
+             turn,
+             call_id,
+             payload,
++            cancellation_token,
+             ..
+         } = invocation;
+ 
+@@ -136,6 +137,25 @@ impl DynamicToolHandler {
+         };
+ 
+         let args: Value = parse_arguments(&arguments)?;
++        use crate::native_operation_barrier::Attempt;
++        use crate::native_operation_barrier::Identity;
++        use crate::native_operation_barrier::Outcome;
++        use crate::native_operation_barrier::Reason;
++        let native_attempt = Attempt::begin(
++            Identity {
++                session_id: session.thread_id.to_string(),
++                turn_id: turn.sub_id.clone(),
++                call_id: call_id.clone(),
++                attempt_ref: uuid::Uuid::new_v4(),
++                tool_name: crate::tools::flat_tool_name(&self.tool_name).into_owned(),
++                parent_attempt_ref: None,
++            },
++            cancellation_token,
++        )
++        .await
++        .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
++        let _registration = crate::native_dynamic_dispatch::register(&native_attempt)
++            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+         let response = request_dynamic_tool(
+             &session,
+             turn.as_ref(),
+@@ -143,8 +163,29 @@ impl DynamicToolHandler {
+             self.tool_name.clone(),
+             args,
+         )
+-        .await
+-        .ok_or_else(|| {
++        .await;
++        let (outcome, reason) = match &response {
++            Some(response) if response.success => (Outcome::Completed, None),
++            Some(_) => (Outcome::Failed, Some(Reason::ExecutionFailed)),
++            None => (Outcome::Unknown, Some(Reason::ResultUnconfirmed)),
++        };
++        // A successful client reply cannot substitute for the actual write receipt.
++        if response.as_ref().is_some_and(|response| response.success) {
++            native_attempt
++                .await_started_receipt()
++                .await
++                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
++            native_attempt
++                .finish_runtime(true)
++                .await
++                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
++        } else {
++            native_attempt
++                .finish(outcome, reason)
++                .await
++                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
++        }
++        let response = response.ok_or_else(|| {
+             FunctionCallError::RespondToModel(
+                 "dynamic tool call was cancelled before receiving a response".to_string(),
+             )
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs b/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs
+index fe67246..14fb3a7 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs
+@@ -25,7 +25,11 @@ impl ToolExecutor<ToolInvocation> for Handler {
+     where
+         ToolInvocation: 'a,
+     {
+-        Box::pin(async move { handle_close_agent(invocation).await.map(boxed_tool_output) })
++        Box::pin(async move {
++            crate::native_sources::run_control(invocation, handle_close_agent)
++                .await
++                .map(boxed_tool_output)
++        })
+     }
+ }
+ 
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs b/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
+index e2fe580..e7a7c1e 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs
+@@ -35,6 +35,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
+ async fn handle_resume_agent(
+     invocation: ToolInvocation,
+ ) -> Result<ResumeAgentResult, FunctionCallError> {
++    let native_invocation = invocation.clone();
+     let ToolInvocation {
+         session,
+         turn,
+@@ -88,12 +89,14 @@ async fn handle_resume_agent(
+         .get_status(receiver_thread_id)
+         .await;
+     let (receiver_agent, error) = if matches!(status, AgentStatus::NotFound) {
+-        match Box::pin(try_resume_closed_agent(
+-            &session,
+-            &turn,
+-            receiver_thread_id,
+-            child_depth,
+-        ))
++        match crate::native_sources::run_control(native_invocation, |_| {
++            Box::pin(try_resume_closed_agent(
++                &session,
++                &turn,
++                receiver_thread_id,
++                child_depth,
++            ))
++        })
+         .await
+         {
+             Ok(()) => {
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs b/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
+index 33e228f..4ae6189 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs
+@@ -25,7 +25,10 @@ impl ToolExecutor<ToolInvocation> for Handler {
+     where
+         ToolInvocation: 'a,
+     {
+-        Box::pin(self.handle_call(invocation))
++        Box::pin(crate::native_sources::run_control(
++            invocation,
++            |invocation| self.handle_call(invocation),
++        ))
+     }
+ }
+ 
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs b/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
+index bd9fe9f..c4e7420 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
+@@ -40,7 +40,11 @@ impl ToolExecutor<ToolInvocation> for Handler {
+     where
+         ToolInvocation: 'a,
+     {
+-        Box::pin(async move { handle_spawn_agent(invocation).await.map(boxed_tool_output) })
++        Box::pin(async move {
++            crate::native_sources::run_control(invocation, handle_spawn_agent)
++                .await
++                .map(boxed_tool_output)
++        })
+     }
+ }
+ 
+diff --git a/codex-rs/core/src/tools/orchestrator.rs b/codex-rs/core/src/tools/orchestrator.rs
+index 3b37571..bc5c4c5 100644
+--- a/codex-rs/core/src/tools/orchestrator.rs
++++ b/codex-rs/core/src/tools/orchestrator.rs
+@@ -102,9 +102,28 @@ impl ToolOrchestrator {
+                 .as_ref()
+                 .map(ActiveNetworkApproval::execution_proxy),
+         };
+-        let run_result = tool
+-            .run(req, &attempt_with_network_approval, &attempt_tool_ctx)
++        let native_attempt = match crate::native_operation_barrier::Attempt::begin(
++            crate::native_operation_barrier::Identity {
++                session_id: tool_ctx.session.thread_id.to_string(),
++                turn_id: tool_ctx.step_context.turn.sub_id.clone(),
++                call_id: tool_ctx.call_id.clone(),
++                attempt_ref: uuid::Uuid::new_v4(),
++                tool_name: flat_tool_name(&tool_ctx.tool_name).into_owned(),
++                parent_attempt_ref: None,
++            },
++            tool_ctx.cancellation_token.clone(),
++        )
++        .await
++        {
++            Ok(attempt) => attempt,
++            Err(error) => return (Err(ToolError::Rejected(error.to_string())), None),
++        };
++        let run_result = native_attempt
++            .scope(tool.run(req, &attempt_with_network_approval, &attempt_tool_ctx))
+             .await;
++        if let Err(error) = native_attempt.finish_runtime(run_result.is_ok()).await {
++            return (Err(ToolError::Rejected(error.to_string())), None);
++        }
+ 
+         let Some(network_approval) = network_approval else {
+             return (run_result, None);
+diff --git a/codex-rs/core/src/tools/runtimes/apply_patch.rs b/codex-rs/core/src/tools/runtimes/apply_patch.rs
+index 723e6eb..24ea8d5 100644
+--- a/codex-rs/core/src/tools/runtimes/apply_patch.rs
++++ b/codex-rs/core/src/tools/runtimes/apply_patch.rs
+@@ -176,26 +176,35 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
+         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
+         let mut stdout = Vec::new();
+         let mut stderr = Vec::new();
+-        let result = codex_apply_patch::apply_patch_with_options(
+-            &req.action.patch,
+-            ApplyPatchOptions {
+-                update_file_mode: req.action.update_file_mode(),
+-                // Only reject links when an otherwise-required sandbox was bypassed.
+-                // Executor-managed sandboxes can have SandboxType::None.
+-                follow_symlinks: attempt.sandbox_requested
+-                    || !attempt.manager.should_sandbox(
+-                        attempt.permissions,
+-                        self.sandbox_preference(),
+-                        attempt.enforce_managed_network,
+-                    ),
+-            },
+-            &req.action.cwd,
+-            &mut stdout,
+-            &mut stderr,
+-            fs.as_ref(),
+-            sandbox.as_ref(),
++        let native_attempt = crate::native_operation_barrier::current()
++            .map_err(|error| ToolError::Rejected(error.to_string()))?;
++        let result = codex_apply_patch::with_native_patch_dispatch(
++            std::sync::Arc::new(native_attempt.clone()),
++            codex_apply_patch::apply_patch_with_options(
++                &req.action.patch,
++                ApplyPatchOptions {
++                    update_file_mode: req.action.update_file_mode(),
++                    // Only reject links when an otherwise-required sandbox was bypassed.
++                    // Executor-managed sandboxes can have SandboxType::None.
++                    follow_symlinks: attempt.sandbox_requested
++                        || !attempt.manager.should_sandbox(
++                            attempt.permissions,
++                            self.sandbox_preference(),
++                            attempt.enforce_managed_network,
++                        ),
++                },
++                &req.action.cwd,
++                &mut stdout,
++                &mut stderr,
++                fs.as_ref(),
++                sandbox.as_ref(),
++            ),
+         )
+         .await;
++        native_attempt
++            .finish_runtime(result.is_ok())
++            .await
++            .map_err(|error| ToolError::Rejected(error.to_string()))?;
+         let stdout = String::from_utf8_lossy(&stdout).into_owned();
+         let stderr = String::from_utf8_lossy(&stderr).into_owned();
+         let failed = result.is_err();
+diff --git a/codex-rs/core/src/unified_exec/async_watcher.rs b/codex-rs/core/src/unified_exec/async_watcher.rs
+index 366f631..163e245 100644
+--- a/codex-rs/core/src/unified_exec/async_watcher.rs
++++ b/codex-rs/core/src/unified_exec/async_watcher.rs
+@@ -189,7 +189,17 @@ pub(crate) fn spawn_exit_watcher(
+         if let Some(network_denial_monitor) = network_denial_monitor {
+             let _ = network_denial_monitor.await;
+         }
++        // Kill/output cancellation is not reap. Preserve cross-Turn terminals,
++        // and publish their original attempt only after the process exit source.
++        if let Err(error) = process.wait_for_native_exit().await {
++            process.fail_and_terminate(error.to_string());
++            return;
++        }
+         let _interaction_guard = interaction_lock.lock_owned().await;
++        if let Err(error) = process.finish_native_attempt().await {
++            process.fail_and_terminate(error.to_string());
++            return;
++        }
+ 
+         let duration = Instant::now().saturating_duration_since(started_at);
+         let plugin_metrics_sidecar = plugin_metrics_sidecar
+diff --git a/codex-rs/core/src/unified_exec/process.rs b/codex-rs/core/src/unified_exec/process.rs
+index 81946e4..89a2b7a 100644
+--- a/codex-rs/core/src/unified_exec/process.rs
++++ b/codex-rs/core/src/unified_exec/process.rs
+@@ -88,6 +88,7 @@ enum ProcessHandle {
+ /// Unified wrapper over directly spawned PTY sessions and exec-server-backed
+ /// processes.
+ pub(crate) struct UnifiedExecProcess {
++    pub(crate) native_attempt: Option<crate::native_operation_barrier::Attempt>,
+     process_handle: ProcessHandle,
+     output_tx: broadcast::Sender<Vec<u8>>,
+     output: OutputHandles,
+@@ -112,6 +113,40 @@ impl std::fmt::Debug for UnifiedExecProcess {
+ }
+ 
+ impl UnifiedExecProcess {
++    pub(crate) async fn finish_native_attempt(&self) -> Result<(), UnifiedExecError> {
++        if !self.has_exited() {
++            return Ok(());
++        }
++        if let Some(attempt) = &self.native_attempt {
++            use crate::native_operation_barrier::Outcome;
++            use crate::native_operation_barrier::Reason;
++            let (outcome, reason) = match self.exit_code() {
++                Some(0) if self.failure_message().is_none() => (Outcome::Completed, None),
++                Some(_) => (Outcome::Failed, Some(Reason::ExecutionFailed)),
++                None => (Outcome::Unknown, Some(Reason::DispatchUnconfirmed)),
++            };
++            attempt
++                .finish(outcome, reason)
++                .await
++                .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++        }
++        Ok(())
++    }
++
++    pub(crate) async fn wait_for_native_exit(&self) -> Result<(), UnifiedExecError> {
++        if self.native_attempt.is_none() {
++            return Ok(());
++        }
++        let mut state = self.state_rx.clone();
++        state
++            .wait_for(|state| state.has_exited)
++            .await
++            .map_err(|_| {
++                UnifiedExecError::process_failed("NATIVE_PROCESS_EXIT_UNCONFIRMED".to_owned())
++            })?;
++        Ok(())
++    }
++
+     fn new(
+         process_handle: ProcessHandle,
+         sandbox_type: SandboxType,
+@@ -129,6 +164,7 @@ impl UnifiedExecProcess {
+         let (state_tx, state_rx) = watch::channel(ProcessState::default());
+ 
+         Self {
++            native_attempt: crate::native_operation_barrier::current().ok(),
+             process_handle,
+             output_tx,
+             output,
+@@ -145,11 +181,56 @@ impl UnifiedExecProcess {
+ 
+     pub(super) async fn write(&self, data: &[u8]) -> Result<(), UnifiedExecError> {
+         match &self.process_handle {
+-            ProcessHandle::Local(process_handle) => process_handle
+-                .writer_sender()
+-                .send(data.to_vec())
+-                .await
+-                .map_err(|_| UnifiedExecError::WriteToStdin),
++            ProcessHandle::Local(process_handle) => {
++                if let Ok(attempt) = crate::native_operation_barrier::current() {
++                    let dispatch_attempt = attempt.clone();
++                    let result = process_handle
++                        .write_confirmed(
++                            data.to_vec(),
++                            Box::new(move || dispatch_attempt.check_dispatch().is_ok()),
++                        )
++                        .await;
++                    use crate::native_operation_barrier::Outcome;
++                    use crate::native_operation_barrier::Reason;
++                    match result {
++                        Ok(receipt) => {
++                            if let Some(timestamp) = receipt.started_at {
++                                attempt.started_at(timestamp).await.map_err(|error| {
++                                    UnifiedExecError::process_failed(error.to_string())
++                                })?;
++                            }
++                            let (outcome, reason) = if receipt.completed {
++                                (Outcome::Completed, None)
++                            } else {
++                                (Outcome::Failed, Some(Reason::ExecutionFailed))
++                            };
++                            attempt.finish(outcome, reason).await.map_err(|error| {
++                                UnifiedExecError::process_failed(error.to_string())
++                            })?;
++                            if receipt.completed {
++                                Ok(())
++                            } else {
++                                Err(UnifiedExecError::WriteToStdin)
++                            }
++                        }
++                        Err(_) => {
++                            attempt
++                                .finish(Outcome::Unknown, Some(Reason::DispatchUnconfirmed))
++                                .await
++                                .map_err(|error| {
++                                    UnifiedExecError::process_failed(error.to_string())
++                                })?;
++                            Err(UnifiedExecError::WriteToStdin)
++                        }
++                    }
++                } else {
++                    process_handle
++                        .writer_sender()
++                        .send(data.to_vec())
++                        .await
++                        .map_err(|_| UnifiedExecError::WriteToStdin)
++                }
++            }
+             ProcessHandle::ExecServer(process_handle) => {
+                 match process_handle.write(data.to_vec()).await {
+                     Ok(response) => match response.status {
+@@ -219,7 +300,11 @@ impl UnifiedExecProcess {
+ 
+     fn finish_termination(&self) {
+         self.output.cancellation_token.cancel();
+-        if let Some(output_task) = &self.output_task {
++        // Remote exit evidence is received by this task; cancelling output does
++        // not prove the remote process stopped, so keep that receiver until exit.
++        if let Some(output_task) = &self.output_task
++            && (matches!(&self.process_handle, ProcessHandle::Local(_)) || self.has_exited())
++        {
+             output_task.abort();
+         }
+     }
+@@ -247,13 +332,28 @@ impl UnifiedExecProcess {
+                     .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
+             }
+         }
+-        self.signal_exit(self.exit_code());
++        if self.native_attempt.is_some() {
++            tokio::time::timeout(Duration::from_secs(5), self.wait_for_native_exit())
++                .await
++                .map_err(|_| {
++                    UnifiedExecError::process_failed("NATIVE_PROCESS_EXIT_UNCONFIRMED".to_owned())
++                })??;
++            self.finish_native_attempt().await?;
++        } else {
++            self.signal_exit(self.exit_code());
++        }
+         self.finish_termination();
+         Ok(())
+     }
+ 
+     pub(super) async fn interrupt(&self) -> Result<(), UnifiedExecError> {
+-        match &self.process_handle {
++        let native_attempt = crate::native_operation_barrier::current().ok();
++        if let Some(attempt) = &native_attempt {
++            attempt
++                .check_dispatch()
++                .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++        }
++        let result = match &self.process_handle {
+             ProcessHandle::Local(process_handle) => process_handle
+                 .signal(PtyProcessSignal::Interrupt)
+                 .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
+@@ -261,7 +361,27 @@ impl UnifiedExecProcess {
+                 .signal(ExecServerProcessSignal::Interrupt)
+                 .await
+                 .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
++        };
++        if let Some(attempt) = native_attempt {
++            use crate::native_operation_barrier::Outcome;
++            use crate::native_operation_barrier::Reason;
++            if result.is_ok() {
++                attempt
++                    .started()
++                    .await
++                    .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++                attempt
++                    .finish(Outcome::Completed, None)
++                    .await
++                    .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++            } else {
++                attempt
++                    .finish(Outcome::Unknown, Some(Reason::DispatchUnconfirmed))
++                    .await
++                    .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++            }
+         }
++        result
+     }
+ 
+     pub(super) fn fail_and_terminate(&self, message: String) {
+@@ -353,6 +473,13 @@ impl UnifiedExecProcess {
+             sandbox_type,
+             Some(spawn_lifecycle),
+         );
++        if let Some(attempt) = &managed.native_attempt {
++            if let Err(error) = attempt.started().await {
++                managed.terminate();
++                return Err(UnifiedExecError::process_failed(error.to_string()));
++            }
++            attempt.background().await;
++        }
+         managed.output_task = Some(Self::spawn_local_output_task(
+             output_rx,
+             managed.output_handles().clone(),
+@@ -362,11 +489,13 @@ impl UnifiedExecProcess {
+         match exit_rx.try_recv() {
+             Ok(exit_code) => {
+                 managed.signal_exit(Some(exit_code));
++                managed.finish_native_attempt().await?;
+                 managed.check_for_sandbox_denial().await?;
+                 return Ok(managed);
+             }
+             Err(TryRecvError::Closed) => {
+                 managed.signal_exit(/*exit_code*/ None);
++                managed.finish_native_attempt().await?;
+                 managed.check_for_sandbox_denial().await?;
+                 return Ok(managed);
+             }
+@@ -375,6 +504,7 @@ impl UnifiedExecProcess {
+ 
+         if let Ok(exit_result) = tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, &mut exit_rx).await {
+             managed.signal_exit(exit_result.ok());
++            managed.finish_native_attempt().await?;
+             managed.check_for_sandbox_denial().await?;
+             return Ok(managed);
+         }
+@@ -401,6 +531,13 @@ impl UnifiedExecProcess {
+         // classification rather than attributing a violation to a guessed backend.
+         let sandbox_type = started.sandbox_type.unwrap_or(SandboxType::None);
+         let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
++        if let Some(attempt) = &managed.native_attempt {
++            if let Err(error) = attempt.started().await {
++                managed.terminate();
++                return Err(UnifiedExecError::process_failed(error.to_string()));
++            }
++            attempt.background().await;
++        }
+         let output_handles = managed.output_handles().clone();
+         managed.output_task = Some(Self::spawn_exec_server_output_task(
+             started,
+@@ -424,6 +561,7 @@ impl UnifiedExecProcess {
+         .await
+         .is_ok()
+         {
++            managed.finish_native_attempt().await?;
+             managed.check_for_sandbox_denial().await?;
+         }
+ 
+diff --git a/codex-rs/core/src/unified_exec/process_manager.rs b/codex-rs/core/src/unified_exec/process_manager.rs
+index 2121857..dc4b6f8 100644
+--- a/codex-rs/core/src/unified_exec/process_manager.rs
++++ b/codex-rs/core/src/unified_exec/process_manager.rs
+@@ -616,6 +616,7 @@ impl UnifiedExecProcessManager {
+                 process.fail_and_terminate(err.to_string());
+             }
+         }
++        process.finish_native_attempt().await?;
+         let wall_time = Instant::now().saturating_duration_since(start);
+ 
+         let original_token_count = usize::try_from(approx_tokens_from_byte_count(
+@@ -902,33 +903,61 @@ impl UnifiedExecProcessManager {
+         let mut status_after_write = None;
+ 
+         if !request.input.is_empty() {
+-            if !tty {
+-                if request.input == INTERRUPT {
+-                    process.interrupt().await?;
+-                } else {
+-                    return Err(UnifiedExecError::StdinClosed);
+-                }
+-            } else {
+-                match process.write(request.input.as_bytes()).await {
+-                    Ok(()) => {
+-                        // Give the remote process a brief window to react so that we are
+-                        // more likely to capture its output in the poll below.
+-                        tokio::time::sleep(Duration::from_millis(100)).await;
+-                    }
+-                    Err(err) => {
+-                        let status = self.refresh_process_state(process_id).await;
+-                        if matches!(status, ProcessStatus::Exited { .. }) {
+-                            status_after_write = Some(status);
+-                        } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
+-                            process.terminate();
+-                            self.release_process_id(process_id).await;
+-                            return Err(err);
++            let parent_attempt_ref = process
++                .native_attempt
++                .as_ref()
++                .map(|attempt| attempt.identity().attempt_ref);
++            let native_stdin = crate::native_operation_barrier::Attempt::begin(
++                crate::native_operation_barrier::Identity {
++                    session_id: context.session.thread_id.to_string(),
++                    turn_id: context.step_context.turn.sub_id.clone(),
++                    call_id: context.call_id.clone(),
++                    attempt_ref: Uuid::new_v4(),
++                    tool_name: "write_stdin".to_string(),
++                    parent_attempt_ref,
++                },
++                context.cancellation_token.clone(),
++            )
++            .await
++            .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++            let write_result = native_stdin
++                .scope(async {
++                    if !tty {
++                        if request.input == INTERRUPT {
++                            process.interrupt().await?;
+                         } else {
+-                            return Err(err);
++                            return Err(UnifiedExecError::StdinClosed);
++                        }
++                    } else {
++                        match process.write(request.input.as_bytes()).await {
++                            Ok(()) => {
++                                // Give the remote process a brief window to react so that we are
++                                // more likely to capture its output in the poll below.
++                                tokio::time::sleep(Duration::from_millis(100)).await;
++                            }
++                            Err(err) => {
++                                let status = self.refresh_process_state(process_id).await;
++                                if matches!(status, ProcessStatus::Exited { .. }) {
++                                    status_after_write = Some(status);
++                                } else if matches!(err, UnifiedExecError::ProcessFailed { .. }) {
++                                    process.terminate();
++                                    self.release_process_id(process_id).await;
++                                    return Err(err);
++                                } else {
++                                    return Err(err);
++                                }
++                            }
+                         }
+                     }
+-                }
+-            }
++
++                    Ok::<(), UnifiedExecError>(())
++                })
++                .await;
++            native_stdin
++                .finish_runtime(write_result.is_ok())
++                .await
++                .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++            write_result?;
+         }
+ 
+         let yield_time_ms = {
+@@ -977,6 +1006,7 @@ impl UnifiedExecProcessManager {
+             return Err(UnifiedExecError::process_failed(message));
+         }
+ 
++        process.finish_native_attempt().await?;
+         // After polling, refresh_process_state tells us whether the PTY is
+         // still alive or has exited and been removed from the store; we thread
+         // that through so the handler can tag or suppress TerminalInteraction
+@@ -1253,6 +1283,11 @@ impl UnifiedExecProcessManager {
+                 windows_sandbox_proxy_settings_mode,
+                 tty,
+             );
++            if let Ok(attempt) = crate::native_operation_barrier::current() {
++                attempt
++                    .check_dispatch()
++                    .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++            }
+             let started = match network_policy_decider {
+                 Some(decider) => {
+                     backend
+@@ -1321,6 +1356,11 @@ impl UnifiedExecProcessManager {
+             } else {
+                 None
+             };
++        if let Ok(attempt) = crate::native_operation_barrier::current() {
++            attempt
++                .check_dispatch()
++                .map_err(|error| UnifiedExecError::process_failed(error.to_string()))?;
++        }
+         let spawn_result = codex_sandboxing::spawn_process(codex_sandboxing::SpawnRequest {
+             command: &request.command,
+             cwd: native_cwd.as_path(),
+diff --git a/codex-rs/hooks/src/engine/command_runner.rs b/codex-rs/hooks/src/engine/command_runner.rs
+index b68474f..2453df9 100644
+--- a/codex-rs/hooks/src/engine/command_runner.rs
++++ b/codex-rs/hooks/src/engine/command_runner.rs
+@@ -34,6 +34,8 @@ use super::dispatcher::hook_handler_type_label;
+ use super::dispatcher::hook_scope_label;
+ use super::dispatcher::hook_source_label;
+ use super::dispatcher::scope_for_event;
++use crate::native_dispatch::CommandAttempt;
++use crate::native_dispatch::NativeHookResult;
+ use crate::output_spill::AdditionalContext;
+ use crate::output_spill::HookOutputSpiller;
+ use codex_protocol::ThreadId;
+@@ -168,11 +170,33 @@ impl CommandHookRuntime {
+ 
+         while state.tasks.try_join_next().is_some() {}
+         let concurrency_limit = Arc::clone(&state.concurrency_limit);
++        let native = match crate::native_dispatch::current().ok() {
++            Some(factory) => match factory.scheduled() {
++                Ok(scheduled) => Some((factory, scheduled)),
++                Err(_) => return,
++            },
++            None => None,
++        };
+         state.tasks.spawn(async move {
+-            let Ok(_permit) = concurrency_limit.acquire_owned().await else {
+-                return;
+-            };
+-            task.await;
++            match native {
++                Some((factory, _scheduled)) => {
++                    let permit = tokio::select! {
++                        biased;
++                        _ = factory.cancelled() => return,
++                        permit = concurrency_limit.acquire_owned() => permit,
++                    };
++                    let Ok(_permit) = permit else {
++                        return;
++                    };
++                    crate::with_native_hook_factory(factory, task).await;
++                }
++                None => {
++                    let Ok(_permit) = concurrency_limit.acquire_owned().await else {
++                        return;
++                    };
++                    task.await;
++                }
++            }
+         });
+     }
+ 
+@@ -224,6 +248,16 @@ pub(crate) async fn run_command(
+     #[cfg(unix)]
+     command.process_group(0);
+ 
++    let mut native_attempt =
++        match CommandAttempt::begin(handler.run_id(), handler.event_name_label()).await {
++            Ok(attempt) => attempt,
++            Err(error) => return native_rejection(started_at, started, error),
++        };
++    if let Err(error) = native_attempt.attempt.check_dispatch() {
++        let _ = native_attempt.finish(NativeHookResult::Failed).await;
++        return native_rejection(started_at, started, error);
++    }
++
+     #[cfg(windows)]
+     let mut process_tree_job = JobObject::create().ok();
+     #[cfg(windows)]
+@@ -233,7 +267,10 @@ pub(crate) async fn run_command(
+             Err(_) => {
+                 process_tree_job = None;
+                 command.creation_flags(0);
+-                command.spawn()
++                native_attempt
++                    .attempt
++                    .check_dispatch()
++                    .and_then(|()| command.spawn())
+             }
+         },
+         None => command.spawn(),
+@@ -244,6 +281,9 @@ pub(crate) async fn run_command(
+     let mut child = match child {
+         Ok(child) => child,
+         Err(err) => {
++            if let Err(error) = native_attempt.finish(NativeHookResult::Failed).await {
++                return native_rejection(started_at, started, error);
++            }
+             return finish_command_run(
+                 started_at,
+                 started,
+@@ -264,26 +304,40 @@ pub(crate) async fn run_command(
+         job: process_tree_job,
+     };
+ 
+-    if let Some(mut stdin) = child.stdin.take()
+-        && let Err(err) = stdin.write_all(input_json.as_bytes()).await
+-        && err.kind() != ErrorKind::BrokenPipe
+-    {
++    native_attempt.dispatched = true;
++    if let Err(error) = native_attempt.attempt.started().await {
+         let _ = child.kill().await;
+-        return finish_command_run(
+-            started_at,
+-            started,
+-            CommandRunCompletion {
+-                exit_code: None,
+-                stdout: String::new(),
+-                stderr: String::new(),
+-                error: Some(format!("failed to write hook stdin: {err}")),
+-                outcome: "stdin_error",
+-            },
+-        );
++        let _ = native_attempt.finish(NativeHookResult::Unknown).await;
++        return native_rejection(started_at, started, error);
+     }
+ 
+     let timeout_duration = Duration::from_secs(handler.timeout_sec);
+-    match timeout(timeout_duration, child.wait_with_output()).await {
++    let result = tokio::select! {
++        biased;
++        _ = native_attempt.attempt.cancelled() => {
++            let _ = native_attempt.finish(NativeHookResult::Unknown).await;
++            return native_rejection(started_at, started, std::io::Error::other("NATIVE_HOOK_EXECUTION_CANCELLED"));
++        }
++        result = timeout(timeout_duration, async move {
++            if let Some(mut stdin) = child.stdin.take()
++                && let Err(error) = stdin.write_all(input_json.as_bytes()).await
++                && error.kind() != ErrorKind::BrokenPipe
++            {
++                let _ = child.kill().await;
++                return Err(std::io::Error::other(format!("failed to write hook stdin: {error}")));
++            }
++            child.wait_with_output().await
++        }) => result,
++    };
++    let outcome = match &result {
++        Ok(Ok(output)) if output.status.success() => NativeHookResult::Completed,
++        Ok(Ok(_)) => NativeHookResult::Failed,
++        Ok(Err(_)) | Err(_) => NativeHookResult::Unknown,
++    };
++    if let Err(error) = native_attempt.finish(outcome).await {
++        return native_rejection(started_at, started, error);
++    }
++    match result {
+         Ok(Ok(output)) => {
+             // Successfully completed hooks may intentionally leave detached helpers running.
+             #[cfg(windows)]
+@@ -328,6 +382,20 @@ pub(crate) async fn run_command(
+     }
+ }
+ 
++fn native_rejection(started_at: i64, started: Instant, error: std::io::Error) -> HandlerRunResult {
++    finish_command_run(
++        started_at,
++        started,
++        CommandRunCompletion {
++            exit_code: None,
++            stdout: String::new(),
++            stderr: String::new(),
++            error: Some(error.to_string()),
++            outcome: "native_rejected",
++        },
++    )
++}
++
+ // Needed only until command hooks move to the exec server, which owns process-tree cleanup.
+ struct ProcessTreeGuard {
+     process_id: Option<u32>,
+@@ -457,3 +525,7 @@ fn default_shell_command(environment: &[(OsString, OsString)]) -> Command {
+ #[cfg(test)]
+ #[path = "command_runner_tests.rs"]
+ mod tests;
++
++#[cfg(all(test, unix))]
++#[path = "native_dispatch_tests.rs"]
++mod native_barrier_tests;
+diff --git a/codex-rs/hooks/src/engine/mcp_runner.rs b/codex-rs/hooks/src/engine/mcp_runner.rs
+index 7a8da53..42916dc 100644
+--- a/codex-rs/hooks/src/engine/mcp_runner.rs
++++ b/codex-rs/hooks/src/engine/mcp_runner.rs
+@@ -61,15 +61,20 @@ pub(crate) async fn run_mcp_tool(
+                 .get_or_insert_with(Map::new)
+                 .extend(metadata.clone());
+         }
+-        executor
+-            .execute(HookMcpCall {
+-                server: server.to_string(),
+-                tool: tool.to_string(),
+-                environment_id,
+-                metadata: call_metadata,
+-                input,
+-                timeout: Duration::from_secs(handler.timeout_sec),
+-            })
++        crate::native_dispatch::current()?
++            .execute_mcp(
++                handler.run_id(),
++                handler.event_name_label(),
++                executor,
++                HookMcpCall {
++                    server: server.to_string(),
++                    tool: tool.to_string(),
++                    environment_id,
++                    metadata: call_metadata,
++                    input,
++                    timeout: Duration::from_secs(handler.timeout_sec),
++                },
++            )
+             .await
+     }
+     .await;
+diff --git a/codex-rs/hooks/src/engine/native_dispatch_tests.rs b/codex-rs/hooks/src/engine/native_dispatch_tests.rs
+new file mode 100644
+index 0000000..f5b33b0
+--- /dev/null
++++ b/codex-rs/hooks/src/engine/native_dispatch_tests.rs

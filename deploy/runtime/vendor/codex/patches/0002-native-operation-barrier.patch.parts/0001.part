@@ -1,0 +1,1646 @@
+diff --git a/codex-rs/app-server-transport/src/outgoing_message.rs b/codex-rs/app-server-transport/src/outgoing_message.rs
+index 7f60ceb..da1b025 100644
+--- a/codex-rs/app-server-transport/src/outgoing_message.rs
++++ b/codex-rs/app-server-transport/src/outgoing_message.rs
+@@ -57,3 +57,22 @@ impl QueuedOutgoingMessage {
+         }
+     }
+ }
++
++impl OutgoingMessage {
++    /// Native vendor receipt, kept outside serialized app-server messages.
++    pub fn native_dynamic_dispatch(
++        &self,
++    ) -> Result<Option<codex_core::NativeDynamicDispatch>, &'static str> {
++        match self {
++            Self::Request(ServerRequest::DynamicToolCall { params, .. }) => {
++                codex_core::native_dynamic_dispatch(
++                    &params.thread_id,
++                    &params.turn_id,
++                    &params.call_id,
++                )
++                .map(Some)
++            }
++            _ => Ok(None),
++        }
++    }
++}
+diff --git a/codex-rs/app-server-transport/src/transport/stdio.rs b/codex-rs/app-server-transport/src/transport/stdio.rs
+index 2d30296..64c00ec 100644
+--- a/codex-rs/app-server-transport/src/transport/stdio.rs
++++ b/codex-rs/app-server-transport/src/transport/stdio.rs
+@@ -82,6 +82,16 @@ pub async fn start_stdio_connection(
+     stdio_handles.push(tokio::spawn(async move {
+         let mut stdout = io::stdout();
+         while let Some(queued_message) = writer_rx.recv().await {
++            let native_dispatch = match queued_message.message.native_dynamic_dispatch() {
++                Ok(dispatch) => dispatch,
++                Err(_) => break,
++            };
++            if native_dispatch
++                .as_ref()
++                .is_some_and(|dispatch| dispatch.check_dispatch().is_err())
++            {
++                break;
++            }
+             let Some(mut json) = serialize_outgoing_message(queued_message.message) else {
+                 continue;
+             };
+@@ -90,6 +100,11 @@ pub async fn start_stdio_connection(
+                 error!("Failed to write to stdout: {err}");
+                 break;
+             }
++            if let Some(dispatch) = native_dispatch
++                && dispatch.dispatched().await.is_err()
++            {
++                break;
++            }
+             if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                 let _ = write_complete_tx.send(());
+             }
+diff --git a/codex-rs/app-server-transport/src/transport/websocket.rs b/codex-rs/app-server-transport/src/transport/websocket.rs
+index 5677faa..9421937 100644
+--- a/codex-rs/app-server-transport/src/transport/websocket.rs
++++ b/codex-rs/app-server-transport/src/transport/websocket.rs
+@@ -313,12 +313,19 @@ async fn run_websocket_outbound_loop<M, SinkError>(
+                 let Some(queued_message) = queued_message else {
+                     break;
+                 };
++                let native_dispatch = match queued_message.message.native_dynamic_dispatch() {
++                    Ok(dispatch) => dispatch,
++                    Err(_) => break,
++                };
++                if native_dispatch.as_ref().is_some_and(|dispatch| dispatch.check_dispatch().is_err()) { break; }
+                 let Some(json) = serialize_outgoing_message(queued_message.message) else {
+                     continue;
+                 };
+                 if websocket_writer.send(M::text(json)).await.is_err() {
+                     break;
+                 }
++                if let Some(dispatch) = native_dispatch
++                    && dispatch.dispatched().await.is_err() { break; }
+                 if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                     let _ = write_complete_tx.send(());
+                 }
+diff --git a/codex-rs/apply-patch/src/lib.rs b/codex-rs/apply-patch/src/lib.rs
+index 0ee7a4e..f338bc1 100644
+--- a/codex-rs/apply-patch/src/lib.rs
++++ b/codex-rs/apply-patch/src/lib.rs
+@@ -1,6 +1,9 @@
+ mod file_update;
+ mod invocation;
++mod native_dispatch;
+ mod parser;
++pub use native_dispatch::NativePatchDispatch;
++pub use native_dispatch::with_native_patch_dispatch;
+ mod seek_sequence;
+ mod standalone_executable;
+ mod streaming_parser;
+@@ -557,24 +560,22 @@ async fn apply_hunks_to_files(
+                             path_uri.inferred_native_path_string()
+                         )
+                     })?;
+-                if let Err(error) = fs
+-                    .remove(
+-                        &path_uri,
+-                        RemoveOptions {
+-                            recursive: false,
+-                            force: false,
+-                            follow_symlinks,
+-                        },
+-                        sandbox,
++                if let Err(error) = native_dispatch::run(fs.remove(
++                    &path_uri,
++                    RemoveOptions {
++                        recursive: false,
++                        force: false,
++                        follow_symlinks,
++                    },
++                    sandbox,
++                ))
++                .await
++                .with_context(|| {
++                    format!(
++                        "Failed to delete file {}",
++                        path_uri.inferred_native_path_string()
+                     )
+-                    .await
+-                    .with_context(|| {
+-                        format!(
+-                            "Failed to delete file {}",
+-                            path_uri.inferred_native_path_string()
+-                        )
+-                    })
+-                {
++                }) {
+                     delta.exact &= remove_failure_was_side_effect_free(
+                         &path_uri,
+                         deleted_content.as_deref(),
+@@ -652,24 +653,22 @@ async fn apply_hunks_to_files(
+                                 path_uri.inferred_native_path_string()
+                             )
+                         })?;
+-                    if let Err(error) = fs
+-                        .remove(
+-                            &path_uri,
+-                            RemoveOptions {
+-                                recursive: false,
+-                                force: false,
+-                                follow_symlinks,
+-                            },
+-                            sandbox,
++                    if let Err(error) = native_dispatch::run(fs.remove(
++                        &path_uri,
++                        RemoveOptions {
++                            recursive: false,
++                            force: false,
++                            follow_symlinks,
++                        },
++                        sandbox,
++                    ))
++                    .await
++                    .with_context(|| {
++                        format!(
++                            "Failed to remove original {}",
++                            path_uri.inferred_native_path_string()
+                         )
+-                        .await
+-                        .with_context(|| {
+-                            format!(
+-                                "Failed to remove original {}",
+-                                path_uri.inferred_native_path_string()
+-                            )
+-                        })
+-                    {
++                    }) {
+                         delta.exact &= remove_failure_was_side_effect_free(
+                             &path_uri,
+                             Some(&original_contents),
+@@ -692,12 +691,12 @@ async fn apply_hunks_to_files(
+                     modified.push(affected_path);
+                 } else {
+                     try_write!(
+-                        fs.write_file(
++                        native_dispatch::run(fs.write_file(
+                             &path_uri,
+                             new_contents.clone().into_bytes(),
+                             WriteFileOptions { follow_symlinks },
+                             sandbox,
+-                        )
++                        ))
+                         .await
+                         .with_context(|| format!(
+                             "Failed to write file {}",
+@@ -805,26 +804,25 @@ async fn write_file_with_missing_parent_retry(
+     follow_symlinks: bool,
+     sandbox: Option<&FileSystemSandboxContext>,
+ ) -> anyhow::Result<()> {
+-    match fs
+-        .write_file(
+-            path,
+-            contents.clone(),
+-            WriteFileOptions { follow_symlinks },
+-            sandbox,
+-        )
+-        .await
++    match native_dispatch::run(fs.write_file(
++        path,
++        contents.clone(),
++        WriteFileOptions { follow_symlinks },
++        sandbox,
++    ))
++    .await
+     {
+         Ok(()) => Ok(()),
+         Err(err) if err.kind() == io::ErrorKind::NotFound => {
+             if let Some(parent) = path.parent() {
+-                fs.create_directory(
++                native_dispatch::run(fs.create_directory(
+                     &parent,
+                     CreateDirectoryOptions {
+                         recursive: true,
+                         follow_symlinks,
+                     },
+                     sandbox,
+-                )
++                ))
+                 .await
+                 .with_context(|| {
+                     format!(
+@@ -833,12 +831,12 @@ async fn write_file_with_missing_parent_retry(
+                     )
+                 })?;
+             }
+-            fs.write_file(
++            native_dispatch::run(fs.write_file(
+                 path,
+                 contents,
+                 WriteFileOptions { follow_symlinks },
+                 sandbox,
+-            )
++            ))
+             .await
+             .with_context(|| {
+                 format!(
+diff --git a/codex-rs/apply-patch/src/native_dispatch.rs b/codex-rs/apply-patch/src/native_dispatch.rs
+new file mode 100644
+index 0000000..7eef4fb
+--- /dev/null
++++ b/codex-rs/apply-patch/src/native_dispatch.rs
+@@ -0,0 +1,33 @@
++//! Private vendor callbacks around actual patch filesystem adapter operations.
++use std::future::Future;
++use std::io;
++use std::pin::Pin;
++use std::sync::Arc;
++
++/// The core-owned permit stays outside patch input and child process state.
++/// A receipt confirms adapter dispatch, not that a failed operation was side-effect free.
++pub trait NativePatchDispatch: Send + Sync {
++    fn check_dispatch(&self) -> io::Result<()>;
++    fn dispatched(&self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + '_>>;
++}
++
++tokio::task_local! { static CURRENT: Arc<dyn NativePatchDispatch>; }
++
++pub async fn with_native_patch_dispatch<T>(
++    barrier: Arc<dyn NativePatchDispatch>,
++    work: impl Future<Output = T>,
++) -> T {
++    CURRENT.scope(barrier, work).await
++}
++
++pub(crate) async fn run<T>(work: impl Future<Output = io::Result<T>>) -> io::Result<T> {
++    let barrier = CURRENT.try_with(Arc::clone).ok();
++    if let Some(barrier) = &barrier {
++        barrier.check_dispatch()?;
++    }
++    let result = work.await;
++    if let Some(barrier) = barrier {
++        barrier.dispatched().await?;
++    }
++    result
++}
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+index 71d0323..b421915 100644
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -1036,6 +1036,15 @@ fn stage_str(stage: Stage) -> &'static str {
+ }
+ 
+ fn main() -> anyhow::Result<()> {
++    codex_core::initialize_native_operation_barrier();
++    if std::env::args_os().len() == 2
++        && std::env::args_os()
++            .nth(1)
++            .is_some_and(|argument| argument == "--agent-infra-native-barrier-info")
++    {
++        print!("{}", codex_core::native_operation_barrier_info());
++        return Ok(());
++    }
+     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
+     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
+         cli_main(arg0_paths, remote_control_disabled).await?;
+diff --git a/codex-rs/core/BUILD.bazel b/codex-rs/core/BUILD.bazel
+index c3b8224..dfa9f58 100644
+--- a/codex-rs/core/BUILD.bazel
++++ b/codex-rs/core/BUILD.bazel
+@@ -2,7 +2,7 @@ load("//:defs.bzl", "codex_rust_crate")
+ 
+ codex_rust_crate(
+     name = "core",
+-    compile_data = glob(["assets/**"]),
++    compile_data = glob(["assets/**"]) + ["src/native_operation_barrier_manifest.json"],
+     crate_name = "codex_core",
+     extra_binaries = [
+         "//codex-rs/bwrap:bwrap",
+diff --git a/codex-rs/core/src/agent/control.rs b/codex-rs/core/src/agent/control.rs
+index 141aadd..ea593cc 100644
+--- a/codex-rs/core/src/agent/control.rs
++++ b/codex-rs/core/src/agent/control.rs
+@@ -193,9 +193,11 @@ impl AgentControl {
+     ) -> CodexResult<String> {
+         let state = self.upgrade()?;
+         let thread = state.get_thread(agent_id).await?;
+-        let result = match thread
+-            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
+-            .await
++        let result = match crate::native_sources::with_target(
++            agent_id.to_string(),
++            thread.start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options)),
++        )
++        .await
+         {
+             Ok(TurnInputSubmission::Started { turn_id }) => Ok(turn_id),
+             Ok(TurnInputSubmission::Steered { .. }) => {
+diff --git a/codex-rs/core/src/agent/control/legacy.rs b/codex-rs/core/src/agent/control/legacy.rs
+index f6bff6c..a9117a0 100644
+--- a/codex-rs/core/src/agent/control/legacy.rs
++++ b/codex-rs/core/src/agent/control/legacy.rs
+@@ -46,18 +46,25 @@ impl AgentControl {
+     /// Mark `agent_id` as explicitly closed in persisted spawn-edge state, then shut down the
+     /// agent and any live descendants reached from the in-memory tree.
+     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
++        for thread_id in self.list_live_agent_subtree_thread_ids(agent_id).await? {
++            crate::native_sources::check_control_target(&thread_id.to_string())
++                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++        }
+         let state = self.upgrade()?;
+         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
+         match state.get_thread(agent_id).await {
+             Ok(thread) => {
+                 if !thread.config_snapshot().await.ephemeral
+                     && let Some(agent_graph_store) = state.agent_graph_store()
+-                    && let Err(err) = agent_graph_store
+-                        .set_thread_spawn_edge_status(
++                    && let Err(err) = crate::native_sources::control_dispatch(
++                        &agent_id.to_string(),
++                        agent_graph_store.set_thread_spawn_edge_status(
+                             agent_id,
+                             codex_agent_graph_store::ThreadSpawnEdgeStatus::Closed,
+-                        )
+-                        .await
++                        ),
++                    )
++                    .await
++                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
+                 {
+                     warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+                 }
+@@ -66,12 +73,15 @@ impl AgentControl {
+                 if known_agent && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
+             {
+                 if let Some(agent_graph_store) = state.agent_graph_store()
+-                    && let Err(err) = agent_graph_store
+-                        .set_thread_spawn_edge_status(
++                    && let Err(err) = crate::native_sources::control_dispatch(
++                        &agent_id.to_string(),
++                        agent_graph_store.set_thread_spawn_edge_status(
+                             agent_id,
+                             codex_agent_graph_store::ThreadSpawnEdgeStatus::Closed,
+-                        )
+-                        .await
++                        ),
++                    )
++                    .await
++                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
+                 {
+                     return Err(CodexErr::Fatal(format!(
+                         "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
+diff --git a/codex-rs/core/src/agent/control/spawn.rs b/codex-rs/core/src/agent/control/spawn.rs
+index e5518b2..a390ae7 100644
+--- a/codex-rs/core/src/agent/control/spawn.rs
++++ b/codex-rs/core/src/agent/control/spawn.rs
+@@ -654,6 +654,11 @@ impl AgentControl {
+         let notification_source = session_source.clone();
+ 
+         // The same `AgentControl` is sent to spawn the thread.
++        let native_attempt = crate::native_operation_barrier::current()
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
++        native_attempt
++            .check_dispatch()
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+         let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
+             (Some(session_source), Some(_), inheritance) => {
+                 Box::pin(self.spawn_forked_thread(
+@@ -695,6 +700,10 @@ impl AgentControl {
+             }
+             (None, _, _) => Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?,
+         };
++        native_attempt
++            .started()
++            .await
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+         agent_metadata.agent_id = Some(new_thread.thread_id);
+         reservation.commit(agent_metadata.clone());
+         if let Some(residency_slot) = residency_slot {
+@@ -1167,6 +1176,8 @@ impl AgentControl {
+         thread_id: ThreadId,
+         session_source: SessionSource,
+     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
++        crate::native_sources::check_control_target(&thread_id.to_string())
++            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+         let state = self.upgrade()?;
+         let stored_thread = state
+             .read_stored_thread(ReadThreadParams {
+@@ -1229,8 +1240,9 @@ impl AgentControl {
+             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+             .await;
+ 
+-        let resumed_thread = state
+-            .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
++        let resumed_thread = crate::native_sources::control_dispatch(
++            &thread_id.to_string(),
++            state.resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+                 config: config.clone(),
+                 initial_history,
+                 agent_control: self.clone(),
+@@ -1240,8 +1252,10 @@ impl AgentControl {
+                 inherited_environments,
+                 inherited_exec_policy,
+                 client_mcp_extensions: None,
+-            })
+-            .await?;
++            }),
++        )
++        .await
++        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))??;
+         let mut agent_metadata = agent_metadata;
+         agent_metadata.agent_id = Some(resumed_thread.thread_id);
+         reservation.commit(agent_metadata.clone());
+diff --git a/codex-rs/core/src/exec.rs b/codex-rs/core/src/exec.rs
+index 46c2442..f2ed737 100644
+--- a/codex-rs/core/src/exec.rs
++++ b/codex-rs/core/src/exec.rs
+@@ -917,7 +917,13 @@ async fn exec(
+         ))
+     })?;
+     let arg0_ref = arg0.as_deref();
+-    let child = spawn_child_async(SpawnChildRequest {
++    let native_attempt = crate::native_operation_barrier::current().ok();
++    if let Some(attempt) = &native_attempt {
++        attempt
++            .check_dispatch()
++            .map_err(|error| CodexErr::Io(io::Error::other(error)))?;
++    }
++    let mut child = spawn_child_async(SpawnChildRequest {
+         program: PathBuf::from(program),
+         args: args.into(),
+         arg0: arg0_ref,
+@@ -931,10 +937,31 @@ async fn exec(
+         env,
+     })
+     .await?;
++    if let Some(attempt) = &native_attempt
++        && let Err(error) = attempt.started().await
++    {
++        let _ = child.kill().await;
++        let _ = child.wait().await;
++        return Err(CodexErr::Io(io::Error::other(error)));
++    }
+     if let Some(after_spawn) = after_spawn {
+         after_spawn();
+     }
+-    consume_output(child, expiration, capture_policy, stdout_stream).await
++    let result = consume_output(child, expiration, capture_policy, stdout_stream).await;
++    if let Some(attempt) = native_attempt {
++        use crate::native_operation_barrier::Outcome;
++        use crate::native_operation_barrier::Reason;
++        let (outcome, reason) = match &result {
++            Ok(output) if output.exit_status.success() => (Outcome::Completed, None),
++            Ok(_) => (Outcome::Failed, Some(Reason::ExecutionFailed)),
++            Err(_) => (Outcome::Unknown, Some(Reason::DispatchUnconfirmed)),
++        };
++        attempt
++            .finish(outcome, reason)
++            .await
++            .map_err(|error| CodexErr::Io(io::Error::other(error)))?;
++    }
++    result
+ }
+ 
+ /// Consumes the output of a child process according to the configured capture
+diff --git a/codex-rs/core/src/hook_runtime.rs b/codex-rs/core/src/hook_runtime.rs
+index 4964905..89a0950 100644
+--- a/codex-rs/core/src/hook_runtime.rs
++++ b/codex-rs/core/src/hook_runtime.rs
+@@ -1,3 +1,8 @@
++#[path = "native_hook_dispatch.rs"]
++mod native_hook_dispatch;
++pub(crate) use native_hook_dispatch::drain_native_hook_context;
++pub(crate) use native_hook_dispatch::with_native_hook_context;
++
+ use std::future::Future;
+ use std::sync::Arc;
+ use std::time::Duration;
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index b4e9792..71122af 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -70,6 +70,13 @@ mod git_info_tests;
+ mod guardian;
+ mod hook_mcp_executor;
+ mod hook_runtime;
++mod native_dynamic_dispatch;
++mod native_operation_barrier;
++mod native_sources;
++pub use native_dynamic_dispatch::NativeDynamicDispatch;
++pub use native_dynamic_dispatch::native_dynamic_dispatch;
++pub use native_operation_barrier::initialize_native_operation_barrier;
++pub use native_operation_barrier::native_operation_barrier_info;
+ mod image_preparation;
+ mod installation_id;
+ pub(crate) mod mcp;
+diff --git a/codex-rs/core/src/mcp_tool_call.rs b/codex-rs/core/src/mcp_tool_call.rs
+index 9d44f61..528f52a 100644
+--- a/codex-rs/core/src/mcp_tool_call.rs
++++ b/codex-rs/core/src/mcp_tool_call.rs
+@@ -293,6 +293,7 @@ pub(crate) async fn handle_mcp_tool_call(
+                 return handle_approved_mcp_tool_call(
+                     &sess,
+                     step_context.as_ref(),
++                    cancellation_token,
+                     &call_id,
+                     originating_item_id.as_ref(),
+                     invocation,
+@@ -367,6 +368,7 @@ pub(crate) async fn handle_mcp_tool_call(
+     handle_approved_mcp_tool_call(
+         &sess,
+         step_context.as_ref(),
++        cancellation_token,
+         &call_id,
+         originating_item_id.as_ref(),
+         invocation,
+@@ -430,6 +432,7 @@ impl McpToolCallItemMetadata {
+ async fn handle_approved_mcp_tool_call(
+     sess: &Arc<Session>,
+     step_context: &StepContext,
++    cancellation_token: &CancellationToken,
+     call_id: &str,
+     originating_item_id: Option<&ResponseItemId>,
+     invocation: McpInvocation,
+@@ -450,7 +453,18 @@ async fn handle_approved_mcp_tool_call(
+     let mut tool_input = arguments_value
+         .clone()
+         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+-    let result = async {
++    let native_factory = Arc::new(crate::native_operation_barrier::McpFactory {
++        identity: crate::native_operation_barrier::Identity {
++            session_id: sess.thread_id.to_string(),
++            turn_id: turn_context.sub_id.clone(),
++            call_id: call_id.to_owned(),
++            attempt_ref: uuid::Uuid::new_v4(),
++            tool_name: format!("{server}/{tool_name}"),
++            parent_attempt_ref: None,
++        },
++        cancelled: cancellation_token.clone(),
++    });
++    let native_work = async {
+         let result = async {
+             let mut result = prepared_call
+                 .call_with_preparation(/*requested_timeout*/ None, || async {
+@@ -574,8 +588,8 @@ async fn handle_approved_mcp_tool_call(
+             connector_id,
+             connector_name,
+         },
+-    ))
+-    .await;
++    ));
++    let result = codex_rmcp_client::with_native_mcp_factory(native_factory, native_work).await;
+     if let Err(error) = &result {
+         tracing::warn!("MCP tool call error: {error:?}");
+     }
+diff --git a/codex-rs/core/src/native_dynamic_dispatch.rs b/codex-rs/core/src/native_dynamic_dispatch.rs
+new file mode 100644
+index 0000000..cd3dfa0
+--- /dev/null
++++ b/codex-rs/core/src/native_dynamic_dispatch.rs
+@@ -0,0 +1,72 @@
++//! Private in-process handoff from dynamic tool registration to actual client write.
++use crate::native_operation_barrier::Attempt;
++use crate::native_operation_barrier::BarrierError;
++use std::collections::HashMap;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++
++type Pending = HashMap<(String, String, String), Attempt>;
++
++fn pending() -> &'static Mutex<Pending> {
++    static PENDING: OnceLock<Mutex<Pending>> = OnceLock::new();
++    PENDING.get_or_init(Mutex::default)
++}
++
++pub(crate) struct Registration((String, String, String));
++impl Drop for Registration {
++    fn drop(&mut self) {
++        if let Ok(mut pending) = pending().lock() {
++            pending.remove(&self.0);
++        }
++    }
++}
++
++pub(crate) fn register(attempt: &Attempt) -> Result<Registration, BarrierError> {
++    let identity = attempt.identity();
++    let key = (
++        identity.session_id.clone(),
++        identity.turn_id.clone(),
++        identity.call_id.clone(),
++    );
++    let mut pending = pending().lock().map_err(|_| BarrierError)?;
++    if pending.len() >= 1024 || pending.contains_key(&key) {
++        return Err(BarrierError);
++    }
++    pending.insert(key.clone(), attempt.clone());
++    Ok(Registration(key))
++}
++
++/// Internal Rust-only receipt handle; never serialized into app-server messages.
++#[doc(hidden)]
++#[derive(Clone, Debug)]
++pub struct NativeDynamicDispatch(Attempt);
++
++/// Resolves only the original core registration. Missing registrations fail closed.
++#[doc(hidden)]
++pub fn native_dynamic_dispatch(
++    thread: &str,
++    turn: &str,
++    call: &str,
++) -> Result<NativeDynamicDispatch, &'static str> {
++    pending()
++        .lock()
++        .map_err(|_| "NATIVE_OPERATION_BARRIER_UNAVAILABLE")?
++        .get(&(thread.to_owned(), turn.to_owned(), call.to_owned()))
++        .cloned()
++        .map(NativeDynamicDispatch)
++        .ok_or("NATIVE_OPERATION_BARRIER_UNAVAILABLE")
++}
++
++impl NativeDynamicDispatch {
++    pub fn check_dispatch(&self) -> Result<(), &'static str> {
++        self.0
++            .check_dispatch()
++            .map_err(|_| "NATIVE_OPERATION_BARRIER_UNAVAILABLE")
++    }
++    pub async fn dispatched(&self) -> Result<(), &'static str> {
++        self.0
++            .started()
++            .await
++            .map_err(|_| "NATIVE_OPERATION_BARRIER_UNAVAILABLE")
++    }
++}
+diff --git a/codex-rs/core/src/native_hook_dispatch.rs b/codex-rs/core/src/native_hook_dispatch.rs
+new file mode 100644
+index 0000000..7d5794d
+--- /dev/null
++++ b/codex-rs/core/src/native_hook_dispatch.rs
+@@ -0,0 +1,220 @@
++//! Native hook identity is captured once from the admitted original task.
++use std::collections::HashMap;
++use std::future::Future;
++use std::io;
++use std::sync::Arc;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++use std::sync::Weak;
++use std::sync::atomic::AtomicUsize;
++use std::sync::atomic::Ordering;
++
++use codex_hooks::HookMcpCall;
++use codex_hooks::HookMcpExecutor;
++use codex_hooks::NativeHookAttempt;
++use codex_hooks::NativeHookFactory;
++use codex_hooks::NativeHookResult;
++use codex_hooks::NativeHookTask;
++use futures::future::BoxFuture;
++use tokio_util::sync::CancellationToken;
++use uuid::Uuid;
++
++use crate::native_operation_barrier::Attempt;
++use crate::native_operation_barrier::Identity;
++use crate::native_operation_barrier::McpFactory;
++use crate::native_operation_barrier::Outcome;
++use crate::native_operation_barrier::Reason;
++
++struct HookFactory {
++    session_id: String,
++    turn_id: String,
++    cancelled: CancellationToken,
++    tasks: Option<Arc<HookTasks>>,
++}
++
++#[derive(Default)]
++struct HookTasks {
++    pending: AtomicUsize,
++    changed: tokio::sync::Notify,
++}
++
++type SourceKey = (String, String);
++fn task_scopes() -> &'static Mutex<HashMap<SourceKey, Weak<HookTasks>>> {
++    static SCOPES: OnceLock<Mutex<HashMap<SourceKey, Weak<HookTasks>>>> = OnceLock::new();
++    SCOPES.get_or_init(Mutex::default)
++}
++
++fn context_error() -> io::Error {
++    io::Error::other("NATIVE_HOOK_EXECUTION_CONTEXT_UNAVAILABLE")
++}
++
++impl HookTasks {
++    async fn drain(&self) {
++        loop {
++            let changed = self.changed.notified();
++            tokio::pin!(changed);
++            changed.as_mut().enable();
++            if self.pending.load(Ordering::Acquire) == 0 {
++                return;
++            }
++            changed.await;
++        }
++    }
++}
++
++struct HookTaskGuard(Arc<HookTasks>);
++impl NativeHookTask for HookTaskGuard {}
++impl Drop for HookTaskGuard {
++    fn drop(&mut self) {
++        self.0.pending.fetch_sub(1, Ordering::AcqRel);
++        self.0.changed.notify_waiters();
++    }
++}
++
++pub(crate) async fn drain_native_hook_context(thread_id: &str, turn_id: &str) -> io::Result<()> {
++    let tasks = task_scopes()
++        .lock()
++        .map_err(|_| context_error())?
++        .get(&(thread_id.into(), turn_id.into()))
++        .and_then(Weak::upgrade);
++    if let Some(tasks) = tasks {
++        tasks.drain().await;
++    }
++    Ok(())
++}
++
++pub(crate) async fn with_native_hook_context<T>(
++    session_id: String,
++    turn_id: String,
++    cancelled: CancellationToken,
++    work: impl Future<Output = T>,
++) -> T {
++    let tasks = task_scopes().lock().ok().and_then(|mut scopes| {
++        scopes.retain(|_, scope| scope.strong_count() > 0);
++        let key = (session_id.clone(), turn_id.clone());
++        if let Some(tasks) = scopes.get(&key).and_then(Weak::upgrade) {
++            return Some(tasks);
++        }
++        if scopes.len() >= 1024 {
++            return None;
++        }
++        let tasks = Arc::new(HookTasks::default());
++        scopes.insert(key, Arc::downgrade(&tasks));
++        Some(tasks)
++    });
++    codex_hooks::with_native_hook_factory(
++        Arc::new(HookFactory {
++            session_id,
++            turn_id,
++            cancelled,
++            tasks,
++        }),
++        work,
++    )
++    .await
++}
++
++impl HookFactory {
++    fn identity(&self, run_id: String, tool_name: String) -> Identity {
++        Identity {
++            session_id: self.session_id.clone(),
++            turn_id: self.turn_id.clone(),
++            call_id: run_id,
++            attempt_ref: Uuid::new_v4(),
++            tool_name,
++            parent_attempt_ref: None,
++        }
++    }
++}
++
++impl NativeHookFactory for HookFactory {
++    fn scheduled(&self) -> io::Result<Box<dyn NativeHookTask>> {
++        let tasks = self.tasks.as_ref().ok_or_else(context_error)?;
++        tasks
++            .pending
++            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
++                (count < 1024).then_some(count + 1)
++            })
++            .map_err(|_| context_error())?;
++        Ok(Box::new(HookTaskGuard(Arc::clone(tasks))))
++    }
++
++    fn drain(&self) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async {
++            self.tasks.as_ref().ok_or_else(context_error)?.drain().await;
++            Ok(())
++        })
++    }
++
++    fn cancelled(&self) -> BoxFuture<'_, ()> {
++        Box::pin(self.cancelled.cancelled())
++    }
++
++    fn begin_command(
++        &self,
++        run_id: String,
++        event_name: &'static str,
++    ) -> BoxFuture<'_, io::Result<Arc<dyn NativeHookAttempt>>> {
++        Box::pin(async move {
++            let attempt = Attempt::begin(
++                self.identity(run_id, format!("hook_command:{event_name}")),
++                self.cancelled.clone(),
++            )
++            .await
++            .map_err(io::Error::other)?;
++            Ok(Arc::new(HookAttempt {
++                attempt,
++                cancelled: self.cancelled.clone(),
++            }) as Arc<dyn NativeHookAttempt>)
++        })
++    }
++
++    fn execute_mcp<'a>(
++        &'a self,
++        run_id: String,
++        event_name: &'static str,
++        executor: &'a dyn HookMcpExecutor,
++        call: HookMcpCall,
++    ) -> BoxFuture<'a, anyhow::Result<String>> {
++        Box::pin(codex_rmcp_client::with_native_mcp_factory(
++            Arc::new(McpFactory {
++                identity: self.identity(run_id, format!("hook_mcp:{event_name}")),
++                cancelled: self.cancelled.clone(),
++            }),
++            executor.execute(call),
++        ))
++    }
++}
++
++struct HookAttempt {
++    attempt: Attempt,
++    cancelled: CancellationToken,
++}
++
++impl NativeHookAttempt for HookAttempt {
++    fn check_dispatch(&self) -> io::Result<()> {
++        self.attempt.check_dispatch().map_err(io::Error::other)
++    }
++
++    fn started(&self) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async { self.attempt.started().await.map_err(io::Error::other) })
++    }
++
++    fn cancelled(&self) -> BoxFuture<'_, ()> {
++        Box::pin(self.cancelled.cancelled())
++    }
++
++    fn finish(&self, result: NativeHookResult) -> BoxFuture<'_, io::Result<()>> {
++        Box::pin(async move {
++            let (outcome, reason) = match result {
++                NativeHookResult::Completed => (Outcome::Completed, None),
++                NativeHookResult::Failed => (Outcome::Failed, Some(Reason::ExecutionFailed)),
++                NativeHookResult::Unknown => (Outcome::Unknown, Some(Reason::ResultUnconfirmed)),
++            };
++            self.attempt
++                .finish(outcome, reason)
++                .await
++                .map_err(io::Error::other)
++        })
++    }
++}
+diff --git a/codex-rs/core/src/native_operation_barrier.rs b/codex-rs/core/src/native_operation_barrier.rs
+new file mode 100644
+index 0000000..60413a1
+--- /dev/null
++++ b/codex-rs/core/src/native_operation_barrier.rs
+@@ -0,0 +1,732 @@
++//! Agent Infra vendor change: mandatory native-attempt callback on an inherited
++//! anonymous socket. No command hook, public app-server method, or agent loop.
++use std::future::Future;
++use std::sync::Arc;
++use std::sync::OnceLock;
++use std::sync::atomic::AtomicBool;
++use std::sync::atomic::Ordering;
++use std::time::Duration;
++use std::time::SystemTime;
++use std::time::UNIX_EPOCH;
++
++use serde::Deserialize;
++use serde::Serialize;
++use tokio::io::AsyncReadExt;
++use tokio::io::AsyncWriteExt;
++use tokio::io::BufReader;
++use tokio::sync::Mutex;
++use tokio_util::sync::CancellationToken;
++use uuid::Uuid;
++
++use crate::native_sources::SourceOwner;
++
++const MAX_FRAME_BYTES: usize = 16_384;
++const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
++const FAILURE: &str = "NATIVE_OPERATION_BARRIER_UNAVAILABLE";
++static CHANNEL_POISONED: AtomicBool = AtomicBool::new(false);
++
++pub(crate) fn channel_poisoned() -> bool {
++    CHANNEL_POISONED.load(Ordering::Acquire)
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) struct BarrierError;
++
++impl std::fmt::Display for BarrierError {
++    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        formatter.write_str(FAILURE)
++    }
++}
++
++impl std::error::Error for BarrierError {}
++
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub(crate) struct Identity {
++    pub session_id: String,
++    pub turn_id: String,
++    pub call_id: String,
++    #[serde(deserialize_with = "canonical_uuid")]
++    pub attempt_ref: Uuid,
++    pub tool_name: String,
++    #[serde(
++        default,
++        deserialize_with = "optional_canonical_uuid",
++        skip_serializing_if = "Option::is_none"
++    )]
++    pub parent_attempt_ref: Option<Uuid>,
++}
++
++impl Identity {
++    fn valid(&self) -> bool {
++        [
++            &self.session_id,
++            &self.turn_id,
++            &self.call_id,
++            &self.tool_name,
++        ]
++        .into_iter()
++        .all(|value| {
++            !value.is_empty()
++                && value.len() <= 1024
++                && value.chars().count() <= 256
++                && !value.chars().any(char::is_control)
++        })
++    }
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++enum Phase {
++    Intent,
++    Started,
++    Outcome,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(crate) enum Outcome {
++    Completed,
++    Failed,
++    Unknown,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(crate) enum Reason {
++    AuthorizationDenied,
++    AuthorizationUnavailable,
++    CancelledBeforeDispatch,
++    ExecutionFailed,
++    ExecutionCancelled,
++    DispatchUnconfirmed,
++    ResultUnconfirmed,
++}
++
++#[derive(Clone, Debug, Serialize)]
++#[serde(rename_all = "camelCase")]
++struct Request {
++    schema_version: u8,
++    request_id: Uuid,
++    phase: Phase,
++    identity: Identity,
++    occurred_at: u64,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    permit_id: Option<Uuid>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    outcome: Option<Outcome>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    reason: Option<Reason>,
++}
++
++#[derive(Debug, Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct Response {
++    schema_version: u8,
++    #[serde(deserialize_with = "canonical_uuid")]
++    request_id: Uuid,
++    phase: Phase,
++    identity: Identity,
++    decision: String,
++    #[serde(default, deserialize_with = "optional_canonical_uuid")]
++    permit_id: Option<Uuid>,
++    #[serde(default, deserialize_with = "present")]
++    expires_at: Option<u64>,
++    #[serde(default, deserialize_with = "present")]
++    reason: Option<String>,
++    #[serde(default, deserialize_with = "present")]
++    source_owner: Option<SourceOwner>,
++}
++
++// Missing optional fields are allowed; explicit null is not part of the wire schema.
++pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
++where
++    D: serde::Deserializer<'de>,
++    T: Deserialize<'de>,
++{
++    T::deserialize(deserializer).map(Some)
++}
++
++pub(crate) fn canonical_uuid<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
++where
++    D: serde::Deserializer<'de>,
++{
++    let text = String::deserialize(deserializer)?;
++    let uuid = Uuid::parse_str(&text).map_err(serde::de::Error::custom)?;
++    if uuid.hyphenated().to_string() != text {
++        return Err(serde::de::Error::custom("noncanonical UUID"));
++    }
++    Ok(uuid)
++}
++
++fn optional_canonical_uuid<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
++where
++    D: serde::Deserializer<'de>,
++{
++    canonical_uuid(deserializer).map(Some)
++}
++
++impl Response {
++    fn validate(&self, request: &Request, now: u64) -> Result<(), BarrierError> {
++        if self.schema_version != 1
++            || self.request_id != request.request_id
++            || self.phase != request.phase
++            || self.identity != request.identity
++            || !self.identity.valid()
++        {
++            return Err(BarrierError);
++        }
++        let valid = match (request.phase, self.decision.as_str()) {
++            (Phase::Intent, "permit") => {
++                self.permit_id.is_some()
++                    && self.source_owner.as_ref().is_some_and(SourceOwner::valid)
++                    && self.reason.is_none()
++                    && self
++                        .expires_at
++                        .is_some_and(|expires| expires > now && expires <= now.saturating_add(5000))
++            }
++            (Phase::Intent, "deny") => {
++                self.permit_id.is_none()
++                    && self.source_owner.is_none()
++                    && self.expires_at.is_none()
++                    && matches!(
++                        self.reason.as_deref(),
++                        Some(
++                            "authorization_denied"
++                                | "authorization_unavailable"
++                                | "persistence_unavailable"
++                        )
++                    )
++            }
++            (Phase::Started | Phase::Outcome, "ack") => {
++                self.permit_id.is_none()
++                    && self.expires_at.is_none()
++                    && self.reason.is_none()
++                    && self.source_owner.is_none()
++            }
++            _ => false,
++        };
++        if valid { Ok(()) } else { Err(BarrierError) }
++    }
++}
++
++pub(crate) fn now_ms() -> Result<u64, BarrierError> {
++    let now = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .map_err(|_| BarrierError)?;
++    let value = u64::try_from(now.as_millis()).map_err(|_| BarrierError)?;
++    if value == 0 || value > 9_007_199_254_740_991 {
++        return Err(BarrierError);
++    }
++    Ok(value)
++}
++
++#[cfg(unix)]
++mod socket {
++    use std::os::fd::BorrowedFd;
++    use std::os::fd::FromRawFd;
++    use std::os::unix::net::UnixStream;
++    use std::sync::OnceLock;
++
++    static SOCKET: OnceLock<Result<UnixStream, ()>> = OnceLock::new();
++
++    // Called synchronously at CLI entry, before arg0 dispatch, runtime bootstrap,
++    // snapshot helpers, plugins, or ordinary hooks can spawn any child.
++    pub(super) fn initialize() {
++        SOCKET.get_or_init(|| {
++            // SAFETY: only inspect inherited fd 3 until it is validated. Take
++            // ownership once, under OnceLock. Invalid/unowned fds are not closed.
++            unsafe {
++                let flags = libc::fcntl(3, libc::F_GETFD);
++                if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags | libc::FD_CLOEXEC) < 0 {
++                    return Err(());
++                }
++                let mut address: libc::sockaddr_storage = std::mem::zeroed();
++                let mut address_length = std::mem::size_of_val(&address) as libc::socklen_t;
++                if libc::getsockname(3, (&raw mut address).cast(), &raw mut address_length) != 0
++                    || i32::from(address.ss_family) != libc::AF_UNIX
++                {
++                    return Err(());
++                }
++                let mut kind: libc::c_int = 0;
++                let mut kind_length = std::mem::size_of_val(&kind) as libc::socklen_t;
++                if libc::getsockopt(
++                    3,
++                    libc::SOL_SOCKET,
++                    libc::SO_TYPE,
++                    (&raw mut kind).cast(),
++                    &raw mut kind_length,
++                ) != 0
++                    || kind != libc::SOCK_STREAM
++                {
++                    return Err(());
++                }
++                // std accounts for Darwin's padded unnamed sockaddr length and
++                // distinguishes Linux abstract names from anonymous socketpairs.
++                let inspection = UnixStream::from(
++                    BorrowedFd::borrow_raw(3)
++                        .try_clone_to_owned()
++                        .map_err(|_| ())?,
++                );
++                if !inspection.local_addr().map_err(|_| ())?.is_unnamed()
++                    || !inspection.peer_addr().map_err(|_| ())?.is_unnamed()
++                {
++                    return Err(());
++                }
++                let stream = UnixStream::from_raw_fd(3);
++                stream.set_nonblocking(true).map_err(|_| ())?;
++                Ok(stream)
++            }
++        });
++    }
++
++    pub(super) fn stream() -> Result<tokio::net::UnixStream, ()> {
++        // Never initialize lazily: that could allow an earlier child to inherit
++        // the control endpoint. A non-CLI entrypoint must initialize explicitly.
++        let stream = SOCKET.get().ok_or(())?.as_ref().map_err(|_| ())?;
++        tokio::net::UnixStream::from_std(stream.try_clone().map_err(|_| ())?).map_err(|_| ())
++    }
++}
++
++pub fn native_operation_barrier_info() -> &'static str {
++    include_str!("native_operation_barrier_manifest.json")
++}
++
++/// Internal CLI bootstrap only; no public app-server protocol addition.
++pub fn initialize_native_operation_barrier() {
++    #[cfg(unix)]
++    socket::initialize();
++}
++
++#[cfg(unix)]
++struct Transport {
++    stream: Mutex<BufReader<tokio::net::UnixStream>>,
++    poisoned: AtomicBool,
++}
++
++#[cfg(unix)]
++struct InFlightExchange<'a> {
++    poisoned: &'a AtomicBool,
++    complete: bool,
++}
++
++#[cfg(unix)]
++impl Drop for InFlightExchange<'_> {
++    fn drop(&mut self) {
++        if !self.complete {
++            self.poisoned.store(true, Ordering::Release);
++            CHANNEL_POISONED.store(true, Ordering::Release);
++        }
++    }
++}
++
++#[cfg(unix)]
++impl Transport {
++    #[allow(
++        clippy::await_holding_invalid_type,
++        reason = "The bounded private socket exchange must serialize each complete request and receipt"
++    )]
++    async fn exchange<T: Serialize + Sync, R: serde::de::DeserializeOwned>(
++        &self,
++        request: &T,
++        validate: impl Fn(&R, &T, u64) -> Result<(), BarrierError> + Send + Sync,
++    ) -> Result<R, BarrierError> {
++        let exchange = async {
++            let mut stream = self.stream.lock().await;
++            if self.poisoned.load(Ordering::Acquire) {
++                return Err(BarrierError);
++            }
++            let mut request_bytes = serde_json::to_vec(request).map_err(|_| BarrierError)?;
++            request_bytes.push(b'\n');
++            if request_bytes.len() > MAX_FRAME_BYTES {
++                return Err(BarrierError);
++            }
++            // A cancelled caller may have partially written or consumed a frame.
++            // Poison before releasing the serialized socket, including task abort.
++            let mut in_flight = InFlightExchange {
++                poisoned: &self.poisoned,
++                complete: false,
++            };
++            stream
++                .get_mut()
++                .write_all(&request_bytes)
++                .await
++                .map_err(|_| BarrierError)?;
++            let mut bytes = Vec::new();
++            loop {
++                if bytes.len() >= MAX_FRAME_BYTES {
++                    return Err(BarrierError);
++                }
++                let byte = stream.read_u8().await.map_err(|_| BarrierError)?;
++                bytes.push(byte);
++                if byte == b'\n' {
++                    break;
++                }
++            }
++            let response: R = serde_json::from_slice(&bytes).map_err(|_| BarrierError)?;
++            validate(&response, request, now_ms()?)?;
++            in_flight.complete = true;
++            Ok(response)
++        };
++        let result = tokio::time::timeout(EXCHANGE_TIMEOUT, exchange)
++            .await
++            .map_err(|_| BarrierError)
++            .and_then(|value| value);
++        if result.is_err() {
++            self.poisoned.store(true, Ordering::Release);
++            CHANNEL_POISONED.store(true, Ordering::Release);
++        }
++        if CHANNEL_POISONED.load(Ordering::Acquire) {
++            return Err(BarrierError);
++        }
++        result
++    }
++}
++
++async fn exchange(request: &Request) -> Result<Response, BarrierError> {
++    exchange_validated(request, Response::validate).await
++}
++
++pub(crate) async fn exchange_validated<T: Serialize + Sync, R: serde::de::DeserializeOwned>(
++    request: &T,
++    validate: impl Fn(&R, &T, u64) -> Result<(), BarrierError> + Send + Sync,
++) -> Result<R, BarrierError> {
++    #[cfg(unix)]
++    {
++        static TRANSPORT: OnceLock<Result<Transport, ()>> = OnceLock::new();
++        let transport = TRANSPORT
++            .get_or_init(|| {
++                Ok(Transport {
++                    stream: Mutex::new(BufReader::with_capacity(
++                        MAX_FRAME_BYTES,
++                        socket::stream()?,
++                    )),
++                    poisoned: AtomicBool::new(false),
++                })
++            })
++            .as_ref()
++            .map_err(|_| BarrierError)?;
++        transport.exchange(request, validate).await
++    }
++    #[cfg(not(unix))]
++    {
++        let _ = (request, validate);
++        Err(BarrierError)
++    }
++}
++
++#[derive(Clone, Debug)]
++pub(crate) struct Attempt(Arc<AttemptInner>);
++
++#[derive(Debug)]
++struct AttemptInner {
++    identity: Identity,
++    permit_id: Uuid,
++    expires_at: u64,
++    source_owner: SourceOwner,
++    cancelled: CancellationToken,
++    state: Mutex<AttemptState>,
++    started_notification: tokio::sync::Notify,
++}
++
++#[derive(Debug, Default)]
++struct AttemptState {
++    started: bool,
++    finished: bool,
++    background: bool,
++}
++
++tokio::task_local! { static CURRENT: Attempt; }
++
++impl Attempt {
++    pub(crate) async fn begin(
++        identity: Identity,
++        cancelled: CancellationToken,
++    ) -> Result<Self, BarrierError> {
++        if !identity.valid() || cancelled.is_cancelled() {
++            return Err(BarrierError);
++        }
++        let request = Request {
++            schema_version: 1,
++            request_id: Uuid::new_v4(),
++            phase: Phase::Intent,
++            identity: identity.clone(),
++            occurred_at: now_ms()?,
++            permit_id: None,
++            outcome: None,
++            reason: None,
++        };
++        let response = exchange(&request).await?;
++        if response.decision != "permit" {
++            return Err(BarrierError);
++        }
++        let source_owner = response.source_owner.ok_or(BarrierError)?;
++        crate::native_sources::remember_owner(&identity, &source_owner)?;
++        let attempt = Self(Arc::new(AttemptInner {
++            identity,
++            permit_id: response.permit_id.ok_or(BarrierError)?,
++            expires_at: response.expires_at.ok_or(BarrierError)?,
++            source_owner,
++            cancelled,
++            state: Mutex::new(AttemptState::default()),
++            started_notification: tokio::sync::Notify::new(),
++        }));
++        if attempt.check_dispatch().is_err() {
++            let reason = if attempt.0.cancelled.is_cancelled() {
++                Reason::CancelledBeforeDispatch
++            } else {
++                Reason::AuthorizationUnavailable
++            };
++            attempt.finish(Outcome::Failed, Some(reason)).await?;
++            return Err(BarrierError);
++        }
++        Ok(attempt)
++    }
++
++    pub(crate) fn identity(&self) -> &Identity {
++        &self.0.identity
++    }
++
++    pub(crate) fn permit_id(&self) -> Uuid {
++        self.0.permit_id
++    }
++
++    pub(crate) fn source_owner(&self) -> &SourceOwner {
++        &self.0.source_owner
++    }
++
++    pub(crate) async fn check_source_submission(&self) -> Result<(), BarrierError> {
++        let state = self.0.state.lock().await;
++        if state.finished
++            || self.0.cancelled.is_cancelled()
++            || CHANNEL_POISONED.load(Ordering::Acquire)
++        {
++            return Err(BarrierError);
++        }
++        if state.started {
++            Ok(())
++        } else {
++            self.check_dispatch()
++        }
++    }
++
++    pub(crate) fn check_dispatch(&self) -> Result<(), BarrierError> {
++        if CHANNEL_POISONED.load(Ordering::Acquire)
++            || self.0.cancelled.is_cancelled()
++            || now_ms()? >= self.0.expires_at
++        {
++            return Err(BarrierError);
++        }
++        Ok(())
++    }
++
++    pub(crate) async fn scope<T>(&self, work: impl Future<Output = T>) -> T {
++        CURRENT.scope(self.clone(), work).await
++    }
++
++    pub(crate) async fn started(&self) -> Result<(), BarrierError> {
++        self.started_at(SystemTime::now()).await
++    }
++
++    #[allow(
++        clippy::await_holding_invalid_type,
++        reason = "The private attempt state remains serialized until the bounded started receipt is durable"
++    )]
++    pub(crate) async fn started_at(&self, timestamp: SystemTime) -> Result<(), BarrierError> {
++        let occurred_at = u64::try_from(
++            timestamp
++                .duration_since(UNIX_EPOCH)
++                .map_err(|_| BarrierError)?
++                .as_millis(),
++        )
++        .map_err(|_| BarrierError)?;
++        let mut state = self.0.state.lock().await;
++        if state.finished {
++            return Err(BarrierError);
++        }
++        if state.started {
++            return Ok(());
++        }
++        let request = Request {
++            schema_version: 1,
++            request_id: Uuid::new_v4(),
++            phase: Phase::Started,
++            identity: self.0.identity.clone(),
++            occurred_at,
++            permit_id: Some(self.0.permit_id),
++            outcome: None,
++            reason: None,
++        };
++        exchange(&request).await?;
++        state.started = true;
++        self.0.started_notification.notify_waiters();
++        Ok(())
++    }
++
++    pub(crate) async fn await_started_receipt(&self) -> Result<(), BarrierError> {
++        tokio::time::timeout(EXCHANGE_TIMEOUT, async {
++            let notified = self.0.started_notification.notified();
++            tokio::pin!(notified);
++            notified.as_mut().enable();
++            if !self.0.state.lock().await.started {
++                notified.await;
++            }
++            if self.0.state.lock().await.started {
++                Ok(())
++            } else {
++                Err(BarrierError)
++            }
++        })
++        .await
++        .map_err(|_| BarrierError)?
++    }
++
++    pub(crate) async fn background(&self) {
++        self.0.state.lock().await.background = true;
++    }
++
++    #[allow(
++        clippy::await_holding_invalid_type,
++        reason = "The private attempt state remains serialized until the bounded terminal receipt is durable"
++    )]
++    pub(crate) async fn finish(
++        &self,
++        outcome: Outcome,
++        reason: Option<Reason>,
++    ) -> Result<(), BarrierError> {
++        let mut state = self.0.state.lock().await;
++        if state.finished {
++            return Ok(());
++        }
++        let request = Request {
++            schema_version: 1,
++            request_id: Uuid::new_v4(),
++            phase: Phase::Outcome,
++            identity: self.0.identity.clone(),
++            occurred_at: now_ms()?,
++            permit_id: Some(self.0.permit_id),
++            outcome: Some(outcome),
++            reason,
++        };
++        exchange(&request).await?;
++        state.finished = true;
++        Ok(())
++    }
++
++    pub(crate) async fn finish_runtime(&self, success: bool) -> Result<(), BarrierError> {
++        let started = {
++            let state = self.0.state.lock().await;
++            if state.finished || state.background {
++                return Ok(());
++            }
++            state.started
++        };
++        let outcome = if success && started {
++            Outcome::Completed
++        } else if started {
++            Outcome::Unknown
++        } else {
++            Outcome::Failed
++        };
++        let reason = match outcome {
++            Outcome::Completed => None,
++            Outcome::Failed => Some(Reason::ExecutionFailed),
++            Outcome::Unknown => Some(Reason::DispatchUnconfirmed),
++        };
++        self.finish(outcome, reason).await?;
++        if success && !started {
++            // A missing leaf receipt must never allow successful model consumption.
++            return Err(BarrierError);
++        }
++        Ok(())
++    }
++}
++
++pub(crate) struct McpFactory {
++    pub identity: Identity,
++    pub cancelled: CancellationToken,
++}
++impl codex_rmcp_client::NativeMcpFactory for McpFactory {
++    fn begin(
++        &self,
++    ) -> std::pin::Pin<
++        Box<
++            dyn Future<Output = std::io::Result<Arc<dyn codex_rmcp_client::NativeMcpAttempt>>>
++                + Send
++                + '_,
++        >,
++    > {
++        Box::pin(async {
++            let mut identity = self.identity.clone();
++            identity.attempt_ref = Uuid::new_v4();
++            let attempt = Attempt::begin(identity, self.cancelled.clone())
++                .await
++                .map_err(std::io::Error::other)?;
++            Ok(Arc::new(attempt) as Arc<dyn codex_rmcp_client::NativeMcpAttempt>)
++        })
++    }
++}
++impl codex_rmcp_client::NativeMcpAttempt for Attempt {
++    fn check_dispatch(&self) -> std::io::Result<()> {
++        Attempt::check_dispatch(self).map_err(std::io::Error::other)
++    }
++    fn started(&self) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + '_>> {
++        Box::pin(async { self.started().await.map_err(std::io::Error::other) })
++    }
++    fn finish(
++        &self,
++        result: codex_rmcp_client::NativeMcpResult,
++    ) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + '_>> {
++        Box::pin(async move {
++            let (outcome, reason) = match result {
++                codex_rmcp_client::NativeMcpResult::Completed => {
++                    self.await_started_receipt()
++                        .await
++                        .map_err(std::io::Error::other)?;
++                    (Outcome::Completed, None)
++                }
++                codex_rmcp_client::NativeMcpResult::CancelledBeforeDispatch => {
++                    (Outcome::Failed, Some(Reason::CancelledBeforeDispatch))
++                }
++                codex_rmcp_client::NativeMcpResult::Failed => {
++                    self.await_started_receipt()
++                        .await
++                        .map_err(std::io::Error::other)?;
++                    (Outcome::Failed, Some(Reason::ExecutionFailed))
++                }
++                codex_rmcp_client::NativeMcpResult::UnconfirmedResponse => {
++                    self.await_started_receipt()
++                        .await
++                        .map_err(std::io::Error::other)?;
++                    (Outcome::Unknown, Some(Reason::ResultUnconfirmed))
++                }
++                codex_rmcp_client::NativeMcpResult::Unknown => {
++                    (Outcome::Unknown, Some(Reason::ResultUnconfirmed))
++                }
++            };
++            self.finish(outcome, reason)
++                .await
++                .map_err(std::io::Error::other)
++        })
++    }
++}
++
++impl codex_apply_patch::NativePatchDispatch for Attempt {
++    fn check_dispatch(&self) -> std::io::Result<()> {
++        Attempt::check_dispatch(self).map_err(std::io::Error::other)
++    }
++
++    fn dispatched(
++        &self,
++    ) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + '_>> {
++        Box::pin(async { self.started().await.map_err(std::io::Error::other) })
++    }
++}
++
++pub(crate) fn current() -> Result<Attempt, BarrierError> {
++    CURRENT.try_with(Clone::clone).map_err(|_| BarrierError)
++}
++
++#[cfg(test)]
++#[path = "native_operation_barrier_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/native_operation_barrier_manifest.json b/codex-rs/core/src/native_operation_barrier_manifest.json
+new file mode 100644
+index 0000000..629aac6
+--- /dev/null
++++ b/codex-rs/core/src/native_operation_barrier_manifest.json
+@@ -0,0 +1 @@
++{"schemaVersion":1,"transport":"anonymous-unix-stream-fd3","callbackSchemaSha256":"sha256:6601384a3b54246f2b91d1bf2c2d3d297de09a2e76370da4bc417fe7efdb42c2","coverageSha256":"sha256:cd35715fc049562eeceb9326d2b15a140700e74ce1a60f63bf49400a2302eebe"}
+diff --git a/codex-rs/core/src/native_operation_barrier_tests.rs b/codex-rs/core/src/native_operation_barrier_tests.rs
+new file mode 100644
+index 0000000..1bea28c
+--- /dev/null
++++ b/codex-rs/core/src/native_operation_barrier_tests.rs

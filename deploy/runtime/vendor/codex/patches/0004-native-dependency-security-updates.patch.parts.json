@@ -1,0 +1,47 @@
+{
+  "format": "agent-infra-vendor-parts-v1",
+  "byteLength": 445532,
+  "sha256": "sha256:0ae72d58882e863a663f9b4c181bf13a4c68131b9b96e458baacff08fab39252",
+  "parts": [
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0001.part",
+      "byteLength": 65305,
+      "sha256": "sha256:ccea9895c9a0af7086c7f0f1b46dcf375a942e2aef9dbce1b01c2f67f6a3e75f"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0002.part",
+      "byteLength": 56536,
+      "sha256": "sha256:c25bc1910d48eddc257c55ea44fcf76296eb5ea20c2943ce883d463856917676"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0003.part",
+      "byteLength": 61038,
+      "sha256": "sha256:1517544c04fbe05eba56feb43268daeaa1a58d43f7622a1037f1202f93719c29"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0004.part",
+      "byteLength": 64342,
+      "sha256": "sha256:9c708e6678f72a0e271ae3e10bcec6cf36c51b15f47f2c7560d3006d1de3723c"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0005.part",
+      "byteLength": 49498,
+      "sha256": "sha256:08b333f668a1e2141fc33c086079f58451705b298440c663b81afeb7830b75b2"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0006.part",
+      "byteLength": 65461,
+      "sha256": "sha256:b06a2d5f53d1f3f2531356cabd176397cad493cd6e1ea7ab0d7cf2ba5f1fa5d3"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0007.part",
+      "byteLength": 64851,
+      "sha256": "sha256:4b1241a752bdcd28e02914645c2e11ea434a116ff7eb558c266240b0319556c1"
+    },
+    {
+      "path": "0004-native-dependency-security-updates.patch.parts/0008.part",
+      "byteLength": 18501,
+      "sha256": "sha256:ca5aeb83c8a0a67c4cdfd87281130659075412ebcd8b0573eeb3685d2069cd63"
+    }
+  ]
+}

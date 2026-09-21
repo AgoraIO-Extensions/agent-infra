@@ -1,0 +1,32 @@
+{
+  "format": "agent-infra-vendor-parts-v1",
+  "byteLength": 1086534,
+  "sha256": "sha256:472ea19f98d6840055c4c5a4ce35cf7e58bcf2d4da3633f592dbd6fbf81b07b1",
+  "parts": [
+    {
+      "path": "0003-protected-connection-client.patch.parts/before-corpus-01.part",
+      "byteLength": 65501,
+      "sha256": "sha256:c64aecabbf40cfb0b45b9f97d5a8b7fd39330f7170fcdf1742719a4af7641906"
+    },
+    {
+      "path": "0003-protected-connection-client.patch.parts/before-corpus-02.part",
+      "byteLength": 56717,
+      "sha256": "sha256:48bd442868c5f3ecefcec709c18368fb8423a431ad27efe3855bc68b7c4e0f1a"
+    },
+    {
+      "generated": "callback-corpus-patch-v1",
+      "byteLength": 856559,
+      "sha256": "sha256:65f8803dfb9fa879b3c93a22fe6ce4ceff0ad087fd17a2864f06055a242075d7"
+    },
+    {
+      "path": "0003-protected-connection-client.patch.parts/after-corpus-01.part",
+      "byteLength": 65492,
+      "sha256": "sha256:b2957ff8d192f5df5cc9b9e378f5022007fd86897115b555460002cae6da2a5b"
+    },
+    {
+      "path": "0003-protected-connection-client.patch.parts/after-corpus-02.part",
+      "byteLength": 42265,
+      "sha256": "sha256:74ab260863c640980c5edc788c4fb993b18f7229a78d64c763de018a386ee9fc"
+    }
+  ]
+}
