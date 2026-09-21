@@ -376,9 +376,7 @@ export class JenkinsAdapter
 		const moreData =
 			truncated ||
 			(size !== undefined && nextStart < size) ||
-			(response.status === 206 &&
-				size === undefined &&
-				bytes.byteLength === maxArtifactBytes);
+			(response.status === 206 && size === undefined);
 		return {
 			contentBase64: Buffer.from(bytes).toString("base64"),
 			...(start === 0 && !moreData && isTextMimeType(mimeType)

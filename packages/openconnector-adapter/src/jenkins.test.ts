@@ -221,6 +221,32 @@ test("Jenkins rejects mismatched artifact ranges", async () => {
 	);
 });
 
+test("Jenkins keeps unknown-total artifact ranges open", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response("partial", {
+				headers: {
+					"content-range": "bytes 0-6/*",
+					"content-type": "text/plain",
+				},
+				status: 206,
+			}),
+	);
+	const result = (await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	})) as { moreData: boolean; text?: string };
+	assert.equal(result.moreData, true);
+	assert.equal(result.text, undefined);
+});
+
 test("Jenkins rejects artifact offsets that would overflow a range", async () => {
 	let called = false;
 	const adapter = new JenkinsAdapter(jenkinsReleaseProfile, async () => {
