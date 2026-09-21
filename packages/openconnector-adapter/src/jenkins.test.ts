@@ -18,7 +18,7 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
 	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v5");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
-	assert.equal(second.providerReleaseId, "jenkins-release-connection-v5");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v6");
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
