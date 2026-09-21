@@ -11,9 +11,7 @@ import {
 	serveCodexNativeCallbacksV1,
 } from "./codex-native-callback.js";
 
-const corpus = JSON.parse(
-	readCallbackCorpusBytes().toString("utf8"),
-) as {
+const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8")) as {
 	cases: { id: string; frame: unknown }[];
 	framingCases: { id: string; wireUtf8?: string; wireHex?: string }[];
 };

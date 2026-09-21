@@ -13,9 +13,7 @@ import {
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
 
-const corpus = JSON.parse(
-	readCallbackCorpusBytes().toString("utf8"),
-) as {
+const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8")) as {
 	cases: { id: string; frame: unknown; schemaValid: boolean }[];
 };
 const ajv = new Ajv2020({ strict: true, strictRequired: false });

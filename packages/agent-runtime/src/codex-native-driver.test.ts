@@ -22,7 +22,7 @@ import {
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	codexConversationKey,
-	runCodexConnectionRecovery,
+	type runCodexConnectionRecovery,
 } from "./codex-app-server-bridge.js";
 import { codexCallbackSchema } from "./codex-callback-schema.generated.js";
 import type {
