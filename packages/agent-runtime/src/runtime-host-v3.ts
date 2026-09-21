@@ -808,6 +808,9 @@ export class RuntimeHostV3 {
 					validate();
 					options.store.checkRequestV3(claims);
 					await options.store.recordDeliveredCursor(claims, parsed.data.cursor);
+					bounded.throwIfAborted();
+					validate();
+					options.store.checkRequestV3(claims);
 					yield parsed.data;
 				}
 			} finally {

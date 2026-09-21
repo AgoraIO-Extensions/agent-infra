@@ -676,6 +676,33 @@ async function startChild(execution: Execution) {
 	return { parent, parentStarted, reserve, bind };
 }
 
+it("keeps identical child source IDs isolated across Conversations after durable reopen", async () => {
+	const env = await setup();
+	const first = await env.start("source-first");
+	const second = await env.start("source-second");
+	const firstChild = await startChild(first);
+	const secondChild = await startChild(second);
+	expect(firstChild.bind.source).toEqual(secondChild.bind.source);
+	expect(firstChild.reserve.reservation.submissionId).toBe(
+		secondChild.reserve.reservation.submissionId,
+	);
+	expect(first.nativeSessionRef).not.toBe(second.nativeSessionRef);
+	await env.driver.close();
+	const reopened = await env.reopen();
+	for (const execution of [first, second]) {
+		const events = await reopened.replayEvents(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		expect(events.length).toBeGreaterThan(0);
+		expect(
+			events.every(
+				(event) => event.executionId === execution.command.executionId,
+			),
+		).toBe(true);
+	}
+});
+
 function stopCommand(execution: Execution): RuntimeDriverCommandV1 {
 	return {
 		schemaVersion: 1,

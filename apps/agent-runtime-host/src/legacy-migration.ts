@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { FileRuntimeStore } from "@agent-infra/agent-runtime";
 import {
@@ -44,20 +44,43 @@ async function readMountedFile(
 			!withinData.startsWith("../"))
 	)
 		fail();
-	const parentPath = resolve(path, "..");
+	// Walk the canonical ancestor chain, including the directories above the
+	// immediate parent: replacing any of them can replace both trust files.
+	const parentPath = dirname(target);
+	for (let current = parentPath; ; current = dirname(current)) {
+		const info = await lstat(current);
+		const parent = dirname(current);
+		const stickyRootDirectory = info.uid === 0 && (info.mode & 0o1000) !== 0;
+		if (
+			!info.isDirectory() ||
+			(await realpath(current)) !== current ||
+			((info.mode & 0o022) !== 0 && !stickyRootDirectory)
+		)
+			fail();
+		// A root-owned sticky directory (e.g. /tmp) cannot replace another
+		// owner's child. The child and remaining ancestors are checked too.
+		if (parent === current) break;
+	}
 	const parentInfo = await lstat(parentPath);
 	if (!parentInfo.isDirectory() || (parentInfo.mode & 0o022) !== 0) fail();
 	const parent = await open(
 		parentPath,
 		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
 	);
-	const leaf = relative(parentPath, path);
+	const leaf = relative(parentPath, target);
 	if (!leaf || leaf.includes("/") || leaf.includes("\\")) {
 		await parent.close();
 		fail();
 	}
 	let handle: Awaited<ReturnType<typeof open>>;
 	try {
+		const openedParent = await parent.stat();
+		if (
+			openedParent.dev !== parentInfo.dev ||
+			openedParent.ino !== parentInfo.ino ||
+			(openedParent.mode & 0o022) !== 0
+		)
+			fail();
 		const descriptorRoot =
 			process.platform === "linux" ? `/proc/self/fd/${parent.fd}` : undefined;
 		handle = descriptorRoot
@@ -65,7 +88,7 @@ async function readMountedFile(
 					`${descriptorRoot}/${leaf}`,
 					constants.O_RDONLY | constants.O_NOFOLLOW,
 				)
-			: await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+			: await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
 	} catch (error) {
 		await parent.close();
 		throw error;

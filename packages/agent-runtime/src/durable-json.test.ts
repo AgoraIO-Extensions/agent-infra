@@ -96,3 +96,36 @@ it("committed reads wait for an already queued authorization barrier", async () 
 	await writing;
 	expect(await snapshot).toEqual({ revoked: true });
 });
+
+it("close drains accepted updates and rejects writes queued during and after shutdown", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "runtime-durable-close-"));
+	directories.push(directory);
+	const path = join(directory, "state.json");
+	const file = await DurableJsonFile.open(path, { count: 0 });
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const writing = file.update(async (draft) => {
+		entered.resolve();
+		await release.promise;
+		draft.count = 1;
+	});
+	await entered.promise;
+	let closed = false;
+	const closing = file.close().then(() => {
+		closed = true;
+	});
+	const rejectedChange = vi.fn();
+	await expect(file.update(rejectedChange)).rejects.toThrow(
+		"Durable state is closed",
+	);
+	expect(closed).toBe(false);
+	release.resolve();
+	await writing;
+	await closing;
+	await expect(file.update(rejectedChange)).rejects.toThrow(
+		"Durable state is closed",
+	);
+	await file.close();
+	expect(rejectedChange).not.toHaveBeenCalled();
+	expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ count: 1 });
+});

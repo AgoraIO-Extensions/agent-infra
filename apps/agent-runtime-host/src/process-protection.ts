@@ -13,13 +13,14 @@ export function assertRuntimeProcessProtection() {
 		);
 	};
 	const forbidden =
-		/^--(?:inspect|debug|heap|report|experimental-report|diagnostic-dir|tls-keylog|prof|no-disable-sigusr1)/;
+		/^--(?:inspect|debug|heap|report|experimental-report|diagnostic-dir|tls-keylog|prof|cpu-prof|trace-event|redirect-warnings|import|require|loader|experimental-loader|no-disable-sigusr1)/;
 	if (
 		!["linux", "darwin"].includes(process.platform) ||
 		!process.execArgv.includes("--disable-sigusr1") ||
 		process.execArgv.some((argument) => {
 			const normalized = argument.replaceAll("_", "-");
 			return (
+				/^-r(?:$|[^-])/.test(normalized) ||
 				forbidden.test(normalized) ||
 				(normalized.startsWith("--disable-sigusr1") &&
 					normalized !== "--disable-sigusr1")

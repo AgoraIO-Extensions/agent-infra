@@ -54,8 +54,7 @@ async function runGuard(
 			"protected-runtime-test",
 			process.execPath,
 			...(options.flags ?? ["--disable-sigusr1"]),
-			"--import",
-			"tsx",
+			"--experimental-strip-types",
 			"--input-type=module",
 			"-e",
 			`import { assertRuntimeProcessProtection } from ${JSON.stringify(guardUrl)};
@@ -88,6 +87,10 @@ describe("credential holder process protection", () => {
 		{ flags: [] },
 		{ flags: ["--disable-sigusr1", "--inspect=127.0.0.1:0"] },
 		{ flags: ["--disable-sigusr1", "--report-on-fatalerror"] },
+		{ flags: ["--disable-sigusr1", "--cpu-prof"] },
+		{ flags: ["--disable-sigusr1", "--trace-events-enabled"] },
+		{ flags: ["--disable-sigusr1", "--import=data:text/javascript,void 0"] },
+		{ flags: ["--disable-sigusr1", "--require=node:fs"] },
 		{ preamble: "process.report.reportOnSignal = true;" },
 		{ preamble: 'process.env.NODE_OPTIONS = "sentinel-private-value";' },
 		{

@@ -275,12 +275,6 @@ async function buildImage({
 					? [
 							"--build-arg",
 							`SOURCE_COMMIT=${commitSha}`,
-							"--build-context",
-							`codex-native=${resolve(
-								repositoryRoot,
-								process.env.AGENT_INFRA_CODEX_BUILD_CONTEXT?.trim() ||
-									"deploy/runtime/vendor/codex",
-							)}`,
 						]
 					: []),
 				...labels,
