@@ -3,8 +3,14 @@
 [callback-v2.schema.json](callback-v2.schema.json) 是本版本唯一 wire Schema。
 它保留 [V1](callback-v1.md) 的全部 16 个定义，增加严格的 Connection bootstrap、
 operation 与 metadata-only evidence 帧；V1 帧不允许携带 V2 字段。
-[共享 corpus](callback-v2-corpus.json) 同时供 TypeScript 和 native typed parser 验证。
+[共享 corpus](callback-v2-corpus/index.mjs) 同时供 TypeScript 和 native typed parser 验证。
 结构有效不代表主体、权限、原请求、真实响应或隔离已经核实。
+
+语料按场景拆为普通 JavaScript 数据模块，重复 fixture 共享定义。
+[序列化入口](callback-corpus.mjs) 按原顺序生成 `callback-v2-corpus.json` 的完整 UTF-8
+字节，并核对 [native barrier](native-barrier-v1.json) 中的固定摘要后才返回。
+原生准备脚本可使用 `node callback-corpus.mjs --output <目标文件>`；生成布局不改变
+174 个 case、framing/JCS vectors 或已固定 native binary 的 probe。
 
 ## 私有启动
 
