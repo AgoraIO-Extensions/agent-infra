@@ -307,7 +307,8 @@ export async function runCodexConnectionRecovery(options: {
 				if (terminal || issued >= 16) throw unavailable();
 				const response = await options.recovery(request, signal);
 				if (response.decision === "verify") issued++;
-				else terminal = true;
+				else if (response.decision === "done") terminal = true;
+				else failed = true;
 				return response;
 			},
 			complete,
