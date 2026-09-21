@@ -267,7 +267,11 @@ function resolveProviderService(
 	service: string,
 ) {
 	const normalizedService = service.trim().toLowerCase();
-	if (!normalizedService.includes("://")) return normalizedService;
+	if (!normalizedService.includes("://")) {
+		return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalizedService)
+			? normalizedService
+			: "unmapped-service-value";
+	}
 	try {
 		const hostname = new URL(normalizedService).hostname
 			.toLowerCase()

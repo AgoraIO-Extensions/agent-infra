@@ -2629,6 +2629,7 @@ describe("Connection API", () => {
 		"custom://unknown.example/secret-job?token=hidden",
 		"https://github/private?token=hidden",
 		"custom://constructor/private?token=hidden",
+		"jenkins-release/secret-job?token=hidden",
 	])(
 		"fails closed on an unmapped service URL without echoing its path: %s",
 		async (serviceUrl) => {
@@ -2662,7 +2663,7 @@ describe("Connection API", () => {
 				result: {
 					structuredContent: {
 						guidance: {
-							provider: expect.stringMatching(/^unmapped-hostname:/),
+							provider: expect.stringMatching(/^unmapped-/),
 							reasonCode: "PROVIDER_UNSUPPORTED",
 						},
 					},
