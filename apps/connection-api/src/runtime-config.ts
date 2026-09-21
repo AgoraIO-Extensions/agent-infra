@@ -43,6 +43,13 @@ export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 		tokenUrl: string;
 		username: string;
 	};
+	jenkinsCiToken: {
+		clientId: string;
+		clientSecret: string;
+		password: string;
+		tokenUrl: string;
+		username: string;
+	};
 };
 
 export type ConnectionWorkerRuntimeConfig = {
@@ -309,6 +316,13 @@ export function fullConnectionRuntimeConfig(
 			password: requireValue(environment, "JIRA_TOKEN_PASSWORD"),
 			tokenUrl: requireJiraTokenUrl(environment),
 			username: requireValue(environment, "JIRA_TOKEN_USERNAME"),
+		},
+		jenkinsCiToken: {
+			clientId: requireValue(environment, "JENKINS_CI_TOKEN_CLIENT_ID"),
+			clientSecret: requireValue(environment, "JENKINS_CI_TOKEN_CLIENT_SECRET"),
+			password: requireValue(environment, "JENKINS_CI_TOKEN_PASSWORD"),
+			tokenUrl: "https://oauth.agoralab.co/oauth/token",
+			username: requireValue(environment, "JENKINS_CI_TOKEN_USERNAME"),
 		},
 	};
 }

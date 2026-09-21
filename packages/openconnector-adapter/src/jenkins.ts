@@ -15,6 +15,10 @@ const sourceCommit = "connection-native";
 
 type JsonObject = Record<string, unknown>;
 
+export type JenkinsGatewayTokenProvider = {
+	getAccessToken(): Promise<string>;
+};
+
 export type JenkinsDeploymentProfile = {
 	apiOrigin: `http://${string}` | `https://${string}`;
 	displayName: string;
@@ -139,11 +143,17 @@ export class JenkinsAdapter
 	readonly providerId: string;
 	readonly providerReleaseId: string;
 	private readonly fetcher: typeof fetch;
+	private readonly gatewayTokenProvider?: JenkinsGatewayTokenProvider;
 	private readonly profile: JenkinsDeploymentProfile;
 
-	constructor(profile: JenkinsDeploymentProfile, fetcher: typeof fetch) {
+	constructor(
+		profile: JenkinsDeploymentProfile,
+		fetcher: typeof fetch,
+		gatewayTokenProvider?: JenkinsGatewayTokenProvider,
+	) {
 		this.profile = profile;
 		this.fetcher = fetcher;
+		this.gatewayTokenProvider = gatewayTokenProvider;
 		this.providerId = profile.providerId;
 		this.providerReleaseId =
 			createJenkinsConnectionCatalog(profile).providerReleaseId;
@@ -225,11 +235,13 @@ export class JenkinsAdapter
 		path: string,
 		credentialProbe = false,
 	) {
+		const accessToken = await this.gatewayTokenProvider?.getAccessToken();
 		const response = await this.fetchRead(
 			new URL(path, this.profile.apiOrigin),
 			{
 				headers: {
 					accept: "application/json",
+					...(accessToken ? { accessToken } : {}),
 					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 				},
 				redirect: "manual",
@@ -269,11 +281,13 @@ export class JenkinsAdapter
 		path: string,
 		start: number,
 	) {
+		const accessToken = await this.gatewayTokenProvider?.getAccessToken();
 		const response = await this.fetchRead(
 			new URL(path, this.profile.apiOrigin),
 			{
 				headers: {
 					accept: "text/plain",
+					...(accessToken ? { accessToken } : {}),
 					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 				},
 				redirect: "manual",
@@ -316,12 +330,14 @@ export class JenkinsAdapter
 		path: string,
 		start: number,
 	) {
+		const accessToken = await this.gatewayTokenProvider?.getAccessToken();
 		const response = await this.fetchRead(
 			new URL(path, this.profile.apiOrigin),
 			{
 				headers: {
 					accept: "*/*",
 					"accept-encoding": "identity",
+					...(accessToken ? { accessToken } : {}),
 					authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
 					range: `bytes=${start}-${start + maxArtifactBytes - 1}`,
 				},

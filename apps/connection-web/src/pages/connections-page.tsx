@@ -54,6 +54,9 @@ export function ConnectionsPage() {
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
+	const [jenkinsProviderId, setJenkinsProviderId] = useState<
+		"jenkins-ci" | "jenkins-release"
+	>("jenkins-release");
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
@@ -68,7 +71,10 @@ export function ConnectionsPage() {
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
-		if (provider === "jenkins-release") setJenkinsOpen(true);
+		if (provider === "jenkins-ci" || provider === "jenkins-release") {
+			setJenkinsProviderId(provider);
+			setJenkinsOpen(true);
+		}
 	}, []);
 	const overview = useQuery({
 		queryKey: ["connections"],
@@ -154,14 +160,16 @@ export function ConnectionsPage() {
 		setJenkinsError(null);
 		try {
 			await connectionApi.connectProviderCredential({
-				providerId: "jenkins-release",
+				providerId: jenkinsProviderId,
 				...credential,
 			});
 			setJenkinsOpen(false);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setJenkinsError(
-				error instanceof Error ? error : new Error("Jenkins Release 连接失败"),
+				error instanceof Error
+					? error
+					: new Error(`${providerLabel(jenkinsProviderId)} 连接失败`),
 			);
 		} finally {
 			setJenkinsPending(false);
@@ -198,8 +206,10 @@ export function ConnectionsPage() {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
-		else if (providerId === "jenkins-release") setJenkinsOpen(true);
-		else beginOAuth();
+		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
+			setJenkinsProviderId(providerId);
+			setJenkinsOpen(true);
+		} else beginOAuth();
 	};
 
 	const data = overview.data?.overview;
@@ -399,7 +409,11 @@ export function ConnectionsPage() {
 									setJiraOpen(true);
 								} else if (connection?.providerId === "confluence") {
 									setConfluenceOpen(true);
-								} else if (connection?.providerId === "jenkins-release") {
+								} else if (
+									connection?.providerId === "jenkins-ci" ||
+									connection?.providerId === "jenkins-release"
+								) {
+									setJenkinsProviderId(connection.providerId);
 									setJenkinsOpen(true);
 								} else {
 									beginOAuth();
@@ -616,7 +630,7 @@ export function ConnectionsPage() {
 			>
 				<DialogContent aria-describedby={undefined}>
 					<DialogHeader>
-						<DialogTitle>连接 Jenkins Release</DialogTitle>
+						<DialogTitle>连接 {providerLabel(jenkinsProviderId)}</DialogTitle>
 						<DialogClose asChild>
 							<Button
 								variant="secondary"
@@ -644,20 +658,20 @@ export function ConnectionsPage() {
 							}
 						}}
 					>
-						<label htmlFor="jenkins-release-username">Jenkins 用户名</label>
+						<label htmlFor="jenkins-username">Jenkins 用户名</label>
 						<input
 							autoComplete="username"
 							defaultValue={overview.data?.account.email ?? ""}
-							id="jenkins-release-username"
+							id="jenkins-username"
 							maxLength={256}
 							name="username"
 							required
 							type="text"
 						/>
-						<label htmlFor="jenkins-release-api-token">Jenkins API Token</label>
+						<label htmlFor="jenkins-api-token">Jenkins API Token</label>
 						<input
 							autoComplete="off"
-							id="jenkins-release-api-token"
+							id="jenkins-api-token"
 							maxLength={8192}
 							name="apiToken"
 							required
