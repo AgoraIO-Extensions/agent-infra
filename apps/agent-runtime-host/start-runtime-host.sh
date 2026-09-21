@@ -10,6 +10,6 @@ ulimit -S -c 0
 ulimit -H -c 0
 case "$#:${1:-}" in
   0:) exec node --disable-sigusr1 dist/index.mjs ;;
-  1:--dev) exec node --disable-sigusr1 --watch --import tsx src/index.ts ;;
+  1:--dev) exec node --disable-sigusr1 --experimental-strip-types --watch src/index.ts ;;
   *) exit 1 ;;
 esac
