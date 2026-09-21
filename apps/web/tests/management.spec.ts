@@ -450,7 +450,15 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(page.getByRole("link", { name: "Owner settings" })).toHaveCount(
 		0,
 	);
-	await expect(page.getByRole("button")).toHaveCount(0);
+	await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+	if (info.project.name === "mobile") {
+		await page.getByRole("button", { name: "打开导航" }).click();
+		await expect(page.getByRole("dialog", { name: "主导航" })).toBeVisible();
+		await expect(
+			page.getByRole("link", { name: "审批", exact: true }),
+		).toHaveCount(0);
+		await page.getByRole("button", { name: "关闭导航" }).click();
+	}
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(page.getByRole("alert")).toHaveText(
 		"This configuration is unavailable.",

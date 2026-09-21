@@ -381,3 +381,21 @@ export function resolvePilotReplayV1(input: PilotReplayInputV1) {
 			message.sequence > position.afterSequence,
 	);
 }
+
+const { actions: _legacyActions, ...configurationV2 } =
+	pilotFakeScenariosV1.starting.response.body.configuration;
+export const pilotFakeScenariosV2 = {
+	...pilotFakeScenariosV1,
+	starting: {
+		...pilotFakeScenariosV1.starting,
+		operationId: "getAgentV2",
+		response: {
+			status: 200,
+			body: {
+				...pilotFakeScenariosV1.starting.response.body,
+				schemaVersion: 2,
+				configuration: configurationV2,
+			},
+		},
+	},
+} as const;

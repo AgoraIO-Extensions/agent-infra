@@ -1,6 +1,7 @@
 import { createRootRoute, HeadContent, Outlet } from "@tanstack/react-router";
 
 import "../index.css";
+import { ApplicationShell } from "../features/application-shell";
 
 export const Route = createRootRoute({
 	component: RootComponent,
@@ -21,7 +22,9 @@ function RootComponent() {
 	return (
 		<>
 			<HeadContent />
-			<Outlet />
+			<ApplicationShell>
+				<Outlet />
+			</ApplicationShell>
 		</>
 	);
 }
