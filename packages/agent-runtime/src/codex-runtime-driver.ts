@@ -3301,7 +3301,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		// `new this` keeps the transport-sharing policy in the class that needs it
 		// instead of carrying a test-only flag through production state.
-		driver = new this(
+		try {
+			driver = new this(
 			file,
 			openConversationBridge,
 			assertContainedNativeConfiguration,
@@ -3335,7 +3336,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			runCodexConnectionRecovery,
 			`${options.path}.native`,
 			options.launchPath,
-		);
+			);
+		} catch (error) {
+			await modelTransport?.close().catch(() => {});
+			await file.close().catch(() => {});
+			throw error;
+		}
 		try {
 			await driver.recoverUnconfirmedModelOperations();
 			return driver;
