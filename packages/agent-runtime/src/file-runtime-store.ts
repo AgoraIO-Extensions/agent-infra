@@ -5,16 +5,35 @@ import {
 	RuntimeDriverCommandV1Schema,
 	type RuntimeDriverSubmitTurnCommandV2,
 	RuntimeDriverSubmitTurnCommandV2Schema,
+	type RuntimeExecutionGrantClaimsV2,
 	type RuntimeOperationResultV1,
 	RuntimeOperationResultV1Schema,
 	type RuntimeOperationResultV2,
 	RuntimeOperationResultV2Schema,
+	type RuntimePrincipalV1,
 } from "@agent-infra/contracts/runtime";
-
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeOriginalEvidenceBinding,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import {
+	applyRuntimeAuthority,
+	assertSessionAuthority,
+	type RuntimeExecutionAuthority,
+	type RuntimeOriginalExecutionRef,
+	type RuntimeSessionAuthority,
+	runtimeAuthorizationDenied,
+	validStoredAuthority,
+	validStoredExecutionAuthority,
+} from "./runtime-authorization.js";
+
+const maximumAcknowledgedCursors = 256;
 
 interface SessionBinding {
+	principal?: RuntimePrincipalV1;
+	channelId?: string;
 	agentId: string;
 	conversationId: string;
 	sessionGeneration: number;
@@ -34,6 +53,8 @@ export interface StoredOperation {
 }
 
 export interface StoredSession extends SessionBinding {
+	authority?: RuntimeSessionAuthority;
+	executionAuthorities?: Record<string, RuntimeExecutionAuthority>;
 	hostSessionRef: string;
 	nativeSessionRef?: string;
 	highestFences: Record<string, number>;
@@ -58,6 +79,8 @@ interface RuntimeStoreState {
 }
 
 interface PrepareOperation {
+	authorization?: RuntimeExecutionGrantClaimsV2;
+	now?: number;
 	requestedHostSessionRef?: string;
 	binding: SessionBinding & { executionId: string; turnId: string };
 	operationId: string;
@@ -165,6 +188,8 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 	if (
 		!isPlainRecord(session) ||
 		!hasOnlyKeys(session, [
+			"authority",
+			"executionAuthorities",
 			"hostSessionRef",
 			"agentId",
 			"conversationId",
@@ -176,6 +201,14 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 			"recovery",
 		]) ||
 		session.hostSessionRef !== hostSessionRef ||
+		(session.authority !== undefined &&
+			!validStoredAuthority(session.authority)) ||
+		(session.executionAuthorities !== undefined &&
+			(!session.authority ||
+				!isPlainRecord(session.executionAuthorities) ||
+				Object.values(session.executionAuthorities).some(
+					(entry) => !validStoredExecutionAuthority(entry),
+				))) ||
 		!session.agentId ||
 		!session.conversationId ||
 		!Number.isSafeInteger(session.sessionGeneration) ||
@@ -334,6 +367,8 @@ function sessionFor(
 			403,
 		);
 	}
+	if (session.authority || binding.principal)
+		assertSessionAuthority(session.authority, binding);
 	if (
 		!allowGenerationBarrier &&
 		session.generationBarrier?.generation === binding.sessionGeneration
@@ -451,6 +486,10 @@ export class FileRuntimeStore {
 		return new FileRuntimeStore(file);
 	}
 
+	async close() {
+		await this.file.close();
+	}
+
 	sessionQueueKey(binding: SessionBinding) {
 		return sessionBindingKey(binding);
 	}
@@ -491,6 +530,15 @@ export class FileRuntimeStore {
 					agentId: input.binding.agentId,
 					conversationId: input.binding.conversationId,
 					sessionGeneration: input.binding.sessionGeneration,
+					...(input.authorization
+						? {
+								authority: {
+									principal: input.authorization.principal,
+									channelId: input.authorization.channelId,
+								},
+								executionAuthorities: {},
+							}
+						: {}),
 					highestFences: {},
 					operations: {},
 				};
@@ -525,6 +573,24 @@ export class FileRuntimeStore {
 			}
 
 			const operation = session.operations[input.operationId];
+			if (input.authorization) {
+				assertSessionAuthority(session.authority, input.binding);
+				const resolvedReplay =
+					operation?.state === "resolved" &&
+					operation.requestDigest === input.requestDigest;
+				// A retry of an already-resolved operation only reads its durable
+				// receipt. Recovery query authority must not turn that read into a
+				// fresh business authorization decision.
+				if (!resolvedReplay) {
+					session.executionAuthorities ??= {};
+					applyRuntimeAuthority(
+						session.executionAuthorities,
+						input.authorization,
+						"prepare",
+						input.now,
+					);
+				}
+			}
 			if (operation) {
 				if (
 					operation.requestDigest !== input.requestDigest ||
@@ -730,6 +796,537 @@ export class FileRuntimeStore {
 			}
 			return structuredClone(session);
 		});
+	}
+
+	// Protected migration input comes from the Platform producer history, never an HTTP caller.
+	migrateLegacyPrincipal(input: {
+		migrationId: string;
+		hostSessionRef: string;
+		agentId: string;
+		conversationId: string;
+		sessionGeneration: number;
+		principal: RuntimePrincipalV1;
+		channelId: string;
+		executions: {
+			executionId: string;
+			turnId: string;
+			originalOperationDigest: string;
+		}[];
+	}) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const session = state.sessions[input.hostSessionRef];
+			if (
+				!input.migrationId ||
+				!session ||
+				session.agentId !== input.agentId ||
+				session.conversationId !== input.conversationId ||
+				session.sessionGeneration !== input.sessionGeneration ||
+				input.principal.kind !== "user"
+			)
+				runtimeAuthorizationDenied();
+			const authority = {
+				principal: input.principal,
+				channelId: input.channelId,
+				migrationId: input.migrationId,
+			};
+			if (!validStoredAuthority(authority)) runtimeAuthorizationDenied();
+			if (session.authority) {
+				assertSessionAuthority(session.authority, input);
+				if (session.authority.migrationId !== input.migrationId)
+					runtimeAuthorizationDenied();
+				return;
+			}
+			const executions = Object.values(session.operations).filter(
+				(entry) => entry.kind === "submit-turn",
+			);
+			if (
+				!executions.length ||
+				executions.length !== input.executions.length ||
+				new Set(input.executions.map((entry) => entry.executionId)).size !==
+					executions.length
+			)
+				runtimeAuthorizationDenied();
+			for (const execution of executions) {
+				const evidence = input.executions.find(
+					(entry) => entry.executionId === execution.executionId,
+				);
+				if (
+					!evidence ||
+					evidence.turnId !== execution.turnId ||
+					evidence.originalOperationDigest !== execution.requestDigest
+				)
+					runtimeAuthorizationDenied();
+			}
+			session.authority = authority;
+			session.executionAuthorities = {};
+		});
+	}
+
+	// Persist an absence fence even when the first submit response and Host reference were lost.
+	recoverOperationV3(
+		claims: RuntimeExecutionGrantClaimsV2,
+		originalOperationDigest: string,
+		now = Date.now(),
+	) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			const indexed = state.sessionBindings[sessionBindingKey(claims)];
+			const ref = claims.hostSessionRef ?? indexed;
+			let session: StoredSession;
+			if (ref) {
+				session = sessionFor(state, ref, claims, true);
+			} else {
+				const hostSessionRef = randomUUID();
+				session = {
+					hostSessionRef,
+					agentId: claims.agentId,
+					conversationId: claims.conversationId,
+					sessionGeneration: claims.sessionGeneration,
+					authority: {
+						principal: claims.principal,
+						channelId: claims.channelId,
+					},
+					executionAuthorities: {},
+					highestFences: {},
+					operations: {},
+				};
+				state.sessions[hostSessionRef] = session;
+				state.sessionBindings[sessionBindingKey(claims)] = hostSessionRef;
+			}
+			assertSessionAuthority(session.authority, claims);
+			const scope = `execution:${claims.executionId}`;
+			const fence = claims.operation.executionDeliveryFence;
+			if (fence < (session.highestFences[scope] ?? 0))
+				runtimeAuthorizationDenied();
+			const operation = session.operations[claims.executionId];
+			if (
+				operation &&
+				(operation.kind !== "submit-turn" ||
+					operation.turnId !== claims.turnId ||
+					operation.requestDigest !== originalOperationDigest)
+			)
+				runtimeAuthorizationDenied();
+			session.executionAuthorities ??= {};
+			applyRuntimeAuthority(session.executionAuthorities, claims, "query", now);
+			session.highestFences[scope] = fence;
+			if (operation) operation.deliveryFence = fence;
+			return { session: structuredClone(session), found: !!operation };
+		});
+	}
+
+	authorizeRequestV3(
+		claims: RuntimeExecutionGrantClaimsV2,
+		mode: "query" | "renew" | "generation-cancel" = "query",
+		now = Date.now(),
+	) {
+		return this.file.update((state) => {
+			assertStoreState(state);
+			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+			const session = sessionFor(
+				state,
+				claims.hostSessionRef,
+				claims,
+				claims.purpose === "control",
+			);
+			assertExecutionBinding(session, claims);
+			assertSessionAuthority(session.authority, claims);
+			const executionScope = `execution:${claims.executionId}`;
+			const executionFence = claims.operation.executionDeliveryFence;
+			if (mode === "generation-cancel") {
+				const scope = `generation:${claims.sessionGeneration}`;
+				const operation = session.operations[claims.operation.id];
+				const control =
+					session.executionAuthorities?.[claims.executionId]?.control;
+				if (
+					claims.purpose !== "control" ||
+					claims.reason !== "generation_isolation" ||
+					claims.allowedCommands[0] !== "generation.cancel" ||
+					claims.operation.kind !== "generation" ||
+					executionFence < (session.highestFences[executionScope] ?? 0) ||
+					claims.operation.deliveryFence <
+						(session.highestFences[scope] ?? 0) ||
+					(!operation &&
+						claims.operation.deliveryFence === session.highestFences[scope]) ||
+					(session.generationBarrier &&
+						(session.generationBarrier.generation !==
+							claims.sessionGeneration ||
+							session.generationBarrier.tombstoneId !== claims.operation.id)) ||
+					(control?.reason === "generation_isolation" &&
+						control.controlRecordId !== claims.controlRecordId) ||
+					(operation &&
+						(operation.kind !== "generation-cancel" ||
+							operation.scope !== scope ||
+							operation.executionId !== claims.executionId ||
+							operation.turnId !== claims.turnId ||
+							operation.requestDigest !==
+								requestDigest({
+									kind: "generation-cancel",
+									agentId: claims.agentId,
+									conversationId: claims.conversationId,
+									executionId: claims.executionId,
+									turnId: claims.turnId,
+									sessionGeneration: claims.sessionGeneration,
+									tombstoneId: claims.operation.id,
+								})))
+				)
+					runtimeAuthorizationDenied();
+			} else if (session.highestFences[executionScope] !== executionFence)
+				runtimeAuthorizationDenied();
+			if (mode === "renew") {
+				const execution = session.operations[claims.executionId];
+				if (
+					claims.purpose !== "business" ||
+					execution?.result?.outcome !== "accepted" ||
+					!["running", "unknown"].includes(execution.result.status)
+				)
+					runtimeAuthorizationDenied();
+			}
+			session.executionAuthorities ??= {};
+			const authority = applyRuntimeAuthority(
+				session.executionAuthorities,
+				claims,
+				mode === "generation-cancel" ? "query" : mode,
+				now,
+			);
+			if (mode === "generation-cancel") {
+				// The isolation claim advances the original Turn's fence without recovering it.
+				session.highestFences[executionScope] = executionFence;
+				const execution =
+					session.operations[claims.executionId] ?? storeCorrupted();
+				execution.deliveryFence = executionFence;
+			}
+			return {
+				session: structuredClone(session),
+				authority: structuredClone(authority),
+			};
+		});
+	}
+
+	checkRequestV3(claims: RuntimeExecutionGrantClaimsV2) {
+		const state = this.file.read();
+		assertStoreState(state);
+		if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+		const session = sessionFor(
+			state,
+			claims.hostSessionRef,
+			claims,
+			claims.purpose === "control",
+		);
+		assertExecutionBinding(session, claims);
+		const authority = session.executionAuthorities?.[claims.executionId];
+		if (
+			!authority ||
+			authority.workerId !== claims.workerId ||
+			session.highestFences[`execution:${claims.executionId}`] !==
+				claims.operation.executionDeliveryFence
+		)
+			runtimeAuthorizationDenied();
+		if (
+			claims.purpose === "business" &&
+			(authority.stopped ||
+				authority.control !== undefined ||
+				authority.authorizationRecordId !== claims.authorizationRecordId)
+		)
+			runtimeAuthorizationDenied();
+		if (
+			claims.purpose === "control" &&
+			authority.control?.controlRecordId !== claims.controlRecordId
+		)
+			runtimeAuthorizationDenied();
+		return session;
+	}
+
+	/** Query high-water mark is independent of business authorization expiry. */
+	latchOriginalEvidenceQuery(
+		claims: RuntimeExecutionGrantClaimsV2,
+		requestId: string,
+	) {
+		if (
+			typeof requestId !== "string" ||
+			requestId.length === 0 ||
+			requestId.length > 1024
+		)
+			runtimeAuthorizationDenied();
+		return this.file.update((state) => {
+			const checked = this.checkRequestV3(claims);
+			if (
+				checked.generationBarrier ||
+				!checked.nativeSessionRef ||
+				!["session.status", "events.persist"].includes(
+					claims.allowedCommands[0],
+				) ||
+				(claims.purpose === "control" &&
+					claims.reason === "generation_isolation")
+			)
+				runtimeAuthorizationDenied();
+			const session = state.sessions[checked.hostSessionRef];
+			const authority = session?.executionAuthorities?.[claims.executionId];
+			if (!authority) runtimeAuthorizationDenied();
+			const previous = authority.evidenceQuery;
+			if (
+				previous &&
+				previous.requestId !== requestId &&
+				claims.issuedAt <= previous.issuedAt
+			)
+				runtimeAuthorizationDenied();
+			authority.evidenceQuery = {
+				requestId,
+				issuedAt: Math.max(previous?.issuedAt ?? 0, claims.issuedAt),
+			};
+		});
+	}
+
+	/** Read only the original accepted submit; never consult its old business lease. */
+	assertOriginalEvidenceBinding(
+		claims: RuntimeExecutionGrantClaimsV2,
+		requestId: string,
+		nativeSessionRef: string,
+		originalOperationDigest: string,
+	): RuntimeOriginalEvidenceBinding {
+		const session = this.checkRequestV3(claims);
+		const original = session.operations[claims.executionId];
+		if (
+			session.generationBarrier ||
+			session.nativeSessionRef !== nativeSessionRef ||
+			session.executionAuthorities?.[claims.executionId]?.evidenceQuery
+				?.requestId !== requestId ||
+			original?.kind !== "submit-turn" ||
+			original.turnId !== claims.turnId ||
+			original.requestDigest !== originalOperationDigest ||
+			original.command.executionId !== claims.executionId ||
+			original.command.agentId !== claims.agentId ||
+			original.command.conversationId !== claims.conversationId ||
+			original.command.sessionGeneration !== claims.sessionGeneration
+		)
+			runtimeAuthorizationDenied();
+		return {
+			principal: { ...claims.principal },
+			scope: {
+				agentId: claims.agentId,
+				conversationId: claims.conversationId,
+				executionId: claims.executionId,
+				sessionGeneration: claims.sessionGeneration,
+			},
+		};
+	}
+
+	recordDeliveredCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+		return this.file.update((state) => {
+			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+			const session = sessionFor(
+				state,
+				claims.hostSessionRef,
+				claims,
+				claims.purpose === "control",
+			);
+			const authority = session.executionAuthorities?.[claims.executionId];
+			if (
+				!authority ||
+				authority.executionDeliveryFence !==
+					claims.operation.executionDeliveryFence ||
+				authority.workerId !== claims.workerId ||
+				session.highestFences[`execution:${claims.executionId}`] !==
+					claims.operation.executionDeliveryFence
+			)
+				runtimeAuthorizationDenied();
+			if (
+				claims.purpose === "business" &&
+				(authority.stopped ||
+					authority.control !== undefined ||
+					authority.authorizationRecordId !== claims.authorizationRecordId)
+			)
+				runtimeAuthorizationDenied();
+			if (
+				claims.purpose === "control" &&
+				(authority.control?.controlRecordId !== claims.controlRecordId ||
+					authority.control.reason !== claims.reason)
+			)
+				runtimeAuthorizationDenied();
+			if (
+				!authority.deliveredCursors.includes(cursor) &&
+				!authority.acknowledgedCursors?.includes(cursor) &&
+				authority.confirmedCursor !== cursor
+			) {
+				if (authority.deliveredCursors.length >= maximumAcknowledgedCursors)
+					runtimeAuthorizationDenied();
+				authority.deliveredCursors.push(cursor);
+			}
+		});
+	}
+
+	checkAcknowledgableCursor(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursor: string,
+	) {
+		const session = this.checkRequestV3(claims);
+		const authority = session.executionAuthorities?.[claims.executionId];
+		if (
+			!authority ||
+			(authority.confirmedCursor !== cursor &&
+				!authority.acknowledgedCursors?.includes(cursor) &&
+				!authority.deliveredCursors.includes(cursor))
+		)
+			runtimeAuthorizationDenied();
+		return session;
+	}
+
+	acknowledgeCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+		return this.file.update((state) => {
+			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+			const session = sessionFor(
+				state,
+				claims.hostSessionRef,
+				claims,
+				claims.purpose === "control",
+			);
+			const authority = session.executionAuthorities?.[claims.executionId];
+			if (
+				!authority ||
+				authority.executionDeliveryFence !==
+					claims.operation.executionDeliveryFence ||
+				authority.workerId !== claims.workerId ||
+				session.highestFences[`execution:${claims.executionId}`] !==
+					claims.operation.executionDeliveryFence
+			)
+				runtimeAuthorizationDenied();
+			if (
+				claims.purpose === "business" &&
+				(authority.stopped ||
+					authority.control !== undefined ||
+					authority.authorizationRecordId !== claims.authorizationRecordId)
+			)
+				runtimeAuthorizationDenied();
+			if (
+				claims.purpose === "control" &&
+				(authority.control?.controlRecordId !== claims.controlRecordId ||
+					authority.control.reason !== claims.reason)
+			)
+				runtimeAuthorizationDenied();
+			if (
+				authority.confirmedCursor === cursor ||
+				authority.acknowledgedCursors?.includes(cursor)
+			)
+				return;
+			const index = authority.deliveredCursors.indexOf(cursor);
+			if (index < 0) runtimeAuthorizationDenied();
+			authority.confirmedCursor = cursor;
+			authority.acknowledgedCursors ??= [];
+			authority.acknowledgedCursors.push(
+				...authority.deliveredCursors.splice(0, index + 1),
+			);
+			if (authority.acknowledgedCursors.length > maximumAcknowledgedCursors)
+				authority.acknowledgedCursors.splice(
+					0,
+					authority.acknowledgedCursors.length - maximumAcknowledgedCursors,
+				);
+		});
+	}
+
+	authorizePreparedOperation(
+		hostSessionRef: string,
+		operation: StoredOperation,
+		now: number,
+	) {
+		const state = this.file.read();
+		assertStoreState(state);
+		const session = state.sessions[hostSessionRef];
+		const authority = session?.executionAuthorities?.[operation.executionId];
+		if (
+			!session?.authority ||
+			!authority?.authorizationRecordId ||
+			session.generationBarrier ||
+			authority.stopped ||
+			authority.control !== undefined ||
+			authority.expiresAt <= now ||
+			authority.issuedAt > now ||
+			authority.executionDeliveryFence !==
+				session.highestFences[`execution:${operation.executionId}`]
+		)
+			runtimeAuthorizationDenied();
+	}
+
+	async authorizeExternalAction(
+		action: RuntimeExternalActionAuthorization,
+		readNow: () => number,
+	) {
+		if (
+			!action.nativeSessionRef ||
+			!action.executionId ||
+			!action.runtimeOperationId ||
+			!action.operationRef ||
+			!action.attemptRef ||
+			(action.kind !== "model" && action.kind !== "tool")
+		)
+			runtimeAuthorizationDenied();
+		await this.authorizedOriginalExecution(action, readNow);
+	}
+
+	async resolveOriginalExecutionBinding(
+		reference: RuntimeOriginalExecutionRef,
+		readNow: () => number,
+	) {
+		const session = await this.authorizedOriginalExecution(
+			{ ...reference, runtimeOperationId: reference.executionId },
+			readNow,
+		);
+		if (
+			session.agentId !== reference.agentId ||
+			session.conversationId !== reference.conversationId ||
+			session.sessionGeneration !== reference.sessionGeneration ||
+			!session.authority
+		)
+			runtimeAuthorizationDenied();
+		return {
+			principal: structuredClone(session.authority.principal),
+			scope: {
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				executionId: reference.executionId,
+			},
+		};
+	}
+
+	private async authorizedOriginalExecution(
+		action: {
+			nativeSessionRef?: string;
+			executionId: string;
+			runtimeOperationId: string;
+		},
+		readNow: () => number,
+	) {
+		const state = await this.file.readCommitted();
+		assertStoreState(state);
+		// A queued durable write may outlive the Grant being checked.
+		const now = readNow();
+		const candidates = Object.values(state.sessions).filter(
+			(entry) =>
+				entry.operations[action.runtimeOperationId]?.kind === "submit-turn" &&
+				entry.operations[action.runtimeOperationId]?.executionId ===
+					action.executionId,
+		);
+		if (candidates.length !== 1) runtimeAuthorizationDenied();
+		const session = candidates[0];
+		if (
+			!session?.authority ||
+			session.generationBarrier ||
+			(action.nativeSessionRef !== undefined &&
+				session.nativeSessionRef !== action.nativeSessionRef)
+		)
+			runtimeAuthorizationDenied();
+		const authority = session.executionAuthorities?.[action.executionId];
+		if (
+			!authority?.authorizationRecordId ||
+			authority.stopped ||
+			authority.control !== undefined ||
+			authority.expiresAt <= now ||
+			authority.issuedAt > now ||
+			authority.executionDeliveryFence !==
+				session.highestFences[`execution:${action.executionId}`]
+		)
+			runtimeAuthorizationDenied();
+		return session;
 	}
 
 	activateGenerationBarrier(

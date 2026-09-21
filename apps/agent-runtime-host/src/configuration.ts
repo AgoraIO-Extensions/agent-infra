@@ -2,7 +2,23 @@ import {
 	type CodexRuntimeModelOption,
 	validateCodexModelAccess,
 } from "@agent-infra/agent-runtime";
-import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeModelConfigurationV3Schema,
+	WorkloadReadinessBindingV1Schema,
+} from "@agent-infra/contracts/runtime";
+
+export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
+	const raw = environment.AGENT_INFRA_RUNTIME_READINESS_BINDING;
+	if (raw === undefined) return undefined;
+	try {
+		const binding = WorkloadReadinessBindingV1Schema.parse(JSON.parse(raw));
+		if (binding.agentId !== environment.AGENT_INFRA_RUNTIME_AGENT_ID)
+			runtimeConfigurationInvalid();
+		return binding;
+	} catch {
+		runtimeConfigurationInvalid();
+	}
+}
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 

@@ -272,7 +272,12 @@ async function buildImage({
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
 				...(image.key === "runtimeHost"
-					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
+					? [
+							"--build-arg",
+							`SOURCE_COMMIT=${commitSha}`,
+							"--build-context",
+							`codex-native=${resolve(process.env.AGENT_INFRA_CODEX_BUILD_CONTEXT ?? join(repositoryRoot, "deploy/runtime/vendor/codex"))}`,
+						]
 					: []),
 				...labels,
 				"--provenance=false",
