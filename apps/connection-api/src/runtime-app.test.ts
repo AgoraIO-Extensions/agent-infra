@@ -59,8 +59,8 @@ describe("Jenkins deployment route", () => {
 		expect(requests[0]?.url).toBe(
 			"http://10.80.1.129:8080/job/EP/job/build_all/901/api/json?tree=result",
 		);
-		await expect(
-			fetcher("http://attacker.example/api/json"),
-		).rejects.toThrow(/fixed route/);
+		await expect(fetcher("http://attacker.example/api/json")).rejects.toThrow(
+			/fixed route/,
+		);
 	});
 });
