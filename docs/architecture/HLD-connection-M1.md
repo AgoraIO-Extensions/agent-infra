@@ -85,7 +85,9 @@
 
 GitHub 的当前 **[设计决策]** profile 固定为 OAuth App 与 classic scopes
 `read:user`、`user:email`、`repo`、`workflow`、`delete_repo`。对应的
-`connection-v8` ProviderRelease 只发布已由该 credential mode 真实验证的 143 个 ActionVersion。
+`connection-v9` ProviderRelease 只发布已由该 credential mode 真实验证的 143 个 `@v8`
+ActionVersion。v9 轮换用于绑定当前已评审 executor digest，不改变 Action schema、effect、scope 或
+授权集合；既有 v8 ActionVersion 与 Grant 不扩权。
 `rerequest_check_run` 与 `rerequest_check_suite` 要求 GitHub `Checks: write`，且目标 Check 必须属于
 对应 GitHub App；它们不能用 `workflow` scope 代替，也不进入 OAuth ProviderRelease。旧
 `connection-v7` Release 及其两个不兼容 ActionVersion 在 v8 发布时整体停用，既有 v7 Grant
