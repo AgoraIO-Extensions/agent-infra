@@ -373,7 +373,49 @@ test("Jenkins returns binary artifacts as Base64 and rejects path injection", as
 		}),
 		/artifactPath is invalid/,
 	);
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-release.get_build_artifact",
+			credential: { accessToken: credential },
+			input: {
+				artifactPath: "..\\secrets.txt",
+				buildNumber: 4342,
+				jobFullName: "AD/Agora-Iris",
+				start: 0,
+			},
+		}),
+		/artifactPath is invalid/,
+	);
 	assert.equal(requests, 1);
+});
+
+test("Jenkins returns an empty artifact from an unsatisfied initial range", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(null, {
+				headers: { "content-range": "bytes */0" },
+				status: 416,
+			}),
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "empty.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 0,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 0,
+		size: 0,
+		truncated: false,
+	});
 });
 
 test("Jenkins credential validation fails closed on auth errors and redirects", async () => {
