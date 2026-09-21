@@ -312,8 +312,7 @@ export async function runCodexConnectionRecovery(options: {
 				if (response.decision === "verify") {
 					if (issued >= 16) throw unavailable();
 					issued++;
-				}
-				else if (response.decision === "done") terminal = true;
+				} else if (response.decision === "done") terminal = true;
 				else failed = true;
 				return response;
 			},
