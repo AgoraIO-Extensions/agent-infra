@@ -13,8 +13,8 @@ for option in "$@"; do
   esac
 done
 
-if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Usage: deploy/connection-gz3-release.sh vX.Y.Z [--publish] [--deploy]" >&2
+if [[ ! "$version" =~ ^connection-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Usage: deploy/connection-gz3-release.sh connection-vX.Y.Z [--publish] [--deploy]" >&2
   exit 2
 fi
 
@@ -34,7 +34,10 @@ if [[ -n "$tag_sha" && "$tag_sha" != "$connection_sha" ]]; then
   exit 1
 fi
 
-previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' | grep -v "^${version} " | sort -V | tail -1 || true)
+previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/connection-v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^connection-v[0-9]+\.[0-9]+\.[0-9]+ ' | grep -v "^${version} " | sort -V | tail -1 || true)
+if [[ -z "$previous_ref" ]]; then
+  previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' | sort -V | tail -1 || true)
+fi
 previous_tag=${previous_ref%% *}
 previous_sha=${previous_ref##* }
 if [[ -n "$previous_ref" ]] && ! git diff --quiet "$previous_sha..$connection_sha" -- migrations/connection; then

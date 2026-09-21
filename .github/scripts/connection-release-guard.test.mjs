@@ -61,3 +61,19 @@ test("compares every action instead of only the maximum version", () => {
 	);
 	assert.throws(() => compareCatalogs({ provider: baseline }, { provider: candidate }), /provider\.b v5 -> v4/);
 });
+
+test("merges explicit and generated actions and rejects ambiguous shared versions", () => {
+	const source = `
+		const providerId = "provider";
+		const actionSpecs = [{ name: "generated" }] as const;
+		const explicit = "provider.explicit@v6";
+	`;
+	assert.deepEqual(parseCatalogSource(source).actions, {
+		"provider.explicit": 6,
+		"provider.generated": 6,
+	});
+	assert.throws(
+		() => parseCatalogSource(source.replace("@v6", "@v6 @v5")),
+		/ambiguous shared action version/,
+	);
+});

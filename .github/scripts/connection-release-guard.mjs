@@ -19,17 +19,20 @@ export function parseCatalogSource(source, providerHint) {
 		),
 	);
 	const actionSpecSource = source.match(/const actionSpecs[\s\S]*?\] as const;/)?.[0] ?? "";
-	const sharedVersion = Math.max(
-		0,
-		...[...source.matchAll(/@v(\d+)/g)].map((match) => Number(match[1])),
+	const sharedVersions = new Set(
+		[...source.matchAll(/@v(\d+)/g)].map((match) => Number(match[1])),
 	);
 	const providerId = source.match(/const providerId = ["']([^"']+)["']/)?.[1] ?? providerHint;
+	if (actionSpecSource && sharedVersions.size !== 1) {
+		throw new Error(`Provider ${providerId} has an ambiguous shared action version`);
+	}
+	const sharedVersion = sharedVersions.values().next().value ?? 0;
 	const dynamicActions = Object.fromEntries(
 		[...actionSpecSource.matchAll(/\bname:\s*["']([a-z][a-z0-9_]*)["']/g)].map(
 			(match) => [`${providerId}.${match[1]}`, sharedVersion],
 		),
 	);
-	const actions = Object.keys(explicitActions).length ? explicitActions : dynamicActions;
+	const actions = { ...dynamicActions, ...explicitActions };
 	const actionVersions = Object.values(actions);
 	const releaseVersions = [...source.matchAll(/connection-v(\d+)/g)].map((match) => Number(match[1]));
 	if (actionVersions.length === 0) throw new Error("Provider source has no versioned actions");

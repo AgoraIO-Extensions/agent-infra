@@ -62,3 +62,17 @@ test("rejects a probe whose action belongs to another service", async () => {
 		/does not belong/,
 	);
 });
+
+test("rejects a non-HTTPS production endpoint before sending the token", async () => {
+	await assert.rejects(
+		verifyProductionReads({
+			endpoint: "http://connection.example/mcp",
+			fetch: async () => {
+				throw new Error("must not call");
+			},
+			probes: [{ service: "jira", actionId: "jira.get_issue", input: {} }],
+			token: "secret",
+		}),
+		/must use HTTPS/,
+	);
+});

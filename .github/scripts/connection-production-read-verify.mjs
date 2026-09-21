@@ -1,9 +1,11 @@
 import { pathToFileURL } from "node:url";
 
 export async function verifyProductionReads({ endpoint, fetch, probes, token }) {
+	const target = new URL(endpoint);
+	if (target.protocol !== "https:") throw new Error("Production endpoint must use HTTPS");
 	let id = 0;
 	const call = async (name, args) => {
-		const response = await fetch(endpoint, {
+		const response = await fetch(target, {
 			method: "POST",
 			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
 			body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name, arguments: args } }),

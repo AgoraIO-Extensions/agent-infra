@@ -24,7 +24,8 @@ pnpm connection:production:bootstrap
 pnpm connection:production:up
 ```
 
-生产镜像只能由恰好指向最新 `origin/connection` 的不可变 tag 发布。发布工作流必须比较上一正式 tag
+Connection 生产镜像只使用专用的 `connection-vX.Y.Z` tag，且该 tag 必须恰好指向最新
+`origin/connection`。其他产品的 `vX.Y.Z` tag 不执行 Connection catalog 门禁。发布工作流必须比较上一正式 Connection tag
 与候选提交的 Provider catalog，拒绝 Provider 删除、Action 版本下降或 ProviderRelease 版本下降，并在
 Job Summary 输出逐 Provider diff。feature branch、旧 SHA 或 divergent SHA 不得发布生产镜像。
 
@@ -106,7 +107,7 @@ pnpm connection:pr:preflight -- --issue <issue-number>
 PR 合并后切到对应的 `origin/connection` commit，再执行：
 
 ```bash
-pnpm connection:gz3:release -- vX.Y.Z --publish --deploy
+pnpm connection:gz3:release -- connection-vX.Y.Z --publish --deploy
 ```
 
 命令只允许 tag 指向当前 `origin/connection`，等待 GHCR workflow 完成，然后固定使用 GZ3 context、
