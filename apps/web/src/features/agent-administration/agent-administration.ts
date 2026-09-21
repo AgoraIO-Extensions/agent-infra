@@ -1,27 +1,30 @@
-import type {
-	AgentLifecycleCommandRequestV1,
-	ApprovalDecisionRequestV1,
-} from "../../pilot/generated/types.gen.js";
+export {
+	type BrowserSessionState,
+	loadBrowserSession,
+} from "../browser-session.js";
+
 import type {
 	Client,
 	RequestResult,
-} from "../../pilot/generated-v2/client/index.js";
+} from "../../pilot/generated/client/index.js";
 import {
-	listPendingAgentApplicationsV2,
-	commandAgentLifecycleV2 as requestAgentLifecycle,
-	decideAgentApplicationV2 as requestApplicationDecision,
-} from "../../pilot/generated-v2/sdk.gen.js";
+	listPendingAgentApplications,
+	commandAgentLifecycle as requestAgentLifecycle,
+	decideAgentApplication as requestApplicationDecision,
+} from "../../pilot/generated/sdk.gen.js";
 import type {
-	AgentApplicationProjectionV2,
-	AgentProjectionV2,
-	CommandAgentLifecycleV2Errors,
-	CommandAgentLifecycleV2Responses,
-	DecideAgentApplicationV2Errors,
-	DecideAgentApplicationV2Responses,
-	ListPendingAgentApplicationsV2Data,
-	ListPendingAgentApplicationsV2Errors,
-	ListPendingAgentApplicationsV2Responses,
-} from "../../pilot/generated-v2/types.gen.js";
+	AgentApplicationProjectionV1,
+	AgentLifecycleCommandRequestV1,
+	AgentProjectionV1,
+	ApprovalDecisionRequestV1,
+	CommandAgentLifecycleErrors,
+	CommandAgentLifecycleResponses,
+	DecideAgentApplicationErrors,
+	DecideAgentApplicationResponses,
+	ListPendingAgentApplicationsData,
+	ListPendingAgentApplicationsErrors,
+	ListPendingAgentApplicationsResponses,
+} from "../../pilot/generated/types.gen.js";
 
 type UnavailableState = {
 	kind: "unavailable";
@@ -29,7 +32,7 @@ type UnavailableState = {
 };
 
 export type PendingAgentApplicationsState =
-	| { kind: "ready"; applications: AgentApplicationProjectionV2[] }
+	| { kind: "ready"; applications: AgentApplicationProjectionV1[] }
 	| UnavailableState;
 
 export type AgentApplicationDecision =
@@ -71,7 +74,7 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 export async function loadPendingAgentApplications(
 	client?: Client,
 ): Promise<PendingAgentApplicationsState> {
-	const applications: AgentApplicationProjectionV2[] = [];
+	const applications: AgentApplicationProjectionV1[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
 	let pages = 0;
@@ -79,15 +82,15 @@ export async function loadPendingAgentApplications(
 	do {
 		if (pages >= maximumPendingApplicationPages) throw retryableError();
 		pages += 1;
-		const query: ListPendingAgentApplicationsV2Data["query"] =
+		const query: ListPendingAgentApplicationsData["query"] =
 			cursor === null ? undefined : { cursor };
 		const result: Awaited<
 			RequestResult<
-				ListPendingAgentApplicationsV2Responses,
-				ListPendingAgentApplicationsV2Errors,
+				ListPendingAgentApplicationsResponses,
+				ListPendingAgentApplicationsErrors,
 				false
 			>
-		> = await listPendingAgentApplicationsV2<false>({
+		> = await listPendingAgentApplications<false>({
 			client,
 			query,
 			responseStyle: "fields",
@@ -109,11 +112,11 @@ export async function decideAgentApplication(
 	decision: AgentApplicationDecision,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentApplicationProjectionV2> {
+): Promise<AgentApplicationProjectionV1> {
 	const result: Awaited<
 		RequestResult<
-			DecideAgentApplicationV2Responses,
-			DecideAgentApplicationV2Errors,
+			DecideAgentApplicationResponses,
+			DecideAgentApplicationErrors,
 			false
 		>
 	> = await requestApplicationDecision<false>({
@@ -135,11 +138,11 @@ export async function commandAgentLifecycle(
 	command: AgentLifecycleCommand,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV2> {
+): Promise<AgentProjectionV1> {
 	const result: Awaited<
 		RequestResult<
-			CommandAgentLifecycleV2Responses,
-			CommandAgentLifecycleV2Errors,
+			CommandAgentLifecycleResponses,
+			CommandAgentLifecycleErrors,
 			false
 		>
 	> = await requestAgentLifecycle<false>({
