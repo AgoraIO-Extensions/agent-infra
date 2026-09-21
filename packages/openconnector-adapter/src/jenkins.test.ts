@@ -418,6 +418,35 @@ test("Jenkins returns an empty artifact from an unsatisfied initial range", asyn
 	});
 });
 
+test("Jenkins completes unknown-total pagination at an unsatisfied EOF range", async () => {
+	const adapter = new JenkinsAdapter(
+		jenkinsReleaseProfile,
+		async () =>
+			new Response(null, {
+				headers: { "content-range": "bytes */7" },
+				status: 416,
+			}),
+	);
+	const result = await adapter.execute({
+		action: "jenkins-release.get_build_artifact",
+		credential: { accessToken: credential },
+		input: {
+			artifactPath: "compile.log",
+			buildNumber: 4342,
+			jobFullName: "AD/Agora-Iris",
+			start: 7,
+		},
+	});
+	assert.deepEqual(result, {
+		contentBase64: "",
+		mimeType: "application/octet-stream",
+		moreData: false,
+		nextStart: 7,
+		size: 7,
+		truncated: false,
+	});
+});
+
 test("Jenkins credential validation fails closed on auth errors and redirects", async () => {
 	for (const response of [
 		new Response("denied", { status: 401 }),
