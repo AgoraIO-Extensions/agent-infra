@@ -27,30 +27,30 @@ vi.mock("node:process", async (importOriginal) => ({
 }));
 
 vi.mock("node:crypto", async (importOriginal) => {
- const original = await importOriginal<typeof import("node:crypto")>();
- return ({
-	createHash: () => {
-		let value = "";
-		return {
-			update: (input: Uint8Array) => {
-				value += Buffer.from(input).toString("utf8");
-				return {
-					digest: () =>
-						value === "schema-matches"
-							? "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
-							: original.createHash("sha256").update(value).digest("hex"),
-				};
-			},
-		};
-	},
-});
+	const original = await importOriginal<typeof import("node:crypto")>();
+	return {
+		createHash: () => {
+			let value = "";
+			return {
+				update: (input: Uint8Array) => {
+					value += Buffer.from(input).toString("utf8");
+					return {
+						digest: () =>
+							value === "schema-matches"
+								? "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+								: original.createHash("sha256").update(value).digest("hex"),
+					};
+				},
+			};
+		},
+	};
 });
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CodexAppServerBridge,
 	validateModelAccess,
- runCodexConnectionRecovery,
+	runCodexConnectionRecovery,
 } from "./codex-app-server-bridge.js";
 
 import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
@@ -1427,20 +1427,53 @@ describe("model access admission", () => {
 	});
 });
 
-
-it.each(["recovery-premature", "recovery-done"])("requires terminal done after recovery budget: %s", async (mode) => {
- await installFakeCodex(mode);
- const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
- const fixture = corpus.cases.find((entry: {id:string}) => entry.id === "recovery-verify-valid").frame as Extract<CodexConnectionRecoveryResponse, {decision:"verify"}>;
- const recovery = vi.fn(async (request: typeof fixture.request) => {
-  if (recovery.mock.calls.length > 16) return {schemaVersion:2 as const, phase:"connection-recovery" as const, requestId:request.requestId, request, decision:"done" as const};
-  return {...structuredClone(fixture), request, requestId:request.requestId, expiresAt:Date.now()+20_000, currentClient:{...fixture.currentClient, credential:{...fixture.currentClient.credential,expiresAt:Date.now()+30_000}}};
- });
- const launch = runCodexConnectionRecovery({
-  ...options(), profile:{serviceRef:"connection",profileRef:fixture.request.profileRef,issuer:"https://connection.example.test",resource:"https://connection.example.test/mcp"},
-  signal:new AbortController().signal,recovery,evidence:vi.fn(),
- });
- if (mode === "recovery-premature") await expect(launch).rejects.toThrow();
- else await expect(launch).resolves.toBeUndefined();
- expect(recovery).toHaveBeenCalledTimes(mode === "recovery-premature" ? 16 : 17);
-});
+it.each(["recovery-premature", "recovery-done"])(
+	"requires terminal done after recovery budget: %s",
+	async (mode) => {
+		await installFakeCodex(mode);
+		const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+		const fixture = corpus.cases.find(
+			(entry: { id: string }) => entry.id === "recovery-verify-valid",
+		).frame as Extract<CodexConnectionRecoveryResponse, { decision: "verify" }>;
+		const recovery = vi.fn(async (request: typeof fixture.request) => {
+			if (recovery.mock.calls.length > 16)
+				return {
+					schemaVersion: 2 as const,
+					phase: "connection-recovery" as const,
+					requestId: request.requestId,
+					request,
+					decision: "done" as const,
+				};
+			return {
+				...structuredClone(fixture),
+				request,
+				requestId: request.requestId,
+				expiresAt: Date.now() + 20_000,
+				currentClient: {
+					...fixture.currentClient,
+					credential: {
+						...fixture.currentClient.credential,
+						expiresAt: Date.now() + 30_000,
+					},
+				},
+			};
+		});
+		const launch = runCodexConnectionRecovery({
+			...options(),
+			profile: {
+				serviceRef: "connection",
+				profileRef: fixture.request.profileRef,
+				issuer: "https://connection.example.test",
+				resource: "https://connection.example.test/mcp",
+			},
+			signal: new AbortController().signal,
+			recovery,
+			evidence: vi.fn(),
+		});
+		if (mode === "recovery-premature") await expect(launch).rejects.toThrow();
+		else await expect(launch).resolves.toBeUndefined();
+		expect(recovery).toHaveBeenCalledTimes(
+			mode === "recovery-premature" ? 16 : 17,
+		);
+	},
+);

@@ -323,6 +323,12 @@ export class RuntimeHost {
 	}
 	async close() {
 		await this.v3?.close();
+		// RuntimeHostV3 rejects new V3 work before draining its own recovery
+		// guards. Drain the shared legacy queue as well so an already admitted
+		// operation cannot outlive host shutdown.
+		while (this.queues.size > 0) {
+			await Promise.allSettled([...this.queues.values()]);
+		}
 	}
 	private requireLegacyHost() {
 		if (this.v3) runtimeAuthorizationDenied();

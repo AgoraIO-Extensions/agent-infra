@@ -296,7 +296,7 @@ export class RuntimeHostV3 {
 		this.assertOpen();
 		const request = parseRequest(RuntimeSubmitTurnRequestV3Schema, value);
 		const claims = this.validate(request, "turn.submit", verification);
-		return this.options.serialize(
+		const response = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.assertOpen();
@@ -348,13 +348,14 @@ export class RuntimeHostV3 {
 				return { ...response, schemaVersion: 3 as const };
 			},
 		);
+		return response;
 	}
 
 	async supplement(value: RuntimeSupplementRequestV3, verification: unknown) {
 		this.assertOpen();
 		const request = parseRequest(RuntimeSupplementRequestV3Schema, value);
 		const claims = this.validate(request, "turn.supplement", verification);
-		return this.options.serialize(
+		const response = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.assertOpen();
@@ -401,6 +402,7 @@ export class RuntimeHostV3 {
 				};
 			},
 		);
+		return response;
 	}
 
 	async stop(value: RuntimeStopRequestV3, verification: unknown) {
@@ -424,7 +426,7 @@ export class RuntimeHostV3 {
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(key, recoveryGenerationKey);
-		return this.options.serialize(
+		const response = await this.options.serialize(
 			this.options.store.sessionQueueKey(request),
 			async () => {
 				this.assertOpen();
@@ -469,6 +471,12 @@ export class RuntimeHostV3 {
 				};
 			},
 		);
+		if (
+			response.result.outcome === "accepted" &&
+			["completed", "failed", "cancelled"].includes(response.result.status)
+		)
+			this.closedRecoveryGenerations.delete(recoveryGenerationKey);
+		return response;
 	}
 
 	async recoverStatus(
@@ -576,7 +584,7 @@ export class RuntimeHostV3 {
 		await this.abortRecovery(recoveryKey, recoveryGenerationKey);
 		let barrierActivated = false;
 		try {
-			return await this.options.serialize(
+			const response = await this.options.serialize(
 				this.options.store.sessionQueueKey(request),
 				async () => {
 					this.assertOpen();
@@ -635,6 +643,9 @@ export class RuntimeHostV3 {
 					return { ...response, schemaVersion: 3 as const };
 				},
 			);
+			if (barrierActivated)
+				this.closedRecoveryGenerations.delete(recoveryGenerationKey);
+			return response;
 		} catch (error) {
 			// Preparation or barrier activation may fail before the durable barrier
 			// exists. In that case leave the generation recoverable for a retry.
