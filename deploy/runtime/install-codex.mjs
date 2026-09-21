@@ -41,9 +41,10 @@ if (!artifact || !destination || extra.length) {
 }
 const isDerivedRelease =
 	release.schemaVersion === 2 && release.distribution?.kind === "derived";
-const isLegacyRelease =
-	release.schemaVersion === undefined && release.distribution === undefined;
-if (!isDerivedRelease && !isLegacyRelease) {
+const isUpstreamRelease =
+	(release.schemaVersion === 2 && release.distribution?.kind === "upstream") ||
+	(release.schemaVersion === undefined && release.distribution === undefined);
+if (!isDerivedRelease && !isUpstreamRelease) {
 	throw new Error("Unsupported Codex release manifest");
 }
 if (isDerivedRelease) {

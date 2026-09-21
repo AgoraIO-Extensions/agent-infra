@@ -50,11 +50,15 @@ export function validateRuntimeProbe(
 	} catch {
 		invalid();
 	}
-	const derived = release?.schemaVersion === 2;
+	const derived =
+		release?.schemaVersion === 2 && release.distribution?.kind === "derived";
+	const upstream =
+		(release?.schemaVersion === 2 &&
+			release.distribution?.kind === "upstream") ||
+		(release?.schemaVersion === undefined && release?.distribution === undefined);
 	if (
 		!release?.provenance ||
-		(typeof release.schemaVersion !== "undefined" && !derived) ||
-		(!derived && release.distribution !== undefined)
+		(!derived && !upstream)
 	)
 		invalid();
 	if (
