@@ -34,7 +34,7 @@ if [[ -n "$tag_sha" && "$tag_sha" != "$connection_sha" ]]; then
   exit 1
 fi
 
-previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' | grep -v "^${version} " | sort -V | tail -1)
+previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk '{sub("refs/tags/", "", $2); print $2, $1}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ ' | grep -v "^${version} " | sort -V | tail -1 || true)
 previous_tag=${previous_ref%% *}
 previous_sha=${previous_ref##* }
 if [[ -n "$previous_ref" ]] && ! git diff --quiet "$previous_sha..$connection_sha" -- migrations/connection; then
@@ -84,11 +84,13 @@ deadline=$((SECONDS + 300))
 while (( SECONDS < deadline )); do
   api_ready=$(kubectl -n "$namespace" get deploy connection-api -o jsonpath='{.status.readyReplicas}')
   web_ready=$(kubectl -n "$namespace" get deploy connection-web -o jsonpath='{.status.readyReplicas}')
+  api_desired=$(kubectl -n "$namespace" get deploy connection-api -o jsonpath='{.spec.replicas}')
+  web_desired=$(kubectl -n "$namespace" get deploy connection-web -o jsonpath='{.spec.replicas}')
   current_api=$(kubectl -n "$namespace" get deploy connection-api -o jsonpath='{.spec.template.spec.containers[0].image}')
   current_web=$(kubectl -n "$namespace" get deploy connection-web -o jsonpath='{.spec.template.spec.containers[0].image}')
   api_pod_ready=$(kubectl -n "$namespace" get pods -l app.kubernetes.io/name=connection-api -o jsonpath='{range .items[*]}{.spec.containers[0].image}={.status.containerStatuses[0].ready}{"\n"}{end}' | grep -Fxc "$api_image=true" || true)
   web_pod_ready=$(kubectl -n "$namespace" get pods -l app.kubernetes.io/name=connection-web -o jsonpath='{range .items[*]}{.spec.containers[0].image}={.status.containerStatuses[0].ready}{"\n"}{end}' | grep -Fxc "$web_image=true" || true)
-  if [[ "$api_ready" == "1" && "$web_ready" == "1" && "$current_api" == "$api_image" && "$current_web" == "$web_image" && "$api_pod_ready" == "1" && "$web_pod_ready" == "1" ]]; then
+  if [[ "$api_ready" == "$api_desired" && "$web_ready" == "$web_desired" && "$current_api" == "$api_image" && "$current_web" == "$web_image" && "$api_pod_ready" == "$api_desired" && "$web_pod_ready" == "$web_desired" ]]; then
     helm -n "$namespace" status "$release"
     kubectl -n "$namespace" get pods \
       -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount'

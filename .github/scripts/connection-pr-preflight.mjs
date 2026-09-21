@@ -69,14 +69,14 @@ function main() {
   );
   const contract = validateSupervisedIssue(issue);
   const baseSha = run("git", ["rev-parse", "origin/connection"]);
-  const checks = JSON.parse(
-    run("gh", [
-      "api",
-      `repos/${repository}/commits/${baseSha}/check-runs`,
-      "--jq",
-      "[.check_runs[] | select(.conclusion == \"failure\") | .name] | unique",
-    ]) || "[]",
-  );
+  const failedCheckOutput = run("gh", [
+    "api",
+    "--paginate",
+    `repos/${repository}/commits/${baseSha}/check-runs?per_page=100`,
+    "--jq",
+    '.check_runs[] | select(.conclusion == "failure") | .name',
+  ]);
+  const checks = [...new Set(failedCheckOutput.split("\n").filter(Boolean))].sort();
 
   console.log(`OK branch: ${branch}`);
   console.log(`OK issue: #${issue.number} (${contract.acceptanceCriteriaIds.join(", ")})`);
