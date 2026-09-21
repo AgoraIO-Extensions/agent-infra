@@ -334,10 +334,19 @@ export class JenkinsAdapter
 		if (response.status >= 300 && response.status < 400) {
 			throw providerError("Jenkins request redirected");
 		}
+		const unsatisfiedRange =
+			response.status === 416
+				? response.headers
+						.get("content-range")
+						?.match(/^\s*bytes\s+\*\/(\d+)\s*$/i)
+				: undefined;
+		const unsatisfiedSize = unsatisfiedRange
+			? Number(unsatisfiedRange[1])
+			: undefined;
 		if (
-			response.status === 416 &&
-			start === 0 &&
-			response.headers.get("content-range")?.toLowerCase() === "bytes */0"
+			unsatisfiedSize !== undefined &&
+			Number.isSafeInteger(unsatisfiedSize) &&
+			unsatisfiedSize === start
 		) {
 			return {
 				contentBase64: "",
@@ -345,8 +354,8 @@ export class JenkinsAdapter
 					response.headers.get("content-type")?.split(";", 1)[0]?.trim() ||
 					"application/octet-stream",
 				moreData: false,
-				nextStart: 0,
-				size: 0,
+				nextStart: start,
+				size: unsatisfiedSize,
 				truncated: false,
 			};
 		}
