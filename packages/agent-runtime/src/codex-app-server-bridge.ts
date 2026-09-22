@@ -265,6 +265,7 @@ export async function runCodexConnectionRecovery(options: {
 	let child: ChildProcess | undefined;
 	let callbacks: ReturnType<typeof serveCodexNativeCallbacks> | undefined;
 	let exited: Promise<void> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const abort = () => {
 		const pid = child?.pid;
 		if (pid && pid > 1) {
@@ -278,6 +279,18 @@ export async function runCodexConnectionRecovery(options: {
 			}
 		}
 		child?.kill("SIGKILL");
+	};
+	const cleanup = () => {
+		if (!cleanupPromise) {
+			cleanupPromise = (async () => {
+				callbacks?.close();
+				abort();
+				if (exited) await settleWithin(exited, recoveryShutdownTimeoutMs);
+				if (callbacks)
+					await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+			})();
+		}
+		return cleanupPromise;
 	};
 	try {
 		await probeVersion(executable, defaultTimeoutMs, policy, options.signal);
@@ -363,23 +376,16 @@ export async function runCodexConnectionRecovery(options: {
 		);
 		if (exitResult !== "exited") {
 			failed = true;
-			callbacks.close();
-			abort();
-			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+			await cleanup();
 			if (exitResult === "aborted") options.signal.throwIfAborted();
 			throw unavailable();
 		}
-		callbacks.close();
-		await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+		await cleanup();
 		options.signal.throwIfAborted();
 		if (failed || !complete() || process.exitCode !== 0) throw unavailable();
 	} finally {
 		options.signal.removeEventListener("abort", abort);
-		callbacks?.close();
-		abort();
-		if (exited) await settleWithin(exited, recoveryShutdownTimeoutMs);
-		if (callbacks)
-			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+		await cleanup();
 		await removeIsolatedDirectory(policy.directory);
 	}
 }
