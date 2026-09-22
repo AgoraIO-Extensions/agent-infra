@@ -15,6 +15,11 @@ type SchemaType<Name extends keyof typeof codexCallbackSchema.$defs> =
 	}>;
 
 export type CodexConnectionProfile = SchemaType<"connectionProfile">;
+/** Deployment-owned Connection service identity used to admit a profile. */
+export type CodexConnectionServiceAuthority = Pick<
+	CodexConnectionProfile,
+	"serviceRef" | "issuer" | "resource"
+>;
 export type CodexConnectionBootstrapRequest =
 	SchemaType<"connectionBootstrapRequest">;
 export type CodexConnectionBootstrapResponse =
@@ -103,6 +108,7 @@ const maximumHistoricalSlots = 1_024;
 
 export function validateCodexConnectionProfile(
 	value: unknown,
+	authorizedService: CodexConnectionServiceAuthority,
 ): CodexConnectionProfile {
 	if (!isProfile(value)) throw unavailable();
 	const profile = structuredClone(value);
@@ -115,12 +121,25 @@ export function validateCodexConnectionProfile(
 		resource.href !== profile.resource
 	)
 		throw unavailable();
+	if (
+		!isDeepStrictEqual(
+			{
+				serviceRef: profile.serviceRef,
+				issuer: profile.issuer,
+				resource: profile.resource,
+			},
+			authorizedService,
+		)
+	)
+		throw unavailable();
 	return profile;
 }
 
 /** One socket-bound client; only the returned bootstrap response contains a token. */
 export function createCodexConnectionClient(options: {
 	profile: CodexConnectionProfile;
+	/** Server-resolved/allowlisted service identity; never a wire input. */
+	authorizedService: CodexConnectionServiceAuthority;
 	resolveOriginalClient: (
 		request: { profileRef: string; nativeSessionRef?: string },
 		signal: AbortSignal,
@@ -128,7 +147,10 @@ export function createCodexConnectionClient(options: {
 	now?: () => number;
 }) {
 	const now = options.now ?? Date.now;
-	const profile = validateCodexConnectionProfile(options.profile);
+	const profile = validateCodexConnectionProfile(
+		options.profile,
+		options.authorizedService,
+	);
 	let slot: SlotMetadata | undefined;
 	const slots = new Map<string, SlotMetadata>();
 	let processNonce: string | undefined;

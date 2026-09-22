@@ -32,6 +32,7 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 };
 import {
 	type CodexConnectionProfile,
+	type CodexConnectionServiceAuthority,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
 import {
@@ -221,6 +222,8 @@ export interface CodexAppServerBridgeOptions {
 	readonly nativeCallback?: CodexNativeCallbackHandler;
 	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
 	readonly connectionProfile?: CodexConnectionProfile;
+	/** Deployment-owned/allowlisted identity; never a wire input. */
+	readonly authorizedConnectionService?: CodexConnectionServiceAuthority;
 	readonly provenance: CodexAppServerProvenanceV2;
 	readonly nativeBarrierRequired?: boolean;
 	readonly startupTimeoutMs?: number;
@@ -243,6 +246,7 @@ export async function runCodexConnectionRecovery(options: {
 	dataDirectory: string;
 	conversationKey: string;
 	profile: CodexConnectionProfile;
+	authorizedConnectionService: CodexConnectionServiceAuthority;
 	signal: AbortSignal;
 	recovery: CodexNativeConnectionRecoveryHandler;
 	evidence: CodexNativeCallbackHandler;
@@ -251,7 +255,10 @@ export async function runCodexConnectionRecovery(options: {
 	options.signal.throwIfAborted();
 	if (options.nativeBarrierRequired === false) configurationInvalid();
 	if (platform !== "linux") throw unavailable();
-	const profile = validateCodexConnectionProfile(options.profile);
+	const profile = validateCodexConnectionProfile(
+		options.profile,
+		options.authorizedConnectionService,
+	);
 	const launchPath = options.launchPath ?? env.PATH;
 	const executable = await resolveExecutable(launchPath, "codex");
 	const policy = await createIsolatedLaunchPolicy(launchPath);
@@ -581,6 +588,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		"nativeCallback",
 		"nativeConnectionBootstrap",
 		"connectionProfile",
+		"authorizedConnectionService",
 		"provenance",
 		"nativeBarrierRequired",
 		"startupTimeoutMs",
@@ -640,8 +648,16 @@ function validateOptions(input: unknown): ValidatedOptions {
 	let connectionProfile: CodexConnectionProfile | undefined;
 	if (input.connectionProfile !== undefined) {
 		try {
+			const authorizedService = input.authorizedConnectionService;
+			if (
+				!authorizedService ||
+				typeof authorizedService !== "object" ||
+				Array.isArray(authorizedService)
+			)
+				configurationInvalid();
 			connectionProfile = validateCodexConnectionProfile(
 				input.connectionProfile,
+				authorizedService as CodexConnectionServiceAuthority,
 			);
 		} catch {
 			configurationInvalid();
@@ -652,6 +668,11 @@ function validateOptions(input: unknown): ValidatedOptions {
 			(input.nativeConnectionBootstrap === undefined) ||
 		(input.nativeConnectionBootstrap !== undefined &&
 			typeof input.nativeConnectionBootstrap !== "function")
+	)
+		configurationInvalid();
+	if (
+		connectionProfile === undefined &&
+		input.authorizedConnectionService !== undefined
 	)
 		configurationInvalid();
 	const modelAccess = validateModelAccess(input.modelAccess);

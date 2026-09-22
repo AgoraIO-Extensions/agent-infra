@@ -1006,6 +1006,11 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		const bridge = await CodexAppServerBridge.open(
 			options({
 				connectionProfile: profile,
+				authorizedConnectionService: {
+					serviceRef: profile.serviceRef,
+					issuer: profile.issuer,
+					resource: profile.resource,
+				},
 				nativeConnectionBootstrap: bootstrap,
 			}),
 		);
@@ -1539,6 +1544,11 @@ it.each(["recovery-premature", "recovery-done"])(
 			profile: {
 				serviceRef: "connection",
 				profileRef: fixture.request.profileRef,
+				issuer: "https://connection.example.test",
+				resource: "https://connection.example.test/mcp",
+			},
+			authorizedConnectionService: {
+				serviceRef: "connection",
 				issuer: "https://connection.example.test",
 				resource: "https://connection.example.test/mcp",
 			},

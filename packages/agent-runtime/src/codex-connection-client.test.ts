@@ -55,6 +55,11 @@ const profile = {
 	issuer: "https://connection.example.test",
 	resource: "https://connection.example.test/mcp",
 };
+const authorizedService = {
+	serviceRef: profile.serviceRef,
+	issuer: profile.issuer,
+	resource: profile.resource,
+};
 function descriptorFromIntent() {
 	const frame = checked<CodexConnectionOperationRequest>(
 		"connectionOperationRequest",
@@ -80,6 +85,7 @@ async function fixture() {
 	);
 	const client = createCodexConnectionClient({
 		profile,
+		authorizedService,
 		resolveOriginalClient,
 		now: () => time,
 	});
@@ -141,6 +147,7 @@ describe("socket-bound independent Connection client", () => {
 		};
 		const client = createCodexConnectionClient({
 			profile,
+			authorizedService,
 			resolveOriginalClient: async () => config,
 			now: () => time,
 		});
@@ -263,6 +270,7 @@ describe("socket-bound independent Connection client", () => {
 		]) {
 			const client = createCodexConnectionClient({
 				profile,
+				authorizedService,
 				resolveOriginalClient,
 				now: () => time,
 			});
@@ -291,6 +299,7 @@ describe("socket-bound independent Connection client", () => {
 		let now = time;
 		const client = createCodexConnectionClient({
 			profile,
+			authorizedService,
 			resolveOriginalClient: async () => configuration,
 			now: () => now,
 		});
@@ -413,7 +422,18 @@ describe("socket-bound independent Connection client", () => {
 			"https://connection.example.test/mcp?url=evil",
 		])
 			expect(() =>
-				validateCodexConnectionProfile({ ...profile, resource }),
+				validateCodexConnectionProfile(
+					{ ...profile, resource },
+					authorizedService,
+				),
 			).toThrow();
+		const attacker = {
+			...profile,
+			issuer: "https://attacker.example.test",
+			resource: "https://attacker.example.test/mcp",
+		};
+		expect(() =>
+			validateCodexConnectionProfile(attacker, authorizedService),
+		).toThrow();
 	});
 });
