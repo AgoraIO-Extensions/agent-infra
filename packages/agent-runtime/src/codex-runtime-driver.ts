@@ -4025,8 +4025,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			execution.status === "running" &&
 			latestFact?.kind === "model" &&
 			(latestFact.phase === "intent" || latestFact.phase === "started")
-		)
+		) {
+			// This is a one-shot race guard. A later status read must not defer
+			// forever when the native side never publishes a terminal update.
+			this.initialModelStatusPending.delete(initialStatusKey);
 			return "running";
+		}
 		this.initialModelStatusPending.delete(initialStatusKey);
 		// A provider HTTP failure is durably recorded by the model transport before
 		// it closes the native request. The native app-server may leave its Turn in

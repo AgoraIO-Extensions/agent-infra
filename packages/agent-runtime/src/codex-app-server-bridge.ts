@@ -1115,9 +1115,12 @@ async function verifyNativeBarrier(
 		signal,
 	);
 	try {
+		// runProbeCommand only resolves after the child exited with status 0;
+		// still reject truncated/empty output before interpreting the payload.
+		if (output.stdoutTooLarge || output.stdout.trim() === "")
+			throw provenanceMismatchError();
 		const value: unknown = JSON.parse(output.stdout);
 		if (
-			output.stdoutTooLarge ||
 			!isPlainRecord(value) ||
 			!exactKeys(value, Object.keys(nativeBarrier)) ||
 			Object.entries(nativeBarrier).some(
