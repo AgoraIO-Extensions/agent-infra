@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmod,
+	chown,
 	copyFile,
 	mkdir,
 	mkdtemp,
@@ -29,6 +30,10 @@ test("upstream installer produces the verifier's immutable file modes", async ()
 		const binary = Buffer.from("synthetic upstream bytes");
 		const name = "codex-test";
 		await writeFile(join(root, name), binary);
+		// Upstream archives can carry a non-root owner. Exercise the image-build
+		// normalization when this test itself is running as root.
+		if (typeof process.getuid === "function" && process.getuid() === 0)
+			await chown(join(root, name), 1001, 1001);
 		const archive = join(root, "archive.tar.gz");
 		execFileSync("tar", ["-czf", archive, "-C", root, name]);
 		const hash = (bytes) =>
@@ -61,6 +66,8 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 			"amd64",
 			destination,
 		]);
+		const expectedUid =
+			typeof process.getuid === "function" ? process.getuid() : undefined;
 		for (const [path, mode] of [
 			["", 0o555],
 			["bin", 0o555],
@@ -68,12 +75,11 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 			["bin/codex", 0o555],
 			["share/release.json", 0o444],
 			["share/LICENSE", 0o444],
-		])
-			assert.equal(
-				(await stat(join(destination, path))).mode & 0o7777,
-				mode,
-				path,
-			);
+		]) {
+			const info = await stat(join(destination, path));
+			assert.equal(info.mode & 0o7777, mode, path);
+			if (expectedUid !== undefined) assert.equal(info.uid, expectedUid, path);
+		}
 		assert.deepEqual(await readFile(join(destination, "bin/codex")), binary);
 	} finally {
 		for (const path of [

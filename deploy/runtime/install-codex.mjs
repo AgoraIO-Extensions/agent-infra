@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmod,
+	chown,
 	copyFile,
 	mkdir,
 	mkdtemp,
@@ -18,6 +19,17 @@ const releasePath = new URL(
 	import.meta.url,
 );
 const release = JSON.parse(await readFile(releasePath, "utf8"));
+
+// The upstream archive can carry a non-root owner on its executable entry.
+// `fs.copyFile` preserves that metadata on Linux, so normalize the installed
+// payload owner when the image build is running as root. The runtime verifier
+// requires the immutable installation hierarchy to remain root-owned; a
+// non-root local fixture/test install remains usable and is rejected by that
+// verifier if it is ever used as a production image.
+async function normalizeRootOwnership(path) {
+	if (typeof process.getuid === "function" && process.getuid() === 0)
+		await chown(path, 0, 0);
+}
 
 async function download(url, expected, path) {
 	const response = await fetch(url, { signal: AbortSignal.timeout(300_000) });
@@ -93,9 +105,14 @@ if (isDerivedRelease) {
 		const share = resolve(destination, "share");
 		await mkdir(bin, { recursive: true });
 		await mkdir(share, { recursive: true });
+		await normalizeRootOwnership(destination);
+		await normalizeRootOwnership(bin);
+		await normalizeRootOwnership(share);
 		await copyFile(join(directory, artifact.name), join(bin, "codex"));
+		await normalizeRootOwnership(join(bin, "codex"));
 		await chmod(join(bin, "codex"), 0o555);
 		await copyFile(releasePath, join(share, "release.json"));
+		await normalizeRootOwnership(join(share, "release.json"));
 		await chmod(join(share, "release.json"), 0o444);
 		for (const [name, sha256] of Object.entries(release.legal)) {
 			await download(
@@ -103,6 +120,7 @@ if (isDerivedRelease) {
 				sha256,
 				join(share, name),
 			);
+			await normalizeRootOwnership(join(share, name));
 			await chmod(join(share, name), 0o444);
 		}
 		await chmod(share, 0o555);
