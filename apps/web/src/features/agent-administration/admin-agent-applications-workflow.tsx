@@ -1,6 +1,6 @@
 import { AdminAgentApplicationsScreen } from "./admin-agent-applications-screen.js";
 import { useAgentApplicationDecision } from "./use-agent-application-decision.js";
-import { useBrowserSession } from "./use-browser-session.js";
+import { useBrowserSession } from "../use-browser-session.js";
 import { usePendingAgentApplications } from "./use-pending-agent-applications.js";
 
 export function AdminAgentApplicationsWorkflow() {
