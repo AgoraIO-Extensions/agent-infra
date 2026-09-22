@@ -35,7 +35,10 @@ import {
 	createIndependentConnectionClientInput,
 	readConnectionClientProfile,
 } from "./connection-client-input.js";
-import { readRuntimeLegacyMigrationV1 } from "./legacy-migration.js";
+import {
+	type RuntimeLegacyMigrationFilesystem,
+	readRuntimeLegacyMigrationV1,
+} from "./legacy-migration.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
@@ -94,7 +97,10 @@ export function startRuntimeHost(options: StartOptions) {
 	);
 }
 
-export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
+export async function assembleRuntimeHost(
+	environment: NodeJS.ProcessEnv,
+	filesystem?: RuntimeLegacyMigrationFilesystem,
+) {
 	const required = (name: string) => requiredEnvironment(environment, name);
 	const binding = required("AGENT_INFRA_RUNTIME_DRIVER");
 	if (
@@ -157,6 +163,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		expectedIssuer,
 		binding: readinessBinding,
 		dataDirectory,
+		filesystem,
 	});
 	if (configuration) {
 		await verifyCodexPilotInstallation();

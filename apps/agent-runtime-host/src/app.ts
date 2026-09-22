@@ -364,12 +364,19 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		const runtimeError =
 			error instanceof RuntimeHostError
 				? error
-				: new RuntimeHostError(
-						"RUNTIME_INTERNAL_ERROR",
-						"Runtime request failed",
-						500,
-						true,
-					);
+				: context.req.raw.signal.aborted
+					? new RuntimeHostError(
+							"RUNTIME_READINESS_UNAVAILABLE",
+							"Runtime request was interrupted",
+							503,
+							true,
+						)
+					: new RuntimeHostError(
+							"RUNTIME_INTERNAL_ERROR",
+							"Runtime request failed",
+							500,
+							true,
+						);
 		return context.json(
 			{
 				schemaVersion: 1,

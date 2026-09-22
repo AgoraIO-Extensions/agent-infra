@@ -262,6 +262,8 @@ export function applyRuntimeAuthority(
 			claims.allowedCommands[0] !== "turn.stop"
 		) {
 			delete authority.stopped;
+			authority.issuedAt = claims.issuedAt;
+			authority.expiresAt = claims.expiresAt;
 		} else {
 			authority.stopped = true;
 			authority.expiresAt = 0;

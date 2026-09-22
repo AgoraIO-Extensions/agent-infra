@@ -96,7 +96,10 @@ describe("RuntimeHost environment assembly", () => {
 		const directory = await mkdtemp(join(tmpdir(), "runtime-legacy-assembly-"));
 		directories.push(directory);
 		const fixture = await createLegacyMigrationFixture(directory, false);
-		const runtime = await assembleRuntimeHost(fixture.environment);
+		const runtime = await assembleRuntimeHost(
+			fixture.environment,
+			fixture.filesystem,
+		);
 		try {
 			const saved = JSON.parse(await readFile(fixture.hostPath, "utf8"));
 			const current = saved.sessions[fixture.manifest.hostSessionRef];
@@ -158,7 +161,10 @@ describe("RuntimeHost environment assembly", () => {
 		} finally {
 			await runtime.close();
 		}
-		const reopened = await assembleRuntimeHost(fixture.environment);
+		const reopened = await assembleRuntimeHost(
+			fixture.environment,
+			fixture.filesystem,
+		);
 		await reopened.close();
 		expect(
 			JSON.parse(await readFile(fixture.hostPath, "utf8")).sessions[

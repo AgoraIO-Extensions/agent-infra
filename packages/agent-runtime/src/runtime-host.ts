@@ -1,5 +1,6 @@
 import type {
 	RuntimeAuthorizationRenewRequestV3,
+	RuntimeCapabilitiesV1,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
 	RuntimeEventAckRequestV3,
@@ -632,7 +633,14 @@ export class RuntimeHost {
 			controller.signal,
 			AbortSignal.timeout(10_000),
 		]);
-		bounded.throwIfAborted();
+		const interrupted = () =>
+			new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness was interrupted",
+				503,
+				true,
+			);
+		if (bounded.aborted) throw interrupted();
 		let abort = () => {};
 		const probe = this.options.driver.probeReadiness(bounded);
 		const guard = {
@@ -644,22 +652,20 @@ export class RuntimeHost {
 		};
 		this.readinessGuards.add(guard);
 		try {
-			const capabilities = await Promise.race([
-				new Promise<never>((_resolve, reject) => {
-					abort = () =>
-						reject(
-							new RuntimeHostError(
-								"RUNTIME_READINESS_UNAVAILABLE",
-								"Workload readiness was interrupted",
-								503,
-								true,
-							),
-						);
-					bounded.addEventListener("abort", abort, { once: true });
-				}),
-				probe,
-			]);
-			bounded.throwIfAborted();
+			let capabilities: RuntimeCapabilitiesV1;
+			try {
+				capabilities = await Promise.race([
+					new Promise<never>((_resolve, reject) => {
+						abort = () => reject(interrupted());
+						bounded.addEventListener("abort", abort, { once: true });
+					}),
+					probe,
+				]);
+			} catch (error) {
+				if (bounded.aborted) throw interrupted();
+				throw error;
+			}
+			if (bounded.aborted) throw interrupted();
 			if (this.closed)
 				throw new RuntimeHostError(
 					"RUNTIME_READINESS_UNAVAILABLE",
