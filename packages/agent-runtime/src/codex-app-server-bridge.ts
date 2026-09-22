@@ -272,8 +272,15 @@ export async function runCodexConnectionRecovery(options: {
 	let exited: Promise<void> | undefined;
 	let cleanupPromise: Promise<void> | undefined;
 	const abort = () => {
-		const pid = child?.pid;
-		if (pid && pid > 1) {
+		const process = child;
+		const pid = process?.pid;
+		if (
+			process &&
+			pid &&
+			pid > 1 &&
+			process.exitCode === null &&
+			process.signalCode === null
+		) {
 			try {
 				// The recovery helper can exec Codex. Kill its process group so an
 				// orphaned native child cannot outlive the bounded cleanup window.
@@ -283,7 +290,8 @@ export async function runCodexConnectionRecovery(options: {
 				// Fall back to the direct child when the group has already exited.
 			}
 		}
-		child?.kill("SIGKILL");
+		if (process?.exitCode === null && process.signalCode === null)
+			process.kill("SIGKILL");
 	};
 	const cleanup = () => {
 		if (!cleanupPromise) {
@@ -319,23 +327,27 @@ export async function runCodexConnectionRecovery(options: {
 			nativePolicy,
 		);
 		options.signal.throwIfAborted();
-		child = spawn(
-			helper,
-			[
-				...boundary,
-				"--",
-				executable,
-				"--agent-infra-connection-profile",
-				JSON.stringify(profile),
-				"--agent-infra-connection-recovery",
-			],
-			{
-				stdio: ["ignore", "ignore", "ignore", "pipe"],
-				detached: true,
-				cwd: nativePolicy.directory,
-				env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
-			},
-		);
+		try {
+			child = spawn(
+				helper,
+				[
+					...boundary,
+					"--",
+					executable,
+					"--agent-infra-connection-profile",
+					JSON.stringify(profile),
+					"--agent-infra-connection-recovery",
+				],
+				{
+					stdio: ["ignore", "ignore", "ignore", "pipe"],
+					detached: true,
+					cwd: nativePolicy.directory,
+					env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
+				},
+			);
+		} catch {
+			throw unavailable();
+		}
 		const process = child;
 		exited = new Promise<void>((resolve) =>
 			process.once("close", () => resolve()),
