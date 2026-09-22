@@ -36,6 +36,7 @@ import {
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
 import {
+	CODEX_NATIVE_CALLBACK_TIMEOUT_MS,
 	type CodexNativeCallbackHandler,
 	type CodexNativeConnectionBootstrapHandler,
 	type CodexNativeConnectionRecoveryHandler,
@@ -45,6 +46,10 @@ import release from "./codex-release.json" with { type: "json" };
 
 const defaultTimeoutMs = 5_000;
 const recoveryShutdownTimeoutMs = defaultTimeoutMs;
+const maximumRecoveryExchanges = 16;
+const maximumRecoveryTimeoutMs =
+	maximumRecoveryExchanges * CODEX_NATIVE_CALLBACK_TIMEOUT_MS +
+	recoveryShutdownTimeoutMs;
 const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
 const maximumFrameBytes = 65_536;
@@ -332,6 +337,9 @@ export async function runCodexConnectionRecovery(options: {
 			},
 		);
 		const process = child;
+		exited = new Promise<void>((resolve) =>
+			process.once("close", () => resolve()),
+		);
 		let failed = false;
 		let terminal = false;
 		let issued = 0;
@@ -342,9 +350,6 @@ export async function runCodexConnectionRecovery(options: {
 		process.on("error", () => {
 			failed = true;
 		});
-		exited = new Promise<void>((resolve) =>
-			process.once("close", () => resolve()),
-		);
 		const stream = process.stdio[3];
 		if (!(stream instanceof Duplex)) throw unavailable();
 		callbacks = serveCodexNativeCallbacks(
@@ -359,7 +364,7 @@ export async function runCodexConnectionRecovery(options: {
 				if (terminal) throw unavailable();
 				const response = await options.recovery(request, signal);
 				if (response.decision === "verify") {
-					if (issued >= 16) throw unavailable();
+					if (issued >= maximumRecoveryExchanges) throw unavailable();
 					issued++;
 				} else if (response.decision === "done") terminal = true;
 				else failed = true;
@@ -372,7 +377,7 @@ export async function runCodexConnectionRecovery(options: {
 		const exitResult = await waitForChildExit(
 			exited,
 			options.signal,
-			maximumTimeoutMs,
+			maximumRecoveryTimeoutMs,
 		);
 		if (exitResult !== "exited") {
 			failed = true;
