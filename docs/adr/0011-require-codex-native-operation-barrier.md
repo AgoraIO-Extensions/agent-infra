@@ -2,7 +2,7 @@
 
 ## 状态
 
-执行前持久意图、当前授权和可靠结果确认的要求继续有效。M1 使用固定官方 upstream release
+已接受；执行前持久意图、当前授权和可靠结果确认的要求继续有效。M1 使用固定官方 upstream release
 与 Native Driver/Adapter；本 ADR 原先选择的本仓 vendor patch 和派生构建交付方式由
 [工程 Spec §10.11](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
 替代，不构成继续维护第三方源码补丁或 vendor builder 的批准。

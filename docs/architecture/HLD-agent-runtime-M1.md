@@ -419,7 +419,7 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 校验调用证据；它不实现 ConsumerInstance 注册、安装私钥持有证明、DPoP/mTLS 请求证明或
 PAT 安装绑定。投影内的 clientId、token 或内部 slot 不能替代 ConsumerInstance 或发送者证明。
 真实 HTTP/MCP 客户端必须按 Connection HLD 完成安装注册和请求证明，Connection 服务端在
-签发、刷新和每次调用时独立校验。callback/client prep 通过不构成 Connection conformance。普通官方 Codex release 没有可验证私有 callback 时，不得
+签发、刷新和每次调用时独立校验。callback/client prep 的通过不构成 Connection conformance。普通官方 Codex release 没有可验证私有 callback 时，不得
 把该能力降级为 bearer token、Owner 或平台服务身份；需要私有 FD3 bootstrap/recovery 时，
 必须先满足 8.5.1 的 native barrier，否则 fail closed。
 
