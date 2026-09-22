@@ -317,4 +317,23 @@ describe("system control transaction plan", () => {
 			}),
 		).toThrow("Task system control is invalid");
 	});
+	it("rejects a non-positive session generation at the runtime boundary", () => {
+		expect(() =>
+			planTaskSystemControlV1({
+				reason: "authorization_revoked",
+				workerId: "worker",
+				boundary: requiredBoundary(),
+				execution: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 0,
+					status: "processing",
+					actorId: "user-a",
+					agentId: "agent-a",
+					channelId: "web",
+					authorizationRevision: "agent-access-4",
+				},
+			}),
+		).toThrow("Task system control is invalid");
+	});
 });
