@@ -48,7 +48,7 @@ const defaultTimeoutMs = 5_000;
 const recoveryShutdownTimeoutMs = defaultTimeoutMs;
 const maximumRecoveryExchanges = 16;
 const maximumRecoveryTimeoutMs =
-	maximumRecoveryExchanges * CODEX_NATIVE_CALLBACK_TIMEOUT_MS +
+	(maximumRecoveryExchanges + 1) * CODEX_NATIVE_CALLBACK_TIMEOUT_MS +
 	recoveryShutdownTimeoutMs;
 const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
