@@ -338,7 +338,7 @@ export type ConnectorProviderId =
 	| "jira"
 	| "rehoboam";
 
-const connectorDefinitions: Array<{
+export const connectorDefinitions: Array<{
 	category: "代码托管" | "研发协作" | "知识库" | "CI/CD";
 	description: string;
 	icon: typeof Boxes;
