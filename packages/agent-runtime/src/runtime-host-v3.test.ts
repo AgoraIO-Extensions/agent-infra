@@ -396,6 +396,44 @@ describe("Runtime V3 durable authorization", () => {
 		}
 	});
 
+	it.each(["expiry", "stop", "close"] as const)(
+		"rechecks external-action authority after Driver inspection observes %s",
+		async (change) => {
+			const env = await setup();
+			try {
+				const accepted = await submit(env.host);
+				vi.spyOn(env.driver, "validateExternalAction").mockImplementation(
+					async () => {
+						if (change === "expiry") env.clock.now += 30_000;
+						else if (change === "close") await env.host.close();
+						else {
+							const stop = signV3Fixture(
+								{
+									...base(accepted.hostSessionRef),
+									operation: {
+										kind: "stop" as const,
+										id: "racing-stop",
+										deliveryFence: 1,
+										executionDeliveryFence: 1,
+									},
+								},
+								"turn.stop",
+							);
+							await env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant));
+						}
+					},
+				);
+				await expect(
+					env.host.authorizeExternalAction(
+						guard(accepted.hostSessionRef, env.store),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			} finally {
+				await env.host.close();
+			}
+		},
+	);
+
 	it("expires external-action authority and renews only the existing accepted execution", async () => {
 		const env = await setup();
 		const accepted = await submit(env.host);
@@ -1266,7 +1304,7 @@ describe("Runtime V3 durable authorization", () => {
 		).rejects.toThrow();
 	});
 
-	it("recovers and stops principal-only legacy work under one immutable migration control record", async () => {
+	it("recovers, stops and isolates principal-only legacy work using independent control records", async () => {
 		const env = await setup();
 		const legacy = await RuntimeHost.open({
 			store: env.store,
@@ -1308,13 +1346,14 @@ describe("Runtime V3 durable authorization", () => {
 		const mismatchedRecovery = signV3Fixture(
 			{
 				...base(accepted.hostSessionRef),
+				principal: { kind: "user", id: "foreign-user" },
 				originalOperationDigest: originalDigest(),
 			},
 			"session.status",
 			{
 				purpose: "control",
 				reason: "recovery",
-				claims: { controlRecordId: "other-migration" },
+				claims: { controlRecordId: "verified-migration" },
 			},
 		);
 		await expect(
@@ -1383,7 +1422,180 @@ describe("Runtime V3 durable authorization", () => {
 			control: { controlRecordId: "verified-migration", reason: "recovery" },
 		});
 		expect(authority).not.toHaveProperty("authorizationRecordId");
+		const changedReason = signV3Fixture(
+			generationCancelFixture(accepted.hostSessionRef, 2),
+			"generation.cancel",
+			{
+				purpose: "control",
+				reason: "generation_isolation",
+				claims: { controlRecordId: "verified-migration" },
+			},
+		);
+		await expect(
+			env.host.cancelGenerationV3(
+				changedReason,
+				verifyRuntimeV2Fixture(changedReason.grant),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		const isolation = signV3Fixture(
+			generationCancelFixture(accepted.hostSessionRef, 2),
+			"generation.cancel",
+			{
+				purpose: "control",
+				reason: "generation_isolation",
+				claims: { controlRecordId: "independent-isolation-record" },
+			},
+		);
+		await expect(
+			env.host.cancelGenerationV3(
+				isolation,
+				verifyRuntimeV2Fixture(isolation.grant),
+			),
+		).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "cancelled" },
+		});
+		const isolated = JSON.parse(await readFile(env.storePath, "utf8")).sessions[
+			accepted.hostSessionRef
+		];
+		expect(isolated.authority.migrationId).toBe("verified-migration");
+		expect(isolated.generationBarrier).toMatchObject({ state: "confirmed" });
+		expect(isolated.executionAuthorities[fixture.executionId]).toMatchObject({
+			stopped: true,
+			control: {
+				controlRecordId: "independent-isolation-record",
+				reason: "generation_isolation",
+			},
+		});
 	});
+
+	it.each(["stop", "authorization_revoked", "generation_isolation"] as const)(
+		"drains and acknowledges stopped %s control events under current scoped grants",
+		async (reason) => {
+			const env = await setup();
+			try {
+				const accepted = await submit(env.host);
+				const provenance = { purpose: "control" as const, reason };
+				const fence = reason === "generation_isolation" ? 2 : 1;
+				if (reason === "generation_isolation") {
+					const cancel = signV3Fixture(
+						generationCancelFixture(accepted.hostSessionRef, fence),
+						"generation.cancel",
+						provenance,
+					);
+					await env.host.cancelGenerationV3(
+						cancel,
+						verifyRuntimeV2Fixture(cancel.grant),
+					);
+				} else {
+					const stop = signV3Fixture(
+						{
+							...base(accepted.hostSessionRef),
+							operation: {
+								kind: "stop",
+								id: "stopped-control",
+								deliveryFence: fence,
+								executionDeliveryFence: fence,
+							},
+						},
+						"turn.stop",
+						provenance,
+					);
+					await env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant));
+				}
+				const eventBase = {
+					...base(accepted.hostSessionRef),
+					consumer: "platform_worker_persistence" as const,
+					operation: {
+						...base(accepted.hostSessionRef).operation,
+						deliveryFence: fence,
+						executionDeliveryFence: fence,
+					},
+				};
+				const before = await readFile(env.storePath, "utf8");
+				for (const denied of [
+					signV3Fixture(
+						{
+							...eventBase,
+							principal: { kind: "user", id: "foreign-user" },
+							afterCursor: null,
+						},
+						"events.persist",
+						provenance,
+					),
+					signV3Fixture({ ...eventBase, afterCursor: null }, "events.persist", {
+						...provenance,
+						now: env.clock.now - 30_000,
+					}),
+				]) {
+					await expect(
+						env.host.streamEventsV3(
+							denied,
+							verifyRuntimeV2Fixture(denied.grant),
+						),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+					expect(await readFile(env.storePath, "utf8")).toBe(before);
+				}
+				const request = signV3Fixture(
+					{ ...eventBase, afterCursor: null },
+					"events.persist",
+					provenance,
+				);
+				const stream = await env.host.streamEventsV3(
+					request,
+					verifyRuntimeV2Fixture(request.grant),
+				);
+				const iterator = stream[Symbol.asyncIterator]();
+				try {
+					const first = await iterator.next();
+					if (first.done) throw new Error("missing original status event");
+					const ackBase = { ...eventBase, confirmedCursor: first.value.cursor };
+					const acknowledge = vi.fn(async () => {});
+					Object.assign(env.driver, { acknowledgeEvents: acknowledge });
+					const delivered = await readFile(env.storePath, "utf8");
+					for (const denied of [
+						signV3Fixture(
+							{
+								...ackBase,
+								principal: { kind: "user", id: "foreign-user" },
+							},
+							"events.ack",
+							provenance,
+						),
+						signV3Fixture(ackBase, "events.ack", {
+							...provenance,
+							now: env.clock.now - 30_000,
+						}),
+					]) {
+						await expect(
+							env.host.acknowledgeEventsV3(
+								denied,
+								verifyRuntimeV2Fixture(denied.grant),
+							),
+						).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+						expect(await readFile(env.storePath, "utf8")).toBe(delivered);
+					}
+					expect(acknowledge).not.toHaveBeenCalled();
+					const ack = signV3Fixture(ackBase, "events.ack", provenance);
+					await expect(
+						env.host.acknowledgeEventsV3(
+							ack,
+							verifyRuntimeV2Fixture(ack.grant),
+						),
+					).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
+					expect(acknowledge).toHaveBeenCalledTimes(1);
+					await expect(
+						env.host.authorizeExternalAction(
+							guard(accepted.hostSessionRef, env.store),
+						),
+					).rejects.toThrow();
+				} finally {
+					await iterator.return?.();
+				}
+			} finally {
+				await env.host.close();
+			}
+		},
+	);
 
 	it("expires an idle event stream and checks revocation again before delivery", async () => {
 		const env = await setup();
@@ -1910,6 +2122,9 @@ describe("Runtime V3 original evidence read contexts", () => {
 				env.host.recoverStatusV3(first, verifyRuntimeV2Fixture(first.grant)),
 			).rejects.toMatchObject({
 				code: "RUNTIME_SESSION_RECOVERY_FAILED",
+				message: "Runtime Session recovery failed",
+				httpStatus: 503,
+				retryable: false,
 			});
 			const failed = JSON.parse(await readFile(env.storePath, "utf8"));
 			expect(

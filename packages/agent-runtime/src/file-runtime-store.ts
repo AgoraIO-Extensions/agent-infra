@@ -330,18 +330,6 @@ function assertStoreState(value: RuntimeStoreState) {
 	}
 }
 
-function assertMigrationControlRecord(
-	authority: RuntimeSessionAuthority | undefined,
-	claims: RuntimeExecutionGrantClaimsV2,
-) {
-	if (
-		authority?.migrationId !== undefined &&
-		claims.purpose === "control" &&
-		claims.controlRecordId !== authority.migrationId
-	)
-		runtimeAuthorizationDenied();
-}
-
 function sessionFor(
 	state: RuntimeStoreState,
 	hostSessionRef: string,
@@ -593,7 +581,6 @@ export class FileRuntimeStore {
 			const operation = session.operations[input.operationId];
 			if (input.authorization) {
 				assertSessionAuthority(session.authority, input.binding);
-				assertMigrationControlRecord(session.authority, input.authorization);
 				const resolvedReplay =
 					operation?.state === "resolved" &&
 					operation.requestDigest === input.requestDigest;
@@ -915,7 +902,6 @@ export class FileRuntimeStore {
 				state.sessionBindings[sessionBindingKey(claims)] = hostSessionRef;
 			}
 			assertSessionAuthority(session.authority, claims);
-			assertMigrationControlRecord(session.authority, claims);
 			const scope = `execution:${claims.executionId}`;
 			const fence = claims.operation.executionDeliveryFence;
 			if (fence < (session.highestFences[scope] ?? 0))
@@ -961,7 +947,6 @@ export class FileRuntimeStore {
 			);
 			assertExecutionBinding(session, claims);
 			assertSessionAuthority(session.authority, claims);
-			assertMigrationControlRecord(session.authority, claims);
 			const executionScope = `execution:${claims.executionId}`;
 			const executionFence = claims.operation.executionDeliveryFence;
 			if (mode === "generation-cancel") {
@@ -1176,7 +1161,7 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
-				authority.expiresAt <= currentNow ||
+				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
 				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
@@ -1243,7 +1228,7 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
-				authority.expiresAt <= currentNow ||
+				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
 				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
