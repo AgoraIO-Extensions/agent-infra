@@ -272,10 +272,7 @@ async function buildImage({
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
 				...(image.key === "runtimeHost"
-					? [
-							"--build-arg",
-							`SOURCE_COMMIT=${commitSha}`,
-						]
+					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
 					: []),
 				...labels,
 				"--provenance=false",

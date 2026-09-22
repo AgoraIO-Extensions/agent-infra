@@ -15,11 +15,19 @@ type SchemaType<Name extends keyof typeof codexCallbackSchema.$defs> =
 	}>;
 
 export type CodexConnectionProfile = SchemaType<"connectionProfile">;
+/** Deployment-owned Connection service identity used to admit a profile. */
+export type CodexConnectionServiceAuthority = Pick<
+	CodexConnectionProfile,
+	"serviceRef" | "issuer" | "resource"
+>;
 export type CodexConnectionBootstrapRequest =
 	SchemaType<"connectionBootstrapRequest">;
 export type CodexConnectionBootstrapResponse =
 	SchemaType<"connectionBootstrapResponse">;
 export type CodexConnectionRequest = SchemaType<"connectionRequest">;
+export type CodexConnectionRequestAuthorizer = (
+	request: CodexConnectionRequest,
+) => boolean;
 export type CodexConnectionEvidence = SchemaType<"connectionEvidence">;
 export type CodexConnectionOperationRequest =
 	SchemaType<"connectionOperationRequest">;
@@ -30,6 +38,9 @@ export type CodexConnectionEvidenceUpdateRequest =
 export type CodexConnectionEvidenceUpdateResponse =
 	SchemaType<"connectionEvidenceUpdateResponse">;
 export type CodexConnectionOrigin = SchemaType<"connectionOrigin">;
+export type CodexConnectionOriginAuthorizer = (
+	origin: CodexConnectionOrigin,
+) => boolean;
 export type CodexConnectionRecoveryRequest =
 	SchemaType<"connectionRecoveryRequest">;
 export type CodexConnectionRecoveryResponse =
@@ -103,16 +114,34 @@ const maximumHistoricalSlots = 1_024;
 
 export function validateCodexConnectionProfile(
 	value: unknown,
+	authorizedService: CodexConnectionServiceAuthority,
 ): CodexConnectionProfile {
 	if (!isProfile(value)) throw unavailable();
 	const profile = structuredClone(value);
-	const issuer = new URL(profile.issuer);
-	const resource = new URL(profile.resource);
+	let issuer: URL;
+	let resource: URL;
+	try {
+		issuer = new URL(profile.issuer);
+		resource = new URL(profile.resource);
+	} catch {
+		throw unavailable();
+	}
 	if (
 		issuer.origin !== resource.origin ||
 		resource.pathname !== "/mcp" ||
 		(issuer.href !== profile.issuer && issuer.href !== `${profile.issuer}/`) ||
 		resource.href !== profile.resource
+	)
+		throw unavailable();
+	if (
+		!isDeepStrictEqual(
+			{
+				serviceRef: profile.serviceRef,
+				issuer: profile.issuer,
+				resource: profile.resource,
+			},
+			authorizedService,
+		)
 	)
 		throw unavailable();
 	return profile;
@@ -121,6 +150,21 @@ export function validateCodexConnectionProfile(
 /** One socket-bound client; only the returned bootstrap response contains a token. */
 export function createCodexConnectionClient(options: {
 	profile: CodexConnectionProfile;
+	/** Server-resolved/allowlisted service identity; never a wire input. */
+	authorizedService: CodexConnectionServiceAuthority;
+	/** Server-owned check for the operation, attempt, action and request digest. */
+	authorizeRequest: CodexConnectionRequestAuthorizer;
+	/** Server-owned journal check for origins from a different process. */
+	authorizeOrigin: CodexConnectionOriginAuthorizer;
+	/** Trusted recovery context; never metadata supplied by a native callback. */
+	resolveReadOnlyQueryMetadata?: (input: {
+		requestDescriptor: CodexConnectionRequest;
+		origin: CodexConnectionOrigin;
+		credentialRevision: NonNullable<
+			CodexConnectionEvidence["recordQuery"]
+		>["credentialRevision"];
+		queriedAt: number;
+	}) => CodexConnectionQueryMetadata | undefined;
 	resolveOriginalClient: (
 		request: { profileRef: string; nativeSessionRef?: string },
 		signal: AbortSignal,
@@ -128,7 +172,10 @@ export function createCodexConnectionClient(options: {
 	now?: () => number;
 }) {
 	const now = options.now ?? Date.now;
-	const profile = validateCodexConnectionProfile(options.profile);
+	const profile = validateCodexConnectionProfile(
+		options.profile,
+		options.authorizedService,
+	);
 	let slot: SlotMetadata | undefined;
 	const slots = new Map<string, SlotMetadata>();
 	let processNonce: string | undefined;
@@ -146,6 +193,13 @@ export function createCodexConnectionClient(options: {
 			slot.credential.expiresAt <= now()
 		)
 			throw unavailable();
+		let authorized = false;
+		try {
+			authorized = options.authorizeRequest(structuredClone(descriptor));
+		} catch {
+			authorized = false;
+		}
+		if (authorized !== true) throw unavailable();
 		return structuredClone(slot.originalBinding);
 	};
 
@@ -258,7 +312,6 @@ export function createCodexConnectionClient(options: {
 		metadataOnly: boolean;
 		occurredAt: number;
 		origin?: CodexConnectionOrigin;
-		queryClient?: CodexConnectionQueryMetadata;
 	}): RuntimeConnectionAssociationV1 | undefined => {
 		const {
 			requestDescriptor: descriptor,
@@ -267,13 +320,41 @@ export function createCodexConnectionClient(options: {
 			metadataOnly,
 			occurredAt,
 		} = input;
-		// Historical slots contain no token and cannot reopen dispatch.
+		// Historical slots contain no token and cannot reopen dispatch. An origin
+		// from this process must match its deployment-owned slot record; a
+		// cross-process origin needs an independent journal/authority check.
 		const evidenceSlot = input.origin ?? slots.get(descriptor.slotId);
+		let originTrusted = input.origin === undefined;
+		if (input.origin !== undefined && isCodexConnectionOrigin(input.origin)) {
+			const known = slots.get(input.origin.slotId);
+			if (known) {
+				originTrusted = isDeepStrictEqual(input.origin, {
+					schemaVersion: 1,
+					slotId: known.slotId,
+					originalBinding: known.originalBinding,
+					service: known.service,
+					connectionIdentity: known.connectionIdentity,
+				});
+			} else {
+				try {
+					originTrusted =
+						options.authorizeOrigin(structuredClone(input.origin)) === true;
+				} catch {
+					originTrusted = false;
+				}
+			}
+		}
 		if (
 			!evidenceSlot ||
+			!originTrusted ||
 			(input.origin !== undefined &&
 				(!isCodexConnectionOrigin(input.origin) ||
-					input.origin.slotId !== descriptor.slotId)) ||
+					input.origin.slotId !== descriptor.slotId ||
+					!isDeepStrictEqual(input.origin.service, {
+						serviceRef: profile.serviceRef,
+						issuer: profile.issuer,
+						resource: profile.resource,
+					}))) ||
 			closed ||
 			!isCodexConnectionRequest(descriptor) ||
 			descriptor.profileRef !== profile.profileRef ||
@@ -283,6 +364,13 @@ export function createCodexConnectionClient(options: {
 				!isCodexConnectionEvidence(previousEvidence))
 		)
 			throw unavailable();
+		let authorized = false;
+		try {
+			authorized = options.authorizeRequest(structuredClone(descriptor));
+		} catch {
+			authorized = false;
+		}
+		if (authorized !== true) throw unavailable();
 		if (descriptor.toolName !== "execute_action") return undefined;
 		if (
 			!Number.isSafeInteger(occurredAt) ||
@@ -333,16 +421,15 @@ export function createCodexConnectionClient(options: {
 		}
 		const query = evidence.recordQuery;
 		const record = query?.record;
-		const queryCredentialKnown =
+		let queryCredentialKnown =
 			query !== undefined &&
-			(input.queryClient ? [input.queryClient] : [...slots.values()]).some(
+			[...slots.values()].some(
 				(known) =>
 					isDeepStrictEqual(known.service, evidenceSlot.service) &&
-					(input.queryClient === undefined ||
-						isDeepStrictEqual(
-							known.originalBinding,
-							evidenceSlot.originalBinding,
-						)) &&
+					isDeepStrictEqual(
+						known.originalBinding,
+						evidenceSlot.originalBinding,
+					) &&
 					known.credential.revision === query.credentialRevision &&
 					known.credential.expiresAt > query.queriedAt &&
 					isDeepStrictEqual(
@@ -351,6 +438,41 @@ export function createCodexConnectionClient(options: {
 					),
 			);
 		if (
+			!queryCredentialKnown &&
+			metadataOnly &&
+			input.origin !== undefined &&
+			query !== undefined &&
+			options.resolveReadOnlyQueryMetadata
+		) {
+			try {
+				const known = options.resolveReadOnlyQueryMetadata(
+					structuredClone({
+						requestDescriptor: descriptor,
+						origin: input.origin,
+						credentialRevision: query.credentialRevision,
+						queriedAt: query.queriedAt,
+					}),
+				);
+				queryCredentialKnown =
+					known !== undefined &&
+					isDeepStrictEqual(known.service, evidenceSlot.service) &&
+					isDeepStrictEqual(
+						known.originalBinding,
+						evidenceSlot.originalBinding,
+					) &&
+					isDeepStrictEqual(
+						known.connectionIdentity,
+						evidenceSlot.connectionIdentity,
+					) &&
+					known.credential.revision === query.credentialRevision &&
+					Number.isSafeInteger(known.credential.expiresAt) &&
+					known.credential.expiresAt > query.queriedAt;
+			} catch {
+				queryCredentialKnown = false;
+			}
+		}
+		if (
+			closed ||
 			!queryCredentialKnown ||
 			!receiptMatches ||
 			!receipt ||

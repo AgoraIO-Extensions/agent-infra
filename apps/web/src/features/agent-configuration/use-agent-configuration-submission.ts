@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef } from "react";
 
-import type { AgentConfigurationUpdateRequestV1Writable } from "../../pilot/generated/types.gen.js";
+import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
@@ -9,7 +9,7 @@ import {
 
 type AgentConfigurationCommand =
 	| {
-			body: AgentConfigurationUpdateRequestV1Writable;
+			body: AgentConfigurationUpdateRequestV2Writable;
 			kind: "configuration";
 	  }
 	| {
@@ -81,7 +81,7 @@ export function useAgentConfigurationSubmission(agentId: string) {
 
 	return {
 		...submission,
-		saveConfiguration: (body: AgentConfigurationUpdateRequestV1Writable) =>
+		saveConfiguration: (body: AgentConfigurationUpdateRequestV2Writable) =>
 			startSubmission({ kind: "configuration", body }),
 		upgradeImage: (imageReference: string) =>
 			startSubmission({ kind: "image", imageReference }),

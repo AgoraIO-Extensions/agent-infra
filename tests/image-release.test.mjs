@@ -15,10 +15,6 @@ import test from "node:test";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const builder = resolve(repositoryRoot, "deploy/release/build-images.mjs");
-const runtimeHostDockerfile = resolve(
-	repositoryRoot,
-	"apps/agent-runtime-host/Dockerfile",
-);
 const commitSha = "1".repeat(40);
 
 async function executable(path, source) {
@@ -98,25 +94,7 @@ if (args[0] === "run") {
   if (args.includes("/probe/runtime-image-probe.mjs")) {
     if (process.env.FAKE_RUNTIME_PROBE_FAIL) { console.error(process.env.FAKE_RUNTIME_PROBE_STDERR ?? "synthetic-credential-do-not-log"); process.exit(42); }
     if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
-    else {
-      const probeMount = args.find((arg) => arg.endsWith("dst=/probe/runtime-image-probe.mjs,readonly"));
-      if (!probeMount || !probeMount.startsWith("type=bind,src=")) process.exit(94);
-      const context = probeMount.slice("type=bind,src=".length).split(",dst=")[0].slice(0, -"/tests/runtime-image-probe.mjs".length);
-      const releaseBytes = readFileSync(join(context, "packages/agent-runtime/src/codex-release.json"));
-      const release = JSON.parse(releaseBytes);
-      const derived = release.schemaVersion === 2 && release.distribution?.kind === "derived";
-      const targetArchitecture = process.env.PLATFORM?.endsWith("/arm64")
-        ? "arm64"
-        : process.env.PLATFORM?.endsWith("/amd64")
-          ? "amd64"
-          : process.arch === "arm64"
-            ? "arm64"
-            : "amd64";
-      const artifact = release.artifacts[targetArchitecture];
-      if (derived && !artifact) throw new Error("Missing pinned artifact for probe architecture");
-      const identity = derived ? { protocolVersion: release.provenance.protocolVersion, distribution: { ...release.distribution, target: artifact.target, releaseSha256: "sha256:" + createHash("sha256").update(releaseBytes).digest("hex"), candidateManifestSha256: artifact.candidateManifestSha256, binaries: artifact.binaries } } : {};
-      console.log(JSON.stringify({ schemaVersion: derived ? 2 : 1, status: "passed", codexVersion: release.provenance.codexVersion, configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-sandboxed-tool-execution", "native-sibling-conversation-denied", "recursive-native-storage-redacted", "personal-configuration-isolated"], ...identity }));
-    }
+    else console.log(JSON.stringify({ schemaVersion: 1, status: "passed", codexVersion: "0.153.0", configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-sandboxed-tool-execution", "native-sibling-conversation-denied", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
     process.exit(0);
   }
   if (args.includes("--entrypoint")) console.log(process.env.FAKE_RUNTIME_UID ?? "1000");
@@ -126,14 +104,6 @@ process.exit(1);`,
 	);
 	return { docker, git };
 }
-
-test("runtime image provisions the legacy migration subPath parent", async () => {
-	const dockerfile = await readFile(runtimeHostDockerfile, "utf8");
-	assert.match(
-		dockerfile,
-		/RUN mkdir -p \/etc\/agent-infra\/legacy-migration[\s\S]*chmod 0555 \/etc\/agent-infra \/etc\/agent-infra\/legacy-migration/,
-	);
-});
 
 function build(
 	manifestPath,

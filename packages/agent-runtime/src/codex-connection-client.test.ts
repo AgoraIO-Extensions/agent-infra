@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it, vi } from "vitest";
 import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
@@ -9,6 +11,7 @@ import {
 	type CodexConnectionBootstrapResponse,
 	type CodexConnectionEvidence,
 	type CodexConnectionOperationRequest,
+	type CodexConnectionQueryMetadata,
 	createCodexConnectionClient,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
@@ -55,6 +58,11 @@ const profile = {
 	issuer: "https://connection.example.test",
 	resource: "https://connection.example.test/mcp",
 };
+const authorizedService = {
+	serviceRef: profile.serviceRef,
+	issuer: profile.issuer,
+	resource: profile.resource,
+};
 function descriptorFromIntent() {
 	const frame = checked<CodexConnectionOperationRequest>(
 		"connectionOperationRequest",
@@ -75,11 +83,19 @@ function evidence(
 async function fixture() {
 	// The corpus contains full frames. Only validated descriptor/evidence crosses this seam.
 	let configuration = originalConfiguration();
+	const admitted = descriptorFromIntent();
 	const resolveOriginalClient = vi.fn(async () =>
 		structuredClone(configuration),
 	);
 	const client = createCodexConnectionClient({
 		profile,
+		authorizedService,
+		authorizeRequest: (candidate) => {
+			const { slotId: _candidateSlot, ...candidateWithoutSlot } = candidate;
+			const { slotId: _admittedSlot, ...admittedWithoutSlot } = admitted;
+			return isDeepStrictEqual(candidateWithoutSlot, admittedWithoutSlot);
+		},
+		authorizeOrigin: () => true,
 		resolveOriginalClient,
 		now: () => time,
 	});
@@ -95,7 +111,58 @@ async function fixture() {
 		setConfiguration: (next: typeof configuration) => {
 			configuration = next;
 		},
-		descriptor: { ...descriptorFromIntent(), slotId: response.slot.slotId },
+		descriptor: { ...admitted, slotId: response.slot.slotId },
+	};
+}
+
+async function recoveryFixture() {
+	const { client: originalClient, descriptor } = await fixture();
+	const origin = originalClient.snapshotOriginal(descriptor);
+	originalClient.close();
+	const configuration = originalConfiguration();
+	const metadata: CodexConnectionQueryMetadata = {
+		originalBinding: configuration.originalBinding,
+		service: configuration.service,
+		connectionIdentity: configuration.connectionIdentity,
+		credential: {
+			revision: `${configuration.credential.revision}-rotated`,
+			expiresAt: configuration.credential.expiresAt,
+		},
+	};
+	const current = evidence();
+	assert(current.recordQuery);
+	current.recordQuery.credentialRevision = metadata.credential.revision;
+	const input = {
+		requestDescriptor: descriptor,
+		origin,
+		evidence: current,
+		previousEvidence: evidence("v2-connection-unverified-record_unavailable"),
+		metadataOnly: true,
+		occurredAt: time,
+	};
+	const resolveReadOnlyQueryMetadata = vi.fn(() => structuredClone(metadata));
+	const resolveOriginalClient = vi.fn(async () => {
+		throw new Error("recovery must not request business credentials");
+	});
+	const createRecoveryClient = (
+		overrides: Partial<Parameters<typeof createCodexConnectionClient>[0]> = {},
+	) =>
+		createCodexConnectionClient({
+			profile,
+			authorizedService,
+			authorizeRequest: (value) => isDeepStrictEqual(value, descriptor),
+			authorizeOrigin: (value) => isDeepStrictEqual(value, origin),
+			resolveOriginalClient,
+			resolveReadOnlyQueryMetadata,
+			now: () => time,
+			...overrides,
+		});
+	return {
+		input,
+		metadata,
+		createRecoveryClient,
+		resolveOriginalClient,
+		resolveReadOnlyQueryMetadata,
 	};
 }
 
@@ -141,6 +208,9 @@ describe("socket-bound independent Connection client", () => {
 		};
 		const client = createCodexConnectionClient({
 			profile,
+			authorizedService,
+			authorizeRequest: () => true,
+			authorizeOrigin: () => true,
 			resolveOriginalClient: async () => config,
 			now: () => time,
 		});
@@ -263,6 +333,9 @@ describe("socket-bound independent Connection client", () => {
 		]) {
 			const client = createCodexConnectionClient({
 				profile,
+				authorizedService,
+				authorizeRequest: () => true,
+				authorizeOrigin: () => true,
 				resolveOriginalClient,
 				now: () => time,
 			});
@@ -286,11 +359,27 @@ describe("socket-bound independent Connection client", () => {
 		client.close();
 		expect(() => client.assertRequest(descriptor)).toThrow();
 	});
+	it("requires the server authorizer to admit every request descriptor", async () => {
+		const { client, descriptor } = await fixture();
+		for (const change of [
+			{ operationNonce: randomUUID() },
+			{ attemptNonce: randomUUID() },
+			{ idempotencyKey: randomUUID() },
+			{ requestDigest: "f".repeat(64) },
+			{ toolName: "list_apps" as const },
+		])
+			expect(() => client.assertRequest({ ...descriptor, ...change })).toThrow(
+				"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+			);
+	});
 	it("checks credential expiry again at the actual dispatch boundary", async () => {
 		const configuration = originalConfiguration();
 		let now = time;
 		const client = createCodexConnectionClient({
 			profile,
+			authorizedService,
+			authorizeRequest: () => true,
+			authorizeOrigin: () => true,
 			resolveOriginalClient: async () => configuration,
 			now: () => now,
 		});
@@ -390,6 +479,163 @@ describe("socket-bound independent Connection client", () => {
 			}),
 		).toThrow();
 	});
+	it("rejects a recovery origin whose service is not the fixed profile", async () => {
+		const { client, descriptor } = await fixture();
+		const origin = client.snapshotOriginal(descriptor);
+		const forged = structuredClone(origin);
+		forged.service.resource = "https://attacker.example.test/mcp";
+		expect(() =>
+			client.associate({
+				requestDescriptor: descriptor,
+				evidence: evidence(),
+				metadataOnly: false,
+				occurredAt: time,
+				origin: forged,
+			}),
+		).toThrow("CODEX_CONNECTION_CLIENT_UNAVAILABLE");
+	});
+	it("recovers historical evidence after restart and credential rotation without a business bootstrap", async () => {
+		const {
+			input,
+			createRecoveryClient,
+			resolveOriginalClient,
+			resolveReadOnlyQueryMetadata,
+		} = await recoveryFixture();
+		const client = createRecoveryClient();
+		expect(client.associate(input)).toEqual({
+			serviceRef: profile.serviceRef,
+			verification: "verified",
+			callRef: "callref-fixture-a",
+		});
+		expect(resolveReadOnlyQueryMetadata).toHaveBeenCalledExactlyOnceWith({
+			requestDescriptor: input.requestDescriptor,
+			origin: input.origin,
+			credentialRevision: input.evidence.recordQuery?.credentialRevision,
+			queriedAt: input.evidence.recordQuery?.queriedAt,
+		});
+		expect(resolveOriginalClient).not.toHaveBeenCalled();
+		expect(() => client.assertRequest(input.requestDescriptor)).toThrow(
+			"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+		);
+		client.close();
+		expect(() => client.associate(input)).toThrow(
+			"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+		);
+		expect(resolveReadOnlyQueryMetadata).toHaveBeenCalledTimes(1);
+	});
+	it.each([
+		"service",
+		"execution",
+		"principal",
+		"actor",
+		"client",
+		"consumer",
+		"revision",
+		"expiry",
+	] as const)("rejects recovery metadata with mismatched %s", async (field) => {
+		const { input, metadata, createRecoveryClient } = await recoveryFixture();
+		switch (field) {
+			case "service":
+				metadata.service.serviceRef = "other-service";
+				break;
+			case "execution":
+				metadata.originalBinding.scope.executionId = "other-execution";
+				break;
+			case "principal":
+				metadata.connectionIdentity.principal.key = "other-principal";
+				break;
+			case "actor":
+				metadata.connectionIdentity.actorId = "other-actor";
+				break;
+			case "client":
+				metadata.connectionIdentity.clientId = "other-client";
+				break;
+			case "consumer":
+				metadata.connectionIdentity.consumerId = "other-consumer";
+				break;
+			case "revision":
+				metadata.credential.revision = "other-revision";
+				break;
+			case "expiry":
+				metadata.credential.expiresAt =
+					input.evidence.recordQuery?.queriedAt ?? 0;
+				break;
+		}
+		expect(() => createRecoveryClient().associate(input)).toThrow(
+			"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+		);
+	});
+	it("does not accept query metadata supplied in a callback instead of a trusted resolver", async () => {
+		const { input, metadata, createRecoveryClient } = await recoveryFixture();
+		const client = createRecoveryClient({
+			resolveReadOnlyQueryMetadata: undefined,
+		});
+		expect(() =>
+			client.associate({
+				...input,
+				// @ts-expect-error native callback metadata is not an authority source
+				queryClient: metadata,
+			}),
+		).toThrow("CODEX_CONNECTION_CLIENT_UNAVAILABLE");
+	});
+	it("rejects recovery if the client closes while trusted metadata is resolved", async () => {
+		const { input, metadata, createRecoveryClient } = await recoveryFixture();
+		const client = createRecoveryClient({
+			resolveReadOnlyQueryMetadata: () => {
+				client.close();
+				return metadata;
+			},
+		});
+		expect(() => client.associate(input)).toThrow(
+			"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+		);
+	});
+	it.each(["missing", "throws"])(
+		"rejects recovery when the trusted resolver %s",
+		async (failure) => {
+			const { input, createRecoveryClient } = await recoveryFixture();
+			const client = createRecoveryClient({
+				resolveReadOnlyQueryMetadata: () => {
+					if (failure === "throws") throw new Error("unavailable");
+					return undefined;
+				},
+			});
+			expect(() => client.associate(input)).toThrow(
+				"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+			);
+		},
+	);
+	it.each(["request", "origin", "business"])(
+		"does not resolve recovery metadata after a rejected %s boundary",
+		async (boundary) => {
+			const { input, createRecoveryClient, resolveReadOnlyQueryMetadata } =
+				await recoveryFixture();
+			if (boundary === "business") input.metadataOnly = false;
+			const client = createRecoveryClient({
+				...(boundary === "request" ? { authorizeRequest: () => false } : {}),
+				...(boundary === "origin" ? { authorizeOrigin: () => false } : {}),
+			});
+			expect(() => client.associate(input)).toThrow(
+				"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+			);
+			expect(resolveReadOnlyQueryMetadata).not.toHaveBeenCalled();
+		},
+	);
+	it("rejects a recovery origin that forges trusted slot identity", async () => {
+		const { client, descriptor } = await fixture();
+		const origin = client.snapshotOriginal(descriptor);
+		const forged = structuredClone(origin);
+		forged.connectionIdentity.actorId = "forged-actor";
+		expect(() =>
+			client.associate({
+				requestDescriptor: descriptor,
+				evidence: evidence(),
+				metadataOnly: false,
+				occurredAt: time,
+				origin: forged,
+			}),
+		).toThrow("CODEX_CONNECTION_CLIENT_UNAVAILABLE");
+	});
 	it("validates fixed HTTPS origin/path without accepting a response-provided endpoint", () => {
 		for (const resource of [
 			"http://connection.example.test/mcp",
@@ -398,7 +644,18 @@ describe("socket-bound independent Connection client", () => {
 			"https://connection.example.test/mcp?url=evil",
 		])
 			expect(() =>
-				validateCodexConnectionProfile({ ...profile, resource }),
+				validateCodexConnectionProfile(
+					{ ...profile, resource },
+					authorizedService,
+				),
 			).toThrow();
+		const attacker = {
+			...profile,
+			issuer: "https://attacker.example.test",
+			resource: "https://attacker.example.test/mcp",
+		};
+		expect(() =>
+			validateCodexConnectionProfile(attacker, authorizedService),
+		).toThrow();
 	});
 });

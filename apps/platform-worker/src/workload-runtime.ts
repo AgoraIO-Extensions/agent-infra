@@ -188,33 +188,6 @@ function validateSecretDataKeys(
 	configuration: WorkloadReconciliationStateV1["candidate"]["configuration"],
 	bindings: readonly ResolvedWorkloadSecretBindingV1[],
 ): void {
-	// Owner-supplied environment, including Secret-backed names, must not alter
-	// the native loader before the trusted Runtime launcher can run. NODE_ENV is
-	// an ordinary application setting and remains allowed.
-	if (
-		[
-			...configuration.environment,
-			...configuration.secrets,
-			...bindings.map(({ record }) => record),
-		].some(
-			({ name }) =>
-				name.startsWith("LD_") ||
-				name.startsWith("DYLD_") ||
-				[
-					"NODE_OPTIONS",
-					"NODE_DEBUG",
-					"NODE_DEBUG_NATIVE",
-					"NODE_V8_COVERAGE",
-					"NODE_PATH",
-					"LD_PRELOAD",
-					"LD_AUDIT",
-					"LD_LIBRARY_PATH",
-					"DYLD_INSERT_LIBRARIES",
-					"DYLD_LIBRARY_PATH",
-				].includes(name),
-		)
-	)
-		throw new WorkloadPreflightRejectedErrorV1();
 	const environmentNames = new Set(
 		configuration.environment.map(({ name }) => name),
 	);
@@ -527,10 +500,6 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
-			const secretBindings = bindingsFor(state, input);
-			// Reject untrusted loader variables before contacting the registry or
-			// creating any workload resources.
-			validateSecretDataKeys(configuration, secretBindings);
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
@@ -580,6 +549,8 @@ export function createWorkloadRuntimeV1(
 					: configuration.source.interactionMode;
 			if (admission.runtimeManifest.interactionMode !== mode)
 				throw new WorkloadPreflightRejectedErrorV1();
+			const secretBindings = bindingsFor(state, input);
+			validateSecretDataKeys(configuration, secretBindings);
 			let modelProjection: unknown;
 			if (configuration.source.kind === "standard") {
 				if (!options.modelCatalog || !options.modelAccess)

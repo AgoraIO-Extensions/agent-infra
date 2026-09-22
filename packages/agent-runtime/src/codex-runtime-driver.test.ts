@@ -1954,7 +1954,7 @@ describe("Codex Runtime Driver", () => {
 			model: "gpt-5.3-codex",
 			reasoningEffort: "high",
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-			nativeBarrierRequired: false,
+			nativeBarrierRequired: true,
 			dataDirectory: `${join(directory, "driver.json")}.native`,
 			// Native storage is selected by the server-resolved binding only.
 			conversationKey: codexConversationKey({

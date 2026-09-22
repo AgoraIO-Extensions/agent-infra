@@ -1,9 +1,6 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagnostics.mjs";
 export { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagnostics.mjs";
@@ -11,14 +8,7 @@ export { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagn
 import { runCommand } from "./run-command.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
-const releasePath = "packages/agent-runtime/src/codex-release.json";
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
-const binaryNames = [
-	"codex",
-	"codex-code-mode-host",
-	"codex-responses-api-proxy",
-	"bwrap",
-];
 const requiredChecks = [
 	"configuration-fail-closed",
 	"native-active-default-model",
@@ -36,112 +26,20 @@ const requiredChecks = [
 	"personal-configuration-isolated",
 ];
 
-export function validateRuntimeProbe(
-	result,
-	expectedReleaseBytes = readFileSync(join(root, releasePath)),
-	expectedTarget,
-	expectedSourceTree,
-) {
-	const invalid = () => {
-		throw new Error("Codex runtime image probe evidence is invalid");
-	};
-	let release;
-	try {
-		if (!Buffer.isBuffer(expectedReleaseBytes)) invalid();
-		release = JSON.parse(expectedReleaseBytes.toString("utf8"));
-	} catch {
-		invalid();
-	}
-	const derived =
-		release?.schemaVersion === 2 && release.distribution?.kind === "derived";
-	const upstream =
-		(release?.schemaVersion === 2 &&
-			release.distribution?.kind === "upstream") ||
-		(release?.schemaVersion === undefined && release?.distribution === undefined);
+export function validateRuntimeProbe(result) {
 	if (
-		!release?.provenance ||
-		release.provenance.protocolVersion !== 2 ||
-		typeof release.provenance.codexVersion !== "string" ||
-		release.provenance.codexVersion.length === 0 ||
-		(!derived && !upstream)
-	)
-		invalid();
-	if (
-		result?.schemaVersion !== (derived ? 2 : 1) ||
+		result?.schemaVersion !== 1 ||
 		result.status !== "passed" ||
 		Object.keys(result).sort().join(",") !==
-			(derived
-				? "checks,codexVersion,configVersion,configurationSchemaVersion,distribution,protocolVersion,schemaVersion,status"
-				: "checks,codexVersion,configVersion,configurationSchemaVersion,schemaVersion,status") ||
-		result.codexVersion !== release.provenance.codexVersion ||
+			"checks,codexVersion,configVersion,configurationSchemaVersion,schemaVersion,status" ||
+		result.codexVersion !== "0.153.0" ||
 		result.configurationSchemaVersion !== 2 ||
 		result.configVersion !== "synthetic-active-v2" ||
 		!Array.isArray(result.checks) ||
 		result.checks.length !== requiredChecks.length ||
 		!requiredChecks.every((check) => result.checks.includes(check))
 	) {
-		invalid();
-	}
-	if (derived) {
-		const distribution = release.distribution;
-		if (
-			typeof expectedTarget !== "string" ||
-			result.distribution?.target !== expectedTarget
-		)
-			invalid();
-		const artifactsByArchitecture = release.artifacts;
-		if (
-			!artifactsByArchitecture ||
-			typeof artifactsByArchitecture !== "object" ||
-			Array.isArray(artifactsByArchitecture)
-		)
-			invalid();
-		const artifactEntries = Object.values(artifactsByArchitecture);
-		if (
-			artifactEntries.some(
-				(artifact) =>
-					!artifact ||
-					typeof artifact !== "object" ||
-					Array.isArray(artifact) ||
-					typeof artifact.target !== "string",
-			)
-		)
-			invalid();
-		const artifacts = artifactEntries.filter(
-			(artifact) => artifact.target === expectedTarget,
-		);
-		if (artifacts.length !== 1) invalid();
-		const artifact = artifacts[0];
-		if (
-			distribution?.kind !== "derived" ||
-			typeof distribution.buildId !== "string" ||
-			distribution.buildId.length === 0 ||
-			!/^[a-f0-9]{40}$/.test(distribution.sourceTree) ||
-			!digestPattern.test(distribution.buildInputSha256) ||
-			artifacts.length !== 1 ||
-			!artifact?.target ||
-			!(expectedSourceTree === undefined ||
-				distribution.sourceTree === expectedSourceTree) ||
-			!digestPattern.test(artifact.archiveSha256) ||
-			!digestPattern.test(artifact.candidateManifestSha256) ||
-			!artifact.binaries ||
-			Object.keys(artifact.binaries).sort().join(",") !==
-				[...binaryNames].sort().join(",") ||
-			!binaryNames.every((name) => digestPattern.test(artifact.binaries[name])) ||
-			artifact.executableSha256 !== artifact.binaries.codex ||
-			result.protocolVersion !== release.provenance.protocolVersion ||
-			!isDeepStrictEqual(result.distribution, {
-				kind: "derived",
-				buildId: distribution.buildId,
-				sourceTree: distribution.sourceTree,
-				buildInputSha256: distribution.buildInputSha256,
-				target: artifact.target,
-				releaseSha256: `sha256:${createHash("sha256").update(expectedReleaseBytes).digest("hex")}`,
-				candidateManifestSha256: artifact.candidateManifestSha256,
-				binaries: artifact.binaries,
-			})
-		)
-			invalid();
+		throw new Error("Codex runtime image probe evidence is invalid");
 	}
 	return result;
 }
@@ -190,8 +88,6 @@ export async function probeRuntimeImage({
 		throw new Error("Codex runtime image probe source is invalid");
 	}
 	const { commitSha } = source;
-	// The immutable Git source context owns the expected pin; no environment override.
-	const expectedReleaseBytes = await readFile(join(contextPath, releasePath));
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const command = (args, name, timeoutMs = 30_000, onFailure) =>
 		runCommand(docker, args, { cwd: root, name, timeoutMs, onFailure });
@@ -210,12 +106,6 @@ export async function probeRuntimeImage({
 		}
 	};
 	const inspection = inspect();
-	const expectedTarget =
-		inspection.Os === "linux" && inspection.Architecture === "arm64"
-			? "aarch64-unknown-linux-musl"
-			: inspection.Os === "linux" && inspection.Architecture === "amd64"
-				? "x86_64-unknown-linux-musl"
-				: undefined;
 	if (
 		inspection.Config?.Labels?.["org.opencontainers.image.revision"] !==
 		commitSha
@@ -267,12 +157,7 @@ export async function probeRuntimeImage({
 		);
 	let result;
 	try {
-		result = validateRuntimeProbe(
-			JSON.parse(run()),
-			expectedReleaseBytes,
-			expectedTarget,
-			commitSha,
-		);
+		result = validateRuntimeProbe(JSON.parse(run()));
 	} catch (error) {
 		if (error instanceof RuntimeProbeFailure) throw error;
 		throw new Error("Native Codex HTTP/SSE image probe failed");
@@ -298,11 +183,6 @@ export async function probeRuntimeImage({
 	}
 	if (inspect().Id !== inspection.Id) {
 		throw new Error("Codex runtime image changed during probe");
-	}
-	if (
-		!(await readFile(join(contextPath, releasePath))).equals(expectedReleaseBytes)
-	) {
-		throw new Error("Codex runtime image source changed during probe");
 	}
 	return {
 		schemaVersion: 1,

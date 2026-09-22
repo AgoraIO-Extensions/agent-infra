@@ -13,6 +13,14 @@
 
 仓库由当前 Git remote 推断。
 
+## Planning priority labels
+
+- `priority:P0`：M1 后端主链路或首个 Pilot 的必要前置。
+- `priority:P1`：M1 必须完成，但依赖 P0 或属于后续验收门禁。
+- `priority:P2`：当前较低优先级的消费者、体验补齐或延后工作。
+
+这些标签只表示当前排序，不表示产品阶段，也不替代 native blockers、PRD、工程 Spec 或人工验收门禁。M1、M2、M3 等阶段使用 GitHub Milestone、独立 Wayfinder map 或 roadmap issue 表达；阶段建立时再单独定义，不为每个阶段创建标签。
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.**

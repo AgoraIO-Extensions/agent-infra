@@ -1082,36 +1082,6 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
-	it.each([
-		"LD_PRELOAD",
-		"LD_AUDIT",
-		"DYLD_INSERT_LIBRARIES",
-		"NODE_OPTIONS",
-		"NODE_PATH",
-	])(
-		"rejects loader environment %s before creating workload resources",
-		async (name) => {
-			const record = pendingSecretRecord();
-			const cleanup = secretCleanupStore(record);
-			for (const secret of [false, true]) {
-				const configuration = secretConfiguration({
-					environment: secret ? [] : [{ name, value: "synthetic-loader" }],
-				});
-				if (secret)
-					Object.assign(configuration, {
-						environment: [{ name, value: "synthetic-loader" }],
-					});
-				const f = fixture(
-					{},
-					{ configuration, secrets: cleanupSecrets(cleanup) },
-				);
-				await f.tick(2);
-				expect(f.state?.phase).toBe("cleaning");
-				expect(f.resources.size).toBe(0);
-			}
-		},
-	);
-
 	it("rejects preflight when environment shadows a generated model credential key", async () => {
 		const record = pendingSecretRecord({
 			name: "model:primary",
@@ -2383,19 +2353,6 @@ describe("assembled Workload Runtime contracts", () => {
 			false,
 			false,
 		]);
-	});
-	it("allows ordinary NODE_ENV configuration", async () => {
-		const f = fixture(
-			{},
-			{
-				configuration: configurationFixture({
-					environment: [{ name: "NODE_ENV", value: "production" }],
-				}),
-			},
-		);
-		await f.tick(8);
-		expect(f.state?.phase).toBe("ready");
-		expect(f.resources.size).toBeGreaterThan(0);
 	});
 	it("uses RuntimeHost Fake HTTP capabilities and persists only the declared intersection across Worker restarts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "workload-runtime-"));

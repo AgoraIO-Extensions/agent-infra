@@ -19,7 +19,7 @@
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"test": "pnpm build && vitest run src"
+		"test": "node scripts/generate-callback-schema.mjs --check && pnpm build && vitest run src"
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",

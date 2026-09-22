@@ -142,21 +142,6 @@
       "required": ["enabled", "storageSize", "service", "route"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "legacyMigrationTrust": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["enabled", "manifestSecretName", "manifestSecretKey", "publicKeySecretName", "publicKeySecretKey", "keyId", "trustRootUid", "mountDir"],
-          "properties": {
-            "enabled": { "type": "boolean" },
-            "manifestSecretName": { "type": "string" },
-            "manifestSecretKey": { "type": "string", "minLength": 1 },
-            "publicKeySecretName": { "type": "string" },
-            "publicKeySecretKey": { "type": "string", "minLength": 1 },
-            "keyId": { "type": "string" },
-            "trustRootUid": { "const": 0 },
-            "mountDir": { "type": "string", "const": "/etc/agent-infra/legacy-migration" }
-          }
-        },
         "storageSize": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(Mi|Gi)$"

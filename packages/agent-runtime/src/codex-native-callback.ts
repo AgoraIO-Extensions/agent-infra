@@ -17,7 +17,7 @@ import type {
 } from "./codex-connection-client.js";
 
 const maximumFrameBytes = 16_384;
-const callbackTimeoutMs = 4_500;
+export const CODEX_NATIVE_CALLBACK_TIMEOUT_MS = 4_500;
 const maximumPermitMs = 5_000;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const ajv = new Ajv2020({ strict: true, strictRequired: false });
@@ -382,7 +382,7 @@ export function serveCodexNativeCallbacks(
 				pending = Buffer.alloc(0);
 				if (!validRequest(value)) throw unavailable();
 				const request = value;
-				const timeout = AbortSignal.timeout(callbackTimeoutMs);
+				const timeout = AbortSignal.timeout(CODEX_NATIVE_CALLBACK_TIMEOUT_MS);
 				const signal = AbortSignal.any([lifetime.signal, timeout]);
 				const waiting = new AbortController();
 				try {
@@ -421,11 +421,19 @@ export function serveCodexNativeCallbacks(
 						throw unavailable();
 					const output = Buffer.from(`${JSON.stringify(response)}\n`);
 					if (output.length > maximumFrameBytes) throw unavailable();
-					const write = new Promise<void>((resolve, reject) =>
-						stream.write(output, (error) =>
-							error ? reject(unavailable()) : resolve(),
-						),
-					);
+					const write = new Promise<void>((resolve, reject) => {
+						const onAbort = () => reject(unavailable());
+						signal.addEventListener("abort", onAbort, { once: true });
+						try {
+							stream.write(output, (error) => {
+								signal.removeEventListener("abort", onAbort);
+								error ? reject(unavailable()) : resolve();
+							});
+						} catch (error) {
+							signal.removeEventListener("abort", onAbort);
+							reject(error);
+						}
+					});
 					try {
 						await Promise.race([write, interrupted]);
 					} catch (error) {

@@ -50,44 +50,17 @@ export async function startMinioFileFixtureV1() {
 			region: "us-east-1",
 			forcePathStyle: true,
 			credentials,
-			maxAttempts: 1,
+			// Startup may still return XMinioServerNotInitialized (503). Use the
+			// SDK's bounded transient-error retries only for fixture provisioning.
+			maxAttempts: 5,
 		});
-		let initialized = false;
-		let bucketCreated = false;
-		let lastError: unknown;
-		for (let attempt = 0; attempt < 60 && !initialized; attempt++) {
-			try {
-				if (!bucketCreated) {
-					await client.send(
-						new CreateBucketCommand({ Bucket: "file-contract" }),
-					);
-					bucketCreated = true;
-				}
-				await client.send(
-					new PutBucketVersioningCommand({
-						Bucket: "file-contract",
-						VersioningConfiguration: { Status: "Enabled" },
-					}),
-				);
-				initialized = true;
-			} catch (error) {
-				if (
-					!bucketCreated &&
-					error instanceof Error &&
-					(error.name === "BucketAlreadyOwnedByYou" ||
-						error.name === "BucketAlreadyExists")
-				) {
-					// The create response may have been lost after MinIO committed
-					// the bucket. Treat the ownership response as successful so the
-					// retry can move on to the versioning contract.
-					bucketCreated = true;
-					continue;
-				}
-				lastError = error;
-				await new Promise((resolve) => setTimeout(resolve, 250));
-			}
-		}
-		if (!initialized) throw lastError;
+		await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
+		await client.send(
+			new PutBucketVersioningCommand({
+				Bucket: "file-contract",
+				VersioningConfiguration: { Status: "Enabled" },
+			}),
+		);
 		const storage = createS3ObjectStorageV1({
 			endpoint,
 			region: "us-east-1",

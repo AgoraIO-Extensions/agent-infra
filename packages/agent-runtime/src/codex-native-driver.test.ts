@@ -2588,6 +2588,7 @@ function connectionOptions() {
 	const { slotId: _slot, ...configuration } = response.slot;
 	configuration.credential.expiresAt = Date.now() + 60_000;
 	const options = {
+		authorizedService: structuredClone(configuration.service),
 		profile: {
 			profileRef: response.request.profileRef,
 			...configuration.service,
@@ -2737,18 +2738,24 @@ describe("Codex Driver Connection journal and admission", () => {
 		).toMatchObject({ connection: true });
 		expect(options.resolveOriginalClient).not.toHaveBeenCalled();
 		for (const bridge of env.bridges.values()) {
+			expect(bridge.options.nativeBarrierRequired).toBe(true);
 			expect(bridge.options.connectionProfile).toBeUndefined();
 			expect(bridge.options.nativeConnectionBootstrap).toBeUndefined();
 			expect(bridge.methods).toEqual(["initialize", "config/read"]);
 		}
 	});
 
-	it.each(["profile", "resolver", "extra"])(
+	it.each(["profile", "authority", "missing-authority", "resolver", "extra"])(
 		"rejects malformed %s deployment input before opening native",
 		async (change) => {
 			const { options } = connectionOptions();
 			if (change === "profile")
 				options.profile.resource = "https://elsewhere.example.test/mcp";
+			if (change === "authority")
+				options.authorizedService.resource =
+					"https://elsewhere.example.test/mcp";
+			if (change === "missing-authority")
+				Object.assign(options, { authorizedService: undefined });
 			if (change === "resolver")
 				Object.assign(options, { resolveOriginalClient: undefined });
 			if (change === "extra")

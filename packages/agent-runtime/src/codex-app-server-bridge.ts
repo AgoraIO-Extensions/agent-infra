@@ -32,9 +32,11 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 };
 import {
 	type CodexConnectionProfile,
+	type CodexConnectionServiceAuthority,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
 import {
+	CODEX_NATIVE_CALLBACK_TIMEOUT_MS,
 	type CodexNativeCallbackHandler,
 	type CodexNativeConnectionBootstrapHandler,
 	type CodexNativeConnectionRecoveryHandler,
@@ -44,6 +46,10 @@ import release from "./codex-release.json" with { type: "json" };
 
 const defaultTimeoutMs = 5_000;
 const recoveryShutdownTimeoutMs = defaultTimeoutMs;
+const maximumRecoveryExchanges = 16;
+const maximumRecoveryTimeoutMs =
+	(maximumRecoveryExchanges + 1) * CODEX_NATIVE_CALLBACK_TIMEOUT_MS +
+	recoveryShutdownTimeoutMs;
 const maximumTimeoutMs = 30_000;
 const minimumTimeoutMs = 25;
 const maximumFrameBytes = 65_536;
@@ -129,6 +135,18 @@ export const CODEX_NATIVE_BARRIER_REQUIRED =
 	releaseManifest.schemaVersion === 2 &&
 	releaseManifest.distribution?.kind === "derived";
 
+function privateNativeLaneRequired(input: {
+	nativeCallback?: unknown;
+	nativeConnectionBootstrap?: unknown;
+	connectionProfile?: unknown;
+}) {
+	return (
+		input.nativeCallback !== undefined ||
+		input.nativeConnectionBootstrap !== undefined ||
+		input.connectionProfile !== undefined
+	);
+}
+
 export type CodexAppServerFrame = Readonly<Record<string, unknown>>;
 
 export interface CodexModelAccess {
@@ -209,6 +227,8 @@ export interface CodexAppServerBridgeOptions {
 	readonly nativeCallback?: CodexNativeCallbackHandler;
 	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
 	readonly connectionProfile?: CodexConnectionProfile;
+	/** Deployment-owned/allowlisted identity; never a wire input. */
+	readonly authorizedConnectionService?: CodexConnectionServiceAuthority;
 	readonly provenance: CodexAppServerProvenanceV2;
 	readonly nativeBarrierRequired?: boolean;
 	readonly startupTimeoutMs?: number;
@@ -231,25 +251,36 @@ export async function runCodexConnectionRecovery(options: {
 	dataDirectory: string;
 	conversationKey: string;
 	profile: CodexConnectionProfile;
+	authorizedConnectionService: CodexConnectionServiceAuthority;
 	signal: AbortSignal;
 	recovery: CodexNativeConnectionRecoveryHandler;
 	evidence: CodexNativeCallbackHandler;
 	nativeBarrierRequired?: boolean;
 }) {
 	options.signal.throwIfAborted();
-	if (CODEX_NATIVE_BARRIER_REQUIRED && options.nativeBarrierRequired === false)
-		configurationInvalid();
+	if (options.nativeBarrierRequired === false) configurationInvalid();
 	if (platform !== "linux") throw unavailable();
-	const profile = validateCodexConnectionProfile(options.profile);
+	const profile = validateCodexConnectionProfile(
+		options.profile,
+		options.authorizedConnectionService,
+	);
 	const launchPath = options.launchPath ?? env.PATH;
 	const executable = await resolveExecutable(launchPath, "codex");
 	const policy = await createIsolatedLaunchPolicy(launchPath);
 	let child: ChildProcess | undefined;
 	let callbacks: ReturnType<typeof serveCodexNativeCallbacks> | undefined;
 	let exited: Promise<void> | undefined;
+	let cleanupPromise: Promise<void> | undefined;
 	const abort = () => {
-		const pid = child?.pid;
-		if (pid && pid > 1) {
+		const process = child;
+		const pid = process?.pid;
+		if (
+			process &&
+			pid &&
+			pid > 1 &&
+			process.exitCode === null &&
+			process.signalCode === null
+		) {
 			try {
 				// The recovery helper can exec Codex. Kill its process group so an
 				// orphaned native child cannot outlive the bounded cleanup window.
@@ -259,10 +290,24 @@ export async function runCodexConnectionRecovery(options: {
 				// Fall back to the direct child when the group has already exited.
 			}
 		}
-		child?.kill("SIGKILL");
+		if (process?.exitCode === null && process.signalCode === null)
+			process.kill("SIGKILL");
+	};
+	const cleanup = () => {
+		if (!cleanupPromise) {
+			cleanupPromise = (async () => {
+				callbacks?.close();
+				abort();
+				if (exited) await settleWithin(exited, recoveryShutdownTimeoutMs);
+				if (callbacks)
+					await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+			})();
+		}
+		return cleanupPromise;
 	};
 	try {
 		await probeVersion(executable, defaultTimeoutMs, policy, options.signal);
+		await verifySchema(executable, defaultTimeoutMs, policy, options.signal);
 		if (options.nativeBarrierRequired ?? true)
 			await verifyNativeBarrier(
 				executable,
@@ -283,37 +328,43 @@ export async function runCodexConnectionRecovery(options: {
 			nativePolicy,
 		);
 		options.signal.throwIfAborted();
-		child = spawn(
-			helper,
-			[
-				...boundary,
-				"--",
-				executable,
-				"--agent-infra-connection-profile",
-				JSON.stringify(profile),
-				"--agent-infra-connection-recovery",
-			],
-			{
-				stdio: ["ignore", "ignore", "ignore", "pipe"],
-				detached: true,
-				cwd: nativePolicy.directory,
-				env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
-			},
-		);
+		try {
+			child = spawn(
+				helper,
+				[
+					...boundary,
+					"--",
+					executable,
+					"--agent-infra-connection-profile",
+					JSON.stringify(profile),
+					"--agent-infra-connection-recovery",
+				],
+				{
+					stdio: ["ignore", "ignore", "ignore", "pipe"],
+					detached: true,
+					cwd: nativePolicy.directory,
+					env: { ...nativePolicy.environment, ...loopbackProxyEnvironment() },
+				},
+			);
+		} catch {
+			throw unavailable();
+		}
 		const process = child;
+		exited = new Promise<void>((resolve) =>
+			process.once("close", () => resolve()),
+		);
 		let failed = false;
 		let terminal = false;
 		let issued = 0;
+		let recoveryProcessNonce: string | undefined;
 		// Issuing the last verification is not evidence that it was persisted.
 		// Require the final pull, which the Driver accepts only after its evidence
 		// handler has durably acknowledged the preceding verification.
 		const complete = () => terminal;
 		process.on("error", () => {
 			failed = true;
+			abort();
 		});
-		exited = new Promise<void>((resolve) =>
-			process.once("close", () => resolve()),
-		);
 		const stream = process.stdio[3];
 		if (!(stream instanceof Duplex)) throw unavailable();
 		callbacks = serveCodexNativeCallbacks(
@@ -325,10 +376,17 @@ export async function runCodexConnectionRecovery(options: {
 				abort();
 			},
 			async (request, signal) => {
-				if (terminal) throw unavailable();
+				if (
+					terminal ||
+					request.profileRef !== profile.profileRef ||
+					(recoveryProcessNonce !== undefined &&
+						request.processNonce !== recoveryProcessNonce)
+				)
+					throw unavailable();
+				recoveryProcessNonce ??= request.processNonce;
 				const response = await options.recovery(request, signal);
 				if (response.decision === "verify") {
-					if (issued >= 16) throw unavailable();
+					if (issued >= maximumRecoveryExchanges) throw unavailable();
 					issued++;
 				} else if (response.decision === "done") terminal = true;
 				else failed = true;
@@ -341,27 +399,20 @@ export async function runCodexConnectionRecovery(options: {
 		const exitResult = await waitForChildExit(
 			exited,
 			options.signal,
-			maximumTimeoutMs,
+			maximumRecoveryTimeoutMs,
 		);
 		if (exitResult !== "exited") {
 			failed = true;
-			callbacks.close();
-			abort();
-			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+			await cleanup();
 			if (exitResult === "aborted") options.signal.throwIfAborted();
 			throw unavailable();
 		}
-		callbacks.close();
-		await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+		await cleanup();
 		options.signal.throwIfAborted();
 		if (failed || !complete() || process.exitCode !== 0) throw unavailable();
 	} finally {
 		options.signal.removeEventListener("abort", abort);
-		callbacks?.close();
-		abort();
-		if (exited) await settleWithin(exited, recoveryShutdownTimeoutMs);
-		if (callbacks)
-			await settleWithin(callbacks.finished, recoveryShutdownTimeoutMs);
+		await cleanup();
 		await removeIsolatedDirectory(policy.directory);
 	}
 }
@@ -570,6 +621,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		"nativeCallback",
 		"nativeConnectionBootstrap",
 		"connectionProfile",
+		"authorizedConnectionService",
 		"provenance",
 		"nativeBarrierRequired",
 		"startupTimeoutMs",
@@ -615,7 +667,11 @@ function validateOptions(input: unknown): ValidatedOptions {
 		typeof input.nativeBarrierRequired !== "boolean"
 	)
 		configurationInvalid();
-	if (CODEX_NATIVE_BARRIER_REQUIRED && input.nativeBarrierRequired === false)
+	const privateLane = privateNativeLaneRequired(input);
+	if (
+		input.nativeBarrierRequired === false &&
+		(CODEX_NATIVE_BARRIER_REQUIRED || privateLane)
+	)
 		configurationInvalid();
 	if (
 		input.nativeCallback !== undefined &&
@@ -625,8 +681,16 @@ function validateOptions(input: unknown): ValidatedOptions {
 	let connectionProfile: CodexConnectionProfile | undefined;
 	if (input.connectionProfile !== undefined) {
 		try {
+			const authorizedService = input.authorizedConnectionService;
+			if (
+				!authorizedService ||
+				typeof authorizedService !== "object" ||
+				Array.isArray(authorizedService)
+			)
+				configurationInvalid();
 			connectionProfile = validateCodexConnectionProfile(
 				input.connectionProfile,
+				authorizedService as CodexConnectionServiceAuthority,
 			);
 		} catch {
 			configurationInvalid();
@@ -636,7 +700,13 @@ function validateOptions(input: unknown): ValidatedOptions {
 		(connectionProfile === undefined) !==
 			(input.nativeConnectionBootstrap === undefined) ||
 		(input.nativeConnectionBootstrap !== undefined &&
-			typeof input.nativeConnectionBootstrap !== "function")
+			typeof input.nativeConnectionBootstrap !== "function") ||
+		(connectionProfile !== undefined && input.nativeCallback === undefined)
+	)
+		configurationInvalid();
+	if (
+		connectionProfile === undefined &&
+		input.authorizedConnectionService !== undefined
 	)
 		configurationInvalid();
 	const modelAccess = validateModelAccess(input.modelAccess);
@@ -660,7 +730,9 @@ function validateOptions(input: unknown): ValidatedOptions {
 						input.nativeConnectionBootstrap as CodexNativeConnectionBootstrapHandler,
 				}
 			: {}),
-		nativeBarrierRequired: input.nativeBarrierRequired ?? true,
+		nativeBarrierRequired:
+			input.nativeBarrierRequired ??
+			(CODEX_NATIVE_BARRIER_REQUIRED || privateLane),
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
@@ -733,6 +805,28 @@ function kill(
 	}
 }
 
+function killProbeProcess(
+	process: ChildProcess,
+	signal: "SIGTERM" | "SIGKILL" = "SIGTERM",
+) {
+	const pid = process.pid;
+	if (
+		pid &&
+		pid > 1 &&
+		process.exitCode === null &&
+		process.signalCode === null
+	) {
+		try {
+			killProcess(-pid, signal);
+			return;
+		} catch {
+			// Fall back to the direct child when the group has already exited or
+			// process-group signalling is unavailable on the current platform.
+		}
+	}
+	kill(process, signal);
+}
+
 async function waitForResult<T>(promise: Promise<T>, timeoutMs: number) {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -748,13 +842,13 @@ async function waitForResult<T>(promise: Promise<T>, timeoutMs: number) {
 }
 
 async function reapChild(
-	process: Pick<ChildProcess, "kill">,
+	process: ChildProcess,
 	closed: Promise<true>,
 	timeoutMs: number,
 ) {
-	kill(process);
+	killProbeProcess(process);
 	if (await waitForResult(closed, timeoutMs)) return;
-	kill(process, "SIGKILL");
+	killProbeProcess(process, "SIGKILL");
 	await waitForResult(closed, timeoutMs);
 }
 
@@ -1056,6 +1150,7 @@ async function runProbeCommand(
 	try {
 		process = spawn(executable, args, {
 			stdio: ["ignore", captureStdout ? "pipe" : "ignore", "ignore"],
+			detached: true,
 			cwd: launchPolicy.directory,
 			env: launchPolicy.environment,
 		});
@@ -1066,12 +1161,7 @@ async function runProbeCommand(
 		process.once("close", () => resolve(true));
 	});
 	const abort = () => {
-		try {
-			if (process.exitCode === null && process.signalCode === null)
-				process.kill("SIGKILL");
-		} catch {
-			// The probe may have exited concurrently with cancellation.
-		}
+		killProbeProcess(process, "SIGKILL");
 	};
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
@@ -1099,6 +1189,9 @@ async function runProbeCommand(
 		});
 	}
 	const result = await waitForResult(outcome, timeoutMs);
+	// A cancellation that races the child's close must retain the caller's
+	// abort contract instead of being reclassified as a probe-specific failure.
+	signal?.throwIfAborted();
 	if (!result) {
 		await reapChild(process, closed, timeoutMs);
 		throw timedOut();
@@ -1147,29 +1240,33 @@ async function verifyNativeBarrier(
 		launchPolicy,
 		signal,
 	);
+	// runProbeCommand rejects non-zero exits, spawn failures and timeouts with
+	// their own unavailable/timeout contract. Only a successful command whose
+	// payload is malformed or does not match the pinned barrier is a provenance
+	// mismatch; do not relabel an ordinary unsupported probe as provenance drift.
+	if (output.stdoutTooLarge || output.stdout.trim() === "")
+		throw provenanceMismatchError();
+	let value: unknown;
 	try {
-		// runProbeCommand only resolves after the child exited with status 0;
-		// still reject truncated/empty output before interpreting the payload.
-		if (output.stdoutTooLarge || output.stdout.trim() === "")
-			throw provenanceMismatchError();
-		const value: unknown = JSON.parse(output.stdout);
-		if (
-			!isPlainRecord(value) ||
-			!exactKeys(value, Object.keys(nativeBarrier)) ||
-			Object.entries(nativeBarrier).some(
-				([key, expected]) => value[key] !== expected,
-			)
-		)
-			throw provenanceMismatchError();
+		value = JSON.parse(output.stdout);
 	} catch {
 		throw provenanceMismatchError();
 	}
+	if (
+		!isPlainRecord(value) ||
+		!exactKeys(value, Object.keys(nativeBarrier)) ||
+		Object.entries(nativeBarrier).some(
+			([key, expected]) => value[key] !== expected,
+		)
+	)
+		throw provenanceMismatchError();
 }
 
 async function verifySchema(
 	executable: string,
 	timeoutMs: number,
 	launchPolicy: IsolatedLaunchPolicy,
+	signal?: AbortSignal,
 ) {
 	let directory: string;
 	try {
@@ -1185,6 +1282,7 @@ async function verifySchema(
 			timeoutMs,
 			false,
 			launchPolicy,
+			signal,
 		);
 		const schema = await readFile(join(directory, schemaArtifactName));
 		const digest = `sha256:${createHash("sha256").update(schema).digest("hex")}`;
@@ -1192,6 +1290,7 @@ async function verifySchema(
 			failure = provenanceMismatchError();
 		}
 	} catch (error) {
+		signal?.throwIfAborted();
 		failure =
 			error instanceof CodexAppServerBridgeError
 				? error
@@ -1233,6 +1332,7 @@ async function verifyLinuxSandbox(
 			signal,
 		);
 	} catch {
+		signal?.throwIfAborted();
 		throw new CodexAppServerBridgeError(
 			"CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
 			"Codex requires setpriv and enforceable Landlock ABI V5 filesystem rights",

@@ -3,39 +3,15 @@
 本入口消费部署已批准的 Agent active 配置，遵循
 [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)
 与[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
-它不读取 Platform DB、ModelCatalog、Connection Provider Credential 或部署解密 keyring。
+它不读取 Platform DB、ModelCatalog、Connection credential 或部署解密 keyring。
 
 ## 固定镜像
 
-`apps/agent-runtime-host/Dockerfile` 在构建时安装
-[`codex-release.json`](../../packages/agent-runtime/src/codex-release.json) 固定的 Codex 产物。
-上游 `0.153.0` 表示协议兼容来源；派生产物另用 `distribution.buildId` 标识，绑定源码
-tree、构建输入与各 target 的归档、manifest 和四个 binary 摘要。只有声明中具备派生产物的
-target 可以安装；本地 ARM 首通不代表其他 target 已交付。
-
-构建输入目录包含完整 `codex-candidate.tar.gz`，通过只读 named build context 交给安装器：
-
-```bash
-AGENT_INFRA_CODEX_BUILD_CONTEXT=/path/to/verified-candidate pnpm docker:build
-```
-
-CI 从同一 release 条目的 `transport` 读取固定 GitHub Actions run、attempt、artifact
-与源码 head，通过标准 artifact 下载入口获取完整归档，再由安装器核对固定摘要。
-当前 CI 原生检查在 Linux ARM64 runner 执行；发布脚本选择 ARM 时需显式设置
-`PLATFORM=linux/arm64`。这不代表 amd64 派生产物已交付。
-
-Actions 候选只在其保留期内可重新下载。已取得的完整归档可以保存在本地，后续构建仍
-逐次验证摘要；归档过期且本地没有副本时构建会失败。候选缓存不替代长期发行来源，
-没有匹配的派生产物时不会安装旧官方包。
-
-该变量只选择归档位置，校验值由源码中的 release 声明固定。安装器验证整个归档、原始
-candidate manifest、完整文件集合、模式、ELF 架构、来源及法律文件，再整体安装到
-`/opt/codex`。最终 binary 为 `0555`，其他文件为 `0444`；源码依赖 SBOM、构建环境、
-原 manifest、LICENSE/NOTICE 与 release 声明保留在 `/opt/codex/share/`。
-
-正式入口在启动原生进程前复验安装文件与来源，Bridge 再验证版本、app-server Schema
-与原生屏障 probe。启动不下载依赖。源码 SBOM 的覆盖范围仍以 candidate 声明为准，
-不作为全部静态链接依赖的完整清单。
+`apps/agent-runtime-host/Dockerfile` 在构建时安装 Codex `0.153.0`，支持
+`linux/amd64` 与 `linux/arm64`。固定资产、SHA-256 与 LICENSE/NOTICE 的来源记录在
+[`codex-release.json`](../../packages/agent-runtime/src/codex-release.json)。安装程序验证压缩包、
+解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
+正式入口在启动原生进程前复验文件，Bridge 再验证版本与协议 Schema。启动不下载依赖。
 
 ## 部署输入
 
@@ -52,7 +28,6 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 | `AGENT_INFRA_RUNTIME_GRANT_KEY_ID` | 已批准的 Grant 签名公钥标识 |
 | `AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY` | Ed25519 PEM 公钥 |
 | `AGENT_INFRA_RUNTIME_GRANT_ISSUER` | 预期 Grant issuer |
-| `AGENT_INFRA_RUNTIME_CONNECTION_PROFILE` | 可选的独立 Connection 固定目标；只含下述非敏感字段 |
 | `PORT` | HTTP 监听端口，默认为 `3003` |
 
 模型配置结构示例，不包含凭证：
@@ -81,40 +56,6 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 `host.json` 与 `codex-driver.json` 位于该 Agent 数据目录；Driver 使用 #403 的
 `codex-driver.json.native` 持久目录装配。关闭进程不删除这些业务数据，损坏或丢失状态仍按
 [HLD §7.3](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复) 拒绝替代恢复。
-
-### 独立 Connection 客户端输入
-
-客户端授权、原主体映射、私有交付与核实规则见
-[Runtime HLD §9.1](../../docs/architecture/HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
-配置目标不代表独立授权已经完成；只有经过当前镜像的原生隔离验证并取得有效客户端输入后，才可执行真实调用。
-
-`AGENT_INFRA_RUNTIME_CONNECTION_PROFILE` 只接受以下 JSON，resource 固定为 HTTPS `/mcp`，不能含凭证、query 或 fragment：
-
-```json
-{
-  "profileRef": "connection-primary",
-  "serviceRef": "connection-primary",
-  "issuer": "https://connection.example.test",
-  "resource": "https://connection.example.test/mcp"
-}
-```
-
-独立授权交付方将短期客户端输入放入 Host 数据目录下的 `independent-client-input/`。
-该目录必须由 Host 进程用户拥有、权限 `0700`、路径无 symlink，并位于原生 Conversation 的文件 allowlist 之外。
-文件名为 `sha256(UTF-8(JSON.stringify([principal.kind, principal.id, agentId, profileRef]))) + ".json"`，
-使用当前已受理原执行的主体与 Agent 选择，不能按 Owner、责任人或 workload 选择。
-
-文件顶层只有 `principal`、`agentId` 和 `client`；`client` 只有 `service`、`connectionIdentity`、
-`credential`，内部字段由版本化私有 callback schema 校验。主体映射必须来自同一次独立授权交付。
-文件必须由 Host 进程用户拥有，权限为 `0400` 或 `0600`，最大 32 KiB；轮换使用同目录原子替换。
-原始 Provider 凭证、refresh token、任意 headers 和 Connection 管理浏览器会话均不属于该输入。
-启动或配置读取不加载这些文件；真实 bootstrap 在读取前后分别重验原任务授权。
-缺失、过期、绑定错误或不安全的文件权限均拒绝调用。不要将文件内容写入日志、Issue 或普通配置示例。
-
-RuntimeHost 使用 `pnpm --filter @agent-infra/agent-runtime-host start` 启动；镜像使用同一 shell launcher。
-launcher 在 Node 启动前拒绝 `NODE_OPTIONS`、`NODE_DEBUG`、`NODE_DEBUG_NATIVE` 和 `NODE_V8_COVERAGE`，
-设置不可提升的零 core dump 限制，并通过 `--disable-sigusr1` 关闭信号启用 inspector 的入口。
-程序化装配及每次凭据读取同样检查当前进程保护。实际原生内存读取、跨主体及后代进程隔离仍须由当前二进制验证。
 
 ## 镜像验证
 

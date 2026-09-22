@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
 	RuntimeCapabilitiesV1,
+	RuntimeConnectionAssociationV1,
 	RuntimeDriverOperationRecordV1,
 	RuntimeEvent,
 	RuntimeOperationFactV2,
@@ -19,7 +20,6 @@ import {
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
-	CODEX_NATIVE_BARRIER_REQUIRED,
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -40,6 +40,7 @@ import {
 	type CodexConnectionRecoveryRequest,
 	type CodexConnectionRecoveryResponse,
 	type CodexConnectionRequest,
+	type CodexConnectionServiceAuthority,
 	createCodexConnectionClient,
 	isCodexConnectionClientConfiguration,
 	isCodexConnectionEvidence,
@@ -113,6 +114,8 @@ export interface CodexRuntimeDriverOptions {
 	) => Promise<void>;
 	// Independent client delivery is trusted deployment input, never a Runtime command.
 	readonly connectionClient?: {
+		/** Independently configured service allowlist; never derived from the profile. */
+		readonly authorizedService: CodexConnectionServiceAuthority;
 		readonly profile: {
 			readonly profileRef: string;
 			readonly serviceRef: string;
@@ -2762,7 +2765,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				dataDirectory: this.recoveryDirectory,
 				conversationKey: initial.conversationKey,
 				profile: options.profile,
-				nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
+				authorizedConnectionService: options.authorizedService,
+				nativeBarrierRequired: true,
 				signal: processSignal,
 				recovery,
 				evidence: async (request, callbackSignal) => {
@@ -2820,6 +2824,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		ReturnType<typeof createCodexConnectionClient>
 	>();
+	// These scopes exist only during one synchronous, server-validated client call.
+	// Read-only query metadata comes from the deployment resolver, never wire fields.
+	private connectionAdmission?: {
+		conversationKey: string;
+		request: CodexConnectionRequest;
+	};
+	private readOnlyQueryAdmission?: {
+		conversationKey: string;
+		request: CodexConnectionRequest;
+		origin: CodexConnectionOrigin;
+		metadata: CodexConnectionQueryMetadata;
+	};
+
+	private hasConnectionJournalAttempt(
+		conversationKey: string,
+		matches: (attempt: CodexNativeToolAttempt) => boolean,
+	) {
+		return Object.values(this.readState().sessions).some(
+			(session) =>
+				codexConversationKey(session) === conversationKey &&
+				Object.values(session.journals ?? {}).some((journal) =>
+					Object.values(journal.nativeToolAttempts ?? {}).some(matches),
+				),
+		);
+	}
 
 	private originalConnectionExecution(
 		conversationKey: string,
@@ -2900,6 +2929,29 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (existing) return existing;
 		const client = createCodexConnectionClient({
 			profile: options.profile,
+			authorizedService: options.authorizedService,
+			authorizeRequest: (request) =>
+				(this.connectionAdmission?.conversationKey === conversationKey &&
+					isDeepStrictEqual(this.connectionAdmission.request, request)) ||
+				this.hasConnectionJournalAttempt(conversationKey, (attempt) =>
+					isDeepStrictEqual(attempt.connectionRequest, request),
+				),
+			authorizeOrigin: (origin) =>
+				this.hasConnectionJournalAttempt(conversationKey, (attempt) =>
+					isDeepStrictEqual(attempt.connectionOrigin, origin),
+				),
+			resolveReadOnlyQueryMetadata: (query) => {
+				const current = this.readOnlyQueryAdmission;
+				if (
+					current?.conversationKey !== conversationKey ||
+					!isDeepStrictEqual(current.request, query.requestDescriptor) ||
+					!isDeepStrictEqual(current.origin, query.origin) ||
+					current.metadata.credential.revision !== query.credentialRevision ||
+					current.metadata.credential.expiresAt <= query.queriedAt
+				)
+					return undefined;
+				return structuredClone(current.metadata);
+			},
 			resolveOriginalClient: async (request, signal) => {
 				const reference = this.originalConnectionExecution(
 					conversationKey,
@@ -3136,6 +3188,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (
 				!isPlainRecord(options.connectionClient) ||
 				!hasOnlyKeys(options.connectionClient, [
+					"authorizedService",
 					"profile",
 					"resolveOriginalClient",
 					"resolveReadOnlyClient",
@@ -3147,8 +3200,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				configurationInvalid();
 			try {
 				connectionClient = {
+					authorizedService: structuredClone(
+						options.connectionClient.authorizedService,
+					),
 					profile: validateCodexConnectionProfile(
 						options.connectionClient.profile,
+						options.connectionClient.authorizedService,
 					),
 					resolveOriginalClient: options.connectionClient.resolveOriginalClient,
 					...(options.connectionClient.resolveReadOnlyClient
@@ -3201,7 +3258,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-				nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
+				nativeBarrierRequired: true,
 				nativeCallback: (request, signal) => {
 					if (!driver) unavailable();
 					return driver.handleNativeCallback(conversationKey, request, signal);
@@ -3209,6 +3266,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				...(connectionClient
 					? {
 							connectionProfile: connectionClient.profile,
+							authorizedConnectionService: connectionClient.authorizedService,
 							nativeConnectionBootstrap: (request, signal) => {
 								if (!driver) unavailable();
 								return driver
@@ -3271,7 +3329,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						? { modelAccess: modelTransport.modelAccessFor(probeKey) }
 						: {}),
 					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
-					nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
+					// The business bridge always installs native callbacks.
+					nativeBarrierRequired: true,
 					startupTimeoutMs: 3000,
 				});
 				signal.throwIfAborted();
@@ -4580,15 +4639,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session: CodexSession,
 		execution: CodexExecution,
 	) {
-		const binding =
-			this.connectionClient(conversationKey).assertRequest(descriptor);
-		if (
-			binding.scope.agentId !== session.agentId ||
-			binding.scope.conversationId !== session.conversationId ||
-			binding.scope.sessionGeneration !== session.sessionGeneration ||
-			binding.scope.executionId !== execution.executionId
-		)
-			unavailable();
+		const previous = this.connectionAdmission;
+		this.connectionAdmission = { conversationKey, request: descriptor };
+		try {
+			const client = this.connectionClient(conversationKey);
+			const binding = client.assertRequest(descriptor);
+			if (
+				binding.scope.agentId !== session.agentId ||
+				binding.scope.conversationId !== session.conversationId ||
+				binding.scope.sessionGeneration !== session.sessionGeneration ||
+				binding.scope.executionId !== execution.executionId
+			)
+				unavailable();
+			return client.snapshotOriginal(descriptor);
+		} finally {
+			this.connectionAdmission = previous;
+		}
 	}
 
 	private async performNativeConnectionEvidence(
@@ -4705,19 +4771,32 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						fact.phase !== "unknown")
 				)
 					protocolInvalid();
-				const association = this.connectionClient(conversationKey).associate({
-					requestDescriptor: request.connectionRequest,
-					evidence: request.connectionEvidence,
-					previousEvidence: attempt.connectionEvidence,
-					metadataOnly: true,
-					occurredAt: request.occurredAt,
-					...(recovery
-						? {
-								origin: recovery.original.connectionOrigin,
-								queryClient: recovery.queryClient,
-							}
-						: {}),
-				});
+				const previous = this.readOnlyQueryAdmission;
+				if (recovery) {
+					this.readOnlyQueryAdmission = {
+						conversationKey,
+						request: request.connectionRequest,
+						origin: recovery.original.connectionOrigin,
+						metadata: recovery.queryClient,
+					};
+				}
+				let association: RuntimeConnectionAssociationV1 | undefined;
+				try {
+					association = this.connectionClient(conversationKey).associate({
+						requestDescriptor: request.connectionRequest,
+						evidence: request.connectionEvidence,
+						previousEvidence: attempt.connectionEvidence,
+						metadataOnly: true,
+						occurredAt: request.occurredAt,
+						...(recovery
+							? {
+									origin: recovery.original.connectionOrigin,
+								}
+							: {}),
+					});
+				} finally {
+					this.readOnlyQueryAdmission = previous;
+				}
 				if (!association) protocolInvalid();
 				if (!isDeepStrictEqual(fact.connection, association))
 					this.appendOperationFact(
@@ -4881,13 +4960,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						protocolInvalid();
 					return { ...resolved, attempt: resolved.attempt, existing: true };
 				}
-				if (descriptor)
-					this.assertConnectionDispatch(
-						conversationKey,
-						descriptor,
-						session,
-						execution,
-					);
+				const connectionOrigin = descriptor
+					? this.assertConnectionDispatch(
+							conversationKey,
+							descriptor,
+							session,
+							execution,
+						)
+					: undefined;
 				this.assertJournalOpen(journal);
 				if (
 					journal.externalActionsBlocked ||
@@ -4971,13 +5051,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					attemptRef: randomUUID(),
 					intentRequestId: request.requestId,
 					intentFingerprint: fingerprint,
-					...(descriptor
+					...(descriptor && connectionOrigin
 						? {
 								connectionRequest: structuredClone(descriptor),
-								connectionOrigin:
-									this.connectionClient(conversationKey).snapshotOriginal(
-										descriptor,
-									),
+								connectionOrigin,
 							}
 						: {}),
 				};

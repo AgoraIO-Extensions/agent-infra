@@ -216,6 +216,9 @@ function options(overrides: Record<string, unknown> = {}) {
 		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 		startupTimeoutMs: 5_000,
 		shutdownTimeoutMs: 1_000,
+		// Exercise the optional barrier hook explicitly; production defaults to
+		// the current release manifest and does not require Wave 3 artifacts.
+		nativeBarrierRequired: true,
 		...overrides,
 	};
 }
@@ -426,6 +429,61 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			),
 		).toBe(false);
 		await bridge.close();
+	});
+
+	it("does not probe the optional barrier for the current official release by default", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const { nativeBarrierRequired: _barrier, ...configuration } = options();
+		const bridge = await CodexAppServerBridge.open(configuration);
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"app-server",
+		]);
+		expect(
+			captures.some((capture) =>
+				capture.args.includes("--agent-infra-native-barrier-info"),
+			),
+		).toBe(false);
+		await bridge.close();
+	});
+
+	it("requires the native barrier whenever a private callback lane is configured", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const callback = vi.fn();
+		const configuration = options({
+			nativeBarrierRequired: undefined,
+			nativeCallback: callback,
+		});
+		await expect(
+			CodexAppServerBridge.open(configuration),
+		).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_UNAVAILABLE",
+		});
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"--agent-infra-native-barrier-info",
+		]);
+		expect(captures.some((capture) => capture.args.includes("--stdio"))).toBe(
+			false,
+		);
+	});
+
+	it("rejects an explicit barrier bypass for a private callback lane", async () => {
+		await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(
+				options({
+					nativeBarrierRequired: false,
+					nativeCallback: vi.fn(),
+				}),
+			),
+		).rejects.toMatchObject({
+			code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
+		});
 	});
 
 	it.each(["sandbox-unsupported", "sandbox-hangs", "sandbox-missing"])(
@@ -948,7 +1006,13 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		const bridge = await CodexAppServerBridge.open(
 			options({
 				connectionProfile: profile,
+				authorizedConnectionService: {
+					serviceRef: profile.serviceRef,
+					issuer: profile.issuer,
+					resource: profile.resource,
+				},
 				nativeConnectionBootstrap: bootstrap,
+				nativeCallback: vi.fn(),
 			}),
 		);
 		try {
@@ -1481,6 +1545,11 @@ it.each(["recovery-premature", "recovery-done"])(
 			profile: {
 				serviceRef: "connection",
 				profileRef: fixture.request.profileRef,
+				issuer: "https://connection.example.test",
+				resource: "https://connection.example.test/mcp",
+			},
+			authorizedConnectionService: {
+				serviceRef: "connection",
 				issuer: "https://connection.example.test",
 				resource: "https://connection.example.test/mcp",
 			},

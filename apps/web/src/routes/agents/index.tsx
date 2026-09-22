@@ -1,35 +1,37 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { buttonVariants } from "@/components/ui/button";
+import { createFileRoute } from "@tanstack/react-router";
 
-import { useBrowserSession } from "../../features/agent-administration/use-browser-session.js";
-import { AgentDiscoveryScreen } from "../../features/agent-discovery/agent-discovery-screen.js";
+import {
+	AgentDiscoveryScreen,
+	agentDiscoveryQueryMaxLength,
+} from "../../features/agent-discovery/agent-discovery-screen.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
 
 export const Route = createFileRoute("/agents/")({
+	validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+		q:
+			typeof search.q === "string" &&
+			search.q.length <= agentDiscoveryQueryMaxLength
+				? search.q
+				: undefined,
+	}),
 	component: AgentsRoute,
 });
 
 function AgentsRoute() {
+	const { q } = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const query = useAgentDiscovery();
-	const session = useBrowserSession();
-	const canReviewApplications =
-		session.state.kind === "ready" &&
-		session.state.session.user.roles.includes("system_admin");
-
 	return (
-		<main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<div className="space-y-6">
-				{canReviewApplications ? (
-					<nav aria-label="Administrator navigation">
-						<Link
-							className={buttonVariants({ variant: "link", className: "px-0" })}
-							to="/admin/approvals"
-						>
-							Agent approvals
-						</Link>
-					</nav>
-				) : null}
 				<AgentDiscoveryScreen
+					query={q ?? ""}
+					onQueryChange={(nextQuery) => {
+						void navigate({
+							search: { q: nextQuery || undefined },
+							replace: true,
+						});
+					}}
 					state={
 						query.isPending
 							? { kind: "loading" }
