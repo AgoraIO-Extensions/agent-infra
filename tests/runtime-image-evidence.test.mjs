@@ -75,7 +75,7 @@ test("runtime image evidence requires the complete pinned native probe", () => {
 		);
 });
 
-async function derivedFixture(directory) {
+async function derivedFixture(directory, sourceTree = "1".repeat(40)) {
 	const binaries = {};
 	for (const name of [
 		"codex",
@@ -96,7 +96,7 @@ async function derivedFixture(directory) {
 		distribution: {
 			kind: "derived",
 			buildId: "synthetic-derived-build",
-			sourceTree: "3".repeat(40),
+			sourceTree,
 			buildInputSha256: sha256("synthetic build input"),
 		},
 		artifacts: {
@@ -252,8 +252,8 @@ test("image probe consumes its clean source context pin and inspected digest", a
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: This test replaces and restores its own Docker fixture, not a cached input.
 	const previousDocker = process.env.DOCKER_BIN;
 	try {
-		const { report } = await derivedFixture(directory);
 		const commitSha = "1".repeat(40);
+		const { report } = await derivedFixture(directory, commitSha);
 		const imageId = `sha256:${"a".repeat(64)}`;
 		const imageDigest = `sha256:${"b".repeat(64)}`;
 		const reportPath = join(directory, "report.json");

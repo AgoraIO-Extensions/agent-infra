@@ -142,13 +142,16 @@ try {
 			await normalizeRootOwnership(join(share, "release.json"));
 			await chmod(join(share, "release.json"), 0o444);
 			for (const [name, sha256] of Object.entries(release.legal)) {
+				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name))
+					throw new Error("Invalid Codex legal file name");
+				const legalPath = join(share, name);
 				await download(
 					`https://raw.githubusercontent.com/openai/codex/${release.provenance.upstreamCommit}/${name}`,
 					sha256,
-					join(share, name),
+					legalPath,
 				);
-				await normalizeRootOwnership(join(share, name));
-				await chmod(join(share, name), 0o444);
+				await normalizeRootOwnership(legalPath);
+				await chmod(legalPath, 0o444);
 			}
 			await chmod(share, 0o555);
 			await chmod(bin, 0o555);
@@ -170,7 +173,16 @@ try {
 		await rename(stagingRoot, installRoot);
 		committed = true;
 	} catch (error) {
-		if (previousRoot) await rename(previousRoot, installRoot).catch(() => {});
+		if (previousRoot) {
+			try {
+				await rename(previousRoot, installRoot);
+			} catch (restoreError) {
+				throw new AggregateError(
+					[error, restoreError],
+					"Failed to restore the previous Codex installation",
+				);
+			}
+		}
 		throw error;
 	}
 	if (previousRoot) await rm(previousRoot, { recursive: true, force: true });

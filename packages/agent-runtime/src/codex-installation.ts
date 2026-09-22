@@ -231,7 +231,14 @@ async function verifyDerived(pinned: Record<string, unknown>) {
 	}
 	const inputs = record(candidate.inputSha256);
 	requireValid(
-		candidate.sourceTree === distribution.sourceTree &&
+		sameKeys(inputs, [
+			"build-input-v1.json",
+			"codex-rs/Cargo.lock",
+			"callback-v2.schema.json",
+			"coverage-v1.json",
+			"callback-v2-corpus.json",
+		]) &&
+			candidate.sourceTree === distribution.sourceTree &&
 			candidate.upstream === release.provenance.upstreamCommit &&
 			candidate.target === derivedTarget &&
 			inputs["build-input-v1.json"] === distribution.buildInputSha256 &&

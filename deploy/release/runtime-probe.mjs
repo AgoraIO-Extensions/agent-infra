@@ -40,6 +40,7 @@ export function validateRuntimeProbe(
 	result,
 	expectedReleaseBytes = readFileSync(join(root, releasePath)),
 	expectedTarget,
+	expectedSourceTree,
 ) {
 	const invalid = () => {
 		throw new Error("Codex runtime image probe evidence is invalid");
@@ -119,6 +120,8 @@ export function validateRuntimeProbe(
 			!digestPattern.test(distribution.buildInputSha256) ||
 			artifacts.length !== 1 ||
 			!artifact?.target ||
+			!(expectedSourceTree === undefined ||
+				distribution.sourceTree === expectedSourceTree) ||
 			!digestPattern.test(artifact.archiveSha256) ||
 			!digestPattern.test(artifact.candidateManifestSha256) ||
 			!artifact.binaries ||
@@ -268,6 +271,7 @@ export async function probeRuntimeImage({
 			JSON.parse(run()),
 			expectedReleaseBytes,
 			expectedTarget,
+			commitSha,
 		);
 	} catch (error) {
 		if (error instanceof RuntimeProbeFailure) throw error;

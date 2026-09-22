@@ -1506,7 +1506,6 @@ export async function openCodexModelTransport(
 				recordOutcome,
 			);
 		} catch {
-			revokeTurn(turnKey);
 			const interrupted = controller.signal.aborted;
 			controller.abort();
 			// started() can fail while fetch is already running. Join its abort and

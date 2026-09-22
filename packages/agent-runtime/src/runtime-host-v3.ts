@@ -840,18 +840,28 @@ export class RuntimeHostV3 {
 			throw error;
 		}
 		const options = this.options;
+		let cleaned = false;
+		let onAbort: (() => void) | undefined;
+		const cleanup = () => {
+			if (cleaned) return;
+			cleaned = true;
+			clearTimeout(timer);
+			if (onAbort) bounded.removeEventListener("abort", onAbort);
+			controller.abort();
+		};
 		const validate = () => {
 			this.assertOpen();
 			this.validate(request, "events.persist", verification);
 		};
-		return (async function* () {
+		const generator = (async function* () {
 			const iterator = events[Symbol.asyncIterator]();
 			let rejectAborted: ((reason?: unknown) => void) | undefined;
 			const aborted = new Promise<never>((_resolve, reject) => {
 				rejectAborted = reject;
 			});
-			const onAbort = () => rejectAborted?.(bounded.reason);
-			bounded.addEventListener("abort", onAbort, { once: true });
+			const abortListener = () => rejectAborted?.(bounded.reason);
+			onAbort = abortListener;
+			bounded.addEventListener("abort", abortListener, { once: true });
 			try {
 				while (true) {
 					bounded.throwIfAborted();
@@ -881,12 +891,27 @@ export class RuntimeHostV3 {
 					yield parsed.data;
 				}
 			} finally {
-				clearTimeout(timer);
-				bounded.removeEventListener("abort", onAbort);
-				controller.abort();
+				cleanup();
 				// A Driver that ignores abort cannot hold an expired HTTP stream open.
 				void Promise.resolve(iterator.return?.()).catch(() => undefined);
 			}
 		})();
+		const iterator = generator[Symbol.asyncIterator]();
+		return {
+			[Symbol.asyncIterator]() {
+				return {
+					next: (...args: [] | [unknown]) => iterator.next(...(args as [])),
+					return: async (value?: unknown) => {
+						cleanup();
+						void value;
+						return iterator.return?.();
+					},
+					throw: async (reason?: unknown) => {
+						cleanup();
+						return iterator.throw?.(reason);
+					},
+				};
+			},
+		};
 	}
 }
