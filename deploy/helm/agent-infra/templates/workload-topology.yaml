@@ -65,6 +65,9 @@ spec:
           image: {{ include "agent-infra.image" .Values.images.runtimeHost }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           {{- if .Values.workloadTopology.legacyMigrationTrust.enabled }}
+          {{- if ne (int .Values.workloadTopology.legacyMigrationTrust.trustRootUid) 0 }}
+          {{- fail "workloadTopology.legacyMigrationTrust.trustRootUid must be 0" }}
+          {{- end }}
           env:
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE
               value: {{ printf "%s/manifest.json" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
@@ -73,7 +76,7 @@ spec:
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID
               value: {{ required "workloadTopology.legacyMigrationTrust.keyId is required" .Values.workloadTopology.legacyMigrationTrust.keyId | quote }}
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID
-              value: {{ .Values.workloadTopology.legacyMigrationTrust.trustRootUid | quote }}
+              value: "0"
           {{- end }}
           command: ["node", "-e"]
           args:
