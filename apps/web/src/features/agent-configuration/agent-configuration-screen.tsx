@@ -350,15 +350,11 @@ export function AgentConfigurationScreen({
 										<p className="text-muted-foreground text-sm">
 											自建应用使用部署提供的回调配置；智能机器人可在下方直接绑定。
 										</p>
-										{agent.configuration.channels.some(
-											(channel) => channel.kind === "wecom_bot",
-										) ? (
-											<WecomBotSetup
-												key={`${agent.agentId}:wecom_bot`}
-												agentId={agent.agentId}
-												onUnbind={onSave}
-											/>
-										) : null}
+										<WecomBotSetup
+											key={`${agent.agentId}:wecom_bot`}
+											agentId={agent.agentId}
+											onUnbind={onSave}
+										/>
 										{(["wecom_app"] as const).map((kind) => {
 											const label = "自建应用";
 											const change = draft.channels?.find(
