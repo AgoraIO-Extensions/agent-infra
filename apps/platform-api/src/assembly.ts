@@ -182,7 +182,11 @@ export function assemblePlatformApi(
 				identity.userId,
 				randomUUID(),
 			);
-			if (currentUser?.accountStatus !== "active") return { outcome: "denied" };
+			if (
+				currentUser?.accountStatus !== "active" ||
+				currentUser.authorizationRevision !== identity.authorizationRevision
+			)
+				return { outcome: "denied" };
 			let agentId = request.agentId;
 			if (request.conversationId !== undefined) {
 				const target = await conversationQuery.getAuthorizationTarget(
@@ -221,7 +225,7 @@ export function assemblePlatformApi(
 				const configuration = await configurationQuery.read({
 					agentId,
 					actorId: identity.userId,
-					organizationIds: identity.organizationIds,
+					organizationIds: currentUser.organizationIds,
 					isAdministrator: identity.roles.includes("system_admin"),
 					intent: "discover",
 				});
@@ -262,10 +266,25 @@ export function assemblePlatformApi(
 				identity: input.identity,
 				conversationAuthorization,
 				async readCurrentLimits(identity, scope, kind) {
+					let currentUser: Awaited<ReturnType<typeof resolveCurrentTaskUser>>;
+					try {
+						currentUser = await resolveCurrentTaskUser(
+							input.identity,
+							identity.userId,
+							randomUUID(),
+						);
+					} catch {
+						return null;
+					}
+					if (
+						currentUser?.accountStatus !== "active" ||
+						currentUser.authorizationRevision !== identity.authorizationRevision
+					)
+						return null;
 					const configuration = await configurationQuery.read({
 						agentId: scope.agentId,
 						actorId: identity.userId,
-						organizationIds: identity.organizationIds,
+						organizationIds: currentUser.organizationIds,
 						isAdministrator: identity.roles.includes("system_admin"),
 						intent: "discover",
 					});
@@ -274,7 +293,7 @@ export function assemblePlatformApi(
 						{
 							kind: "user",
 							userId: identity.userId,
-							organizationIds: identity.organizationIds,
+							organizationIds: currentUser.organizationIds,
 						},
 						scope.agentId,
 					);

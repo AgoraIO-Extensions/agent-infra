@@ -1,7 +1,11 @@
 import { once } from "node:events";
 import { createServer } from "node:net";
 
-import { PostgresAgentManagementQueryV1 } from "@agent-infra/platform-store";
+import {
+	PostgresAgentConfigurationQueryV1,
+	PostgresAgentManagementQueryV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -144,6 +148,104 @@ describe("Platform API production assembly", () => {
 				schemaVersion: 1,
 				user: { userId: "user-1" },
 			});
+		} finally {
+			await assembly.close();
+		}
+	});
+
+	it("binds conversation authorization to freshly resolved directory facts", async () => {
+		const identity = {
+			schemaVersion: 1 as const,
+			userId: "user-1",
+			displayName: "Ada",
+			accountStatus: "active" as const,
+			organizationIds: ["org-stale"],
+			roles: ["employee" as const],
+			authorizationRevision: "authorization-1",
+		};
+		const getAgent = vi
+			.spyOn(PostgresAgentManagementQueryV1.prototype, "getAgent")
+			.mockResolvedValue({
+				schemaVersion: 1,
+				agentId: "agent-1",
+				applicationId: "application-1",
+				name: "Agent",
+				description: "Agent fixture",
+				sourceReference: "source-1",
+				management: {
+					schemaVersion: 1,
+					applicationId: "application-1",
+					agentId: "agent-1",
+					applicantId: identity.userId,
+					status: "available",
+					revision: 1,
+					approvalRevision: 1,
+					decisionReason: null,
+					serviceAvailability: "ready",
+					desiredState: "running",
+					workloadRevision: 1,
+					fence: 1,
+					ownerIds: [identity.userId],
+					availability: [],
+					failureCode: null,
+				},
+			});
+		const readConfiguration = vi
+			.spyOn(PostgresAgentConfigurationQueryV1.prototype, "read")
+			.mockResolvedValue({ outcome: "found", configuration: {} as never });
+		vi.spyOn(
+			PostgresTaskAuthorizationStoreV1.prototype,
+			"captureUserBoundary",
+		).mockResolvedValue({
+			schemaVersion: 1,
+			principal: { kind: "user", id: identity.userId },
+			agentId: "agent-1",
+			channelId: "web",
+			identityRevision: identity.authorizationRevision,
+			agentAuthorizationRevision: "agent-authorization-1",
+			accessSources: [{ kind: "owner", userId: identity.userId }],
+		});
+		const assembly = assemblePlatformApi({
+			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: ["org-current"],
+					authorizationRevision: identity.authorizationRevision,
+				}),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+			},
+			admissions: {
+				authorizationAdmission: { authorize: async () => ({}) as never },
+				imageAdmission: { admitImage: async () => ({}) as never },
+				modelAdmission: { admitModels: async () => ({}) as never },
+				secretAdmission: { admitSecrets: async () => ({}) as never },
+				channelAdmission: { admitChannels: async () => ({}) as never },
+			},
+			allocateApplicationIds: async () => ({}) as never,
+			prepareApplicationSecrets: async () => ({}) as never,
+			prepareConfigurationSecrets: async () => ({}) as never,
+			presentAgent: async () =>
+				({ capabilities: { supplementaryInstruction: true } }) as never,
+		});
+		try {
+			await expect(
+				assembly.dependencies.conversation.authorization.authorize(identity, {
+					schemaVersion: 1,
+					operation: "message",
+					agentId: "agent-1",
+				}),
+			).resolves.toMatchObject({ outcome: "allowed" });
+			expect(getAgent).toHaveBeenCalledWith(
+				expect.objectContaining({ organizationIds: ["org-current"] }),
+				"agent-1",
+			);
+			expect(readConfiguration).toHaveBeenCalledWith(
+				expect.objectContaining({ organizationIds: ["org-current"] }),
+			);
 		} finally {
 			await assembly.close();
 		}
