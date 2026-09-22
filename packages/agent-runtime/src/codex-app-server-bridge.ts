@@ -355,6 +355,7 @@ export async function runCodexConnectionRecovery(options: {
 		let failed = false;
 		let terminal = false;
 		let issued = 0;
+		let recoveryProcessNonce: string | undefined;
 		// Issuing the last verification is not evidence that it was persisted.
 		// Require the final pull, which the Driver accepts only after its evidence
 		// handler has durably acknowledged the preceding verification.
@@ -374,7 +375,14 @@ export async function runCodexConnectionRecovery(options: {
 				abort();
 			},
 			async (request, signal) => {
-				if (terminal) throw unavailable();
+				if (
+					terminal ||
+					request.profileRef !== profile.profileRef ||
+					(recoveryProcessNonce !== undefined &&
+						request.processNonce !== recoveryProcessNonce)
+				)
+					throw unavailable();
+				recoveryProcessNonce ??= request.processNonce;
 				const response = await options.recovery(request, signal);
 				if (response.decision === "verify") {
 					if (issued >= maximumRecoveryExchanges) throw unavailable();
