@@ -36,6 +36,11 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
 Skill 调用轨迹；受保护路径、CI、Review thread、CODEOWNER Approve、人工验证和分支保护继续从
 外层校验交付结果与安全边界。
 
+需要从 Roadmap 或 Map 选择一组可执行 frontier 时，可显式调用仓库级
+[`gen-goal-with-roadmap`](../../.agents/skills/gen-goal-with-roadmap/SKILL.md)。该 Skill 只读发现并冻结
+snapshot，生成一个 Coordinator Goal；它不创建 Goal、不修改 Issue/Project、不启动执行，也不绑定个人通知流程。
+生成的 snapshot 可交给本地协调执行入口继续处理，GitHub Issue、依赖、PR、CI 和 Project 仍是事实源。
+
 ## 3. 权威依据
 
 开发工作按以下顺序确定依据：
