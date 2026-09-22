@@ -150,8 +150,9 @@ DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
 `HCIAuthToken` Cookie 建立个人 Credential，并通过固定不存在的 job status READ 探针证明内嵌
-access token 已进入 DataLego 业务鉴权，再使用 HCI 签发的 `user.email` claim 形成账号身份并加密保存完整
-session token。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析 Cookie JWT 中的个人
+access token 已进入 DataLego 业务鉴权，再使用 Connection 已服务端验证的 Principal email 形成账号
+身份，并与完整 session token 一起加密保存。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析
+Cookie JWT 中的个人
 `access_token`，通过 `accessToken` Header 发送；原始 session、内嵌 token 和 SQL 不得进入日志、错误
 或身份响应。查询状态是 READ，提交与取消任务是 WRITE，调用方不能提交 URL、路径或 Header。
 仅当 DataLego 返回精确的 access-token-expired 401 时，Adapter 才携带现有 `HCIAuthToken` 访问固定

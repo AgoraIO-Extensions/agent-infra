@@ -88,11 +88,12 @@ export class DataLegoAdapter
 		this.fetcher = fetcher;
 	}
 
-	async validateCredential(sessionToken: string) {
-		const identity = await this.requestIdentity(sessionToken);
+	async validateCredential(encodedCredential: string) {
+		const credential = parseCredential(encodedCredential);
+		const identity = await this.requestIdentity(credential);
 		return {
-			accessToken: sessionToken,
-			displayName: identity.name || identity.email,
+			accessToken: encodedCredential,
+			displayName: identity.email,
 			externalAccount: identity.email,
 			grantedScopes: [credentialScope],
 			providerId,
@@ -105,44 +106,52 @@ export class DataLegoAdapter
 		credential: CredentialForExecution;
 		input: Record<string, unknown>;
 	}) {
-		const sessionToken = input.credential.accessToken;
+		const credential = parseCredential(input.credential.accessToken);
 		switch (input.action) {
 			case "datalego.get_current_user":
-				return this.requestIdentity(sessionToken);
+				return this.requestIdentity(credential);
 			case "datalego.submit_query": {
-				const auth = parseSession(sessionToken);
-				return this.requestWithRefresh(sessionToken, (accessToken) => ({
-					init: {
-						body: JSON.stringify({
-							download: Boolean(input.input.download),
-							engine: enumValue(input.input, "engine", ["doris", "hive"]),
-							panelId: 0,
-							queue: optionalString(input.input, "queue") ?? "share",
-							sql: boundedString(input.input, "sql", 200_000),
-						}),
-						headers: { "content-type": "application/json", accessToken },
-						method: "POST",
-					},
-					path: `/api/v1/datainsight/job/trigger?creator=${encodeURIComponent(auth.email)}`,
-				}));
+				return this.requestWithRefresh(
+					credential.sessionToken,
+					(accessToken) => ({
+						init: {
+							body: JSON.stringify({
+								download: Boolean(input.input.download),
+								engine: enumValue(input.input, "engine", ["doris", "hive"]),
+								panelId: 0,
+								queue: optionalString(input.input, "queue") ?? "share",
+								sql: boundedString(input.input, "sql", 200_000),
+							}),
+							headers: { "content-type": "application/json", accessToken },
+							method: "POST",
+						},
+						path: `/api/v1/datainsight/job/trigger?creator=${encodeURIComponent(credential.email)}`,
+					}),
+				);
 			}
 			case "datalego.get_query_status":
-				return this.requestWithRefresh(sessionToken, (accessToken) => ({
-					init: { headers: { accessToken }, method: "GET" },
-					path: `/api/v1/datainsight/jobs/${encodeURIComponent(jobId(input.input))}/status`,
-				}));
+				return this.requestWithRefresh(
+					credential.sessionToken,
+					(accessToken) => ({
+						init: { headers: { accessToken }, method: "GET" },
+						path: `/api/v1/datainsight/jobs/${encodeURIComponent(jobId(input.input))}/status`,
+					}),
+				);
 			case "datalego.cancel_query":
-				return this.requestWithRefresh(sessionToken, (accessToken) => ({
-					init: { headers: { accessToken }, method: "PUT" },
-					path: `/api/v1/datainsight/jobs/${encodeURIComponent(jobId(input.input))}/cancel`,
-				}));
+				return this.requestWithRefresh(
+					credential.sessionToken,
+					(accessToken) => ({
+						init: { headers: { accessToken }, method: "PUT" },
+						path: `/api/v1/datainsight/jobs/${encodeURIComponent(jobId(input.input))}/cancel`,
+					}),
+				);
 			default:
 				throw providerError(`Unsupported DataLego action: ${input.action}`);
 		}
 	}
 
-	private async requestIdentity(sessionToken: string) {
-		let activeSession = sessionToken;
+	private async requestIdentity(credential: DataLegoCredential) {
+		let activeSession = credential.sessionToken;
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			const identity = parseSession(activeSession);
 			const response = await this.send(
@@ -161,7 +170,7 @@ export class DataLegoAdapter
 				response.status === 400 &&
 				text.toLowerCase().includes("record not found")
 			) {
-				return { email: identity.email, name: identity.name };
+				return { email: credential.email };
 			}
 			if (response.status === 401 || response.status === 403) {
 				throw invalidCredential("DataLego personal session was rejected");
@@ -246,6 +255,22 @@ export class DataLegoAdapter
 	}
 }
 
+type DataLegoCredential = { email: string; sessionToken: string };
+
+function parseCredential(encoded: string): DataLegoCredential {
+	try {
+		const value = JSON.parse(encoded) as Record<string, unknown>;
+		const email = typeof value.email === "string" ? value.email.trim() : "";
+		const sessionToken =
+			typeof value.sessionToken === "string" ? value.sessionToken : "";
+		if (!email || !sessionToken) throw new Error();
+		parseSession(sessionToken);
+		return { email, sessionToken };
+	} catch {
+		throw invalidCredential("DataLego credential is invalid");
+	}
+}
+
 function parseSession(token: string) {
 	try {
 		const payload = token.split(".")[1];
@@ -255,19 +280,8 @@ function parseSession(token: string) {
 		) as Record<string, unknown>;
 		const accessToken =
 			typeof value.access_token === "string" ? value.access_token : "";
-		const user =
-			value.user && typeof value.user === "object"
-				? (value.user as Record<string, unknown>)
-				: {};
-		const email = typeof user.email === "string" ? user.email : "";
-		const name =
-			typeof user.name === "string"
-				? user.name
-				: typeof user.displayName === "string"
-					? user.displayName
-					: "";
-		if (!accessToken || !email) throw new Error();
-		return { accessToken, email, name };
+		if (!accessToken) throw new Error();
+		return { accessToken };
 	} catch {
 		throw invalidCredential("DataLego HCI session is invalid");
 	}

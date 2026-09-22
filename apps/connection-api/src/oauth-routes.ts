@@ -977,7 +977,10 @@ export function createConnectionOAuthApp(
 						}
 						const credential =
 							body.providerId === "datalego"
-								? (datalegoSession as string)
+								? JSON.stringify({
+										email: session.account.email,
+										sessionToken: datalegoSession,
+									})
 								: "accessToken" in body
 									? body.accessToken
 									: "apiToken" in body
