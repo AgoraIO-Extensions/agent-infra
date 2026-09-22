@@ -184,11 +184,15 @@ export function AgentLifecycleControls({
 		useState<AgentLifecycleCommand | null>(null);
 	const observedResult = commandResult ? JSON.stringify(commandResult) : null;
 	const lastObservedResult = useRef(observedResult);
+	const lastCommandError = useRef(commandError);
 	useEffect(() => {
 		const resultAdvanced = observedResult !== lastObservedResult.current;
+		const errorAdvanced =
+			commandError !== null && commandError !== lastCommandError.current;
 		lastObservedResult.current = observedResult;
+		lastCommandError.current = commandError;
 		if (
-			commandError !== null ||
+			errorAdvanced ||
 			(resultAdvanced && commandResult?.agentId === agent.agentId)
 		) {
 			setLocalPendingCommand(null);

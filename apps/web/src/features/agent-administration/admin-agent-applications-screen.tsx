@@ -88,6 +88,7 @@ function ApplicationReview({
 	const [reason, setReason] = useState("");
 	const [reasonError, setReasonError] = useState(false);
 	const [localDecisionPending, setLocalDecisionPending] = useState(false);
+	const lastDecisionError = useRef(decisionError);
 	const reasonId = useId();
 	const reasonInput = useRef<HTMLTextAreaElement>(null);
 	const deciding = pendingDecision !== undefined;
@@ -112,7 +113,10 @@ function ApplicationReview({
 		if (resolved && open) close();
 	}, [close, open, resolved]);
 	useEffect(() => {
-		if (decisionError) setLocalDecisionPending(false);
+		const errorAdvanced =
+			decisionError !== null && decisionError !== lastDecisionError.current;
+		lastDecisionError.current = decisionError;
+		if (errorAdvanced) setLocalDecisionPending(false);
 	}, [decisionError]);
 	return (
 		<Dialog
