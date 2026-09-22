@@ -2383,6 +2383,20 @@ describe("assembled Workload Runtime contracts", () => {
 			false,
 			false,
 		]);
+
+	});
+	it("allows ordinary NODE_ENV configuration", async () => {
+		const f = fixture(
+			{},
+			{
+				configuration: configurationFixture({
+					environment: [{ name: "NODE_ENV", value: "production" }],
+				}),
+			},
+		);
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.resources.size).toBeGreaterThan(0);
 	});
 	it("uses RuntimeHost Fake HTTP capabilities and persists only the declared intersection across Worker restarts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "workload-runtime-"));

@@ -38,7 +38,7 @@ export async function startMinioFileFixtureV1() {
 		const endpoint = `http://127.0.0.1:${stdout.trim().split(":").at(-1)}`;
 		for (let attempt = 0; attempt < 60; attempt++) {
 			if (
-				await fetch(`${endpoint}/minio/health/live`)
+				await fetch(`${endpoint}/minio/health/ready`)
 					.then((r) => r.ok)
 					.catch(() => false)
 			)
@@ -52,13 +52,24 @@ export async function startMinioFileFixtureV1() {
 			credentials,
 			maxAttempts: 1,
 		});
-		await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
-		await client.send(
-			new PutBucketVersioningCommand({
-				Bucket: "file-contract",
-				VersioningConfiguration: { Status: "Enabled" },
-			}),
-		);
+		let initialized = false;
+		let lastError: unknown;
+		for (let attempt = 0; attempt < 60 && !initialized; attempt++) {
+			try {
+				await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
+				await client.send(
+					new PutBucketVersioningCommand({
+						Bucket: "file-contract",
+						VersioningConfiguration: { Status: "Enabled" },
+					}),
+				);
+				initialized = true;
+			} catch (error) {
+				lastError = error;
+				await new Promise((resolve) => setTimeout(resolve, 250));
+			}
+		}
+		if (!initialized) throw lastError;
 		const storage = createS3ObjectStorageV1({
 			endpoint,
 			region: "us-east-1",
