@@ -2,37 +2,43 @@
 
 ## 状态
 
-已完成独立架构评审，用于 [#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508)
-的实现；补丁、产物与合入遵循仓库当前提交的审查门禁。
+执行前持久意图、当前授权和可靠结果确认的要求继续有效。M1 使用固定官方 upstream release
+与 Native Driver/Adapter；本 ADR 原先选择的本仓 vendor patch 和派生构建交付方式由
+[工程 Spec §10.11](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
+替代，不构成继续维护第三方源码补丁或 vendor builder 的批准。
 
 ## 背景
 
-PRD 要求实际外部操作前持久保存意图，并区分真实结果与 unknown。固定 Codex 的
-PreToolUse 在命令失败时可能继续工具；一次 hook 还不能覆盖原生内部 retry、非空 stdin
-及后台完成。普通审批和单向开始通知无法承担全部实际尝试的业务授权与持久确认。
+PRD 要求实际外部操作前持久保存意图，并区分真实结果与 unknown。普通审批和单向开始通知
+不能证明全部原生尝试已在执行前通过当前授权；一次 hook 也不能证明覆盖内部 retry、非空
+stdin 及后台完成。固定官方 release 的协议可用不等于存在私有 callback 或完整的屏障能力。
 
 ## 决策
 
-按工程 Spec 的
-[Codex 上游原生补丁与执行屏障](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
-采用固定上游源码的受控 vendor patch，在原生真实执行边界增加必须等待的 Driver permit
-和结果持久确认。原工具实现、推理循环与文件隔离继续由同一 native 进程承担，TypeScript
-Driver 保存意图/结果并消费既有 Host 授权；协议与恢复由
-[Runtime HLD 8.5.1](../architecture/HLD-agent-runtime-M1.md#851-codex-原生执行屏障)定义。
+标准路径固定官方发行物的 provenance、协议/Schema 和精确产物，由 TypeScript Native
+Driver/Adapter 消费上游接口，保留原推理循环、工具与文件隔离。普通官方路径不探测或宣称
+不存在的私有 barrier；缺少可靠执行前控制边界的操作不得准入，也不能宣称通过相应 conformance。
+
+明确启用私有 FD callback、Connection bootstrap/recovery 或等价 native lane 时，必须先验证
+该 target 的 provenance、协议/Schema、工具覆盖和不可由模型/Owner 关闭的 native barrier。
+每次实际尝试先等待 Driver 持久 intent 和当前 Host 授权，结果或 unknown 可靠保存后才交付；
+缺失或无法验证时 fail closed。状态、恢复和测试要求以
+[Runtime HLD §8.5.1](../architecture/HLD-agent-runtime-M1.md#851-codex-原生执行屏障) 与
+[§11.2](../architecture/HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收) 为准。
 
 ## 取舍
 
-保留原生能力与原 Session 的代价是维护小范围上游 Rust 补丁、派生 artifact 的供应链，以及
-每次上游更新的路径覆盖和兼容验证。原生构建不能继承官方 binary 的签名或验收；增加的
-持久确认延迟由性能基线测量。候选失败仍自动以旧 Digest 新建期望修订并实际调谐、验证；
-只有旧修订实际恢复也失败后才关闭路由并保留原数据，不能预先跳过恢复尝试，也不能以
-放宽业务屏障使缺少该能力的旧 binary 通过准入。
+官方 release 路径免除本仓维护第三方原生源码与构建链的负担，但上游能力缺口必须如实记录。
+普通 approval、许可缓存、非强制 hook 或移除 built-ins 不能代替所需执行边界，也不能缩减
+PRD 的正向能力和真实事实要求。官方路径与私有 lane 的验证证据不能互相转移。
 
-仅修 hook 失败处理仍漏实际尝试；更改 namespaced dynamic tool 会改变 catalog、交互和旧
-Session 语义；移除 built-ins 不满足现有正向 conformance，因此都不作为本方案的替代。
+候选失败仍自动以旧 Digest 新建期望修订并实际调谐、验证；只有旧修订实际恢复也失败后才
+关闭路由并保留原数据。原执行要求的屏障、状态兼容或隔离不满足时，禁止降级或重新发起
+副作用；已持久终态仍可按原授权读取。
 
 ## 维护与退出
 
-Codex Driver 与模板的现有维护归属同时负责 patch、构建 provenance、coverage、原生回归及
-安全更新。正式上游出现等价的强制每 attempt 接口后，以独立升级评审和相同故障矩阵验证
-替代，移除已无必要的 patch；不长期复制完整上游产品或建立通用 Fork 平台。
+缺少上游接缝时优先提交 upstream contribution。任何 derived/private artifact 的引入必须先
+完成独立架构、安全、供应链和维护评审，明确来源、产物证明、维护责任与退出路径；本 ADR
+不授权恢复第三方源码补丁、vendor builder 或下载编译流程。正式上游具备等价能力后，按
+同一故障矩阵验证并更新 pin，不长期复制上游产品或建立通用 Fork 平台。
