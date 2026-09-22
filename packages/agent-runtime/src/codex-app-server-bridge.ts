@@ -805,6 +805,28 @@ function kill(
 	}
 }
 
+function killProbeProcess(
+	process: ChildProcess,
+	signal: "SIGTERM" | "SIGKILL" = "SIGTERM",
+) {
+	const pid = process.pid;
+	if (
+		pid &&
+		pid > 1 &&
+		process.exitCode === null &&
+		process.signalCode === null
+	) {
+		try {
+			killProcess(-pid, signal);
+			return;
+		} catch {
+			// Fall back to the direct child when the group has already exited or
+			// process-group signalling is unavailable on the current platform.
+		}
+	}
+	kill(process, signal);
+}
+
 async function waitForResult<T>(promise: Promise<T>, timeoutMs: number) {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -820,13 +842,13 @@ async function waitForResult<T>(promise: Promise<T>, timeoutMs: number) {
 }
 
 async function reapChild(
-	process: Pick<ChildProcess, "kill">,
+	process: ChildProcess,
 	closed: Promise<true>,
 	timeoutMs: number,
 ) {
-	kill(process);
+	killProbeProcess(process);
 	if (await waitForResult(closed, timeoutMs)) return;
-	kill(process, "SIGKILL");
+	killProbeProcess(process, "SIGKILL");
 	await waitForResult(closed, timeoutMs);
 }
 
@@ -1128,6 +1150,7 @@ async function runProbeCommand(
 	try {
 		process = spawn(executable, args, {
 			stdio: ["ignore", captureStdout ? "pipe" : "ignore", "ignore"],
+			detached: true,
 			cwd: launchPolicy.directory,
 			env: launchPolicy.environment,
 		});
@@ -1138,12 +1161,7 @@ async function runProbeCommand(
 		process.once("close", () => resolve(true));
 	});
 	const abort = () => {
-		try {
-			if (process.exitCode === null && process.signalCode === null)
-				process.kill("SIGKILL");
-		} catch {
-			// The probe may have exited concurrently with cancellation.
-		}
+		killProbeProcess(process, "SIGKILL");
 	};
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
