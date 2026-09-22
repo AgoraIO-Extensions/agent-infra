@@ -95,14 +95,16 @@ if (isDerivedRelease) {
 		await mkdir(share, { recursive: true });
 		await copyFile(join(directory, artifact.name), join(bin, "codex"));
 		await chmod(join(bin, "codex"), 0o755);
-		await copyFile(releasePath, join(share, "release.json"));
+	await copyFile(releasePath, join(share, "release.json"));
+	await chmod(join(share, "release.json"), 0o444);
 		await chmod(join(share, "release.json"), 0o444);
 		for (const [name, sha256] of Object.entries(release.legal)) {
 			await download(
 				`https://raw.githubusercontent.com/openai/codex/${release.provenance.upstreamCommit}/${name}`,
 				sha256,
-				join(share, name),
-			);
+			join(share, name),
+		);
+		await chmod(join(share, name), 0o444);
 			await chmod(join(share, name), 0o444);
 		}
 	} finally {
