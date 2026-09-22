@@ -2525,7 +2525,7 @@ it("retains access for an admitted native Turn while capacity fills", async () =
 	expect(value.modelAccessFor(first)).toEqual(firstAccess);
 });
 
-it("releases a bound thread after its cancelled turn", async () => {
+it("retains a bound native thread while idle access capacity fills", async () => {
 	const value = await openProductionModelTransport(
 		[
 			{
@@ -2540,7 +2540,7 @@ it("releases a bound thread after its cancelled turn", async () => {
 	close.push(value.close);
 	const first = "a".repeat(64);
 	const threadId = "thread-cancelled";
-	value.modelAccessFor(first);
+	const firstAccess = value.modelAccessFor(first);
 	value.bindThread(first, threadId);
 	await value.cancelTurn({
 		conversationKey: first,
@@ -2550,4 +2550,5 @@ it("releases a bound thread after its cancelled turn", async () => {
 	for (let index = 1; index < 1024; index++)
 		value.modelAccessFor(index.toString(16).padStart(64, "0"));
 	expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
+	expect(value.modelAccessFor(first)).toEqual(firstAccess);
 });
