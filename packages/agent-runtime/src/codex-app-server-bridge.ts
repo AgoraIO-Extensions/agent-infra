@@ -678,7 +678,8 @@ function validateOptions(input: unknown): ValidatedOptions {
 		(connectionProfile === undefined) !==
 			(input.nativeConnectionBootstrap === undefined) ||
 		(input.nativeConnectionBootstrap !== undefined &&
-			typeof input.nativeConnectionBootstrap !== "function")
+			typeof input.nativeConnectionBootstrap !== "function") ||
+		(connectionProfile !== undefined && input.nativeCallback === undefined)
 	)
 		configurationInvalid();
 	if (

@@ -1012,6 +1012,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 					resource: profile.resource,
 				},
 				nativeConnectionBootstrap: bootstrap,
+				nativeCallback: vi.fn(),
 			}),
 		);
 		try {
