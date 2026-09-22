@@ -2629,6 +2629,49 @@ describe("Connection API", () => {
 		});
 	});
 
+	it.each(["github.com", "https://github.com/AgoraIO-Extensions/Electron-SDK"])(
+		"resolves a GitHub service hostname: %s",
+		async (serviceValue) => {
+			const githubAction: ActionDefinition = {
+				description: "Get workflow run",
+				effect: "READ",
+				id: "github.get_workflow_run@v9",
+				inputSchema: { required: ["owner", "repo", "runId"] },
+				name: "github.get_workflow_run",
+				requiredScopes: ["repo"],
+			};
+			const app = createTestApp({
+				actions: [githubAction],
+				providerServiceHostAliases: { "github.com": "github" },
+				supportedProviders: ["github"],
+			});
+			const response = await app.request("/mcp", {
+				body: JSON.stringify({
+					id: 1,
+					jsonrpc: "2.0",
+					method: "tools/call",
+					params: {
+						arguments: { service: serviceValue },
+						name: "search_actions",
+					},
+				}),
+				headers: {
+					authorization: "Bearer test",
+					"content-type": "application/json",
+				},
+				method: "POST",
+			});
+
+			expect(await response.json()).toMatchObject({
+				result: {
+					structuredContent: {
+						actions: [{ actionId: "github.get_workflow_run" }],
+					},
+				},
+			});
+		},
+	);
+
 	it("keeps a routed but unavailable Jenkins provider fail closed", async () => {
 		const app = createTestApp({
 			providerServiceHostAliases: {
