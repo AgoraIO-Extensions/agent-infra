@@ -23,8 +23,8 @@ Connection 相关工作还必须遵守 [Connection M1 HLD](docs/architecture/HLD
 
 ### Issue tracker
 
-Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues。参见
-[Issue Tracker](docs/agents/issue-tracker.md)。
+Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues；规划优先级使用
+`priority:P0`、`priority:P1`、`priority:P2`。参见 [Issue Tracker](docs/agents/issue-tracker.md)。
 
 ### Triage labels
 
