@@ -77,6 +77,5 @@ export type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
-export * from "./workload-reconciliation.js";
-
 export * from "./task-authorization.js";
+export * from "./workload-reconciliation.js";

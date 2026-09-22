@@ -74,10 +74,7 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 function principal(input: unknown): TaskPrincipalV1 {
 	const value = object(input);
 	exact(value, ["kind", "id"]);
-	if (
-		value.kind !== "user" ||
-		!text(value.id)
-	) {
+	if (value.kind !== "user" || !text(value.id)) {
 		throw new TypeError("Task principal is invalid");
 	}
 	return { kind: value.kind, id: value.id };
