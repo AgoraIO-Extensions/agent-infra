@@ -73,20 +73,13 @@ describe("task authorization boundary", () => {
 		expect(boundary?.identityRevision).toBe("directory-7");
 	});
 
-	it("does not conflate an application and user with the same ID", () => {
-		expect(
-			capture({ principal: { kind: "application", id: user.userId } }),
-		).toBeNull();
-		expect(
-			isTaskAuthorizationCurrentV1({
-				boundary: {
-					...requiredBoundary(),
-					principal: { kind: "application", id: user.userId },
-				},
-				user,
-				agent,
+	it("rejects application principals until the #481 grant slice supplies them", () => {
+		expect(() =>
+			parseTaskAuthorizationBoundaryV1({
+				...requiredBoundary(),
+				principal: { kind: "application", id: user.userId },
 			}),
-		).toBe(false);
+		).toThrow("Task principal is invalid");
 	});
 
 	it.each([
@@ -233,6 +226,9 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary,
 				execution: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 2,
 					status,
 					actorId: "user-a",
 					agentId: "agent-a",
@@ -243,6 +239,11 @@ describe("system control transaction plan", () => {
 			expect(plan).toEqual({
 				schemaVersion: 1,
 				workerId: "worker",
+				binding: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 2,
+				},
 				revokeAuthorization: true,
 				ensureStop,
 				audit: {
@@ -261,6 +262,9 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary: requiredBoundary(),
 				execution: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 2,
 					status: "processing",
 					actorId: "user-a",
 					agentId: "agent-a",
@@ -282,6 +286,9 @@ describe("system control transaction plan", () => {
 				workerId: "worker",
 				boundary: requiredBoundary(),
 				execution: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 2,
 					status: "unknown",
 					actorId: "owner-a",
 					agentId: "agent-a",
