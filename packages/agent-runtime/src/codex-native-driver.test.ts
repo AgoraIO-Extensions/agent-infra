@@ -1744,6 +1744,71 @@ describe("Codex native Driver callbacks with production Conversation binding", (
 // These callbacks represent trusted native source receipts on the original FD.
 // They exercise Driver ownership and aggregation, not real Codex queue delivery.
 describe("Codex native source lifecycle", () => {
+	it("replays a denied source bind by receipt without reauthorizing after reopen", async () => {
+		const authorize = vi.fn<Authorize>(async (action) => {
+			if (action.purpose === "source-bind")
+				throw new RuntimeHostError(
+					"RUNTIME_GRANT_INVALID",
+					"synthetic bind denial",
+					403,
+				);
+		});
+		const env = await setup(authorize);
+		const execution = await env.start();
+		const parent = await permit(
+			execution.bridge,
+			intent(execution.bridge, { toolName: "spawn_agent" }),
+		);
+		await execution.bridge.callback(started(parent.request, parent.response));
+		const reserve = reserveSource(parent);
+		await sourceAck(execution.bridge, reserve);
+		const bind = bindSource(reserve);
+		const denied = await execution.bridge.callback(bind);
+		expect(denied).toMatchObject({
+			decision: "deny",
+			phase: "source-bind",
+			reason: "authorization_denied",
+		});
+		expect(
+			authorize.mock.calls.filter(
+				([action]) => action.purpose === "source-bind",
+			),
+		).toHaveLength(1);
+		await expect(execution.bridge.callback(bind)).resolves.toEqual(denied);
+		expect(
+			authorize.mock.calls.filter(
+				([action]) => action.purpose === "source-bind",
+			),
+		).toHaveLength(1);
+
+		await env.driver.close();
+		const reopened = await env.reopen();
+		await reopened.getStatus(
+			execution.nativeSessionRef,
+			execution.command.executionId,
+		);
+		const reopenedBridge = env.bridgeFor(execution.command);
+		expect(reopenedBridge).not.toBe(execution.bridge);
+		await expect(reopenedBridge.callback(bind)).resolves.toEqual(denied);
+		expect(
+			authorize.mock.calls.filter(
+				([action]) => action.purpose === "source-bind",
+			),
+		).toHaveLength(1);
+		await expect(
+			reopenedBridge.callback({ ...bind, requestId: randomUUID() }),
+		).rejects.toThrow();
+		await expect(
+			reopenedBridge.callback({ ...bind, occurredAt: bind.occurredAt + 1 }),
+		).rejects.toThrow();
+		expect(
+			authorize.mock.calls.filter(
+				([action]) => action.purpose === "source-bind",
+			),
+		).toHaveLength(1);
+		await reopened.close();
+	});
+
 	it("rejects a recovered gate-rejected receipt whose source Turn is not its original submission", async () => {
 		const env = await setup();
 		const execution = await env.start();

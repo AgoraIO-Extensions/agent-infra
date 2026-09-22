@@ -255,6 +255,7 @@ interface CodexNativeSourceRecord {
 	bindPending?: CodexNativeSourceReceipt;
 	bind?: CodexNativeSourceReceipt;
 	bindDenied?: "authorization_denied" | "authorization_unavailable";
+	bindDeniedReceipt?: CodexNativeSourceReceipt;
 	source?: CodexNativeSourceV1;
 	delivery?: "started" | "steered";
 	notStarted?: CodexNativeSourceReceipt;
@@ -726,6 +727,7 @@ function isNativeSourceRecord(
 			"bindPending",
 			"bind",
 			"bindDenied",
+			"bindDeniedReceipt",
 			"source",
 			"delivery",
 			"notStarted",
@@ -742,6 +744,7 @@ function isNativeSourceRecord(
 		"reserve",
 		"bindPending",
 		"bind",
+		"bindDeniedReceipt",
 		"notStarted",
 		"terminal",
 	] as const) {
@@ -759,6 +762,8 @@ function isNativeSourceRecord(
 		)
 			return false;
 	}
+	if (value.bindDeniedReceipt !== undefined && value.bindDenied === undefined)
+		return false;
 	for (const field of ["reserveDenied", "bindDenied"])
 		if (
 			value[field] !== undefined &&
@@ -792,7 +797,11 @@ function isNativeSourceRecord(
 				value.reservation.submissionId
 		)
 			return false;
-		if (value.delivery === "steered" && value.bindDenied) return false;
+		if (
+			value.delivery === "steered" &&
+			(value.bindDenied || value.bindDeniedReceipt)
+		)
+			return false;
 	} else if (value.bindPending !== undefined) {
 		if (
 			!value.reserveAuthorized ||
@@ -800,6 +809,7 @@ function isNativeSourceRecord(
 			(value.delivery !== "started" && value.delivery !== "steered") ||
 			value.reserveDenied ||
 			value.bindDenied ||
+			value.bindDeniedReceipt ||
 			(value.delivery === "started" &&
 				(value.source as CodexNativeSourceV1).turnId !==
 					value.reservation.submissionId)
@@ -5366,6 +5376,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				protocolInvalid();
 		};
+		const denyBind = (
+			source: CodexNativeSourceRecord,
+			reason: "authorization_denied" | "authorization_unavailable",
+		) => {
+			source.bindDenied = reason;
+			source.bindDeniedReceipt = receipt;
+		};
 		const checkUniqueRequest = (state: CodexDriverState) => {
 			for (const session of Object.values(state.sessions)) {
 				if (codexConversationKey(session) !== conversationKey) continue;
@@ -5384,6 +5401,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							source.reserve,
 							source.bindPending,
 							source.bind,
+							source.bindDeniedReceipt,
 							source.notStarted,
 							source.terminal,
 						])
@@ -5493,7 +5511,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			request.phase === "source-reserve"
 				? source?.reserve
 				: request.phase === "source-bind"
-					? (source?.bind ?? source?.bindPending)
+					? (source?.bind ?? source?.bindPending ?? source?.bindDeniedReceipt)
 					: request.phase === "source-not-started"
 						? source?.notStarted
 						: source?.terminal;
@@ -5502,7 +5520,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? source?.reserveAuthorized === true ||
 					source?.reserveDenied !== undefined
 				: request.phase === "source-bind"
-					? source?.bind !== undefined || source?.bindDenied !== undefined
+					? source?.bind !== undefined ||
+						source?.bindDenied !== undefined ||
+						source?.bindDeniedReceipt !== undefined
 					: true;
 
 		signal.throwIfAborted();
@@ -5511,6 +5531,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (this.closed) unavailable();
 			const resolved = locate(state);
 			const { source, journal, parent } = resolved;
+			if (
+				request.phase === "source-bind" &&
+				source?.bindDenied !== undefined &&
+				source.bindDeniedReceipt === undefined
+			)
+				unavailable();
 			const prior = priorReceipt(source);
 			if (prior) {
 				checkReceipt(prior);
@@ -5680,7 +5706,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				source.delivery = request.delivery;
 				if (denied) {
 					delete source.bindPending;
-					source.bindDenied = denied;
+					denyBind(source, denied);
 				}
 			} else if (request.phase === "source-not-started") {
 				source.notStarted = receipt;
@@ -5754,7 +5780,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								)
 									stateInvalid();
 								delete source.bindPending;
-								source.bindDenied = "authorization_unavailable";
+								denyBind(source, "authorization_unavailable");
 							});
 							unavailable();
 						}
@@ -5780,7 +5806,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								)
 									stateInvalid();
 								delete source.bindPending;
-								source.bindDenied = "authorization_unavailable";
+								denyBind(source, "authorization_unavailable");
 							});
 							unavailable();
 						}
@@ -5806,7 +5832,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							) {
 								lateClose = true;
 								delete source.bindPending;
-								source.bindDenied = "authorization_unavailable";
+								denyBind(source, "authorization_unavailable");
 							} else {
 								source.bind = source.bindPending;
 							}
@@ -5841,7 +5867,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						))
 				) {
 					delete source.bindPending;
-					source.bindDenied = "authorization_unavailable";
+					denyBind(source, "authorization_unavailable");
 				} else {
 					source.bind = source.bindPending;
 				}
