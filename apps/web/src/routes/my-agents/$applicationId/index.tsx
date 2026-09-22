@@ -14,7 +14,7 @@ function MyAgentApplicationRoute() {
 	const withdrawal = useWithdrawMyAgentApplication(applicationId);
 
 	return (
-		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<MyAgentApplicationDetailScreen
 				onWithdraw={() => withdrawal.mutate()}
 				state={

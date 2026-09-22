@@ -25,7 +25,7 @@ import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
-} from "./agent-administration/use-browser-session";
+} from "./use-browser-session";
 
 const SessionContext = createContext<{
 	identityKey: string;

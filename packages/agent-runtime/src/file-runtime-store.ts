@@ -1161,7 +1161,7 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
-				authority.expiresAt <= currentNow ||
+				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
 				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
@@ -1228,7 +1228,7 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
-				authority.expiresAt <= currentNow ||
+				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
 				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||

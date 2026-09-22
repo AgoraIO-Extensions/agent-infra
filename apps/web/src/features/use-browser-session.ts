@@ -1,7 +1,7 @@
 import { type QueryClient, useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
-import { loadBrowserSession } from "../browser-session.js";
+import { loadBrowserSession } from "./browser-session.js";
 
 export const BrowserSessionQueryContext = createContext<
 	QueryClient | undefined

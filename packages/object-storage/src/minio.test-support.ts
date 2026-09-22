@@ -50,7 +50,9 @@ export async function startMinioFileFixtureV1() {
 			region: "us-east-1",
 			forcePathStyle: true,
 			credentials,
-			maxAttempts: 1,
+			// Startup may still return XMinioServerNotInitialized (503). Use the
+			// SDK's bounded transient-error retries only for fixture provisioning.
+			maxAttempts: 5,
 		});
 		let initialized = false;
 		let bucketCreated = false;

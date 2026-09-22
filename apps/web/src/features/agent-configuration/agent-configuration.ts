@@ -1,23 +1,23 @@
+import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type {
 	Client,
 	RequestResult,
-} from "../../pilot/generated/client/index.js";
+} from "../../pilot/generated-v2/client/index.js";
 import {
-	commandAgentLifecycle,
-	updateAgentConfiguration as requestUpdateAgentConfiguration,
-} from "../../pilot/generated/sdk.gen.js";
+	commandAgentLifecycleV2,
+	updateAgentConfigurationV2 as requestUpdateAgentConfiguration,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	AgentConfigurationUpdateRequestV1Writable,
-	AgentProjectionV1,
-	BrowserSessionProjectionV1,
-	CommandAgentLifecycleErrors,
-	CommandAgentLifecycleResponses,
-	UpdateAgentConfigurationErrors,
-	UpdateAgentConfigurationResponses,
-} from "../../pilot/generated/types.gen.js";
+	AgentConfigurationUpdateRequestV2Writable,
+	AgentProjectionV2,
+	CommandAgentLifecycleV2Errors,
+	CommandAgentLifecycleV2Responses,
+	UpdateAgentConfigurationV2Errors,
+	UpdateAgentConfigurationV2Responses,
+} from "../../pilot/generated-v2/types.gen.js";
 
 export function isAgentConfigurationOwner(
-	agent: AgentProjectionV1,
+	agent: AgentProjectionV2,
 	session: BrowserSessionProjectionV1,
 ) {
 	return agent.configuration.owners.some(
@@ -36,14 +36,14 @@ function requestError(retryable: boolean) {
 
 export async function updateAgentConfiguration(
 	agentId: string,
-	body: AgentConfigurationUpdateRequestV1Writable,
+	body: AgentConfigurationUpdateRequestV2Writable,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV1> {
+): Promise<AgentProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			UpdateAgentConfigurationResponses,
-			UpdateAgentConfigurationErrors,
+			UpdateAgentConfigurationV2Responses,
+			UpdateAgentConfigurationV2Errors,
 			false
 		>
 	> = await requestUpdateAgentConfiguration<false>({
@@ -65,14 +65,14 @@ export async function upgradeAgentCustomImage(
 	imageReference: string,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV1> {
+): Promise<AgentProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			CommandAgentLifecycleResponses,
-			CommandAgentLifecycleErrors,
+			CommandAgentLifecycleV2Responses,
+			CommandAgentLifecycleV2Errors,
 			false
 		>
-	> = await commandAgentLifecycle<false>({
+	> = await commandAgentLifecycleV2<false>({
 		body: {
 			schemaVersion: 1,
 			command: "upgrade_custom_image",

@@ -406,11 +406,16 @@ export class RuntimeHost {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)
 			runtimeAuthorizationDenied();
+		await this.options.store.authorizeExternalAction(
+			action,
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
 		await this.options.driver.validateExternalAction(action);
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
+		this.trustedHost();
 	}
 
 	/** Resolve the accepted original principal; this is not a Connection grant. */
@@ -683,6 +688,7 @@ export class RuntimeHost {
 				drainDeadline,
 			]).finally(() => {
 				if (drainTimer !== undefined) clearTimeout(drainTimer);
+				this.readinessGuards.delete(guard);
 			});
 			let capabilities: RuntimeCapabilitiesV1;
 			try {
@@ -719,7 +725,6 @@ export class RuntimeHost {
 			});
 		} finally {
 			bounded.removeEventListener("abort", abort);
-			this.readinessGuards.delete(guard);
 		}
 	}
 

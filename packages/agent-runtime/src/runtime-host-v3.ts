@@ -245,15 +245,30 @@ export class RuntimeHostV3 {
 					active,
 				);
 				assertCurrent();
-				await recover.call(
-					this.options.driver,
-					{
-						nativeSessionRef,
-						executionId: request.executionId,
-						recoveryRequestId: request.requestId,
-					},
-					read,
-				);
+				try {
+					await recover.call(
+						this.options.driver,
+						{
+							nativeSessionRef,
+							executionId: request.executionId,
+							recoveryRequestId: request.requestId,
+						},
+						read,
+					);
+				} catch (error) {
+					if (
+						error instanceof RuntimeHostError &&
+						error.driverFailureKind === "session_recovery_failed"
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_SESSION_RECOVERY_FAILED",
+							"Runtime Session recovery failed",
+							503,
+							false,
+							"session_recovery_failed",
+						);
+					invalidDriver();
+				}
 			} catch (error) {
 				// A failed native recovery must not leave an evidence-query latch that
 				// blocks a later authorized retry. Restore the prior high-water mark only
@@ -542,7 +557,23 @@ export class RuntimeHostV3 {
 		try {
 			this.assertOpen();
 			response = await abortable(
-				this.options.dispatch(session.hostSessionRef, operation, false),
+				this.options.serialize(
+					this.options.store.sessionQueueKey(request),
+					async () => {
+						this.assertOpen();
+						signal?.throwIfAborted();
+						this.validate(request, "session.status", verification);
+						this.options.store.checkRequestV3({
+							...claims,
+							hostSessionRef: session.hostSessionRef,
+						});
+						return this.options.dispatch(
+							session.hostSessionRef,
+							operation,
+							false,
+						);
+					},
+				),
 				signal ?? this.lifetime.signal,
 			);
 		} catch (error) {
