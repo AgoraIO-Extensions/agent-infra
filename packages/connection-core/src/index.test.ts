@@ -1041,9 +1041,8 @@ describe("Connection application service", () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
-				throw Object.assign(new Error("Bad credentials"), {
-					providerCode: "authorization_failed",
-					providerStatus: 401,
+				throw Object.assign(new Error("Expired credential"), {
+					providerCredentialInvalid: true,
 				});
 			},
 		});
