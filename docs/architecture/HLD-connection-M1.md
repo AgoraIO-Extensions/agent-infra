@@ -146,6 +146,19 @@ credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志�
 业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
 Grant 或凭证。
 
+DataLego 的首个 **[设计决策]** Provider profile 固定为
+`https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
+浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
+`HCIAuthToken` Cookie 建立个人 Credential，并通过 `/api/userInfo` 校验邮箱身份后加密保存完整 session
+token。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析 Cookie JWT 中的个人
+`access_token`，通过 `accessToken` Header 发送；原始 session、内嵌 token 和 SQL 不得进入日志、错误
+或身份响应。查询状态是 READ，提交与取消任务是 WRITE，调用方不能提交 URL、路径或 Header。
+仅当 DataLego 返回精确的 access-token-expired 401 时，Adapter 才携带现有 `HCIAuthToken` 访问固定
+`https://grafana.bj2.agoralab.co` HCI 入口，读取新的 `Set-Cookie` 并重试原请求一次；其他失败不得刷新
+或重放。该 refresh origin 是当前受监督 pilot 已验证的 HCI sliding-session 兼容契约，HCI 提供正式
+refresh endpoint 后必须发布新 ProviderRelease 迁移；刷新失败要求用户重新连接，不回退到机器人账号、
+LDAP 密码或客户端 Token 输入。
+
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
 Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID

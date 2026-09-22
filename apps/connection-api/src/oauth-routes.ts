@@ -965,18 +965,30 @@ export function createConnectionOAuthApp(
 						subject: session.account.principalId,
 					},
 					() => {
+						const datalegoSession =
+							body.providerId === "datalego"
+								? getCookie(context, "HCIAuthToken")
+								: undefined;
+						if (body.providerId === "datalego" && !datalegoSession) {
+							throw new ConnectionError(
+								"AUTHENTICATION_FAILED",
+								"DataLego company login is required",
+							);
+						}
 						const credential =
-							"accessToken" in body
-								? body.accessToken
-								: "apiToken" in body
-									? JSON.stringify({
-											apiToken: body.apiToken,
-											username: body.username,
-										})
-									: JSON.stringify({
-											password: body.password,
-											username: body.username,
-										});
+							body.providerId === "datalego"
+								? (datalegoSession as string)
+								: "accessToken" in body
+									? body.accessToken
+									: "apiToken" in body
+										? JSON.stringify({
+												apiToken: body.apiToken,
+												username: body.username,
+											})
+										: JSON.stringify({
+												password: body.password,
+												username: body.username,
+											});
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,

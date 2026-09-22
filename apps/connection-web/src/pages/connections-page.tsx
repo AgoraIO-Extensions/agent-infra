@@ -16,7 +16,14 @@ import {
 	SlidersHorizontal,
 	X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type FormEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -61,6 +68,7 @@ export function ConnectionsPage() {
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
+	const [datalegoError, setDatalegoError] = useState<Error | null>(null);
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
 	const [jenkinsProviderId, setJenkinsProviderId] = useState<
 		"jenkins-ci" | "jenkins-release"
@@ -179,6 +187,26 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
+	const connectDatalego = useCallback(async () => {
+		setDatalegoError(null);
+		try {
+			await connectionApi.connectProviderCredential({ providerId: "datalego" });
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setDatalegoError(
+				error instanceof Error ? error : new Error("DataLego 连接失败"),
+			);
+		}
+	}, [queryClient]);
+	useEffect(() => {
+		const search = new URLSearchParams(window.location.search);
+		if (
+			["connect", "reauthorize"].includes(search.get("intent") ?? "") &&
+			search.get("provider") === "datalego"
+		) {
+			void connectDatalego();
+		}
+	}, [connectDatalego]);
 	const connectJenkins = async (credential: {
 		apiToken: string;
 		username: string;
@@ -231,6 +259,7 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin();
 	const connectProvider = (providerId: ConnectorProviderId) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
+		else if (providerId === "datalego") void connectDatalego();
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
@@ -313,6 +342,7 @@ export function ConnectionsPage() {
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
+			{datalegoError ? <PageError error={datalegoError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
@@ -446,7 +476,9 @@ export function ConnectionsPage() {
 								disconnect.mutate(connectionId);
 						}}
 						onReconnect={(connection) => {
-							if (connection.providerId === "bitbucket") setBitbucketOpen(true);
+							if (connection.providerId === "datalego") void connectDatalego();
+							else if (connection.providerId === "bitbucket")
+								setBitbucketOpen(true);
 							else if (connection.providerId === "rehoboam")
 								setRehoboamOpen(true);
 							else if (connection.providerId === "jira") setJiraOpen(true);

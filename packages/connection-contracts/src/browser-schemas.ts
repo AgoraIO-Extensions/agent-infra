@@ -24,6 +24,9 @@ export const oauthTransactionRequestSchema = z.strictObject({
 
 export const providerCredentialRequestSchema = z.union([
 	z.strictObject({
+		providerId: z.literal("datalego"),
+	}),
+	z.strictObject({
 		accessToken: z.string().min(1).max(8_192),
 		providerId: z.enum(["bitbucket", "rehoboam"]),
 	}),

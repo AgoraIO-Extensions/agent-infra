@@ -30,6 +30,10 @@ import {
 	confluenceServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/confluence-server";
 import {
+	DataLegoAdapter,
+	datalegoConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/datalego";
+import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
@@ -73,6 +77,7 @@ export async function createConnectionRuntime(
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
 		confluenceServerConnectionCatalog,
+		datalegoConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
 		rehoboamConnectionCatalog,
@@ -92,6 +97,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog,
 			jiraServerConnectionCatalog,
 			confluenceServerConnectionCatalog,
+			datalegoConnectionCatalog,
 			jenkinsCiConnectionCatalog,
 			jenkinsReleaseConnectionCatalog,
 			rehoboamConnectionCatalog,
@@ -173,11 +179,15 @@ export async function createConnectionRuntime(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 		config.rehoboamApiKey,
 	);
+	const datalego = new DataLegoAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
+		[datalegoConnectionCatalog.providerReleaseId]: datalego,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
@@ -192,6 +202,7 @@ export async function createConnectionRuntime(
 		{
 			bitbucket,
 			confluence,
+			datalego,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
 			[rehoboam.providerId]: rehoboam,
@@ -215,6 +226,7 @@ export async function createConnectionRuntime(
 					bitbucketServerConnectionCatalog,
 					jiraServerConnectionCatalog,
 					confluenceServerConnectionCatalog,
+					datalegoConnectionCatalog,
 					jenkinsCiConnectionCatalog,
 					jenkinsReleaseConnectionCatalog,
 					rehoboamConnectionCatalog,
@@ -229,6 +241,8 @@ export async function createConnectionRuntime(
 			"10.80.1.129": jenkinsReleaseConnectionCatalog.provider,
 			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
 			"github.com": githubConnectionCatalog.provider,
+			"datalego.agoralab.co": datalegoConnectionCatalog.provider,
+			"datalego.la3d.agoralab.co": datalegoConnectionCatalog.provider,
 			"jenkins-ci.agoralab.co": "jenkins-ci",
 			"rehoboam.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 			"justinia.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
@@ -239,6 +253,7 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
+			datalegoConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,
