@@ -149,8 +149,9 @@ Grant 或凭证。
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
-`HCIAuthToken` Cookie 建立个人 Credential，并通过 `/api/userInfo` 校验邮箱身份后加密保存完整 session
-token。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析 Cookie JWT 中的个人
+`HCIAuthToken` Cookie 建立个人 Credential，并通过固定不存在的 job status READ 探针证明内嵌
+access token 已进入 DataLego 业务鉴权，再使用 HCI 签发的 `user.email` claim 形成账号身份并加密保存完整
+session token。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析 Cookie JWT 中的个人
 `access_token`，通过 `accessToken` Header 发送；原始 session、内嵌 token 和 SQL 不得进入日志、错误
 或身份响应。查询状态是 READ，提交与取消任务是 WRITE，调用方不能提交 URL、路径或 Header。
 仅当 DataLego 返回精确的 access-token-expired 401 时，Adapter 才携带现有 `HCIAuthToken` 访问固定
@@ -158,6 +159,8 @@ token。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析 Cooki
 或重放。该 refresh origin 是当前受监督 pilot 已验证的 HCI sliding-session 兼容契约，HCI 提供正式
 refresh endpoint 后必须发布新 ProviderRelease 迁移；刷新失败要求用户重新连接，不回退到机器人账号、
 LDAP 密码或客户端 Token 输入。
+生产验证发现 `/api/userInfo` 不接受服务端 Cookie 重放后，身份校验改为固定不存在 job 的 status READ
+探针，并发布 `datalego-connection-v2` 与 `@v2` ActionVersion；不得修改已发布的 v1 catalog。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token

@@ -11,7 +11,7 @@ const refreshOrigin = "https://grafana.bj2.agoralab.co";
 const credentialScope = "datalego.query";
 const maxResponseBytes = 5 * 1024 * 1024;
 const providerId = "datalego";
-const providerReleaseId = "datalego-connection-v1";
+const providerReleaseId = "datalego-connection-v2";
 const requestTimeoutMs = 120_000;
 
 export const datalegoConnectionCatalog = {
@@ -19,7 +19,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "获取当前 DataLego 个人用户。",
 			effect: "READ" as const,
-			id: "datalego.get_current_user@v1",
+			id: "datalego.get_current_user@v2",
 			inputSchema: emptySchema(),
 			name: "datalego.get_current_user",
 			requiredScopes: [credentialScope],
@@ -27,7 +27,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "提交一个有界的 DataLego SQL 查询任务。",
 			effect: "WRITE" as const,
-			id: "datalego.submit_query@v1",
+			id: "datalego.submit_query@v2",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -45,7 +45,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "获取 DataLego 查询任务状态和结果。",
 			effect: "READ" as const,
-			id: "datalego.get_query_status@v1",
+			id: "datalego.get_query_status@v2",
 			inputSchema: jobSchema(),
 			name: "datalego.get_query_status",
 			requiredScopes: [credentialScope],
@@ -53,7 +53,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "取消一个 DataLego 查询任务。",
 			effect: "WRITE" as const,
-			id: "datalego.cancel_query@v1",
+			id: "datalego.cancel_query@v2",
 			inputSchema: jobSchema(),
 			name: "datalego.cancel_query",
 			requiredScopes: [credentialScope],
@@ -142,19 +142,35 @@ export class DataLegoAdapter
 	}
 
 	private async requestIdentity(sessionToken: string) {
-		parseSession(sessionToken);
-		const response = await this.send("/api/userInfo", {
-			headers: { cookie: `HCIAuthToken=${sessionToken}` },
-			method: "GET",
-		});
-		if (response.status === 401 || response.status === 403) {
-			throw invalidCredential("DataLego personal session was rejected");
+		let activeSession = sessionToken;
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const identity = parseSession(activeSession);
+			const response = await this.send(
+				"/api/v1/datainsight/jobs/__connection_credential_probe__/status",
+				{
+					headers: { accessToken: identity.accessToken },
+					method: "GET",
+				},
+			);
+			if (attempt === 0 && (await expiredAccessToken(response))) {
+				activeSession = await this.refreshSession(activeSession);
+				continue;
+			}
+			const text = await response.text();
+			if (
+				response.status === 400 &&
+				text.toLowerCase().includes("record not found")
+			) {
+				return { email: identity.email, name: identity.name };
+			}
+			if (response.status === 401 || response.status === 403) {
+				throw invalidCredential("DataLego personal session was rejected");
+			}
+			throw providerError(
+				`DataLego credential proof failed with HTTP ${response.status}`,
+			);
 		}
-		const value = await this.responseJson(response);
-		const email = typeof value.email === "string" ? value.email : "";
-		const name = typeof value.name === "string" ? value.name : "";
-		if (!email) throw invalidCredential("DataLego identity is incomplete");
-		return { email, name };
+		throw invalidCredential("DataLego personal session requires reconnection");
 	}
 
 	private async requestWithRefresh(
@@ -244,8 +260,14 @@ function parseSession(token: string) {
 				? (value.user as Record<string, unknown>)
 				: {};
 		const email = typeof user.email === "string" ? user.email : "";
+		const name =
+			typeof user.name === "string"
+				? user.name
+				: typeof user.displayName === "string"
+					? user.displayName
+					: "";
 		if (!accessToken || !email) throw new Error();
-		return { accessToken, email };
+		return { accessToken, email, name };
 	} catch {
 		throw invalidCredential("DataLego HCI session is invalid");
 	}
