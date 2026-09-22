@@ -188,19 +188,12 @@ export function AgentLifecycleControls({
 		const resultAdvanced = observedResult !== lastObservedResult.current;
 		lastObservedResult.current = observedResult;
 		if (
-			pendingCommand !== undefined ||
 			commandError !== null ||
 			(resultAdvanced && commandResult?.agentId === agent.agentId)
 		) {
 			setLocalPendingCommand(null);
 		}
-	}, [
-		agent.agentId,
-		commandError,
-		commandResult?.agentId,
-		observedResult,
-		pendingCommand,
-	]);
+	}, [agent.agentId, commandError, commandResult?.agentId, observedResult]);
 	const commands = visibleLifecycleCommands(agent, session);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;
