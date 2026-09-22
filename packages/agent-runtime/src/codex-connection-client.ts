@@ -38,6 +38,9 @@ export type CodexConnectionEvidenceUpdateRequest =
 export type CodexConnectionEvidenceUpdateResponse =
 	SchemaType<"connectionEvidenceUpdateResponse">;
 export type CodexConnectionOrigin = SchemaType<"connectionOrigin">;
+export type CodexConnectionOriginAuthorizer = (
+	origin: CodexConnectionOrigin,
+) => boolean;
 export type CodexConnectionRecoveryRequest =
 	SchemaType<"connectionRecoveryRequest">;
 export type CodexConnectionRecoveryResponse =
@@ -145,6 +148,8 @@ export function createCodexConnectionClient(options: {
 	authorizedService: CodexConnectionServiceAuthority;
 	/** Server-owned check for the operation, attempt, action and request digest. */
 	authorizeRequest: CodexConnectionRequestAuthorizer;
+	/** Server-owned journal check for origins from a different process. */
+	authorizeOrigin: CodexConnectionOriginAuthorizer;
 	resolveOriginalClient: (
 		request: { profileRef: string; nativeSessionRef?: string },
 		signal: AbortSignal,
@@ -301,10 +306,33 @@ export function createCodexConnectionClient(options: {
 			metadataOnly,
 			occurredAt,
 		} = input;
-		// Historical slots contain no token and cannot reopen dispatch.
+		// Historical slots contain no token and cannot reopen dispatch. An origin
+		// from this process must match its deployment-owned slot record; a
+		// cross-process origin needs an independent journal/authority check.
 		const evidenceSlot = input.origin ?? slots.get(descriptor.slotId);
+		let originTrusted = input.origin === undefined;
+		if (input.origin !== undefined && isCodexConnectionOrigin(input.origin)) {
+			const known = slots.get(input.origin.slotId);
+			if (known) {
+				originTrusted = isDeepStrictEqual(input.origin, {
+					schemaVersion: 1,
+					slotId: known.slotId,
+					originalBinding: known.originalBinding,
+					service: known.service,
+					connectionIdentity: known.connectionIdentity,
+				});
+			} else {
+				try {
+					originTrusted =
+						options.authorizeOrigin(structuredClone(input.origin)) === true;
+				} catch {
+					originTrusted = false;
+				}
+			}
+		}
 		if (
 			!evidenceSlot ||
+			!originTrusted ||
 			(input.origin !== undefined &&
 				(!isCodexConnectionOrigin(input.origin) ||
 					input.origin.slotId !== descriptor.slotId ||

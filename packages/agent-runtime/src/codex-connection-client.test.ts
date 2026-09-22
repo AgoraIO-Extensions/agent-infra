@@ -94,6 +94,7 @@ async function fixture() {
 			const { slotId: _admittedSlot, ...admittedWithoutSlot } = admitted;
 			return isDeepStrictEqual(candidateWithoutSlot, admittedWithoutSlot);
 		},
+		authorizeOrigin: () => true,
 		resolveOriginalClient,
 		now: () => time,
 	});
@@ -157,6 +158,7 @@ describe("socket-bound independent Connection client", () => {
 			profile,
 			authorizedService,
 			authorizeRequest: () => true,
+			authorizeOrigin: () => true,
 			resolveOriginalClient: async () => config,
 			now: () => time,
 		});
@@ -281,6 +283,7 @@ describe("socket-bound independent Connection client", () => {
 				profile,
 				authorizedService,
 				authorizeRequest: () => true,
+				authorizeOrigin: () => true,
 				resolveOriginalClient,
 				now: () => time,
 			});
@@ -324,6 +327,7 @@ describe("socket-bound independent Connection client", () => {
 			profile,
 			authorizedService,
 			authorizeRequest: () => true,
+			authorizeOrigin: () => true,
 			resolveOriginalClient: async () => configuration,
 			now: () => now,
 		});
@@ -428,6 +432,21 @@ describe("socket-bound independent Connection client", () => {
 		const origin = client.snapshotOriginal(descriptor);
 		const forged = structuredClone(origin);
 		forged.service.resource = "https://attacker.example.test/mcp";
+		expect(() =>
+			client.associate({
+				requestDescriptor: descriptor,
+				evidence: evidence(),
+				metadataOnly: false,
+				occurredAt: time,
+				origin: forged,
+			}),
+		).toThrow("CODEX_CONNECTION_CLIENT_UNAVAILABLE");
+	});
+	it("rejects a recovery origin that forges trusted slot identity", async () => {
+		const { client, descriptor } = await fixture();
+		const origin = client.snapshotOriginal(descriptor);
+		const forged = structuredClone(origin);
+		forged.connectionIdentity.actorId = "forged-actor";
 		expect(() =>
 			client.associate({
 				requestDescriptor: descriptor,
