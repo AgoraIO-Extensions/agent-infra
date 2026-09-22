@@ -716,6 +716,7 @@ export class RuntimeHostV3 {
 				await this.options.store.acknowledgeCursor(
 					claims,
 					request.confirmedCursor,
+					this.options.grantValidation.now ?? Date.now,
 				);
 				// The durable write can outlive the grant. Re-authorize immediately
 				// before the Driver call so an expired grant cannot trigger compaction.
