@@ -882,32 +882,8 @@ function pendingNativeSources(journal: CodexEventJournal) {
 }
 
 function nativeSourceFingerprint(request: CodexNativeSourceRequestV1) {
-	const parent = request.reservation.parent;
 	return createHash("sha256")
-		.update(
-			JSON.stringify([
-				request.phase,
-				request.occurredAt,
-				request.reservation.reservationId,
-				[
-					parent.sessionId,
-					parent.turnId,
-					parent.callId,
-					parent.attemptRef,
-					parent.toolName,
-					parent.parentAttemptRef ?? null,
-				],
-				request.reservation.parentPermitId,
-				request.reservation.childThreadId,
-				request.reservation.submissionId,
-				"source" in request
-					? [request.source.threadId, request.source.turnId]
-					: null,
-				"delivery" in request ? request.delivery : null,
-				"stage" in request ? [request.stage, request.reason] : null,
-				"nativeStatus" in request ? request.nativeStatus : null,
-			]),
-		)
+		.update(JSON.stringify(canonicalCallbackValue("", request)))
 		.digest("hex");
 }
 
@@ -2407,7 +2383,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return Object.entries(state.operations).some(
 			([key, operation]) =>
 				operation.nativeSessionRef === nativeSessionRef &&
-				(JSON.parse(key) as unknown[])[3] === "generation-cancel",
+				["stop", "generation-cancel"].includes(
+					(JSON.parse(key) as unknown[])[3] as string,
+				),
 		);
 	}
 
@@ -6153,16 +6131,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
-			// Drain actual requests and persist their outcome before publishing the
-			// journal's terminal event. A stopped native Turn may still have an
-			// in-flight provider request whose result is unknown.
-			const owningSession = Object.values(this.readState().sessions).find(
+			// A cancelled native Turn may still have an in-flight provider request;
+			// drain it before publishing the terminal event. Normal completion and
+			// failure already represent a settled provider request and must not cancel
+			// a transport that may be finishing its final response.
+			const completedState = this.readState();
+			const resolvedCompleted = this.resolveNotificationJournal(
+				completedState,
+				conversationKey,
+				completed.threadId,
+				completed.nativeTurnId,
+			);
+			const owningSession = Object.values(completedState.sessions).find(
 				(session) =>
 					session.threadId === completed.threadId &&
 					(conversationKey === undefined ||
 						codexConversationKey(session) === conversationKey),
 			);
-			if (owningSession)
+			const admissionPending =
+				resolvedCompleted?.pendingOperationKey !== undefined &&
+				this.modelTurnAdmissions.has(resolvedCompleted.pendingOperationKey);
+			if (
+				owningSession &&
+				(completed.status === "cancelled" || admissionPending)
+			)
 				await this.cancelModelTurn?.({
 					conversationKey: this.modelConversationKey(
 						codexConversationKey(owningSession),
@@ -6170,7 +6162,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
 				});
-			let recognized = false;
 			const streamKey = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -6179,7 +6170,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					completed.nativeTurnId,
 				);
 				if (!resolved) return;
-				recognized = true;
 				const appended = this.appendCompletedEvent(
 					resolved.session,
 					resolved.journal,
@@ -6209,15 +6199,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				completed.threadId,
 				completed.nativeTurnId,
 			);
-			if (recognized && owningSession) {
-				await this.cancelModelTurn?.({
-					conversationKey: this.modelConversationKey(
-						codexConversationKey(owningSession),
-					),
-					threadId: completed.threadId,
-					turnId: completed.nativeTurnId,
-				});
-			}
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
