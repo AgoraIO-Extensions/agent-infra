@@ -92,7 +92,7 @@ export class DataLegoAdapter
 		const credential = parseCredential(encodedCredential);
 		const identity = await this.requestIdentity(credential);
 		return {
-			accessToken: encodedCredential,
+			accessToken: JSON.stringify(identity),
 			displayName: identity.email,
 			externalAccount: identity.email,
 			grantedScopes: [credentialScope],
@@ -109,7 +109,7 @@ export class DataLegoAdapter
 		const credential = parseCredential(input.credential.accessToken);
 		switch (input.action) {
 			case "datalego.get_current_user":
-				return this.requestIdentity(credential);
+				return { email: (await this.requestIdentity(credential)).email };
 			case "datalego.submit_query": {
 				return this.requestWithRefresh(
 					credential.sessionToken,
@@ -170,7 +170,7 @@ export class DataLegoAdapter
 				response.status === 400 &&
 				text.toLowerCase().includes("record not found")
 			) {
-				return { email: credential.email };
+				return { email: credential.email, sessionToken: activeSession };
 			}
 			if (response.status === 401 || response.status === 403) {
 				throw invalidCredential("DataLego personal session was rejected");

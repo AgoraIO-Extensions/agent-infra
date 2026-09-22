@@ -49,10 +49,40 @@ test("DataLego validates the personal HCI session without returning it", async (
 	);
 	assert.equal(request?.headers.get("accesstoken"), "personal-access-token");
 	assert.equal(identity.externalAccount, "user@agora.io");
+	assert.deepEqual(JSON.parse(identity.accessToken), {
+		email: "user@agora.io",
+		sessionToken: session(),
+	});
 	assert.equal(
 		JSON.stringify(identity).includes("personal-access-token"),
 		false,
 	);
+});
+
+test("DataLego persists the refreshed HCI session after validation", async () => {
+	let requests = 0;
+	const refreshedSession = session("refreshed-token");
+	const adapter = new DataLegoAdapter(async (input) => {
+		requests += 1;
+		if (String(input) === "https://grafana.bj2.agoralab.co/") {
+			return new Response("", {
+				headers: {
+					"set-cookie": `HCIAuthToken=${refreshedSession}; Path=/`,
+				},
+			});
+		}
+		if (requests === 1)
+			return Response.json(
+				{ message: "Invalid token: access token has expired" },
+				{ status: 401 },
+			);
+		return Response.json({ message: "record not found" }, { status: 400 });
+	});
+	const identity = await adapter.validateCredential(credential());
+	assert.deepEqual(JSON.parse(identity.accessToken), {
+		email: "user@agora.io",
+		sessionToken: refreshedSession,
+	});
 });
 
 test("DataLego refreshes an expired access token once and retries", async () => {
