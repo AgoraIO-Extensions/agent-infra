@@ -305,6 +305,7 @@ function parseDriverLookup(
 
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
+	private readonly lifetime = new AbortController();
 	private readonly readinessGuards = new Set<{
 		controller: AbortController;
 		done: Promise<void>;
@@ -331,6 +332,14 @@ export class RuntimeHost {
 	async close() {
 		if (this.closed) return;
 		this.closed = true;
+		this.lifetime.abort(
+			new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness was interrupted",
+				503,
+				true,
+			),
+		);
 		for (const guard of this.readinessGuards) guard.controller.abort();
 		await Promise.allSettled(
 			[...this.readinessGuards].map((guard) => guard.done),
@@ -630,6 +639,7 @@ export class RuntimeHost {
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([
 			signal,
+			this.lifetime.signal,
 			controller.signal,
 			AbortSignal.timeout(10_000),
 		]);

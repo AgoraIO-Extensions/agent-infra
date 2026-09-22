@@ -95,7 +95,7 @@ async function harness(
 				readFile(join(dir, name), "utf8"),
 			),
 		);
-	return { app, driver, execute, lookup, snapshot };
+	return { app, driver, execute, host, lookup, snapshot };
 }
 const caps = {
 	modelSelection: true,
@@ -240,6 +240,36 @@ describe("HTTP Workload readiness", () => {
 		controller.abort();
 		expect((await pending).status).toBe(503);
 		expect(aborted).toBe(true);
+	});
+	it("aborts readiness during host shutdown and rejects later probes", async () => {
+		let aborted = false;
+		const started = Promise.withResolvers<void>();
+		const h = await harness(
+			(signal) =>
+				new Promise((_resolve, reject) => {
+					started.resolve();
+					signal.addEventListener(
+						"abort",
+						() => {
+							aborted = true;
+							reject(new Error("probe cancelled"));
+						},
+						{ once: true },
+					);
+				}),
+		);
+		const pending = h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(request()),
+		);
+		await started.promise;
+		await h.host.close();
+		expect((await pending).status).toBe(503);
+		expect(aborted).toBe(true);
+		expect(
+			(await h.app.request("/internal/runtime/v1/readiness", post(request())))
+				.status,
+		).toBe(503);
 	});
 	it("reads only trusted matching deployment binding and fails malformed configuration", () => {
 		const env = {
