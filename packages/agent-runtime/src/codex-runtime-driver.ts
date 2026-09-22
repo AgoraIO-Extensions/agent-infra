@@ -4378,8 +4378,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			...[...rpcs].map((rpc) => rpc.close()),
 			...(this.closeModelTransport ? [this.closeModelTransport()] : []),
 		]);
-		await this.file.readCommitted();
-		await this.file.close();
+		try {
+			await this.file.readCommitted();
+		} finally {
+			await this.file.close();
+		}
 		const rejected = results.find((result) => result.status === "rejected");
 		if (rejected?.status === "rejected") throw rejected.reason;
 	}
