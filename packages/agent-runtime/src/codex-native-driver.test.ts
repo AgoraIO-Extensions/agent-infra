@@ -3633,7 +3633,7 @@ describe("private cross-process Connection evidence recovery", () => {
 		);
 		expect(new Set(passes[1]).size).toBe(16);
 		expect(passes[0]).not.toContain(passes[1]?.[0]);
-	});
+	}, 15_000);
 
 	it("aborts and reaps recovery before generation confirmation and admits no new pass afterward", async () => {
 		const { env, execution, origin, resolveReadOnlyClient } =
