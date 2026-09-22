@@ -91,11 +91,15 @@ function ApplicationReview({
 	const lastDecisionError = useRef(decisionError);
 	const reasonId = useId();
 	const reasonInput = useRef<HTMLTextAreaElement>(null);
-	const deciding = pendingDecision !== undefined;
+	const matchingPendingDecision =
+		pendingDecision?.applicationId === application.applicationId
+			? pendingDecision
+			: undefined;
+	const deciding = matchingPendingDecision !== undefined;
 	const decisionSubmitting = deciding || localDecisionPending;
 	const currentDecision =
-		pendingDecision?.applicationId === application.applicationId
-			? pendingDecision.decision
+		matchingPendingDecision !== undefined
+			? matchingPendingDecision.decision
 			: undefined;
 	const resolved =
 		decisionResult?.applicationId === application.applicationId &&

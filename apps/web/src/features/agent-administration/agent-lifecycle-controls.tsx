@@ -201,12 +201,11 @@ export function AgentLifecycleControls({
 	const commands = visibleLifecycleCommands(agent, session);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;
+	const matchingPendingCommand =
+		pendingCommand?.agentId === agent.agentId ? pendingCommand : undefined;
 	const isPending =
-		pendingCommand !== undefined || localPendingCommand !== null;
-	const activeCommand =
-		pendingCommand?.agentId === agent.agentId
-			? pendingCommand.command
-			: localPendingCommand;
+		matchingPendingCommand !== undefined || localPendingCommand !== null;
+	const activeCommand = matchingPendingCommand?.command ?? localPendingCommand;
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
