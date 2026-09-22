@@ -28,10 +28,10 @@ test("DataLego catalog keeps query effects explicit", () => {
 	assert.deepEqual(
 		datalegoConnectionCatalog.actions.map(({ id, effect }) => [id, effect]),
 		[
-			["datalego.get_current_user@v2", "READ"],
-			["datalego.submit_query@v2", "WRITE"],
-			["datalego.get_query_status@v2", "READ"],
-			["datalego.cancel_query@v2", "WRITE"],
+			["datalego.get_current_user@v3", "READ"],
+			["datalego.submit_query@v3", "WRITE"],
+			["datalego.get_query_status@v3", "READ"],
+			["datalego.cancel_query@v3", "WRITE"],
 		],
 	);
 });

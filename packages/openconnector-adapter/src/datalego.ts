@@ -11,7 +11,7 @@ const refreshOrigin = "https://grafana.bj2.agoralab.co";
 const credentialScope = "datalego.query";
 const maxResponseBytes = 5 * 1024 * 1024;
 const providerId = "datalego";
-const providerReleaseId = "datalego-connection-v2";
+const providerReleaseId = "datalego-connection-v3";
 const requestTimeoutMs = 120_000;
 
 export const datalegoConnectionCatalog = {
@@ -19,7 +19,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "获取当前 DataLego 个人用户。",
 			effect: "READ" as const,
-			id: "datalego.get_current_user@v2",
+			id: "datalego.get_current_user@v3",
 			inputSchema: emptySchema(),
 			name: "datalego.get_current_user",
 			requiredScopes: [credentialScope],
@@ -27,7 +27,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "提交一个有界的 DataLego SQL 查询任务。",
 			effect: "WRITE" as const,
-			id: "datalego.submit_query@v2",
+			id: "datalego.submit_query@v3",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -45,7 +45,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "获取 DataLego 查询任务状态和结果。",
 			effect: "READ" as const,
-			id: "datalego.get_query_status@v2",
+			id: "datalego.get_query_status@v3",
 			inputSchema: jobSchema(),
 			name: "datalego.get_query_status",
 			requiredScopes: [credentialScope],
@@ -53,7 +53,7 @@ export const datalegoConnectionCatalog = {
 		{
 			description: "取消一个 DataLego 查询任务。",
 			effect: "WRITE" as const,
-			id: "datalego.cancel_query@v2",
+			id: "datalego.cancel_query@v3",
 			inputSchema: jobSchema(),
 			name: "datalego.cancel_query",
 			requiredScopes: [credentialScope],

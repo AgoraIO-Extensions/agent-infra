@@ -32,6 +32,29 @@ test("accepts monotonic catalog versions", () => {
 	);
 });
 
+test("rejects a DataLego catalog downgrade", () => {
+	assert.throws(
+		() =>
+			compareCatalogs(
+				{
+					datalego: {
+						actions: { "datalego.get_current_user": 3 },
+						actionVersion: 3,
+						providerReleaseVersion: 3,
+					},
+				},
+				{
+					datalego: {
+						actions: { "datalego.get_current_user": 2 },
+						actionVersion: 2,
+						providerReleaseVersion: 2,
+					},
+				},
+			),
+		/Action version downgrade: datalego\.get_current_user/,
+	);
+});
+
 test("requires the deployment SHA to equal canonical connection head", () => {
 	assert.equal(assertCanonicalSha("abc", "abc"), "abc");
 	assert.throws(() => assertCanonicalSha("stale", "current"), /does not equal/);
