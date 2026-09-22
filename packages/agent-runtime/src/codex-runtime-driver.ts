@@ -5570,11 +5570,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					// A source-reserve replay is freshly authorized above. Preserve
 					// that denial even when an earlier attempt recorded an ACK; a
 					// revoked or expired grant must not be revived by replay.
-					if (
-						request.phase === "source-reserve" &&
-						prepared.replay &&
-						denied
-					) {
+					if (request.phase === "source-reserve" && prepared.replay && denied) {
 						source.reserveDenied = denied;
 						delete source.reserveAuthorized;
 					}
