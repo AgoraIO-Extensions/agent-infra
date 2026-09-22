@@ -88,9 +88,21 @@ export function validateRuntimeProbe(
 			result.distribution?.target !== expectedTarget
 		)
 			invalid();
-		const artifacts = Object.values(release.artifacts ?? {}).filter(
-			(artifact) => artifact?.target === expectedTarget,
+		const artifactEntries = Object.values(release.artifacts ?? {});
+		if (
+			artifactEntries.some(
+				(artifact) =>
+					!artifact ||
+					typeof artifact !== "object" ||
+					Array.isArray(artifact) ||
+					typeof artifact.target !== "string",
+			)
+		)
+			invalid();
+		const artifacts = artifactEntries.filter(
+			(artifact) => artifact.target === expectedTarget,
 		);
+		if (artifacts.length !== 1) invalid();
 		const artifact = artifacts[0];
 		if (
 			distribution?.kind !== "derived" ||

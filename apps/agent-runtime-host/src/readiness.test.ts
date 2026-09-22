@@ -142,6 +142,19 @@ describe("HTTP Workload readiness", () => {
 				.status,
 		).toBe(503);
 	});
+	it("normalizes native probe failures to readiness unavailable", async () => {
+		const h = await harness(async () => {
+			throw new Error("private native handshake detail");
+		});
+		const response = await h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(request()),
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "RUNTIME_READINESS_UNAVAILABLE",
+		});
+	});
 	it("rejects a proof that expires during the native handshake", async () => {
 		const body = request();
 		let now = Date.now();

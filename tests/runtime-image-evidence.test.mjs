@@ -132,7 +132,7 @@ async function derivedFixture(directory) {
 test("derived evidence binds source pin, raw manifests and every installed binary", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "codex-derived-evidence-"));
 	try {
-		const { releaseBytes, report, candidatePath } =
+		const { release, releaseBytes, report, candidatePath } =
 			await derivedFixture(directory);
 		assert.equal(
 			validateRuntimeProbe(report, releaseBytes, "aarch64-unknown-linux-musl"),
@@ -184,6 +184,29 @@ test("derived evidence binds source pin, raw manifests and every installed binar
 					),
 				/evidence is invalid/,
 			);
+		const artifact = release.artifacts.arm64;
+		for (const artifacts of [
+			{
+				arm64: { ...artifact },
+				x64: { ...artifact, target: artifact.target },
+			},
+			{ arm64: null },
+			{ arm64: [] },
+			{ arm64: { ...artifact, target: undefined } },
+		]) {
+			const malformedRelease = Buffer.from(
+				JSON.stringify({ ...release, artifacts }),
+			);
+			assert.throws(
+				() =>
+					validateRuntimeProbe(
+						report,
+						malformedRelease,
+						"aarch64-unknown-linux-musl",
+					),
+				/evidence is invalid/,
+			);
+		}
 		assert.throws(
 			() =>
 				validateRuntimeProbe(

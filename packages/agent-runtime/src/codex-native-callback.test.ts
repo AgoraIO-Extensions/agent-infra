@@ -328,6 +328,13 @@ describe("private native callback channel", () => {
 			native.destroy();
 		},
 	);
+	it("rejects duplicate keys when whitespace precedes the colon", async () => {
+		const request = intent();
+		const input = JSON.stringify(request);
+		const first = input.replace('"requestId":', '"requestId" :');
+		const duplicate = `${first.slice(0, -1)},"requestId":"${randomUUID()}"}\n`;
+		await expectRejectedSourceInput(request, Buffer.from(duplicate));
+	});
 
 	it("cancels a pending handler when the native side disconnects", async () => {
 		const { server, native } = pair();

@@ -97,6 +97,7 @@ describe("Runtime V3 authenticated HTTP", () => {
 				}),
 			},
 			"session.status",
+			{ purpose: "control", reason: "recovery" },
 		);
 		const getStatus = vi
 			.spyOn(driver, "getStatus")

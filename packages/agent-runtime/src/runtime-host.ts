@@ -674,9 +674,14 @@ export class RuntimeHost {
 					}),
 					probe,
 				]);
-			} catch (error) {
+			} catch {
 				if (bounded.aborted) throw interrupted();
-				throw error;
+				throw new RuntimeHostError(
+					"RUNTIME_READINESS_UNAVAILABLE",
+					"Workload readiness is unavailable",
+					503,
+					true,
+				);
 			}
 			if (bounded.aborted) throw interrupted();
 			if (this.closed)
