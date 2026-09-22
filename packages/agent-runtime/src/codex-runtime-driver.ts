@@ -5566,7 +5566,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			const prior = priorReceipt(source);
 			if (prior) {
 				checkReceipt(prior);
-				if (decisionRecorded(source)) return resolved;
+				if (decisionRecorded(source)) {
+					// A source-reserve replay is freshly authorized above. Preserve
+					// that denial even when an earlier attempt recorded an ACK; a
+					// revoked or expired grant must not be revived by replay.
+					if (
+						request.phase === "source-reserve" &&
+						prepared.replay &&
+						denied
+					) {
+						source.reserveDenied = denied;
+						delete source.reserveAuthorized;
+					}
+					return resolved;
+				}
 			}
 			// An identical callback may already have a pending bind receipt. Its
 			// fingerprint was checked above, so do not reject the coalesced update
