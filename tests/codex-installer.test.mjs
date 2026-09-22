@@ -91,3 +91,92 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+test("upstream installer validates the archive member before replacing an existing install", async () => {
+	const root = await mkdtemp(join(tmpdir(), "codex-installer-invalid-member-"));
+	const destination = join(root, "installed");
+	try {
+		await mkdir(join(root, "deploy/runtime"), { recursive: true });
+		await mkdir(join(root, "packages/agent-runtime/src"), { recursive: true });
+		const installer = join(root, "deploy/runtime/install-codex.mjs");
+		await copyFile(
+			new URL("../deploy/runtime/install-codex.mjs", import.meta.url),
+			installer,
+		);
+		await mkdir(destination, { recursive: true });
+		const sentinel = join(destination, "sentinel");
+		await writeFile(sentinel, "keep-existing-install");
+		await writeFile(
+			join(root, "packages/agent-runtime/src/codex-release.json"),
+			JSON.stringify({
+				provenance: { upstreamTag: "test", upstreamCommit: "test" },
+				artifacts: {
+					amd64: {
+						name: "../outside",
+						archiveSha256: "sha256:invalid",
+						executableSha256: "sha256:invalid",
+					},
+				},
+				legal: {},
+			}),
+		);
+		assert.throws(
+			() =>
+				execFileSync(process.execPath, [installer, "amd64", destination], {
+					stdio: "pipe",
+				}),
+			/Invalid Codex executable archive member/,
+		);
+		assert.equal(await readFile(sentinel, "utf8"), "keep-existing-install");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("upstream installer keeps the previous install when staging validation fails", async () => {
+	const root = await mkdtemp(join(tmpdir(), "codex-installer-staging-failure-"));
+	const destination = join(root, "installed");
+	try {
+		await mkdir(join(root, "deploy/runtime"), { recursive: true });
+		await mkdir(join(root, "packages/agent-runtime/src"), { recursive: true });
+		const installer = join(root, "deploy/runtime/install-codex.mjs");
+		await copyFile(
+			new URL("../deploy/runtime/install-codex.mjs", import.meta.url),
+			installer,
+		);
+		await mkdir(destination, { recursive: true });
+		const sentinel = join(destination, "sentinel");
+		await writeFile(sentinel, "keep-existing-install");
+		await writeFile(
+			join(root, "packages/agent-runtime/src/codex-release.json"),
+			JSON.stringify({
+				provenance: { upstreamTag: "test", upstreamCommit: "test" },
+				artifacts: {
+					amd64: {
+						name: "codex-test",
+						archiveSha256: `sha256:${"0".repeat(64)}`,
+						executableSha256: `sha256:${"1".repeat(64)}`,
+					},
+				},
+				legal: {},
+			}),
+		);
+		const preload = join(root, "download-fixture.mjs");
+		await writeFile(
+			preload,
+			"globalThis.fetch = async () => new Response(\"synthetic archive\");",
+		);
+		assert.throws(
+			() =>
+				execFileSync(
+					process.execPath,
+					["--import", preload, installer, "amd64", destination],
+					{ stdio: "pipe" },
+				),
+			/Codex release asset checksum mismatch/,
+		);
+		assert.equal(await readFile(sentinel, "utf8"), "keep-existing-install");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

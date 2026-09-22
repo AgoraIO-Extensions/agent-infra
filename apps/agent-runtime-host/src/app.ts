@@ -361,10 +361,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	});
 
 	app.onError((error, context) => {
+		const readinessRequest =
+			context.req.path === "/internal/runtime/v1/readiness";
 		const runtimeError =
 			error instanceof RuntimeHostError
 				? error
-				: context.req.raw.signal.aborted
+				: readinessRequest && context.req.raw.signal.aborted
 					? new RuntimeHostError(
 							"RUNTIME_READINESS_UNAVAILABLE",
 							"Runtime request was interrupted",

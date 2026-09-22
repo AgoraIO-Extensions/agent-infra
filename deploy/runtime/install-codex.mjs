@@ -7,11 +7,13 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	lstat,
 	rm,
+	rename,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const releasePath = new URL(
@@ -59,77 +61,119 @@ const isUpstreamRelease =
 if (!isDerivedRelease && !isUpstreamRelease) {
 	throw new Error("Unsupported Codex release manifest");
 }
+if (
+	isUpstreamRelease &&
+	(typeof artifact.name !== "string" ||
+		! /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(artifact.name))
+) {
+	throw new Error("Invalid Codex executable archive member");
+}
 const installRoot = resolve(destination);
-await rm(installRoot, { recursive: true, force: true });
-await mkdir(installRoot, { recursive: true });
-if (isDerivedRelease) {
-	if (
-		!archiveInput ||
-		release.schemaVersion !== 2 ||
-		release.distribution?.kind !== "derived"
-	) {
-		throw new Error("A pinned derived release requires its complete archive");
-	}
-	execFileSync(
-		"python3",
-		[
-			"-B",
-			fileURLToPath(
-				new URL("./vendor/codex/install-bundle.py", import.meta.url),
-			),
-			architecture,
-			installRoot,
-			resolve(archiveInput),
-		],
-		{ stdio: "inherit" },
-	);
-} else {
-	if (archiveInput)
-		throw new Error("An archive input requires a pinned derived release");
-	const directory = await mkdtemp(join(tmpdir(), "codex-install-"));
-	try {
-		const archive = join(directory, "release.tar.gz");
-		await download(
-			`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${artifact.name}.tar.gz`,
-			artifact.archiveSha256,
-			archive,
-		);
-		execFileSync("tar", ["-xzf", archive, "-C", directory, artifact.name], {
-			stdio: "ignore",
-		});
-		const binary = await readFile(join(directory, artifact.name));
+const installParent = dirname(installRoot);
+await mkdir(installParent, { recursive: true });
+const stagingRoot = await mkdtemp(join(installParent, ".codex-install-"));
+let committed = false;
+try {
+	if (isDerivedRelease) {
 		if (
-			`sha256:${createHash("sha256").update(binary).digest("hex")}` !==
-			artifact.executableSha256
+			!archiveInput ||
+			release.schemaVersion !== 2 ||
+			release.distribution?.kind !== "derived"
 		) {
-			throw new Error("Codex executable checksum mismatch");
+			throw new Error("A pinned derived release requires its complete archive");
 		}
-		const bin = resolve(destination, "bin");
-		const share = resolve(destination, "share");
-		await mkdir(bin, { recursive: true });
-		await mkdir(share, { recursive: true });
-		await normalizeRootOwnership(destination);
-		await normalizeRootOwnership(bin);
-		await normalizeRootOwnership(share);
-		await copyFile(join(directory, artifact.name), join(bin, "codex"));
-		await normalizeRootOwnership(join(bin, "codex"));
-		await chmod(join(bin, "codex"), 0o555);
-		await copyFile(releasePath, join(share, "release.json"));
-		await normalizeRootOwnership(join(share, "release.json"));
-		await chmod(join(share, "release.json"), 0o444);
-		for (const [name, sha256] of Object.entries(release.legal)) {
+		execFileSync(
+			"python3",
+			[
+				"-B",
+				fileURLToPath(
+					new URL("./vendor/codex/install-bundle.py", import.meta.url),
+				),
+				architecture,
+				stagingRoot,
+				resolve(archiveInput),
+			],
+			{ stdio: "inherit" },
+		);
+	} else {
+		if (archiveInput)
+			throw new Error("An archive input requires a pinned derived release");
+		const directory = await mkdtemp(join(tmpdir(), "codex-install-"));
+		try {
+			const archive = join(directory, "release.tar.gz");
 			await download(
-				`https://raw.githubusercontent.com/openai/codex/${release.provenance.upstreamCommit}/${name}`,
-				sha256,
-				join(share, name),
+				`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${artifact.name}.tar.gz`,
+				artifact.archiveSha256,
+				archive,
 			);
-			await normalizeRootOwnership(join(share, name));
-			await chmod(join(share, name), 0o444);
+			execFileSync(
+				"tar",
+				[
+					"-xzf",
+					archive,
+					"-C",
+					directory,
+					artifact.name,
+				],
+				{ stdio: "ignore" },
+			);
+			const binaryPath = join(directory, artifact.name);
+			const binaryInfo = await lstat(binaryPath);
+			if (!binaryInfo.isFile() || binaryInfo.isSymbolicLink())
+				throw new Error("Codex executable archive member is not a regular file");
+			const binary = await readFile(binaryPath);
+			if (
+				`sha256:${createHash("sha256").update(binary).digest("hex")}` !==
+				artifact.executableSha256
+			) {
+				throw new Error("Codex executable checksum mismatch");
+			}
+			const bin = resolve(stagingRoot, "bin");
+			const share = resolve(stagingRoot, "share");
+			await mkdir(bin, { recursive: true });
+			await mkdir(share, { recursive: true });
+			await normalizeRootOwnership(stagingRoot);
+			await normalizeRootOwnership(bin);
+			await normalizeRootOwnership(share);
+			await copyFile(binaryPath, join(bin, "codex"));
+			await normalizeRootOwnership(join(bin, "codex"));
+			await chmod(join(bin, "codex"), 0o555);
+			await copyFile(releasePath, join(share, "release.json"));
+			await normalizeRootOwnership(join(share, "release.json"));
+			await chmod(join(share, "release.json"), 0o444);
+			for (const [name, sha256] of Object.entries(release.legal)) {
+				await download(
+					`https://raw.githubusercontent.com/openai/codex/${release.provenance.upstreamCommit}/${name}`,
+					sha256,
+					join(share, name),
+				);
+				await normalizeRootOwnership(join(share, name));
+				await chmod(join(share, name), 0o444);
+			}
+			await chmod(share, 0o555);
+			await chmod(bin, 0o555);
+			await chmod(stagingRoot, 0o555);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
 		}
-		await chmod(share, 0o555);
-		await chmod(bin, 0o555);
-		await chmod(destination, 0o555);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
 	}
+	let previousRoot;
+	try {
+		await lstat(installRoot);
+		previousRoot = await mkdtemp(join(installParent, ".codex-install-previous-"));
+		await rm(previousRoot, { recursive: true, force: true });
+		await rename(installRoot, previousRoot);
+	} catch (error) {
+		if (error?.code !== "ENOENT") throw error;
+	}
+	try {
+		await rename(stagingRoot, installRoot);
+		committed = true;
+	} catch (error) {
+		if (previousRoot) await rename(previousRoot, installRoot).catch(() => {});
+		throw error;
+	}
+	if (previousRoot) await rm(previousRoot, { recursive: true, force: true });
+} finally {
+	if (!committed) await rm(stagingRoot, { recursive: true, force: true });
 }

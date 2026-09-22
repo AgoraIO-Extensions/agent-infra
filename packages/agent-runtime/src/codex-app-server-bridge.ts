@@ -1066,7 +1066,12 @@ async function runProbeCommand(
 		process.once("close", () => resolve(true));
 	});
 	const abort = () => {
-		process.kill("SIGKILL");
+		try {
+			if (process.exitCode === null && process.signalCode === null)
+				process.kill("SIGKILL");
+		} catch {
+			// The probe may have exited concurrently with cancellation.
+		}
 	};
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
@@ -1280,6 +1285,9 @@ export class CodexAppServerBridge {
 			else this.fail(exited());
 			void this.cleanIsolatedDirectory();
 		});
+		const callbackRequired =
+			nativeCallback !== undefined || nativeConnectionBootstrap !== undefined;
+		if (!callbackRequired) return;
 		const callbackStream = process.stdio[3];
 		if (!(callbackStream instanceof Duplex)) {
 			this.fail(unavailable());
@@ -1396,7 +1404,14 @@ export class CodexAppServerBridge {
 					...modelAccessArguments(validated.modelAccess),
 				],
 				{
-					stdio: ["pipe", "pipe", "pipe", "pipe"],
+					stdio: [
+						"pipe",
+						"pipe",
+						"pipe",
+						validated.nativeCallback || validated.nativeConnectionBootstrap
+							? "pipe"
+							: "ignore",
+					],
 					cwd: nativeLaunchPolicy.directory,
 					env: {
 						...nativeLaunchPolicy.environment,
@@ -1409,7 +1424,7 @@ export class CodexAppServerBridge {
 							: {}),
 					},
 				},
-			);
+			) as ChildProcessWithoutNullStreams;
 		} catch {
 			await removeIsolatedDirectory(launchPolicy.directory);
 			throw unavailable();

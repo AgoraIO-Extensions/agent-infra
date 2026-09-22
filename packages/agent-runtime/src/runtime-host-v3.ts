@@ -225,31 +225,50 @@ export class RuntimeHostV3 {
 				),
 		};
 		const work = async () => {
-			await abortable(
-				this.options.serialize(key, async () => {
-					active.throwIfAborted();
-					const allowedCommand = claims.allowedCommands[0];
-					if (!allowedCommand) nativeRequired();
-					this.validate(request, allowedCommand, verification);
-					if (this.closedRecoveryGenerations.has(recoveryGenerationKey))
-						nativeRequired();
-					await this.options.store.latchOriginalEvidenceQuery(
-						queryClaims,
-						request.requestId,
-					);
-				}),
-				active,
-			);
-			assertCurrent();
-			await recover.call(
-				this.options.driver,
-				{
-					nativeSessionRef,
-					executionId: request.executionId,
-					recoveryRequestId: request.requestId,
-				},
-				read,
-			);
+			let previousEvidenceQuery:
+				| { requestId: string; issuedAt: number }
+				| undefined;
+			try {
+				previousEvidenceQuery = await abortable(
+					this.options.serialize(key, async () => {
+						active.throwIfAborted();
+						const allowedCommand = claims.allowedCommands[0];
+						if (!allowedCommand) nativeRequired();
+						this.validate(request, allowedCommand, verification);
+						if (this.closedRecoveryGenerations.has(recoveryGenerationKey))
+							nativeRequired();
+						return this.options.store.latchOriginalEvidenceQuery(
+							queryClaims,
+							request.requestId,
+						);
+					}),
+					active,
+				);
+				assertCurrent();
+				await recover.call(
+					this.options.driver,
+					{
+						nativeSessionRef,
+						executionId: request.executionId,
+						recoveryRequestId: request.requestId,
+					},
+					read,
+				);
+			} catch (error) {
+				// A failed native recovery must not leave an evidence-query latch that
+				// blocks a later authorized retry. Restore the prior high-water mark only
+				// while this request still owns the current latch.
+				await this.options
+					.serialize(key, async () =>
+						this.options.store.restoreOriginalEvidenceQuery(
+							queryClaims,
+							request.requestId,
+							previousEvidenceQuery,
+						),
+					)
+					.catch(() => undefined);
+				throw error;
+			}
 		};
 		const guard = {
 			controller,

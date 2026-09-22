@@ -1845,6 +1845,55 @@ describe("Runtime V3 original evidence read contexts", () => {
 		await env.host.close();
 	});
 
+	it("does not leave an evidence-query latch when native evidence recovery fails", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const query = (requestId: string) =>
+				signV3Fixture(
+					{
+						...base(accepted.hostSessionRef),
+						requestId,
+						originalOperationDigest: originalDigest(),
+					},
+					"session.status",
+					{ purpose: "control", reason: "recovery" },
+				);
+			Object.assign(env.driver, {
+				recoverOriginalEvidence: async () => {
+					throw new RuntimeHostError(
+						"RUNTIME_SESSION_RECOVERY_FAILED",
+						"synthetic native evidence recovery failure",
+						503,
+						true,
+						"session_recovery_failed",
+					);
+				},
+			});
+			const first = query("failed-evidence-pass");
+			await expect(
+				env.host.recoverStatusV3(first, verifyRuntimeV2Fixture(first.grant)),
+			).rejects.toMatchObject({
+				code: "RUNTIME_SESSION_RECOVERY_FAILED",
+			});
+			const failed = JSON.parse(await readFile(env.storePath, "utf8"));
+			expect(
+				failed.sessions[accepted.hostSessionRef].executionAuthorities[
+					"execution-fixture"
+				].evidenceQuery,
+			).toBeUndefined();
+
+			Object.assign(env.driver, { recoverOriginalEvidence: async () => {} });
+			env.clock.now += 1;
+			const retry = query("retry-evidence-pass");
+			await expect(
+				env.host.recoverStatusV3(retry, verifyRuntimeV2Fixture(retry.grant)),
+			).resolves.toMatchObject({ outcome: "found" });
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("rejects a substituted recovery pass ID before any admission or durable write", async () => {
 		const env = await setup();
 		try {

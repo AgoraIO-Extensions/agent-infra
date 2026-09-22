@@ -1089,6 +1089,24 @@ export class FileRuntimeStore {
 				requestId,
 				issuedAt: Math.max(previous?.issuedAt ?? 0, claims.issuedAt),
 			};
+			return previous ? { ...previous } : undefined;
+		});
+	}
+
+	/** Restore the previous evidence-query latch after an unsuccessful native read. */
+	restoreOriginalEvidenceQuery(
+		claims: RuntimeExecutionGrantClaimsV2,
+		requestId: string,
+		previous: { requestId: string; issuedAt: number } | undefined,
+	) {
+		return this.file.update((state) => {
+			const checked = this.checkRequestV3(claims);
+			const session = state.sessions[checked.hostSessionRef];
+			const authority = session?.executionAuthorities?.[claims.executionId];
+			if (!authority || authority.evidenceQuery?.requestId !== requestId)
+				return;
+			if (previous) authority.evidenceQuery = { ...previous };
+			else delete authority.evidenceQuery;
 		});
 	}
 
