@@ -1077,7 +1077,7 @@ export async function openCodexModelTransport(
 			if (key.startsWith(prefix)) readyModelTurns.delete(key);
 		for (const key of revokedTurns)
 			if (key.startsWith(prefix)) revokedTurns.delete(key);
-		for (const key of admittedTurns)
+		for (const key of admittedTurns.keys())
 			if (key.startsWith(prefix)) admittedTurns.delete(key);
 		return true;
 	};
