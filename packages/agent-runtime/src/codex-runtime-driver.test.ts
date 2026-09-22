@@ -8221,3 +8221,57 @@ it("retires a failed native RPC before retrying the same Conversation", async ()
 	});
 	expect(opened).toBe(2);
 });
+
+it("revokes model access for every alias when a shared native RPC fails", async () => {
+	class AliasDriver extends CodexRuntimeDriver {
+		protected override sharesOneNativeTransport() {
+			return true;
+		}
+
+		static openBound(
+			options: CodexRuntimeDriverOptions,
+			factory: Parameters<typeof openCodexRuntimeDriverForTest>[1],
+		) {
+			return AliasDriver.openWithBridge(
+				options,
+				factory,
+			) as Promise<AliasDriver>;
+		}
+
+		openNative(key: string) {
+			return this.openConversationRpc(key);
+		}
+	}
+
+	const path = join(await runtimeDirectory(), "driver.json");
+	const bridge = new TestCodexBridge();
+	const accesses: CodexModelAccess[] = [];
+	const driver = await AliasDriver.openBound(
+		{
+			...driverOptions(path),
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+		},
+		async (options) => {
+			if (!options.modelAccess) throw new Error("missing access");
+			accesses.push(options.modelAccess);
+			bridge.setConfigReadResult(
+				modelAccessConfigReadResult(options.modelAccess),
+			);
+			return bridge;
+		},
+	);
+	drivers.push(driver);
+
+	await driver.openNative("c".repeat(64));
+	await driver.openNative("d".repeat(64));
+	const [first, second] = accesses;
+	if (!first || !second) throw new Error("missing aliased access");
+	await bridge.close();
+	await vi.waitFor(async () => {
+		expect((await modelRequest(first, bridge)).status).toBe(401);
+		expect((await modelRequest(second, bridge)).status).toBe(401);
+	});
+});

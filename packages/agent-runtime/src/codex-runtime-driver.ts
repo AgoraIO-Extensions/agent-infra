@@ -3042,14 +3042,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (cached === rpc) {
 						this.conversationRpcs.delete(key);
 						this.revokeConnectionClient(key);
+						this.revokeModelConversation?.(this.modelConversationKey(key));
 					}
 				}
 				const cached = this.rpcsByTransport.get(bridge);
 				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
-				this.revokeConnectionClient(conversationKey);
-				this.revokeModelConversation?.(
-					this.modelConversationKey(conversationKey),
-				);
 			},
 		);
 		try {

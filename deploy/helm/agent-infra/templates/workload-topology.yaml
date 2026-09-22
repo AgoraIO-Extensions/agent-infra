@@ -71,7 +71,13 @@ spec:
           {{- if ne (int .Values.workloadTopology.legacyMigrationTrust.trustRootUid) 0 }}
           {{- fail "workloadTopology.legacyMigrationTrust.trustRootUid must be 0" }}
           {{- end }}
+          {{- end }}
           env:
+            - name: PORT
+              value: {{ .Values.workloadTopology.service.runtimePort | quote }}
+            - name: AGENT_INFRA_RUNTIME_TOPOLOGY_ROUTE_PORT
+              value: {{ .Values.workloadTopology.service.routePort | quote }}
+            {{- if .Values.workloadTopology.legacyMigrationTrust.enabled }}
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE
               value: {{ printf "%s/manifest.json" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE
@@ -80,14 +86,17 @@ spec:
               value: {{ required "workloadTopology.legacyMigrationTrust.keyId is required" .Values.workloadTopology.legacyMigrationTrust.keyId | quote }}
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID
               value: "0"
-          {{- end }}
-          command: ["node", "-e"]
+            {{- end }}
+          command: ["/bin/sh", "-c"]
           args:
             - >-
-              const http=require('node:http');
-              const serve=(port)=>http.createServer((_,res)=>{res.end('ok')}).listen(port);
-              serve({{ .Values.workloadTopology.service.runtimePort }});
-              serve({{ .Values.workloadTopology.service.routePort }});
+              if [ -n "${NODE_OPTIONS+x}${NODE_DEBUG+x}${NODE_DEBUG_NATIVE+x}${NODE_V8_COVERAGE+x}${NODE_PATH+x}${LD_PRELOAD+x}${LD_AUDIT+x}${LD_LIBRARY_PATH+x}${DYLD_INSERT_LIBRARIES+x}${DYLD_LIBRARY_PATH+x}${DYLD_FRAMEWORK_PATH+x}" ] || env | grep -Eq '^(LD_|DYLD_)'; then
+                printf '%s\n' '{"service":"agent-runtime-host","code":"RUNTIME_PROCESS_PROTECTION_INVALID"}' >&2;
+                exit 1;
+              fi;
+              ulimit -S -c 0;
+              ulimit -H -c 0;
+              exec node --disable-sigusr1 -e 'const http=require("node:http"); const ports=[process.env.PORT,process.env.AGENT_INFRA_RUNTIME_TOPOLOGY_ROUTE_PORT].map(Number); if (ports.some((port)=>!Number.isInteger(port)||port<1||port>65535)) process.exit(1); for (const port of new Set(ports)) http.createServer((_,res)=>res.end("ok")).listen(port);'
           ports:
             - name: runtime-host
               containerPort: {{ .Values.workloadTopology.service.runtimePort }}
