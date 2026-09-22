@@ -1577,6 +1577,7 @@ export async function openCodexModelTransport(
 			const turnKeys = new Set([
 				...recognizedTurns.keys(),
 				...admittedTurns.keys(),
+				...modelRequestWaiters.keys(),
 			]);
 			for (const key of turnKeys) if (key.startsWith(prefix)) revokeTurn(key);
 			for (const [key, requests] of activeTurns) {
