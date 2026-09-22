@@ -3641,6 +3641,86 @@ describe("private cross-process Connection evidence recovery", () => {
 		},
 	);
 
+	it("coalesces an in-flight recovery ID and retries a different ID after the active pass finishes", async () => {
+		const { env, execution, origin, resolveReadOnlyClient } =
+			await recoveryFixture();
+		const first = recoveryRead(execution, origin);
+		const next = recoveryRead(execution, origin);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const decisions: string[] = [];
+		const launch = vi
+			.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
+			.mockImplementation(async (process) => {
+				const response = await process.recovery(
+					recoveryPull(process.profile.profileRef),
+					process.signal,
+				);
+				decisions.push(response.decision);
+				if (decisions.length === 1) {
+					entered.resolve();
+					await release.promise;
+				}
+			});
+		const active = env.driver.recoverOriginalEvidence(
+			first.reference,
+			first.read,
+		);
+		const pending = [active];
+		try {
+			await entered.promise;
+			let duplicateFinished = false;
+			const duplicate = env.driver
+				.recoverOriginalEvidence(first.reference, first.read)
+				.then(() => {
+					duplicateFinished = true;
+				});
+			pending.push(duplicate);
+			const busy = env.driver.recoverOriginalEvidence(
+				next.reference,
+				next.read,
+			);
+			pending.push(busy);
+			// A reused active promise must fail this assertion without waiting for release.
+			await expect(
+				Promise.race([
+					busy,
+					new Promise<void>((resolve) => setImmediate(resolve)),
+				]),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+				httpStatus: 503,
+				retryable: true,
+			});
+			expect(duplicateFinished).toBe(false);
+			expect(launch).toHaveBeenCalledTimes(1);
+			expect(resolveReadOnlyClient).toHaveBeenCalledTimes(1);
+			expect(journal(await env.saved(), execution)).toMatchObject({
+				connectionRecovery: {
+					recoveryRequestId: first.reference.recoveryRequestId,
+					completed: false,
+				},
+			});
+			release.resolve();
+			await Promise.all([active, duplicate]);
+			expect(duplicateFinished).toBe(true);
+			await env.driver.recoverOriginalEvidence(next.reference, next.read);
+			expect(journal(await env.saved(), execution)).toMatchObject({
+				connectionRecovery: {
+					recoveryRequestId: next.reference.recoveryRequestId,
+					completed: true,
+				},
+			});
+			expect(decisions).toEqual(["verify", "verify"]);
+			expect(launch).toHaveBeenCalledTimes(2);
+			expect(resolveReadOnlyClient).toHaveBeenCalledTimes(2);
+			expect(execution.bridge.native.turnStarts).toBe(1);
+		} finally {
+			release.resolve();
+			await Promise.allSettled(pending);
+		}
+	});
+
 	it("persists a 16-item budget across reopen and advances the original attempt ring on a new authorized pass", async () => {
 		const { options, configuration } = connectionOptions();
 		const env = await setup(undefined, undefined, {
