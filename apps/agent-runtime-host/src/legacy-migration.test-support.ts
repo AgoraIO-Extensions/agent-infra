@@ -14,7 +14,6 @@ import {
 	RuntimeHost,
 	requestDigest,
 } from "@agent-infra/agent-runtime";
-import type { RuntimeLegacyMigrationFilesystem } from "./legacy-migration.js";
 import type {
 	RuntimeLegacyPrincipalManifestV1,
 	RuntimeSubmitTurnRequestV2,
@@ -24,6 +23,7 @@ import {
 	verificationForRuntimeGrant,
 } from "../../../packages/agent-runtime/src/grant-fixture.test-support.js";
 import { runtimeV2Keys } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
+import type { RuntimeLegacyMigrationFilesystem } from "./legacy-migration.js";
 
 export const legacyBodySentinel = "legacy-input-must-not-appear-in-provenance";
 export const migrationKeys = generateKeyPairSync("ed25519");

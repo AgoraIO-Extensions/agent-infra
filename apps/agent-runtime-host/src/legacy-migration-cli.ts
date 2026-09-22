@@ -19,8 +19,8 @@ import { FileRuntimeStore } from "@agent-infra/agent-runtime";
 import { readWorkloadReadinessBindingV1 } from "./configuration.js";
 import {
 	RuntimeLegacyMigrationError,
-	readRuntimeLegacyMigrationV1,
 	type RuntimeLegacyMigrationFilesystem,
+	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
 
 const maximumJournalBytes = 64 * 1024 * 1024;
