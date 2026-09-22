@@ -25,6 +25,9 @@ export type CodexConnectionBootstrapRequest =
 export type CodexConnectionBootstrapResponse =
 	SchemaType<"connectionBootstrapResponse">;
 export type CodexConnectionRequest = SchemaType<"connectionRequest">;
+export type CodexConnectionRequestAuthorizer = (
+	request: CodexConnectionRequest,
+) => boolean;
 export type CodexConnectionEvidence = SchemaType<"connectionEvidence">;
 export type CodexConnectionOperationRequest =
 	SchemaType<"connectionOperationRequest">;
@@ -140,6 +143,8 @@ export function createCodexConnectionClient(options: {
 	profile: CodexConnectionProfile;
 	/** Server-resolved/allowlisted service identity; never a wire input. */
 	authorizedService: CodexConnectionServiceAuthority;
+	/** Server-owned check for the operation, attempt, action and request digest. */
+	authorizeRequest: CodexConnectionRequestAuthorizer;
 	resolveOriginalClient: (
 		request: { profileRef: string; nativeSessionRef?: string },
 		signal: AbortSignal,
@@ -168,6 +173,13 @@ export function createCodexConnectionClient(options: {
 			slot.credential.expiresAt <= now()
 		)
 			throw unavailable();
+		let authorized = false;
+		try {
+			authorized = options.authorizeRequest(structuredClone(descriptor));
+		} catch {
+			authorized = false;
+		}
+		if (authorized !== true) throw unavailable();
 		return structuredClone(slot.originalBinding);
 	};
 

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it, vi } from "vitest";
 import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
@@ -80,12 +82,18 @@ function evidence(
 async function fixture() {
 	// The corpus contains full frames. Only validated descriptor/evidence crosses this seam.
 	let configuration = originalConfiguration();
+	const admitted = descriptorFromIntent();
 	const resolveOriginalClient = vi.fn(async () =>
 		structuredClone(configuration),
 	);
 	const client = createCodexConnectionClient({
 		profile,
 		authorizedService,
+		authorizeRequest: (candidate) => {
+			const { slotId: _candidateSlot, ...candidateWithoutSlot } = candidate;
+			const { slotId: _admittedSlot, ...admittedWithoutSlot } = admitted;
+			return isDeepStrictEqual(candidateWithoutSlot, admittedWithoutSlot);
+		},
 		resolveOriginalClient,
 		now: () => time,
 	});
@@ -101,7 +109,7 @@ async function fixture() {
 		setConfiguration: (next: typeof configuration) => {
 			configuration = next;
 		},
-		descriptor: { ...descriptorFromIntent(), slotId: response.slot.slotId },
+		descriptor: { ...admitted, slotId: response.slot.slotId },
 	};
 }
 
@@ -148,6 +156,7 @@ describe("socket-bound independent Connection client", () => {
 		const client = createCodexConnectionClient({
 			profile,
 			authorizedService,
+			authorizeRequest: () => true,
 			resolveOriginalClient: async () => config,
 			now: () => time,
 		});
@@ -271,6 +280,7 @@ describe("socket-bound independent Connection client", () => {
 			const client = createCodexConnectionClient({
 				profile,
 				authorizedService,
+				authorizeRequest: () => true,
 				resolveOriginalClient,
 				now: () => time,
 			});
@@ -294,12 +304,26 @@ describe("socket-bound independent Connection client", () => {
 		client.close();
 		expect(() => client.assertRequest(descriptor)).toThrow();
 	});
+	it("requires the server authorizer to admit every request descriptor", async () => {
+		const { client, descriptor } = await fixture();
+		for (const change of [
+			{ operationNonce: randomUUID() },
+			{ attemptNonce: randomUUID() },
+			{ idempotencyKey: randomUUID() },
+			{ requestDigest: "f".repeat(64) },
+			{ toolName: "list_apps" as const },
+		])
+			expect(() => client.assertRequest({ ...descriptor, ...change })).toThrow(
+				"CODEX_CONNECTION_CLIENT_UNAVAILABLE",
+			);
+	});
 	it("checks credential expiry again at the actual dispatch boundary", async () => {
 		const configuration = originalConfiguration();
 		let now = time;
 		const client = createCodexConnectionClient({
 			profile,
 			authorizedService,
+			authorizeRequest: () => true,
 			resolveOriginalClient: async () => configuration,
 			now: () => now,
 		});
