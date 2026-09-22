@@ -28,7 +28,7 @@ describe("assistant Markdown", () => {
 		const { container } = render(
 			<AssistantMarkdown>
 				{
-					'<script>alert(1)</script>\n\n<img src="https://tracker.example/pixel" onerror="alert(1)">\n\n[危险](javascript:alert%281%29) [本地](/api/logout) [协议相对](//tracker.example) [不安全](http://example.com) [凭证](https://user:pass@example.com)\n\n![示意图](https://tracker.example/image.png)\n\n[来源](https://example.com/docs)'
+					'<script>alert(1)</script>\n\n<img src="https://tracker.example/pixel" onerror="alert(1)">\n\n[危险](javascript:alert%281%29) [本地](/api/logout) [协议相对](//tracker.example) [不安全](http://example.com) [凭证](https://user:pass@example.com) [令牌](https://example.com/?access_token=secret)\n\n![示意图](https://tracker.example/image.png)\n\n[来源](https://example.com/docs)'
 				}
 			</AssistantMarkdown>,
 		);
@@ -36,6 +36,7 @@ describe("assistant Markdown", () => {
 		expect(container.textContent).toContain("<script>alert(1)</script>");
 		expect(container.textContent).toContain("[图片：示意图]");
 		expect(screen.getAllByRole("link")).toHaveLength(1);
+		expect(screen.getByText("令牌")).toBeTruthy();
 		const link = screen.getByRole<HTMLAnchorElement>("link", { name: "来源" });
 		expect(link.href).toBe("https://example.com/docs");
 		expect(link.rel).toBe("noopener noreferrer");

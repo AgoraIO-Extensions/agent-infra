@@ -5,7 +5,11 @@ function safeExternalUrl(href: string | undefined) {
 	if (!href) return undefined;
 	try {
 		const url = new URL(href);
-		return url.protocol === "https:" && !url.username && !url.password
+		return url.protocol === "https:" &&
+			!url.username &&
+			!url.password &&
+			!url.search &&
+			!url.hash
 			? url.href
 			: undefined;
 	} catch {
