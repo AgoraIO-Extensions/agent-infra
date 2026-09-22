@@ -87,13 +87,21 @@ export function ActiveConversation({
 	});
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
 	const denied = timeline.status === "denied" || command.isDenied || mismatched;
+	const denialScope = `${agentId}:${identityKey}:${conversationId}`;
+	const denialScopeRef = useRef(denialScope);
+	const denialHandled = useRef(false);
 	useLayoutEffect(() => {
-		if (!denied) return;
+		if (denialScopeRef.current !== denialScope) {
+			denialScopeRef.current = denialScope;
+			denialHandled.current = false;
+		}
+		if (!denied || denialHandled.current) return;
+		denialHandled.current = true;
 		command.revoke();
 		reader.abort();
 		setDraft("");
 		onDenied();
-	}, [denied, command.revoke, reader.abort, onDenied]);
+	}, [denialScope, denied, command.revoke, reader.abort, onDenied]);
 	const lastRefreshEvent = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		const event = timeline.events.findLast(
