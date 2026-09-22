@@ -411,11 +411,11 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		await this.options.driver.validateExternalAction(action);
+		this.trustedHost();
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
-		this.trustedHost();
 	}
 
 	/** Resolve the accepted original principal; this is not a Connection grant. */
