@@ -87,6 +87,10 @@ spec:
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID
               value: "0"
             {{- end }}
+          # This StatefulSet is the topology-only harness described in
+          # deploy/README.md. It uses the kind node image and a minimal HTTP
+          # listener; real Agent Workloads are created by the
+          # KubernetesRuntimeAdapter and start the packaged RuntimeHost entrypoint.
           command: ["/bin/sh", "-c"]
           args:
             - >-

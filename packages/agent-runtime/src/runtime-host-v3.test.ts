@@ -2144,6 +2144,44 @@ describe("Runtime V3 original evidence read contexts", () => {
 		}
 	});
 
+	it("surfaces evidence-query cleanup failure instead of hiding a stuck latch", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			Object.assign(env.driver, {
+				recoverOriginalEvidence: async () => {
+					throw new RuntimeHostError(
+						"RUNTIME_SESSION_RECOVERY_FAILED",
+						"synthetic native evidence recovery failure",
+						503,
+						true,
+						"session_recovery_failed",
+					);
+				},
+			});
+			vi.spyOn(env.store, "restoreOriginalEvidenceQuery").mockRejectedValueOnce(
+				new Error("synthetic evidence-query cleanup failure"),
+			);
+			const query = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					requestId: "cleanup-failure-pass",
+					originalOperationDigest: originalDigest(),
+				},
+				"session.status",
+				{ purpose: "control", reason: "recovery" },
+			);
+			await expect(
+				env.host.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant)),
+			).rejects.toMatchObject({
+				name: "AggregateError",
+				message: "Runtime evidence-query cleanup failed",
+			});
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("normalizes arbitrary native evidence failures", async () => {
 		const env = await setup();
 		try {

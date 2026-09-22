@@ -273,15 +273,22 @@ export class RuntimeHostV3 {
 				// A failed native recovery must not leave an evidence-query latch that
 				// blocks a later authorized retry. Restore the prior high-water mark only
 				// while this request still owns the current latch.
-				await this.options
-					.serialize(key, async () =>
+				try {
+					await this.options.serialize(key, async () =>
 						this.options.store.restoreOriginalEvidenceQuery(
 							queryClaims,
 							request.requestId,
 							previousEvidenceQuery,
 						),
-					)
-					.catch(() => undefined);
+					);
+				} catch (cleanupError) {
+					// Do not hide a failed latch restore. Surface both failures so
+					// operators can distinguish recovery failure from a stuck latch.
+					throw new AggregateError(
+						[error, cleanupError],
+						"Runtime evidence-query cleanup failed",
+					);
+				}
 				throw error;
 			}
 		};
