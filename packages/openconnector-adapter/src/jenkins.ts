@@ -26,7 +26,7 @@ export type JenkinsDeploymentProfile = {
 };
 
 export const jenkinsCiProfile = {
-	apiOrigin: "https://jenkins-ci.agoralab.co",
+	apiOrigin: "https://jenkins-api.bj2.agoralab.co",
 	displayName: "Jenkins CI",
 	providerId: "jenkins-ci",
 } as const satisfies JenkinsDeploymentProfile;
@@ -103,7 +103,7 @@ export function createJenkinsConnectionCatalog(
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
 			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v6`,
+			id: `${profile.providerId}.${action.name}@v7`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -126,7 +126,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v6`,
+		providerReleaseId: `${profile.providerId}-connection-v7`,
 		sourceCommit,
 	} as const;
 }
