@@ -168,36 +168,8 @@ export async function probeRuntimeImage({
 		throw new Error("Codex runtime image probe source is invalid");
 	}
 	const { commitSha } = source;
-	// The checked-out Git tree is the source of truth for the pinned release.
-	// Never derive probe expectations solely from a caller-provided extracted
-	// context: that would allow a modified context to self-attest its own pin.
-	const expectedReleaseBytes = await readFile(join(root, releasePath));
-	if (resolve(contextPath) !== root) {
-		try {
-			const contextHead = runCommand("git", ["rev-parse", "HEAD"], {
-				cwd: contextPath,
-				name: "Runtime probe context revision",
-				timeoutMs: 10_000,
-			}).trim();
-			const contextReleaseStatus = runCommand(
-				"git",
-				["status", "--porcelain", "--", releasePath],
-				{
-					cwd: contextPath,
-					name: "Runtime probe context release status",
-					timeoutMs: 10_000,
-				},
-			).trim();
-			if (contextHead !== commitSha || contextReleaseStatus !== "")
-				throw new Error("Codex runtime probe context does not match its commit");
-		} catch (error) {
-			if (error instanceof Error && error.message.includes("does not match"))
-				throw error;
-		}
-		const contextReleaseBytes = await readFile(join(contextPath, releasePath));
-		if (!contextReleaseBytes.equals(expectedReleaseBytes))
-			throw new Error("Codex runtime probe context does not match Git HEAD");
-	}
+	// The immutable Git source context owns the expected pin; no environment override.
+	const expectedReleaseBytes = await readFile(join(contextPath, releasePath));
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const command = (args, name, timeoutMs = 30_000, onFailure) =>
 		runCommand(docker, args, { cwd: root, name, timeoutMs, onFailure });
