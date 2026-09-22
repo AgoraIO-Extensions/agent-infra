@@ -62,7 +62,8 @@ describe("Connection 查询失败状态", () => {
 		expect(document.activeElement).toBe(
 			screen.getByRole("searchbox", { name: "搜索连接器" }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "连接 Bitbucket" }));
+		fireEvent.click(screen.getByRole("button", { name: "Bitbucket 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		expect(
 			screen.getByRole("heading", { name: "连接公司 Bitbucket" }),
 		).toBeTruthy();

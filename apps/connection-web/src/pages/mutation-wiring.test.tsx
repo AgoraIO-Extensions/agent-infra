@@ -273,6 +273,9 @@ describe("Connection 管理 mutation wiring", () => {
 				}).then(() => ({ connectionId })),
 		);
 		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /Jenkins Release 已连接/ }),
+		);
 		await screen.findByRole("heading", { level: 2, name: "Jenkins Release" });
 
 		fireEvent.click(screen.getByRole("button", { name: "升级连接" }));
@@ -335,15 +338,12 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(
 			screen.getByRole("heading", { name: "connectionE2E2" }),
 		).toBeTruthy();
-		expect(screen.getByText("329435106")).toBeTruthy();
-		expect(
-			screen.getByRole("heading", { level: 2, name: "Confluence" }),
-		).toBeTruthy();
-		expect(screen.getByRole("columnheader", { name: "平台" })).toBeTruthy();
+		expect(screen.getAllByText("329435106").length).toBeGreaterThanOrEqual(1);
 		expect(screen.getAllByText("GitHub").length).toBeGreaterThanOrEqual(2);
 		expect(screen.queryByText("github.get_repository")).toBeNull();
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 Bitbucket" }));
+		fireEvent.click(screen.getByRole("button", { name: "Bitbucket 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		fireEvent.change(screen.getByLabelText("Personal Access Token"), {
 			target: { value: "test-bitbucket-pat" },
 		});
@@ -356,7 +356,11 @@ describe("Connection 管理 mutation wiring", () => {
 			providerId: "bitbucket",
 		});
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+		fireEvent.click(screen.getByRole("button", { name: /GitHub 已连接/ }));
+		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /旧 GitHub guoxianzhe-old/ }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
 		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledTimes(2));
 		expect(calls(api.startGithubOAuth).map((call) => call[0])).toEqual([
@@ -366,8 +370,9 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(open).not.toHaveBeenCalled();
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "断开 connectionE2E2" }),
+			screen.getByRole("button", { name: /connectionE2E2 329435106/ }),
 		);
+		fireEvent.click(screen.getByRole("button", { name: "断开 Connection" }));
 		await waitFor(() =>
 			expect(api.disconnectConnection).toHaveBeenCalledOnce(),
 		);
@@ -376,9 +381,7 @@ describe("Connection 管理 mutation wiring", () => {
 		await waitFor(() => expect(api.revokeGrant).toHaveBeenCalledOnce());
 		expect(calls(api.revokeGrant)[0]?.[0]).toBe("grant-codex");
 
-		fireEvent.click(
-			screen.getAllByRole("button", { name: "授权客户端" })[1] as HTMLElement,
-		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "查看授权差异" });
 		expect(screen.getByText("已选择 1 / 共 2 项")).toBeTruthy();
@@ -404,7 +407,8 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 Jira" }));
+		fireEvent.click(screen.getByRole("button", { name: "Jira 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		fireEvent.change(screen.getByLabelText("Jira 用户名"), {
 			target: { value: "guoxianzhe@agora.io" },
 		});
@@ -427,8 +431,9 @@ describe("Connection 管理 mutation wiring", () => {
 		await screen.findByRole("heading", { name: "客户端授权" });
 
 		fireEvent.click(
-			screen.getByRole("button", { name: "连接 Jenkins Release" }),
+			screen.getByRole("button", { name: /Jenkins Release 已连接/ }),
 		);
+		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
 		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
 			target: { value: "jenkins-user" },
 		});
@@ -450,7 +455,8 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 Rehoboam" }));
+		fireEvent.click(screen.getByRole("button", { name: "Rehoboam 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		fireEvent.change(screen.getByLabelText("Rehoboam 访问令牌"), {
 			target: { value: "rehoboam-personal-token" },
 		});
@@ -468,7 +474,8 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 Jenkins CI" }));
+		fireEvent.click(screen.getByRole("button", { name: "Jenkins CI 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		fireEvent.change(screen.getByLabelText("Jenkins 用户名"), {
 			target: { value: "jenkins-ci-user" },
 		});
@@ -490,7 +497,8 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
 
-		fireEvent.click(screen.getByRole("button", { name: "连接 Confluence" }));
+		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
+		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
 		fireEvent.change(screen.getByLabelText("Confluence 密码"), {
 			target: { value: "confluence-password" },
 		});
@@ -539,6 +547,52 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.queryByText("历史 Codex")).toBeNull();
 		fireEvent.click(screen.getByRole("checkbox", { name: "显示历史授权" }));
 		expect(screen.getByText("历史 Codex")).toBeTruthy();
+	});
+
+	it("同一连接器下切换账号时只显示该账号的客户端授权", async () => {
+		const overview = await api.getConnections();
+		overview.overview.connections.push({
+			actionVersionIds: ["github.get_repository@v2"],
+			displayName: "AgoraIO-Extensions",
+			externalAccount: "agora-release-bot",
+			id: "connection-github-shared",
+			ownerType: "PERSONAL",
+			providerId: "github",
+			requiresReconnect: false,
+			status: "ACTIVE",
+		});
+		overview.overview.grants.push({
+			actionVersionIds: ["github.get_repository@v2"],
+			actions: [
+				{
+					effect: "READ",
+					id: "github.get_repository@v2",
+					name: "github.get_repository",
+				},
+			],
+			connectionDisplayName: "AgoraIO-Extensions",
+			connectionId: "connection-github-shared",
+			consumerId: "consumer-rehoboam-ai",
+			consumerName: "RehoboamAI",
+			externalAccount: "agora-release-bot",
+			id: "grant-rehoboam-shared",
+			providerId: "github",
+			status: "ACTIVE",
+		});
+		api.getConnections.mockResolvedValueOnce(overview);
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: /AgoraIO-Extensions agora-release-bot/,
+			}),
+		);
+
+		expect(
+			screen.getByRole("heading", { name: "AgoraIO-Extensions" }),
+		).toBeTruthy();
+		expect(screen.getByText("RehoboamAI")).toBeTruthy();
+		expect(screen.queryByText("Codex")).toBeNull();
 	});
 
 	it("Token 页面调用签发和撤销 API", async () => {

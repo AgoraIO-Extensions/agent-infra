@@ -1,11 +1,17 @@
-import type { AuthorizationPreviewResponse } from "@agent-infra/connection-contracts";
+import type {
+	AuthorizationPreviewResponse,
+	Connection,
+	Grant,
+} from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	BookOpen,
 	Check,
+	ChevronRight,
 	GitBranch,
 	KeyRound,
 	Plus,
+	Search,
 	ShieldOff,
 	SlidersHorizontal,
 	X,
@@ -24,9 +30,8 @@ import {
 import { useGithubOAuth } from "../github-oauth";
 import { ConsoleShell, PageError } from "../shell";
 import {
-	ConnectionsView,
-	ConnectorCatalog,
 	type ConnectorProviderId,
+	connectorDefinitions,
 	EmptyState,
 	PageHeader,
 	providerLabel,
@@ -317,10 +322,22 @@ export function ConnectionsPage() {
 					{upgradeNotice}
 				</p>
 			) : null}
-			<ConnectorCatalog
-				connections={data?.connections ?? []}
-				onConnect={connectProvider}
-			/>
+			{!data && !overview.isPending ? (
+				<ConnectorManagementWorkspace
+					connections={[]}
+					grants={[]}
+					hasGrantHistory={false}
+					onAuthorize={() => undefined}
+					onConnect={connectProvider}
+					onDisconnect={() => undefined}
+					onReconnect={() => undefined}
+					onRevoke={() => undefined}
+					onShowHistoryChange={() => undefined}
+					onUpgrade={() => undefined}
+					showHistory={false}
+					upgradingConnectionId={null}
+				/>
+			) : null}
 			{data ? (
 				<div className="content-stack">
 					{data.upgradeTasks?.length ? (
@@ -395,172 +412,60 @@ export function ConnectionsPage() {
 							</div>
 						</section>
 					) : null}
-					<section className="data-section">
-						<ConnectionsView
-							connections={data.connections}
-							onAuthorize={(connectionId) =>
-								setAuthorization({
-									connectionId,
-									consumerId: data.consumers[0]?.id ?? "",
-									initialActionVersionIds: [],
-									preview: null,
-									reviewed: false,
-								})
-							}
-							onDisconnect={(connectionId) => {
-								const connection = data.connections.find(
-									(entry) => entry.id === connectionId,
-								);
-								if (
-									window.confirm(
-										`确认断开这个 ${providerLabel(connection?.providerId ?? "")} Connection？`,
-									)
-								) {
-									disconnect.mutate(connectionId);
-								}
-							}}
-							onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
-							upgradingConnectionId={
-								upgrade.isPending ? (upgrade.variables ?? null) : null
-							}
-							onReconnect={(connectionId) => {
-								const connection = data.connections.find(
-									(entry) => entry.id === connectionId,
-								);
-								if (connection?.providerId === "bitbucket") {
-									setBitbucketOpen(true);
-								} else if (connection?.providerId === "rehoboam") {
-									setRehoboamOpen(true);
-								} else if (connection?.providerId === "jira") {
-									setJiraOpen(true);
-								} else if (connection?.providerId === "confluence") {
-									setConfluenceOpen(true);
-								} else if (
-									connection?.providerId === "jenkins-ci" ||
-									connection?.providerId === "jenkins-release"
-								) {
-									setJenkinsProviderId(connection.providerId);
-									setJenkinsOpen(true);
-								} else {
-									beginOAuth();
-								}
-							}}
-						/>
-					</section>
-
-					<section className="data-section" aria-labelledby="grants-title">
-						<div className="section-heading">
-							<div>
-								<h2 id="grants-title">客户端授权</h2>
-								<p>每个客户端独立授权，可随时撤销。</p>
-							</div>
-							{data.grants.length ? (
-								<label className="history-toggle">
-									<input
-										checked={showHistory}
-										onChange={(event) => setShowHistory(event.target.checked)}
-										type="checkbox"
-									/>
-									<span>显示历史授权</span>
-								</label>
-							) : null}
-						</div>
-						{visibleGrants.length ? (
-							<div className="table-scroll">
-								<table className="grant-table">
-									<thead>
-										<tr>
-											<th>客户端</th>
-											<th>平台</th>
-											<th>账号</th>
-											<th>状态</th>
-											<th>授权能力</th>
-											<th className="table-action">操作</th>
-										</tr>
-									</thead>
-									<tbody>
-										{visibleGrants.map((grant) => (
-											<tr key={grant.id}>
-												<td className="primary-cell">
-													<div>{grant.consumerName}</div>
-													<small className="table-secondary">
-														{grant.consumerId}
-													</small>
-												</td>
-												<td>
-													<span className="provider-badge">
-														{providerLabel(grant.providerId)}
-													</span>
-												</td>
-												<td>
-													<strong>{grant.connectionDisplayName}</strong>
-													<small className="table-secondary">
-														{grant.externalAccount}
-													</small>
-												</td>
-												<td>
-													<Status value={grant.status} />
-												</td>
-												<td>
-													<GrantPermissions grant={grant} />
-												</td>
-												<td className="table-action">
-													<div className="row-actions">
-														<Button
-															variant="secondary"
-															size="icon"
-															type="button"
-															disabled={grant.status !== "ACTIVE"}
-															onClick={() =>
-																setAuthorization({
-																	connectionId: grant.connectionId,
-																	consumerId: grant.consumerId,
-																	initialActionVersionIds:
-																		grant.actionVersionIds,
-																	preview: null,
-																	reviewed: false,
-																})
-															}
-															aria-label={`管理 ${grant.consumerName} 能力`}
-															title="管理能力"
-														>
-															<SlidersHorizontal aria-hidden="true" size={17} />
-														</Button>
-														<Button
-															variant="danger"
-															size="icon"
-															type="button"
-															disabled={
-																grant.status !== "ACTIVE" ||
-																revokeGrant.isPending
-															}
-															onClick={() => revokeGrant.mutate(grant.id)}
-															aria-label={`撤销 ${grant.consumerName}`}
-															title={
-																grant.status === "ACTIVE"
-																	? "撤销授权"
-																	: "历史授权不可操作"
-															}
-														>
-															<ShieldOff aria-hidden="true" size={17} />
-														</Button>
-													</div>
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						) : data.grants.length ? (
-							<EmptyState title="没有当前授权">
-								当前只显示正常授权，打开“显示历史授权”可查看已撤销、已替换和已暂停记录。
-							</EmptyState>
-						) : (
-							<EmptyState title="还没有客户端授权">
-								从上方 Connection 选择客户端并确认授权。
-							</EmptyState>
-						)}
-					</section>
+					<ConnectorManagementWorkspace
+						connections={data.connections}
+						grants={visibleGrants}
+						hasGrantHistory={data.grants.length > 0}
+						onAuthorize={(connectionId, consumerId) =>
+							setAuthorization({
+								connectionId,
+								consumerId: consumerId ?? data.consumers[0]?.id ?? "",
+								initialActionVersionIds: consumerId
+									? (data.grants.find(
+											(grant) =>
+												grant.connectionId === connectionId &&
+												grant.consumerId === consumerId,
+										)?.actionVersionIds ?? [])
+									: [],
+								preview: null,
+								reviewed: false,
+							})
+						}
+						onConnect={connectProvider}
+						onDisconnect={(connectionId) => {
+							const connection = data.connections.find(
+								(entry) => entry.id === connectionId,
+							);
+							if (
+								window.confirm(
+									`确认断开这个 ${providerLabel(connection?.providerId ?? "")} Connection？`,
+								)
+							)
+								disconnect.mutate(connectionId);
+						}}
+						onReconnect={(connection) => {
+							if (connection.providerId === "bitbucket") setBitbucketOpen(true);
+							else if (connection.providerId === "rehoboam")
+								setRehoboamOpen(true);
+							else if (connection.providerId === "jira") setJiraOpen(true);
+							else if (connection.providerId === "confluence")
+								setConfluenceOpen(true);
+							else if (
+								connection.providerId === "jenkins-ci" ||
+								connection.providerId === "jenkins-release"
+							) {
+								setJenkinsProviderId(connection.providerId);
+								setJenkinsOpen(true);
+							} else beginOAuth();
+						}}
+						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
+						onShowHistoryChange={setShowHistory}
+						onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
+						showHistory={showHistory}
+						upgradingConnectionId={
+							upgrade.isPending ? (upgrade.variables ?? null) : null
+						}
+					/>
 				</div>
 			) : null}
 
@@ -958,6 +863,263 @@ export function ConnectionsPage() {
 				</DialogContent>
 			</Dialog>
 		</ConsoleShell>
+	);
+}
+
+function ConnectorManagementWorkspace(props: {
+	connections: Connection[];
+	grants: Grant[];
+	hasGrantHistory: boolean;
+	onAuthorize: (connectionId: string, consumerId?: string) => void;
+	onConnect: (providerId: ConnectorProviderId) => void;
+	onDisconnect: (connectionId: string) => void;
+	onReconnect: (connection: Connection) => void;
+	onRevoke: (grantId: string) => void;
+	onShowHistoryChange: (show: boolean) => void;
+	onUpgrade: (connectionId: string) => void;
+	showHistory: boolean;
+	upgradingConnectionId: string | null;
+}) {
+	const initialProvider =
+		props.connections.find((connection) => connection.providerId === "github")
+			?.providerId ??
+		props.connections.find((connection) => connection.status === "ACTIVE")
+			?.providerId ??
+		connectorDefinitions[0]?.providerId ??
+		"github";
+	const [providerId, setProviderId] = useState(initialProvider);
+	const [connectionId, setConnectionId] = useState<string | null>(null);
+	const [query, setQuery] = useState("");
+	const visibleConnectors = connectorDefinitions.filter((connector) =>
+		`${connector.name} ${connector.category} ${connector.description}`
+			.toLowerCase()
+			.includes(query.trim().toLowerCase()),
+	);
+	const connector =
+		connectorDefinitions.find((item) => item.providerId === providerId) ??
+		connectorDefinitions[0];
+	const accounts = props.connections.filter(
+		(connection) => connection.providerId === connector?.providerId,
+	);
+	const selected =
+		accounts.find((connection) => connection.id === connectionId) ??
+		accounts[0];
+	const grants = selected
+		? props.grants.filter((grant) => grant.connectionId === selected.id)
+		: [];
+	const Icon = connector?.icon;
+
+	return (
+		<section className="connection-management-workspace">
+			<aside className="connection-connector-list">
+				<label className="connector-search" htmlFor="connector-search">
+					<Search aria-hidden="true" size={17} />
+					<span className="sr-only">搜索连接器</span>
+					<input
+						id="connector-search"
+						maxLength={120}
+						onChange={(event) => setQuery(event.target.value)}
+						placeholder="搜索连接器"
+						type="search"
+						value={query}
+					/>
+				</label>
+				<strong className="connection-list-label">连接器</strong>
+				{visibleConnectors.map((item) => {
+					const count = props.connections.filter(
+						(connection) =>
+							connection.providerId === item.providerId &&
+							connection.status === "ACTIVE",
+					).length;
+					const ItemIcon = item.icon;
+					return (
+						<button
+							className={
+								item.providerId === connector?.providerId ? "active" : ""
+							}
+							key={item.providerId}
+							onClick={() => {
+								setProviderId(item.providerId);
+								setConnectionId(null);
+							}}
+							type="button"
+						>
+							<span className="connector-logo" aria-hidden="true">
+								<ItemIcon size={19} />
+							</span>
+							<span>
+								<b>{item.name}</b>
+								<small>{count ? `已连接 ${count} 个账号` : "未连接"}</small>
+							</span>
+							<ChevronRight aria-hidden="true" size={16} />
+						</button>
+					);
+				})}
+			</aside>
+			<div className="connection-provider-detail">
+				<header className="connection-provider-header">
+					{Icon ? (
+						<span className="connector-logo">{<Icon size={20} />}</span>
+					) : null}
+					<div>
+						<span>{connector?.category}</span>
+						<h2>{connector?.name}</h2>
+						<p>{connector?.description}</p>
+					</div>
+					<Button
+						variant={accounts.length ? "secondary" : "primary"}
+						onClick={() => connector && props.onConnect(connector.providerId)}
+					>
+						{accounts.length ? "再连接" : "连接"}
+					</Button>
+				</header>
+				{selected ? (
+					<div className="connection-account-workspace">
+						<section className="connection-account-list">
+							<div className="connection-subheading">
+								<div>
+									<strong>已连接账号</strong>
+									<p>{accounts.length} 个账号</p>
+								</div>
+							</div>
+							{accounts.map((account) => (
+								<button
+									className={account.id === selected.id ? "active" : ""}
+									key={account.id}
+									onClick={() => setConnectionId(account.id)}
+									type="button"
+								>
+									<span className="connection-account-avatar">
+										{account.displayName.slice(0, 1).toUpperCase()}
+									</span>
+									<span>
+										<b>{account.displayName}</b>
+										<small>{account.externalAccount}</small>
+										<small>
+											{
+												props.grants.filter(
+													(grant) =>
+														grant.connectionId === account.id &&
+														grant.status === "ACTIVE",
+												).length
+											}{" "}
+											个客户端
+										</small>
+									</span>
+									<ChevronRight aria-hidden="true" size={16} />
+								</button>
+							))}
+						</section>
+						<section className="connection-grant-list">
+							<div className="connection-selected-account">
+								<div>
+									<span>客户端授权</span>
+									<h2 className="sr-only">客户端授权</h2>
+									<h3>{selected.displayName}</h3>
+									<p>{selected.externalAccount}</p>
+								</div>
+								<Status value={selected.status} />
+							</div>
+							<div className="connection-grant-toolbar">
+								{props.hasGrantHistory ? (
+									<label className="history-toggle">
+										<input
+											checked={props.showHistory}
+											onChange={(event) =>
+												props.onShowHistoryChange(event.target.checked)
+											}
+											type="checkbox"
+										/>
+										<span>显示历史授权</span>
+									</label>
+								) : (
+									<span />
+								)}
+								<Button onClick={() => props.onAuthorize(selected.id)}>
+									<Plus aria-hidden="true" size={15} />
+									授权客户端
+								</Button>
+							</div>
+							<div className="connection-grants">
+								{grants.length ? (
+									grants.map((grant) => (
+										<div className="connection-grant-row" key={grant.id}>
+											<span className="connection-client-avatar">
+												{grant.consumerName.slice(0, 1).toUpperCase()}
+											</span>
+											<div>
+												<strong>{grant.consumerName}</strong>
+												<GrantPermissions grant={grant} />
+											</div>
+											<Status value={grant.status} />
+											<Button
+												variant="secondary"
+												size="icon"
+												disabled={grant.status !== "ACTIVE"}
+												onClick={() =>
+													props.onAuthorize(selected.id, grant.consumerId)
+												}
+												aria-label={`管理 ${grant.consumerName} 能力`}
+												title="管理能力"
+											>
+												<SlidersHorizontal aria-hidden="true" size={16} />
+											</Button>
+											<Button
+												variant="danger"
+												size="icon"
+												disabled={grant.status !== "ACTIVE"}
+												onClick={() => props.onRevoke(grant.id)}
+												aria-label={`撤销 ${grant.consumerName}`}
+												title="撤销授权"
+											>
+												<ShieldOff aria-hidden="true" size={16} />
+											</Button>
+										</div>
+									))
+								) : (
+									<div className="connection-inline-empty">
+										<ShieldOff aria-hidden="true" size={20} />
+										<strong>还没有客户端授权</strong>
+										<p>授权后，客户端才能通过此账号工作。</p>
+									</div>
+								)}
+							</div>
+							<div className="connection-account-actions">
+								{selected.requiresReconnect ? (
+									<Button
+										variant="secondary"
+										disabled={props.upgradingConnectionId === selected.id}
+										onClick={() =>
+											selected.providerId === "github"
+												? props.onReconnect(selected)
+												: props.onUpgrade(selected.id)
+										}
+									>
+										{props.upgradingConnectionId === selected.id
+											? "正在升级"
+											: selected.providerId === "github"
+												? "重新连接"
+												: "升级连接"}
+									</Button>
+								) : null}
+								{selected.ownerType === "PERSONAL" ? (
+									<Button
+										variant="danger"
+										onClick={() => props.onDisconnect(selected.id)}
+									>
+										断开 Connection
+									</Button>
+								) : null}
+							</div>
+						</section>
+					</div>
+				) : (
+					<EmptyState title={`还没有 ${connector?.name} Connection`}>
+						连接后，账号和客户端授权会在这里统一管理。
+					</EmptyState>
+				)}
+			</div>
+		</section>
 	);
 }
 
