@@ -72,6 +72,8 @@ spec:
               value: {{ printf "%s/migration-public.pem" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
             - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID
               value: {{ required "workloadTopology.legacyMigrationTrust.keyId is required" .Values.workloadTopology.legacyMigrationTrust.keyId | quote }}
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID
+              value: {{ .Values.workloadTopology.legacyMigrationTrust.trustRootUid | quote }}
           {{- end }}
           command: ["node", "-e"]
           args:

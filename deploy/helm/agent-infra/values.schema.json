@@ -145,7 +145,7 @@
         "legacyMigrationTrust": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["enabled", "manifestSecretName", "manifestSecretKey", "publicKeySecretName", "publicKeySecretKey", "keyId", "mountDir"],
+          "required": ["enabled", "manifestSecretName", "manifestSecretKey", "publicKeySecretName", "publicKeySecretKey", "keyId", "trustRootUid", "mountDir"],
           "properties": {
             "enabled": { "type": "boolean" },
             "manifestSecretName": { "type": "string" },
@@ -153,6 +153,7 @@
             "publicKeySecretName": { "type": "string" },
             "publicKeySecretKey": { "type": "string", "minLength": 1 },
             "keyId": { "type": "string" },
+            "trustRootUid": { "type": "integer", "minimum": 0 },
             "mountDir": { "type": "string", "pattern": "^/[^ ]+$" }
           }
         },

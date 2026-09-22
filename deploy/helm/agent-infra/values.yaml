@@ -68,6 +68,7 @@ workloadTopology:
     publicKeySecretName: ""
     publicKeySecretKey: migration-public.pem
     keyId: ""
+    trustRootUid: 0
     mountDir: /etc/agent-infra/legacy-migration
   storageSize: 1Gi
   service:
