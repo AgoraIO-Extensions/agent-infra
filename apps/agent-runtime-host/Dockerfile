@@ -44,6 +44,7 @@ ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
+RUN chmod 0555 /opt/codex /opt/codex/bin /opt/codex/share
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
 RUN chmod 0755 ./start-runtime-host.sh
