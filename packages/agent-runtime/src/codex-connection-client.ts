@@ -156,6 +156,15 @@ export function createCodexConnectionClient(options: {
 	authorizeRequest: CodexConnectionRequestAuthorizer;
 	/** Server-owned journal check for origins from a different process. */
 	authorizeOrigin: CodexConnectionOriginAuthorizer;
+	/** Trusted recovery context; never metadata supplied by a native callback. */
+	resolveReadOnlyQueryMetadata?: (input: {
+		requestDescriptor: CodexConnectionRequest;
+		origin: CodexConnectionOrigin;
+		credentialRevision: NonNullable<
+			CodexConnectionEvidence["recordQuery"]
+		>["credentialRevision"];
+		queriedAt: number;
+	}) => CodexConnectionQueryMetadata | undefined;
 	resolveOriginalClient: (
 		request: { profileRef: string; nativeSessionRef?: string },
 		signal: AbortSignal,
@@ -412,7 +421,7 @@ export function createCodexConnectionClient(options: {
 		}
 		const query = evidence.recordQuery;
 		const record = query?.record;
-		const queryCredentialKnown =
+		let queryCredentialKnown =
 			query !== undefined &&
 			[...slots.values()].some(
 				(known) =>
@@ -429,6 +438,41 @@ export function createCodexConnectionClient(options: {
 					),
 			);
 		if (
+			!queryCredentialKnown &&
+			metadataOnly &&
+			input.origin !== undefined &&
+			query !== undefined &&
+			options.resolveReadOnlyQueryMetadata
+		) {
+			try {
+				const known = options.resolveReadOnlyQueryMetadata(
+					structuredClone({
+						requestDescriptor: descriptor,
+						origin: input.origin,
+						credentialRevision: query.credentialRevision,
+						queriedAt: query.queriedAt,
+					}),
+				);
+				queryCredentialKnown =
+					known !== undefined &&
+					isDeepStrictEqual(known.service, evidenceSlot.service) &&
+					isDeepStrictEqual(
+						known.originalBinding,
+						evidenceSlot.originalBinding,
+					) &&
+					isDeepStrictEqual(
+						known.connectionIdentity,
+						evidenceSlot.connectionIdentity,
+					) &&
+					known.credential.revision === query.credentialRevision &&
+					Number.isSafeInteger(known.credential.expiresAt) &&
+					known.credential.expiresAt > query.queriedAt;
+			} catch {
+				queryCredentialKnown = false;
+			}
+		}
+		if (
+			closed ||
 			!queryCredentialKnown ||
 			!receiptMatches ||
 			!receipt ||
