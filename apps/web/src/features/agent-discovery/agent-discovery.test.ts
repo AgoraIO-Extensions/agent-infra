@@ -1,24 +1,24 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
-	createPilotAgentMockServerV1,
-	pilotFakeScenariosV1,
+	createPilotAgentMockServerV2,
+	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 
-import { createClient } from "../../pilot/generated/client/index.js";
+import { createClient } from "../../pilot/generated-v2/client/index.js";
 import { loadAgentDetail, loadAgentDiscovery } from "./agent-discovery.js";
 
-const startingAgent = AgentProjectionV1Schema.parse(
-	pilotFakeScenariosV1.starting.response.body,
+const startingAgent = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
 );
-const secondAgent = AgentProjectionV1Schema.parse({
+const secondAgent = AgentProjectionV2Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
 });
 const emptyAgentPage = { status: 200, body: { items: [], nextCursor: null } };
 
 function createAgentClient(
-	server: ReturnType<typeof createPilotAgentMockServerV1>,
+	server: ReturnType<typeof createPilotAgentMockServerV2>,
 ) {
 	return createClient({
 		baseUrl: "https://platform.example.test",
@@ -28,7 +28,7 @@ function createAgentClient(
 
 describe("Agent discovery generated-client consumer", () => {
 	it("consumes the generated visible-Agent list and preserves its projection", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: {
 				status: 200,
 				body: { items: [startingAgent], nextCursor: null },
@@ -44,13 +44,33 @@ describe("Agent discovery generated-client consumer", () => {
 		});
 		expect(server.requests).toHaveLength(1);
 		expect(server.requests[0]?.url).toBe(
-			"https://platform.example.test/api/v1/agents",
+			"https://platform.example.test/api/v2/agents",
+		);
+	});
+
+	it("requests the server-owned Agent projection for the management view", async () => {
+		const server = createPilotAgentMockServerV2({
+			listAgents: {
+				status: 200,
+				body: { items: [startingAgent], nextCursor: null },
+			},
+			getAgent: { status: 200, body: startingAgent },
+		});
+
+		await expect(
+			loadAgentDiscovery(createAgentClient(server), "owner"),
+		).resolves.toEqual({
+			kind: "ready",
+			agents: [startingAgent],
+		});
+		expect(server.requests[0]?.url).toBe(
+			"https://platform.example.test/api/v2/agents?scope=owner",
 		);
 	});
 
 	it("aggregates every visible-Agent page from the generated client", async () => {
 		const cursor = "agent-pilot-1";
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: (request) =>
 				new URL(request.url).searchParams.get("cursor") === cursor
 					? { status: 200, body: { items: [secondAgent], nextCursor: null } }
@@ -71,7 +91,7 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("fails closed when a visible-Agent cursor repeats", async () => {
 		const cursor = "agent-pilot-1";
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: {
 				status: 200,
 				body: { items: [startingAgent], nextCursor: cursor },
@@ -89,7 +109,7 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("bounds a unique visible-Agent cursor chain", async () => {
 		let requests = 0;
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: () => {
 				requests += 1;
 				return {
@@ -110,10 +130,10 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("keeps non-retryable visible-Agent failures opaque", async () => {
 		for (const status of [403, 404]) {
-			const server = createPilotAgentMockServerV1({
+			const server = createPilotAgentMockServerV2({
 				listAgents: {
 					status,
-					body: pilotFakeScenariosV1.unauthorized.response.body,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
 				},
 				getAgent: { status: 200, body: startingAgent },
 			});
@@ -128,11 +148,11 @@ describe("Agent discovery generated-client consumer", () => {
 	});
 
 	it("rejects retryable generated-client list failures without exposing details", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: {
 				status: 503,
 				body: {
-					...pilotFakeScenariosV1.unavailable.response.body,
+					...pilotFakeScenariosV2.unavailable.response.body,
 					message: "private upstream detail",
 				},
 			},
@@ -148,11 +168,11 @@ describe("Agent discovery generated-client consumer", () => {
 
 	it("keeps missing and forbidden detail responses equally opaque", async () => {
 		for (const status of [403, 404]) {
-			const server = createPilotAgentMockServerV1({
+			const server = createPilotAgentMockServerV2({
 				listAgents: emptyAgentPage,
 				getAgent: {
 					status,
-					body: pilotFakeScenariosV1.unauthorized.response.body,
+					body: pilotFakeScenariosV2.unauthorized.response.body,
 				},
 			});
 
@@ -166,12 +186,12 @@ describe("Agent discovery generated-client consumer", () => {
 	});
 
 	it("rejects retryable generated-client detail failures without exposing details", async () => {
-		const server = createPilotAgentMockServerV1({
+		const server = createPilotAgentMockServerV2({
 			listAgents: emptyAgentPage,
 			getAgent: {
 				status: 503,
 				body: {
-					...pilotFakeScenariosV1.unavailable.response.body,
+					...pilotFakeScenariosV2.unavailable.response.body,
 					message: "private upstream detail",
 				},
 			},

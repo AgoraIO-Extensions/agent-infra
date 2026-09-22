@@ -4,9 +4,9 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationUpdateRequestV1Writable,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationUpdateRequestV2Writable,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
 	createMyAgentApplication,
 	updateMyAgentApplication,
@@ -20,7 +20,7 @@ vi.mock("./my-agent-applications.js", () => ({
 }));
 
 const createBody = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	name: pendingApplication.name,
 	description: pendingApplication.description,
 	source: pendingApplication.source,
@@ -38,10 +38,10 @@ const createBody = {
 		defaultOptionId: "model-option-1",
 		defaultReasoningLevel: "medium",
 	},
-	actions: [],
+
 	environment: [],
 	secrets: [],
-} satisfies AgentApplicationCreateRequestV1Writable;
+} satisfies AgentApplicationCreateRequestV2Writable;
 const { secrets: _secrets, ...updateBody } = createBody;
 
 const sensitiveCreateBody = {
@@ -56,7 +56,7 @@ const sensitiveCreateBody = {
 			},
 		],
 	},
-} satisfies AgentApplicationCreateRequestV1Writable;
+} satisfies AgentApplicationCreateRequestV2Writable;
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
@@ -90,7 +90,7 @@ describe("useAgentApplicationSubmission", () => {
 			expect(
 				result.current.update(
 					pendingApplication.applicationId,
-					updateBody satisfies AgentApplicationUpdateRequestV1Writable,
+					updateBody satisfies AgentApplicationUpdateRequestV2Writable,
 				),
 			).toBeUndefined();
 		});

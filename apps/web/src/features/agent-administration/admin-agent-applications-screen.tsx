@@ -1,33 +1,34 @@
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+	DialogTrigger,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
-
-import type {
-	AgentApplicationProjectionV1,
-	BrowserSessionProjectionV1,
-} from "../../pilot/generated/types.gen.js";
+import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
+import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import type { BrowserSessionState } from "../browser-session.js";
 import type {
 	AgentApplicationDecision,
-	BrowserSessionState,
 	PendingAgentApplicationsState,
 } from "./agent-administration.js";
 
 type AdministrationSessionState = BrowserSessionState | { kind: "loading" };
-
 type PendingDecision = {
 	readonly applicationId: string;
 	readonly decision: AgentApplicationDecision;
 };
-
 type RequestError = Error & { readonly retryable?: boolean };
-
 type AdminAgentApplicationsScreenProps = {
 	decisionError?: RequestError | null;
-	decisionResult?: AgentApplicationProjectionV1;
+	decisionResult?: AgentApplicationProjectionV2;
 	onDecision: (
 		applicationId: string,
 		decision: AgentApplicationDecision,
@@ -37,99 +38,269 @@ type AdminAgentApplicationsScreenProps = {
 	state: PendingAgentApplicationsState | { kind: "loading" };
 };
 
+type ApplicationReviewProps = {
+	application: AgentApplicationProjectionV2;
+	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
+	pendingDecision?: PendingDecision;
+	decisionError?: RequestError | null;
+	decisionResult?: AgentApplicationProjectionV2;
+	onOpenChange?: (open: boolean) => void;
+};
+
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	// This controls visibility only. The Platform authorizes every decision command.
 	return session.user.roles.includes("system_admin");
 }
-
-function resourceSummary(application: AgentApplicationProjectionV1) {
-	const { estimatedResources } = application.resourceProfile;
-	return `${estimatedResources.cpuMillicores}m CPU, ${estimatedResources.memoryMiB} MiB memory, ${estimatedResources.storageGiB} GiB storage`;
+function decisionFailure(error: RequestError) {
+	return error.retryable === false
+		? "权限或申请状态已变化，请刷新页面。"
+		: "审批未能提交，请稍后重试。";
 }
-
 function DecisionFeedback({
 	decision,
 }: {
-	decision?: AgentApplicationProjectionV1;
+	decision?: AgentApplicationProjectionV2;
 }) {
 	const resultRef = useResultFocus(decision);
 	return decision ? (
 		<p
 			ref={resultRef}
 			tabIndex={-1}
-			className="mt-4 font-medium text-slate-950 text-sm"
+			className="mt-4 font-medium text-sm"
 			role="status"
 		>
-			Decision submitted for {decision.name}:{" "}
-			{agentManagementStatusLabels[decision.status]}.
+			已提交 {decision.name} 的审批结果：
+			{agentManagementStatusLabels[decision.status]}。
 		</p>
 	) : null;
 }
 
-function ApplicationDecisionControls({
+function ApplicationReview({
 	application,
 	onDecision,
 	pendingDecision,
-}: {
-	application: AgentApplicationProjectionV1;
-	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
-	pendingDecision?: PendingDecision;
-}) {
+	decisionError,
+	decisionResult,
+	onOpenChange,
+}: ApplicationReviewProps) {
+	const [open, setOpen] = useState(false);
+	const [rejecting, setRejecting] = useState(false);
 	const [reason, setReason] = useState("");
+	const [reasonError, setReasonError] = useState(false);
+	const [localDecisionPending, setLocalDecisionPending] = useState(false);
+	const lastDecisionError = useRef(decisionError);
 	const reasonId = useId();
-	const deciding = pendingDecision !== undefined;
-	const currentDecision =
+	const reasonInput = useRef<HTMLTextAreaElement>(null);
+	const matchingPendingDecision =
 		pendingDecision?.applicationId === application.applicationId
-			? pendingDecision.decision
+			? pendingDecision
 			: undefined;
-
+	const deciding = matchingPendingDecision !== undefined;
+	const decisionSubmitting = deciding || localDecisionPending;
+	const currentDecision =
+		matchingPendingDecision !== undefined
+			? matchingPendingDecision.decision
+			: undefined;
+	const resolved =
+		decisionResult?.applicationId === application.applicationId &&
+		decisionResult.status !== "pending_approval";
+	const { configuration, resourceProfile, source } = application;
+	const resources = resourceProfile.estimatedResources;
+	const close = useCallback(() => {
+		setOpen(false);
+		onOpenChange?.(false);
+		setRejecting(false);
+		setReason("");
+		setReasonError(false);
+	}, [onOpenChange]);
+	useEffect(() => {
+		if (resolved && open) close();
+	}, [close, open, resolved]);
+	useEffect(() => {
+		const errorAdvanced =
+			decisionError !== null && decisionError !== lastDecisionError.current;
+		lastDecisionError.current = decisionError;
+		if (errorAdvanced) setLocalDecisionPending(false);
+	}, [decisionError]);
 	return (
-		<div className="flex min-w-0 flex-col gap-3 sm:min-w-72">
-			<Button
-				disabled={deciding}
-				onClick={() =>
-					onDecision(application.applicationId, { decision: "approve" })
-				}
-				type="button"
+		<Dialog
+			open={open && !resolved}
+			onOpenChange={(next) => {
+				if (decisionSubmitting) return;
+				if (next) {
+					setOpen(true);
+					onOpenChange?.(true);
+				} else close();
+			}}
+		>
+			<DialogTrigger
+				className={buttonVariants({ variant: "outline" })}
+				disabled={decisionSubmitting || resolved}
 			>
-				{currentDecision?.decision === "approve"
-					? "Approving..."
-					: "Approve application"}
-			</Button>
-			<form
-				className="flex flex-col gap-2"
-				onSubmit={(event) => {
-					event.preventDefault();
-					if (deciding) return;
-					const trimmedReason = reason.trim();
-					if (!trimmedReason) return;
-					onDecision(application.applicationId, {
-						decision: "reject",
-						reason: trimmedReason,
-					});
-				}}
-			>
-				<Label htmlFor={reasonId}>Rejection reason</Label>
-				<Textarea
-					id={reasonId}
-					className="min-h-20"
-					disabled={deciding}
-					onChange={(event) => setReason(event.target.value)}
-					required
-					value={reason}
-				/>
-				<Button
-					variant="outline"
-					className="self-start"
-					disabled={deciding || !reason.trim()}
-					type="submit"
-				>
-					{currentDecision?.decision === "reject"
-						? "Rejecting..."
-						: "Reject application"}
-				</Button>
-			</form>
-		</div>
+				{currentDecision ? "审批提交中…" : "审阅申请"}
+			</DialogTrigger>
+			<DialogContent showCloseButton={!decisionSubmitting}>
+				<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
+				<DialogDescription>
+					{rejecting
+						? "请输入申请人可以据此修改的具体原因。"
+						: "确认用途、Owner、使用范围与平台给出的只读资源规格。"}
+				</DialogDescription>
+				<h3 className="mt-5 break-words font-semibold">{application.name}</h3>
+				<p className="break-words text-muted-foreground">
+					{application.description}
+				</p>
+				{!rejecting ? (
+					<>
+						<dl className="detail-list my-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 text-sm">
+							<dt>{source.kind === "standard" ? "模板" : "镜像"}</dt>
+							<dd className="break-all">
+								{source.kind === "standard"
+									? source.templateId
+									: source.imageReference}
+							</dd>
+							<dt>Owner</dt>
+							<dd className="break-words">
+								{configuration.owners
+									.map((owner) => owner.displayName || owner.userId)
+									.join("、") || "未提供"}
+							</dd>
+							<dt>使用范围</dt>
+							<dd className="break-all">
+								{configuration.availability
+									.map((target) =>
+										target.kind === "user"
+											? `员工：${target.userId}`
+											: `组织：${target.organizationId}`,
+									)
+									.join("；") || "未提供额外范围"}
+							</dd>
+							<dt>模型</dt>
+							<dd className="break-words">
+								{configuration.modelOptions
+									.map((model) => `${model.displayName}（${model.modelId}）`)
+									.join("、") || "未提供模型选项"}
+							</dd>
+							<dt>默认模型</dt>
+							<dd className="break-all">
+								{configuration.defaultModelOptionId ?? "未提供"}
+							</dd>
+							<dt>默认推理强度</dt>
+							<dd className="break-words">
+								{configuration.defaultReasoningLevel ?? "未提供"}
+							</dd>
+							<dt>预设规格</dt>
+							<dd>{resourceProfile.displayName}（只读）</dd>
+							<dt>预计资源占用</dt>
+							<dd>
+								{resources.cpuMillicores}m CPU / {resources.memoryMiB} MiB 内存
+								/ {resources.storageGiB} GiB 存储
+							</dd>
+						</dl>
+						<p className="text-muted-foreground text-sm">
+							批准后才开始创建 Agent；审批受理不表示服务已就绪。
+						</p>
+						<div className="mt-5 flex flex-wrap gap-3">
+							<Button
+								disabled={decisionSubmitting || resolved}
+								onClick={() => {
+									if (!decisionSubmitting && !resolved) {
+										setLocalDecisionPending(true);
+										onDecision(application.applicationId, {
+											decision: "approve",
+										});
+									}
+								}}
+							>
+								{currentDecision?.decision === "approve"
+									? "批准中…"
+									: "批准并创建"}
+							</Button>
+							<Button
+								variant="outline"
+								disabled={decisionSubmitting}
+								onClick={() => setRejecting(true)}
+							>
+								驳回
+							</Button>
+							<Button
+								variant="ghost"
+								disabled={decisionSubmitting}
+								onClick={close}
+							>
+								取消
+							</Button>
+						</div>
+					</>
+				) : (
+					<form
+						className="mt-5 space-y-4"
+						noValidate
+						onSubmit={(event) => {
+							event.preventDefault();
+							if (decisionSubmitting || resolved) return;
+							const trimmedReason = reason.trim();
+							if (!trimmedReason) {
+								setReasonError(true);
+								reasonInput.current?.focus();
+								return;
+							}
+							setLocalDecisionPending(true);
+							onDecision(application.applicationId, {
+								decision: "reject",
+								reason: trimmedReason,
+							});
+						}}
+					>
+						<div className="space-y-2">
+							<Label htmlFor={reasonId}>驳回原因</Label>
+							<Textarea
+								ref={reasonInput}
+								id={reasonId}
+								disabled={decisionSubmitting}
+								required
+								value={reason}
+								aria-invalid={reasonError || undefined}
+								aria-describedby={reasonError ? `${reasonId}-error` : undefined}
+								onChange={(event) => {
+									setReason(event.target.value);
+									setReasonError(false);
+								}}
+							/>
+							{reasonError && (
+								<p
+									id={`${reasonId}-error`}
+									role="alert"
+									className="text-destructive text-sm"
+								>
+									请输入驳回原因。
+								</p>
+							)}
+						</div>
+						<div className="flex flex-wrap gap-3">
+							<Button disabled={decisionSubmitting || resolved} type="submit">
+								{currentDecision?.decision === "reject"
+									? "提交中…"
+									: "确认驳回"}
+							</Button>
+							<Button
+								variant="outline"
+								disabled={decisionSubmitting}
+								onClick={() => setRejecting(false)}
+								type="button"
+							>
+								返回审阅
+							</Button>
+						</div>
+					</form>
+				)}
+				{decisionError && (
+					<p role="alert" className="mt-4 text-destructive text-sm">
+						{decisionFailure(decisionError)}
+					</p>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -141,99 +312,112 @@ export function AdminAgentApplicationsScreen({
 	session,
 	state,
 }: AdminAgentApplicationsScreenProps) {
-	if (session.kind === "loading") {
-		return <p aria-live="polite">Loading Agent approvals...</p>;
-	}
-	if (session.kind !== "ready" || !isSystemAdministrator(session.session)) {
-		return <p role="alert">Approvals are unavailable.</p>;
-	}
-	if (state.kind === "loading") {
-		return <p aria-live="polite">Loading Agent approvals...</p>;
-	}
-	if (state.kind === "unavailable") {
-		return (
-			<section aria-labelledby="agent-approvals-heading">
-				<h1
-					id="agent-approvals-heading"
-					className="font-semibold text-2xl text-slate-950"
-				>
-					Agent approvals are unavailable
-				</h1>
-				<DecisionFeedback decision={decisionResult} />
-				<p className="mt-4 text-slate-600" role="alert">
-					{state.retryable
-						? "Please try again shortly."
-						: "Please contact an administrator."}
-				</p>
-			</section>
-		);
-	}
-
+	const [openApplicationId, setOpenApplicationId] = useState<string | null>(
+		null,
+	);
+	useEffect(() => {
+		const renderedPendingApplication =
+			session.kind === "ready" &&
+			isSystemAdministrator(session.session) &&
+			state.kind === "ready" &&
+			state.applications.some(
+				(application) =>
+					application.applicationId === openApplicationId &&
+					application.status === "pending_approval",
+			);
+		if (openApplicationId !== null && !renderedPendingApplication)
+			setOpenApplicationId(null);
+	}, [openApplicationId, session, state]);
+	if (session.kind === "loading")
+		return <p aria-live="polite">正在读取审批申请…</p>;
+	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
+		return <p role="alert">当前无法访问审批。</p>;
+	if (state.kind === "loading")
+		return <p aria-live="polite">正在读取审批申请…</p>;
 	return (
 		<section aria-labelledby="agent-approvals-heading">
-			<h1
-				id="agent-approvals-heading"
-				className="font-semibold text-2xl text-slate-950"
-			>
-				Agent approvals
-			</h1>
-			<DecisionFeedback decision={decisionResult} />
-			{state.applications.length === 0 ? (
-				<p className="mt-4 text-slate-600">No pending Agent applications.</p>
-			) : (
-				<ul className="mt-4 divide-y divide-slate-200 border-slate-200 border-y">
-					{state.applications.map((application) => {
-						return (
-							<li
-								className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start sm:justify-between"
-								key={application.applicationId}
-							>
-								<div className="min-w-0 space-y-2">
-									<div className="flex flex-wrap items-center gap-2">
-										<strong className="text-slate-950">
-											{application.name}
-										</strong>
-										<Badge variant="outline">
-											{agentManagementStatusLabels[application.status]}
-										</Badge>
-									</div>
-									<p className="text-slate-600 text-sm">
-										{application.description}
-									</p>
-									<dl className="text-slate-700 text-sm">
-										<div>
-											<dt className="inline font-medium">Resource profile: </dt>
-											<dd className="inline">
-												{application.resourceProfile.displayName}
-											</dd>
-										</div>
-										<div>
-											<dt className="inline font-medium">
-												Estimated resources:{" "}
-											</dt>
-											<dd className="inline">{resourceSummary(application)}</dd>
-										</div>
-									</dl>
-								</div>
-								{application.status === "pending_approval" ? (
-									<ApplicationDecisionControls
-										application={application}
-										onDecision={onDecision}
-										pendingDecision={pendingDecision}
-									/>
-								) : null}
-							</li>
-						);
-					})}
-				</ul>
-			)}
-			{decisionError ? (
-				<p className="mt-4 text-slate-600" role="alert">
-					{decisionError.retryable === false
-						? "Your permission or this application changed. Refresh the page."
-						: "Unable to submit the application decision. Please try again shortly."}
+			<header className="page-heading flex-col space-y-2">
+				<h1 id="agent-approvals-heading" className="font-semibold text-[28px]">
+					审批
+				</h1>
+				<p className="text-muted-foreground">
+					审阅 Agent 创建申请，确认预设资源占用。
 				</p>
-			) : null}
+			</header>
+			<DecisionFeedback decision={decisionResult} />
+			{state.kind === "unavailable" ? (
+				<p className="mt-5 text-muted-foreground" role="alert">
+					{state.retryable
+						? "审批列表暂时无法读取，请稍后重试。"
+						: "审批列表不可用，请联系管理员。"}
+				</p>
+			) : (
+				<>
+					<div className="tabs mt-6 border-border border-b pb-3">
+						<span className="font-medium text-sm">
+							待审批{" "}
+							{
+								state.applications.filter(
+									(application) => application.status === "pending_approval",
+								).length
+							}
+						</span>
+					</div>
+					{state.applications.length === 0 ? (
+						<p className="empty-state py-12 text-center text-muted-foreground">
+							暂无待审批申请。
+						</p>
+					) : (
+						<ul>
+							{state.applications.map((application) => (
+								<li
+									className="record-row flex flex-wrap items-center gap-4 border-border border-b py-5"
+									key={application.applicationId}
+								>
+									<div className="min-w-0 flex-1">
+										<h2 className="break-words font-semibold">
+											{application.name}
+										</h2>
+										<p className="mt-1 break-words text-muted-foreground text-sm">
+											{application.description}
+										</p>
+										<p className="mt-1 text-muted-foreground text-sm">
+											提交时间：
+											{new Date(application.submittedAt).toLocaleString()}
+										</p>
+									</div>
+									<Badge variant="outline">
+										{agentManagementStatusLabels[application.status]}
+									</Badge>
+									{application.status === "pending_approval" && (
+										<ApplicationReview
+											application={application}
+											onDecision={onDecision}
+											pendingDecision={pendingDecision}
+											decisionError={
+												openApplicationId === application.applicationId
+													? decisionError
+													: null
+											}
+											decisionResult={decisionResult}
+											onOpenChange={(open) =>
+												setOpenApplicationId(
+													open ? application.applicationId : null,
+												)
+											}
+										/>
+									)}
+								</li>
+							))}
+						</ul>
+					)}
+				</>
+			)}
+			{decisionError && openApplicationId === null && (
+				<p className="mt-4 text-destructive text-sm" role="alert">
+					{decisionFailure(decisionError)}
+				</p>
+			)}
 		</section>
 	);
 }

@@ -1,14 +1,14 @@
 import type {
 	Client,
 	RequestResult,
-} from "../../pilot/generated/client/index.js";
-import { getAgent, listAgents } from "../../pilot/generated/sdk.gen.js";
+} from "../../pilot/generated-v2/client/index.js";
+import { getAgentV2, listAgentsV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	AgentProjectionV1,
-	ListAgentsData,
-	ListAgentsErrors,
-	ListAgentsResponses,
-} from "../../pilot/generated/types.gen.js";
+	AgentProjectionV2,
+	ListAgentsV2Data,
+	ListAgentsV2Errors,
+	ListAgentsV2Responses,
+} from "../../pilot/generated-v2/types.gen.js";
 
 type UnavailableState = {
 	kind: "unavailable";
@@ -18,16 +18,18 @@ type UnavailableState = {
 export type AgentDiscoveryState =
 	| {
 			kind: "ready";
-			agents: AgentProjectionV1[];
+			agents: AgentProjectionV2[];
 	  }
 	| UnavailableState;
 
 export type AgentDetailState =
-	| { kind: "ready"; agent: AgentProjectionV1 }
+	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
 const retryableError = () => new Error("Agent data is temporarily unavailable");
 const maximumAgentDiscoveryPages = 100;
+
+export type AgentDiscoveryScope = "visible" | "owner";
 
 function unavailable(error: { retryable?: boolean } | undefined) {
 	if (error?.retryable !== false) throw retryableError();
@@ -40,8 +42,9 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 
 export async function loadAgentDiscovery(
 	client?: Client,
+	scope: AgentDiscoveryScope = "visible",
 ): Promise<AgentDiscoveryState> {
-	const agents: AgentProjectionV1[] = [];
+	const agents: AgentProjectionV2[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
 	let pages = 0;
@@ -49,11 +52,13 @@ export async function loadAgentDiscovery(
 	do {
 		if (pages >= maximumAgentDiscoveryPages) throw retryableError();
 		pages += 1;
-		const query: ListAgentsData["query"] =
-			cursor === null ? undefined : { cursor };
+		const query: ListAgentsV2Data["query"] = {
+			...(cursor === null ? {} : { cursor }),
+			...(scope === "owner" ? { scope: "owner" as const } : {}),
+		};
 		const result: Awaited<
-			RequestResult<ListAgentsResponses, ListAgentsErrors, false>
-		> = await listAgents<false>({
+			RequestResult<ListAgentsV2Responses, ListAgentsV2Errors, false>
+		> = await listAgentsV2<false>({
 			client,
 			query,
 			responseStyle: "fields",
@@ -74,7 +79,7 @@ export async function loadAgentDetail(
 	agentId: string,
 	client?: Client,
 ): Promise<AgentDetailState> {
-	const result = await getAgent({
+	const result = await getAgentV2({
 		client,
 		path: { agentId },
 		responseStyle: "fields",
