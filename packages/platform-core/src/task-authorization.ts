@@ -10,21 +10,22 @@ import {
 import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispatch.js";
 
 export interface TaskPrincipalV1 {
-	readonly kind: "user" | "application";
+	/** Application principals are supplied by the #481 application-grant slice. */
+	readonly kind: "user";
 	readonly id: string;
 }
 
-/** Directory facts resolved by trusted reference, without a browser Request. */
+/**
+ * Task-scoped directory facts resolved by a deployment IdentityAdapter.
+ * This is not the canonical platform IdentityContext; application grants and
+ * platform-role facts are supplied by their owning slices.
+ */
 export interface CurrentTaskUserV1 {
 	readonly schemaVersion: 1;
 	readonly userId: string;
 	readonly accountStatus: "active" | "disabled";
 	readonly organizationIds: readonly string[];
 	readonly authorizationRevision: string;
-}
-
-export interface TaskUserDirectoryV1 {
-	resolveUser(userId: string): Promise<unknown | null>;
 }
 
 type TaskAccessSourceV1 =
@@ -73,10 +74,7 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 function principal(input: unknown): TaskPrincipalV1 {
 	const value = object(input);
 	exact(value, ["kind", "id"]);
-	if (
-		(value.kind !== "user" && value.kind !== "application") ||
-		!text(value.id)
-	) {
+	if (value.kind !== "user" || !text(value.id)) {
 		throw new TypeError("Task principal is invalid");
 	}
 	return { kind: value.kind, id: value.id };
@@ -182,8 +180,7 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	const subject = principal(input.principal);
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
-	// Applications require their own persisted grants, delivered by #481.
-	if (subject.kind !== "user" || subject.id !== user.userId) return null;
+	if (subject.id !== user.userId) return null;
 	const sources = accessSources(user, agent);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
@@ -197,7 +194,13 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	});
 }
 
-/** New access sources cannot expand a stored task boundary. */
+/**
+ * New access sources cannot expand a stored task boundary.
+ *
+ * This is only the scope-intersection check. The Store must also reject a
+ * persisted revokedAt/control receipt before calling it; restoration of a
+ * matching organization grant is not proof that a revoked task is current.
+ */
 export function isTaskAuthorizationCurrentV1(input: {
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly user: CurrentTaskUserV1;
@@ -224,12 +227,21 @@ export type TaskSystemControlReasonV1 =
 	| "recovery"
 	| "generation_isolation";
 
+export interface TaskSystemControlBindingV1 {
+	readonly executionId: string;
+	readonly conversationId: string;
+	readonly sessionGeneration: number;
+}
+
 /** Decided from the Store's locked current rows; all resulting writes share its transaction. */
 export function planTaskSystemControlV1(input: {
 	readonly reason: TaskSystemControlReasonV1;
 	readonly workerId: string;
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly execution: {
+		readonly executionId: string;
+		readonly conversationId: string;
+		readonly sessionGeneration: number;
 		readonly actorId: string;
 		readonly agentId: string;
 		readonly channelId: string;
@@ -246,6 +258,10 @@ export function planTaskSystemControlV1(input: {
 			"generation_isolation",
 		].includes(input.reason) ||
 		!text(input.workerId) ||
+		!text(input.execution.executionId) ||
+		!text(input.execution.conversationId) ||
+		!Number.isSafeInteger(input.execution.sessionGeneration) ||
+		input.execution.sessionGeneration < 0 ||
 		boundary.principal.kind !== "user" ||
 		boundary.principal.id !== input.execution.actorId ||
 		boundary.agentId !== input.execution.agentId ||
@@ -257,6 +273,11 @@ export function planTaskSystemControlV1(input: {
 	return {
 		schemaVersion: 1 as const,
 		workerId: input.workerId,
+		binding: {
+			executionId: input.execution.executionId,
+			conversationId: input.execution.conversationId,
+			sessionGeneration: input.execution.sessionGeneration,
+		},
 		ensureStop:
 			input.reason === "authorization_revoked" &&
 			["submitted", "processing", "unknown"].includes(input.execution.status),
