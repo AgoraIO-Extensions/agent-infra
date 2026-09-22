@@ -101,7 +101,14 @@ if (args[0] === "run") {
       const releaseBytes = readFileSync(join(context, "packages/agent-runtime/src/codex-release.json"));
       const release = JSON.parse(releaseBytes);
       const derived = release.schemaVersion === 2 && release.distribution?.kind === "derived";
-			const artifact = release.artifacts[process.arch === "arm64" ? "arm64" : "amd64"];
+      const targetArchitecture = process.env.PLATFORM?.endsWith("/arm64")
+        ? "arm64"
+        : process.env.PLATFORM?.endsWith("/amd64")
+          ? "amd64"
+          : process.arch === "arm64"
+            ? "arm64"
+            : "amd64";
+      const artifact = release.artifacts[targetArchitecture];
       if (derived && !artifact) throw new Error("Missing pinned artifact for probe architecture");
       const identity = derived ? { protocolVersion: release.provenance.protocolVersion, distribution: { ...release.distribution, target: artifact.target, releaseSha256: "sha256:" + createHash("sha256").update(releaseBytes).digest("hex"), candidateManifestSha256: artifact.candidateManifestSha256, binaries: artifact.binaries } } : {};
       console.log(JSON.stringify({ schemaVersion: derived ? 2 : 1, status: "passed", codexVersion: release.provenance.codexVersion, configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-sandboxed-tool-execution", "native-sibling-conversation-denied", "recursive-native-storage-redacted", "personal-configuration-isolated"], ...identity }));

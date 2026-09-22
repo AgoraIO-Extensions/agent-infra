@@ -71,6 +71,18 @@ export async function startMinioFileFixtureV1() {
 				);
 				initialized = true;
 			} catch (error) {
+				if (
+					!bucketCreated &&
+					error instanceof Error &&
+					(error.name === "BucketAlreadyOwnedByYou" ||
+						error.name === "BucketAlreadyExists")
+				) {
+					// The create response may have been lost after MinIO committed
+					// the bucket. Treat the ownership response as successful so the
+					// retry can move on to the versioning contract.
+					bucketCreated = true;
+					continue;
+				}
 				lastError = error;
 				await new Promise((resolve) => setTimeout(resolve, 250));
 			}
