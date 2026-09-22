@@ -38,6 +38,7 @@ type ReadingSession = {
 	historyRequest?: AbortController;
 	stream?: AbortController;
 	cursor: string | null;
+	seenCursors: Set<string>;
 	needsHistory: boolean;
 	reloadCursor?: string;
 };
@@ -154,6 +155,9 @@ export function createConversationTimeline({
 			history.events.at(-1)?.conversationCursor ??
 			session.reloadCursor ??
 			null;
+		session.seenCursors = new Set(
+			session.cursor === null ? [] : [session.cursor],
+		);
 		session.needsHistory = false;
 		publish({
 			...state,
@@ -233,9 +237,13 @@ export function createConversationTimeline({
 				if (message.conversationId !== session.conversationId) {
 					throw new ConversationReadError({ kind: "invalid" });
 				}
+				const cursor = message.conversationCursor;
 				const events = reduceTimelineEvents(state.events, [message]);
 				if (events === state.events) continue;
-				session.cursor = message.conversationCursor;
+				if (!cursor || session.seenCursors.has(cursor))
+					throw new ConversationReadError({ kind: "invalid" });
+				session.seenCursors.add(cursor);
+				session.cursor = cursor;
 				publish({ ...state, status: "ready", events, failure: null });
 			}
 			if (!active()) return;
@@ -268,6 +276,7 @@ export function createConversationTimeline({
 			const session: ReadingSession = {
 				conversationId,
 				cursor: null,
+				seenCursors: new Set(),
 				needsHistory: true,
 			};
 			current = session;
