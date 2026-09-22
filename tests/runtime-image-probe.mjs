@@ -779,6 +779,7 @@ async function submitTurn(name, selection, session = undefined) {
 		},
 		() => ({
 			httpStatus: accepted?.status,
+			responseCode,
 			resultStatus: accepted
 				? JSON.parse(accepted.text).result?.status
 				: undefined,
