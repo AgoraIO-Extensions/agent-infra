@@ -2486,3 +2486,30 @@ it("evicts the oldest idle Conversation access at the bounded capacity", async (
 	const reopened = value.modelAccessFor(first);
 	expect(reopened.credential).not.toBe(firstAccess.credential);
 });
+
+it("releases a bound thread after its cancelled turn", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const first = "a".repeat(64);
+	const threadId = "thread-cancelled";
+	value.modelAccessFor(first);
+	value.bindThread(first, threadId);
+	await value.cancelTurn({
+		conversationKey: first,
+		threadId,
+		turnId: "turn-cancelled",
+	});
+	for (let index = 1; index < 1024; index++)
+		value.modelAccessFor(index.toString(16).padStart(64, "0"));
+	expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
+});

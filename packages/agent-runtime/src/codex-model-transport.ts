@@ -1153,6 +1153,19 @@ export async function openCodexModelTransport(
 		}
 		admittedTurns.delete(key);
 		settleAdmissionWaiters(key, undefined);
+		maybeUnbindThread(key);
+	};
+	const maybeUnbindThread = (turnKey: string) => {
+		const threadKey = turnKey.slice(0, turnKey.lastIndexOf("\u0000"));
+		if (
+			[...activeTurns.keys()].some((key) => key.startsWith(`${threadKey}\u0000`)) ||
+			[...admittedTurns.keys()].some((key) => key.startsWith(`${threadKey}\u0000`)) ||
+			pendingThreads.has(threadKey) ||
+			[...recognizedTurns.keys()].some((key) => key.startsWith(`${threadKey}\u0000`)) ||
+			[...modelRequestWaiters.keys()].some((key) => key.startsWith(`${threadKey}\u0000`))
+		)
+			return;
+		boundThreads.delete(threadKey);
 	};
 	const recognizeAdmissionWaiters = (
 		admission: CodexModelTurnAdmission,
@@ -1337,6 +1350,8 @@ export async function openCodexModelTransport(
 				if (startedPersistence) await startedPersistence.catch(() => {});
 				if (!journal) {
 					readyModelTurns.delete(turnKey);
+					admittedTurns.delete(turnKey);
+					maybeUnbindThread(turnKey);
 					outcomeReported = true;
 					return;
 				}
@@ -1355,6 +1370,8 @@ export async function openCodexModelTransport(
 					}),
 				);
 				readyModelTurns.delete(turnKey);
+				admittedTurns.delete(turnKey);
+				maybeUnbindThread(turnKey);
 				outcomeReported = true;
 			})();
 			outcomeReport = pending;
@@ -1505,6 +1522,7 @@ export async function openCodexModelTransport(
 			active.delete(activeTurn);
 			turnRequests.delete(activeTurn);
 			if (turnRequests.size === 0) activeTurns.delete(turnKey);
+			maybeUnbindThread(turnKey);
 			completeRequest?.();
 		}
 	});

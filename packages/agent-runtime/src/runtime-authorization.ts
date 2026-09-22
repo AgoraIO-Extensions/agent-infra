@@ -206,12 +206,11 @@ export function applyRuntimeAuthority(
 			claims.operation.executionDeliveryFence <
 				current.executionDeliveryFence ||
 			(claims.purpose === "control" &&
-				current.control !== undefined &&
 				claims.operation.executionDeliveryFence ===
 					current.executionDeliveryFence &&
 				claims.operation.deliveryFence <=
 					(current.controlDeliveryFence ?? current.executionDeliveryFence) &&
-				current.control.controlRecordId !== claims.controlRecordId))
+				current.control?.controlRecordId !== claims.controlRecordId))
 	)
 		runtimeAuthorizationDenied();
 	if (claims.purpose === "business") {
@@ -275,7 +274,6 @@ export function applyRuntimeAuthority(
 				mode === "renew")
 		) {
 			delete authority.control;
-			delete authority.controlDeliveryFence;
 		}
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;

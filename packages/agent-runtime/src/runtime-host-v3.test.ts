@@ -1601,6 +1601,28 @@ describe("Runtime V3 durable authorization", () => {
 		).claims;
 		applyRuntimeAuthority(authorities, recovery, "query");
 		expect(authorities["execution-fixture"]).not.toHaveProperty("stopped");
+		const staleControl = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "execution",
+						id: "execution-fixture",
+						deliveryFence: 2,
+						executionDeliveryFence: 2,
+					},
+				},
+				"session.status",
+				{
+					purpose: "control",
+					reason: "stop",
+					claims: { controlRecordId: "first-control" },
+				},
+			).grant,
+		).claims;
+		expect(() =>
+			applyRuntimeAuthority(authorities, staleControl, "query"),
+		).toThrow();
 
 		const business = verifyRuntimeV2Fixture(
 			signV3Fixture(
