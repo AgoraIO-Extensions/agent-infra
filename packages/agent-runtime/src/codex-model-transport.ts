@@ -1060,6 +1060,8 @@ export async function openCodexModelTransport(
 	const conversationIsActive = (conversationKey: string) => {
 		const prefix = `${conversationKey}\u0000`;
 		return (
+			[...boundThreads].some((key) => key.startsWith(prefix)) ||
+			[...admittedTurns.keys()].some((key) => key.startsWith(prefix)) ||
 			[...activeTurns.keys()].some((key) => key.startsWith(prefix)) ||
 			[...pendingThreads.keys()].some((key) => key.startsWith(prefix)) ||
 			[...recognizedTurns.keys()].some((key) => key.startsWith(prefix)) ||

@@ -111,6 +111,7 @@ export function validateRuntimeExecutionGrantV2(
 			if (claims[key] !== request[key]) runtimeAuthorizationDenied();
 		}
 		if (
+			claims.allowedCommands.length !== 1 ||
 			claims.principal.kind !== request.principal.kind ||
 			claims.principal.id !== request.principal.id ||
 			claims.allowedCommands[0] !== command ||
