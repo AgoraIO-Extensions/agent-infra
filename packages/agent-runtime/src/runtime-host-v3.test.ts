@@ -379,6 +379,23 @@ describe("Runtime V3 durable authorization", () => {
 		expect(await env.driver.sideEffectCount()).toBe(1);
 	});
 
+	it("authorizes external actions before asking the Driver to inspect them", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const validate = vi.spyOn(env.driver, "validateExternalAction");
+			await expect(
+				env.host.authorizeExternalAction({
+					...guard(accepted.hostSessionRef, env.store),
+					runtimeOperationId: "missing-operation",
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			expect(validate).not.toHaveBeenCalled();
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("expires external-action authority and renews only the existing accepted execution", async () => {
 		const env = await setup();
 		const accepted = await submit(env.host);

@@ -406,11 +406,11 @@ export class RuntimeHost {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)
 			runtimeAuthorizationDenied();
-		await this.options.driver.validateExternalAction(action);
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
+		await this.options.driver.validateExternalAction(action);
 	}
 
 	/** Resolve the accepted original principal; this is not a Connection grant. */

@@ -267,15 +267,13 @@ export class RuntimeHostV3 {
 				// A failed native recovery must not leave an evidence-query latch that
 				// blocks a later authorized retry. Restore the prior high-water mark only
 				// while this request still owns the current latch.
-				await this.options
-					.serialize(key, async () =>
-						this.options.store.restoreOriginalEvidenceQuery(
-							queryClaims,
-							request.requestId,
-							previousEvidenceQuery,
-						),
-					)
-					.catch(() => undefined);
+				await this.options.serialize(key, async () =>
+					this.options.store.restoreOriginalEvidenceQuery(
+						queryClaims,
+						request.requestId,
+						previousEvidenceQuery,
+					),
+				);
 				throw error;
 			}
 		};
