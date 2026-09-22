@@ -28,6 +28,10 @@ export type AgentConfigurationDraft = {
 	userAvailabilityIds: string;
 };
 
+type AgentConfigurationChannelDraft = NonNullable<
+	AgentConfigurationUpdateRequestV2Writable["channels"]
+>[number];
+
 function splitValues(value: string) {
 	return value
 		.split(/[\n,]/)
@@ -38,6 +42,15 @@ function splitValues(value: string) {
 export function configurationDraftFromAgent(
 	agent: AgentProjectionV2,
 ): AgentConfigurationDraft {
+	const channels: AgentConfigurationChannelDraft[] = [];
+	for (const channel of agent.configuration.channels) {
+		if (channel.kind === "web") continue;
+		channels.push(
+			channel.status === "bound"
+				? { kind: channel.kind, enabled: true, bindingReference: "" }
+				: { kind: channel.kind, enabled: false },
+		);
+	}
 	return {
 		coOwnerIds: agent.configuration.owners
 			.map((owner) => owner.userId)
@@ -55,6 +68,7 @@ export function configurationDraftFromAgent(
 		defaultModelOptionId: "",
 		defaultReasoningLevel: "",
 		secrets: [],
+		...(channels.length === 0 ? {} : { channels }),
 	};
 }
 
