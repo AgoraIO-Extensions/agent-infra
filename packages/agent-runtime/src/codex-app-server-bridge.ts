@@ -1162,6 +1162,9 @@ async function runProbeCommand(
 		});
 	}
 	const result = await waitForResult(outcome, timeoutMs);
+	// A cancellation that races the child's close must retain the caller's
+	// abort contract instead of being reclassified as a probe-specific failure.
+	signal?.throwIfAborted();
 	if (!result) {
 		await reapChild(process, closed, timeoutMs);
 		throw timedOut();
