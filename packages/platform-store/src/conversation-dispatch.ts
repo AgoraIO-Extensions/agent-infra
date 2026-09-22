@@ -310,6 +310,9 @@ export class PostgresConversationDispatchStoreV1
 					workerId: claim.leaseOwner,
 					boundary,
 					execution: {
+						executionId: claim.executionId,
+						conversationId: claim.conversationId,
+						sessionGeneration: claim.sessionGeneration,
 						actorId: claim.actorId,
 						agentId: claim.agentId,
 						channelId: claim.channelId,

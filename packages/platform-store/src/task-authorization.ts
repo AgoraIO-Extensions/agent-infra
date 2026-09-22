@@ -223,6 +223,9 @@ export class PostgresTaskAuthorizationStoreV1 {
 					workerId: input.workerId,
 					boundary,
 					execution: {
+						executionId: input.executionId,
+						conversationId: execution.conversation_id,
+						sessionGeneration: Number(execution.session_generation),
 						actorId: execution.actor_id,
 						agentId: execution.agent_id,
 						channelId: execution.channel_id,
