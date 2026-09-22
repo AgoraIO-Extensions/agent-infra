@@ -335,7 +335,8 @@ export type ConnectorProviderId =
 	| "github"
 	| "jenkins-ci"
 	| "jenkins-release"
-	| "jira";
+	| "jira"
+	| "rehoboam";
 
 const connectorDefinitions: Array<{
 	category: "代码托管" | "研发协作" | "知识库" | "CI/CD";
@@ -385,6 +386,13 @@ const connectorDefinitions: Array<{
 		icon: SlidersHorizontal,
 		name: "Jenkins CI",
 		providerId: "jenkins-ci",
+	},
+	{
+		category: "CI/CD",
+		description: "发布编排与交付状态",
+		icon: Boxes,
+		name: "Rehoboam",
+		providerId: "rehoboam",
 	},
 ];
 
@@ -537,6 +545,7 @@ export function providerLabel(value: string) {
 			"jenkins-ci": "Jenkins CI",
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
+			rehoboam: "Rehoboam",
 		}[value] ?? value
 	);
 }

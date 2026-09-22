@@ -78,6 +78,10 @@ Jira/Confluence Server 的 `JIRA_TOKEN_*` 参数由 Secret Manager 注入服务�
 credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发送。Connection 不读取或执行
 本机 Atlassian CLI 配置或脚本。
 
+Rehoboam Provider 的 `REHOBOAM_KONG_API_KEY` 由 Secret Manager 注入服务端，只用于通过固定
+Rehoboam Ingress 的 Kong `key-auth`。用户个人 Rehoboam Bearer Token 仍由 Connection 加密保存；机器
+`apiKey` 不进入浏览器、用户 credential envelope、MCP 参数或调用结果。
+
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收

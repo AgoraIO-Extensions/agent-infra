@@ -134,6 +134,16 @@ Build artifact 有界读取与 HCI OAuth 双层鉴权发布为新的 `@v6` Actio
 256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
 Connection/Grant 同样不自动获得该新增 Action。
 
+Rehoboam 的首个 **[设计决策]** Provider profile 固定为
+`https://justinia.gz3.agoralab.co`。Kong `key-auth` 使用部署级 `apiKey` 放行机器请求，用户个人
+Rehoboam Bearer Token 作为 provider-specific encrypted credential 保存；两者不得进入同一
+credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志或 Action 结果。identity proof 固定为
+`GET /api/connection/whoami`，由 Rehoboam 现有 `agent_auth` 服务端解析 Token、角色与启用状态，仅返回
+`user_id`、`username` 和 `role`。首个 `rehoboam-connection-v1` 只发布
+`rehoboam.get_current_user@v1` READ Action，不允许调用方提交 URL、路径、Header、用户身份或任意 Rehoboam
+业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
+Grant 或凭证。
+
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
 Bearer 认证。账号 identity proof 使用 `whoami` 后精确匹配唯一 active user，并以稳定 user ID

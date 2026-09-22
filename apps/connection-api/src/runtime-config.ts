@@ -50,6 +50,7 @@ export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 		tokenUrl: string;
 		username: string;
 	};
+	rehoboamApiKey: string;
 };
 
 export type ConnectionWorkerRuntimeConfig = {
@@ -324,6 +325,7 @@ export function fullConnectionRuntimeConfig(
 			tokenUrl: "https://oauth.agoralab.co/oauth/token",
 			username: requireValue(environment, "JENKINS_CI_TOKEN_USERNAME"),
 		},
+		rehoboamApiKey: requireValue(environment, "REHOBOAM_KONG_API_KEY"),
 	};
 }
 
