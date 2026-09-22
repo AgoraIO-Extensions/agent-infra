@@ -19,6 +19,7 @@ import {
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_NATIVE_BARRIER_REQUIRED,
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -2746,6 +2747,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				dataDirectory: this.recoveryDirectory,
 				conversationKey: initial.conversationKey,
 				profile: options.profile,
+				nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
 				signal: processSignal,
 				recovery,
 				evidence: async (request, callbackSignal) => {
@@ -3187,6 +3189,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+				nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
 				nativeCallback: (request, signal) => {
 					if (!driver) unavailable();
 					return driver.handleNativeCallback(conversationKey, request, signal);
@@ -3256,6 +3259,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						? { modelAccess: modelTransport.modelAccessFor(probeKey) }
 						: {}),
 					provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+					nativeBarrierRequired: CODEX_NATIVE_BARRIER_REQUIRED,
 					startupTimeoutMs: 3000,
 				});
 				signal.throwIfAborted();

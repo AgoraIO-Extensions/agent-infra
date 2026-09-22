@@ -15,6 +15,10 @@ import test from "node:test";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const builder = resolve(repositoryRoot, "deploy/release/build-images.mjs");
+const runtimeHostDockerfile = resolve(
+	repositoryRoot,
+	"apps/agent-runtime-host/Dockerfile",
+);
 const commitSha = "1".repeat(40);
 
 async function executable(path, source) {
@@ -122,6 +126,14 @@ process.exit(1);`,
 	);
 	return { docker, git };
 }
+
+test("runtime image provisions the legacy migration subPath parent", async () => {
+	const dockerfile = await readFile(runtimeHostDockerfile, "utf8");
+	assert.match(
+		dockerfile,
+		/RUN mkdir -p \/etc\/agent-infra\/legacy-migration[\s\S]*chmod 0555 \/etc\/agent-infra \/etc\/agent-infra\/legacy-migration/,
+	);
+});
 
 function build(
 	manifestPath,

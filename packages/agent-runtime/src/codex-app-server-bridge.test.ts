@@ -409,6 +409,25 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expectPathRemoved(capture.cwd);
 	});
 
+	it("supports the official upstream release without its derived-only barrier", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const bridge = await CodexAppServerBridge.open(
+			options({ nativeBarrierRequired: false }),
+		);
+		const captures = await readCaptures(capturePath, 3);
+		expect(captures.map((capture) => capture.args[0])).toEqual([
+			"--version",
+			"app-server",
+			"app-server",
+		]);
+		expect(
+			captures.some((capture) =>
+				capture.args.includes("--agent-infra-native-barrier-info"),
+			),
+		).toBe(false);
+		await bridge.close();
+	});
+
 	it.each(["sandbox-unsupported", "sandbox-hangs", "sandbox-missing"])(
 		"rejects %s before starting app-server or creating persistent storage",
 		async (mode) => {

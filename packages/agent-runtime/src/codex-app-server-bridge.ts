@@ -116,6 +116,19 @@ export const CODEX_APP_SERVER_V2_PROVENANCE = Object.freeze(
 	release.provenance as CodexAppServerProvenanceV2,
 );
 
+const releaseManifest = release as {
+	schemaVersion?: number;
+	distribution?: { kind?: string };
+};
+
+// The derived release is the only artifact that contains Agent Infra's
+// private native-operation barrier. Official upstream archives intentionally
+// do not expose that private CLI probe; their provenance and protocol checks
+// remain mandatory, while the derived artifact keeps the barrier fail-closed.
+export const CODEX_NATIVE_BARRIER_REQUIRED =
+	releaseManifest.schemaVersion === 2 &&
+	releaseManifest.distribution?.kind === "derived";
+
 export type CodexAppServerFrame = Readonly<Record<string, unknown>>;
 
 export interface CodexModelAccess {
@@ -197,6 +210,7 @@ export interface CodexAppServerBridgeOptions {
 	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
 	readonly connectionProfile?: CodexConnectionProfile;
 	readonly provenance: CodexAppServerProvenanceV2;
+	readonly nativeBarrierRequired?: boolean;
 	readonly startupTimeoutMs?: number;
 	readonly shutdownTimeoutMs?: number;
 }
@@ -220,8 +234,11 @@ export async function runCodexConnectionRecovery(options: {
 	signal: AbortSignal;
 	recovery: CodexNativeConnectionRecoveryHandler;
 	evidence: CodexNativeCallbackHandler;
+	nativeBarrierRequired?: boolean;
 }) {
 	options.signal.throwIfAborted();
+	if (CODEX_NATIVE_BARRIER_REQUIRED && options.nativeBarrierRequired === false)
+		configurationInvalid();
 	if (platform !== "linux") throw unavailable();
 	const profile = validateCodexConnectionProfile(options.profile);
 	const launchPath = options.launchPath ?? env.PATH;
@@ -246,12 +263,13 @@ export async function runCodexConnectionRecovery(options: {
 	};
 	try {
 		await probeVersion(executable, defaultTimeoutMs, policy, options.signal);
-		await verifyNativeBarrier(
-			executable,
-			defaultTimeoutMs,
-			policy,
-			options.signal,
-		);
+		if (options.nativeBarrierRequired ?? true)
+			await verifyNativeBarrier(
+				executable,
+				defaultTimeoutMs,
+				policy,
+				options.signal,
+			);
 		await verifyLinuxSandbox(policy, defaultTimeoutMs, options.signal);
 		const nativePolicy = await persistentLaunchPolicy(
 			options.dataDirectory,
@@ -372,6 +390,7 @@ interface ValidatedOptions {
 	nativeCallback?: CodexNativeCallbackHandler;
 	readonly nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler;
 	readonly connectionProfile?: CodexConnectionProfile;
+	nativeBarrierRequired: boolean;
 	startupTimeoutMs: number;
 	shutdownTimeoutMs: number;
 }
@@ -552,6 +571,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		"nativeConnectionBootstrap",
 		"connectionProfile",
 		"provenance",
+		"nativeBarrierRequired",
 		"startupTimeoutMs",
 		"shutdownTimeoutMs",
 	];
@@ -590,6 +610,13 @@ function validateOptions(input: unknown): ValidatedOptions {
 	)
 		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
+	if (
+		input.nativeBarrierRequired !== undefined &&
+		typeof input.nativeBarrierRequired !== "boolean"
+	)
+		configurationInvalid();
+	if (CODEX_NATIVE_BARRIER_REQUIRED && input.nativeBarrierRequired === false)
+		configurationInvalid();
 	if (
 		input.nativeCallback !== undefined &&
 		typeof input.nativeCallback !== "function"
@@ -633,6 +660,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 						input.nativeConnectionBootstrap as CodexNativeConnectionBootstrapHandler,
 				}
 			: {}),
+		nativeBarrierRequired: input.nativeBarrierRequired ?? true,
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
@@ -1281,11 +1309,12 @@ export class CodexAppServerBridge {
 		try {
 			await probeVersion(executable, validated.startupTimeoutMs, launchPolicy);
 			await verifySchema(executable, validated.startupTimeoutMs, launchPolicy);
-			await verifyNativeBarrier(
-				executable,
-				validated.startupTimeoutMs,
-				launchPolicy,
-			);
+			if (validated.nativeBarrierRequired)
+				await verifyNativeBarrier(
+					executable,
+					validated.startupTimeoutMs,
+					launchPolicy,
+				);
 			await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
 			nativeLaunchPolicy = await persistentLaunchPolicy(
 				validated.dataDirectory,

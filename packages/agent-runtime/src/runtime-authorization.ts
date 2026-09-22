@@ -206,6 +206,7 @@ export function applyRuntimeAuthority(
 			claims.operation.executionDeliveryFence <
 				current.executionDeliveryFence ||
 			(claims.purpose === "control" &&
+				current.controlDeliveryFence !== undefined &&
 				claims.operation.executionDeliveryFence ===
 					current.executionDeliveryFence &&
 				claims.operation.deliveryFence <=
