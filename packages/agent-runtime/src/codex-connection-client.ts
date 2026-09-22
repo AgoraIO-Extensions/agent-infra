@@ -356,6 +356,13 @@ export function createCodexConnectionClient(options: {
 				!isCodexConnectionEvidence(previousEvidence))
 		)
 			throw unavailable();
+		let authorized = false;
+		try {
+			authorized = options.authorizeRequest(structuredClone(descriptor));
+		} catch {
+			authorized = false;
+		}
+		if (authorized !== true) throw unavailable();
 		if (descriptor.toolName !== "execute_action") return undefined;
 		if (
 			!Number.isSafeInteger(occurredAt) ||
