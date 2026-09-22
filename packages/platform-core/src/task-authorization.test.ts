@@ -74,12 +74,19 @@ describe("task authorization boundary", () => {
 	});
 
 	it("rejects application principals until the #481 grant slice supplies them", () => {
-		expect(() =>
-			parseTaskAuthorizationBoundaryV1({
-				...requiredBoundary(),
-				principal: { kind: "application", id: user.userId },
+		expect(
+			capture({ principal: { kind: "application", id: user.userId } }),
+		).toBeNull();
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary: {
+					...requiredBoundary(),
+					principal: { kind: "application", id: user.userId },
+				},
+				user,
+				agent,
 			}),
-		).toThrow("Task principal is invalid");
+		).toBe(false);
 	});
 
 	it.each([

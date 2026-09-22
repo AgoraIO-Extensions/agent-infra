@@ -11,7 +11,7 @@ import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispa
 
 export interface TaskPrincipalV1 {
 	/** Application principals are supplied by the #481 application-grant slice. */
-	readonly kind: "user";
+	readonly kind: "user" | "application";
 	readonly id: string;
 }
 
@@ -80,7 +80,10 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 function principal(input: unknown): TaskPrincipalV1 {
 	const value = object(input);
 	exact(value, ["kind", "id"]);
-	if (value.kind !== "user" || !text(value.id)) {
+	if (
+		(value.kind !== "user" && value.kind !== "application") ||
+		!text(value.id)
+	) {
 		throw new TypeError("Task principal is invalid");
 	}
 	return { kind: value.kind, id: value.id };
@@ -186,7 +189,8 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	const subject = principal(input.principal);
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
-	if (subject.id !== user.userId) return null;
+	// Application grants are supplied by #481; this slice admits trusted users only.
+	if (subject.kind !== "user" || subject.id !== user.userId) return null;
 	const sources = accessSources(user, agent);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
