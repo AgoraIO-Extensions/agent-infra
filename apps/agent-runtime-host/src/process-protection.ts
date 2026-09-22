@@ -36,7 +36,8 @@ export function assertRuntimeProcessProtection() {
 						"NODE_DEBUG_NATIVE",
 						"NODE_V8_COVERAGE",
 						"NODE_PATH",
-					].includes(name)) && Boolean(process.env[name])),
+					].includes(name)) &&
+					Boolean(process.env[name])),
 		) ||
 		inspectorUrl() !== undefined ||
 		process.report?.reportOnFatalError ||

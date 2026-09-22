@@ -4015,7 +4015,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			session.threadId,
 			execution.nativeTurnId,
 		);
-		const deferInitialStatus = this.initialModelStatusPending.has(initialStatusKey);
+		const deferInitialStatus =
+			this.initialModelStatusPending.has(initialStatusKey);
 		// The initial status lookup can race the response body of a live model
 		// stream. Its durable intent/started fact already proves that this execution
 		// is accepted; defer native resume until the stream records its outcome.

@@ -117,8 +117,8 @@ async function readIndependentInput(
 				const openedDirectory = await directory.stat();
 				if (
 					(await realpath(inputDirectory)) !== inputDirectory ||
-					(openedDirectory.dev !== directoryStat.dev ||
-						openedDirectory.ino !== directoryStat.ino)
+					openedDirectory.dev !== directoryStat.dev ||
+					openedDirectory.ino !== directoryStat.ino
 				)
 					return undefined;
 				const before = await handle.stat();
