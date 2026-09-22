@@ -28,6 +28,10 @@ import { client as v2Client } from "../../pilot/generated-v2/client.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 
 type V1Options<TData extends TDataShape> = Omit<Options<TData, false>, "url">;
+
+// The published browser contract exposes WeCom setup only as V1 operations;
+// there is no V2 equivalent to generate. Use the configured V2 client for
+// these explicit V1 paths so base URL, auth, and transport remain identical.
 const getWecomBotConnection = (options: V1Options<GetWecomBotConnectionData>) =>
 	v2Client.get<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors>({
 		url: "/api/v1/agents/{agentId}/wecom-bot",
