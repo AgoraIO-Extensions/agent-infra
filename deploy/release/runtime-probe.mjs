@@ -88,7 +88,14 @@ export function validateRuntimeProbe(
 			result.distribution?.target !== expectedTarget
 		)
 			invalid();
-		const artifactEntries = Object.values(release.artifacts ?? {});
+		const artifactsByArchitecture = release.artifacts;
+		if (
+			!artifactsByArchitecture ||
+			typeof artifactsByArchitecture !== "object" ||
+			Array.isArray(artifactsByArchitecture)
+		)
+			invalid();
+		const artifactEntries = Object.values(artifactsByArchitecture);
 		if (
 			artifactEntries.some(
 				(artifact) =>

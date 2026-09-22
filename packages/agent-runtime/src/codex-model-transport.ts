@@ -1060,7 +1060,6 @@ export async function openCodexModelTransport(
 	const conversationIsActive = (conversationKey: string) => {
 		const prefix = `${conversationKey}\u0000`;
 		return (
-			[...boundThreads].some((key) => key.startsWith(prefix)) ||
 			[...admittedTurns.keys()].some((key) => key.startsWith(prefix)) ||
 			[...readyModelTurns].some((key) => key.startsWith(prefix)) ||
 			[...activeTurns.keys()].some((key) => key.startsWith(prefix)) ||
@@ -1281,6 +1280,13 @@ export async function openCodexModelTransport(
 			return;
 		}
 		const [conversationKey] = authenticated;
+		const turnKey = nativeTurnKey({ ...nativeTurn, conversationKey });
+		// Preserve the terminal fence for a previously admitted Turn even if its
+		// native thread binding has since been retired by idle access eviction.
+		if (revokedTurns.has(turnKey)) {
+			reject(response, 409);
+			return;
+		}
 		// Reject a foreign or unbound native thread before it can touch admission,
 		// cancellation, body parsing, or any journal owned by another process.
 		if (
@@ -1289,7 +1295,6 @@ export async function openCodexModelTransport(
 			reject(response, 403);
 			return;
 		}
-		const turnKey = nativeTurnKey({ ...nativeTurn, conversationKey });
 		const controller = new AbortController();
 		let completeRequest: (() => void) | undefined;
 		const completion = new Promise<void>((resolve) => {
@@ -1419,8 +1424,27 @@ export async function openCodexModelTransport(
 				reject(response, 409);
 				return;
 			}
-			startedAt = performance.now();
 			const requestStartedAt = new Date().toISOString();
+			if (journal) {
+				startedPersistence = journal.started(requestStartedAt);
+				await awaitPersistence(startedPersistence, controller.signal);
+			}
+			// The durable started fact is the commit barrier for the external request.
+			// If it cannot be persisted, do not invoke the provider at all.
+			if (
+				closing ||
+				controller.signal.aborted ||
+				revokedTurns.has(turnKey) ||
+				processAccess.get(conversationKey) !== authenticated[1]
+			) {
+				await recordOutcome({
+					phase: "failed",
+					failureCode: "request_not_started",
+				});
+				reject(response, 409);
+				return;
+			}
+			startedAt = performance.now();
 			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
@@ -1438,10 +1462,6 @@ export async function openCodexModelTransport(
 				(value) => ({ value }),
 				() => ({ value: undefined }),
 			);
-			if (journal) {
-				startedPersistence = journal.started(requestStartedAt);
-				await awaitPersistence(startedPersistence, controller.signal);
-			}
 			const upstream = (await upstreamResult).value;
 			if (!upstream) {
 				settleModelRequestWaiters(turnKey, false);
@@ -1573,6 +1593,8 @@ export async function openCodexModelTransport(
 			const prefix = `${conversationKey}\u0000`;
 			for (const key of boundThreads)
 				if (key.startsWith(prefix)) boundThreads.delete(key);
+			for (const key of revokedTurns)
+				if (key.startsWith(prefix)) revokedTurns.delete(key);
 			for (const [key, pending] of pendingThreads) {
 				if (key.startsWith(prefix))
 					for (const admission of [...pending]) closeAdmission(admission);
