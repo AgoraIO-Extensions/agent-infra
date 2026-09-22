@@ -30,6 +30,7 @@ async function readMountedFile(
 	path: string,
 	dataDirectory: string,
 	maximumBytes: number,
+	expectedOwnerUid: number,
 ) {
 	if (!isAbsolute(path) || resolve(path) !== path) fail();
 	const [target, dataRoot] = await Promise.all([
@@ -54,6 +55,8 @@ async function readMountedFile(
 		if (
 			!info.isDirectory() ||
 			(await realpath(current)) !== current ||
+			(!stickyRootDirectory &&
+				(current === parentPath ? info.uid !== expectedOwnerUid : false)) ||
 			((info.mode & 0o022) !== 0 && !stickyRootDirectory)
 		)
 			fail();
@@ -104,6 +107,7 @@ async function readMountedFile(
 			pathInfo.dev !== info.dev ||
 			pathInfo.ino !== info.ino ||
 			!info.isFile() ||
+			info.uid !== expectedOwnerUid ||
 			info.nlink !== 1 ||
 			info.size === 0 ||
 			info.size > maximumBytes ||
@@ -165,10 +169,25 @@ export async function readRuntimeLegacyMigrationV1(input: {
 		if (paths.every((value) => value === undefined)) return undefined;
 		const [manifestPath, publicKeyPath, keyId] = paths;
 		if (!manifestPath || !publicKeyPath || !keyId || !input.binding) fail();
+		const ownerText =
+			input.environment.AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID;
+		if (!ownerText || !/^[0-9]+$/.test(ownerText)) fail();
+		const expectedOwnerUid = Number(ownerText);
+		if (!Number.isSafeInteger(expectedOwnerUid) || expectedOwnerUid < 0) fail();
 		const binding = WorkloadReadinessBindingV1Schema.parse(input.binding);
 		const [envelopeBytes, publicKeyBytes] = await Promise.all([
-			readMountedFile(manifestPath, input.dataDirectory, 256_000),
-			readMountedFile(publicKeyPath, input.dataDirectory, 8192),
+			readMountedFile(
+				manifestPath,
+				input.dataDirectory,
+				256_000,
+				expectedOwnerUid,
+			),
+			readMountedFile(
+				publicKeyPath,
+				input.dataDirectory,
+				8192,
+				expectedOwnerUid,
+			),
 		]);
 		const publicKey = createPublicKey(publicKeyBytes);
 		if (publicKey.asymmetricKeyType !== "ed25519") fail();

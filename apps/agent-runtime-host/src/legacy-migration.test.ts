@@ -81,6 +81,18 @@ describe("deployment-signed Host legacy principal migration", () => {
 		expect(await env.driver.sideEffectCount()).toBe(1);
 	});
 
+	it("rejects a trust-root owner mismatch", async () => {
+		const env = await fixture();
+		await expect(
+			load(env, {
+				...env.environment,
+				AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID: String(
+					(process.getuid?.() ?? 0) + 1,
+				),
+			}),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
+	});
+
 	it("rejects unsigned, tampered or differently signed artifacts before Store mutation", async () => {
 		for (const kind of ["bare", "payload", "key", "extra"]) {
 			const env = await fixture();

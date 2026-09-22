@@ -165,6 +165,9 @@ export async function createLegacyMigrationFixture(
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE: manifestPath,
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE: publicKeyPath,
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID: "migration-key",
+		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID: String(
+			process.getuid?.() ?? 0,
+		),
 	};
 	return {
 		store,
