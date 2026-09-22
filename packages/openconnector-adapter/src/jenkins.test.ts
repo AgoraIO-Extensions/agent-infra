@@ -16,9 +16,9 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.notEqual(first.provider, second.provider);
 	assert.notEqual(first.providerReleaseId, second.providerReleaseId);
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
-	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v6");
+	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v7");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
-	assert.equal(second.providerReleaseId, "jenkins-release-connection-v6");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v7");
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
@@ -37,7 +37,7 @@ test("Jenkins validates identity without returning the API Token", async () => {
 	assert.equal(identity.accessToken, credential);
 	assert.equal(
 		requests[0]?.url,
-		"https://jenkins-ci.agoralab.co/whoAmI/api/json",
+		"https://jenkins-api.bj2.agoralab.co/whoAmI/api/json",
 	);
 	assert.match(requests[0]?.headers.get("authorization") ?? "", /^Basic /);
 
@@ -85,7 +85,7 @@ test("Jenkins encodes folder jobs and only uses the fixed deployment origin", as
 		input: { buildNumber: 42, jobFullName: "SDK/Mac Release" },
 	});
 	assert.deepEqual(urls, [
-		"https://jenkins-ci.agoralab.co/job/SDK/job/Mac%20Release/42/api/json",
+		"https://jenkins-api.bj2.agoralab.co/job/SDK/job/Mac%20Release/42/api/json",
 	]);
 });
 
