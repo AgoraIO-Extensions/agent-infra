@@ -3722,9 +3722,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		for (const turn of turns) this.revokeModelTurn?.(turn);
 		try {
-			let status: PersistedTurnStatus | "unknown";
+			let interruptionStatus: PersistedTurnStatus | "unknown";
 			try {
-				status = await this.getStatus(
+				interruptionStatus = await this.getStatus(
 					prepared.operation.nativeSessionRef,
 					command.executionId,
 				);
@@ -3737,7 +3737,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				}
 				// Native history can be unreadable while its original live Thread
 				// still accepts cancellation. Its control ACK is not a terminal proof.
-				status = "unknown";
+				interruptionStatus = "unknown";
 			}
 			const results = await Promise.allSettled(
 				turns.map(async (turn) => {
@@ -3755,7 +3755,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						: journal?.nativeCompletionStatus !== undefined;
 					try {
 						if (
-							(status === "running" || status === "unknown") &&
+							(interruptionStatus === "running" ||
+								interruptionStatus === "unknown") &&
 							!inferenceComplete
 						) {
 							await (
@@ -3782,14 +3783,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} finally {
 			await Promise.all(turns.map((turn) => this.cancelModelTurn?.(turn)));
 		}
-		const status = await this.getStatus(
+		const resolvedStatus = await this.getStatus(
 			prepared.operation.nativeSessionRef,
 			command.executionId,
 		);
 		return this.resolveInterruption(
 			command,
 			prepared.operation.nativeSessionRef,
-			status,
+			resolvedStatus,
 		);
 	}
 
