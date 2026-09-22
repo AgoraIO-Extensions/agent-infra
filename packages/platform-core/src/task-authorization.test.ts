@@ -262,4 +262,23 @@ describe("system control transaction plan", () => {
 			}),
 		).toThrow("Task system control is invalid");
 	});
+	it("rejects an execution status that is malformed at the runtime boundary", () => {
+		expect(() =>
+			planTaskSystemControlV1({
+				reason: "authorization_revoked",
+				workerId: "worker",
+				boundary: requiredBoundary(),
+				execution: {
+					executionId: "execution-1",
+					conversationId: "conversation-1",
+					sessionGeneration: 2,
+					status: "still-running" as never,
+					actorId: "user-a",
+					agentId: "agent-a",
+					channelId: "web",
+					authorizationRevision: "agent-access-4",
+				},
+			}),
+		).toThrow("Task system control is invalid");
+	});
 });

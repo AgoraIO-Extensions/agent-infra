@@ -272,6 +272,14 @@ export function planTaskSystemControlV1(input: {
 		!text(input.execution.conversationId) ||
 		!Number.isSafeInteger(input.execution.sessionGeneration) ||
 		input.execution.sessionGeneration < 0 ||
+		![
+			"submitted",
+			"processing",
+			"unknown",
+			"completed",
+			"failed",
+			"cancelled",
+		].includes(input.execution.status) ||
 		boundary.principal.kind !== "user" ||
 		boundary.principal.id !== input.execution.actorId ||
 		boundary.agentId !== input.execution.agentId ||
