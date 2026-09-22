@@ -799,6 +799,7 @@ async function turn(
 	await beforePersist?.(submitted);
 	const { lookup } = submitted;
 	let events;
+	let frames;
 	await probeStep(
 		`${name}-events`,
 		async () => {
@@ -815,7 +816,7 @@ async function turn(
 			);
 			assert.equal(events.status, 200);
 			assert.ok(events.contentType.includes("text/event-stream"));
-			const frames = protocol.parseEvents(events.text, lookup.executionId);
+			frames = protocol.parseEvents(events.text, lookup.executionId);
 			assert.ok(
 				frames.some(
 					(event) =>

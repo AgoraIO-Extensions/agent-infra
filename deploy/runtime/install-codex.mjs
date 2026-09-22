@@ -59,6 +59,9 @@ const isUpstreamRelease =
 if (!isDerivedRelease && !isUpstreamRelease) {
 	throw new Error("Unsupported Codex release manifest");
 }
+const installRoot = resolve(destination);
+await rm(installRoot, { recursive: true, force: true });
+await mkdir(installRoot, { recursive: true });
 if (isDerivedRelease) {
 	if (
 		!archiveInput ||
@@ -75,7 +78,7 @@ if (isDerivedRelease) {
 				new URL("./vendor/codex/install-bundle.py", import.meta.url),
 			),
 			architecture,
-			resolve(destination),
+			installRoot,
 			resolve(archiveInput),
 		],
 		{ stdio: "inherit" },

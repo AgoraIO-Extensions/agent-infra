@@ -671,10 +671,19 @@ export class RuntimeHost {
 					),
 				);
 			}
-			guard.done = probe.then(
-				() => undefined,
-				() => undefined,
-			);
+			let drainTimer: ReturnType<typeof setTimeout> | undefined;
+			const drainDeadline = new Promise<void>((resolve) => {
+				drainTimer = setTimeout(resolve, 10_000);
+			});
+			guard.done = Promise.race([
+				probe.then(
+					() => undefined,
+					() => undefined,
+				),
+				drainDeadline,
+			]).finally(() => {
+				if (drainTimer !== undefined) clearTimeout(drainTimer);
+			});
 			let capabilities: RuntimeCapabilitiesV1;
 			try {
 				capabilities = await Promise.race([
