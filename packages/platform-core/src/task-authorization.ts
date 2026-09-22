@@ -271,7 +271,7 @@ export function planTaskSystemControlV1(input: {
 		!text(input.execution.executionId) ||
 		!text(input.execution.conversationId) ||
 		!Number.isSafeInteger(input.execution.sessionGeneration) ||
-		input.execution.sessionGeneration < 0 ||
+		input.execution.sessionGeneration < 1 ||
 		![
 			"submitted",
 			"processing",
