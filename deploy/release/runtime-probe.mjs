@@ -173,6 +173,22 @@ export async function probeRuntimeImage({
 	// context: that would allow a modified context to self-attest its own pin.
 	const expectedReleaseBytes = await readFile(join(root, releasePath));
 	if (resolve(contextPath) !== root) {
+		const contextHead = runCommand("git", ["rev-parse", "HEAD"], {
+			cwd: contextPath,
+			name: "Runtime probe context revision",
+			timeoutMs: 10_000,
+		}).trim();
+		const contextReleaseStatus = runCommand(
+			"git",
+			["status", "--porcelain", "--", releasePath],
+			{
+				cwd: contextPath,
+				name: "Runtime probe context release status",
+				timeoutMs: 10_000,
+			},
+		).trim();
+		if (contextHead !== commitSha || contextReleaseStatus !== "")
+			throw new Error("Codex runtime probe context does not match its commit");
 		const contextReleaseBytes = await readFile(join(contextPath, releasePath));
 		if (!contextReleaseBytes.equals(expectedReleaseBytes))
 			throw new Error("Codex runtime probe context does not match Git HEAD");
