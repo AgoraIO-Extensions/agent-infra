@@ -303,7 +303,6 @@ export function createCodexConnectionClient(options: {
 		metadataOnly: boolean;
 		occurredAt: number;
 		origin?: CodexConnectionOrigin;
-		queryClient?: CodexConnectionQueryMetadata;
 	}): RuntimeConnectionAssociationV1 | undefined => {
 		const {
 			requestDescriptor: descriptor,
@@ -415,14 +414,13 @@ export function createCodexConnectionClient(options: {
 		const record = query?.record;
 		const queryCredentialKnown =
 			query !== undefined &&
-			(input.queryClient ? [input.queryClient] : [...slots.values()]).some(
+			[...slots.values()].some(
 				(known) =>
 					isDeepStrictEqual(known.service, evidenceSlot.service) &&
-					(input.queryClient === undefined ||
-						isDeepStrictEqual(
-							known.originalBinding,
-							evidenceSlot.originalBinding,
-						)) &&
+					isDeepStrictEqual(
+						known.originalBinding,
+						evidenceSlot.originalBinding,
+					) &&
 					known.credential.revision === query.credentialRevision &&
 					known.credential.expiresAt > query.queriedAt &&
 					isDeepStrictEqual(
