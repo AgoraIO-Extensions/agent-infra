@@ -96,6 +96,7 @@ if (args[0] === "run") {
     if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
     else {
       const probeMount = args.find((arg) => arg.endsWith("dst=/probe/runtime-image-probe.mjs,readonly"));
+      if (!probeMount || !probeMount.startsWith("type=bind,src=")) process.exit(94);
       const context = probeMount.slice("type=bind,src=".length).split(",dst=")[0].slice(0, -"/tests/runtime-image-probe.mjs".length);
       const releaseBytes = readFileSync(join(context, "packages/agent-runtime/src/codex-release.json"));
       const release = JSON.parse(releaseBytes);
