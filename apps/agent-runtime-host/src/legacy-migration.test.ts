@@ -40,6 +40,7 @@ function load(
 		expectedIssuer: "platform-fixture",
 		binding: migrationBinding,
 		dataDirectory: input.dataDirectory,
+		filesystem: input.filesystem,
 	});
 }
 

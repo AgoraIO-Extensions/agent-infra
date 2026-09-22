@@ -31,11 +31,12 @@ async function readMountedFile(
 	dataDirectory: string,
 	maximumBytes: number,
 	expectedOwnerUid: number,
+	fs = { lstat, open, realpath },
 ) {
 	if (!isAbsolute(path) || resolve(path) !== path) fail();
 	const [target, dataRoot] = await Promise.all([
-		realpath(path),
-		realpath(dataDirectory),
+		fs.realpath(path),
+		fs.realpath(dataDirectory),
 	]);
 	const withinData = relative(dataRoot, target);
 	if (
@@ -49,12 +50,12 @@ async function readMountedFile(
 	// immediate parent: replacing any of them can replace both trust files.
 	const parentPath = dirname(target);
 	for (let current = parentPath; ; current = dirname(current)) {
-		const info = await lstat(current);
+		const info = await fs.lstat(current);
 		const parent = dirname(current);
 		const stickyRootDirectory = info.uid === 0 && (info.mode & 0o1000) !== 0;
 		if (
 			!info.isDirectory() ||
-			(await realpath(current)) !== current ||
+			(await fs.realpath(current)) !== current ||
 			(!stickyRootDirectory &&
 				(current === parentPath ? info.uid !== expectedOwnerUid : false)) ||
 			((info.mode & 0o022) !== 0 && !stickyRootDirectory)
@@ -64,9 +65,9 @@ async function readMountedFile(
 		// owner's child. The child and remaining ancestors are checked too.
 		if (parent === current) break;
 	}
-	const parentInfo = await lstat(parentPath);
+	const parentInfo = await fs.lstat(parentPath);
 	if (!parentInfo.isDirectory() || (parentInfo.mode & 0o022) !== 0) fail();
-	const parent = await open(
+	const parent = await fs.open(
 		parentPath,
 		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
 	);
@@ -87,11 +88,11 @@ async function readMountedFile(
 		const descriptorRoot =
 			process.platform === "linux" ? `/proc/self/fd/${parent.fd}` : undefined;
 		handle = descriptorRoot
-			? await open(
+			? await fs.open(
 					`${descriptorRoot}/${leaf}`,
 					constants.O_RDONLY | constants.O_NOFOLLOW,
 				)
-			: await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+			: await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
 	} catch (error) {
 		await parent.close();
 		throw error;
@@ -99,8 +100,8 @@ async function readMountedFile(
 	try {
 		// Re-resolve and compare the path after opening. Parsing always uses the
 		// already-open descriptor, so a later replacement cannot change the bytes.
-		const openedTarget = await realpath(path);
-		const pathInfo = await lstat(path);
+		const openedTarget = await fs.realpath(path);
+		const pathInfo = await fs.lstat(path);
 		const info = await handle.stat();
 		if (
 			openedTarget !== target ||
@@ -159,6 +160,11 @@ export async function readRuntimeLegacyMigrationV1(input: {
 	expectedIssuer: string;
 	binding: WorkloadReadinessBindingV1 | undefined;
 	dataDirectory: string;
+	filesystem?: {
+		lstat: typeof lstat;
+		open: typeof open;
+		realpath: typeof realpath;
+	};
 }) {
 	try {
 		const paths = [
@@ -180,12 +186,14 @@ export async function readRuntimeLegacyMigrationV1(input: {
 				input.dataDirectory,
 				256_000,
 				expectedOwnerUid,
+				input.filesystem,
 			),
 			readMountedFile(
 				publicKeyPath,
 				input.dataDirectory,
 				8192,
 				expectedOwnerUid,
+				input.filesystem,
 			),
 		]);
 		const publicKey = createPublicKey(publicKeyBytes);

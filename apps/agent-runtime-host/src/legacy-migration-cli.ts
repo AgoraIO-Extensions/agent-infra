@@ -99,6 +99,7 @@ function onlyPrincipalAdded(beforeBytes: Buffer, afterBytes: Buffer) {
  */
 export async function runRuntimeLegacyMigrationCli(
 	environment: NodeJS.ProcessEnv,
+	filesystem?: Parameters<typeof readRuntimeLegacyMigrationV1>[0]["filesystem"],
 ) {
 	let temporaryDirectory: string | undefined;
 	let ownedLock: string | undefined;
@@ -154,6 +155,7 @@ export async function runRuntimeLegacyMigrationCli(
 			expectedIssuer,
 			binding,
 			dataDirectory: canonicalDirectory,
+			filesystem,
 		});
 		if (!migration) fail();
 		const lock = join(canonicalDirectory, ".legacy-migration-bootstrap-lock");

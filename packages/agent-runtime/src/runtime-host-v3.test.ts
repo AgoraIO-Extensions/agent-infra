@@ -1506,6 +1506,38 @@ describe("Runtime V3 durable authorization", () => {
 		).rejects.toThrow();
 	});
 
+	it("does not leave an in-memory stop recovery latch after preparation failure", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const stop = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					operation: {
+						kind: "stop",
+						id: "stop-retry",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+				},
+				"turn.stop",
+			);
+			vi.spyOn(env.store, "prepareOperation").mockRejectedValueOnce(
+				new Error("synthetic stop preparation failure"),
+			);
+			await expect(
+				env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+			).rejects.toThrow("synthetic stop preparation failure");
+			await expect(
+				env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+			).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "cancelled" },
+			});
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("clears a prior stop lock when applying trusted recovery authority", () => {
 		const authorities: Record<string, RuntimeExecutionAuthority> = {};
 		const stop = verifyRuntimeV2Fixture(

@@ -330,11 +330,11 @@ export class RuntimeHost {
 	async close() {
 		if (this.closed) return;
 		this.closed = true;
-		await this.v3?.close();
 		for (const guard of this.readinessGuards) guard.controller.abort();
 		await Promise.allSettled(
 			[...this.readinessGuards].map((guard) => guard.done),
 		);
+		await this.v3?.close();
 		// RuntimeHostV3 rejects new V3 work before draining its own recovery
 		// guards. Drain the shared legacy queue as well so an already admitted
 		// operation cannot outlive host shutdown.

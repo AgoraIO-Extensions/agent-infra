@@ -46,7 +46,10 @@ describe("offline Host migration candidate CLI", () => {
 			...env.environment,
 			AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE: "offline-commit",
 		};
-		const result = await runRuntimeLegacyMigrationCli(environment);
+		const result = await runRuntimeLegacyMigrationCli(
+			environment,
+			env.filesystem,
+		);
 		expect(result).toMatchObject({ status: "applied", commitPerformed: true });
 		expect(await readFile(env.hostPath)).toEqual(
 			await readFile(env.candidatePath),
@@ -56,7 +59,9 @@ describe("offline Host migration candidate CLI", () => {
 		);
 		const committed = await readFile(env.hostPath);
 		await rm(env.candidatePath);
-		expect(await runRuntimeLegacyMigrationCli(environment)).toMatchObject({
+		expect(
+			await runRuntimeLegacyMigrationCli(environment, env.filesystem),
+		).toMatchObject({
 			status: "replayed",
 			commitPerformed: false,
 		});
@@ -70,10 +75,13 @@ describe("offline Host migration candidate CLI", () => {
 		await writeFile(join(lock, "owner"), "another-bootstrap");
 		const original = await readFile(env.hostPath);
 		await expect(
-			runRuntimeLegacyMigrationCli({
-				...env.environment,
-				AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE: "offline-commit",
-			}),
+			runRuntimeLegacyMigrationCli(
+				{
+					...env.environment,
+					AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE: "offline-commit",
+				},
+				env.filesystem,
+			),
 		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		expect(await readFile(env.hostPath)).toEqual(original);
 		expect(await readFile(join(lock, "owner"), "utf8")).toBe(
@@ -85,12 +93,12 @@ describe("offline Host migration candidate CLI", () => {
 		const env = await fixture();
 		const lock = join(env.dataDirectory, ".legacy-migration-bootstrap-lock");
 		await mkdir(lock);
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
-			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		await rm(lock, { recursive: true });
 		await expect(
-			runRuntimeLegacyMigrationCli(env.environment),
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
 		).resolves.toMatchObject({ status: "verified_candidate" });
 	});
 
@@ -101,7 +109,10 @@ describe("offline Host migration candidate CLI", () => {
 		// No Runtime transport token, model configuration or private signing key is needed.
 		const { AGENT_INFRA_RUNTIME_SERVICE_TOKEN: _token, ...environment } =
 			env.environment;
-		const result = await runRuntimeLegacyMigrationCli(environment);
+		const result = await runRuntimeLegacyMigrationCli(
+			environment,
+			env.filesystem,
+		);
 		expect(result).toMatchObject({
 			status: "verified_candidate",
 			commitPerformed: false,
@@ -136,15 +147,15 @@ describe("offline Host migration candidate CLI", () => {
 		const env = await fixture();
 		const original = await readFile(env.hostPath);
 		await writeFile(env.candidatePath, "existing output", { mode: 0o600 });
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
-			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		expect(await readFile(env.candidatePath, "utf8")).toBe("existing output");
 		expect(await readFile(env.hostPath)).toEqual(original);
 		await rm(env.hostPath);
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
-			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		await expect(readFile(env.hostPath)).rejects.toMatchObject({
 			code: "ENOENT",
 		});
@@ -159,7 +170,7 @@ describe("offline Host migration candidate CLI", () => {
 			if (failure === "binding") manifest.deployment.fence++;
 			if (failure === "principal") {
 				// First generate and explicitly install a prior candidate in the test fixture.
-				await runRuntimeLegacyMigrationCli(env.environment);
+				await runRuntimeLegacyMigrationCli(env.environment, env.filesystem);
 				await writeFile(env.hostPath, await readFile(env.candidatePath));
 				await rm(env.candidatePath);
 				manifest.principal.id = "another-user";
@@ -167,7 +178,7 @@ describe("offline Host migration candidate CLI", () => {
 			const beforeAttempt = await readFile(env.hostPath);
 			await writeSignedLegacyManifest(env.manifestPath, manifest);
 			await expect(
-				runRuntimeLegacyMigrationCli(env.environment),
+				runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
 			).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 			expect(await readFile(env.hostPath)).toEqual(beforeAttempt);
 			if (failure !== "principal") expect(beforeAttempt).toEqual(original);
@@ -183,9 +194,9 @@ describe("offline Host migration candidate CLI", () => {
 		before.sessions["unrelated-corrupt"] = { unreadable: "private-sentinel" };
 		await writeFile(env.hostPath, JSON.stringify(before));
 		const original = await readFile(env.hostPath);
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
-			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		expect(await readFile(env.hostPath)).toEqual(original);
 		await expect(readFile(env.candidatePath)).rejects.toMatchObject({
 			code: "ENOENT",
@@ -195,22 +206,25 @@ describe("offline Host migration candidate CLI", () => {
 	it("rejects writable-data candidate paths and symlinked original state", async () => {
 		const env = await fixture();
 		await expect(
-			runRuntimeLegacyMigrationCli({
-				...env.environment,
-				AGENT_INFRA_RUNTIME_LEGACY_CANDIDATE_FILE: join(
-					env.dataDirectory,
-					"candidate.json",
-				),
-			}),
+			runRuntimeLegacyMigrationCli(
+				{
+					...env.environment,
+					AGENT_INFRA_RUNTIME_LEGACY_CANDIDATE_FILE: join(
+						env.dataDirectory,
+						"candidate.json",
+					),
+				},
+				env.filesystem,
+			),
 		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		const original = await readFile(env.hostPath);
 		const linkedTarget = join(env.dataDirectory, "original.json");
 		await writeFile(linkedTarget, original);
 		await rm(env.hostPath);
 		await symlink(linkedTarget, env.hostPath);
-		await expect(runRuntimeLegacyMigrationCli(env.environment)).rejects.toThrow(
-			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
-		);
+		await expect(
+			runRuntimeLegacyMigrationCli(env.environment, env.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		expect(await readFile(linkedTarget)).toEqual(original);
 	});
 });

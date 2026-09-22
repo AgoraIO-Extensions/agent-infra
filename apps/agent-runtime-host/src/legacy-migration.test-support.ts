@@ -1,5 +1,12 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	open,
+	readFile,
+	realpath,
+	writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
 	FakeRuntimeDriver,
@@ -165,9 +172,7 @@ export async function createLegacyMigrationFixture(
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE: manifestPath,
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE: publicKeyPath,
 		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID: "migration-key",
-		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID: String(
-			process.getuid?.() ?? 0,
-		),
+		AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID: String(0),
 	};
 	return {
 		store,
@@ -179,6 +184,20 @@ export async function createLegacyMigrationFixture(
 		before,
 		manifest,
 		environment,
+		filesystem: {
+			lstat: async (path) => Object.assign(await lstat(path), { uid: 0 }),
+			open: async (path, flags, mode) => {
+				const handle = await open(path, flags, mode);
+				return new Proxy(handle, {
+					get(target, property, receiver) {
+						if (property === "stat")
+							return async () => Object.assign(await target.stat(), { uid: 0 });
+						return Reflect.get(target, property, receiver);
+					},
+				});
+			},
+			realpath,
+		},
 	};
 }
 

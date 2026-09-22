@@ -506,7 +506,9 @@ export class FileRuntimeStore {
 	prepareOperation(input: PrepareOperation) {
 		return this.file.update((state) => {
 			const now =
-				typeof input.now === "function" ? input.now() : (input.now ?? Date.now());
+				typeof input.now === "function"
+					? input.now()
+					: (input.now ?? Date.now());
 			assertStoreState(state);
 			const indexedHostSessionRef =
 				state.sessionBindings[sessionBindingKey(input.binding)];
@@ -913,7 +915,12 @@ export class FileRuntimeStore {
 			)
 				runtimeAuthorizationDenied();
 			session.executionAuthorities ??= {};
-			applyRuntimeAuthority(session.executionAuthorities, claims, "query", currentNow);
+			applyRuntimeAuthority(
+				session.executionAuthorities,
+				claims,
+				"query",
+				currentNow,
+			);
 			session.highestFences[scope] = fence;
 			if (operation) operation.deliveryFence = fence;
 			return { session: structuredClone(session), found: !!operation };
