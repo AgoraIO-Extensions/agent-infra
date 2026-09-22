@@ -104,6 +104,8 @@ export async function runRuntimeLegacyMigrationCli(
 ) {
 	let temporaryDirectory: string | undefined;
 	let ownedLock: string | undefined;
+	let createdCandidatePath: string | undefined;
+	let preserveCandidate = false;
 	try {
 		const mode =
 			environment.AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE ?? "candidate";
@@ -184,6 +186,7 @@ export async function runRuntimeLegacyMigrationCli(
 			flag: "wx",
 			mode: 0o600,
 		});
+		createdCandidatePath = canonicalCandidatePath;
 		if (mode === "offline-commit" && changed) {
 			if (!ownedLock) fail();
 			const pending = join(ownedLock, "host.json");
@@ -218,6 +221,7 @@ export async function runRuntimeLegacyMigrationCli(
 			)
 		)
 			fail();
+		preserveCandidate = true;
 		return {
 			schemaVersion: 1 as const,
 			status:
@@ -238,6 +242,18 @@ export async function runRuntimeLegacyMigrationCli(
 	} catch {
 		fail();
 	} finally {
+		if (createdCandidatePath && !preserveCandidate) {
+			try {
+				await rm(createdCandidatePath, { force: true });
+			} catch {
+				console.warn(
+					JSON.stringify({
+						service: "agent-runtime-host",
+						code: "RUNTIME_LEGACY_MIGRATION_CANDIDATE_CLEANUP_FAILED",
+					}),
+				);
+			}
+		}
 		// Cleanup is best effort. Once the durable rename and read-back succeed,
 		// a transient cleanup failure must not turn a committed migration into an
 		// apparent failure for the caller.

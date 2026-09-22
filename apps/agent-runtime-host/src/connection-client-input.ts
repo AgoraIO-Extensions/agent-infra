@@ -99,6 +99,7 @@ async function readIndependentInput(
 			constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
 		);
 		try {
+			if (process.platform !== "linux") return undefined;
 			const directoryStat = await directory.stat();
 			if (
 				!directoryStat.isDirectory() ||
@@ -107,10 +108,7 @@ async function readIndependentInput(
 				(await realpath(inputDirectory)) !== inputDirectory
 			)
 				return undefined;
-			const directoryPath =
-				process.platform === "linux"
-					? `/proc/self/fd/${directory.fd}`
-					: inputDirectory;
+			const directoryPath = `/proc/self/fd/${directory.fd}`;
 			const handle = await open(
 				join(directoryPath, `${inputId}.json`),
 				constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
