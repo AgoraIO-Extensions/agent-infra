@@ -34,6 +34,10 @@ import {
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/jira-server";
+import {
+	RehoboamAdapter,
+	rehoboamConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/rehoboam";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
@@ -71,6 +75,7 @@ export async function createConnectionRuntime(
 		confluenceServerConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
+		rehoboamConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog, {
 			mode: "USER_ACTION_REQUIRED",
@@ -89,6 +94,7 @@ export async function createConnectionRuntime(
 			confluenceServerConnectionCatalog,
 			jenkinsCiConnectionCatalog,
 			jenkinsReleaseConnectionCatalog,
+			rehoboamConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
@@ -163,6 +169,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 		new JiraServerOAuthTokenProvider(jiraFetch, config.jenkinsCiToken),
 	);
+	const rehoboam = new RehoboamAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		config.rehoboamApiKey,
+	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		[githubConnectionCatalog.providerReleaseId]: github,
@@ -170,6 +180,7 @@ export async function createConnectionRuntime(
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
+		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
 	});
 	const service = new ConnectionApplicationService(
 		repository,
@@ -183,6 +194,7 @@ export async function createConnectionRuntime(
 			confluence,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
+			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
 	);
@@ -205,6 +217,7 @@ export async function createConnectionRuntime(
 					confluenceServerConnectionCatalog,
 					jenkinsCiConnectionCatalog,
 					jenkinsReleaseConnectionCatalog,
+					rehoboamConnectionCatalog,
 				],
 				githubRedirectUri: config.github.redirectUri,
 				service,
@@ -217,6 +230,8 @@ export async function createConnectionRuntime(
 			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
 			"github.com": githubConnectionCatalog.provider,
 			"jenkins-ci.agoralab.co": "jenkins-ci",
+			"rehoboam.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
+			"justinia.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 		},
 		service,
 		supportedProviders: [
@@ -226,6 +241,7 @@ export async function createConnectionRuntime(
 			confluenceServerConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
+			rehoboamConnectionCatalog.provider,
 		],
 	});
 	return {

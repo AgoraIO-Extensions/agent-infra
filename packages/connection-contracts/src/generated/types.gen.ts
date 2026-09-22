@@ -142,7 +142,7 @@ export type OAuthTransactionRequest = {
 };
 
 export type ProviderCredentialRequest = {
-    providerId: 'bitbucket';
+    providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {
     providerId: 'confluence' | 'jira';

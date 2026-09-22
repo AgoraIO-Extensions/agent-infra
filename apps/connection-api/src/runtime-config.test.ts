@@ -40,6 +40,7 @@ const accountBase = {
 	JENKINS_CI_TOKEN_CLIENT_SECRET: "jenkins-ci-secret",
 	JENKINS_CI_TOKEN_PASSWORD: "jenkins-ci-token-password",
 	JENKINS_CI_TOKEN_USERNAME: "jenkins-ci-token-user",
+	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 
 describe("Connection runtime configuration", () => {
@@ -128,6 +129,7 @@ describe("Connection runtime configuration", () => {
 			tokenUrl: "https://oauth.agoralab.co/oauth/token",
 			username: "jenkins-ci-token-user",
 		});
+		expect(config.rehoboamApiKey).toBe("rehoboam-machine-key");
 	});
 
 	it("requires a primary GitHub egress before configuring READ fallback", () => {

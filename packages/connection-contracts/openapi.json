@@ -843,7 +843,10 @@
 						"additionalProperties": false,
 						"required": ["providerId", "accessToken"],
 						"properties": {
-							"providerId": { "type": "string", "const": "bitbucket" },
+							"providerId": {
+								"type": "string",
+								"enum": ["bitbucket", "rehoboam"]
+							},
 							"accessToken": {
 								"type": "string",
 								"minLength": 1,

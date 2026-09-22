@@ -966,7 +966,7 @@ export function createConnectionOAuthApp(
 					},
 					() => {
 						const credential =
-							body.providerId === "bitbucket"
+							"accessToken" in body
 								? body.accessToken
 								: "apiToken" in body
 									? JSON.stringify({

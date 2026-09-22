@@ -47,6 +47,9 @@ export function ConnectionsPage() {
 	const [bitbucketOpen, setBitbucketOpen] = useState(false);
 	const [bitbucketPending, setBitbucketPending] = useState(false);
 	const [bitbucketError, setBitbucketError] = useState<Error | null>(null);
+	const [rehoboamOpen, setRehoboamOpen] = useState(false);
+	const [rehoboamPending, setRehoboamPending] = useState(false);
+	const [rehoboamError, setRehoboamError] = useState<Error | null>(null);
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
@@ -69,6 +72,7 @@ export function ConnectionsPage() {
 			return;
 		const provider = search.get("provider");
 		if (provider === "bitbucket") setBitbucketOpen(true);
+		if (provider === "rehoboam") setRehoboamOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
 		if (provider === "jenkins-ci" || provider === "jenkins-release") {
@@ -110,6 +114,24 @@ export function ConnectionsPage() {
 			);
 		} finally {
 			setBitbucketPending(false);
+		}
+	};
+	const connectRehoboam = async (accessToken: string) => {
+		setRehoboamPending(true);
+		setRehoboamError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				accessToken,
+				providerId: "rehoboam",
+			});
+			setRehoboamOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setRehoboamError(
+				error instanceof Error ? error : new Error("Rehoboam 连接失败"),
+			);
+		} finally {
+			setRehoboamPending(false);
 		}
 	};
 	const connectJira = async (credential: {
@@ -204,6 +226,7 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin();
 	const connectProvider = (providerId: ConnectorProviderId) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
+		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -282,6 +305,7 @@ export function ConnectionsPage() {
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
+			{rehoboamError ? <PageError error={rehoboamError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
@@ -405,6 +429,8 @@ export function ConnectionsPage() {
 								);
 								if (connection?.providerId === "bitbucket") {
 									setBitbucketOpen(true);
+								} else if (connection?.providerId === "rehoboam") {
+									setRehoboamOpen(true);
 								} else if (connection?.providerId === "jira") {
 									setJiraOpen(true);
 								} else if (connection?.providerId === "confluence") {
@@ -681,6 +707,57 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={jenkinsPending}>
 								<SlidersHorizontal aria-hidden="true" size={17} />
 								{jenkinsPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
+				open={rehoboamOpen}
+				onOpenChange={(open) => {
+					setRehoboamOpen(open);
+					if (!open) setRehoboamError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接 Rehoboam</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const accessToken = new FormData(event.currentTarget).get(
+								"accessToken",
+							);
+							if (typeof accessToken === "string")
+								void connectRehoboam(accessToken);
+						}}
+					>
+						<label htmlFor="rehoboam-access-token">Rehoboam 访问令牌</label>
+						<input
+							autoComplete="off"
+							id="rehoboam-access-token"
+							maxLength={8192}
+							name="accessToken"
+							required
+							type="password"
+						/>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={rehoboamPending}>
+								<KeyRound aria-hidden="true" size={17} />
+								{rehoboamPending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>
