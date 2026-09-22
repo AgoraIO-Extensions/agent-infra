@@ -793,15 +793,24 @@ export class RuntimeHostV3 {
 				bounded,
 				true,
 			);
-			events = await abortable(
-				this.options.driver.subscribeEvents(
-					session.nativeSessionRef ?? nativeRequired(),
-					request.executionId,
-					request.afterCursor ?? undefined,
-					bounded,
-				),
+			const subscription = this.options.driver.subscribeEvents(
+				session.nativeSessionRef ?? nativeRequired(),
+				request.executionId,
+				request.afterCursor ?? undefined,
 				bounded,
 			);
+			try {
+				events = await abortable(subscription, bounded);
+			} catch (error) {
+				// If cancellation wins while the Driver is still constructing its
+				// iterable, close that late iterable as soon as it arrives. This
+				// prevents a subscription created after grant expiry from leaking
+				// listeners or native resources past the HTTP request lifetime.
+				void subscription
+					.then((late) => late[Symbol.asyncIterator]().return?.())
+					.catch(() => undefined);
+				throw error;
+			}
 		} catch (error) {
 			clearTimeout(timer);
 			throw error;

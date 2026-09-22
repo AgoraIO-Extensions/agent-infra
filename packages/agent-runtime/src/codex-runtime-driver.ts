@@ -2379,10 +2379,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private connectionRecoveryClosed(
 		state: CodexDriverState,
 		nativeSessionRef: string,
+		executionId: string,
 	) {
 		return Object.entries(state.operations).some(
 			([key, operation]) =>
 				operation.nativeSessionRef === nativeSessionRef &&
+				operation.executionId === executionId &&
 				["stop", "generation-cancel"].includes(
 					(JSON.parse(key) as unknown[])[3] as string,
 				),
@@ -2481,7 +2483,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.closed ||
 				Date.now() >= read.expiresAt ||
 				!isDeepStrictEqual(read.assertCurrent(), binding) ||
-				this.connectionRecoveryClosed(state, reference.nativeSessionRef)
+				this.connectionRecoveryClosed(
+					state,
+					reference.nativeSessionRef,
+					reference.executionId,
+				)
 			)
 				unavailable();
 			const session = ownRecordValue(
@@ -4004,13 +4010,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const latestFact = journal
 			? latestModelOperationAttemptFact(journal.events)
 			: undefined;
-		const deferInitialStatus = this.initialModelStatusPending.delete(
-			this.nativeTurnKey(
-				this.modelConversationKey(codexConversationKey(session)),
-				session.threadId,
-				execution.nativeTurnId,
-			),
+		const initialStatusKey = this.nativeTurnKey(
+			this.modelConversationKey(codexConversationKey(session)),
+			session.threadId,
+			execution.nativeTurnId,
 		);
+		const deferInitialStatus = this.initialModelStatusPending.has(initialStatusKey);
 		// The initial status lookup can race the response body of a live model
 		// stream. Its durable intent/started fact already proves that this execution
 		// is accepted; defer native resume until the stream records its outcome.
@@ -4021,6 +4026,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			(latestFact.phase === "intent" || latestFact.phase === "started")
 		)
 			return "running";
+		this.initialModelStatusPending.delete(initialStatusKey);
 		// A provider HTTP failure is durably recorded by the model transport before
 		// it closes the native request. The native app-server may leave its Turn in
 		// `running` while processing that rejected response, so status recovery must
@@ -4637,7 +4643,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					].includes(request.requestId)
 				)
 					protocolInvalid();
-				if (this.connectionRecoveryClosed(state, nativeSessionRef))
+				if (
+					this.connectionRecoveryClosed(
+						state,
+						nativeSessionRef,
+						execution.executionId,
+					)
+				)
 					unavailable();
 				if (recovery) {
 					const binding = checkAbort
