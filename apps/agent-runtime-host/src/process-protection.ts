@@ -5,7 +5,12 @@ import { RuntimeHostError } from "@agent-infra/agent-runtime";
 
 /** Check the actual credential-holding process before accepting private client input. */
 export function assertRuntimeProcessProtection() {
-	const development = process.env.AGENT_INFRA_RUNTIME_DEV === "1";
+	const development =
+		process.env.AGENT_INFRA_RUNTIME_DEV === "1" &&
+		process.execArgv.includes("--watch") &&
+		process.execArgv.some(
+			(argument) => argument === "tsx" || argument.endsWith("/tsx"),
+		);
 	const fail = (): never => {
 		throw new RuntimeHostError(
 			"RUNTIME_PROCESS_PROTECTION_INVALID",

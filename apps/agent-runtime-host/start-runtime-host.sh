@@ -8,6 +8,7 @@ if [ -n "${NODE_OPTIONS:-}${NODE_DEBUG:-}${NODE_DEBUG_NATIVE:-}${NODE_V8_COVERAG
 fi
 ulimit -S -c 0
 ulimit -H -c 0
+unset AGENT_INFRA_RUNTIME_DEV
 case "$#:${1:-}" in
   0:) exec node --disable-sigusr1 dist/index.mjs ;;
   1:--dev) exec env AGENT_INFRA_RUNTIME_DEV=1 node --disable-sigusr1 --watch --import tsx src/index.ts ;;

@@ -91,6 +91,7 @@ describe("credential holder process protection", () => {
 		{ flags: ["--disable-sigusr1", "--require=node:fs"] },
 		{ preamble: "process.report.reportOnSignal = true;" },
 		{ preamble: 'process.env.NODE_OPTIONS = "sentinel-private-value";' },
+		{ preamble: 'process.env.AGENT_INFRA_RUNTIME_DEV = "1";' },
 		{
 			preamble:
 				'const inspector = await import("node:inspector"); inspector.open(0, "127.0.0.1");',
