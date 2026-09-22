@@ -1127,7 +1127,7 @@ export class FileRuntimeStore {
 			if (
 				!authority ||
 				authority.expiresAt <= now ||
-				claims.expiresAt <= Date.now() ||
+				claims.expiresAt <= now ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
 				authority.workerId !== claims.workerId ||
