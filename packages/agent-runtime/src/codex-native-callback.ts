@@ -421,11 +421,19 @@ export function serveCodexNativeCallbacks(
 						throw unavailable();
 					const output = Buffer.from(`${JSON.stringify(response)}\n`);
 					if (output.length > maximumFrameBytes) throw unavailable();
-					const write = new Promise<void>((resolve, reject) =>
-						stream.write(output, (error) =>
-							error ? reject(unavailable()) : resolve(),
-						),
-					);
+					const write = new Promise<void>((resolve, reject) => {
+						const onAbort = () => reject(unavailable());
+						signal.addEventListener("abort", onAbort, { once: true });
+						try {
+							stream.write(output, (error) => {
+								signal.removeEventListener("abort", onAbort);
+								error ? reject(unavailable()) : resolve();
+							});
+						} catch (error) {
+							signal.removeEventListener("abort", onAbort);
+							reject(error);
+						}
+					});
 					try {
 						await Promise.race([write, interrupted]);
 					} catch (error) {
