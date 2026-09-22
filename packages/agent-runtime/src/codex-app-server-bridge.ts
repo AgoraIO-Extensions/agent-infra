@@ -1302,6 +1302,7 @@ async function verifyLinuxSandbox(
 			signal,
 		);
 	} catch {
+		signal?.throwIfAborted();
 		throw new CodexAppServerBridgeError(
 			"CODEX_APP_SERVER_SANDBOX_UNAVAILABLE",
 			"Codex requires setpriv and enforceable Landlock ABI V5 filesystem rights",
