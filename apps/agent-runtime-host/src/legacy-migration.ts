@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -17,6 +17,16 @@ export class RuntimeLegacyMigrationError extends Error {
 	}
 }
 
+export type RuntimeLegacyMigrationFilesystem = {
+	lstat(path: string): Promise<Stats>;
+	open(
+		path: string,
+		flags: string | number,
+		mode?: number,
+	): ReturnType<typeof open>;
+	realpath(path: string): Promise<string>;
+};
+
 function fail(): never {
 	throw new RuntimeLegacyMigrationError();
 }
@@ -31,7 +41,7 @@ async function readMountedFile(
 	dataDirectory: string,
 	maximumBytes: number,
 	expectedOwnerUid: number,
-	fs = { lstat, open, realpath },
+	fs: RuntimeLegacyMigrationFilesystem = { lstat, open, realpath },
 ) {
 	if (!isAbsolute(path) || resolve(path) !== path) fail();
 	const [target, dataRoot] = await Promise.all([
@@ -160,11 +170,7 @@ export async function readRuntimeLegacyMigrationV1(input: {
 	expectedIssuer: string;
 	binding: WorkloadReadinessBindingV1 | undefined;
 	dataDirectory: string;
-	filesystem?: {
-		lstat: typeof lstat;
-		open: typeof open;
-		realpath: typeof realpath;
-	};
+	filesystem?: RuntimeLegacyMigrationFilesystem;
 }) {
 	try {
 		const paths = [

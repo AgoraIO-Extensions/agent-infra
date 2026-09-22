@@ -14,6 +14,7 @@ import {
 	RuntimeHost,
 	requestDigest,
 } from "@agent-infra/agent-runtime";
+import type { RuntimeLegacyMigrationFilesystem } from "./legacy-migration.js";
 import type {
 	RuntimeLegacyPrincipalManifestV1,
 	RuntimeSubmitTurnRequestV2,
@@ -185,8 +186,9 @@ export async function createLegacyMigrationFixture(
 		manifest,
 		environment,
 		filesystem: {
-			lstat: async (path) => Object.assign(await lstat(path), { uid: 0 }),
-			open: async (path, flags, mode) => {
+			lstat: async (path: string) =>
+				Object.assign(await lstat(path), { uid: 0 }),
+			open: async (path: string, flags: string | number, mode?: number) => {
 				const handle = await open(path, flags, mode);
 				return new Proxy(handle, {
 					get(target, property, receiver) {
@@ -197,7 +199,7 @@ export async function createLegacyMigrationFixture(
 				});
 			},
 			realpath,
-		},
+		} satisfies RuntimeLegacyMigrationFilesystem,
 	};
 }
 

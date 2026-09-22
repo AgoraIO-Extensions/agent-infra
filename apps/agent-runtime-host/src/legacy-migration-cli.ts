@@ -20,6 +20,7 @@ import { readWorkloadReadinessBindingV1 } from "./configuration.js";
 import {
 	RuntimeLegacyMigrationError,
 	readRuntimeLegacyMigrationV1,
+	type RuntimeLegacyMigrationFilesystem,
 } from "./legacy-migration.js";
 
 const maximumJournalBytes = 64 * 1024 * 1024;
@@ -99,7 +100,7 @@ function onlyPrincipalAdded(beforeBytes: Buffer, afterBytes: Buffer) {
  */
 export async function runRuntimeLegacyMigrationCli(
 	environment: NodeJS.ProcessEnv,
-	filesystem?: Parameters<typeof readRuntimeLegacyMigrationV1>[0]["filesystem"],
+	filesystem?: RuntimeLegacyMigrationFilesystem,
 ) {
 	let temporaryDirectory: string | undefined;
 	let ownedLock: string | undefined;
