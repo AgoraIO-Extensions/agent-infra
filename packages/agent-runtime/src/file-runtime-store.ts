@@ -915,12 +915,15 @@ export class FileRuntimeStore {
 			)
 				runtimeAuthorizationDenied();
 			session.executionAuthorities ??= {};
-			applyRuntimeAuthority(
+			const authority = applyRuntimeAuthority(
 				session.executionAuthorities,
 				claims,
 				"query",
 				currentNow,
 			);
+			// Recovery is the durable absence-fence path. Persist its query
+			// authority explicitly after the verified session/migration checks.
+			session.executionAuthorities[claims.executionId] = authority;
 			session.highestFences[scope] = fence;
 			if (operation) operation.deliveryFence = fence;
 			return { session: structuredClone(session), found: !!operation };
