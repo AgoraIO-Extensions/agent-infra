@@ -26,12 +26,13 @@ import {
 } from "node:path";
 import { env, kill as killProcess, platform } from "node:process";
 import { Duplex } from "node:stream";
-import { TextDecoder } from "node:util";
+import { isDeepStrictEqual, TextDecoder } from "node:util";
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
 import {
 	type CodexConnectionProfile,
+	type CodexConnectionRecoveryOriginal,
 	type CodexConnectionServiceAuthority,
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
@@ -40,6 +41,7 @@ import {
 	type CodexNativeCallbackHandler,
 	type CodexNativeConnectionBootstrapHandler,
 	type CodexNativeConnectionRecoveryHandler,
+	sameCodexNativeAttemptV1,
 	serveCodexNativeCallbacks,
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
@@ -358,9 +360,11 @@ export async function runCodexConnectionRecovery(options: {
 		let issued = 0;
 		let recoveryProcessNonce: string | undefined;
 		let previousRecoveryId: string | undefined;
-		// Issuing the last verification is not evidence that it was persisted.
-		// Require the final pull, which the Driver accepts only after its evidence
-		// handler has durably acknowledged the preceding verification.
+		let pendingEvidence:
+			| { original: CodexConnectionRecoveryOriginal; acknowledged: boolean }
+			| undefined;
+		// Keep only non-secret original evidence, never the query credential.
+		// Every following pull, including done, requires its durable ACK.
 		const complete = () => terminal;
 		process.on("error", () => {
 			failed = true;
@@ -373,9 +377,44 @@ export async function runCodexConnectionRecovery(options: {
 			async (request, signal) => {
 				// Recovery can persist query evidence, but cannot dispatch business
 				// operations or create/bind native sources on this private channel.
-				if (terminal || request.phase !== "connection-evidence")
+				const pending = pendingEvidence;
+				if (
+					terminal ||
+					!pending ||
+					request.schemaVersion !== 2 ||
+					request.phase !== "connection-evidence" ||
+					request.connectionEvidence.verification !== "verified" ||
+					!sameCodexNativeAttemptV1(
+						request.identity,
+						pending.original.identity,
+					) ||
+					request.permitId !== pending.original.permitId ||
+					!isDeepStrictEqual(
+						request.connectionRequest,
+						pending.original.connectionRequest,
+					) ||
+					!isDeepStrictEqual(
+						request.connectionEvidence.originalResponse,
+						pending.original.originalResponse,
+					)
+				)
 					throw unavailable();
-				return options.evidence(request, signal);
+				const expectedAck = structuredClone({
+					schemaVersion: 2,
+					phase: "connection-evidence",
+					requestId: request.requestId,
+					identity: request.identity,
+					connectionRequest: request.connectionRequest,
+					decision: "ack",
+				});
+				const response = await options.evidence(request, signal);
+				signal.throwIfAborted();
+				options.signal.throwIfAborted();
+				// The shared FD server validates again after this handler returns.
+				// Validate the exact ACK here before advancing recovery state.
+				if (!isDeepStrictEqual(response, expectedAck)) throw unavailable();
+				pending.acknowledged = true;
+				return response;
 			},
 			undefined,
 			() => {
@@ -385,6 +424,7 @@ export async function runCodexConnectionRecovery(options: {
 			async (request, signal) => {
 				if (
 					terminal ||
+					(pendingEvidence !== undefined && !pendingEvidence.acknowledged) ||
 					request.profileRef !== profile.profileRef ||
 					request.previousRecoveryId !== previousRecoveryId ||
 					(recoveryProcessNonce !== undefined &&
@@ -397,6 +437,10 @@ export async function runCodexConnectionRecovery(options: {
 					if (issued >= maximumRecoveryExchanges) throw unavailable();
 					issued++;
 					previousRecoveryId = response.recoveryId;
+					pendingEvidence = {
+						original: structuredClone(response.original),
+						acknowledged: false,
+					};
 				} else if (response.decision === "done") terminal = true;
 				else failed = true;
 				return response;
