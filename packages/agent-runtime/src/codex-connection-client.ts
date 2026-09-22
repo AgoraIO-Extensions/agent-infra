@@ -118,8 +118,14 @@ export function validateCodexConnectionProfile(
 ): CodexConnectionProfile {
 	if (!isProfile(value)) throw unavailable();
 	const profile = structuredClone(value);
-	const issuer = new URL(profile.issuer);
-	const resource = new URL(profile.resource);
+	let issuer: URL;
+	let resource: URL;
+	try {
+		issuer = new URL(profile.issuer);
+		resource = new URL(profile.resource);
+	} catch {
+		throw unavailable();
+	}
 	if (
 		issuer.origin !== resource.origin ||
 		resource.pathname !== "/mcp" ||
