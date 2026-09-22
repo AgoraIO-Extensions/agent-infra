@@ -237,14 +237,17 @@ export function applyRuntimeAuthority(
 		)
 			runtimeAuthorizationDenied();
 	}
-	const authority: RuntimeExecutionAuthority = current ?? {
-		workerId: claims.workerId,
-		executionDeliveryFence: claims.operation.executionDeliveryFence,
-		issuedAt: 0,
-		expiresAt: 0,
-		...(mode === "query" ? { queryOnly: true as const } : {}),
-		deliveredCursors: [],
-	};
+	const authority: RuntimeExecutionAuthority =
+		mode === "query" && current
+			? structuredClone(current)
+			: (current ?? {
+					workerId: claims.workerId,
+					executionDeliveryFence: claims.operation.executionDeliveryFence,
+					issuedAt: 0,
+					expiresAt: 0,
+					...(mode === "query" ? { queryOnly: true as const } : {}),
+					deliveredCursors: [],
+				});
 	if (claims.purpose === "control") {
 		delete authority.queryOnly;
 		if (
@@ -269,6 +272,7 @@ export function applyRuntimeAuthority(
 			authority.expiresAt = 0;
 		}
 	} else {
+		if (mode === "query") authority.queryOnly = true;
 		if (
 			current?.control?.reason === "recovery" &&
 			(current.authorizationRecordId !== claims.authorizationRecordId ||
@@ -286,7 +290,9 @@ export function applyRuntimeAuthority(
 			authority.expiresAt = claims.expiresAt;
 		}
 	}
-	authority.executionDeliveryFence = claims.operation.executionDeliveryFence;
-	authorities[claims.executionId] = authority;
+	if (mode !== "query" || claims.purpose === "control") {
+		authority.executionDeliveryFence = claims.operation.executionDeliveryFence;
+		authorities[claims.executionId] = authority;
+	}
 	return authority;
 }

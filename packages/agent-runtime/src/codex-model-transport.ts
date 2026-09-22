@@ -1511,7 +1511,9 @@ export async function openCodexModelTransport(
 			controller.abort();
 			// started() can fail while fetch is already running. Join its abort and
 			// release any received body before reporting this request drained.
-			const received = await upstreamResult;
+			const received = upstreamResult
+				? await awaitPersistence(upstreamResult).catch(() => undefined)
+				: undefined;
 			await received?.value?.body?.cancel().catch(() => {});
 			await recordOutcome(
 				startedAt === undefined

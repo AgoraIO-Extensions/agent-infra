@@ -679,6 +679,7 @@ function isCodexEventJournal(
 					value.connectionRecovery.scannedAttemptRefs.length)) &&
 		(value.nativeSources === undefined ||
 			(isPlainRecord(value.nativeSources) &&
+				Object.keys(value.nativeSources).length <= 1024 &&
 				Object.entries(value.nativeSources).every(([id, source]) =>
 					isNativeSourceRecord(id, source),
 				))) &&
