@@ -1018,7 +1018,10 @@ describe("Connection API", () => {
 				accessToken: string,
 			) => {
 				if (providerId === "datalego") {
-					expect(accessToken).toBe("personal-hci-session");
+					expect(JSON.parse(accessToken)).toEqual({
+						email: "connection-user@example.invalid",
+						sessionToken: "personal-hci-session",
+					});
 					calls.push({
 						name: "connect-datalego",
 						value: { principalId, providerId },

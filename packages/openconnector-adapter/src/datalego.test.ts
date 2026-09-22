@@ -7,7 +7,14 @@ import { DataLegoAdapter, datalegoConnectionCatalog } from "./datalego.ts";
 import { datalegoExecutorDigest } from "./datalego-integrity.ts";
 
 function session(accessToken = "personal-access-token") {
-	return `x.${Buffer.from(JSON.stringify({ access_token: accessToken, user: { email: "user@agora.io", name: "User" } })).toString("base64url")}.x`;
+	return `x.${Buffer.from(JSON.stringify({ access_token: accessToken })).toString("base64url")}.x`;
+}
+
+function credential(accessToken = "personal-access-token") {
+	return JSON.stringify({
+		email: "user@agora.io",
+		sessionToken: session(accessToken),
+	});
 }
 
 test("DataLego executor digest pins its reviewed source", () => {
@@ -35,8 +42,7 @@ test("DataLego validates the personal HCI session without returning it", async (
 		request = { headers: new Headers(init?.headers), url: String(input) };
 		return Response.json({ message: "record not found" }, { status: 400 });
 	});
-	const token = session();
-	const identity = await adapter.validateCredential(token);
+	const identity = await adapter.validateCredential(credential());
 	assert.equal(
 		request?.url,
 		"https://datalego.agoralab.co/api/v1/datainsight/jobs/__connection_credential_probe__/status",
@@ -74,7 +80,7 @@ test("DataLego refreshes an expired access token once and retries", async () => 
 	});
 	const result = await adapter.execute({
 		action: "datalego.get_query_status",
-		credential: { accessToken: session() },
+		credential: { accessToken: credential() },
 		input: { jobId: "job-1" },
 	});
 	assert.equal("status" in result && result.status, "success");
