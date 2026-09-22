@@ -916,11 +916,13 @@ function ConnectorManagementWorkspace(props: {
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
+	const activeConnections = props.connections.filter(
+		(connection) => connection.status === "ACTIVE",
+	);
 	const initialProvider =
-		props.connections.find((connection) => connection.providerId === "github")
+		activeConnections.find((connection) => connection.providerId === "github")
 			?.providerId ??
-		props.connections.find((connection) => connection.status === "ACTIVE")
-			?.providerId ??
+		activeConnections[0]?.providerId ??
 		connectorDefinitions[0]?.providerId ??
 		"github";
 	const [providerId, setProviderId] = useState(initialProvider);
@@ -934,7 +936,7 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
-	const accounts = props.connections.filter(
+	const accounts = activeConnections.filter(
 		(connection) => connection.providerId === connector?.providerId,
 	);
 	const selected =
@@ -964,10 +966,8 @@ function ConnectorManagementWorkspace(props: {
 				</label>
 				<strong className="connection-list-label">连接器</strong>
 				{visibleConnectors.map((item) => {
-					const count = props.connections.filter(
-						(connection) =>
-							connection.providerId === item.providerId &&
-							connection.status === "ACTIVE",
+					const count = activeConnections.filter(
+						(connection) => connection.providerId === item.providerId,
 					).length;
 					const ItemIcon = item.icon;
 					return (

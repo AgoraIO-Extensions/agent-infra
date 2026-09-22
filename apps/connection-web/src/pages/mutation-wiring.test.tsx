@@ -106,6 +106,16 @@ const api = vi.hoisted(() => ({
 					requiresReconnect: true,
 					status: "ACTIVE",
 				},
+				{
+					actionVersionIds: ["datalego.get_current_user@v1"],
+					displayName: "Disconnected DataLego",
+					externalAccount: "old@example.invalid",
+					id: "connection-datalego-old",
+					ownerType: "PERSONAL" as const,
+					providerId: "datalego",
+					requiresReconnect: false,
+					status: "DISCONNECTED",
+				},
 			],
 			consumers: [{ id: "consumer-codex", name: "Codex" }],
 			grants: [
@@ -358,15 +368,8 @@ describe("Connection 管理 mutation wiring", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: /GitHub 已连接/ }));
 		fireEvent.click(screen.getByRole("button", { name: "再连接" }));
-		fireEvent.click(
-			screen.getByRole("button", { name: /旧 GitHub guoxianzhe-old/ }),
-		);
-		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
-		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledTimes(2));
-		expect(calls(api.startGithubOAuth).map((call) => call[0])).toEqual([
-			undefined,
-			undefined,
-		]);
+		await waitFor(() => expect(api.startGithubOAuth).toHaveBeenCalledOnce());
+		expect(calls(api.startGithubOAuth)[0]?.[0]).toBeUndefined();
 		expect(open).not.toHaveBeenCalled();
 
 		fireEvent.click(
@@ -482,6 +485,18 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
 			providerId: "datalego",
 		});
+	});
+
+	it("断开的 Connection 不显示在已连接账号列表", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
+		expect(
+			screen.getByRole("heading", { name: "还没有 DataLego Connection" }),
+		).toBeTruthy();
+		expect(screen.queryByText("Disconnected DataLego")).toBeNull();
+		expect(screen.queryByText("old@example.invalid")).toBeNull();
 	});
 
 	it("连接页调用 Jenkins CI credential API", async () => {
