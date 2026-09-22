@@ -7,7 +7,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { client } from "../../pilot/generated/client.gen.js";
+import { client } from "../../pilot/generated-v2/client.gen.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
 afterEach(() => {

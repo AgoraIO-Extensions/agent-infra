@@ -3,14 +3,59 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-	beginWecomSetup,
-	cancelWecomSetup,
-	getWecomBotConnection,
-	getWecomSetup,
-	submitWecomCredentials,
-} from "../../pilot/generated/sdk.gen.js";
+import type {
+	BeginWecomSetupData,
+	BeginWecomSetupErrors,
+	BeginWecomSetupResponses,
+	CancelWecomSetupData,
+	CancelWecomSetupErrors,
+	CancelWecomSetupResponses,
+	GetWecomBotConnectionData,
+	GetWecomBotConnectionErrors,
+	GetWecomBotConnectionResponses,
+	GetWecomSetupData,
+	GetWecomSetupErrors,
+	GetWecomSetupResponses,
+	SubmitWecomCredentialsData,
+	SubmitWecomCredentialsErrors,
+	SubmitWecomCredentialsResponses,
+} from "../../pilot/generated/types.gen.js";
+import type {
+	Options,
+	TDataShape,
+} from "../../pilot/generated-v2/client/index.js";
+import { client as v2Client } from "../../pilot/generated-v2/client.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+
+type V1Options<TData extends TDataShape> = Omit<Options<TData, false>, "url">;
+const getWecomBotConnection = (options: V1Options<GetWecomBotConnectionData>) =>
+	v2Client.get<GetWecomBotConnectionResponses, GetWecomBotConnectionErrors>({
+		url: "/api/v1/agents/{agentId}/wecom-bot",
+		...options,
+	});
+const beginWecomSetup = (options: V1Options<BeginWecomSetupData>) =>
+	v2Client.post<BeginWecomSetupResponses, BeginWecomSetupErrors>({
+		url: "/api/v1/agents/{agentId}/wecom-setup",
+		...options,
+	});
+const getWecomSetup = (options: V1Options<GetWecomSetupData>) =>
+	v2Client.get<GetWecomSetupResponses, GetWecomSetupErrors>({
+		url: "/api/v1/agents/{agentId}/wecom-setup/{sessionId}",
+		...options,
+	});
+const cancelWecomSetup = (options: V1Options<CancelWecomSetupData>) =>
+	v2Client.post<CancelWecomSetupResponses, CancelWecomSetupErrors>({
+		url: "/api/v1/agents/{agentId}/wecom-setup/{sessionId}/cancel",
+		...options,
+	});
+const submitWecomCredentials = (
+	options: V1Options<SubmitWecomCredentialsData>,
+) =>
+	v2Client.post<SubmitWecomCredentialsResponses, SubmitWecomCredentialsErrors>({
+		url: "/api/v1/agents/{agentId}/wecom-setup/{sessionId}/credentials",
+		...options,
+		headers: { "Content-Type": "application/json", ...options.headers },
+	});
 
 const labels = {
 	not_configured: "未配置",
