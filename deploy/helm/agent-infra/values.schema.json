@@ -154,7 +154,7 @@
             "publicKeySecretKey": { "type": "string", "minLength": 1 },
             "keyId": { "type": "string" },
             "trustRootUid": { "const": 0 },
-            "mountDir": { "type": "string", "pattern": "^/[^ ]+$" }
+            "mountDir": { "type": "string", "const": "/etc/agent-infra/legacy-migration" }
           }
         },
         "storageSize": {

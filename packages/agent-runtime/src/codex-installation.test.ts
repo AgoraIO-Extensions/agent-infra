@@ -24,6 +24,7 @@ const fixture = vi.hoisted(() => ({
 	release: {} as Record<string, unknown>,
 	arch: "arm64",
 	platform: "linux",
+	ownerUid: 0,
 }));
 
 vi.mock("./codex-release.json", () => ({
@@ -42,8 +43,8 @@ vi.mock("node:process", async (importOriginal) => ({
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
-	// Only the fixed production installation paths are translated. All bytes,
-	// modes, directories, links and hashes remain real independent fixture data.
+	// Translate installation paths and deployment ownership; bytes, modes,
+	// directories, links and hashes remain real independent fixture data.
 	const map = (path: PathLike) =>
 		typeof path === "string" &&
 		(path === "/" || path === "/opt" || path.startsWith("/opt/"))
@@ -52,8 +53,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	return {
 		...actual,
 		access: (path: PathLike, mode?: number) => actual.access(map(path), mode),
-		lstat: (path: PathLike) => actual.lstat(map(path)),
-		open: (path: PathLike, flags: number) => actual.open(map(path), flags),
+		lstat: async (path: PathLike) =>
+			Object.assign(await actual.lstat(map(path)), { uid: fixture.ownerUid }),
+		open: async (path: PathLike, flags: number) => {
+			const file = await actual.open(map(path), flags);
+			const stat = file.stat.bind(file);
+			(file as unknown as { stat: () => Promise<unknown> }).stat = async () =>
+				Object.assign(await stat(), { uid: fixture.ownerUid });
+			return file;
+		},
 		readFile: (...args: Parameters<typeof actual.readFile>) =>
 			actual.readFile(
 				typeof args[0] === "string" ? map(args[0]) : args[0],
@@ -168,6 +176,7 @@ beforeEach(async () => {
 	);
 	fixture.sandbox = join(directory, "root");
 	fixture.arch = "arm64";
+	fixture.ownerUid = 0;
 	fixture.platform = "linux";
 	payload = Object.fromEntries(
 		otherFiles.map((name) => [name, Buffer.from(`${name}\n`)]),

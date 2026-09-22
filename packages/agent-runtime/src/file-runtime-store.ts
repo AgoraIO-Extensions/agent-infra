@@ -78,9 +78,11 @@ interface RuntimeStoreState {
 	quarantinedSessions: Record<string, unknown>;
 }
 
+type RuntimeStoreClock = number | (() => number);
+
 interface PrepareOperation {
 	authorization?: RuntimeExecutionGrantClaimsV2;
-	now?: number;
+	now?: RuntimeStoreClock;
 	requestedHostSessionRef?: string;
 	binding: SessionBinding & { executionId: string; turnId: string };
 	operationId: string;
@@ -503,6 +505,8 @@ export class FileRuntimeStore {
 
 	prepareOperation(input: PrepareOperation) {
 		return this.file.update((state) => {
+			const now =
+				typeof input.now === "function" ? input.now() : (input.now ?? Date.now());
 			assertStoreState(state);
 			const indexedHostSessionRef =
 				state.sessionBindings[sessionBindingKey(input.binding)];
@@ -587,7 +591,7 @@ export class FileRuntimeStore {
 						session.executionAuthorities,
 						input.authorization,
 						"prepare",
-						input.now,
+						now,
 					);
 				}
 			}
@@ -867,9 +871,10 @@ export class FileRuntimeStore {
 	recoverOperationV3(
 		claims: RuntimeExecutionGrantClaimsV2,
 		originalOperationDigest: string,
-		now = Date.now(),
+		now: RuntimeStoreClock = Date.now,
 	) {
 		return this.file.update((state) => {
+			const currentNow = typeof now === "function" ? now() : now;
 			assertStoreState(state);
 			const indexed = state.sessionBindings[sessionBindingKey(claims)];
 			const ref = claims.hostSessionRef ?? indexed;
@@ -908,7 +913,7 @@ export class FileRuntimeStore {
 			)
 				runtimeAuthorizationDenied();
 			session.executionAuthorities ??= {};
-			applyRuntimeAuthority(session.executionAuthorities, claims, "query", now);
+			applyRuntimeAuthority(session.executionAuthorities, claims, "query", currentNow);
 			session.highestFences[scope] = fence;
 			if (operation) operation.deliveryFence = fence;
 			return { session: structuredClone(session), found: !!operation };
@@ -918,9 +923,10 @@ export class FileRuntimeStore {
 	authorizeRequestV3(
 		claims: RuntimeExecutionGrantClaimsV2,
 		mode: "query" | "renew" | "generation-cancel" = "query",
-		now = Date.now(),
+		now: RuntimeStoreClock = Date.now,
 	) {
 		return this.file.update((state) => {
+			const currentNow = typeof now === "function" ? now() : now;
 			assertStoreState(state);
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
@@ -987,7 +993,7 @@ export class FileRuntimeStore {
 				session.executionAuthorities,
 				claims,
 				mode === "generation-cancel" ? "query" : mode,
-				now,
+				currentNow,
 			);
 			if (mode === "generation-cancel") {
 				// The isolation claim advances the original Turn's fence without recovering it.
@@ -1113,9 +1119,10 @@ export class FileRuntimeStore {
 	recordDeliveredCursor(
 		claims: RuntimeExecutionGrantClaimsV2,
 		cursor: string,
-		now = Date.now(),
+		now: RuntimeStoreClock = Date.now,
 	) {
 		return this.file.update((state) => {
+			const currentNow = typeof now === "function" ? now() : now;
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
 				state,
@@ -1126,8 +1133,8 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
-				authority.expiresAt <= now ||
-				claims.expiresAt <= now ||
+				authority.expiresAt <= currentNow ||
+				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
 				authority.workerId !== claims.workerId ||
@@ -1176,8 +1183,13 @@ export class FileRuntimeStore {
 		return session;
 	}
 
-	acknowledgeCursor(claims: RuntimeExecutionGrantClaimsV2, cursor: string) {
+	acknowledgeCursor(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursor: string,
+		now: RuntimeStoreClock = Date.now,
+	) {
 		return this.file.update((state) => {
+			const currentNow = typeof now === "function" ? now() : now;
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
 			const session = sessionFor(
 				state,
@@ -1188,6 +1200,8 @@ export class FileRuntimeStore {
 			const authority = session.executionAuthorities?.[claims.executionId];
 			if (
 				!authority ||
+				authority.expiresAt <= currentNow ||
+				claims.expiresAt <= currentNow ||
 				authority.executionDeliveryFence !==
 					claims.operation.executionDeliveryFence ||
 				authority.workerId !== claims.workerId ||

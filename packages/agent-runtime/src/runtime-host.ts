@@ -304,6 +304,10 @@ function parseDriverLookup(
 
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
+	private readonly readinessGuards = new Set<{
+		controller: AbortController;
+		done: Promise<void>;
+	}>();
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
@@ -327,6 +331,10 @@ export class RuntimeHost {
 		if (this.closed) return;
 		this.closed = true;
 		await this.v3?.close();
+		for (const guard of this.readinessGuards) guard.controller.abort();
+		await Promise.allSettled(
+			[...this.readinessGuards].map((guard) => guard.done),
+		);
 		// RuntimeHostV3 rejects new V3 work before draining its own recovery
 		// guards. Drain the shared legacy queue as well so an already admitted
 		// operation cannot outlive host shutdown.
@@ -335,7 +343,7 @@ export class RuntimeHost {
 		}
 	}
 	private requireLegacyHost() {
-		if (this.closed || this.v3) runtimeAuthorizationDenied();
+		if (this.closed) runtimeAuthorizationDenied();
 	}
 
 	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {
@@ -598,6 +606,13 @@ export class RuntimeHost {
 		authenticatedWorkerId: string,
 		signal: AbortSignal,
 	): Promise<WorkloadReadinessResponseV1> {
+		if (this.closed)
+			throw new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness is unavailable",
+				503,
+				true,
+			);
 		const parsed = WorkloadReadinessRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
@@ -611,9 +626,23 @@ export class RuntimeHost {
 			);
 		verify(request, authenticatedWorkerId);
 		if (!this.options.driver.probeReadiness) driverInvalid();
-		const bounded = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+		const controller = new AbortController();
+		const bounded = AbortSignal.any([
+			signal,
+			controller.signal,
+			AbortSignal.timeout(10_000),
+		]);
 		bounded.throwIfAborted();
 		let abort = () => {};
+		const probe = this.options.driver.probeReadiness(bounded);
+		const guard = {
+			controller,
+			done: probe.then(
+				() => undefined,
+				() => undefined,
+			),
+		};
+		this.readinessGuards.add(guard);
 		try {
 			const capabilities = await Promise.race([
 				new Promise<never>((_resolve, reject) => {
@@ -628,9 +657,16 @@ export class RuntimeHost {
 						);
 					bounded.addEventListener("abort", abort, { once: true });
 				}),
-				this.options.driver.probeReadiness(bounded),
+				probe,
 			]);
 			bounded.throwIfAborted();
+			if (this.closed)
+				throw new RuntimeHostError(
+					"RUNTIME_READINESS_UNAVAILABLE",
+					"Workload readiness is unavailable",
+					503,
+					true,
+				);
 			verify(request, authenticatedWorkerId);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
@@ -640,6 +676,7 @@ export class RuntimeHost {
 			});
 		} finally {
 			bounded.removeEventListener("abort", abort);
+			this.readinessGuards.delete(guard);
 		}
 	}
 

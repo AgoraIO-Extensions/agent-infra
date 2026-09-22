@@ -5,12 +5,6 @@ import { RuntimeHostError } from "@agent-infra/agent-runtime";
 
 /** Check the actual credential-holding process before accepting private client input. */
 export function assertRuntimeProcessProtection() {
-	const development =
-		process.env.AGENT_INFRA_RUNTIME_DEV === "1" &&
-		process.execArgv.includes("--watch") &&
-		process.execArgv.some(
-			(argument) => argument === "tsx" || argument.endsWith("/tsx"),
-		);
 	const fail = (): never => {
 		throw new RuntimeHostError(
 			"RUNTIME_PROCESS_PROTECTION_INVALID",
@@ -21,34 +15,33 @@ export function assertRuntimeProcessProtection() {
 	const forbidden =
 		/^--(?:inspect|debug|heap|report|experimental-report|diagnostic-dir|tls-keylog|prof|cpu-prof|trace-event|redirect-warnings|import|require|loader|experimental-loader|no-disable-sigusr1)/;
 	if (
-		!development &&
-		(!["linux", "darwin"].includes(process.platform) ||
-			!process.execArgv.includes("--disable-sigusr1") ||
-			process.execArgv.some((argument) => {
-				const normalized = argument.replaceAll("_", "-");
-				return (
-					/^-r(?:$|[^-])/.test(normalized) ||
-					forbidden.test(normalized) ||
-					(normalized.startsWith("--disable-sigusr1") &&
-						normalized !== "--disable-sigusr1")
-				);
-			}) ||
-			Object.keys(process.env).some(
-				(name) =>
-					(/^(?:LD_|DYLD_)/.test(name) ||
-						[
-							"NODE_OPTIONS",
-							"NODE_DEBUG",
-							"NODE_DEBUG_NATIVE",
-							"NODE_V8_COVERAGE",
-							"NODE_PATH",
-						].includes(name)) &&
-					Boolean(process.env[name]),
-			) ||
-			inspectorUrl() !== undefined ||
-			process.report?.reportOnFatalError ||
-			process.report?.reportOnSignal ||
-			process.report?.reportOnUncaughtException)
+		!["linux", "darwin"].includes(process.platform) ||
+		!process.execArgv.includes("--disable-sigusr1") ||
+		process.execArgv.some((argument) => {
+			const normalized = argument.replaceAll("_", "-");
+			return (
+				/^-r(?:$|[^-])/.test(normalized) ||
+				forbidden.test(normalized) ||
+				(normalized.startsWith("--disable-sigusr1") &&
+					normalized !== "--disable-sigusr1")
+			);
+		}) ||
+		Object.keys(process.env).some(
+			(name) =>
+				(/^(?:LD_|DYLD_)/.test(name) ||
+					[
+						"NODE_OPTIONS",
+						"NODE_DEBUG",
+						"NODE_DEBUG_NATIVE",
+						"NODE_V8_COVERAGE",
+						"NODE_PATH",
+					].includes(name)) &&
+				Boolean(process.env[name]),
+		) ||
+		inspectorUrl() !== undefined ||
+		process.report?.reportOnFatalError ||
+		process.report?.reportOnSignal ||
+		process.report?.reportOnUncaughtException
 	)
 		fail();
 	try {

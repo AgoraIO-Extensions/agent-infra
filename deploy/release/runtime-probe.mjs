@@ -58,6 +58,7 @@ export function validateRuntimeProbe(
 		(release?.schemaVersion === undefined && release?.distribution === undefined);
 	if (
 		!release?.provenance ||
+		release.provenance.protocolVersion !== 2 ||
 		typeof release.provenance.codexVersion !== "string" ||
 		release.provenance.codexVersion.length === 0 ||
 		(!derived && !upstream)

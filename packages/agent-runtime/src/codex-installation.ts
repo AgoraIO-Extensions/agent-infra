@@ -66,7 +66,9 @@ async function protectedDirectory(path: string) {
 	if (typeof getuid === "function" && getuid() === 0) throw new Error();
 	requireValid((await realpath(path)) === path);
 	const stat = await lstat(path);
-	requireValid(stat.isDirectory() && (stat.mode & 0o7022) === 0);
+	requireValid(
+		stat.isDirectory() && stat.uid === 0 && (stat.mode & 0o7022) === 0,
+	);
 	try {
 		await access(path, constants.W_OK);
 	} catch (error) {
@@ -112,6 +114,7 @@ async function readProtectedFile(
 		const mode = binary ? 0o555 : 0o444;
 		requireValid(
 			before.isFile() &&
+				before.uid === 0 &&
 				(before.mode & 0o7777) === mode &&
 				before.size > 0 &&
 				before.size <= (binary ? 512 : 16) * 1024 * 1024,

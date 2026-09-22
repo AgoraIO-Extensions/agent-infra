@@ -303,7 +303,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "turn.submit", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
-					now: (this.options.grantValidation.now ?? Date.now)(),
+					now: this.options.grantValidation.now ?? Date.now,
 					requestedHostSessionRef: request.hostSessionRef ?? undefined,
 					binding: request,
 					operationId: request.executionId,
@@ -362,7 +362,7 @@ export class RuntimeHostV3 {
 				this.validate(request, "turn.supplement", verification);
 				const prepared = await this.options.store.prepareOperation({
 					authorization: claims,
-					now: (this.options.grantValidation.now ?? Date.now)(),
+					now: this.options.grantValidation.now ?? Date.now,
 					requestedHostSessionRef: request.hostSessionRef,
 					binding: request,
 					operationId: request.operation.id,
@@ -421,62 +421,67 @@ export class RuntimeHostV3 {
 			await this.options.store.authorizeRequestV3(
 				claims,
 				"query",
-				(this.options.grantValidation.now ?? Date.now)(),
+				this.options.grantValidation.now ?? Date.now,
 			);
 			this.closedRecoveryGenerations.add(recoveryGenerationKey);
 		});
 		await this.abortRecovery(key, recoveryGenerationKey);
-		const response = await this.options.serialize(
-			this.options.store.sessionQueueKey(request),
-			async () => {
-				this.assertOpen();
-				this.validate(request, "turn.stop", verification);
-				const prepared = await this.options.store.prepareOperation({
-					authorization: claims,
-					now: (this.options.grantValidation.now ?? Date.now)(),
-					requestedHostSessionRef: request.hostSessionRef,
-					binding: request,
-					operationId: request.operation.id,
-					kind: "stop",
-					scope: `stop:${request.operation.id}`,
-					deliveryFence: request.operation.deliveryFence,
-					executionDeliveryFence: request.operation.executionDeliveryFence,
-					requestDigest: requestDigest({
-						kind: "stop",
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						stopRequestId: request.operation.id,
-					}),
-					command: (nativeSessionRef) => ({
-						schemaVersion: 1,
-						kind: "stop",
+		try {
+			const response = await this.options.serialize(
+				this.options.store.sessionQueueKey(request),
+				async () => {
+					this.assertOpen();
+					this.validate(request, "turn.stop", verification);
+					const prepared = await this.options.store.prepareOperation({
+						authorization: claims,
+						now: this.options.grantValidation.now ?? Date.now,
+						requestedHostSessionRef: request.hostSessionRef,
+						binding: request,
 						operationId: request.operation.id,
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						turnId: request.turnId,
-						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeRequired(),
-					}),
-				});
-				return {
-					...(await this.options.dispatch(
-						prepared.session.hostSessionRef,
-						prepared.operation,
-					)),
-					schemaVersion: 3 as const,
-				};
-			},
-		);
-		if (
-			response.result.outcome !== "accepted" ||
-			["completed", "failed", "cancelled"].includes(response.result.status)
-		)
+						kind: "stop",
+						scope: `stop:${request.operation.id}`,
+						deliveryFence: request.operation.deliveryFence,
+						executionDeliveryFence: request.operation.executionDeliveryFence,
+						requestDigest: requestDigest({
+							kind: "stop",
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							stopRequestId: request.operation.id,
+						}),
+						command: (nativeSessionRef) => ({
+							schemaVersion: 1,
+							kind: "stop",
+							operationId: request.operation.id,
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+						}),
+					});
+					return {
+						...(await this.options.dispatch(
+							prepared.session.hostSessionRef,
+							prepared.operation,
+						)),
+						schemaVersion: 3 as const,
+					};
+				},
+			);
+			if (
+				response.result.outcome !== "accepted" ||
+				["completed", "failed", "cancelled"].includes(response.result.status)
+			)
+				this.closedRecoveryGenerations.delete(recoveryGenerationKey);
+			return response;
+		} catch (error) {
 			this.closedRecoveryGenerations.delete(recoveryGenerationKey);
-		return response;
+			throw error;
+		}
 	}
 
 	async recoverStatus(
@@ -495,7 +500,7 @@ export class RuntimeHostV3 {
 				return this.options.store.recoverOperationV3(
 					claims,
 					request.originalOperationDigest,
-					(this.options.grantValidation.now ?? Date.now)(),
+					this.options.grantValidation.now ?? Date.now,
 				);
 			},
 		);
@@ -575,7 +580,7 @@ export class RuntimeHostV3 {
 			await this.options.store.authorizeRequestV3(
 				claims,
 				"generation-cancel",
-				(this.options.grantValidation.now ?? Date.now)(),
+				this.options.grantValidation.now ?? Date.now,
 			);
 			// Close the in-memory generation before aborting existing guards. This
 			// serialized latch prevents a new recovery from registering in the gap.
@@ -591,7 +596,7 @@ export class RuntimeHostV3 {
 					this.validate(request, "generation.cancel", verification);
 					const prepared = await this.options.store.prepareOperation({
 						authorization: claims,
-						now: (this.options.grantValidation.now ?? Date.now)(),
+						now: this.options.grantValidation.now ?? Date.now,
 						requestedHostSessionRef: request.hostSessionRef,
 						binding: request,
 						operationId: request.operation.id,
@@ -673,7 +678,7 @@ export class RuntimeHostV3 {
 				return this.options.store.authorizeRequestV3(
 					claims,
 					"renew",
-					(this.options.grantValidation.now ?? Date.now)(),
+					this.options.grantValidation.now ?? Date.now,
 				);
 			},
 		);
@@ -699,7 +704,7 @@ export class RuntimeHostV3 {
 				await this.options.store.authorizeRequestV3(
 					claims,
 					"query",
-					(this.options.grantValidation.now ?? Date.now)(),
+					this.options.grantValidation.now ?? Date.now,
 				);
 				const session = this.options.store.checkAcknowledgableCursor(
 					claims,
@@ -717,7 +722,7 @@ export class RuntimeHostV3 {
 				await this.options.store.authorizeRequestV3(
 					claims,
 					"query",
-					(this.options.grantValidation.now ?? Date.now)(),
+					this.options.grantValidation.now ?? Date.now,
 				);
 				await this.options.driver.acknowledgeEvents?.(
 					session.nativeSessionRef ?? nativeRequired(),
@@ -749,7 +754,7 @@ export class RuntimeHostV3 {
 				return this.options.store.authorizeRequestV3(
 					claims,
 					"query",
-					(this.options.grantValidation.now ?? Date.now)(),
+					this.options.grantValidation.now ?? Date.now,
 				);
 			},
 		);
@@ -835,7 +840,7 @@ export class RuntimeHostV3 {
 					await options.store.recordDeliveredCursor(
 						claims,
 						parsed.data.cursor,
-						(options.grantValidation.now ?? Date.now)(),
+						options.grantValidation.now ?? Date.now,
 					);
 					validate();
 					options.store.checkRequestV3(claims);

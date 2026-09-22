@@ -143,6 +143,7 @@ export function validateRuntimeExecutionGrantV2(
 			if (
 				!access ||
 				access.consumer !== request.consumer ||
+				access.command !== command ||
 				(access.command === "events.persist" &&
 					access.afterCursor !== request.afterCursor) ||
 				(access.command === "events.ack" &&

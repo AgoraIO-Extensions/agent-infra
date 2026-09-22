@@ -171,9 +171,8 @@ export async function readRuntimeLegacyMigrationV1(input: {
 		if (!manifestPath || !publicKeyPath || !keyId || !input.binding) fail();
 		const ownerText =
 			input.environment.AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID;
-		if (!ownerText || !/^[0-9]+$/.test(ownerText)) fail();
-		const expectedOwnerUid = Number(ownerText);
-		if (!Number.isSafeInteger(expectedOwnerUid) || expectedOwnerUid < 0) fail();
+		if (ownerText !== "0") fail();
+		const expectedOwnerUid = 0;
 		const binding = WorkloadReadinessBindingV1Schema.parse(input.binding);
 		const [envelopeBytes, publicKeyBytes] = await Promise.all([
 			readMountedFile(

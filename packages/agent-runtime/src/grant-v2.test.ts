@@ -132,4 +132,29 @@ describe("Runtime V2 grant trust boundary", () => {
 			),
 		).toThrow();
 	});
+
+	it("binds event cursor claims to the endpoint command", () => {
+		const request = {
+			...submitV3Fixture(),
+			consumer: "platform_worker_persistence" as const,
+			afterCursor: null,
+		};
+		const forged = signV3Fixture(request, "events.persist", {
+			claims: {
+				eventAccess: {
+					command: "events.ack",
+					consumer: "platform_worker_persistence",
+					confirmedCursor: "cursor-1",
+				},
+			},
+		});
+		expect(() =>
+			validateRuntimeExecutionGrantV2(
+				forged,
+				"events.persist",
+				verifyRuntimeV2Fixture(forged.grant),
+				options,
+			),
+		).toThrow();
+	});
 });

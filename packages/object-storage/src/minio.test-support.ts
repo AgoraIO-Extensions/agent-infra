@@ -53,10 +53,16 @@ export async function startMinioFileFixtureV1() {
 			maxAttempts: 1,
 		});
 		let initialized = false;
+		let bucketCreated = false;
 		let lastError: unknown;
 		for (let attempt = 0; attempt < 60 && !initialized; attempt++) {
 			try {
-				await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
+				if (!bucketCreated) {
+					await client.send(
+						new CreateBucketCommand({ Bucket: "file-contract" }),
+					);
+					bucketCreated = true;
+				}
 				await client.send(
 					new PutBucketVersioningCommand({
 						Bucket: "file-contract",

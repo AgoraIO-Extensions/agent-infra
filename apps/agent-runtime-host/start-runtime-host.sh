@@ -11,6 +11,7 @@ ulimit -H -c 0
 unset AGENT_INFRA_RUNTIME_DEV
 case "$#:${1:-}" in
   0:) exec node --disable-sigusr1 dist/index.mjs ;;
-  1:--dev) exec env AGENT_INFRA_RUNTIME_DEV=1 node --disable-sigusr1 --watch --import tsx src/index.ts ;;
+  # Development watches compiled output; run pnpm build --watch separately.
+  1:--dev) exec node --disable-sigusr1 --watch dist/index.mjs ;;
   *) exit 1 ;;
 esac
