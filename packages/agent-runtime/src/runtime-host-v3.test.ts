@@ -303,6 +303,7 @@ describe("Runtime V3 durable authorization", () => {
 					originalOperationDigest: originalDigest(),
 				},
 				"session.status",
+				{ purpose: "control", reason: "recovery" },
 			);
 			const recovery = reopened.recoverStatusV3(
 				request,

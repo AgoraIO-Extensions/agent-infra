@@ -2487,6 +2487,44 @@ it("evicts the oldest idle Conversation access at the bounded capacity", async (
 	expect(reopened.credential).not.toBe(firstAccess.credential);
 });
 
+it("retains access for an admitted native Turn while capacity fills", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const first = "f".repeat(64);
+	const firstAccess = value.modelAccessFor(first);
+	const turn = {
+		conversationKey: first,
+		threadId: "thread-live",
+		turnId: "turn-live",
+	};
+	value.bindThread(first, turn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		"thread-live",
+		"high",
+		first,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	for (let index = 1; index < 1024; index++)
+		value.modelAccessFor(index.toString(16).padStart(64, "0"));
+	// The admitted Turn keeps its credential and native thread binding alive;
+	// an unrelated Conversation cannot evict it at the access limit.
+	value.modelAccessFor("e".repeat(64));
+	expect(value.modelAccessFor(first)).toEqual(firstAccess);
+});
+
 it("releases a bound thread after its cancelled turn", async () => {
 	const value = await openProductionModelTransport(
 		[

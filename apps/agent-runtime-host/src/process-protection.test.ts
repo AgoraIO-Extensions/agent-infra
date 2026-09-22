@@ -91,6 +91,7 @@ describe("credential holder process protection", () => {
 		{ flags: ["--disable-sigusr1", "--require=node:fs"] },
 		{ preamble: "process.report.reportOnSignal = true;" },
 		{ preamble: 'process.env.NODE_OPTIONS = "sentinel-private-value";' },
+		{ preamble: 'process.env.NODE_OPTIONS = "";' },
 		{ preamble: 'process.env.DYLD_FRAMEWORK_PATH = "";' },
 		{
 			preamble:

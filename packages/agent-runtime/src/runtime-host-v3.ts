@@ -497,6 +497,11 @@ export class RuntimeHostV3 {
 			async () => {
 				this.assertOpen();
 				this.validate(request, "session.status", verification);
+				if (
+					!request.hostSessionRef &&
+					!(claims.purpose === "control" && claims.reason === "recovery")
+				)
+					nativeRequired();
 				return this.options.store.recoverOperationV3(
 					claims,
 					request.originalOperationDigest,

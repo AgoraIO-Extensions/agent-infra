@@ -642,16 +642,29 @@ export class RuntimeHost {
 			);
 		if (bounded.aborted) throw interrupted();
 		let abort = () => {};
-		const probe = this.options.driver.probeReadiness(bounded);
 		const guard = {
 			controller,
-			done: probe.then(
-				() => undefined,
-				() => undefined,
-			),
+			done: Promise.resolve(),
 		};
 		this.readinessGuards.add(guard);
 		try {
+			let probe: Promise<RuntimeCapabilitiesV1>;
+			try {
+				probe = this.options.driver.probeReadiness(bounded);
+			} catch {
+				probe = Promise.reject(
+					new RuntimeHostError(
+						"RUNTIME_READINESS_UNAVAILABLE",
+						"Workload readiness is unavailable",
+						503,
+						true,
+					),
+				);
+			}
+			guard.done = probe.then(
+				() => undefined,
+				() => undefined,
+			);
 			let capabilities: RuntimeCapabilitiesV1;
 			try {
 				capabilities = await Promise.race([
