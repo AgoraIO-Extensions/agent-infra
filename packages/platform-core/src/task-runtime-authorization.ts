@@ -143,7 +143,12 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 	) {
 		const record = await options.readAuthorization(claim.executionId, signal);
 		if (!record) return null;
-		const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+		let boundary: TaskAuthorizationBoundaryV1;
+		try {
+			boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+		} catch {
+			denied("TASK_AUTHORIZATION_BINDING_INVALID");
+		}
 		if (
 			record.executionId !== claim.executionId ||
 			boundary.principal.kind !== "user" ||

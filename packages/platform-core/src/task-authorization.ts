@@ -28,6 +28,12 @@ export interface CurrentTaskUserV1 {
 	readonly authorizationRevision: string;
 }
 
+/** Deployment-selected IdentityAdapter boundary for task-scoped user facts. */
+export interface TaskUserDirectoryV1 {
+	/** Untrusted adapter payload; the identity package parses it before use. */
+	resolveUser(userId: string): Promise<unknown | null>;
+}
+
 type TaskAccessSourceV1 =
 	| { readonly kind: "owner" | "user"; readonly userId: string }
 	| { readonly kind: "organization"; readonly organizationId: string };

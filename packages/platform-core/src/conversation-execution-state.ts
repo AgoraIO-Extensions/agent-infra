@@ -546,7 +546,12 @@ export function planMetadataRecovery(
 			!isText(payload.messageId, 1024)
 		)
 			continue;
-		const boundary = parseTaskAuthorizationBoundaryV1(candidate.boundary);
+		let boundary: ReturnType<typeof parseTaskAuthorizationBoundaryV1>;
+		try {
+			boundary = parseTaskAuthorizationBoundaryV1(candidate.boundary);
+		} catch {
+			continue;
+		}
 		if (
 			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== execution.actorId ||
