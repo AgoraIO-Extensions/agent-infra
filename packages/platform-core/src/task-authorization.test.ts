@@ -132,6 +132,49 @@ describe("task authorization boundary", () => {
 		).toBe(false);
 	});
 
+	it("keeps an original organization grant usable after an unrelated Owner change", () => {
+		const boundary = requiredBoundary();
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user,
+				agent: {
+					...agent,
+					revision: agent.revision + 1,
+					ownerIds: ["owner-b"],
+				},
+			}),
+		).toBe(true);
+	});
+
+	it("keeps a remaining original grant but rejects replacement grants", () => {
+		const original: AgentManagementStateV1 = {
+			...agent,
+			availability: [
+				...agent.availability,
+				{ kind: "user", userId: user.userId },
+			],
+		};
+		const boundary = requiredBoundary({ agent: original });
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user,
+				agent: {
+					...original,
+					availability: [{ kind: "user", userId: user.userId }],
+				},
+			}),
+		).toBe(true);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user,
+				agent: { ...original, ownerIds: [user.userId], availability: [] },
+			}),
+		).toBe(false);
+	});
+
 	it("rejects direct access and Owner access after their respective original grants are removed", () => {
 		for (const original of [
 			{ ...agent, ownerIds: [user.userId], availability: [] },
