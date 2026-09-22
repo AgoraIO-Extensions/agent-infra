@@ -1283,7 +1283,10 @@ export async function openCodexModelTransport(
 		const turnKey = nativeTurnKey({ ...nativeTurn, conversationKey });
 		// Preserve the terminal fence for a previously admitted Turn even if its
 		// native thread binding has since been retired by idle access eviction.
-		if (revokedTurns.has(turnKey)) {
+		if (
+			revokedTurns.has(turnKey) &&
+			boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
+		) {
 			reject(response, 409);
 			return;
 		}
