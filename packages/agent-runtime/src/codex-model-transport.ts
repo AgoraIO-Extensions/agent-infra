@@ -1057,6 +1057,30 @@ export async function openCodexModelTransport(
 	const modelRequestWaiters = new Map<string, Set<ModelRequestWaiter>>();
 	const readyModelTurns = new Set<string>();
 	let closing = false;
+	const conversationIsActive = (conversationKey: string) => {
+		const prefix = `${conversationKey}\u0000`;
+		return (
+			[...activeTurns.keys()].some((key) => key.startsWith(prefix)) ||
+			[...pendingThreads.keys()].some((key) => key.startsWith(prefix)) ||
+			[...recognizedTurns.keys()].some((key) => key.startsWith(prefix)) ||
+			[...admissionWaiters.keys()].some((key) => key.startsWith(prefix)) ||
+			[...modelRequestWaiters.keys()].some((key) => key.startsWith(prefix))
+		);
+	};
+	const evictInactiveConversation = (conversationKey: string) => {
+		if (conversationIsActive(conversationKey)) return false;
+		const prefix = `${conversationKey}\u0000`;
+		processAccess.delete(conversationKey);
+		for (const key of boundThreads)
+			if (key.startsWith(prefix)) boundThreads.delete(key);
+		for (const key of readyModelTurns)
+			if (key.startsWith(prefix)) readyModelTurns.delete(key);
+		for (const key of revokedTurns)
+			if (key.startsWith(prefix)) revokedTurns.delete(key);
+		for (const key of admittedTurns)
+			if (key.startsWith(prefix)) admittedTurns.delete(key);
+		return true;
+	};
 	const settleAdmissionWaiters = (
 		key: string,
 		model: ModelTurnSelection | undefined,
@@ -1511,13 +1535,23 @@ export async function openCodexModelTransport(
 				throw new Error("RUNTIME_STARTUP_FAILED");
 			let access = processAccess.get(conversationKey);
 			if (!access) {
-				if (processAccess.size >= maximumConversationAccessEntries)
-					throw new Error("RUNTIME_MODEL_ACCESS_CAPACITY");
+				if (processAccess.size >= maximumConversationAccessEntries) {
+					for (const candidate of processAccess.keys()) {
+						if (evictInactiveConversation(candidate)) break;
+					}
+					if (processAccess.size >= maximumConversationAccessEntries)
+						throw new Error("RUNTIME_MODEL_ACCESS_CAPACITY");
+				}
 				const credential = randomBytes(32).toString("base64url");
 				access = {
 					credential,
 					authorization: Buffer.from(`Bearer ${credential}`),
 				};
+				processAccess.set(conversationKey, access);
+			} else {
+				// Keep recently used conversations at the end of the bounded map so
+				// eviction prefers the oldest idle access.
+				processAccess.delete(conversationKey);
 				processAccess.set(conversationKey, access);
 			}
 			return { endpoint, credential: access.credential };

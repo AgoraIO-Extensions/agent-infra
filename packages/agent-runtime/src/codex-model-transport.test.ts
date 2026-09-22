@@ -2457,3 +2457,32 @@ it("revokes recognized but not yet registered admissions with Conversation acces
 	value.revokeConversationAccess(conversationKey);
 	expect(value.registerTurn(admission, turn)).toBe(false);
 });
+
+it("evicts the oldest idle Conversation access at the bounded capacity", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const first = "f".repeat(64);
+	const accesses = [first];
+	for (let index = 1; index < 1024; index++)
+		accesses.push(index.toString(16).padStart(64, "0"));
+	const firstAccess = value.modelAccessFor(first);
+	for (const conversationKey of accesses.slice(1))
+		value.modelAccessFor(conversationKey);
+	const replacement = value.modelAccessFor("e".repeat(64));
+	expect(replacement.credential).toBeTruthy();
+	// Eviction invalidates only the idle credential; no active request is
+	// evicted, and the conversation can acquire a fresh credential later.
+	expect((await request(firstAccess)).status).toBe(401);
+	const reopened = value.modelAccessFor(first);
+	expect(reopened.credential).not.toBe(firstAccess.credential);
+});
