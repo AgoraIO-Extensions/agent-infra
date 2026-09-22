@@ -361,6 +361,7 @@ export async function runCodexConnectionRecovery(options: {
 		const complete = () => terminal;
 		process.on("error", () => {
 			failed = true;
+			abort();
 		});
 		const stream = process.stdio[3];
 		if (!(stream instanceof Duplex)) throw unavailable();
@@ -1209,23 +1210,26 @@ async function verifyNativeBarrier(
 		launchPolicy,
 		signal,
 	);
+	// runProbeCommand rejects non-zero exits, spawn failures and timeouts with
+	// their own unavailable/timeout contract. Only a successful command whose
+	// payload is malformed or does not match the pinned barrier is a provenance
+	// mismatch; do not relabel an ordinary unsupported probe as provenance drift.
+	if (output.stdoutTooLarge || output.stdout.trim() === "")
+		throw provenanceMismatchError();
+	let value: unknown;
 	try {
-		// runProbeCommand only resolves after the child exited with status 0;
-		// still reject truncated/empty output before interpreting the payload.
-		if (output.stdoutTooLarge || output.stdout.trim() === "")
-			throw provenanceMismatchError();
-		const value: unknown = JSON.parse(output.stdout);
-		if (
-			!isPlainRecord(value) ||
-			!exactKeys(value, Object.keys(nativeBarrier)) ||
-			Object.entries(nativeBarrier).some(
-				([key, expected]) => value[key] !== expected,
-			)
-		)
-			throw provenanceMismatchError();
+		value = JSON.parse(output.stdout);
 	} catch {
 		throw provenanceMismatchError();
 	}
+	if (
+		!isPlainRecord(value) ||
+		!exactKeys(value, Object.keys(nativeBarrier)) ||
+		Object.entries(nativeBarrier).some(
+			([key, expected]) => value[key] !== expected,
+		)
+	)
+		throw provenanceMismatchError();
 }
 
 async function verifySchema(
