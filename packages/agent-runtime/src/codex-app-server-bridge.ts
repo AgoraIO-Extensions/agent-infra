@@ -307,6 +307,7 @@ export async function runCodexConnectionRecovery(options: {
 	};
 	try {
 		await probeVersion(executable, defaultTimeoutMs, policy, options.signal);
+		await verifySchema(executable, defaultTimeoutMs, policy, options.signal);
 		if (options.nativeBarrierRequired ?? true)
 			await verifyNativeBarrier(
 				executable,
@@ -1247,6 +1248,7 @@ async function verifySchema(
 	executable: string,
 	timeoutMs: number,
 	launchPolicy: IsolatedLaunchPolicy,
+	signal?: AbortSignal,
 ) {
 	let directory: string;
 	try {
@@ -1262,6 +1264,7 @@ async function verifySchema(
 			timeoutMs,
 			false,
 			launchPolicy,
+			signal,
 		);
 		const schema = await readFile(join(directory, schemaArtifactName));
 		const digest = `sha256:${createHash("sha256").update(schema).digest("hex")}`;
@@ -1269,6 +1272,7 @@ async function verifySchema(
 			failure = provenanceMismatchError();
 		}
 	} catch (error) {
+		signal?.throwIfAborted();
 		failure =
 			error instanceof CodexAppServerBridgeError
 				? error
