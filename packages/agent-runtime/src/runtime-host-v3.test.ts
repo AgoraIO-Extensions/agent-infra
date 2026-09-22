@@ -110,6 +110,16 @@ function guard(hostSessionRef: string, store: FileRuntimeStore) {
 }
 
 describe("Runtime V3 durable authorization", () => {
+	it("rejects V3 requests after close and keeps close idempotent", async () => {
+		const env = await setup();
+
+		await env.host.close();
+		await expect(env.host.close()).resolves.toBeUndefined();
+		await expect(submit(env.host)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+	});
+
 	it.each(["user", "application"] as const)(
 		"resolves the original %s for private bootstrap before native Session creation",
 		async (kind) => {

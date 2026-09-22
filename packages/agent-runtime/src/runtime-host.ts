@@ -304,6 +304,7 @@ function parseDriverLookup(
 
 export class RuntimeHost {
 	private readonly queues = new Map<string, Promise<void>>();
+	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
 	private constructor(private readonly options: RuntimeHostOptions) {
@@ -319,9 +320,12 @@ export class RuntimeHost {
 	}
 
 	private trustedHost() {
+		if (this.closed) runtimeAuthorizationDenied();
 		return this.v3 ?? runtimeAuthorizationDenied();
 	}
 	async close() {
+		if (this.closed) return;
+		this.closed = true;
 		await this.v3?.close();
 		// RuntimeHostV3 rejects new V3 work before draining its own recovery
 		// guards. Drain the shared legacy queue as well so an already admitted
@@ -331,7 +335,7 @@ export class RuntimeHost {
 		}
 	}
 	private requireLegacyHost() {
-		if (this.v3) runtimeAuthorizationDenied();
+		if (this.closed || this.v3) runtimeAuthorizationDenied();
 	}
 
 	submitTurnV3(value: RuntimeSubmitTurnRequestV3, verification: unknown) {

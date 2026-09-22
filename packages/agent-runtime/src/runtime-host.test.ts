@@ -136,6 +136,25 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost durable Session", () => {
+	it("rejects legacy requests after close and keeps close idempotent", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantValidation: {
+				expectedIssuer: "agent-platform",
+				now: () => "2026-08-28T10:00:00Z",
+			},
+		});
+
+		await runtimeHost.close();
+		await expect(runtimeHost.close()).resolves.toBeUndefined();
+		await expect(
+			runtimeHost.submitTurn(submitRequest(), undefined),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	});
+
 	it("binds V2 selection to replay and isolates consecutive Executions", async () => {
 		const directory = await runtimeDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
