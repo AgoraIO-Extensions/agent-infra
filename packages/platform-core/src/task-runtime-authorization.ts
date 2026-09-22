@@ -149,7 +149,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			boundary.principal.kind !== "user" ||
 			boundary.principal.id !== claim.actorId ||
 			boundary.agentId !== claim.agentId ||
-			boundary.channelId !== claim.channelId
+			boundary.channelId !== claim.channelId ||
+			boundary.agentAuthorizationRevision !== claim.authorizationRevision
 		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		return { ...record, boundary };

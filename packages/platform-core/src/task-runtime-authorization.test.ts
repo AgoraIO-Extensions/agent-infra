@@ -279,6 +279,17 @@ describe("task Runtime authorization Core use case", () => {
 			expect(h.ports.recordControl).not.toHaveBeenCalled();
 		},
 	);
+	it("rejects a business record with a different authorization revision", async () => {
+		const h = harness();
+		h.setRecord({
+			...h.record,
+			boundary: { ...h.boundary, agentAuthorizationRevision: "agent-8" },
+		});
+		expect(await h.useCase.authorizeClaim(h.claim, signal())).toEqual({
+			outcome: "denied",
+		});
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+	});
 });
 
 describe("terminal task event recovery authority", () => {
