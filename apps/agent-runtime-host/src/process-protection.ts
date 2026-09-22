@@ -29,14 +29,14 @@ export function assertRuntimeProcessProtection() {
 		Object.keys(process.env).some(
 			(name) =>
 				name === "DYLD_FRAMEWORK_PATH" ||
-				((/^(?:LD_|DYLD_)/.test(name) ||
-					[
-						"NODE_OPTIONS",
-						"NODE_DEBUG",
-						"NODE_DEBUG_NATIVE",
-						"NODE_V8_COVERAGE",
-						"NODE_PATH",
-					].includes(name))),
+				/^(?:LD_|DYLD_)/.test(name) ||
+				[
+					"NODE_OPTIONS",
+					"NODE_DEBUG",
+					"NODE_DEBUG_NATIVE",
+					"NODE_V8_COVERAGE",
+					"NODE_PATH",
+				].includes(name),
 		) ||
 		inspectorUrl() !== undefined ||
 		process.report?.reportOnFatalError ||
