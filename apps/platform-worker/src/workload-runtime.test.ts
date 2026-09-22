@@ -2383,7 +2383,6 @@ describe("assembled Workload Runtime contracts", () => {
 			false,
 			false,
 		]);
-
 	});
 	it("allows ordinary NODE_ENV configuration", async () => {
 		const f = fixture(
