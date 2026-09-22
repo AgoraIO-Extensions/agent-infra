@@ -390,6 +390,21 @@ describe("socket-bound independent Connection client", () => {
 			}),
 		).toThrow();
 	});
+	it("rejects a recovery origin whose service is not the fixed profile", async () => {
+		const { client, descriptor } = await fixture();
+		const origin = client.snapshotOriginal(descriptor);
+		const forged = structuredClone(origin);
+		forged.service.resource = "https://attacker.example.test/mcp";
+		expect(() =>
+			client.associate({
+				requestDescriptor: descriptor,
+				evidence: evidence(),
+				metadataOnly: false,
+				occurredAt: time,
+				origin: forged,
+			}),
+		).toThrow("CODEX_CONNECTION_CLIENT_UNAVAILABLE");
+	});
 	it("validates fixed HTTPS origin/path without accepting a response-provided endpoint", () => {
 		for (const resource of [
 			"http://connection.example.test/mcp",

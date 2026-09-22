@@ -273,7 +273,12 @@ export function createCodexConnectionClient(options: {
 			!evidenceSlot ||
 			(input.origin !== undefined &&
 				(!isCodexConnectionOrigin(input.origin) ||
-					input.origin.slotId !== descriptor.slotId)) ||
+					input.origin.slotId !== descriptor.slotId ||
+					!isDeepStrictEqual(input.origin.service, {
+						serviceRef: profile.serviceRef,
+						issuer: profile.issuer,
+						resource: profile.resource,
+					}))) ||
 			closed ||
 			!isCodexConnectionRequest(descriptor) ||
 			descriptor.profileRef !== profile.profileRef ||
