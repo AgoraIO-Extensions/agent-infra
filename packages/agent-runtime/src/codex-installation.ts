@@ -109,10 +109,12 @@ async function readProtectedFile(
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
 		const before = await file.stat();
-		const mode = binary ? 0o555 : 0o444;
+		const mode = binary ? undefined : 0o444;
 		requireValid(
 			before.isFile() &&
-				(before.mode & 0o7777) === mode &&
+				(binary
+					? (before.mode & 0o6222) === 0 && (before.mode & 0o111) !== 0
+					: (before.mode & 0o7777) === mode) &&
 				before.size > 0 &&
 				before.size <= (binary ? 512 : 16) * 1024 * 1024,
 		);
