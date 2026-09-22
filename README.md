@@ -9,6 +9,7 @@
 - [企业级 Agent 平台 M1 产品需求](docs/prd/PRD-agent-platform-M1.md)
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
+- [#670 共享契约与最终装配 ADR](docs/adr/0015-m1-shared-contract-assembly-convergence.md)
 - [Agent Runtime M1 HLD](docs/architecture/HLD-agent-runtime-M1.md)
 - [Connection M1 HLD](docs/architecture/HLD-connection-M1.md)
 - [ADR: Platform 服务与 Kubernetes Workload Plane 分离](docs/adr/0001-separate-platform-services-from-kubernetes-workload-plane.md)
