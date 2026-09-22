@@ -22,7 +22,8 @@ Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配
 
 | 领域 | 唯一 owner | 主要路径 | 允许消费 | 明确不拥有 |
 | --- | --- | --- | --- | --- |
-| Callback / Runtime / Pilot contracts | #629、#630 | `packages/contracts`、生成 artifacts | PRD/Spec 定义的版本化 HTTP、SSE、Host、Grant、事件和生成 client | 业务规则、数据库权威、Runtime driver、页面 |
+| Callback corpus | #629，随 #637 消费 | `deploy/runtime/vendor/codex` 的 callback corpus 与固定读取资产 | #639 的 Runtime/Host callback 输入 | 公共 Platform contract、业务规则、数据库权威、Runtime driver、页面 |
+| Runtime / Pilot contracts | #630 | `packages/contracts`、生成 artifacts | PRD/Spec 定义的版本化 HTTP、SSE、Host、Grant、事件和生成 client | 业务规则、数据库权威、Runtime driver、页面 |
 | Codex vendor inputs | #637 | `deploy/runtime/vendor/codex` | 固定上游 source、patch、manifest、probe 的字节和摘要 | native 编译/替换/发布、Runtime 语义、凭证和 Connection 授权 |
 | Runtime / Host | #639 | `packages/agent-runtime`、`apps/agent-runtime-host` | #630 的 Host/Grant/event contracts、#637 的固定安装输入 | Platform DB、Hono 业务路由、Kubernetes 期望状态、Web 状态 |
 | Platform / local assembly | #643 | `packages/platform-core`、`packages/platform-store`、`apps/platform-api`、`apps/platform-worker`、`migrations/platform`、`deploy` | #630 的 public contracts、#639 的 RuntimeHost client/driver boundary | Runtime driver 内部、vendor source、浏览器状态、Connection DB/凭证 |
