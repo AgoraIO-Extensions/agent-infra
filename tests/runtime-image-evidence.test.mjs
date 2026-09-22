@@ -134,7 +134,10 @@ test("derived evidence binds source pin, raw manifests and every installed binar
 	try {
 		const { releaseBytes, report, candidatePath } =
 			await derivedFixture(directory);
-		assert.equal(validateRuntimeProbe(report, releaseBytes), report);
+		assert.equal(
+			validateRuntimeProbe(report, releaseBytes, "aarch64-unknown-linux-musl"),
+			report,
+		);
 		const invalid = [
 			evidence,
 			{ ...report, schemaVersion: 1 },
@@ -173,11 +176,21 @@ test("derived evidence binds source pin, raw manifests and every installed binar
 		];
 		for (const value of invalid)
 			assert.throws(
-				() => validateRuntimeProbe(value, releaseBytes),
+				() =>
+					validateRuntimeProbe(
+						value,
+						releaseBytes,
+						"aarch64-unknown-linux-musl",
+					),
 				/evidence is invalid/,
 			);
 		assert.throws(
-			() => validateRuntimeProbe(report, officialReleaseBytes),
+			() =>
+				validateRuntimeProbe(
+					report,
+					officialReleaseBytes,
+					"aarch64-unknown-linux-musl",
+				),
 			/evidence is invalid/,
 		);
 		assert.throws(
@@ -185,6 +198,7 @@ test("derived evidence binds source pin, raw manifests and every installed binar
 				validateRuntimeProbe(
 					report,
 					Buffer.concat([releaseBytes, Buffer.from("\n")]),
+					"aarch64-unknown-linux-musl",
 				),
 			/evidence is invalid/,
 		);
@@ -201,6 +215,7 @@ test("derived evidence binds source pin, raw manifests and every installed binar
 						},
 					},
 					releaseBytes,
+					"aarch64-unknown-linux-musl",
 				),
 			/evidence is invalid/,
 		);
@@ -226,7 +241,7 @@ test("image probe consumes its clean source context pin and inspected digest", a
 			`#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "image") console.log(JSON.stringify(${JSON.stringify({ Id: imageId, Descriptor: { digest: imageDigest }, Config: { Labels: { "org.opencontainers.image.revision": commitSha } } })}));
+if (args[0] === "image") console.log(JSON.stringify(${JSON.stringify({ Id: imageId, Architecture: "arm64", Os: "linux", Descriptor: { digest: imageDigest }, Config: { Labels: { "org.opencontainers.image.revision": commitSha } } })}));
 else if (args.includes("--provenance-rejection")) console.log(JSON.stringify({status:"passed",check:"provenance-fail-closed"}));
 else console.log(readFileSync(${JSON.stringify(reportPath)}, "utf8"));
 `,

@@ -39,6 +39,7 @@ const requiredChecks = [
 export function validateRuntimeProbe(
 	result,
 	expectedReleaseBytes = readFileSync(join(root, releasePath)),
+	expectedTarget,
 ) {
 	const invalid = () => {
 		throw new Error("Codex runtime image probe evidence is invalid");
@@ -82,8 +83,13 @@ export function validateRuntimeProbe(
 	}
 	if (derived) {
 		const distribution = release.distribution;
+		if (
+			typeof expectedTarget !== "string" ||
+			result.distribution?.target !== expectedTarget
+		)
+			invalid();
 		const artifacts = Object.values(release.artifacts ?? {}).filter(
-			(artifact) => artifact?.target === result.distribution?.target,
+			(artifact) => artifact?.target === expectedTarget,
 		);
 		const artifact = artifacts[0];
 		if (
@@ -182,6 +188,12 @@ export async function probeRuntimeImage({
 		}
 	};
 	const inspection = inspect();
+	const expectedTarget =
+		inspection.Os === "linux" && inspection.Architecture === "arm64"
+			? "aarch64-unknown-linux-musl"
+			: inspection.Os === "linux" && inspection.Architecture === "amd64"
+				? "x86_64-unknown-linux-musl"
+				: undefined;
 	if (
 		inspection.Config?.Labels?.["org.opencontainers.image.revision"] !==
 		commitSha
@@ -233,7 +245,11 @@ export async function probeRuntimeImage({
 		);
 	let result;
 	try {
-		result = validateRuntimeProbe(JSON.parse(run()), expectedReleaseBytes);
+		result = validateRuntimeProbe(
+			JSON.parse(run()),
+			expectedReleaseBytes,
+			expectedTarget,
+		);
 	} catch (error) {
 		if (error instanceof RuntimeProbeFailure) throw error;
 		throw new Error("Native Codex HTTP/SSE image probe failed");
