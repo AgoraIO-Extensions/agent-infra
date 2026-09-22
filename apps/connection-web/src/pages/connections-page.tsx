@@ -332,6 +332,7 @@ export function ConnectionsPage() {
 					onDisconnect={() => undefined}
 					onReconnect={() => undefined}
 					onRevoke={() => undefined}
+					revokePending={false}
 					onShowHistoryChange={() => undefined}
 					onUpgrade={() => undefined}
 					showHistory={false}
@@ -424,7 +425,8 @@ export function ConnectionsPage() {
 									? (data.grants.find(
 											(grant) =>
 												grant.connectionId === connectionId &&
-												grant.consumerId === consumerId,
+												grant.consumerId === consumerId &&
+												grant.status === "ACTIVE",
 										)?.actionVersionIds ?? [])
 									: [],
 								preview: null,
@@ -459,6 +461,7 @@ export function ConnectionsPage() {
 							} else beginOAuth();
 						}}
 						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
+						revokePending={revokeGrant.isPending}
 						onShowHistoryChange={setShowHistory}
 						onUpgrade={(connectionId) => upgrade.mutate(connectionId)}
 						showHistory={showHistory}
@@ -877,6 +880,7 @@ function ConnectorManagementWorkspace(props: {
 	onRevoke: (grantId: string) => void;
 	onShowHistoryChange: (show: boolean) => void;
 	onUpgrade: (connectionId: string) => void;
+	revokePending: boolean;
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
@@ -908,6 +912,8 @@ function ConnectorManagementWorkspace(props: {
 		? props.grants.filter((grant) => grant.connectionId === selected.id)
 		: [];
 	const Icon = connector?.icon;
+	const authorizationAvailable =
+		selected?.status === "ACTIVE" && !selected.requiresReconnect;
 
 	return (
 		<section className="connection-management-workspace">
@@ -1035,7 +1041,11 @@ function ConnectorManagementWorkspace(props: {
 								) : (
 									<span />
 								)}
-								<Button onClick={() => props.onAuthorize(selected.id)}>
+								<Button
+									disabled={!authorizationAvailable}
+									onClick={() => props.onAuthorize(selected.id)}
+									title={authorizationAvailable ? "授权客户端" : "请先恢复连接"}
+								>
 									<Plus aria-hidden="true" size={15} />
 									授权客户端
 								</Button>
@@ -1055,7 +1065,9 @@ function ConnectorManagementWorkspace(props: {
 											<Button
 												variant="secondary"
 												size="icon"
-												disabled={grant.status !== "ACTIVE"}
+												disabled={
+													grant.status !== "ACTIVE" || !authorizationAvailable
+												}
 												onClick={() =>
 													props.onAuthorize(selected.id, grant.consumerId)
 												}
@@ -1067,7 +1079,9 @@ function ConnectorManagementWorkspace(props: {
 											<Button
 												variant="danger"
 												size="icon"
-												disabled={grant.status !== "ACTIVE"}
+												disabled={
+													grant.status !== "ACTIVE" || props.revokePending
+												}
 												onClick={() => props.onRevoke(grant.id)}
 												aria-label={`撤销 ${grant.consumerName}`}
 												title="撤销授权"
