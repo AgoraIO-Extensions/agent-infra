@@ -1,6 +1,6 @@
 # ADR：#670 M1 共享契约与最终装配收口
 
-- 状态：已决议，作为 #670 的交接决策
+- 状态：已决议（仅覆盖 #670 的拆分交接；不改变 #150 汇合计划的总体状态）
 - 日期：2026-09-22
 - 基线：`origin/main` `76d6ecc10ce8bc9a6c69a7d655e903c52fdd9a6d`
 - 范围：#506 拆分后的 contracts、vendor、Runtime/Host、Platform/local、Web
@@ -10,12 +10,11 @@
 M1 只保留一条从契约到真实启动的装配链：
 
 ```text
-#629 callback contracts ─┐
-                         ├─> #630 contracts ─> #639 Runtime/Host ─> #643 Platform/local ─> #638 Web consumer
-#637 frozen vendor ──────┘
-```
+#629 callback contracts ─> #637 frozen vendor ─┐
+#630 contracts ───────────────────────────────┼─> #639 Runtime/Host ─> #643 Platform/local ─> #638 Web consumer
+                                              ┘
 
-Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配；它们不宣称 Runtime、身份、模型、Connection 或四模板真实验收。#639 和 #643 是行为交付票，分别拥有 Runtime/Host 与 Platform/Worker 的缺失行为。#638 只拥有 Web 消费行为。任何切片都不得复制另一个切片的 schema、store、worker、RuntimeHost 或页面实现。
+Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配；它们不宣称 Runtime、身份、模型、Connection 或四模板真实验收。#639 和 #643 是行为交付票，分别拥有 Runtime/Host 与 Platform/Worker 的缺失行为。#638 只拥有 Web 消费行为。任何切片都不得复制另一个切片的 schema、store、worker、RuntimeHost 或页面实现。通用的数据归属、身份、Runtime 和 Connection 边界仍以 [工程 Spec](../architecture/SPEC-agent-infra-M1-engineering-architecture.md)、[Runtime HLD](../architecture/HLD-agent-runtime-M1.md) 和 [Connection HLD](../architecture/HLD-connection-M1.md) 为唯一权威。
 
 契约进入 `main` 后，后续 PR 必须直接以最新 `main` 为 base，只携带本票差额。拆分票关闭不关闭原功能票；原功能票继续承担其完整 AC、真实身份、模型、四模板和 Connection 联合验收。
 
@@ -31,12 +30,12 @@ Issues #629、#630、#637 只交付冻结输入、契约生成物和读取适配
 | Actual execution facts | #508 先行、#483 补齐 | Runtime 实际模型/工具边界、Platform durable consumer | 同一版本化事实 schema、intent/result、事件 cursor 和审计事务 | 自报 callId、日志反解析、第二套事实 schema |
 | Audit / observability consumers | #484、#441 | Platform query/management 与运行观测入口 | #508/#483 持久事实及 Platform 审计 | 重新生产执行事实、改变任务结果、Connection 审计投影 |
 
-Platform DB 是 Agent、会话、任务、授权、事件和审计的权威；Kubernetes 只保存实际 workload 状态。`platform-api` 负责身份解析、授权和 HTTP/SSE 接入，`platform-core` 负责领域规则，`platform-store` 负责事务持久化，`platform-worker` 负责 claim、dispatch、恢复和 RuntimeHost client。RuntimeHost 只接受版本化内部 contract；它不读取 Platform DB，也不接收原始 Connection 凭证。
+以上服务和数据边界只引用工程 Spec 与 Runtime/Connection HLD；本 ADR 仅规定拆分票的 owner 和交接，不重复定义这些架构结论。
 
 ## 消费顺序与交接
 
-1. 合入 #629，再合入 #630；生成 client、Host、Grant、事件和 Pilot artifacts 的版本与摘要在此处冻结。
-2. #637 只在 callback corpus 可消费后合入，逐字节验证 vendor 输入和来源摘要；不得把安装脚本通过当作 native 或真实 Runtime 验收。
+1. 合入 #629；再合入 #630，分别冻结 callback 与公共契约的版本、生成 client 和摘要。
+2. #637 在 #629 进入 `main` 后合入，消费 callback corpus 并逐字节验证 vendor 输入和来源摘要；不得把安装脚本通过当作 native 或真实 Runtime 验收。
 3. #639 消费 #630/#629/#637，交付 Runtime/Host 行为、恢复、隔离、安装准入和拒绝路径；其 PR 不重新提交 contracts 或 vendor。
 4. #643 消费 #630 与 #639，完成 Platform API/Worker、Platform DB migration、local deployment assembly、唯一 dispatch/store/host seam；其 PR 不重新实现 Runtime driver。
 5. #638 消费 #630 的 generated client 和 #643 暴露的公开 HTTP/SSE；它可以在 #630 后并行做页面，但正式 consumer acceptance 必须针对 #643 的当前 `main`，不能用 mock/fixture 代替真实 API。
@@ -44,15 +43,18 @@ Platform DB 是 Agent、会话、任务、授权、事件和审计的权威；Ku
 
 ## 基线事实与未完成行为
 
-基线已经包含可生成的 RuntimeHost/Pilot contracts、callback corpus、四类 Runtime driver/core conformance、RuntimeHost HTTP/SSE 入口，以及 Platform API 的 assembly loader 和 Platform Worker 的 dispatch factory。这些是可消费的技术资产，不等于正式 M1 闭环。
+以下矩阵是对 `76d6ecc` 当前 main 的代码回读；“已存在”只表示代码资产，不表示完整 AC 或真实环境验收。
 
-以下事实仍必须由对应唯一实施票完成并以正式启动入口证明：
+| 领域 | 当前可回读资产 | 仍需唯一实施票补齐 | 消费接口 / 证据入口 |
+| --- | --- | --- | --- |
+| Contracts / callback | `packages/contracts/src/generate.mjs`、`packages/contracts/artifacts`、`packages/contracts/src/runtime/*`；#629/#630 已关闭 | 仅保持生成漂移、兼容性和 frozen corpus 校验；不承担运行行为 | #639 RuntimeHost/Grant/event；#638 generated client；契约生成与 compatibility tests |
+| Runtime / Host | `packages/agent-runtime` 的四 driver/core conformance；`apps/agent-runtime-host/src/index.ts` 的 `assembleRuntimeHost`/`startRuntimeHost` | #639 仍需把固定安装、恢复、隔离、真实 driver 与正式 Pod 启动证据交付 | RuntimeHost HTTP/SSE contract；真实 Pod、不可变配置和 driver evidence |
+| Platform API | `apps/platform-api/src/assembly.ts` 的 `assemblePlatformApi`；`apps/platform-api/src/index.ts` 的 deployment loader | #643/#481/#482 需把主体授权、Store/Core、任务 API、SSE、审计事务接到正式部署 | `Web → platform-api`；真实身份、PostgreSQL 和 API/SSE 回读 |
+| Platform Worker | `apps/platform-worker/src/index.ts` 的 `createPlatformConversationDispatchWorkerV1` 与 `startPlatformWorker`；`packages/platform-core/src/conversation-dispatch.ts` 的 dispatch use case | #643/#508/#482 需交付唯一持久 work-item claim/loop、租约、恢复和 RuntimeHost 投递；heartbeat/factory/孤立 dispatch 不足 | PostgreSQL work item、Worker lease/claim、RuntimeHost request、事件/审计事务 |
+| Actual facts / audit | `packages/contracts/src/runtime/events.ts` 与现有 execution/audit consumers | #508/#483 需在实际模型/工具边界持久 intent/result/unknown、attempt、耗时/用量；#484/#441 读取同一事实 | execution/operation/attempt/cursor；真实 driver fault matrix；查询/观测回读 |
+| Web | `apps/web` 已有管理/对话消费代码和 consumer tests | #638 需针对当前 API 的主体/授权、模型选择、SSE 恢复和真实首通完成消费验证 | generated client、HTTP/SSE；浏览器/正式 API 联测 |
 
-- `apps/platform-api` 的 deployment assembly 必须连接当前身份、Platform Store/Core、公开 API/SSE 和审计事务；不能只通过路由或组件测试。
-- `apps/platform-worker` 必须从持久 work item 唯一发现/claim，沿同一 store/事件/审计事务投递到真实 RuntimeHost；heartbeat 或孤立 `dispatch()` 调用不构成生产循环。
-- RuntimeHost/Driver 必须在实际模型/工具边界记录 intent、结果/unknown、耗时和可得用量；Schema、SDK mock、整体 Turn 耗时或模型自报不构成 #483 事实。
-- Web 的管理、对话、任务、SSE 恢复和执行详情必须消费当前 API 返回的主体/授权/事件状态；页面测试不能改变服务端授权，也不能用合成数据证明真实首通。
-- #481、#482、#483、#484、#441、#508 的完整 AC 保持独立；拆分产物只回填已经满足的代码和验证证据，不把“schema 存在”“组件测试通过”或“Issue closed”标记为真实验收完成。
+这些资产中的 Schema、工厂、healthz、组件或 fixture 测试不能替代正式启动路径。完整产品 AC、真实身份、模型、四模板和 Connection 联合验收仍由 #508/#481/#482/#483/#484/#441、#194、#435 和 #150 负责。
 
 ## 唯一装配 seam
 
