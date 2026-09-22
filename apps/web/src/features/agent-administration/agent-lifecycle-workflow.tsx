@@ -1,7 +1,7 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { useBrowserSession } from "../use-browser-session.js";
 import { AgentLifecycleControls } from "./agent-lifecycle-controls.js";
 import { useAgentLifecycleCommand } from "./use-agent-lifecycle-command.js";
-import { useBrowserSession } from "../use-browser-session.js";
 
 type AgentLifecycleWorkflowProps = {
 	agent: AgentProjectionV2;

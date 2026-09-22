@@ -83,12 +83,19 @@ export function useConversationHistory({
 		},
 		// Query supplies the in-progress refetch chain here; its public cache may
 		// still contain the previous chain until the entire refetch completes.
-		getNextPageParam: (page, _pages, _pageParam, pageParams) =>
-			pageParams.includes(page.nextCursor) ? null : page.nextCursor,
+		getNextPageParam: (page, _pages, _pageParam, pageParams) => {
+			if (page.nextCursor !== null && pageParams.includes(page.nextCursor)) {
+				queueMicrotask(() => block({ kind: "invalid" }));
+				return null;
+			}
+			return page.nextCursor;
+		},
 		select: (data) => {
-			const cursor = data.pages.at(-1)?.nextCursor;
-			if (cursor != null && data.pageParams.includes(cursor))
-				throw new ConversationReadError({ kind: "invalid" });
+			const seen = new Set<string>();
+			const cycle = data.pageParams.some(
+				(cursor) => cursor !== null && (seen.has(cursor) || !seen.add(cursor)),
+			);
+			if (cycle) throw new ConversationReadError({ kind: "invalid" });
 			return data;
 		},
 		retry: false,
