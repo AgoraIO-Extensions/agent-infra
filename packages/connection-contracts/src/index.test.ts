@@ -18,6 +18,14 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						providerId: { const: "datalego", type: "string" },
+					},
+					required: ["providerId"],
+					type: "object",
+				},
+				{
+					additionalProperties: false,
+					properties: {
 						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: { enum: ["bitbucket", "rehoboam"], type: "string" },
 					},

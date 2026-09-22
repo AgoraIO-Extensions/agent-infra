@@ -142,6 +142,8 @@ export type OAuthTransactionRequest = {
 };
 
 export type ProviderCredentialRequest = {
+    providerId: 'datalego';
+} | {
     providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {

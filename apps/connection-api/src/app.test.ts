@@ -1017,6 +1017,14 @@ describe("Connection API", () => {
 				providerId: string,
 				accessToken: string,
 			) => {
+				if (providerId === "datalego") {
+					expect(accessToken).toBe("personal-hci-session");
+					calls.push({
+						name: "connect-datalego",
+						value: { principalId, providerId },
+					});
+					return { connectionId: "connection-datalego" };
+				}
 				if (providerId === "jira") {
 					expect(accessToken).toBe(
 						JSON.stringify({
@@ -1219,9 +1227,19 @@ describe("Connection API", () => {
 				},
 				method: "DELETE",
 			}),
+			await app.request("/api/v1/connection/provider-credentials", {
+				body: JSON.stringify({ providerId: "datalego" }),
+				headers: {
+					"content-type": "application/json",
+					cookie: `${cookie}; HCIAuthToken=personal-hci-session`,
+					"idempotency-key": "test-datalego-connect",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			}),
 		];
 		expect(apiResponses.map(({ status }) => status)).toEqual([
-			200, 201, 201, 201, 201, 201, 200, 201, 204, 204,
+			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 201,
 		]);
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
@@ -1244,6 +1262,9 @@ describe("Connection API", () => {
 		});
 		expect(await apiResponses[6]?.json()).toEqual({
 			connectionId: "connection-old",
+		});
+		expect(await apiResponses[10]?.json()).toEqual({
+			connectionId: "connection-datalego",
 		});
 		expect(calls).toEqual([
 			{
@@ -1315,6 +1336,13 @@ describe("Connection API", () => {
 				value: {
 					connectionId: "connection-github",
 					principalId: "principal-user",
+				},
+			},
+			{
+				name: "connect-datalego",
+				value: {
+					principalId: "principal-user",
+					providerId: "datalego",
 				},
 			},
 		]);

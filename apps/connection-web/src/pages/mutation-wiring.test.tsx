@@ -470,6 +470,20 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			providerId: "datalego",
+		});
+	});
+
 	it("连接页调用 Jenkins CI credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
