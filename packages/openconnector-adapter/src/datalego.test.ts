@@ -7,7 +7,7 @@ import { DataLegoAdapter, datalegoConnectionCatalog } from "./datalego.ts";
 import { datalegoExecutorDigest } from "./datalego-integrity.ts";
 
 function session(accessToken = "personal-access-token") {
-	return `x.${Buffer.from(JSON.stringify({ access_token: accessToken, user: { email: "user@agora.io" } })).toString("base64url")}.x`;
+	return `x.${Buffer.from(JSON.stringify({ access_token: accessToken, user: { email: "user@agora.io", name: "User" } })).toString("base64url")}.x`;
 }
 
 test("DataLego executor digest pins its reviewed source", () => {
@@ -21,10 +21,10 @@ test("DataLego catalog keeps query effects explicit", () => {
 	assert.deepEqual(
 		datalegoConnectionCatalog.actions.map(({ id, effect }) => [id, effect]),
 		[
-			["datalego.get_current_user@v1", "READ"],
-			["datalego.submit_query@v1", "WRITE"],
-			["datalego.get_query_status@v1", "READ"],
-			["datalego.cancel_query@v1", "WRITE"],
+			["datalego.get_current_user@v2", "READ"],
+			["datalego.submit_query@v2", "WRITE"],
+			["datalego.get_query_status@v2", "READ"],
+			["datalego.cancel_query@v2", "WRITE"],
 		],
 	);
 });
@@ -33,12 +33,15 @@ test("DataLego validates the personal HCI session without returning it", async (
 	let request: { headers: Headers; url: string } | undefined;
 	const adapter = new DataLegoAdapter(async (input, init) => {
 		request = { headers: new Headers(init?.headers), url: String(input) };
-		return Response.json({ email: "user@agora.io", name: "User" });
+		return Response.json({ message: "record not found" }, { status: 400 });
 	});
 	const token = session();
 	const identity = await adapter.validateCredential(token);
-	assert.equal(request?.url, "https://datalego.agoralab.co/api/userInfo");
-	assert.equal(request?.headers.get("cookie"), `HCIAuthToken=${token}`);
+	assert.equal(
+		request?.url,
+		"https://datalego.agoralab.co/api/v1/datainsight/jobs/__connection_credential_probe__/status",
+	);
+	assert.equal(request?.headers.get("accesstoken"), "personal-access-token");
 	assert.equal(identity.externalAccount, "user@agora.io");
 	assert.equal(
 		JSON.stringify(identity).includes("personal-access-token"),
