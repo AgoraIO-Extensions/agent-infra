@@ -134,7 +134,9 @@ test("upstream installer validates the archive member before replacing an existi
 });
 
 test("upstream installer keeps the previous install when staging validation fails", async () => {
-	const root = await mkdtemp(join(tmpdir(), "codex-installer-staging-failure-"));
+	const root = await mkdtemp(
+		join(tmpdir(), "codex-installer-staging-failure-"),
+	);
 	const destination = join(root, "installed");
 	try {
 		await mkdir(join(root, "deploy/runtime"), { recursive: true });
@@ -164,7 +166,7 @@ test("upstream installer keeps the previous install when staging validation fail
 		const preload = join(root, "download-fixture.mjs");
 		await writeFile(
 			preload,
-			"globalThis.fetch = async () => new Response(\"synthetic archive\");",
+			'globalThis.fetch = async () => new Response("synthetic archive");',
 		);
 		assert.throws(
 			() =>
