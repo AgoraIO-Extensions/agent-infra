@@ -13,7 +13,7 @@ import {
 } from "@testing-library/react";
 import { type ReactNode, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useBrowserSession } from "./agent-administration/use-browser-session";
+import { useBrowserSession } from "./use-browser-session";
 import {
 	ApplicationShell,
 	safeDeploymentUrl,

@@ -6,11 +6,11 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useBrowserSession } from "../agent-administration/use-browser-session.js";
+import { useBrowserSession } from "../use-browser-session.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 
-vi.mock("../agent-administration/use-browser-session.js", () => ({
+vi.mock("../use-browser-session.js", () => ({
 	useBrowserSession: vi.fn(),
 }));
 vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({

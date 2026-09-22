@@ -1,6 +1,6 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { AgentLifecycleWorkflow } from "../agent-administration/agent-lifecycle-workflow.js";
-import { useBrowserSession } from "../agent-administration/use-browser-session.js";
+import { useBrowserSession } from "../use-browser-session.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";

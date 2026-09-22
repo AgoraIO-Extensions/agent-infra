@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useBrowserSession } from "../../../features/agent-administration/use-browser-session.js";
+import { useBrowserSession } from "../../../features/use-browser-session.js";
 import { useApplicationSession } from "../../../features/application-shell.js";
 import { ConversationScreen } from "../../../features/conversation/conversation-screen.js";
 

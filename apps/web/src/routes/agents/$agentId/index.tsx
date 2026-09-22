@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useBrowserSession } from "../../../features/agent-administration/use-browser-session.js";
+import { useBrowserSession } from "../../../features/use-browser-session.js";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
