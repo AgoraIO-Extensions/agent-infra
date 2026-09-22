@@ -68,8 +68,12 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
 		const injection = modelBindings(value);
 		const runtimeAuth =
-			injection && policy.runtimeAuth
-				? workloadRuntimeAuthEnvironmentV1(policy.runtimeAuth, value)
+			value.runtimeManifest.interactionMode === "platform-adapter" &&
+			policy.runtimeAuth
+				? workloadRuntimeAuthEnvironmentV1(policy.runtimeAuth, value).filter(
+						// Only standard templates use the platform's PORT convention.
+						(entry) => entry.name !== "PORT" || injection !== undefined,
+					)
 				: [];
 		if (runtimeAuth.some((entry) => Object.hasOwn(value.env, entry.name)))
 			throw new WorkloadKubernetesError("policy");
