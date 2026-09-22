@@ -94,7 +94,7 @@ if (isDerivedRelease) {
 		await mkdir(bin, { recursive: true });
 		await mkdir(share, { recursive: true });
 		await copyFile(join(directory, artifact.name), join(bin, "codex"));
-		await chmod(join(bin, "codex"), 0o755);
+		await chmod(join(bin, "codex"), 0o555);
 		await copyFile(releasePath, join(share, "release.json"));
 		await chmod(join(share, "release.json"), 0o444);
 		for (const [name, sha256] of Object.entries(release.legal)) {
