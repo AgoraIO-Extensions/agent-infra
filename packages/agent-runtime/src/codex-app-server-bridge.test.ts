@@ -54,6 +54,7 @@ import {
 	validateModelAccess,
 } from "./codex-app-server-bridge.js";
 import type { CodexConnectionRecoveryResponse } from "./codex-connection-client.js";
+import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
@@ -70,7 +71,7 @@ const isolatedEnvironmentKeys = [
 	...(process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : []),
 ].sort();
 
-async function installFakeCodex(mode: string) {
+async function installFakeCodex(mode: string, recoveryFrame?: unknown) {
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-runtime-codex-bridge-"),
 	);
@@ -137,14 +138,29 @@ if (args.includes("--agent-infra-connection-recovery")) {
  let count = 0;
  const profile = JSON.parse(args[args.indexOf("--agent-infra-connection-profile") + 1]);
  const processNonce = randomUUID();
+ const frame = ${JSON.stringify(recoveryFrame ?? null)};
+ let lastRecoveryId;
+ let firstRecoveryId;
  const pull = (previousRecoveryId) => socket.write(JSON.stringify({schemaVersion:2,phase:"connection-recovery",requestId:randomUUID(),profileRef:profile.profileRef,processNonce,...(previousRecoveryId ? {previousRecoveryId} : {})}) + "\\n");
  socket.on("data", (chunk) => {
   const response = JSON.parse(chunk.toString());
   count++;
   if (response.decision === "done" || (count === 16 && mode === "recovery-premature")) socket.end(() => process.exit(0));
+  else if (response.phase === "connection-evidence") pull(lastRecoveryId);
+  else if (mode === "recovery-evidence") {
+   lastRecoveryId = response.recoveryId;
+   socket.write(JSON.stringify(frame) + "\\n");
+  }
+  else if (mode === "recovery-previous-missing") pull();
+  else if (mode === "recovery-previous-foreign") pull(randomUUID());
+  else if (mode === "recovery-previous-stale") {
+   firstRecoveryId ??= response.recoveryId;
+   pull(firstRecoveryId);
+  }
   else pull(response.recoveryId);
  });
- pull();
+ if (mode === "recovery-frame") socket.write(JSON.stringify(frame) + "\\n");
+ else pull(mode === "recovery-previous-initial" ? randomUUID() : undefined);
  return;
 }
 if (mode === "startup-exit") process.exit(9);
@@ -1509,57 +1525,130 @@ describe("model access admission", () => {
 	});
 });
 
+function recoveryTestOptions(maximumVerifications = 1) {
+	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+	const fixture = corpus.cases.find(
+		(entry: { id: string }) => entry.id === "recovery-verify-valid",
+	).frame as Extract<CodexConnectionRecoveryResponse, { decision: "verify" }>;
+	const recovery = vi.fn(async (request: typeof fixture.request) => {
+		const base = {
+			schemaVersion: 2 as const,
+			phase: "connection-recovery" as const,
+			requestId: request.requestId,
+			request,
+		};
+		if (recovery.mock.calls.length > maximumVerifications)
+			return { ...base, decision: "done" as const };
+		return {
+			...structuredClone(fixture),
+			...base,
+			recoveryId: `00000000-0000-4000-8000-${String(recovery.mock.calls.length).padStart(12, "0")}`,
+			expiresAt: Date.now() + 20_000,
+			currentClient: {
+				...fixture.currentClient,
+				credential: {
+					...fixture.currentClient.credential,
+					expiresAt: Date.now() + 30_000,
+				},
+			},
+		};
+	});
+	const evidence = vi.fn<CodexNativeCallbackHandler>(async (request) => {
+		if (request.schemaVersion !== 2 || request.phase !== "connection-evidence")
+			throw new Error("unexpected recovery evidence");
+		return {
+			schemaVersion: 2,
+			phase: "connection-evidence",
+			requestId: request.requestId,
+			identity: request.identity,
+			connectionRequest: request.connectionRequest,
+			decision: "ack",
+		};
+	});
+	return {
+		...options(),
+		profile: {
+			serviceRef: "connection",
+			profileRef: fixture.request.profileRef,
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		},
+		authorizedConnectionService: {
+			serviceRef: "connection",
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		},
+		signal: new AbortController().signal,
+		recovery,
+		evidence,
+	};
+}
+
+it.each([
+	"v1-operation-intent",
+	"v1-source-reserve-request",
+	"v1-source-bind-started",
+	"v2-connection-intent",
+])(
+	"rejects %s on the recovery channel before the evidence handler",
+	async (id) => {
+		const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+		const frame = corpus.cases.find(
+			(entry: { id: string }) => entry.id === id,
+		).frame;
+		await installFakeCodex("recovery-frame", frame);
+		const configuration = recoveryTestOptions();
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).not.toHaveBeenCalled();
+		expect(configuration.recovery).not.toHaveBeenCalled();
+	},
+);
+
+it("allows recovery evidence to be acknowledged before the final pull", async () => {
+	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+	const frame = corpus.cases.find(
+		(entry: { id: string }) => entry.id === "v2-connection-evidence-update",
+	).frame;
+	await installFakeCodex("recovery-evidence", frame);
+	const configuration = recoveryTestOptions();
+	await expect(
+		runCodexConnectionRecovery(configuration),
+	).resolves.toBeUndefined();
+	expect(configuration.evidence).toHaveBeenCalledExactlyOnceWith(
+		frame,
+		expect.any(AbortSignal),
+	);
+	expect(configuration.recovery).toHaveBeenCalledTimes(2);
+	expect(configuration.recovery.mock.calls[1]?.[0].previousRecoveryId).toBe(
+		"00000000-0000-4000-8000-000000000001",
+	);
+});
+
+it.each([
+	["initial", 0],
+	["missing", 1],
+	["foreign", 1],
+	["stale", 2],
+] as const)(
+	"rejects %s previousRecoveryId before the recovery handler",
+	async (kind, calls) => {
+		await installFakeCodex(`recovery-previous-${kind}`);
+		const configuration = recoveryTestOptions(2);
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.recovery).toHaveBeenCalledTimes(calls);
+		expect(configuration.evidence).not.toHaveBeenCalled();
+	},
+);
+
 it.each(["recovery-premature", "recovery-done"])(
 	"requires terminal done after recovery budget: %s",
 	async (mode) => {
 		await installFakeCodex(mode);
-		const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
-		const fixture = corpus.cases.find(
-			(entry: { id: string }) => entry.id === "recovery-verify-valid",
-		).frame as Extract<CodexConnectionRecoveryResponse, { decision: "verify" }>;
-		const recovery = vi.fn(async (request: typeof fixture.request) => {
-			if (recovery.mock.calls.length > 16)
-				return {
-					schemaVersion: 2 as const,
-					phase: "connection-recovery" as const,
-					requestId: request.requestId,
-					request,
-					decision: "done" as const,
-				};
-			return {
-				...structuredClone(fixture),
-				request,
-				requestId: request.requestId,
-				expiresAt: Date.now() + 20_000,
-				currentClient: {
-					...fixture.currentClient,
-					credential: {
-						...fixture.currentClient.credential,
-						expiresAt: Date.now() + 30_000,
-					},
-				},
-			};
-		});
-		const launch = runCodexConnectionRecovery({
-			...options(),
-			profile: {
-				serviceRef: "connection",
-				profileRef: fixture.request.profileRef,
-				issuer: "https://connection.example.test",
-				resource: "https://connection.example.test/mcp",
-			},
-			authorizedConnectionService: {
-				serviceRef: "connection",
-				issuer: "https://connection.example.test",
-				resource: "https://connection.example.test/mcp",
-			},
-			signal: new AbortController().signal,
-			recovery,
-			evidence: vi.fn(),
-		});
+		const configuration = recoveryTestOptions(16);
+		const launch = runCodexConnectionRecovery(configuration);
 		if (mode === "recovery-premature") await expect(launch).rejects.toThrow();
 		else await expect(launch).resolves.toBeUndefined();
-		expect(recovery).toHaveBeenCalledTimes(
+		expect(configuration.recovery).toHaveBeenCalledTimes(
 			mode === "recovery-premature" ? 16 : 17,
 		);
 	},

@@ -357,6 +357,7 @@ export async function runCodexConnectionRecovery(options: {
 		let terminal = false;
 		let issued = 0;
 		let recoveryProcessNonce: string | undefined;
+		let previousRecoveryId: string | undefined;
 		// Issuing the last verification is not evidence that it was persisted.
 		// Require the final pull, which the Driver accepts only after its evidence
 		// handler has durably acknowledged the preceding verification.
@@ -369,7 +370,13 @@ export async function runCodexConnectionRecovery(options: {
 		if (!(stream instanceof Duplex)) throw unavailable();
 		callbacks = serveCodexNativeCallbacks(
 			stream,
-			options.evidence,
+			async (request, signal) => {
+				// Recovery can persist query evidence, but cannot dispatch business
+				// operations or create/bind native sources on this private channel.
+				if (terminal || request.phase !== "connection-evidence")
+					throw unavailable();
+				return options.evidence(request, signal);
+			},
 			undefined,
 			() => {
 				failed = true;
@@ -379,6 +386,7 @@ export async function runCodexConnectionRecovery(options: {
 				if (
 					terminal ||
 					request.profileRef !== profile.profileRef ||
+					request.previousRecoveryId !== previousRecoveryId ||
 					(recoveryProcessNonce !== undefined &&
 						request.processNonce !== recoveryProcessNonce)
 				)
@@ -388,6 +396,7 @@ export async function runCodexConnectionRecovery(options: {
 				if (response.decision === "verify") {
 					if (issued >= maximumRecoveryExchanges) throw unavailable();
 					issued++;
+					previousRecoveryId = response.recoveryId;
 				} else if (response.decision === "done") terminal = true;
 				else failed = true;
 				return response;
