@@ -1,8 +1,8 @@
 import type {
 	RuntimeAuthorizationRenewRequestV3,
-	RuntimeCapabilitiesV1,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
+	RuntimeCapabilitiesV1,
 	RuntimeEventAckRequestV3,
 	RuntimeEventPersistRequestV3,
 	RuntimeGenerationCancelRequestV1,
