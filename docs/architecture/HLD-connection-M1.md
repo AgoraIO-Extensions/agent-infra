@@ -162,6 +162,8 @@ refresh endpoint 后必须发布新 ProviderRelease 迁移；刷新失败要求�
 LDAP 密码或客户端 Token 输入。
 生产验证发现 `/api/userInfo` 不接受服务端 Cookie 重放后，身份校验改为固定不存在 job 的 status READ
 探针，并发布 `datalego-connection-v2` 与 `@v2` ActionVersion；不得修改已发布的 v1 catalog。
+身份校验发生一次受控 refresh 时，Adapter 必须把实际验证成功的新 session 写入 Credential envelope，
+并以 `datalego-connection-v3` 与 `@v3` ActionVersion 发布；不得修改已发布的 v2 catalog。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
