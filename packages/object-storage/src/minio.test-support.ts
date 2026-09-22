@@ -38,7 +38,7 @@ export async function startMinioFileFixtureV1() {
 		const endpoint = `http://127.0.0.1:${stdout.trim().split(":").at(-1)}`;
 		for (let attempt = 0; attempt < 60; attempt++) {
 			if (
-				await fetch(`${endpoint}/minio/health/live`)
+				await fetch(`${endpoint}/minio/health/ready`)
 					.then((r) => r.ok)
 					.catch(() => false)
 			)
@@ -50,7 +50,9 @@ export async function startMinioFileFixtureV1() {
 			region: "us-east-1",
 			forcePathStyle: true,
 			credentials,
-			maxAttempts: 1,
+			// Startup may still return XMinioServerNotInitialized (503). Use the
+			// SDK's bounded transient-error retries only for fixture provisioning.
+			maxAttempts: 5,
 		});
 		await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
 		await client.send(
