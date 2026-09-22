@@ -64,6 +64,15 @@ spec:
         - name: runtime-host-topology
           image: {{ include "agent-infra.image" .Values.images.runtimeHost }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- if .Values.workloadTopology.legacyMigrationTrust.enabled }}
+          env:
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE
+              value: {{ printf "%s/manifest.json" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE
+              value: {{ printf "%s/migration-public.pem" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID
+              value: {{ required "workloadTopology.legacyMigrationTrust.keyId is required" .Values.workloadTopology.legacyMigrationTrust.keyId | quote }}
+          {{- end }}
           command: ["node", "-e"]
           args:
             - >-
@@ -88,6 +97,33 @@ spec:
           volumeMounts:
             - name: runtime-data
               mountPath: /var/lib/agent-runtime
+            {{- if .Values.workloadTopology.legacyMigrationTrust.enabled }}
+            - name: legacy-migration-manifest
+              mountPath: {{ printf "%s/manifest.json" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
+              subPath: manifest.json
+              readOnly: true
+            - name: legacy-migration-public-key
+              mountPath: {{ printf "%s/migration-public.pem" .Values.workloadTopology.legacyMigrationTrust.mountDir | quote }}
+              subPath: migration-public.pem
+              readOnly: true
+            {{- end }}
+      {{- if .Values.workloadTopology.legacyMigrationTrust.enabled }}
+      volumes:
+        - name: legacy-migration-manifest
+          secret:
+            secretName: {{ required "workloadTopology.legacyMigrationTrust.manifestSecretName is required" .Values.workloadTopology.legacyMigrationTrust.manifestSecretName }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.workloadTopology.legacyMigrationTrust.manifestSecretKey | quote }}
+                path: manifest.json
+        - name: legacy-migration-public-key
+          secret:
+            secretName: {{ required "workloadTopology.legacyMigrationTrust.publicKeySecretName is required" .Values.workloadTopology.legacyMigrationTrust.publicKeySecretName }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.workloadTopology.legacyMigrationTrust.publicKeySecretKey | quote }}
+                path: migration-public.pem
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: runtime-data

@@ -142,6 +142,20 @@
       "required": ["enabled", "storageSize", "service", "route"],
       "properties": {
         "enabled": { "type": "boolean" },
+        "legacyMigrationTrust": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "manifestSecretName", "manifestSecretKey", "publicKeySecretName", "publicKeySecretKey", "keyId", "mountDir"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "manifestSecretName": { "type": "string" },
+            "manifestSecretKey": { "type": "string", "minLength": 1 },
+            "publicKeySecretName": { "type": "string" },
+            "publicKeySecretKey": { "type": "string", "minLength": 1 },
+            "keyId": { "type": "string" },
+            "mountDir": { "type": "string", "pattern": "^/[^ ]+$" }
+          }
+        },
         "storageSize": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(Mi|Gi)$"

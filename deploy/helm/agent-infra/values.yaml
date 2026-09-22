@@ -61,6 +61,14 @@ migration:
 
 workloadTopology:
   enabled: false
+  legacyMigrationTrust:
+    enabled: false
+    manifestSecretName: ""
+    manifestSecretKey: manifest.json
+    publicKeySecretName: ""
+    publicKeySecretKey: migration-public.pem
+    keyId: ""
+    mountDir: /etc/agent-infra/legacy-migration
   storageSize: 1Gi
   service:
     runtimePort: 3003
