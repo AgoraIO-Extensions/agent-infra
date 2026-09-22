@@ -458,6 +458,12 @@ export function createConversationDispatchUseCaseV1(
 							"GENERATION_BARRIER_UNCONFIRMED",
 							true,
 						);
+					// A prior drain may have committed its last event before ACK delivery failed.
+					if (claim.runtimeCursor)
+						await dependencies.runtimeHost.acknowledge?.(
+							{ ...request, confirmedCursor: claim.runtimeCursor },
+							isolationHeartbeat.signal,
+						);
 					// The barrier closes all producers; archive its remaining original events before fencing the DB generation.
 					let terminalEventSeen = claim.runtimeTerminalEventSeen === true;
 					for await (const raw of dependencies.runtimeHost.drainGenerationEvents(

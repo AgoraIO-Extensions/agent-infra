@@ -1628,6 +1628,116 @@ function isolationHost(
 }
 
 describe("durable generation isolation in the existing dispatch loop", () => {
+	it.each([1, 2])(
+		"retries a committed isolation cursor after %i undelivered ACKs before confirming an empty drain",
+		async (failures) => {
+			const work = await seedIsolation();
+			const store = open();
+			const transaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1({ transaction });
+			let attempts = 0;
+			let submitted = 0;
+			let watermark: string | null = null;
+			const drainCursors: (string | null)[] = [];
+			const readCursor = async () => {
+				const [row] =
+					await client`select last_runtime_cursor from platform.conversation_executions where execution_id = ${work.executionId}`;
+				return row?.last_runtime_cursor as string | null;
+			};
+			const eventSnapshot = async () => ({
+				events:
+					await client`select * from platform.conversation_events where execution_id = ${work.executionId} order by sequence`,
+				audits:
+					await client`select * from platform.conversation_audit_events where execution_id = ${work.executionId}`,
+				cursor: await readCursor(),
+			});
+			const runtimeHost = isolationHost(work, {
+				async dispatch() {
+					submitted++;
+					throw new Error("Unexpected Turn submission");
+				},
+				async *drainGenerationEvents() {
+					// Match the real Worker: resume strictly after the persisted DB cursor.
+					const cursor = await readCursor();
+					drainCursors.push(cursor);
+					if (cursor === "last-cursor") return;
+					yield {
+						schemaVersion: 1,
+						type: "text",
+						executionId: work.executionId,
+						adapterEventKey: "last-output",
+						cursor: "last-cursor",
+						occurredAt: "2026-09-15T00:00:00.000Z",
+						payload: { delta: "original" },
+					};
+				},
+				async acknowledge(request) {
+					expect(await readCursor()).toBe(request.confirmedCursor);
+					expect(request).toMatchObject({
+						executionId: work.executionId,
+						sessionGeneration: 1,
+						hostSessionRef: "original-host",
+					});
+					attempts++;
+					if (attempts <= failures)
+						throw new Error("ACK not delivered to Runtime");
+					watermark = request.confirmedCursor;
+				},
+			});
+			const useCase = createConversationDispatchUseCaseV1(
+				{ store, authorization: isolationAuthorization, runtimeHost, events },
+				{ retryDelayMs: 0 },
+			);
+			const command = {
+				schemaVersion: 1 as const,
+				itemId: work.itemId,
+				workerId: "worker",
+			};
+			try {
+				expect(await useCase.dispatch(command)).toMatchObject({
+					outcome: "retry",
+				});
+				expect(await useCase.dispatch(command)).toMatchObject({
+					outcome: "retry",
+				});
+				const committed = await eventSnapshot();
+				expect(committed.events).toHaveLength(1);
+				expect(committed.cursor).toBe("last-cursor");
+				expect(watermark).toBeNull();
+				for (let failure = 1; failure < failures; failure++) {
+					expect(await useCase.dispatch(command)).toMatchObject({
+						outcome: "retry",
+					});
+					expect(await isolationState(work)).toMatchObject({
+						generation: 1,
+						isolation_status: "pending",
+					});
+					expect(await eventSnapshot()).toEqual(committed);
+					expect(watermark).toBeNull();
+				}
+				expect(await useCase.dispatch(command)).toMatchObject({
+					outcome: "accepted",
+				});
+				expect(watermark).toBe("last-cursor");
+				expect(attempts).toBe(failures + 1);
+				expect(drainCursors).toEqual([null, "last-cursor"]);
+				expect(await eventSnapshot()).toEqual(committed);
+				expect(await isolationState(work)).toMatchObject({
+					generation: 2,
+					isolation_status: "confirmed",
+				});
+				const [audit] =
+					await client`select count(*)::int as count from platform.audit_events where target_id = ${work.conversationId} and action = 'conversation.generation.isolation.confirmed'`;
+				expect(audit?.count).toBe(1);
+				expect(submitted).toBe(0);
+			} finally {
+				await Promise.all([store.close(), transaction.close()]);
+			}
+		},
+	);
+
 	it("recovers the original opaque ref atomically, retries the same barrier after lost ACK and archives events before confirming", async () => {
 		const work = await seedIsolation(null);
 		const store = open();
