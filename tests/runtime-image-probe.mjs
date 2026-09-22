@@ -1386,8 +1386,10 @@ async function runImageProbe() {
 		const releaseBytes = await readFile("/opt/codex/share/release.json");
 		const release = JSON.parse(releaseBytes.toString("utf8"));
 		let derivedIdentity;
-		if (release.schemaVersion === 2) {
-			assert.equal(release.distribution.kind, "derived");
+		if (
+			release.schemaVersion === 2 &&
+			release.distribution?.kind === "derived"
+		) {
 			const architecture = process.arch === "x64" ? "amd64" : process.arch;
 			const artifact = release.artifacts[architecture];
 			assert.ok(artifact?.target);

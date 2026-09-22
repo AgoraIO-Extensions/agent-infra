@@ -2288,6 +2288,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		Promise<RuntimeDriverOperationRecord>
 	>();
+	private readonly inFlightNativeSourceCallbacks = new Map<
+		string,
+		Promise<CodexNativeSourceResponseV1>
+	>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -5272,7 +5276,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return { ...binding, phase: request.phase, decision: "ack" };
 	}
 
-	private async performNativeSourceCallback(
+	private performNativeSourceCallback(
+		conversationKey: string,
+		request: CodexNativeSourceRequestV1,
+		signal: AbortSignal,
+	): Promise<CodexNativeSourceResponseV1> {
+		const key = JSON.stringify([
+			conversationKey,
+			request.requestId,
+			nativeSourceFingerprint(request),
+		]);
+		const existing = this.inFlightNativeSourceCallbacks.get(key);
+		if (existing) return existing;
+		const operation = this.performNativeSourceCallbackInternal(
+			conversationKey,
+			request,
+			signal,
+		);
+		this.inFlightNativeSourceCallbacks.set(key, operation);
+		const clear = () => {
+			if (this.inFlightNativeSourceCallbacks.get(key) === operation)
+				this.inFlightNativeSourceCallbacks.delete(key);
+		};
+		void operation.then(clear, clear);
+		return operation;
+	}
+
+	private async performNativeSourceCallbackInternal(
 		conversationKey: string,
 		request: CodexNativeSourceRequestV1,
 		signal: AbortSignal,
@@ -5407,6 +5437,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 			if (!source?.reserveAuthorized || source.reserveDenied) protocolInvalid();
 			if (request.phase === "source-bind") {
+				if (
+					source.bindPending &&
+					source.bindPending.requestId !== request.requestId
+				)
+					protocolInvalid();
 				if (
 					!parent.startedRequestId ||
 					source.notStarted ||
@@ -5617,6 +5652,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					))
 			)
 				denied ??= "authorization_unavailable";
+			if (request.phase === "source-bind" && source.bindDenied) {
+				if (
+					source.delivery !== request.delivery ||
+					!source.source ||
+					!isDeepStrictEqual(source.source, request.source)
+				)
+					protocolInvalid();
+				return resolved;
+			}
 			if (request.phase === "source-reserve") {
 				if (
 					(resolved.sourceRecord
