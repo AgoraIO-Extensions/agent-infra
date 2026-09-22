@@ -422,6 +422,8 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运行时权限以工程 Spec 的[安全基线](SPEC-agent-infra-M1-engineering-architecture.md#17-安全基线)为唯一权威。Runtime 和 Adapter 不能要求超出该基线的数据库、部署解密私钥、Kubernetes 或原始凭证权限作为运行前提。
 
+Legacy migration trust root 是部署输入，不属于 Runtime 可写数据：启用迁移时，Deployment 必须以 root（UID 0）拥有的 Secret `subPath` 文件只读挂载 manifest 与 public key，挂载目录及其祖先不得由 Runtime UID 写入；Host 通过固定的 `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE`、`AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE` 和 `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID=0` 接收路径与所有者约束。缺少该三项配置、文件可写或所有者不是 UID 0 时，Host 必须拒绝迁移。Helm 的 `workloadTopology.legacyMigrationTrust.trustRootUid` 只允许 `0`；实际 Agent Workload 生成器必须复用同一挂载契约，不能将信任文件放入 Runtime PVC。
+
 只读根文件系统下的可写临时卷与生产、探针装配一致性遵循工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)。临时卷可写不替代原生 readiness 和 Conversation 隔离验证。
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。

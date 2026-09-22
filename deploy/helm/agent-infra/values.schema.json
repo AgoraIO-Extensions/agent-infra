@@ -153,7 +153,7 @@
             "publicKeySecretName": { "type": "string" },
             "publicKeySecretKey": { "type": "string", "minLength": 1 },
             "keyId": { "type": "string" },
-            "trustRootUid": { "type": "integer", "minimum": 0 },
+            "trustRootUid": { "const": 0 },
             "mountDir": { "type": "string", "pattern": "^/[^ ]+$" }
           }
         },
