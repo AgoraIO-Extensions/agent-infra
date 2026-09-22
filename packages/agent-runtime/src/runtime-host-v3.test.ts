@@ -1288,6 +1288,24 @@ describe("Runtime V3 durable authorization", () => {
 				},
 			],
 		});
+		const mismatchedRecovery = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				originalOperationDigest: originalDigest(),
+			},
+			"session.status",
+			{
+				purpose: "control",
+				reason: "recovery",
+				claims: { controlRecordId: "other-migration" },
+			},
+		);
+		await expect(
+			env.host.recoverStatusV3(
+				mismatchedRecovery,
+				verifyRuntimeV2Fixture(mismatchedRecovery.grant),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 		const provenance = {
 			purpose: "control" as const,
 			reason: "recovery" as const,
@@ -1889,6 +1907,38 @@ describe("Runtime V3 original evidence read contexts", () => {
 			await expect(
 				env.host.recoverStatusV3(retry, verifyRuntimeV2Fixture(retry.grant)),
 			).resolves.toMatchObject({ outcome: "found" });
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("normalizes arbitrary native evidence failures", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			Object.assign(env.driver, {
+				recoverOriginalEvidence: async () => {
+					throw new Error("native-private-diagnostic");
+				},
+			});
+			const query = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					requestId: "arbitrary-failure-pass",
+					originalOperationDigest: originalDigest(),
+				},
+				"session.status",
+				{ purpose: "control", reason: "recovery" },
+			);
+			const error = await env.host
+				.recoverStatusV3(query, verifyRuntimeV2Fixture(query.grant))
+				.catch((value: unknown) => value);
+			expect(error).toMatchObject({
+				code: "RUNTIME_DRIVER_INVALID",
+				httpStatus: 503,
+				retryable: true,
+			});
+			expect(error).not.toMatchObject({ message: "native-private-diagnostic" });
 		} finally {
 			await env.host.close();
 		}

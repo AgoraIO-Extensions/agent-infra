@@ -245,15 +245,24 @@ export class RuntimeHostV3 {
 					active,
 				);
 				assertCurrent();
-				await recover.call(
-					this.options.driver,
-					{
-						nativeSessionRef,
-						executionId: request.executionId,
-						recoveryRequestId: request.requestId,
-					},
-					read,
-				);
+				try {
+					await recover.call(
+						this.options.driver,
+						{
+							nativeSessionRef,
+							executionId: request.executionId,
+							recoveryRequestId: request.requestId,
+						},
+						read,
+					);
+				} catch (error) {
+					if (
+						error instanceof RuntimeHostError &&
+						error.driverFailureKind === "session_recovery_failed"
+					)
+						throw error;
+					invalidDriver();
+				}
 			} catch (error) {
 				// A failed native recovery must not leave an evidence-query latch that
 				// blocks a later authorized retry. Restore the prior high-water mark only
