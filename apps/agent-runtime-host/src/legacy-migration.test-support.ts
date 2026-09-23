@@ -39,8 +39,9 @@ export async function createLegacyMigrationFixture(
 	directory: string,
 	includePrepared = true,
 ) {
-	const dataDirectory = join(directory, "data");
-	const mountedDirectory = join(directory, "provisioned");
+	const canonicalDirectory = await realpath(directory);
+	const dataDirectory = join(canonicalDirectory, "data");
+	const mountedDirectory = join(canonicalDirectory, "provisioned");
 	await mkdir(dataDirectory, { recursive: true });
 	await mkdir(mountedDirectory, { recursive: true });
 	const hostPath = join(dataDirectory, "host.json");

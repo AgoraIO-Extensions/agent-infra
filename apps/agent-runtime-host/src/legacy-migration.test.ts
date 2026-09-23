@@ -10,7 +10,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { FileRuntimeStore } from "@agent-infra/agent-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { readRuntimeLegacyMigrationV1 } from "./legacy-migration.js";
@@ -112,6 +112,25 @@ describe("deployment-signed Host legacy principal migration", () => {
 		await expect(load(env)).rejects.toThrow(
 			/^RUNTIME_LEGACY_MIGRATION_INVALID$/,
 		);
+		expect(JSON.parse(await readFile(env.hostPath, "utf8"))).toEqual(
+			env.before,
+		);
+	});
+
+	it.each([
+		"AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE",
+		"AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE",
+	] as const)("rejects a symlinked ancestor of %s", async (variable) => {
+		const env = await fixture();
+		const path = env.environment[variable];
+		const alias = join(dirname(dirname(path)), "deployment-alias");
+		await symlink(dirname(path), alias);
+		await expect(
+			load(env, {
+				...env.environment,
+				[variable]: join(alias, basename(path)),
+			}),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
 		expect(JSON.parse(await readFile(env.hostPath, "utf8"))).toEqual(
 			env.before,
 		);

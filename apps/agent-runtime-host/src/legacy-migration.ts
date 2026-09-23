@@ -48,6 +48,7 @@ async function readMountedFile(
 		fs.realpath(path),
 		fs.realpath(dataDirectory),
 	]);
+	if (target !== path) fail();
 	const withinData = relative(dataRoot, target);
 	if (
 		withinData === "" ||
