@@ -13,7 +13,6 @@ import {
 	X,
 } from "lucide-react";
 import {
-	type CSSProperties,
 	createContext,
 	type ReactNode,
 	useContext,
@@ -38,7 +37,7 @@ import {
 	SheetTitle,
 	SheetTrigger,
 } from "@/components/ui/sheet";
-import { Sidebar, SidebarProvider } from "@/components/ui/sidebar";
+import { Sidebar } from "@/components/ui/sidebar";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import {
 	BrowserSessionQueryContext,
@@ -211,16 +210,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		</>
 	);
 	return (
-		<SidebarProvider
-			className="platform-shell"
-			style={{ "--sidebar-width": "224px" } as CSSProperties}
-		>
+		<div className="platform-shell">
 			<a className="platform-skip-link" href="#main-content">
 				跳至主要内容
 			</a>
-			<Sidebar collapsible="none" className="platform-sidebar">
-				{navigation}
-			</Sidebar>
+			<Sidebar className="platform-sidebar">{navigation}</Sidebar>
 			<div className="platform-workspace">
 				<header className="platform-topbar">
 					<Sheet open={sheet} onOpenChange={setSheet}>
@@ -319,6 +313,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					)}
 				</div>
 			</div>
-		</SidebarProvider>
+		</div>
 	);
 }
