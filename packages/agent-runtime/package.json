@@ -19,18 +19,20 @@
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"test": "pnpm build && vitest run src"
+		"test": "node scripts/generate-callback-schema.mjs --check && pnpm build && vitest run src"
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
 		"@agentclientprotocol/sdk": "1.4.0",
 		"@anthropic-ai/claude-agent-sdk": "0.3.246",
+		"ajv": "catalog:",
 		"@earendil-works/pi-coding-agent": "0.85.1",
 		"eventsource-parser": "3.1.0"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
+		"json-schema-to-ts": "3.1.1",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
