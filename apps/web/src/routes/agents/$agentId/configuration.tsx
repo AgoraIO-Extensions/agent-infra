@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 import { AgentConfigurationWorkflow } from "../../../features/agent-configuration/agent-configuration-workflow.js";
@@ -27,9 +28,9 @@ function AgentConfigurationRoute() {
 					>
 						配置暂不可用
 					</h1>
-					<p className="text-muted-foreground" role="alert">
-						请稍后重试。
-					</p>
+					<Alert>
+						<AlertDescription>请稍后重试。</AlertDescription>
+					</Alert>
 					<Link
 						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ agentId }}

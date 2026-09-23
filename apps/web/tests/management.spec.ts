@@ -193,12 +193,16 @@ async function fixture(
 async function capture(page: Page, info: TestInfo, name: string) {
 	expect(
 		await page.evaluate(
-			() => document.documentElement.scrollWidth <= window.innerWidth,
+			() =>
+				Math.max(
+					document.documentElement.scrollWidth,
+					document.body.scrollWidth,
+				) <= window.innerWidth,
 		),
 	).toBe(true);
 	const overflow = await page
 		.locator(
-			"main button, main input:not([type=hidden]):not([aria-hidden=true]), main textarea, main select, main label, main [role=checkbox]",
+			"main a, main button, main input:not([type=hidden]):not([aria-hidden=true]), main textarea, main select, main label, main [role=checkbox]",
 		)
 		.evaluateAll((elements) =>
 			elements
@@ -501,6 +505,66 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await dialog.getByRole("link", { name: "我的 Agent", exact: true }).click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(dialog).not.toBeVisible();
+});
+
+test("management pages remain reachable at 200% zoom equivalent widths", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "mobile", "Narrow viewport acceptance");
+	await fixture(page, "owner");
+	for (const path of [
+		"/agents",
+		"/agents/agent-pilot-1",
+		"/my-agents",
+		"/my-agents/new",
+		"/my-agents/application-browser-1",
+		"/agents/agent-pilot-1/configuration",
+	]) {
+		await page.goto(path);
+		await expect(page.locator(".management-content h1").first()).toBeVisible();
+		for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
+			await page.setViewportSize({ width, height: width <= 430 ? 844 : 1000 });
+			await expect
+				.poll(
+					() =>
+						page.evaluate(
+							() =>
+								Math.max(
+									document.documentElement.scrollWidth,
+									document.body.scrollWidth,
+								) <= innerWidth,
+						),
+					{ message: `${path} at ${width}px` },
+				)
+				.toBe(true);
+			if (width === 160)
+				await capture(page, info, `narrow-${path.replaceAll("/", "-")}`);
+		}
+		await page.setViewportSize({ width: 160, height: 320 });
+		await capture(page, info, `short-${path.replaceAll("/", "-")}`);
+	}
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	await expect(page.getByRole("heading", { name: "审批" })).toBeVisible();
+	for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
+		await page.setViewportSize({ width, height: width <= 430 ? 844 : 1000 });
+		await expect
+			.poll(
+				() =>
+					page.evaluate(
+						() =>
+							Math.max(
+								document.documentElement.scrollWidth,
+								document.body.scrollWidth,
+							) <= innerWidth,
+					),
+				{ message: `approvals at ${width}px` },
+			)
+			.toBe(true);
+		if (width === 160) await capture(page, info, "narrow-approvals");
+	}
+	await page.setViewportSize({ width: 160, height: 320 });
+	await capture(page, info, "short-approvals");
 });
 
 test("Owner manually configures a bot without exposing its Secret or an internal reference", async ({

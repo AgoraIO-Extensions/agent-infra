@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
@@ -30,9 +31,9 @@ function EditAgentApplicationRoute() {
 					>
 						申请暂不可用
 					</h1>
-					<p className="text-muted-foreground" role="alert">
-						请稍后重试。
-					</p>
+					<Alert>
+						<AlertDescription>请稍后重试。</AlertDescription>
+					</Alert>
 				</section>
 			</main>
 		);

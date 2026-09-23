@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -70,11 +71,13 @@ export function MyAgentApplicationDetailScreen({
 				<header className="page-heading">
 					<h1 id="my-agent-application-detail-heading">申请详情暂不可用</h1>
 				</header>
-				<p className="alert" role="alert">
-					{state.retryable
-						? "暂时无法读取申请，请稍后重试。"
-						: "当前无法查看此申请。"}
-				</p>
+				<Alert className="my-3">
+					<AlertDescription>
+						{state.retryable
+							? "暂时无法读取申请，请稍后重试。"
+							: "当前无法查看此申请。"}
+					</AlertDescription>
+				</Alert>
 				<Link
 					className={buttonVariants({ variant: "outline" })}
 					to="/my-agents"
@@ -117,10 +120,12 @@ export function MyAgentApplicationDetailScreen({
 						</span>
 					</div>
 					{application.decision?.reason ? (
-						<div className="alert text-destructive" role="status">
-							<strong>审批原因：</strong>
-							<span>{application.decision.reason}</span>
-						</div>
+						<Alert variant="destructive" role="status" className="my-3">
+							<AlertDescription>
+								<strong>审批原因：</strong>
+								<span>{application.decision.reason}</span>
+							</AlertDescription>
+						</Alert>
 					) : null}
 					<section className="detail-section" aria-label="申请配置摘要">
 						<h2>{application.name}</h2>
@@ -260,15 +265,19 @@ export function MyAgentApplicationDetailScreen({
 						</p>
 					) : null}
 					{submittedResult ? (
-						<p ref={resultRef} tabIndex={-1} className="alert" role="status">
-							撤回请求已提交：
-							{agentManagementStatusLabels[submittedResult.status]}。
-						</p>
+						<Alert ref={resultRef} tabIndex={-1} className="my-3" role="status">
+							<AlertDescription>
+								撤回请求已提交：
+								{agentManagementStatusLabels[submittedResult.status]}。
+							</AlertDescription>
+						</Alert>
 					) : null}
 					{withdrawalError ? (
-						<p className="alert text-destructive" role="alert">
-							暂未确认撤回结果，请先查看申请的最新状态。
-						</p>
+						<Alert variant="destructive" className="my-3">
+							<AlertDescription>
+								暂未确认撤回结果，请先查看申请的最新状态。
+							</AlertDescription>
+						</Alert>
 					) : null}
 				</div>
 				<aside className="form-aside">

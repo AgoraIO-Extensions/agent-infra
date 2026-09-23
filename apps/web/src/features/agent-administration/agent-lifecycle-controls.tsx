@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Dialog,
@@ -250,11 +251,13 @@ export function AgentLifecycleControls({
 					</p>
 				) : null}
 				{commandError ? (
-					<p className="text-muted-foreground text-sm" role="alert">
-						{commandError.retryable === false
-							? "权限或 Agent 状态已变化，请刷新页面。"
-							: "操作未能提交，请稍后重试。"}
-					</p>
+					<Alert>
+						<AlertDescription>
+							{commandError.retryable === false
+								? "权限或 Agent 状态已变化，请刷新页面。"
+								: "操作未能提交，请稍后重试。"}
+						</AlertDescription>
+					</Alert>
 				) : null}
 			</div>
 			{commands.length > 0 ? (

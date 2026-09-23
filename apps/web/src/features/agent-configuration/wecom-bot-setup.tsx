@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -270,9 +271,9 @@ export function WecomBotSetup({
 				提交后清空。
 			</p>
 			{error ? (
-				<p role="alert" className="text-red-700 text-sm">
-					{error}
-				</p>
+				<Alert variant="destructive">
+					<AlertDescription>{error}</AlertDescription>
+				</Alert>
 			) : null}
 			<div className="flex flex-wrap gap-3">
 				<Button

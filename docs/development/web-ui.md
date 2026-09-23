@@ -9,7 +9,7 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 组件由 lockfile 中的 shadcn CLI 生成：
 
 ```bash
-pnpm --filter @agent-infra/web exec shadcn add button input textarea native-select checkbox label badge --yes
+pnpm --filter @agent-infra/web exec shadcn add button input textarea native-select checkbox label badge tabs dialog sheet sidebar breadcrumb avatar alert empty table --yes
 ```
 
 生成后将 `cn` 导入适配到既有 `@/lib/utils` alias，显式声明 Base UI、CVA、clsx、
@@ -25,6 +25,11 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Checkbox` | 申请和 Owner 的模型配置开关 |
 | `Label` | 上述表单的可访问名称 |
 | `Badge` | Agent 列表、我的 Agent、审批列表的服务或管理状态 |
+| `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
+| `Tabs` | 我的申请与已创建 Agent 切换 |
+| `Dialog` | 撤回、审批及生命周期确认 |
+| `Alert` / `Empty` | 管理、对话及历史的错误反馈与空态 |
+| `Table` | Agent 输出的 Markdown 表格 |
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
@@ -37,15 +42,12 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 
 - 拒绝原生 `button/input/textarea/select/option/optgroup/label/summary`。
 - 拒绝原生元素直接声明通用控件角色，如 `button/checkbox/combobox/textbox`。
+- 拒绝业务页面直接导入 Base UI 原语，以及原生 `table`、`alert/dialog/tab/tablist/tabpanel` 替代组件。
 - 同样拒绝词法绑定到 `react` default、namespace 或 named `createElement` alias 的上述字面量控件和角色调用，
   包括直接的一层 `const` 属性或解构 alias。
-- 允许 `components/ui` 内部、普通语义 HTML、测试文件和三个具名现有测试 helper；生产页面不得导入测试 helper。
-- 唯一具名例外 `hidden-form-value` 只接受带 `data-native-control="hidden-form-value"` 和字面量
-  `type="hidden"` 的 input，理由是传递不可见表单元数据。动态 type、属性 spread、其他标签或
-  未知例外名均失败。当前生产页面没有使用原生例外。
+- 允许 `components/ui` 内部、普通语义内容 HTML、测试文件和三个具名现有测试 helper；生产页面不得导入测试 helper。组件选型遵守[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#21-技术栈)。
 
-规则检查直接 JSX 声明与静态可归因的 React 调用，包括一层不可变 alias；不会跟踪第二跳 alias，不是任意 JavaScript 数据流分析。新增例外必须在规则中限定结构、
-记录理由，并添加正负测试；不得增加业务文件级或目录通配排除。
+规则检查直接 JSX 声明与静态可归因的 React 调用，包括一层不可变 alias；不会跟踪第二跳 alias，不是任意 JavaScript 数据流分析。不得增加业务文件级或目录通配排除。
 
 ## 验证
 

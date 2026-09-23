@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -8,6 +9,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
@@ -268,13 +270,9 @@ function ApplicationReview({
 								}}
 							/>
 							{reasonError && (
-								<p
-									id={`${reasonId}-error`}
-									role="alert"
-									className="text-destructive text-sm"
-								>
-									请输入驳回原因。
-								</p>
+								<Alert id={`${reasonId}-error`} variant="destructive">
+									<AlertDescription>请输入驳回原因。</AlertDescription>
+								</Alert>
 							)}
 						</div>
 						<div className="flex flex-wrap gap-3">
@@ -295,9 +293,11 @@ function ApplicationReview({
 					</form>
 				)}
 				{decisionError && (
-					<p role="alert" className="mt-4 text-destructive text-sm">
-						{decisionFailure(decisionError)}
-					</p>
+					<Alert variant="destructive" className="mt-4">
+						<AlertDescription>
+							{decisionFailure(decisionError)}
+						</AlertDescription>
+					</Alert>
 				)}
 			</DialogContent>
 		</Dialog>
@@ -331,7 +331,11 @@ export function AdminAgentApplicationsScreen({
 	if (session.kind === "loading")
 		return <p aria-live="polite">正在读取审批申请…</p>;
 	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
-		return <p role="alert">当前无法访问审批。</p>;
+		return (
+			<Alert>
+				<AlertDescription>当前无法访问审批。</AlertDescription>
+			</Alert>
+		);
 	if (state.kind === "loading")
 		return <p aria-live="polite">正在读取审批申请…</p>;
 	return (
@@ -346,11 +350,13 @@ export function AdminAgentApplicationsScreen({
 			</header>
 			<DecisionFeedback decision={decisionResult} />
 			{state.kind === "unavailable" ? (
-				<p className="mt-5 text-muted-foreground" role="alert">
-					{state.retryable
-						? "审批列表暂时无法读取，请稍后重试。"
-						: "审批列表不可用，请联系管理员。"}
-				</p>
+				<Alert className="mt-5">
+					<AlertDescription>
+						{state.retryable
+							? "审批列表暂时无法读取，请稍后重试。"
+							: "审批列表不可用，请联系管理员。"}
+					</AlertDescription>
+				</Alert>
 			) : (
 				<>
 					<div className="tabs mt-6 border-border border-b pb-3">
@@ -364,9 +370,9 @@ export function AdminAgentApplicationsScreen({
 						</span>
 					</div>
 					{state.applications.length === 0 ? (
-						<p className="empty-state py-12 text-center text-muted-foreground">
-							暂无待审批申请。
-						</p>
+						<Empty className="py-12">
+							<EmptyDescription>暂无待审批申请。</EmptyDescription>
+						</Empty>
 					) : (
 						<ul>
 							{state.applications.map((application) => (
@@ -414,9 +420,9 @@ export function AdminAgentApplicationsScreen({
 				</>
 			)}
 			{decisionError && openApplicationId === null && (
-				<p className="mt-4 text-destructive text-sm" role="alert">
-					{decisionFailure(decisionError)}
-				</p>
+				<Alert variant="destructive" className="mt-4">
+					<AlertDescription>{decisionFailure(decisionError)}</AlertDescription>
+				</Alert>
 			)}
 		</section>
 	);

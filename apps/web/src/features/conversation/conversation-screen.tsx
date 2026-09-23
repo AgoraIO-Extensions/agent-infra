@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import { ActiveConversation } from "./active-conversation.js";
@@ -107,9 +108,11 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	}, [denied, queryClient, queryKey]);
 	if (denied || !identityKey)
 		return (
-			<p role="alert" className="py-6">
-				当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
-			</p>
+			<Alert className="my-6">
+				<AlertDescription>
+					当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
+				</AlertDescription>
+			</Alert>
 		);
 	const agent = agentQuery.data;
 	if (!agent)
@@ -120,7 +123,9 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					<p role="status">正在读取 Agent…</p>
 				) : (
 					<>
-						<p role="alert">Agent 信息暂时无法读取。</p>
+						<Alert>
+							<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
+						</Alert>
 						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
 					</>
 				)}
@@ -166,17 +171,19 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				</div>
 			</header>
 			{!available && (
-				<p role="status" className="border border-border bg-muted p-3">
-					{agent.serviceAvailability === "updating"
-						? "Agent 更新中"
-						: agent.serviceAvailability === "starting"
-							? "Agent 启动中"
-							: "Agent 当前不可用"}
-					，历史保持只读。
-					<Button variant="ghost" onClick={() => void agentQuery.refetch()}>
-						刷新 Agent 状态
-					</Button>
-				</p>
+				<Alert role="status" className="bg-muted">
+					<AlertDescription>
+						{agent.serviceAvailability === "updating"
+							? "Agent 更新中"
+							: agent.serviceAvailability === "starting"
+								? "Agent 启动中"
+								: "Agent 当前不可用"}
+						，历史保持只读。
+						<Button variant="ghost" onClick={() => void agentQuery.refetch()}>
+							刷新 Agent 状态
+						</Button>
+					</AlertDescription>
+				</Alert>
 			)}
 			{showHistory ? (
 				<PersonalHistory

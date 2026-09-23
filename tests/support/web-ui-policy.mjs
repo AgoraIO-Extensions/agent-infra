@@ -14,8 +14,10 @@ const controls = new Set([
 	"optgroup",
 	"label",
 	"summary",
+	"table",
 ]);
 const controlRoles = new Set([
+	"alert",
 	"button",
 	"checkbox",
 	"combobox",
@@ -25,6 +27,10 @@ const controlRoles = new Set([
 	"spinbutton",
 	"switch",
 	"textbox",
+	"dialog",
+	"tab",
+	"tablist",
+	"tabpanel",
 ]);
 // These existing helpers render test routers only. Production imports are checked below.
 const fixtures = new Set([
@@ -181,6 +187,11 @@ export function checkWebUiSource(source, { path }) {
 		) {
 			const specifier = node.moduleSpecifier.text;
 			if (
+				specifier === "@base-ui/react" ||
+				specifier.startsWith("@base-ui/react/")
+			)
+				report(node, "use components/ui instead of Base UI primitives");
+			if (
 				/(?:^|\/)(?:test-router|test-fixtures)(?:\.|$)|\.(?:test|spec)(?:\.|$)/.test(
 					specifier,
 				)
@@ -206,17 +217,7 @@ export function checkWebUiSource(source, { path }) {
 					return value.expression.text;
 				return undefined;
 			};
-			const exception = literal("data-native-control");
-			// hidden-form-value: native form metadata has no visible control or focus target.
-			// No spread may override type="hidden" and turn this into a visible input.
-			const hiddenFormValue =
-				exception === "hidden-form-value" &&
-				tag === "input" &&
-				literal("type") === "hidden" &&
-				!attributes.some(ts.isJsxSpreadAttribute);
-			if (exception !== undefined && !hiddenFormValue)
-				report(node, "invalid native control exception");
-			if (controls.has(tag) && !hiddenFormValue)
+			if (controls.has(tag))
 				report(node, `use components/ui instead of <${tag}>`);
 			if (/^[a-z]/.test(tag) && controlRoles.has(literal("role")))
 				report(
@@ -230,18 +231,7 @@ export function checkWebUiSource(source, { path }) {
 			if (tag && ts.isStringLiteral(tag)) {
 				const attributes =
 					props && ts.isObjectLiteralExpression(props) ? props : undefined;
-				const exception = attributes
-					? objectLiteralValue(attributes, "data-native-control")
-					: undefined;
-				const hiddenFormValue =
-					exception === "hidden-form-value" &&
-					tag.text === "input" &&
-					attributes &&
-					objectLiteralValue(attributes, "type") === "hidden" &&
-					!attributes.properties.some(ts.isSpreadAssignment);
-				if (exception !== undefined && !hiddenFormValue)
-					report(node, "invalid native control exception");
-				if (controls.has(tag.text) && !hiddenFormValue)
+				if (controls.has(tag.text))
 					report(
 						node,
 						`use components/ui instead of React.createElement("${tag.text}")`,

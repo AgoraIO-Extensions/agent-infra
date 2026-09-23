@@ -1,5 +1,6 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -126,9 +127,9 @@ function unavailableScreen() {
 			>
 				配置不可用
 			</h1>
-			<p className="text-muted-foreground" role="alert">
-				当前无法访问此配置。
-			</p>
+			<Alert>
+				<AlertDescription>当前无法访问此配置。</AlertDescription>
+			</Alert>
 		</section>
 	);
 }
@@ -244,11 +245,13 @@ export function AgentConfigurationScreen({
 						</p>
 					) : null}
 					{commandError ? (
-						<p className="text-muted-foreground text-sm" role="alert">
-							{commandError.retryable === false
-								? "权限或 Agent 状态已变化，请刷新页面。"
-								: "配置未能保存，请重新填写 Secret 或模型凭证后再试。"}
-						</p>
+						<Alert>
+							<AlertDescription>
+								{commandError.retryable === false
+									? "权限或 Agent 状态已变化，请刷新页面。"
+									: "配置未能保存，请重新填写 Secret 或模型凭证后再试。"}
+							</AlertDescription>
+						</Alert>
 					) : null}
 					{submittedResult ? null : (
 						<form

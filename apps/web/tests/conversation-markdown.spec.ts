@@ -5,16 +5,18 @@ import {
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
 import {
+	execution,
 	history,
 	timestamp,
 } from "../src/features/conversation/conversation-test-fixtures";
 
 const longCode = `const value = "${"long-value-".repeat(80)}";`;
+const longTableValue = "long-table-value-".repeat(40);
 const markdown = [
 	"## 检查结果",
 	"**通过**，请检查以下代码。",
 	`\`\`\`ts\n${longCode}\n\`\`\``,
-	"| 模块 | 状态 | 描述 | 下一步 |\n| --- | --- | --- | --- |\n| Web | 通过 | 长内容检查 | 查看结果 |",
+	`| 模块 | 状态 | 描述 | 下一步 |\n| --- | --- | --- | --- |\n| Web | 通过 | ${longTableValue} | 查看结果 |`,
 	"![禁止加载的远程图片](https://tracker.example/pixel)",
 	"[来源](https://example.com/docs) [危险](javascript:alert%281%29)",
 	...Array.from(
@@ -86,9 +88,13 @@ test("assistant Markdown stays readable through history reload and version switc
 				}
 			: path === "/api/v2/agents/agent-1"
 				? agent
-				: path === "/api/v2/conversations/conversation-1"
-					? detail
-					: { items: [], nextCursor: null };
+				: path.includes("/executions/")
+					? execution("conversation-1", path.split("/").at(-1))
+					: path === "/api/v2/conversations/conversation-1"
+						? detail
+						: path === "/api/v1/agents/agent-1/conversations"
+							? { items: [detail.conversation], nextCursor: null }
+							: { items: [], nextCursor: null };
 		await route.fulfill({ json: body });
 	});
 	await page.goto("/agents/agent-1/conversations?conversation=conversation-1");
@@ -127,9 +133,62 @@ test("assistant Markdown stays readable through history reload and version switc
 	await page.reload();
 	await expect(page.locator(".assistant-markdown pre")).toHaveCount(1);
 	await expect(page.getByRole("heading", { name: "检查结果" })).toBeVisible();
+	if (testInfo.project.name === "mobile") {
+		const widths = [160, 200, 215, 320, 390, 430, 768, 1024, 1440];
+		async function checkSurface(name: string, sendReachable = false) {
+			for (const width of widths) {
+				await page.setViewportSize({
+					width,
+					height: width <= 430 ? 568 : 1000,
+				});
+				await expect
+					.poll(
+						() =>
+							page.evaluate(
+								() =>
+									Math.max(
+										document.documentElement.scrollWidth,
+										document.body.scrollWidth,
+									) <= innerWidth,
+							),
+						{ message: `${name} at ${width}px` },
+					)
+					.toBe(true);
+				if (sendReachable) {
+					const send = page.getByRole("button", { name: "发送", exact: true });
+					await send.scrollIntoViewIfNeeded();
+					await expect(send).toBeInViewport();
+				}
+				if (width === 160)
+					await page.screenshot({
+						path: testInfo.outputPath(`${name}-160.png`),
+						fullPage: true,
+					});
+			}
+		}
+		await checkSurface("conversation", true);
+		await page.getByRole("button", { name: "个人历史" }).click();
+		const personalHistory = page.getByRole("region", { name: "个人历史" });
+		await expect(
+			personalHistory.getByRole("link", { name: /Test conversation/ }),
+		).toBeVisible();
+		await checkSurface("history");
+		await page.getByRole("button", { name: "返回对话" }).click();
+		await page.getByRole("button", { name: "执行详情" }).first().click();
+		const details = page.getByRole("region", { name: "执行详情" });
+		await expect(
+			details.getByRole("button", { name: "核实原执行状态" }),
+		).toBeVisible();
+		await checkSurface("execution");
+		await details.getByRole("button", { name: "返回对话" }).click();
+	}
 	expect(
 		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
+			() =>
+				Math.max(
+					document.documentElement.scrollWidth,
+					document.body.scrollWidth,
+				) <= innerWidth,
 		),
 	).toBe(true);
 	expect(
