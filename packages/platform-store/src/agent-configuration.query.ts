@@ -284,7 +284,9 @@ export class PostgresAgentConfigurationQueryV1 {
 				schemaVersion: 1 as const,
 				userId: input.actorId,
 				accountStatus:
-					input.accountStatus === "active" ? ("active" as const) : ("disabled" as const),
+					input.accountStatus === "active"
+						? ("active" as const)
+						: ("disabled" as const),
 				organizationIds: [...input.organizationIds],
 				isAdministrator: input.isAdministrator,
 			};
