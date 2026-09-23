@@ -1,6 +1,8 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+	access,
+	chmod,
 	copyFile,
 	mkdir,
 	mkdtemp,
@@ -118,25 +120,81 @@ describe("credential holder process protection", () => {
 			"NODE_DEBUG",
 			"NODE_DEBUG_NATIVE",
 			"NODE_V8_COVERAGE",
+			"LD_UNLISTED_PROBE",
+			// macOS strips DYLD_* before /bin/sh enters; Linux preserves it.
+			...(process.platform === "linux" ? ["DYLD_UNLISTED_PROBE"] : []),
 		]) {
 			await expect(
-				execute("/bin/sh", ["./start-runtime-host.sh"], {
-					cwd,
-					env: {
-						...environment,
-						[name]:
-							name === "NODE_OPTIONS"
-								? `--require=${preload}`
-								: "sentinel-private-value",
+				execute(
+					"/bin/sh",
+					["./start-runtime-host.sh", "--dev", process.execPath],
+					{
+						cwd,
+						env: {
+							...environment,
+							[name]:
+								name === "NODE_OPTIONS"
+									? `--require=${preload}`
+									: "sentinel-private-value",
+						},
+						timeout: 5000,
 					},
-					timeout: 5000,
-				}),
+				),
 			).rejects.toMatchObject({
 				code: 1,
 				stdout: "",
 				stderr: `{"service":"agent-runtime-host","code":"${failure}"}\n`,
 			});
 		}
+		await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	it("ignores an injected executable search path before reading private configuration", async () => {
+		const cwd = await launchFixture('console.log("application-entered");');
+		const poisoned = join(cwd, "poisoned");
+		await mkdir(poisoned);
+		const marker = join(cwd, "path-hijacked");
+		for (const command of ["node", "env", "grep"]) {
+			const executable = join(poisoned, command);
+			await writeFile(
+				executable,
+				`#!/bin/sh\nprintf hijacked > '${marker}'\nexit 43\n`,
+			);
+			await chmod(executable, 0o755);
+		}
+		const defaultResult = await execute(
+			"/bin/sh",
+			["./start-runtime-host.sh"],
+			{
+				cwd,
+				env: { PATH: poisoned, npm_node_execpath: join(poisoned, "node") },
+				timeout: 5000,
+			},
+		).catch((error) => error);
+		// The production image has the pinned path; a test host may not.
+		// Both must bypass injected executables, including npm_node_execpath.
+		const hasProductionNode = await access("/usr/local/bin/node").then(
+			() => true,
+			() => false,
+		);
+		if (hasProductionNode) {
+			expect(defaultResult.code).toBeUndefined();
+			expect(defaultResult.stdout).toBe("application-entered\n");
+		} else {
+			expect([1, 127]).toContain(defaultResult.code);
+			expect(defaultResult.stderr).toContain("/usr/local/bin/node");
+		}
+		await expect(
+			execute(
+				"/bin/sh",
+				["./start-runtime-host.sh", "--dev", process.execPath],
+				{
+					cwd,
+					env: { PATH: poisoned },
+					timeout: 5000,
+				},
+			),
+		).resolves.toMatchObject({ stdout: "application-entered\n" });
 		await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
@@ -155,11 +213,15 @@ describe("credential holder process protection", () => {
 			createInterface({input: process.stdin}).on("line", () => {report(); process.exit();});
 			report();
 		`);
-		const child = spawn("/bin/sh", ["./start-runtime-host.sh"], {
-			cwd,
-			env: environment,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+		const child = spawn(
+			"/bin/sh",
+			["./start-runtime-host.sh", "--dev", process.execPath],
+			{
+				cwd,
+				env: environment,
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		);
 		processes.add(child);
 		let stdout = "";
 		let stderr = "";

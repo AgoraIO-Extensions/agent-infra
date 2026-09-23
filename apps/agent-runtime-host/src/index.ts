@@ -108,7 +108,7 @@ export async function assembleRuntimeHost(
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
-	if (binding === "codex") assertRuntimeProcessProtection();
+	if (binding !== "fake") assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
 		!isAbsolute(dataDirectory) ||

@@ -75,24 +75,33 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it("checks process protection before reading private deployment inputs even through programmatic assembly", async () => {
-		const configuration = await environment();
-		configuration.AGENT_INFRA_RUNTIME_DRIVER = "codex";
-		const readPrivateInput = vi.fn(() => "synthetic-private-value");
-		Object.defineProperty(configuration, "AGENT_INFRA_RUNTIME_SERVICE_TOKEN", {
-			get: readPrivateInput,
-		});
-		runtimeAssemblyMocks.assertRuntimeProcessProtection.mockImplementationOnce(
-			() => {
-				throw new Error("RUNTIME_PROCESS_PROTECTION_INVALID");
-			},
-		);
-		await expect(assembleRuntimeHost(configuration)).rejects.toThrow(
-			"RUNTIME_PROCESS_PROTECTION_INVALID",
-		);
-		expect(readPrivateInput).not.toHaveBeenCalled();
-		expect(runtimeAssemblyMocks.openCodexRuntimeDriver).not.toHaveBeenCalled();
-	});
+	it.each(["codex", "claude", "acp", "pi"])(
+		"checks %s process protection before reading private deployment inputs even through programmatic assembly",
+		async (driver) => {
+			const configuration = await environment();
+			configuration.AGENT_INFRA_RUNTIME_DRIVER = driver;
+			const readPrivateInput = vi.fn(() => "synthetic-private-value");
+			Object.defineProperty(
+				configuration,
+				"AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+				{
+					get: readPrivateInput,
+				},
+			);
+			runtimeAssemblyMocks.assertRuntimeProcessProtection.mockImplementationOnce(
+				() => {
+					throw new Error("RUNTIME_PROCESS_PROTECTION_INVALID");
+				},
+			);
+			await expect(assembleRuntimeHost(configuration)).rejects.toThrow(
+				"RUNTIME_PROCESS_PROTECTION_INVALID",
+			);
+			expect(readPrivateInput).not.toHaveBeenCalled();
+			expect(
+				runtimeAssemblyMocks.openCodexRuntimeDriver,
+			).not.toHaveBeenCalled();
+		},
+	);
 	it("consumes a signed deployment migration before serving and retains the original native Session", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "runtime-legacy-assembly-"));
 		directories.push(directory);

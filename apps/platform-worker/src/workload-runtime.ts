@@ -226,6 +226,7 @@ function validateSecretDataKeys(
 					"NODE_DEBUG_NATIVE",
 					"NODE_V8_COVERAGE",
 					"NODE_PATH",
+					"PATH",
 				].includes(name),
 		)
 	)

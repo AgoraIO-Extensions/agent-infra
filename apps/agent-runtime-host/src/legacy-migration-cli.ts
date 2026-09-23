@@ -170,7 +170,11 @@ export async function runRuntimeLegacyMigrationCli(
 		const stagedPath = join(temporaryDirectory, "host.json");
 		await writeFile(stagedPath, before.bytes, { flag: "wx", mode: 0o600 });
 		const store = await FileRuntimeStore.open(stagedPath);
-		await migration.apply(store);
+		try {
+			await migration.apply(store);
+		} finally {
+			await store.close();
+		}
 		const after = await readFile(stagedPath);
 		const changed = onlyPrincipalAdded(before.bytes, after);
 		const current = await journal(path);

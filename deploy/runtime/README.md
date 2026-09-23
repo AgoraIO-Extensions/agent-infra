@@ -18,8 +18,10 @@
 
 正式启动使用 `sh ./start-runtime-host.sh`（镜像内为 `/app/start-runtime-host.sh`）。launcher
 在启动 Node 前拒绝 `LD_*`、`DYLD_*` 及 Node preload/诊断环境变量，将 core dump 的软、硬上限
-均设为零，并传入 `--disable-sigusr1`。Codex 装配在读取私有配置前复验实际进程保护；直接运行
-`node dist/index.mjs` 不能替代正式入口。本地开发先构建，再用 `pnpm start`；需要自动构建时另开
+均设为零，并传入 `--disable-sigusr1`。所有非 fake Driver 装配在读取私有配置前复验实际进程保护；直接运行
+`node dist/index.mjs` 不能替代正式入口。生产入口固定使用 `/usr/local/bin/node` 和可信 `PATH`，
+不消费 Workload 提供的可执行路径。本地开发先构建，再用 `pnpm dev` 显式传入当前 pnpm 的
+Node 绝对路径（`--dev <path>`）；需要自动构建时另开
 `pnpm build --watch`。Worker 同样在创建 Workload 前拒绝上述 loader 环境或 Secret 名称。
 
 ## 部署输入

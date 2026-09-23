@@ -1090,6 +1090,7 @@ describe("assembled Workload Runtime contracts", () => {
 		"NODE_DEBUG_NATIVE",
 		"NODE_V8_COVERAGE",
 		"NODE_PATH",
+		"PATH",
 	])(
 		"rejects loader key %s in environment or a Secret before registry admission",
 		async (name) => {

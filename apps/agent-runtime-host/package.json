@@ -10,7 +10,7 @@
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"dev": "sh ./start-runtime-host.sh --dev",
+		"dev": "sh ./start-runtime-host.sh --dev \"$npm_node_execpath\"",
 		"start": "sh ./start-runtime-host.sh",
 		"test": "vitest run src"
 	},
