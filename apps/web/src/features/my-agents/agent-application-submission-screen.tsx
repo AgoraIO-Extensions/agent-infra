@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
@@ -74,11 +75,13 @@ export function AgentApplicationSubmissionScreen(
 			<div className="form-layout">
 				<div className="min-w-0">
 					{props.error ? (
-						<p className="alert text-destructive" role="alert">
-							{props.error.retryable === false
-								? "申请已变更或当前不可用，请刷新页面后核对。"
-								: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
-						</p>
+						<Alert variant="destructive" className="my-3">
+							<AlertDescription>
+								{props.error.retryable === false
+									? "申请已变更或当前不可用，请刷新页面后核对。"
+									: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
+							</AlertDescription>
+						</Alert>
 					) : null}
 					{props.result ? null : (
 						<AgentApplicationForm
@@ -92,14 +95,16 @@ export function AgentApplicationSubmissionScreen(
 						/>
 					)}
 					{props.result ? (
-						<p
+						<Alert
 							ref={resultRef}
 							tabIndex={-1}
-							className="alert font-medium"
+							className="my-3 font-medium"
 							role="status"
 						>
-							申请已提交：{agentManagementStatusLabels[props.result.status]}。
-						</p>
+							<AlertDescription>
+								申请已提交：{agentManagementStatusLabels[props.result.status]}。
+							</AlertDescription>
+						</Alert>
 					) : null}
 					{props.result ? (
 						<Link

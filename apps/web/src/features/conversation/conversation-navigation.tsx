@@ -1,5 +1,7 @@
 import { Bot, History, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
@@ -30,9 +32,15 @@ export function PersonalHistory({
 				个人历史
 			</h2>
 			{history.status === "loading" && <p role="status">正在读取历史…</p>}
-			{history.status === "error" && <p role="alert">历史暂时无法读取。</p>}
+			{history.status === "error" && (
+				<Alert>
+					<AlertDescription>历史暂时无法读取。</AlertDescription>
+				</Alert>
+			)}
 			{history.status === "ready" && !history.items.length && (
-				<p className="text-muted-foreground text-sm">暂无 Web 会话。</p>
+				<Empty>
+					<EmptyDescription>暂无 Web 会话。</EmptyDescription>
+				</Empty>
 			)}
 			<ul className="space-y-1">
 				{history.items.map((item) => (
@@ -114,7 +122,7 @@ export function NewConversation({
 		if (command.result?.kind === "denied") onDenied();
 	}, [command.result, onCreated, onDenied]);
 	return (
-		<div className="space-y-5 py-12 text-center">
+		<Empty className="space-y-5 py-12">
 			<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />
 			<h2 className="font-semibold text-xl">从一个明确的任务开始</h2>
 			<p className="text-muted-foreground">
@@ -134,6 +142,6 @@ export function NewConversation({
 				pending={command.isPending}
 				retry={command.canRetry ? () => command.retry() : undefined}
 			/>
-		</div>
+		</Empty>
 	);
 }

@@ -7,20 +7,38 @@ import { Link, useLocation } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
 	CheckCheck,
-	ChevronRight,
 	Grid2X2,
 	Layers,
 	Menu,
+	X,
 } from "lucide-react";
 import {
+	type CSSProperties,
 	createContext,
 	type ReactNode,
 	useContext,
 	useLayoutEffect,
 	useState,
 } from "react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+	Breadcrumb,
+	BreadcrumbItem,
+	BreadcrumbList,
+	BreadcrumbPage,
+	BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { NavigationSheet } from "@/components/ui/sheet";
+import {
+	Sheet,
+	SheetClose,
+	SheetContent,
+	SheetDescription,
+	SheetHeader,
+	SheetTitle,
+	SheetTrigger,
+} from "@/components/ui/sheet";
+import { Sidebar, SidebarProvider } from "@/components/ui/sidebar";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import {
 	BrowserSessionQueryContext,
@@ -172,9 +190,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<p className="platform-nav-label">Connection 尚未接入</p>
 				)}
 				<div className="platform-identity">
-					<span className="platform-avatar" aria-hidden="true">
-						{user?.displayName.slice(0, 1) ?? "访"}
-					</span>
+					<Avatar className="platform-avatar" aria-hidden="true">
+						<AvatarFallback>
+							{user?.displayName.slice(0, 1) ?? "访"}
+						</AvatarFallback>
+					</Avatar>
 					<div>
 						{user?.displayName ?? "尚未登录"}
 						<small>
@@ -191,25 +211,64 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		</>
 	);
 	return (
-		<div className="platform-shell">
+		<SidebarProvider
+			className="platform-shell"
+			style={{ "--sidebar-width": "224px" } as CSSProperties}
+		>
 			<a className="platform-skip-link" href="#main-content">
 				跳至主要内容
 			</a>
-			<aside className="platform-sidebar">{navigation}</aside>
+			<Sidebar collapsible="none" className="platform-sidebar">
+				{navigation}
+			</Sidebar>
 			<div className="platform-workspace">
 				<header className="platform-topbar">
-					<NavigationSheet
-						open={sheet}
-						onOpenChange={setSheet}
-						trigger={<Menu aria-hidden="true" />}
-					>
-						{navigation}
-					</NavigationSheet>
-					<div className="platform-breadcrumb">
-						工作台
-						<ChevronRight size={15} aria-hidden="true" />
-						<span>{title}</span>
-					</div>
+					<Sheet open={sheet} onOpenChange={setSheet}>
+						<SheetTrigger
+							render={
+								<Button
+									variant="ghost"
+									size="icon"
+									className="mobile-menu"
+									aria-label="打开导航"
+								/>
+							}
+						>
+							<Menu aria-hidden="true" />
+						</SheetTrigger>
+						<SheetContent
+							side="left"
+							showCloseButton={false}
+							className="platform-nav-sheet"
+						>
+							<SheetHeader className="sr-only">
+								<SheetTitle>主导航</SheetTitle>
+								<SheetDescription>
+									选择页面，或关闭导航返回当前页面。
+								</SheetDescription>
+							</SheetHeader>
+							<SheetClose
+								className={buttonVariants({
+									variant: "ghost",
+									size: "icon",
+									className: "absolute top-3 right-3",
+								})}
+								aria-label="关闭导航"
+							>
+								<X aria-hidden="true" />
+							</SheetClose>
+							{navigation}
+						</SheetContent>
+					</Sheet>
+					<Breadcrumb className="platform-breadcrumb">
+						<BreadcrumbList>
+							<BreadcrumbItem>工作台</BreadcrumbItem>
+							<BreadcrumbSeparator />
+							<BreadcrumbItem>
+								<BreadcrumbPage>{title}</BreadcrumbPage>
+							</BreadcrumbItem>
+						</BreadcrumbList>
+					</Breadcrumb>
 					{development && (
 						<span className="text-muted-foreground text-xs">
 							本地开发 · 测试身份
@@ -260,6 +319,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					)}
 				</div>
 			</div>
-		</div>
+		</SidebarProvider>
 	);
 }

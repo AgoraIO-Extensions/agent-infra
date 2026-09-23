@@ -6,6 +6,7 @@ import {
 	MessageSquare,
 	Settings,
 } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -59,11 +60,13 @@ export function AgentDetailScreen({
 				<h1 id="agent-detail-heading" className="font-semibold text-[28px]">
 					暂时无法访问 Agent
 				</h1>
-				<p className="text-muted-foreground" role="alert">
-					{state.retryable
-						? "暂时无法读取 Agent 信息，请稍后重试。"
-						: "此 Agent 暂时无法访问。"}
-				</p>
+				<Alert>
+					<AlertDescription>
+						{state.retryable
+							? "暂时无法读取 Agent 信息，请稍后重试。"
+							: "此 Agent 暂时无法访问。"}
+					</AlertDescription>
+				</Alert>
 				<Link
 					className={buttonVariants({ variant: "link", className: "px-0" })}
 					to="/agents"

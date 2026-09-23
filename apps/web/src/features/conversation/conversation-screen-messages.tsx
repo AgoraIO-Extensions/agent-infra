@@ -6,6 +6,8 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import { useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import type {
@@ -49,13 +51,13 @@ export function ConversationMessages({
 	return (
 		<section className="timeline min-h-48 space-y-8" aria-label="会话时间线">
 			{!userMessages.length && !events.length && (
-				<div className="chat-welcome space-y-3 py-8 text-center">
+				<Empty className="chat-welcome space-y-3 py-8">
 					<Bot className="mx-auto size-8 text-primary" aria-hidden="true" />
-					<h2 className="font-semibold text-xl">从一个明确的任务开始</h2>
-					<p className="text-muted-foreground">
+					<EmptyTitle className="text-xl">从一个明确的任务开始</EmptyTitle>
+					<EmptyDescription>
 						描述需要检查的内容和期望结果。对话仅对你可见。
-					</p>
-				</div>
+					</EmptyDescription>
+				</Empty>
 			)}
 			{userMessages.map((message) => {
 				const candidates = answers.filter(
@@ -81,15 +83,17 @@ export function ConversationMessages({
 							{message.text}
 						</p>
 						{message.status === "failed" && (
-							<div className="supplement space-y-2" role="alert">
-								<p>{commandFailure(message.error.code)}</p>
+							<Alert variant="destructive" className="supplement space-y-2">
+								<AlertDescription>
+									{commandFailure(message.error.code)}
+								</AlertDescription>
 								<Button
 									variant="outline"
 									onClick={() => onResend(message.text)}
 								>
 									准备重新发送
 								</Button>
-							</div>
+							</Alert>
 						)}
 						{selected ? (
 							<>

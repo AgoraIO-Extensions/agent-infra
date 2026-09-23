@@ -1,5 +1,13 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
 
 function safeExternalUrl(href: string | undefined) {
 	if (!href) return undefined;
@@ -45,9 +53,14 @@ export function AssistantMarkdown({ children }: { children: string }) {
 					table: ({ children }) => (
 						// biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable tables must be reachable by keyboard.
 						<section className="markdown-table" tabIndex={0} aria-label="表格">
-							<table>{children}</table>
+							<Table>{children}</Table>
 						</section>
 					),
+					thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+					tbody: ({ children }) => <TableBody>{children}</TableBody>,
+					tr: ({ children }) => <TableRow>{children}</TableRow>,
+					th: ({ children }) => <TableHead>{children}</TableHead>,
+					td: ({ children }) => <TableCell>{children}</TableCell>,
 				}}
 			>
 				{children}

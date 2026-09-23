@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Bot, Search } from "lucide-react";
 import { useId, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -67,11 +69,13 @@ export function AgentDiscoveryScreen({
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Agent…</p>
 			) : state.kind === "unavailable" ? (
-				<p role="alert" className="text-muted-foreground">
-					{state.retryable
-						? "Agent 列表暂时无法读取，请稍后重试。"
-						: "Agent 列表暂时无法访问，请联系管理员。"}
-				</p>
+				<Alert>
+					<AlertDescription>
+						{state.retryable
+							? "Agent 列表暂时无法读取，请稍后重试。"
+							: "Agent 列表暂时无法访问，请联系管理员。"}
+					</AlertDescription>
+				</Alert>
 			) : (
 				<>
 					<div className="flex list-tools flex-wrap items-end justify-between gap-4 border-border border-b pb-6">
@@ -103,11 +107,13 @@ export function AgentDiscoveryScreen({
 						</p>
 					</div>
 					{!agents.length ? (
-						<p className="py-8 text-muted-foreground">
-							暂无你有权访问的 Agent。
-						</p>
+						<Empty className="py-8">
+							<EmptyDescription>暂无你有权访问的 Agent。</EmptyDescription>
+						</Empty>
 					) : !visible.length ? (
-						<p className="py-8 text-muted-foreground">未找到匹配的 Agent。</p>
+						<Empty className="py-8">
+							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
+						</Empty>
 					) : (
 						<ul className="agent-list divide-y divide-border">
 							{visible.map((agent) => (
