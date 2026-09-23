@@ -156,22 +156,32 @@ export const rehoboamConnectionCatalog = {
 			name: "rehoboam.get_execution_request",
 			requiredScopes: [releaseReadScope],
 		},
-		...(["approve", "withdraw"] as const).map((verb) => ({
-			description:
-				verb === "approve"
-					? "批准流水线执行申请。"
-					: "撤回自己的流水线执行申请。",
+		{
+			description: "批准流水线执行申请。",
 			effect: "WRITE" as const,
-			id: `rehoboam.${verb}_execution_request@v1`,
+			id: "rehoboam.approve_execution_request@v1",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
 				required: ["releaseId", "requestId"],
 				type: "object",
 			},
-			name: `rehoboam.${verb}_execution_request`,
+			name: "rehoboam.approve_execution_request",
 			requiredScopes: [releaseWriteScope],
-		})),
+		},
+		{
+			description: "撤回自己的流水线执行申请。",
+			effect: "WRITE" as const,
+			id: "rehoboam.withdraw_execution_request@v1",
+			inputSchema: {
+				additionalProperties: false,
+				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
+				required: ["releaseId", "requestId"],
+				type: "object",
+			},
+			name: "rehoboam.withdraw_execution_request",
+			requiredScopes: [releaseWriteScope],
+		},
 		{
 			description: "拒绝流水线执行申请，必须提供原因。",
 			effect: "WRITE" as const,
