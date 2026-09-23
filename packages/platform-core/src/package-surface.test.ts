@@ -61,6 +61,7 @@ describe("platform-core package surface", () => {
 			"createFileReconciliationV1",
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
+			"createTaskRuntimeAuthorizationUseCaseV1",
 			"createWorkloadReconciliationV1",
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
