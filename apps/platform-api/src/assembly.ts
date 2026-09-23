@@ -123,8 +123,7 @@ export function assemblePlatformApi(
 				randomUUID(),
 			);
 			if (currentUser === null) return { outcome: "unavailable" };
-			if (currentUser.accountStatus !== "active")
-				return { outcome: "revoked" };
+			if (currentUser.accountStatus !== "active") return { outcome: "revoked" };
 			let agentId = request.agentId;
 			if (request.conversationId !== undefined) {
 				const target = await conversationQuery.getAuthorizationTarget(

@@ -538,7 +538,10 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 
 	it("returns 403 for a confirmed disabled directory user", async () => {
 		const conversationId = await createConversation();
-		resolveUser.mockResolvedValue({ ...currentUser, accountStatus: "disabled" });
+		resolveUser.mockResolvedValue({
+			...currentUser,
+			accountStatus: "disabled",
+		});
 		const before = await snapshot();
 		const response = await post(
 			`/conversations/${conversationId}/messages`,
