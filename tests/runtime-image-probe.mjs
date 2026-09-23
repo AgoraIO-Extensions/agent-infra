@@ -624,7 +624,7 @@ function deployment(origin, directory) {
 }
 
 async function launch(environment, rejection) {
-	const child = spawn(process.execPath, ["/app/dist/index.mjs"], {
+	const child = spawn("/bin/sh", ["/app/start-runtime-host.sh"], {
 		cwd: "/app",
 		env: environment,
 		stdio: ["ignore", "pipe", "pipe"],
