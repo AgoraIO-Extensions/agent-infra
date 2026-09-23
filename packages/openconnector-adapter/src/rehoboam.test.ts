@@ -13,12 +13,33 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 	assert.equal(rehoboamExecutorDigest, `sha256:${digest}`);
 });
 
-test("Rehoboam catalog exposes one bounded read action", () => {
+test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
-		["rehoboam.get_current_user@v3"],
+		[
+			"rehoboam.get_current_user@v3",
+			"rehoboam.list_releases@v1",
+			"rehoboam.get_release@v1",
+			"rehoboam.list_release_pipelines@v1",
+			"rehoboam.get_release_pipeline@v1",
+			"rehoboam.prepare_release_pipeline_run@v1",
+			"rehoboam.execute_release_pipeline@v1",
+			"rehoboam.list_execution_requests@v1",
+			"rehoboam.get_execution_request@v1",
+			"rehoboam.approve_execution_request@v1",
+			"rehoboam.withdraw_execution_request@v1",
+			"rehoboam.reject_execution_request@v1",
+			"rehoboam.list_release_pipeline_runs@v1",
+			"rehoboam.get_release_pipeline_run@v1",
+		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
+	assert.equal(
+		rehoboamConnectionCatalog.actions.find(
+			(action) => action.name === "rehoboam.execute_release_pipeline",
+		)?.effect,
+		"WRITE",
+	);
 });
 
 test("Rehoboam validates a scoped personal access token", async () => {
@@ -28,6 +49,7 @@ test("Rehoboam validates a scoped personal access token", async () => {
 		return Response.json({
 			data: {
 				role: "operator",
+				scopes: ["metadata:read", "release:write"],
 				user_id: "user-1",
 				username: "user@example.com",
 			},
@@ -46,7 +68,11 @@ test("Rehoboam validates a scoped personal access token", async () => {
 	assert.equal(identity.externalAccount, "user-1");
 	assert.equal(identity.displayName, "user@example.com");
 	assert.equal(identity.accessToken, "personal-pat");
-	assert.deepEqual(identity.grantedScopes, ["rehoboam.metadata.read"]);
+	assert.deepEqual(identity.grantedScopes, [
+		"rehoboam.metadata.read",
+		"rehoboam.release.read",
+		"rehoboam.release.write",
+	]);
 	assert.equal(JSON.stringify(identity).includes("machine-key"), false);
 });
 
@@ -73,8 +99,56 @@ test("Rehoboam execution sends the stored personal token", async () => {
 	assert.equal(authorization, "Bearer stored-token");
 	assert.deepEqual(result, {
 		role: "operator",
+		scopes: [],
 		user_id: "user-1",
 		username: "user@example.com",
+	});
+});
+
+test("Rehoboam maps release reads and writes to fixed endpoints", async () => {
+	const requests: Array<{ body?: string; method?: string; url: string }> = [];
+	const adapter = new RehoboamAdapter(async (input, init) => {
+		requests.push({
+			body: init?.body as string | undefined,
+			method: init?.method,
+			url: String(input),
+		});
+		return Response.json({ data: { ok: true }, success: true });
+	}, "machine-key");
+	const credential = { accessToken: "stored-token" };
+
+	await adapter.execute({
+		action: "rehoboam.list_release_pipelines",
+		credential,
+		input: { releaseId: "rel/1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.execute_release_pipeline",
+		credential,
+		input: { cardId: "card-1", params: { env: "prod" }, releaseId: "rel-1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.reject_execution_request",
+		credential,
+		input: { reason: "not ready", releaseId: "rel-1", requestId: "req-1" },
+	});
+
+	assert.equal(
+		requests[0]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/pipelines",
+	);
+	assert.equal(
+		requests[1]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel-1/pipeline-runs",
+	);
+	assert.equal(requests[1]?.method, "POST");
+	assert.deepEqual(JSON.parse(requests[1]?.body ?? "{}"), {
+		card_id: "card-1",
+		params: { env: "prod" },
+	});
+	assert.deepEqual(JSON.parse(requests[2]?.body ?? "{}"), {
+		reject_reason: "not ready",
+		release_id: "rel-1",
 	});
 });
 

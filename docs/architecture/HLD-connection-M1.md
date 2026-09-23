@@ -148,6 +148,15 @@ URL、路径、Header、用户身份或任意 Rehoboam
 业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
 Grant 或凭证。
 
+Rehoboam Release workflow 作为后续 immutable `rehoboam-connection-v4` 发布：保留
+`rehoboam.get_current_user@v3`，新增有界的 Release list/detail、Release Pipeline discovery、运行预检、
+执行/审批、Execution Request 和 Release-scoped Job result Actions。READ 要求
+`rehoboam.release.read`，WRITE 要求 `rehoboam.release.write`；Provider scope 只能来自 Rehoboam
+`whoami` 对当前 PAT scope 的服务端证明。执行目标必须是指定 Release 拥有的 Card，禁止任意全局 Pipeline、
+Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员直跑，其他用户创建
+`auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
+exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
+
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
