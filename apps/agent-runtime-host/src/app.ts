@@ -23,6 +23,7 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	type VerifiedExecutionGrantV1,
 	type VerifiedRuntimeExecutionGrantV2,
+	WorkloadReadinessRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -38,7 +39,8 @@ interface RuntimeHostAppOptions {
 	) =>
 		| VerifiedRuntimeExecutionGrantV2
 		| Promise<VerifiedRuntimeExecutionGrantV2>;
-
+	/** The transport token authenticates this deployment-provisioned Worker identity. */
+	readinessWorkerId?: string;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -106,6 +108,26 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			await options.host.submitTurn(
 				request,
 				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/readiness", async (context) => {
+		if (!options.readinessWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_READINESS_UNAVAILABLE",
+				"Workload readiness is not configured",
+				503,
+				true,
+			);
+		const request = await parseBody(
+			context.req.raw,
+			WorkloadReadinessRequestV1Schema,
+		);
+		return context.json(
+			await options.host.readiness(
+				request,
+				options.readinessWorkerId,
+				context.req.raw.signal,
 			),
 		);
 	});
@@ -339,15 +361,24 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	});
 
 	app.onError((error, context) => {
+		const readinessRequest =
+			context.req.path === "/internal/runtime/v1/readiness";
 		const runtimeError =
 			error instanceof RuntimeHostError
 				? error
-				: new RuntimeHostError(
-						"RUNTIME_INTERNAL_ERROR",
-						"Runtime request failed",
-						500,
-						true,
-					);
+				: readinessRequest && context.req.raw.signal.aborted
+					? new RuntimeHostError(
+							"RUNTIME_READINESS_UNAVAILABLE",
+							"Runtime request was interrupted",
+							503,
+							true,
+						)
+					: new RuntimeHostError(
+							"RUNTIME_INTERNAL_ERROR",
+							"Runtime request failed",
+							500,
+							true,
+						);
 		return context.json(
 			{
 				schemaVersion: 1,

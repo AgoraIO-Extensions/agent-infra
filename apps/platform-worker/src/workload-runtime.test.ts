@@ -1080,6 +1080,66 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.resources.size).toBe(0);
 	});
 
+	it.each([
+		"LD_PRELOAD",
+		"LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES",
+		"DYLD_FRAMEWORK_PATH",
+		"NODE_OPTIONS",
+		"NODE_DEBUG",
+		"NODE_DEBUG_NATIVE",
+		"NODE_V8_COVERAGE",
+		"NODE_PATH",
+		"PATH",
+	])(
+		"rejects loader key %s in environment or a Secret before registry admission",
+		async (name) => {
+			for (const secret of [false, true]) {
+				const record = pendingSecretRecord({ name });
+				const cleanup = secretCleanupStore(record);
+				const admit = vi.fn();
+				const f = fixture(
+					{ registry: { admit } },
+					{
+						configuration: configurationFixture({
+							environment: secret ? [] : [{ name, value: "synthetic-loader" }],
+							secrets: secret
+								? [
+										{
+											name,
+											secretId: record.secretId,
+											version: record.secretVersion,
+											isSet: true,
+										},
+									]
+								: [],
+						}),
+						...(secret ? { secrets: cleanupSecrets(cleanup) } : {}),
+					},
+				);
+				await f.tick(2);
+				expect(f.state?.phase).toBe("cleaning");
+				expect(f.state?.candidate.deployment).toBeNull();
+				expect(admit).not.toHaveBeenCalled();
+				expect(f.resources.size).toBe(0);
+			}
+		},
+	);
+
+	it("allows ordinary NODE_ENV configuration", async () => {
+		const f = fixture(
+			{},
+			{
+				configuration: configurationFixture({
+					environment: [{ name: "NODE_ENV", value: "production" }],
+				}),
+			},
+		);
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.resources.size).toBeGreaterThan(0);
+	});
+
 	it("rejects preflight when environment shadows a generated model credential key", async () => {
 		const record = pendingSecretRecord({
 			name: "model:primary",
