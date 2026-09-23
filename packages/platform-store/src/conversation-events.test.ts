@@ -350,6 +350,65 @@ async function operationFixture(withProvenance = true) {
 }
 
 describe("PostgreSQL actual operation facts and necessary audits", () => {
+	it("rejects reuse of an older attempt after intervening completed attempts without changing events or audits", async () => {
+		const fixture = await operationFixture();
+		try {
+			for (const attemptRef of ["attempt-1", "attempt-2"]) {
+				const intent = { ...fixture.fact, attemptRef };
+				const started = {
+					...intent,
+					phase: "started" as const,
+					startedAt: "2026-09-04T00:00:00.000Z",
+				};
+				const completed = {
+					...started,
+					phase: "completed" as const,
+					finishedAt: "2026-09-04T00:00:01.000Z",
+					durationMs: 1_000,
+				};
+				for (const fact of [intent, started, completed]) {
+					await expect(
+						fixture.events.persist(
+							fixture.command(fact, `${attemptRef}-${fact.phase}`),
+						),
+					).resolves.toMatchObject({ outcome: "accepted" });
+				}
+			}
+			const before = await fixture.snapshot();
+			expect(before).toMatchObject({ sequence: 6, events: 6, audits: 6 });
+			await expect(
+				fixture.events.persist(
+					fixture.command(fixture.fact, "reuse-attempt-1"),
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await fixture.snapshot()).toEqual(before);
+			await expect(
+				fixture.events.persist(
+					fixture.command(
+						{ ...fixture.fact, operationRef: "another-operation" },
+						"reuse-attempt-1-another-operation",
+					),
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await fixture.snapshot()).toEqual(before);
+			const next = fixture.command(
+				{ ...fixture.fact, attemptRef: "attempt-3" },
+				"fresh-attempt-3",
+			);
+			await expect(fixture.events.persist(next)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			const accepted = await fixture.snapshot();
+			expect(accepted).toMatchObject({ sequence: 7, events: 7, audits: 7 });
+			await expect(fixture.events.persist(next)).resolves.toMatchObject({
+				outcome: "replayed",
+			});
+			expect(await fixture.snapshot()).toEqual(accepted);
+		} finally {
+			await fixture.close();
+		}
+	});
+
 	async function connectionFixture() {
 		const fixture = await operationFixture();
 		const intent = {

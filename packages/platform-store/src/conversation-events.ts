@@ -640,6 +640,8 @@ async function readOperationSuccessorFacts(
 	nextInput: ConversationOperationFactV2,
 ): Promise<readonly ConversationOperationFactV2[]> {
 	const next = parseConversationOperationFactV2(nextInput);
+	// Include any earlier use of this attempt, but keep the latest operation fact
+	// last for the domain successor check. Each lookup contributes at most one row.
 	const rows = await transaction<{ event_payload: unknown }[]>`
 		with candidates as (
 			select event_payload
@@ -650,14 +652,13 @@ async function readOperationSuccessorFacts(
 				and event_payload->'fact'->>'operationRef' = ${next.operationRef}
 			order by sequence desc
 			limit 1
-		), conflicting_attempt as (
+		), matching_attempt as (
 			select event_payload
 			from platform.conversation_events
 			where execution_id = ${executionId}
 				and event_type = 'execution.operation'
 				and source = 'runtime'
 				and event_payload->'fact'->>'attemptRef' = ${next.attemptRef}
-				and event_payload->'fact'->>'operationRef' <> ${next.operationRef}
 			limit 1
 		), parent as (
 			select event_payload
@@ -669,11 +670,14 @@ async function readOperationSuccessorFacts(
 				and event_payload->'fact'->>'operationRef' = ${next.parentOperationRef ?? null}::text
 			limit 1
 		)
-		select event_payload from candidates
-		union all
-		select event_payload from conflicting_attempt
-		union all
-		select event_payload from parent
+		select event_payload from (
+			select event_payload, 0 as history_order from matching_attempt
+			union all
+			select event_payload, 1 as history_order from parent
+			union all
+			select event_payload, 2 as history_order from candidates
+		) successor_facts
+		order by history_order
 	`;
 	return rows.map(
 		(row) => parseConversationOperationEventV2(row.event_payload).fact,
