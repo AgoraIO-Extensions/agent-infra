@@ -6,17 +6,17 @@ import type {
 import { rehoboamExecutorDigest } from "./rehoboam-integrity.ts";
 
 const apiOrigin = "https://justinia.gz3.agoralab.co";
-const credentialScope = "rehoboam.read";
+const credentialScope = "rehoboam.metadata.read";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
-const providerReleaseId = "rehoboam-connection-v2";
+const providerReleaseId = "rehoboam-connection-v3";
 
 export const rehoboamConnectionCatalog = {
 	actions: [
 		{
 			description: "获取当前通过 Rehoboam 个人 Token 鉴权的用户。",
 			effect: "READ" as const,
-			id: "rehoboam.get_current_user@v2",
+			id: "rehoboam.get_current_user@v3",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
@@ -56,9 +56,7 @@ export class RehoboamAdapter
 		this.gatewayApiKey = gatewayApiKey;
 	}
 
-	async validateCredential(encodedCredential: string) {
-		const { password, username } = parseLoginCredential(encodedCredential);
-		const accessToken = await this.login(username, password);
+	async validateCredential(accessToken: string) {
 		const identity = await this.getCurrentUser(accessToken);
 		return {
 			accessToken,
@@ -79,19 +77,6 @@ export class RehoboamAdapter
 			throw providerError(`Unsupported Rehoboam action: ${input.action}`);
 		}
 		return this.getCurrentUser(input.credential.accessToken);
-	}
-
-	private async login(username: string, password: string) {
-		const data = await this.requestJson("/mcp/v1/auth/login", {
-			body: JSON.stringify({ password, username }),
-			headers: { "content-type": "application/json" },
-			method: "POST",
-		});
-		const accessToken = typeof data.token === "string" ? data.token : "";
-		if (!accessToken) {
-			throw invalidCredential("Rehoboam login did not return a token");
-		}
-		return accessToken;
 	}
 
 	private async getCurrentUser(accessToken: string) {
@@ -146,17 +131,6 @@ export class RehoboamAdapter
 		if (!data) throw providerError("Rehoboam response is missing data");
 		return data;
 	}
-}
-
-function parseLoginCredential(encoded: string) {
-	try {
-		const value = JSON.parse(encoded) as Record<string, unknown>;
-		const username =
-			typeof value.username === "string" ? value.username.trim() : "";
-		const password = typeof value.password === "string" ? value.password : "";
-		if (username && password) return { password, username };
-	} catch {}
-	throw invalidCredential("Rehoboam username and password are required");
 }
 
 function invalidCredential(message: string) {

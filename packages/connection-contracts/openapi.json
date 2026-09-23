@@ -853,7 +853,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"const": "bitbucket"
+								"enum": ["bitbucket", "rehoboam"]
 							},
 							"accessToken": {
 								"type": "string",
@@ -869,7 +869,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"enum": ["confluence", "jira", "rehoboam"]
+								"enum": ["confluence", "jira"]
 							},
 							"username": {
 								"type": "string",

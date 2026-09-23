@@ -16,26 +16,15 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 test("Rehoboam catalog exposes one bounded read action", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
-		["rehoboam.get_current_user@v2"],
+		["rehoboam.get_current_user@v3"],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
 });
 
-test("Rehoboam exchanges login credentials and stores only the returned token", async () => {
-	const requests: Array<{
-		body?: BodyInit | null;
-		headers: Headers;
-		url: string;
-	}> = [];
+test("Rehoboam validates a scoped personal access token", async () => {
+	let request: { headers: Headers; url: string } | undefined;
 	const adapter = new RehoboamAdapter(async (input, init) => {
-		requests.push({
-			body: init?.body,
-			headers: new Headers(init?.headers),
-			url: String(input),
-		});
-		if (String(input).endsWith("/mcp/v1/auth/login")) {
-			return Response.json({ data: { token: "issued-token" }, success: true });
-		}
+		request = { headers: new Headers(init?.headers), url: String(input) };
 		return Response.json({
 			data: {
 				role: "operator",
@@ -46,35 +35,19 @@ test("Rehoboam exchanges login credentials and stores only the returned token", 
 		});
 	}, "machine-key");
 
-	const identity = await adapter.validateCredential(
-		JSON.stringify({
-			password: "personal-password",
-			username: "user@example.com",
-		}),
-	);
+	const identity = await adapter.validateCredential("personal-pat");
 
 	assert.equal(
-		requests[0]?.url,
-		"https://justinia.gz3.agoralab.co/mcp/v1/auth/login",
-	);
-	assert.equal(requests[0]?.headers.get("apikey"), "machine-key");
-	assert.deepEqual(JSON.parse(String(requests[0]?.body)), {
-		password: "personal-password",
-		username: "user@example.com",
-	});
-	assert.equal(
-		requests[1]?.url,
+		request?.url,
 		"https://justinia.gz3.agoralab.co/api/connection/whoami",
 	);
-	assert.equal(
-		requests[1]?.headers.get("authorization"),
-		"Bearer issued-token",
-	);
+	assert.equal(request?.headers.get("apikey"), "machine-key");
+	assert.equal(request?.headers.get("authorization"), "Bearer personal-pat");
 	assert.equal(identity.externalAccount, "user-1");
 	assert.equal(identity.displayName, "user@example.com");
-	assert.equal(identity.accessToken, "issued-token");
+	assert.equal(identity.accessToken, "personal-pat");
+	assert.deepEqual(identity.grantedScopes, ["rehoboam.metadata.read"]);
 	assert.equal(JSON.stringify(identity).includes("machine-key"), false);
-	assert.equal(JSON.stringify(identity).includes("personal-password"), false);
 });
 
 test("Rehoboam execution sends the stored personal token", async () => {
@@ -105,19 +78,17 @@ test("Rehoboam execution sends the stored personal token", async () => {
 	});
 });
 
-test("Rehoboam rejects redirects and login responses without a token", async () => {
+test("Rehoboam rejects redirects and invalid PATs", async () => {
 	for (const response of [
 		new Response(null, {
 			headers: { location: "https://oauth.example" },
 			status: 302,
 		}),
-		Response.json({ data: {}, success: true }),
+		new Response(null, { status: 401 }),
 	]) {
 		const adapter = new RehoboamAdapter(async () => response, "machine-key");
 		await assert.rejects(
-			adapter.validateCredential(
-				JSON.stringify({ password: "password", username: "user@example.com" }),
-			),
+			adapter.validateCredential("personal-pat"),
 			(error: Error & { providerCredentialInvalid?: boolean }) =>
 				error.providerCredentialInvalid === true,
 		);
