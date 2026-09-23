@@ -6304,18 +6304,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async recoverUnconfirmedModelOperations() {
-		const pending = Object.values(this.readState().sessions).some((session) =>
-			Object.values(session.journals ?? {}).some(
-				(journal) =>
-					pendingNativeSources(journal).length > 0 ||
-					latestOperationAttemptFacts(journal.events).some(
-						(fact) => fact.phase === "intent" || fact.phase === "started",
-					),
-			),
+		const pending = Object.values(this.readState().sessions).some(
+			(session) =>
+				runtimeRequirementsMatch(session) &&
+				Object.values(session.journals ?? {}).some(
+					(journal) =>
+						pendingNativeSources(journal).length > 0 ||
+						latestOperationAttemptFacts(journal.events).some(
+							(fact) => fact.phase === "intent" || fact.phase === "started",
+						),
+				),
 		);
 		if (!pending) return;
 		await this.update((state) => {
 			for (const session of Object.values(state.sessions)) {
+				// Preserve incompatible Sessions until their original runtime can
+				// verify them; another Session's recovery must not rewrite their facts.
+				if (!runtimeRequirementsMatch(session)) continue;
 				for (const journal of Object.values(session.journals ?? {})) {
 					// Persisted lineage identifies the original source, but cannot prove
 					// its live task/queue survived. Keep occupancy and seal new actions.

@@ -8379,6 +8379,215 @@ const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
 ];
 
 describe("durable required runtime binding", () => {
+	it.each(
+		(["intent", "started"] as const).flatMap((phase) =>
+			(["missing", "lane"] as const).map((mismatch) => ({ phase, mismatch })),
+		),
+	)(
+		"preserves incompatible $mismatch runtime pending $phase facts during startup recovery",
+		async ({ phase, mismatch }) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls++;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const authorize = vi.fn(async () => {});
+			const options = {
+				...driverOptions(path),
+				authorizeExternalAction: authorize,
+				modelOptions: driverOptions(path).modelOptions.map((option) => ({
+					...option,
+					endpoint,
+					credential: upstreamModelAccess.credential,
+				})),
+			};
+			const opened: { bridge: TestCodexBridge; access: CodexModelAccess }[] =
+				[];
+			const first = await RuntimeBindingDriver.openBound(
+				options,
+				async (launch) => {
+					if (!launch.modelAccess) throw new Error("missing model access");
+					const bridge = new TestCodexBridge(
+						`pending-thread-${opened.length}`,
+						`pending-turn-${opened.length}`,
+					);
+					bridge.setConfigReadResult(
+						modelAccessConfigReadResult(launch.modelAccess),
+					);
+					opened.push({ bridge, access: launch.modelAccess });
+					return bridge;
+				},
+			);
+			drivers.push(first);
+			const command = submitCommandV2();
+			const incompatible = await first.execute(command);
+			const compatible = await first.execute(
+				submitCommandV2({
+					conversationId: "compatible-recovery",
+					operationId: "compatible-recovery",
+					executionId: "compatible-recovery",
+					turnId: "compatible-recovery",
+				}),
+			);
+			// Real model HTTP produces each fact. Simulate process/storage loss at
+			// the selected committed boundary, rejecting later terminal writes.
+			const originalUpdate = DurableJsonFile.prototype.update;
+			let committedFaults = 0;
+			const crash = vi
+				.spyOn(DurableJsonFile.prototype, "update")
+				.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+					const before = this.read() as StoredCodexDriverState;
+					let failAfterCommit = false;
+					return originalUpdate
+						.call(this, async (draft) => {
+							const result = await change(draft);
+							const state = draft as StoredCodexDriverState;
+							for (const [ref, session] of Object.entries(state.sessions)) {
+								for (const [turn, journal] of Object.entries(
+									session.journals ?? {},
+								)) {
+									const priorLength =
+										before.sessions[ref]?.journals?.[turn]?.events.length ?? 0;
+									for (const event of journal.events.slice(priorLength)) {
+										if (event.type !== "operation") continue;
+										const fact = event.payload as RuntimeOperationFactV2;
+										if (fact.kind !== "model") continue;
+										if (fact.phase === phase) failAfterCommit = true;
+										if (fact.phase === "failed" || fact.phase === "unknown")
+											throw new Error(
+												"simulated unavailable terminal persistence",
+											);
+									}
+								}
+							}
+							return result;
+						})
+						.then((result) => {
+							if (failAfterCommit) {
+								committedFaults++;
+								throw new Error("simulated process loss after pending fact");
+							}
+							return result;
+						});
+				});
+			try {
+				for (const process of opened) {
+					const outcome = await modelRequest(
+						process.access,
+						process.bridge,
+					).then(
+						async (response) => {
+							await response.text();
+							return response.status;
+						},
+						() => "closed",
+					);
+					expect(outcome).not.toBe(200);
+				}
+				await first.close();
+			} finally {
+				crash.mockRestore();
+			}
+			expect(committedFaults).toBe(2);
+			expect(upstreamCalls).toBe(0);
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const session = state.sessions[incompatible.nativeSessionRef];
+			if (!session?.requiredRuntime)
+				throw new Error("missing original binding");
+			const originalEvents = Object.values(session.journals ?? {}).flatMap(
+				(journal) => journal.events,
+			);
+			expect(
+				originalEvents
+					.filter((event) => event.type === "operation")
+					.map((event) => (event.payload as RuntimeOperationFactV2).phase),
+			).toEqual(phase === "intent" ? ["intent"] : ["intent", "started"]);
+			if (mismatch === "missing") delete session.requiredRuntime;
+			else session.requiredRuntime.lane = "upstream-only";
+			await writeFile(path, `${JSON.stringify(state)}\n`);
+			authorize.mockClear();
+			const noNative = vi.fn(async () => new TestCodexBridge());
+			// First isolate the incompatible original: opening must not rewrite even
+			// its file bytes. Then prove a compatible neighbor still recovers.
+			const isolatedPath = join(directory, "incompatible-only.json");
+			await writeFile(
+				isolatedPath,
+				`${JSON.stringify({
+					...state,
+					sessions: { [incompatible.nativeSessionRef]: session },
+					operations: Object.fromEntries(
+						Object.entries(state.operations).filter(
+							([, operation]) =>
+								operation.nativeSessionRef === incompatible.nativeSessionRef,
+						),
+					),
+				})}\n`,
+			);
+			const isolatedBefore = await readFile(isolatedPath, "utf8");
+			const isolated = await RuntimeBindingDriver.openBound(
+				{ ...options, path: isolatedPath },
+				noNative,
+			);
+			drivers.push(isolated);
+			expect.soft(await readFile(isolatedPath, "utf8")).toBe(isolatedBefore);
+			const recovered = await RuntimeBindingDriver.openBound(options, noNative);
+			drivers.push(recovered);
+			const after = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect
+				.soft(after.sessions[incompatible.nativeSessionRef])
+				.toEqual(session);
+			expect
+				.soft(
+					(
+						await recovered.replayEvents(
+							incompatible.nativeSessionRef,
+							command.executionId,
+						)
+					).map(({ type, payload }) => ({ type, payload })),
+				)
+				.toEqual(
+					originalEvents.map(({ type, payload }) => ({ type, payload })),
+				);
+			const recoveredCompatible = after.sessions[compatible.nativeSessionRef];
+			const compatibleFacts = Object.values(
+				recoveredCompatible?.journals ?? {},
+			).flatMap((journal) =>
+				journal.events
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload as RuntimeOperationFactV2),
+			);
+			expect(compatibleFacts.map((fact) => fact.phase)).toEqual(
+				phase === "intent"
+					? ["intent", "unknown"]
+					: ["intent", "started", "unknown"],
+			);
+			expect(compatibleFacts.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			expect(
+				new Set(compatibleFacts.map((fact) => fact.operationRef)).size,
+			).toBe(1);
+			expect(new Set(compatibleFacts.map((fact) => fact.attemptRef)).size).toBe(
+				1,
+			);
+			expect(
+				Object.values(recoveredCompatible?.journals ?? {}).every(
+					(journal) => journal.externalActionsBlocked === true,
+				),
+			).toBe(true);
+			expect(noNative).not.toHaveBeenCalled();
+			expect(authorize).not.toHaveBeenCalled();
+			expect(upstreamCalls).toBe(0);
+		},
+	);
+
 	it("atomically persists the required runtime with the prepared Session before native launch", async () => {
 		const path = join(await runtimeDirectory(), "driver.json");
 		const factory = vi.fn(async () => new TestCodexBridge());
