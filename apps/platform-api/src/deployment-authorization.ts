@@ -35,7 +35,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 			const authorityContext = await input.loadAuthorityContext();
 			if (
 				currentRequest.method === "POST" &&
-				new URL(currentRequest.url).pathname === "/api/v2/agent-applications"
+				new URL(currentRequest.url).pathname === "/api/v1/agent-applications"
 			) {
 				const ids = await allocateDeploymentApplicationIds({
 					identity,
