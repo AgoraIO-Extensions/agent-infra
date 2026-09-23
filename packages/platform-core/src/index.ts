@@ -49,8 +49,16 @@ export * from "./agent-runtime-presentation.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";
+export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
+export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+export {
+	isConversationGenerationBarrierConfirmedV1,
+	planConversationGenerationConfirmationV1,
+	planConversationGenerationIsolationV1,
+} from "./conversation-generation-isolation.js";
+export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export {
 	bindInputFileV1,
@@ -86,3 +94,4 @@ export type {
 } from "./secret-record-attachments.js";
 export * from "./task-authorization.js";
 export * from "./workload-reconciliation.js";
+export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";

@@ -64,6 +64,26 @@ export interface WorkloadRuntimeOptionsV1 {
 	}>;
 }
 
+export function workloadResourceConfigurationHashV1(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				resourceProfileRef: policy.resourceProfileRef,
+				requests: {
+					cpu: policy.resources.requests.cpu,
+					memory: policy.resources.requests.memory,
+				},
+				limits: {
+					cpu: policy.resources.limits.cpu,
+					memory: policy.resources.limits.memory,
+				},
+			}),
+		)
+		.digest("hex");
+}
+
 function recordReference(
 	record: PlatformSecretRecordV1,
 ): SecretActivationReferenceV1 {

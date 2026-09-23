@@ -21,7 +21,7 @@ import {
 	ModelConfigurationErrorV1,
 } from "@agent-infra/model-catalog";
 import {
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
@@ -63,12 +63,10 @@ import {
 } from "./workload-runtime.js";
 
 function configurationFixture(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return {
-		schemaVersion: 1,
-		actions: [],
-		actionSetRevision: "actions-a",
+		schemaVersion: 2,
 		channels: [],
 		channelRevision: "channels-a",
 		agentId: "agent-a",
@@ -401,8 +399,8 @@ function rejectedRegistry(): WorkloadRuntimeOptionsV1["registry"] {
 }
 
 function secretConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		secrets: [
 			{
@@ -420,8 +418,8 @@ const modelCredentialEnvironmentKey =
 	"MODEL_CREDENTIAL_8797B0599D5943E951FFB4D92C441B669B051F3EC38058B37737816D5C061E52";
 
 function standardModelConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		source: {
 			kind: "standard",
