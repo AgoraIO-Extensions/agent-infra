@@ -26,7 +26,9 @@ afterEach(async () => {
 	await client.unsafe(
 		"drop function if exists platform.conversation_dispatch_failure()",
 	);
-	await client`truncate platform.file_accesses, platform.files, platform.conversation_events,
+	await client`truncate platform.conversation_generation_tombstones,
+		platform.task_control_records, platform.task_authorization_records,
+		platform.file_accesses, platform.files, platform.conversation_events,
 		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
