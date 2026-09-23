@@ -43,6 +43,8 @@ M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-
 | 可观测性 | OpenTelemetry + Pino | Trace、Metric 和结构化日志 |
 | 部署 | Docker + Helm + Kubernetes | Web/API 位置无关；Worker 与 Agent Workload 进入 Kubernetes Workload Plane |
 
+Web 页面中凡 shadcn/ui 提供的可复用交互、导航、反馈或表格组件，均使用项目的 `components/ui` 实现，无业务页面例外。Base UI 原语只允许在 shadcn/ui 组件内部使用；语义内容标签和业务状态逻辑不属于组件替代。
+
 初始化依赖以固定版本 Better-T-Stack 的生成结果为基线，并写入 lockfile。Node.js 使用公司支持的 LTS 版本；Kubernetes JavaScript Client 与目标集群版本配套，不使用浮动 `latest`。
 
 ### 2.2 Better-T-Stack 初始化基线

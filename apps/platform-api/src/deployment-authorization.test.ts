@@ -50,7 +50,7 @@ describe("deployment authorization admission", () => {
 			idempotencyKey: "create_01",
 		});
 		await scope.requestScope(
-			new Request("https://platform.test/api/v2/agent-applications", {
+			new Request("https://platform.test/api/v1/agent-applications", {
 				method: "POST",
 				headers: { "Idempotency-Key": "create_01" },
 			}),
@@ -86,7 +86,7 @@ describe("deployment authorization admission", () => {
 		});
 		await scope.requestScope(
 			new Request(
-				"https://platform.test/api/v2/agents/agent_01/configuration",
+				"https://platform.test/api/v1/agents/agent_01/configuration",
 				{ method: "PUT" },
 			),
 			async () => {
@@ -113,7 +113,7 @@ describe("deployment authorization admission", () => {
 		});
 		await scope.requestScope(
 			new Request(
-				"https://platform.test/api/v2/agents/agent_01/configuration",
+				"https://platform.test/api/v1/agents/agent_01/configuration",
 				{ method: "PUT" },
 			),
 			async () => {

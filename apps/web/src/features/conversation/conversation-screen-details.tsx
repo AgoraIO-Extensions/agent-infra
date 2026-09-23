@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
 import type {
 	ExecutionDetailProjectionV2,
@@ -41,12 +42,12 @@ export function ConversationExecutionDetails({
 			</div>
 			{loading && <p role="status">正在读取执行记录…</p>}
 			{failed && (
-				<div role="alert">
-					<p>执行记录暂时无法读取。</p>
+				<Alert className="space-y-2">
+					<AlertDescription>执行记录暂时无法读取。</AlertDescription>
 					<Button variant="outline" onClick={onRetry}>
 						重新读取详情
 					</Button>
-				</div>
+				</Alert>
 			)}
 			{data && (
 				<>
@@ -59,7 +60,13 @@ export function ConversationExecutionDetails({
 						<dt>结束时间</dt>
 						<dd>{data.finishedAt ?? "尚未确认结束"}</dd>
 					</dl>
-					{data.error && <p role="alert">{commandFailure(data.error.code)}</p>}
+					{data.error && (
+						<Alert variant="destructive">
+							<AlertDescription>
+								{commandFailure(data.error.code)}
+							</AlertDescription>
+						</Alert>
+					)}
 					<h3 className="font-semibold">过程摘要</h3>
 					{data.processSummary.length ? (
 						<ul className="space-y-3">

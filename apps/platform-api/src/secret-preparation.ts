@@ -1,6 +1,9 @@
 import { types } from "node:util";
 
-import type { PendingSecretRecordAttachmentResolverV1 } from "@agent-infra/platform-core";
+import type {
+	PendingSecretRecordAttachmentResolverV1,
+	PendingSecretRecordExpectationV1,
+} from "@agent-infra/platform-core";
 import type { SecretEncryptorV1 } from "@agent-infra/secret-store";
 
 export interface PreparedSecretPlaintextV1 {
@@ -41,16 +44,24 @@ export function parsePendingSecretRecordAttachmentResolverV1(
 
 export function createPendingSecretRecordAttachmentResolverV1(input: {
 	readonly encryptor: SecretEncryptorV1;
-	readonly plaintexts: readonly PreparedSecretPlaintextV1[];
+	readonly plaintexts:
+		| readonly PreparedSecretPlaintextV1[]
+		| ((
+				expected: readonly PendingSecretRecordExpectationV1[],
+		  ) => readonly PreparedSecretPlaintextV1[]);
 }): PendingSecretRecordAttachmentResolverV1 {
 	const encryptor = input.encryptor;
+	let prepare =
+		typeof input.plaintexts === "function" ? input.plaintexts : undefined;
+	const initial =
+		typeof input.plaintexts === "function" ? [] : input.plaintexts;
 	const plaintexts = new Map(
-		input.plaintexts.map((plaintext) => [
+		initial.map((plaintext) => [
 			key(plaintext.secretId, plaintext.version),
 			plaintext.plaintext,
 		]),
 	);
-	if (plaintexts.size !== input.plaintexts.length) {
+	if (plaintexts.size !== initial.length) {
 		throw new TypeError("Prepared Secret plaintexts are invalid");
 	}
 	let consumed = false;
@@ -59,6 +70,14 @@ export function createPendingSecretRecordAttachmentResolverV1(input: {
 			if (consumed) throw new TypeError("Prepared Secret attachment is spent");
 			consumed = true;
 			try {
+				if (prepare) {
+					for (const value of prepare(expected)) {
+						const id = key(value.secretId, value.version);
+						if (plaintexts.has(id))
+							throw new TypeError("Prepared Secret plaintexts are invalid");
+						plaintexts.set(id, value.plaintext);
+					}
+				}
 				const expectedKeys = new Set(
 					expected.map(({ secretId, secretVersion }) =>
 						key(secretId, secretVersion),
@@ -92,6 +111,7 @@ export function createPendingSecretRecordAttachmentResolverV1(input: {
 				});
 			} finally {
 				plaintexts.clear();
+				prepare = undefined;
 			}
 		},
 	};

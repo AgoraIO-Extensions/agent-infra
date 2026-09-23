@@ -44,8 +44,14 @@ ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
+RUN chmod 0555 /opt/codex /opt/codex/bin /opt/codex/share
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
+COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
+RUN chmod 0755 ./start-runtime-host.sh
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
+RUN mkdir -p /etc/agent-infra/legacy-migration \
+    && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \
+    && chmod 0555 /etc/agent-infra /etc/agent-infra/legacy-migration
 VOLUME ["/var/lib/agent-runtime"]
 USER node
-CMD ["node", "dist/index.mjs"]
+CMD ["/bin/sh", "./start-runtime-host.sh"]

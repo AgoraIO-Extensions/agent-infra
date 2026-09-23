@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	createPendingSecretRecordAttachmentResolverV1,
@@ -118,5 +118,23 @@ describe("pending Secret preparation", () => {
 				plaintext: "must-not-cross-the-route-boundary",
 			}),
 		).toThrow("invalid");
+	});
+	it("consumes a throwing metadata mapper once and never retries captured plaintext", async () => {
+		const map = vi.fn(() => {
+			throw new Error("controlled mapping failure");
+		});
+		const encrypt = vi.fn(encryptor.encrypt);
+		const attachment = createPendingSecretRecordAttachmentResolverV1({
+			encryptor: { encrypt },
+			plaintexts: map,
+		});
+		await expect(
+			attachment.resolve({ schemaVersion: 1, expected: [] }),
+		).rejects.toThrow("controlled mapping failure");
+		await expect(
+			attachment.resolve({ schemaVersion: 1, expected: [] }),
+		).rejects.toThrow("spent");
+		expect(map).toHaveBeenCalledTimes(1);
+		expect(encrypt).not.toHaveBeenCalled();
 	});
 });

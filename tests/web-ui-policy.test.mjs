@@ -28,6 +28,7 @@ test("rejects direct common native controls in routes and features", () => {
 			"optgroup",
 			"label",
 			"summary",
+			"table",
 		]) {
 			assert.match(
 				check(`const screen = <${tag} />;`, file)[0],
@@ -64,12 +65,6 @@ test("rejects React createElement controls and native control roles", () => {
 		)[0],
 		/control role/,
 	);
-	assert.deepEqual(
-		check(
-			'import React from "react"; const metadata = React.createElement("input", { "data-native-control": "hidden-form-value", type: "hidden" });',
-		),
-		[],
-	);
 	for (const source of [
 		'import React from "react"; React.createElement("input", { type: "hidden" });',
 		'import React from "react"; React.createElement("input", { "data-native-control": "hidden-form-value", type: "text" });',
@@ -97,7 +92,7 @@ test("attributes React createElement calls to lexical import bindings", () => {
 test("accepts shared controls and ordinary semantic layout and navigation", () => {
 	assert.deepEqual(
 		check(
-			'const screen = <main><form><fieldset><legend>Source</legend><Label htmlFor="source">Source</Label><NativeSelect id="source"><NativeSelectOption>Standard</NativeSelectOption></NativeSelect><Input /><Textarea /><Checkbox /><Button type="submit">Save</Button><p role="alert">Error</p><a href="/agents">Agents</a><dl><dt>Status</dt><dd>Ready</dd></dl></fieldset></form></main>;',
+			'const screen = <main><form><fieldset><legend>Source</legend><Label htmlFor="source">Source</Label><NativeSelect id="source"><NativeSelectOption>Standard</NativeSelectOption></NativeSelect><Input /><Textarea /><Checkbox /><Button type="submit">Save</Button><Alert>Error</Alert><a href="/agents">Agents</a><dl><dt>Status</dt><dd>Ready</dd></dl></fieldset></form></main>;',
 		),
 		[],
 	);
@@ -105,6 +100,17 @@ test("accepts shared controls and ordinary semantic layout and navigation", () =
 		check('const prose = "<button>not JSX</button>"; /* <input /> */'),
 		[],
 	);
+});
+
+test("requires shadcn/ui for reusable feedback, tabs, dialogs, tables and Base UI imports", () => {
+	for (const source of [
+		'const view = <p role="alert">Error</p>;',
+		'const view = <div role="dialog" />;',
+		'const view = <div role="tablist" />;',
+		"const view = <table />;",
+		'import { Tabs } from "@base-ui/react/tabs"; const view = <Tabs.Root />;',
+	])
+		assert.ok(check(source).length > 0, source);
 });
 
 test("accepts UI internals and test fixtures without excluding nearby business files", () => {
@@ -129,21 +135,16 @@ test("accepts UI internals and test fixtures without excluding nearby business f
 	);
 });
 
-test("hidden-form-value is the only named native exception and cannot become visible", () => {
-	assert.deepEqual(
-		check(
-			'const metadata = <input data-native-control="hidden-form-value" type="hidden" name="revision" value="1" />;',
-		),
-		[],
-	);
+test("native controls have no production exceptions", () => {
 	for (const source of [
 		'<input type="hidden" />',
-		'<input data-native-control="hidden-form-value" type="text" />',
-		'<input data-native-control="hidden-form-value" type={kind} />',
-		'<input data-native-control="hidden-form-value" type="hidden" {...props} />',
-		'<input data-native-control="hidden-form-value" type="hidden" type="text" />',
-		'<button data-native-control="hidden-form-value" />',
+		'<input data-native-control="hidden-form-value" type="hidden" />',
 		'<button data-native-control="approved" />',
 	])
 		assert.ok(check(`const screen = ${source};`).length > 0, source);
+	assert.ok(
+		check(
+			'import React from "react"; React.createElement("input", { type: "hidden" });',
+		).length > 0,
+	);
 });

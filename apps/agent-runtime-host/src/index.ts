@@ -7,6 +7,7 @@ import {
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantVerifierV2,
+	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	openOpenCodeRuntime,
@@ -27,12 +28,24 @@ import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
+	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
+
+import {
+	type RuntimeLegacyMigrationFilesystem,
+	readRuntimeLegacyMigrationV1,
+} from "./legacy-migration.js";
+import {
+	previewRuntimeLegacyMigration,
+	readRuntimeLegacyJournal,
+} from "./legacy-migration-journal.js";
+import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
 		grant: RuntimeExecutionGrantV2,
@@ -85,7 +98,10 @@ export function startRuntimeHost(options: StartOptions) {
 	);
 }
 
-export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
+export async function assembleRuntimeHost(
+	environment: NodeJS.ProcessEnv,
+	filesystem?: RuntimeLegacyMigrationFilesystem,
+) {
 	const required = (name: string) => requiredEnvironment(environment, name);
 	const binding = required("AGENT_INFRA_RUNTIME_DRIVER");
 	if (
@@ -96,6 +112,7 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
+	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
 		!isAbsolute(dataDirectory) ||
@@ -105,10 +122,18 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		runtimeConfigurationInvalid();
 	}
 	const port = runtimePort(environment.PORT, 3003);
+	const readinessBinding = readWorkloadReadinessBindingV1(environment);
 	const runtimeWorkerId =
-		binding === "codex"
+		readinessBinding?.workerId ??
+		(binding === "codex"
 			? required("AGENT_INFRA_RUNTIME_WORKER_ID")
-			: environment.AGENT_INFRA_RUNTIME_WORKER_ID;
+			: environment.AGENT_INFRA_RUNTIME_WORKER_ID);
+	if (
+		readinessBinding &&
+		environment.AGENT_INFRA_RUNTIME_WORKER_ID !== undefined &&
+		environment.AGENT_INFRA_RUNTIME_WORKER_ID !== readinessBinding.workerId
+	)
+		runtimeConfigurationInvalid();
 	if (runtimeWorkerId !== undefined && !runtimeWorkerId.trim())
 		runtimeConfigurationInvalid();
 	const keyId = required("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
@@ -135,6 +160,13 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
+	const legacyMigration = await readRuntimeLegacyMigrationV1({
+		environment,
+		expectedIssuer,
+		binding: readinessBinding,
+		dataDirectory,
+		filesystem,
+	});
 	if (configuration) {
 		await verifyCodexPilotInstallation();
 	}
@@ -153,8 +185,14 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		}
 	};
 	try {
-		const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
+		const storePath = join(dataDirectory, "host.json");
+		if (legacyMigration) {
+			const { bytes } = await readRuntimeLegacyJournal(storePath);
+			await previewRuntimeLegacyMigration(bytes, legacyMigration);
+		}
+		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
+		await legacyMigration?.apply(store);
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
 					authorizeExternalAction: async (action) => {
@@ -196,6 +234,15 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 			if ("close" in driver) await driver.close();
 		};
 		const host = await RuntimeHost.open({
+			...(readinessBinding
+				? {
+						readinessVerifier: createWorkloadReadinessVerifierV1({
+							binding: readinessBinding,
+							expectedIssuer,
+							publicKeys: new Map([[keyId, publicKey]]),
+						}),
+					}
+				: {}),
 			store,
 			driver,
 			grantValidation: { expectedIssuer },
@@ -215,6 +262,9 @@ export async function assembleRuntimeHost(environment: NodeJS.ProcessEnv) {
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			...(readinessBinding
+				? { readinessWorkerId: readinessBinding.workerId }
+				: {}),
 			...(runtimeWorkerId
 				? {
 						runtimeWorkerId,

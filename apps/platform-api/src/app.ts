@@ -24,6 +24,10 @@ import {
 export const platformApiService = "platform-api";
 
 export interface PlatformAppDependencies {
+	readonly requestScope?: (
+		request: Request,
+		work: () => Promise<void>,
+	) => Promise<void>;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
@@ -55,6 +59,9 @@ export function createPlatformHealthApp() {
 
 export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	const app = createPlatformHealthApp();
+	const requestScope = dependencies.requestScope;
+	if (requestScope)
+		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
 	registerConversationRoutes(app, {

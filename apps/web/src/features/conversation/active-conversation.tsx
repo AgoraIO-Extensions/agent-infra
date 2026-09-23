@@ -1,5 +1,6 @@
 import { ArrowUp, Square } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
 import { Label } from "../../components/ui/label.js";
 import {
@@ -187,7 +188,12 @@ export function ActiveConversation({
 			setNotice("");
 		}
 	}
-	if (denied) return <p role="alert">访问权限已失效。</p>;
+	if (denied)
+		return (
+			<Alert>
+				<AlertDescription>访问权限已失效。</AlertDescription>
+			</Alert>
+		);
 	return (
 		<>
 			<div
@@ -212,22 +218,21 @@ export function ActiveConversation({
 				{timeline.status === "loading" && <p role="status">正在读取会话…</p>}
 				{(timeline.status === "disconnected" ||
 					timeline.status === "unavailable") && (
-					<div
-						role="alert"
-						className="space-y-2 border border-border bg-muted p-3"
-					>
-						<p>
+					<Alert className="space-y-2 bg-muted">
+						<AlertDescription>
 							会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。
-						</p>
+						</AlertDescription>
 						<Button variant="outline" onClick={() => void reader.reconnect()}>
 							重新连接
 						</Button>
-					</div>
+					</Alert>
 				)}
 				{conversation?.status === "unavailable" && (
-					<p role="alert">
-						当前会话不可用，历史只读。请使用上方入口明确新建会话。
-					</p>
+					<Alert>
+						<AlertDescription>
+							当前会话不可用，历史只读。请使用上方入口明确新建会话。
+						</AlertDescription>
+					</Alert>
 				)}
 				{timeline.history && (
 					<ConversationMessages
