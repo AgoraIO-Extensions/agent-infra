@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
-import type { AgentConfigurationRecordV1 } from "@agent-infra/platform-core";
+import type {
+	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
+} from "@agent-infra/platform-core";
 import { expect, it } from "vitest";
 import { catalogFixture } from "./catalog.fixture.js";
 import {
@@ -13,8 +16,8 @@ import {
 
 const hash = (s: string) =>
 	createHash("sha256").update(s).digest("hex").toUpperCase();
-const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV1 = {
-	schemaVersion: 1,
+const configurationV2: AgentConfigurationRecordV2 = {
+	schemaVersion: 2,
 	agentId: "agent-a",
 	revision: 1,
 	source: {
@@ -28,8 +31,6 @@ const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV1 = {
 		connectionEnabled: false,
 	},
 	modelConfiguration: null,
-	actions: [],
-	actionSetRevision: "actions-a",
 	environment: [],
 	secrets: [],
 	channels: [],
@@ -38,10 +39,13 @@ const agentConfigurationConformanceRecordV1: AgentConfigurationRecordV1 = {
 async function projection(
 	protocol: "anthropic-messages-v1" | "openai-responses-v1",
 	templateProtocol = protocol,
+	configuration:
+		| AgentConfigurationRecordV1
+		| AgentConfigurationRecordV2 = configurationV2,
 ) {
 	return projectRuntimeModelConfigurationV1({
 		configuration: {
-			...agentConfigurationConformanceRecordV1,
+			...configuration,
 			environment: [],
 			secrets: [],
 			modelConfiguration: {
@@ -93,6 +97,22 @@ async function projection(
 		}),
 	});
 }
+
+it("preserves model projection while configuration records migrate from V1 to V2", async () => {
+	const historical: AgentConfigurationRecordV1 = {
+		...configurationV2,
+		schemaVersion: 1,
+		actions: [],
+		actionSetRevision: "historical-actions",
+	};
+	expect(
+		await projection(
+			"anthropic-messages-v1",
+			"anthropic-messages-v1",
+			historical,
+		),
+	).toEqual(await projection("anthropic-messages-v1"));
+});
 
 it("projects Messages as V3 with its per-option credential and refuses a template/profile mismatch", async () => {
 	const projected = await projection("anthropic-messages-v1");
