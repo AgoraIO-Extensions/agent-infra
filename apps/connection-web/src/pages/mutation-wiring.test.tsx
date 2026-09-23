@@ -581,7 +581,11 @@ describe("Connection 管理 mutation wiring", () => {
 	it("同一连接器下切换账号时只显示该账号的客户端授权", async () => {
 		const overview = await api.getConnections();
 		overview.overview.connections.push({
-			actionVersionIds: ["github.get_repository@v2"],
+			actionVersionIds: [
+				"github.get_repository@v8",
+				"github.get_pull_request@v7",
+				"github.list_repositories@v8",
+			],
 			displayName: "AgoraIO-Extensions",
 			externalAccount: "agora-release-bot",
 			id: "connection-github-shared",
@@ -622,6 +626,7 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 		expect(screen.getByText("RehoboamAI")).toBeTruthy();
 		expect(screen.queryByText("Codex")).toBeNull();
+		expect(screen.getByText("授权版本 v7, v8")).toBeTruthy();
 	});
 
 	it("Token 页面调用签发和撤销 API", async () => {
