@@ -21,6 +21,12 @@ Connection 相关工作还必须遵守 [Connection M1 HLD](docs/architecture/HLD
 
 ## Agent skills
 
+### Local Codex task routing
+
+- 本地 Codex 处理编码或技术方案时遵循 `ponytail`：先理解实际调用链，再选择满足需求的最小实现。
+- 本地实现任务在确认完整的 primary Issue 后使用仓库级 `implement` Skill，并按[开发工作流](docs/architecture/SPEC-ai-native-development-workflow.md#21-matt-skill-交付路径)完成验证和评审；需求讨论、调研和只读评审不进入实现流程。
+- 每次开始 Web UI 相关操作前，先通过 OpenDesign MCP 回读并核对本次任务对应的原型，再使用 `ui-ux-pro-max` Skill 指导界面和交互。无法确认原型时，先报告缺口，不把未经核对的原型当作当前设计依据。
+
 ### Issue tracker
 
 Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues；规划优先级使用
