@@ -56,7 +56,9 @@ export class RehoboamAdapter
 		this.gatewayApiKey = gatewayApiKey;
 	}
 
-	async validateCredential(accessToken: string) {
+	async validateCredential(encodedCredential: string) {
+		const { password, username } = parseLoginCredential(encodedCredential);
+		const accessToken = await this.login(username, password);
 		const identity = await this.getCurrentUser(accessToken);
 		return {
 			accessToken,
@@ -79,19 +81,43 @@ export class RehoboamAdapter
 		return this.getCurrentUser(input.credential.accessToken);
 	}
 
+	private async login(username: string, password: string) {
+		const data = await this.requestJson("/mcp/v1/auth/login", {
+			body: JSON.stringify({ password, username }),
+			headers: { "content-type": "application/json" },
+			method: "POST",
+		});
+		const accessToken = typeof data.token === "string" ? data.token : "";
+		if (!accessToken) {
+			throw invalidCredential("Rehoboam login did not return a token");
+		}
+		return accessToken;
+	}
+
 	private async getCurrentUser(accessToken: string) {
 		if (!accessToken) throw invalidCredential("Rehoboam token is required");
-		const response = await this.fetcher(
-			new URL("/api/connection/whoami", apiOrigin),
-			{
-				headers: {
-					accept: "application/json",
-					apiKey: this.gatewayApiKey,
-					authorization: `Bearer ${accessToken}`,
-				},
-				redirect: "manual",
+		const data = await this.requestJson("/api/connection/whoami", {
+			headers: { authorization: `Bearer ${accessToken}` },
+		});
+		const userId = typeof data.user_id === "string" ? data.user_id : "";
+		const username = typeof data.username === "string" ? data.username : "";
+		const role = typeof data.role === "string" ? data.role : null;
+		if (!userId || !username) {
+			throw invalidCredential("Rehoboam identity is incomplete");
+		}
+		return { role, user_id: userId, username };
+	}
+
+	private async requestJson(path: string, init: RequestInit) {
+		const response = await this.fetcher(new URL(path, apiOrigin), {
+			...init,
+			headers: {
+				accept: "application/json",
+				apiKey: this.gatewayApiKey,
+				...init.headers,
 			},
-		);
+			redirect: "manual",
+		});
 		if (response.status === 401 || response.status === 403) {
 			throw invalidCredential("Rehoboam credential was rejected");
 		}
@@ -117,14 +143,20 @@ export class RehoboamAdapter
 			envelope && typeof envelope === "object" && "data" in envelope
 				? (envelope.data as Record<string, unknown>)
 				: undefined;
-		const userId = typeof data?.user_id === "string" ? data.user_id : "";
-		const username = typeof data?.username === "string" ? data.username : "";
-		const role = typeof data?.role === "string" ? data.role : null;
-		if (!userId || !username) {
-			throw invalidCredential("Rehoboam identity is incomplete");
-		}
-		return { role, user_id: userId, username };
+		if (!data) throw providerError("Rehoboam response is missing data");
+		return data;
 	}
+}
+
+function parseLoginCredential(encoded: string) {
+	try {
+		const value = JSON.parse(encoded) as Record<string, unknown>;
+		const username =
+			typeof value.username === "string" ? value.username.trim() : "";
+		const password = typeof value.password === "string" ? value.password : "";
+		if (username && password) return { password, username };
+	} catch {}
+	throw invalidCredential("Rehoboam username and password are required");
 }
 
 function invalidCredential(message: string) {
