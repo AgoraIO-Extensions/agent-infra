@@ -85,4 +85,3 @@ export type {
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
 export * from "./workload-reconciliation.js";
-export * from "./workload-secret-recovery.js";

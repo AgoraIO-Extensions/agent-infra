@@ -48,7 +48,10 @@ function fixture() {
 		runtimeManifest: { interactionMode: "platform-adapter" as const },
 		route: { exposure: "internal-only" as const },
 	};
-	const version = { configuration, deployment };
+	const version = {
+		configuration,
+		deployment,
+	} as unknown as import("./workload-reconciliation.js").WorkloadVersionV1;
 	const facts: AgentRuntimePresentationFactsV1 = {
 		management: structuredClone(management),
 		configuration,

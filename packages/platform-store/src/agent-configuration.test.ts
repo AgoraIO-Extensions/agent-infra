@@ -1424,7 +1424,10 @@ async function runtimePresentationFixture(record?: AgentConfigurationRecordV2) {
 		organizationIds: [],
 		isAdministrator: false,
 	};
-	const version = { configuration, deployment };
+	const version = {
+		configuration,
+		deployment,
+	} as unknown as import("@agent-infra/platform-core").WorkloadVersionV1;
 	const state = {
 		schemaVersion: 1,
 		agentId: "agent_01",

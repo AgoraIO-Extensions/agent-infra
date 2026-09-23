@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
+import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
 import {
 	type AgentManagementDecisionV1,
 	type AgentManagementStateV1,
@@ -7,10 +7,6 @@ import {
 	createAgentManagementV1,
 } from "./agent-management.js";
 import type { SecretActivationStorePortV1 } from "./secret-activation.js";
-import {
-	hasUnverifiedWorkloadSecretRecoveryV1,
-	type WorkloadSecretRecoveryV1,
-} from "./workload-secret-recovery.js";
 
 export type WorkloadPhaseV1 =
 	| "preflight"
@@ -30,66 +26,12 @@ export interface WorkloadIdentityV1 {
 	readonly generation: number;
 }
 
-/** Deployment-owned load evidence, private to reconciliation and Dispatch. */
-export interface WorkloadExecutionCapacityV1 {
-	readonly schemaVersion: 1;
-	readonly imageDigest: string;
-	readonly resourceProfileRef: string;
-	readonly resourceConfigurationHash: string;
-	readonly maximumConcurrentExecutions: number;
-	readonly conformanceEvidenceHash: string;
-}
-
-export function parseWorkloadExecutionCapacityV1(
-	input: unknown,
-): WorkloadExecutionCapacityV1 {
-	if (!input || typeof input !== "object" || Array.isArray(input))
-		throw new TypeError("Workload execution capacity is invalid");
-	const value = input as Record<string, unknown>;
-	const keys = [
-		"schemaVersion",
-		"imageDigest",
-		"resourceProfileRef",
-		"resourceConfigurationHash",
-		"maximumConcurrentExecutions",
-		"conformanceEvidenceHash",
-	];
-	if (
-		Object.keys(value).length !== keys.length ||
-		keys.some((key) => !Object.hasOwn(value, key)) ||
-		value.schemaVersion !== 1 ||
-		typeof value.imageDigest !== "string" ||
-		!/^sha256:[a-f0-9]{64}$/.test(value.imageDigest) ||
-		typeof value.resourceProfileRef !== "string" ||
-		!/^[\x21-\x7e]{1,256}$/.test(value.resourceProfileRef) ||
-		typeof value.resourceConfigurationHash !== "string" ||
-		!/^[a-f0-9]{64}$/.test(value.resourceConfigurationHash) ||
-		typeof value.conformanceEvidenceHash !== "string" ||
-		!/^[a-f0-9]{64}$/.test(value.conformanceEvidenceHash) ||
-		typeof value.maximumConcurrentExecutions !== "number" ||
-		!Number.isSafeInteger(value.maximumConcurrentExecutions) ||
-		value.maximumConcurrentExecutions < 1
-	)
-		throw new TypeError("Workload execution capacity is invalid");
-	return {
-		schemaVersion: 1,
-		imageDigest: value.imageDigest,
-		resourceProfileRef: value.resourceProfileRef,
-		resourceConfigurationHash: value.resourceConfigurationHash,
-		maximumConcurrentExecutions: value.maximumConcurrentExecutions,
-		conformanceEvidenceHash: value.conformanceEvidenceHash,
-	};
-}
-
 export interface WorkloadVersionV1 {
-	readonly secretRecoveries?: readonly WorkloadSecretRecoveryV1[];
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecordV1;
 	/** Validated, credential-free deployment contract; never a Kubernetes object. */
 	readonly deployment: unknown;
 	/** Private Worker projection, persisted with candidate/verified; never public desired state. */
 	readonly modelProjection?: unknown;
-	/** Absent on legacy or unverified deployments; never inferred from loop limits. */
-	readonly executionCapacity?: WorkloadExecutionCapacityV1;
 }
 
 export interface WorkloadReconciliationStateV1 {
@@ -126,7 +68,7 @@ export interface WorkloadSecretBindingV1 {
 
 export interface WorkloadReconciliationInputV1 {
 	readonly management: AgentManagementStateV1;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecordV1;
 	readonly state: WorkloadReconciliationStateV1 | null;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -170,7 +112,7 @@ export interface WorkloadRuntimePortV1 {
 		state: WorkloadReconciliationStateV1,
 		stopped: boolean,
 		input: WorkloadReconciliationInputV1,
-	): Promise<WorkloadIdentityV1 | WorkloadPreparationV1 | "pending" | null>;
+	): Promise<WorkloadIdentityV1 | "pending" | null>;
 	observe(
 		state: WorkloadReconciliationStateV1,
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted">;
@@ -182,19 +124,12 @@ export interface WorkloadRuntimePortV1 {
 	discardUnactivatedSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
-	): Promise<boolean | WorkloadPreparationV1>;
+	): Promise<boolean>;
 	cleanup(
 		state: WorkloadReconciliationStateV1,
 		deleteNewVolume: boolean,
 		input: WorkloadReconciliationInputV1,
-	): Promise<boolean | WorkloadPreparationV1>;
-}
-
-/** Persist a resource intention or observed identity before its next side effect. */
-export interface WorkloadPreparationV1 {
-	readonly status: "prepared";
-	readonly candidate: WorkloadVersionV1;
-	readonly identity: WorkloadIdentityV1 | null;
+	): Promise<boolean>;
 }
 
 function nextRevision(revision: number): number {
@@ -238,12 +173,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 					const supersedesUnverifiedCandidate =
 						state &&
 						state.candidate.deployment !== null &&
-						(state.candidate.configuration.revision !==
-							state.verified?.configuration.revision ||
-							hasUnverifiedWorkloadSecretRecoveryV1(
-								state.candidate,
-								state.verified,
-							)) &&
+						state.candidate.configuration.revision !==
+							state.verified?.configuration.revision &&
 						[
 							"closing",
 							"applying",
@@ -254,10 +185,6 @@ export function createWorkloadReconciliationV1(dependencies: {
 					if (
 						state &&
 						(state.phase === "cleaning" ||
-							hasUnverifiedWorkloadSecretRecoveryV1(
-								state.candidate,
-								state.verified,
-							) ||
 							(!state.rollback && supersedesUnverifiedCandidate))
 					) {
 						const interruptedState: WorkloadReconciliationStateV1 = {
@@ -333,15 +260,6 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return advance("applying");
 						case "applying": {
 							const identity = await runtime.apply(state, stopped, input);
-							if (
-								identity &&
-								typeof identity === "object" &&
-								"status" in identity
-							)
-								return advance("applying", {
-									candidate: identity.candidate,
-									identity: identity.identity,
-								});
 							if (identity === "pending") {
 								if (!stopped && state.attempts + 1 >= maximumAttempts)
 									return failed("reconciliation_failed");
@@ -420,23 +338,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 							const cleaned = preservesResources
 								? await runtime.discardUnactivatedSecrets(state, input)
 								: await runtime.cleanup(state, state.verified === null, input);
-							if (typeof cleaned === "object")
-								return advance("cleaning", {
-									candidate: cleaned.candidate,
-									identity: cleaned.identity,
-								});
 							if (!cleaned) return state;
-							const preservesIdentity =
-								preservesResources &&
-								!hasUnverifiedWorkloadSecretRecoveryV1(
-									state.candidate,
-									state.verified,
-								);
 							if (state.cleanupInterrupted) {
 								const { cleanupInterrupted: _, ...retained } = state;
 								return {
 									...retained,
-									identity: preservesIdentity ? state.identity : null,
+									identity: preservesResources ? state.identity : null,
 									phase: stopped ? "closing" : "preflight",
 									candidate: stopped
 										? state.candidate
@@ -450,7 +357,6 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (state.verified && !state.rollback) {
 								return advance("applying", {
 									candidate: state.verified,
-									identity: preservesIdentity ? state.identity : null,
 									revision: nextRevision(state.revision),
 									rollback: true,
 								});
@@ -463,19 +369,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 							return state;
 						case "failed":
 							await runtime.closeRoute(state);
-							{
-								const cleaned = await runtime.cleanup(
-									state,
-									state.verified === null,
-									input,
-								);
-								if (typeof cleaned === "object")
-									return advance("cleaning", {
-										candidate: cleaned.candidate,
-										identity: cleaned.identity,
-									});
-								return cleaned ? state : advance("cleaning");
-							}
+							if (
+								!(await runtime.cleanup(state, state.verified === null, input))
+							)
+								return advance("cleaning");
+							return state;
 					}
 				} catch (error) {
 					if (state.phase === "preflight") {
