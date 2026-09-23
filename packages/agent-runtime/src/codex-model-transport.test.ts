@@ -1768,8 +1768,9 @@ describe("Codex model transport", () => {
 		const value = await transport(target, false);
 		const expiringTurn = { threadId: "thread-expiring", turnId: "turn-one" };
 		const unrelatedTurn = { threadId: "thread-unrelated", turnId: "turn-one" };
+		const deadline = Date.now() + 50;
 		const admission = value.beginTurnAdmission(
-			Date.now() + 50,
+			deadline,
 			selectedInternalModel,
 			expiringTurn.threadId,
 			"high",
@@ -1787,11 +1788,18 @@ describe("Codex model transport", () => {
 		expect(await unrelatedResponse.text()).toBe(completedEvent());
 		const expiredResponse = await expiringRequest;
 		expect(expiredResponse.status).toBe(409);
-		expect(value.registerTurn(admission, expiringTurn)).toBe(false);
-		expect(value.recognizeTurn(admission, expiringTurn)).toBe(false);
-		const lateResponse = await request(value.modelAccess, {}, expiringTurn);
-		expect(lateResponse.status).toBe(409);
-		expect(calls).toBe(1);
+		// The HTTP waiter's timer can settle before the wall-clock deadline.
+		// Check late admission with that original absolute deadline reached.
+		const clock = vi.spyOn(Date, "now").mockReturnValue(deadline);
+		try {
+			expect(value.registerTurn(admission, expiringTurn)).toBe(false);
+			expect(value.recognizeTurn(admission, expiringTurn)).toBe(false);
+			const lateResponse = await request(value.modelAccess, {}, expiringTurn);
+			expect(lateResponse.status).toBe(409);
+			expect(calls).toBe(1);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("never reuses concurrent pending admissions after cancellation", async () => {
@@ -2525,35 +2533,89 @@ it("retains access for an admitted native Turn while capacity fills", async () =
 	expect(value.modelAccessFor(first)).toEqual(firstAccess);
 });
 
-it("evicts an idle bound native thread with its Conversation access", async () => {
-	const value = await openProductionModelTransport(
-		[
-			{
-				internalModel: selectedInternalModel,
-				model: "synthetic-selected",
-				endpoint: "http://127.0.0.1:1",
-				credential,
-			},
-		],
-		testObserver,
-	);
-	close.push(value.close);
-	const first = "a".repeat(64);
-	const threadId = "thread-cancelled";
-	const firstAccess = value.modelAccessFor(first);
-	value.bindThread(first, threadId);
-	await value.cancelTurn({
-		conversationKey: first,
-		threadId,
-		turnId: "turn-cancelled",
-	});
-	for (let index = 1; index < 1024; index++)
-		value.modelAccessFor(index.toString(16).padStart(64, "0"));
-	expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
-	const reopened = value.modelAccessFor(first);
-	expect(reopened.credential).not.toBe(firstAccess.credential);
-	expect(
-		(await request(firstAccess, {}, { threadId, turnId: "turn-cancelled" }))
-			.status,
-	).toBe(401);
-});
+it.each(["explicit access revoke", "LRU eviction"] as const)(
+	"retains cancelled Turn revocation across %s of Conversation access",
+	async (retirement) => {
+		let upstreamCalls = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				upstreamCalls++;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await openProductionModelTransport(
+			[
+				{
+					internalModel: selectedInternalModel,
+					model: "synthetic-selected",
+					endpoint: target,
+					credential,
+				},
+			],
+			testObserver,
+		);
+		close.push(value.close);
+		const conversationKey = "a".repeat(64);
+		const threadId = "thread-cancelled";
+		const cancelledTurn = {
+			conversationKey,
+			threadId,
+			turnId: "turn-cancelled",
+		};
+		const firstAccess = value.modelAccessFor(conversationKey);
+		value.bindThread(conversationKey, threadId);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect(value.recognizeTurn(admission, cancelledTurn)).toBe(true);
+		expect(value.registerTurn(admission, cancelledTurn)).toBe(true);
+		await value.cancelTurn(cancelledTurn);
+		if (retirement === "explicit access revoke") {
+			value.revokeConversationAccess(conversationKey);
+		} else {
+			for (let index = 1; index < 1024; index++)
+				value.modelAccessFor(index.toString(16).padStart(64, "0"));
+			expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
+		}
+		const reopened = value.modelAccessFor(conversationKey);
+		expect(reopened.credential).not.toBe(firstAccess.credential);
+		const retired = await request(firstAccess, {}, cancelledTurn);
+		expect(retired.status).toBe(401);
+		await retired.text();
+
+		value.bindThread(conversationKey, threadId);
+		const freshAdmission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect.soft(value.recognizeTurn(freshAdmission, cancelledTurn)).toBe(false);
+		expect.soft(value.registerTurn(freshAdmission, cancelledTurn)).toBe(false);
+		const late = await request(reopened, {}, cancelledTurn);
+		expect.soft(late.status).toBe(409);
+		await late.text();
+		expect.soft(upstreamCalls).toBe(0);
+
+		const nextTurn = { ...cancelledTurn, turnId: "turn-next" };
+		const nextAdmission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect(value.recognizeTurn(nextAdmission, nextTurn)).toBe(true);
+		expect(value.registerTurn(nextAdmission, nextTurn)).toBe(true);
+		const live = await request(reopened, {}, nextTurn);
+		expect(live.status).toBe(200);
+		await live.text();
+		expect(upstreamCalls).toBe(1);
+	},
+);

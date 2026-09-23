@@ -1044,7 +1044,7 @@ export async function openCodexModelTransport(
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
 	const admittedTurns = new Map<string, ModelTurnSelection>();
-	// Explicit cancellation is final for this token's lifetime; abandoning a
+	// Explicit cancellation is final for this transport's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
 	const revokedTurns = new Set<string>();
 	const recognizedTurns = new Map<string, Set<CodexModelTurnAdmission>>();
@@ -1077,8 +1077,6 @@ export async function openCodexModelTransport(
 			if (key.startsWith(prefix)) boundThreads.delete(key);
 		for (const key of readyModelTurns)
 			if (key.startsWith(prefix)) readyModelTurns.delete(key);
-		for (const key of revokedTurns)
-			if (key.startsWith(prefix)) revokedTurns.delete(key);
 		for (const key of admittedTurns.keys())
 			if (key.startsWith(prefix)) admittedTurns.delete(key);
 		return true;
@@ -1597,8 +1595,6 @@ export async function openCodexModelTransport(
 			const prefix = `${conversationKey}\u0000`;
 			for (const key of boundThreads)
 				if (key.startsWith(prefix)) boundThreads.delete(key);
-			for (const key of revokedTurns)
-				if (key.startsWith(prefix)) revokedTurns.delete(key);
 			for (const [key, pending] of pendingThreads) {
 				if (key.startsWith(prefix))
 					for (const admission of [...pending]) closeAdmission(admission);

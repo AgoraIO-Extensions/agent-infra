@@ -1900,6 +1900,90 @@ describe("Codex native source lifecycle", () => {
 		},
 	);
 
+	it("denies a late reserve replay without rewriting the committed source lineage", async () => {
+		let replaying = false;
+		const entered = Promise.withResolvers<void>();
+		const delayed = Promise.withResolvers<void>();
+		const env = await setup(async (action) => {
+			if (action.purpose === "source-reserve" && replaying) {
+				entered.resolve();
+				await delayed.promise;
+			}
+		});
+		const execution = await env.start();
+		const parent = await permit(
+			execution.bridge,
+			intent(execution.bridge, { toolName: "spawn_agent" }),
+		);
+		const begin = started(parent.request, parent.response);
+		await execution.bridge.callback(begin);
+		const reserve = reserveSource(parent);
+		await sourceAck(execution.bridge, reserve);
+		const committedReserve = journal(await env.saved(), execution)
+			.nativeSources?.[reserve.reservation.reservationId];
+		expect(committedReserve).toMatchObject({
+			reserve: { requestId: reserve.requestId },
+			reserveAuthorized: true,
+		});
+		expect(committedReserve).not.toHaveProperty("reserveDenied");
+
+		// The original ACK has settled, so this request is a fresh-authorized
+		// replay rather than a duplicate coalesced with the original request.
+		replaying = true;
+		const replay = execution.bridge.callback(reserve);
+		void replay.catch(() => {});
+		try {
+			await entered.promise;
+			const bind = bindSource(reserve);
+			execution.bridge.registerSource(bind.source);
+			await sourceAck(execution.bridge, bind);
+			const committedBind = journal(await env.saved(), execution)
+				.nativeSources?.[reserve.reservation.reservationId];
+			expect(committedBind).toMatchObject({
+				...committedReserve,
+				bind: { requestId: bind.requestId },
+				source: bind.source,
+			});
+			delayed.reject(
+				new RuntimeHostError(
+					"RUNTIME_GRANT_INVALID",
+					"synthetic late replay denial",
+					403,
+				),
+			);
+			await expect(replay).resolves.toEqual({
+				schemaVersion: 1,
+				requestId: reserve.requestId,
+				phase: "source-reserve",
+				request: reserve,
+				decision: "deny",
+				reason: "authorization_denied",
+			});
+			expect(
+				journal(await env.saved(), execution).nativeSources?.[
+					reserve.reservation.reservationId
+				],
+			).toEqual(committedBind);
+
+			execution.bridge.completeSource(bind.source);
+			await sourceAck(execution.bridge, terminalSource(bind));
+			await execution.bridge.callback(completed(begin));
+			await execution.bridge.completeInferenceTurn();
+			await env.driver.close();
+			const reopened = await env.reopen();
+			await expect(
+				reopened.getStatus(
+					execution.nativeSessionRef,
+					execution.command.executionId,
+				),
+			).resolves.toBe("completed");
+			expect(execution.bridge.native.turnStarts).toBe(1);
+		} finally {
+			delayed.resolve();
+			await replay.catch(() => {});
+		}
+	});
+
 	it("rejects a conflicting pending bind instead of overwriting the receipt that already received ACK", async () => {
 		let binding = false;
 		let bindingChecks = 0;

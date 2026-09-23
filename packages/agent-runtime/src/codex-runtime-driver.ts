@@ -5500,6 +5500,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		const reply = (
 			resolved: ReturnType<typeof locate>,
+			currentReserveDenial?: CodexNativeSourceRecord["reserveDenied"],
 		): CodexNativeSourceResponseV1 => {
 			const common = {
 				schemaVersion: 1 as const,
@@ -5511,7 +5512,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			) {
 				const denied =
 					request.phase === "source-reserve"
-						? resolved.source?.reserveDenied
+						? (resolved.source?.reserveDenied ?? currentReserveDenial)
 						: resolved.source?.bindDenied;
 				if (denied)
 					return {
@@ -5739,13 +5740,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (prior) {
 				checkReceipt(prior);
 				if (decisionRecorded(source)) {
-					// A source-reserve replay is freshly authorized above. Preserve
-					// that denial even when an earlier attempt recorded an ACK; a
-					// revoked or expired grant must not be revived by replay.
-					if (request.phase === "source-reserve" && prepared.replay && denied) {
-						source.reserveDenied = denied;
-						delete source.reserveAuthorized;
-					}
+					// Keep the committed receipt and source lineage immutable. A fresh
+					// authorization denial refuses this response, not the prior admission.
 					return resolved;
 				}
 			}
@@ -5967,7 +5963,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.notifyEventStream(
 			this.eventStreamKey(saved.nativeSessionRef, saved.execution.executionId),
 		);
-		return reply(saved);
+		return reply(
+			saved,
+			request.phase === "source-reserve" ? denied : undefined,
+		);
 	}
 
 	private async prepareModelRequest(
