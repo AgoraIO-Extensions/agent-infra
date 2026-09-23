@@ -148,8 +148,8 @@ URL、路径、Header、用户身份或任意 Rehoboam
 业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
 Grant 或凭证。
 
-Rehoboam Release workflow 作为后续 immutable `rehoboam-connection-v4` 发布：保留
-`rehoboam.get_current_user@v3`，新增有界的 Release list/detail、Release Pipeline discovery、运行预检、
+Rehoboam Release workflow 作为后续 immutable `rehoboam-connection-v4` 发布：旧 Release 保留
+`rehoboam.get_current_user@v3`，v4 发布新的 `rehoboam.get_current_user@v4` 并新增有界的 Release list/detail、Release Pipeline discovery、运行预检、
 执行/审批、Execution Request 和 Release-scoped Job result Actions。READ 要求
 `rehoboam.release.read`，WRITE 要求 `rehoboam.release.write`；Provider scope 只能来自 Rehoboam
 `whoami` 对当前 PAT scope 的服务端证明。执行目标必须是指定 Release 拥有的 Card，禁止任意全局 Pipeline、

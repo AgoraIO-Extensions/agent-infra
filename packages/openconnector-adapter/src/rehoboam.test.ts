@@ -17,7 +17,7 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v3",
+			"rehoboam.get_current_user@v4",
 			"rehoboam.list_releases@v1",
 			"rehoboam.get_release@v1",
 			"rehoboam.list_release_pipelines@v1",
