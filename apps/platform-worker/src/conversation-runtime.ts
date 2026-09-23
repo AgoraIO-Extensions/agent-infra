@@ -158,7 +158,7 @@ export function createConversationRuntimeV2(
 		channelAuthorizationCurrent: (record, signal) =>
 			options.channelAuthorizationCurrent
 				? bounded(options.channelAuthorizationCurrent(record, signal), signal)
-				: Promise.resolve(!/^wecom_(bot|app):/.test(record.boundary.channelId)),
+				: unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE"),
 		readRuntimeState: (claim, signal) =>
 			bounded(options.dispatchStore.readRuntimeState({ claim }), signal),
 		readAuthorization: (executionId, signal) =>

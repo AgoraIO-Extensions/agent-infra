@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
+	type ConversationRuntimeOptionsV2,
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
@@ -22,7 +23,12 @@ const verify = createRuntimeExecutionGrantVerifierV2(
 	new Map([["signing", keys.publicKey]]),
 );
 const now = 1_800_000_000_000;
-function harness(reconnectDelayMs = 1) {
+function harness(
+	reconnectDelayMs = 1,
+	channelAuthorizationCurrent:
+		| ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
+		| null = async (record) => record.boundary.channelId === "web",
+) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		itemId: "item",
@@ -224,6 +230,7 @@ function harness(reconnectDelayMs = 1) {
 		workerId: "transport",
 	}));
 	const runtime = createConversationRuntimeV2({
+		...(channelAuthorizationCurrent ? { channelAuthorizationCurrent } : {}),
 		workerId: "instance",
 		signing: {
 			issuer: "platform",
@@ -306,6 +313,46 @@ function harness(reconnectDelayMs = 1) {
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it.each(["web", "partner:channel", "wecom_bot:bot", "wecom_app:app"])(
+		"does not authorize %s without a current channel authority",
+		async (channelId) => {
+			const h = harness(1, null);
+			const record = h.record();
+			if (!record) throw new Error("missing authorization");
+			Object.assign(h.claim, { channelId });
+			Object.assign(record.boundary, { channelId });
+			expect(
+				await h.runtime.authorization.authorize({ ...h.claim, claim: h.claim }),
+			).toEqual({ outcome: "unavailable" });
+			expect(h.authorizationStore.recordControl).not.toHaveBeenCalled();
+			expect(h.record()?.revokedAt).toBeNull();
+			expect(h.fetcher).not.toHaveBeenCalled();
+			h.runtime.close();
+		},
+	);
+	it("rechecks configured channel authority before issuing a business Grant", async () => {
+		let current = true;
+		const channelAuthorizationCurrent = vi.fn(async () => current);
+		const h = harness(1, channelAuthorizationCurrent);
+		const record = h.record();
+		if (!record) throw new Error("missing authorization");
+		Object.assign(h.claim, { channelId: "partner:channel" });
+		Object.assign(record.boundary, { channelId: "partner:channel" });
+		const reference = await h.authorize();
+		expect(channelAuthorizationCurrent).toHaveBeenCalled();
+		current = false;
+		await expect(
+			h.runtime.runtimeHost.dispatch(h.request(reference)),
+		).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+		expect(
+			h.fetcher.mock.calls.some(([url]) => String(url).endsWith("/turns")),
+		).toBe(false);
+		expect(h.sent().claims).toMatchObject({
+			purpose: "control",
+			reason: "authorization_revoked",
+		});
+		h.runtime.close();
+	});
 	it("recovers principal-only history using migration control with no current identity or new boundary", async () => {
 		const h = harness();
 		const original = h.useLegacy();
