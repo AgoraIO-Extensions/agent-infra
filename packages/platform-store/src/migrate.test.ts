@@ -114,6 +114,60 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
+	it.each(["file-authority", "configuration-v2"] as const)(
+		"upgrades the existing %s migration history without losing either schema",
+		async (history) => {
+			const database = await startPostgresTestDatabase("migration-branches");
+			const client = postgres(database.databaseUrl, { max: 1 });
+			try {
+				await client.unsafe(`CREATE SCHEMA platform_migrations;
+					CREATE TABLE platform_migrations.history
+					(id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`);
+				const legacy =
+					history === "file-authority"
+						? migrations.slice(0, 14)
+						: migrations.slice(0, 15);
+				for (const migration of legacy) {
+					for (const statement of migration.sql) await client.unsafe(statement);
+					await client`insert into platform_migrations.history (hash, created_at)
+						values (${migration.hash}, ${migration.folderMillis})`;
+				}
+				const previousHistory =
+					await client`select * from platform_migrations.history order by id`;
+				await builtStore.migratePlatformDatabase({
+					databaseUrl: database.databaseUrl,
+				});
+				const upgraded = await readPlatformCatalog(client);
+				expect(
+					upgraded.columns.filter((column) => column.table_name === "files"),
+				).not.toHaveLength(0);
+				expect(
+					upgraded.checks.find(
+						(check) =>
+							check.constraint_name === "agent_configuration_identity_matches",
+					)?.definition,
+				).toContain("'2'::jsonb");
+				const upgradedHistory =
+					await client`select * from platform_migrations.history order by id`;
+				expect(upgradedHistory.slice(0, previousHistory.length)).toEqual(
+					previousHistory,
+				);
+				expect(upgradedHistory).toHaveLength(migrations.length);
+				await builtStore.migratePlatformDatabase({
+					databaseUrl: database.databaseUrl,
+				});
+				expect(await readPlatformCatalog(client)).toEqual(upgraded);
+				expect(
+					await client`select * from platform_migrations.history order by id`,
+				).toEqual(upgradedHistory);
+			} finally {
+				await client.end();
+				await database.stop();
+			}
+		},
+		120_000,
+	);
+
 	it("applies, replays, and enforces the authored infrastructure schema", async () => {
 		await Promise.all([
 			builtStore.migratePlatformDatabase({ databaseUrl }),
@@ -300,7 +354,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 				where table_schema = 'platform'
 					and column_name ~ '(connection|kubernetes|credential|message_body)'
 				`;
-			expect(forbiddenObjects).toEqual([]);
+			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
+			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
+				"wecom_connections",
+				"wecom_receipts.connection_bot_id",
+				"wecom_receipts.connection_fence",
+				"wecom_setup_sessions.encrypted_credential",
+			]);
 
 			await expectConstraintFailure(
 				client`
@@ -513,6 +573,95 @@ describe("Platform PostgreSQL migration foundation", () => {
 			await client.end();
 		}
 	}, 120_000);
+
+	it("keeps task controls and generation tombstones bound to the original execution", async () => {
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		const client = postgres(databaseUrl, { max: 1 });
+		try {
+			for (const suffix of ["a", "b"]) {
+				await client`
+					insert into platform.conversations
+						(id, agent_id, actor_id, channel_id, status, session_generation,
+						 authorization_revision)
+					values (${`integrity-conversation-${suffix}`}, ${`agent-${suffix}`},
+						${`actor-${suffix}`}, 'web', 'ready', 1, 'authorization-1')
+				`;
+				await client`
+					insert into platform.conversation_executions
+						(execution_id, conversation_id, agent_id, actor_id, channel_id,
+						 turn_id, status, session_generation, authorization_revision, created_at)
+					values (${`integrity-execution-${suffix}`},
+						${`integrity-conversation-${suffix}`}, ${`agent-${suffix}`},
+						${`actor-${suffix}`}, 'web', ${`turn-${suffix}`}, 'completed', 1,
+						'authorization-1', now())
+				`;
+				await client`
+					insert into platform.task_authorization_records (id, execution_id, boundary)
+					values (${`integrity-authorization-${suffix}`},
+						${`integrity-execution-${suffix}`}, ${client.json({ schemaVersion: 1 })})
+				`;
+				await client`
+					insert into platform.task_control_records
+						(id, execution_id, authorization_record_id, reason)
+					values (${`integrity-control-${suffix}`}, ${`integrity-execution-${suffix}`},
+						${`integrity-authorization-${suffix}`}, 'generation_isolation')
+				`;
+			}
+			const originalControls = await client`
+				select id, execution_id, authorization_record_id
+				from platform.task_control_records
+				where id in ('integrity-control-a', 'integrity-control-b') order by id
+			`;
+			expect(originalControls).toHaveLength(2);
+			await expectConstraintFailure(
+				client`
+					update platform.task_control_records
+					set authorization_record_id = 'integrity-authorization-b'
+					where id = 'integrity-control-a'
+				`,
+				"task_control_authorization_execution_fk",
+			);
+			expect(
+				await client`
+					select id, execution_id, authorization_record_id
+					from platform.task_control_records
+					where id in ('integrity-control-a', 'integrity-control-b') order by id
+				`,
+			).toEqual(originalControls);
+
+			await client`
+				insert into platform.conversation_generation_tombstones
+					(operation_id, conversation_id, session_generation, execution_id, item_id,
+					 control_record_id, control_source_id, original_principal, host_session_ref,
+					 failure_code)
+				values ('integrity-isolation-a', 'integrity-conversation-a', 1,
+					'integrity-execution-a', 'integrity-outbox-a', 'integrity-control-a',
+					'integrity-source-a', ${client.json({ kind: "user", id: "actor-a" })},
+					'integrity-host-a', 'RUNTIME_SESSION_RECOVERY_FAILED')
+			`;
+			const originalTombstone = await client`
+				select * from platform.conversation_generation_tombstones
+				where operation_id = 'integrity-isolation-a'
+			`;
+			expect(originalTombstone).toHaveLength(1);
+			await expectConstraintFailure(
+				client`
+					update platform.conversation_generation_tombstones
+					set control_record_id = 'integrity-control-b'
+					where operation_id = 'integrity-isolation-a'
+				`,
+				"conversation_generation_control_execution_fk",
+			);
+			expect(
+				await client`
+					select * from platform.conversation_generation_tombstones
+					where operation_id = 'integrity-isolation-a'
+				`,
+			).toEqual(originalTombstone);
+		} finally {
+			await client.end();
+		}
+	});
 
 	it("upgrades legacy events with source binding and persistence time", async () => {
 		const upgradeDatabase = await startPostgresTestDatabase(
