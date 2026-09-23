@@ -7,6 +7,11 @@ import {
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	runtimeV2Keys,
+	signV3Fixture,
+	submitV3Fixture,
+} from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -135,12 +140,57 @@ describe("RuntimeHost environment assembly", () => {
 		await runtime.close();
 	});
 
+	it("binds V3 HTTP to the deployed Worker and closes its authority", async () => {
+		const runtime = await assembleRuntimeHost({
+			...(await environment()),
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-fixture",
+			AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "fixture",
+			AGENT_INFRA_RUNTIME_GRANT_ISSUER: "platform-fixture",
+			AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: runtimeV2Keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+		});
+		const app = createRuntimeHostApp(runtime);
+		const post = (workerId: string, now = Date.now()) =>
+			app.request("/internal/runtime/v3/turns", {
+				method: "POST",
+				headers: {
+					authorization: "Bearer synthetic-token",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(
+					signV3Fixture(submitV3Fixture(), "turn.submit", {
+						now,
+						claims: { workerId },
+					}),
+				),
+			});
+		try {
+			expect((await post("foreign-worker")).status).toBe(403);
+			expect((await post("worker-fixture", Date.now() - 60_000)).status).toBe(
+				403,
+			);
+			expect((await post("worker-fixture")).status).toBe(200);
+		} finally {
+			await runtime.close();
+		}
+		expect((await post("worker-fixture")).status).toBe(403);
+	});
+
 	it.each([false, true])(
 		"passes configuration without mutating PATH, failure=%s",
 		async (failure) => {
 			const values = await environment();
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
 			const originalPath = process.env.PATH;
+			const unboundAction = {
+				nativeSessionRef: "synthetic-unbound-session",
+				executionId: "synthetic-execution",
+				operationRef: "synthetic-operation",
+				attemptRef: "synthetic-attempt",
+				runtimeOperationId: "synthetic-runtime-operation",
+				kind: "model" as const,
+			};
 			let openedWith: CodexRuntimeDriverOptions | undefined;
 			runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
 				protocolVersion: 2,
@@ -153,6 +203,10 @@ describe("RuntimeHost environment assembly", () => {
 				async (options: CodexRuntimeDriverOptions) => {
 					openedWith = options;
 					expect(process.env.PATH).toBe(originalPath);
+					expect(options.authorizeExternalAction).toBeTypeOf("function");
+					await expect(
+						options.authorizeExternalAction?.(unboundAction),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 					if (failure) throw new Error("synthetic driver open failure");
 					return FakeRuntimeDriver.open(
 						join(dataDirectory, "codex-assembly-test.json"),
@@ -164,6 +218,7 @@ describe("RuntimeHost environment assembly", () => {
 				const assembling = assembleRuntimeHost({
 					...values,
 					AGENT_INFRA_RUNTIME_DRIVER: "codex",
+					AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
 					AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
 					AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
 					AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
@@ -188,6 +243,16 @@ describe("RuntimeHost environment assembly", () => {
 						"synthetic driver open failure",
 					);
 				else runtime = await assembling;
+				if (runtime) {
+					const authorization = vi.spyOn(
+						runtime.host,
+						"authorizeExternalAction",
+					);
+					await expect(
+						openedWith?.authorizeExternalAction?.(unboundAction),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+					expect(authorization).toHaveBeenCalledWith(unboundAction);
+				}
 				expect(process.env.PATH).toBe(originalPath);
 				expect(openedWith).toMatchObject({
 					path: join(dataDirectory, "codex-driver.json"),
@@ -213,6 +278,7 @@ describe("RuntimeHost environment assembly", () => {
 		{ AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: "synthetic-invalid-key" },
 		{ PORT: "synthetic-private-value" },
 		{ AGENT_INFRA_RUNTIME_DRIVER: "codex" },
+		{ AGENT_INFRA_RUNTIME_DRIVER: "codex", AGENT_INFRA_RUNTIME_WORKER_ID: "" },
 	])(
 		"rejects invalid deployment assembly before opening a listener",
 		async (patch) => {

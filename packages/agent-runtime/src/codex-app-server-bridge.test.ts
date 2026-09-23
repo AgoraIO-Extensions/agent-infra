@@ -49,6 +49,7 @@ vi.mock("node:crypto", async (importOriginal) => {
 import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_MODEL_ONLY_CONFIG,
 	CodexAppServerBridge,
 	runCodexConnectionRecovery,
 	validateModelAccess,
@@ -110,6 +111,7 @@ if (capturePath) {
       hasMcpConfiguration: Object.hasOwn(process.env, "AGENT_INFRA_TEST_MCP_CONFIGURATION"),
       hasConnectionCredential: Object.hasOwn(process.env, "AGENT_INFRA_TEST_CONNECTION_CREDENTIAL"),
       modelCredentialMatches: process.env.AGENT_INFRA_CODEX_MODEL_CREDENTIAL === "synthetic-loopback-token",
+      execServerUrl: process.env.CODEX_EXEC_SERVER_URL,
     },
   }) + "\\n");
 }
@@ -350,6 +352,7 @@ async function readCaptures(path: string, minimum = 1) {
 								hasMcpConfiguration: boolean;
 								hasConnectionCredential: boolean;
 								modelCredentialMatches: boolean;
+								execServerUrl?: string;
 							};
 						},
 				);
@@ -438,6 +441,64 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		]);
 		expect(capture.environmentKeys).toEqual(isolatedEnvironmentKeys);
 		await expectPathRemoved(capture.cwd);
+	});
+
+	it("fixes the official model-only launch policy without inheriting executor overrides", async () => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const previous = process.env.CODEX_EXEC_SERVER_URL;
+		process.env.CODEX_EXEC_SERVER_URL = "ws://127.0.0.1:9999";
+		try {
+			const bridge = await CodexAppServerBridge.open(
+				options({
+					modelOnly: true,
+					nativeBarrierRequired: false,
+					model: "synthetic/gpt-5.6-sol",
+					modelAccess: {
+						endpoint: "http://127.0.0.1:8080",
+						credential: "synthetic-loopback-token",
+					},
+				}),
+			);
+			try {
+				const captures = await readCaptures(capturePath, 3);
+				expect(
+					captures.some((capture) =>
+						capture.args.includes("--agent-infra-native-barrier-info"),
+					),
+				).toBe(false);
+				const server = captures[2];
+				expect(server?.environment.execServerUrl).toBe("none");
+				for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG))
+					expect(server?.args).toContain(`${key}=${JSON.stringify(value)}`);
+			} finally {
+				await bridge.close();
+			}
+		} finally {
+			if (previous === undefined) delete process.env.CODEX_EXEC_SERVER_URL;
+			else process.env.CODEX_EXEC_SERVER_URL = previous;
+		}
+	});
+
+	it.each([
+		{ nativeCallback: async () => ({}) },
+		{ nativeBarrierRequired: true },
+		{ modelAccess: undefined },
+	])("rejects incompatible official model-only launch %j", async (override) => {
+		await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(
+				options({
+					modelOnly: true,
+					nativeBarrierRequired: false,
+					model: "synthetic/gpt-5.6-sol",
+					modelAccess: {
+						endpoint: "http://127.0.0.1:8080",
+						credential: "synthetic-loopback-token",
+					},
+					...override,
+				}),
+			),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
 	});
 
 	it("supports the official upstream release without its derived-only barrier", async () => {

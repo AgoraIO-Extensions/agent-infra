@@ -93,5 +93,6 @@ export type {
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
 export * from "./task-authorization.js";
+export * from "./task-runtime-authorization.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";

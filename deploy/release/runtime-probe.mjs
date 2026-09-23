@@ -20,8 +20,8 @@ const requiredChecks = [
 	"http-failures-redacted",
 	"stream-failures-redacted",
 	"cancellation-aborts-upstream",
-	"native-sandboxed-tool-execution",
-	"native-sibling-conversation-denied",
+	"native-shell-rejected-without-side-effects",
+	"native-apply-patch-rejected-without-side-effects",
 	"recursive-native-storage-redacted",
 	"personal-configuration-isolated",
 ];
@@ -30,8 +30,9 @@ export function validateRuntimeProbe(result) {
 	if (
 		result?.schemaVersion !== 1 ||
 		result.status !== "passed" ||
+		result.capability !== "official-model-only" ||
 		Object.keys(result).sort().join(",") !==
-			"checks,codexVersion,configVersion,configurationSchemaVersion,schemaVersion,status" ||
+			"capability,checks,codexVersion,configVersion,configurationSchemaVersion,schemaVersion,status" ||
 		result.codexVersion !== "0.153.0" ||
 		result.configurationSchemaVersion !== 2 ||
 		result.configVersion !== "synthetic-active-v2" ||

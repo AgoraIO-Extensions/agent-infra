@@ -1,8 +1,10 @@
 import { pathToFileURL } from "node:url";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
+export * from "./conversation-runtime.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./runtime-grant-signer.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
 
@@ -34,6 +36,7 @@ import {
 
 export {
 	createWorkerRuntimeHostClientV1,
+	createWorkerRuntimeHostClientV3,
 	type WorkerRuntimeHostClientOptionsV1,
 } from "./runtime-host-client.js";
 export {

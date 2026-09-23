@@ -8,6 +8,7 @@
 	],
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",

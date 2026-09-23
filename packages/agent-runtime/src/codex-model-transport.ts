@@ -19,6 +19,7 @@ const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumEventBytes = 1024 * 1024;
 const maximumStreamBytes = 16 * 1024 * 1024;
 const maximumStreamEvents = 8_192;
+const maximumConversationAccessEntries = 1_024;
 const requestTimeoutMs = 120_000;
 const sanitizedFailureBody = JSON.stringify({
 	error: { message: "Model request failed" },
@@ -45,6 +46,56 @@ export interface CodexNativeTurn {
 	readonly turnId: string;
 }
 
+export interface CodexModelTurn extends CodexNativeTurn {
+	/** Bound by the server to one native process, never read from HTTP metadata. */
+	readonly conversationKey: string;
+}
+
+export interface CodexModelRequestContext extends CodexModelTurn {
+	readonly internalModel: string;
+	readonly reasoningLevel: string;
+}
+
+export interface CodexModelRequestUsage {
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	readonly cachedInputTokens?: number;
+}
+
+export type CodexModelRequestOutcome = {
+	readonly durationMs?: number;
+	readonly finishedAt?: string;
+} & (
+	| { readonly phase: "succeeded"; readonly usage?: CodexModelRequestUsage }
+	| {
+			readonly phase: "failed" | "unknown";
+			readonly failureCode:
+				| "request_not_started"
+				| "http_error"
+				| "provider_error"
+				| "transport_error"
+				| "invalid_response"
+				| "interrupted";
+	  }
+);
+
+export interface CodexModelRequestJournal {
+	/** Called only after the actual fetch has been invoked. */
+	started(startedAt: string): Promise<void>;
+	/** Must commit before a terminal response can be published to native. */
+	finish(outcome: CodexModelRequestOutcome): Promise<void>;
+}
+
+export interface CodexModelTransportObserver {
+	/** Official lane has no controlled native tool dispatch boundary. */
+	readonly modelOnly?: boolean;
+	/** Persists intent and checks current authorization before permitting fetch. */
+	beforeRequest(
+		context: CodexModelRequestContext,
+		signal: AbortSignal,
+	): Promise<CodexModelRequestJournal>;
+}
+
 declare const codexModelTurnAdmissionBrand: unique symbol;
 
 export interface CodexModelTurnAdmission {
@@ -66,10 +117,14 @@ interface AdmissionWaiter {
 	readonly settle: (model: ModelTurnSelection | undefined) => void;
 }
 
+interface ModelRequestWaiter {
+	readonly settle: (ready: boolean) => void;
+}
+
 interface ModelTurnAdmissionState extends ModelTurnSelection {
 	state: "open" | "consumed" | "closed";
 	readonly deadline: number;
-	readonly threadId: string;
+	readonly threadKey: string;
 	turnKey?: string;
 	timer?: ReturnType<typeof setTimeout>;
 }
@@ -104,6 +159,26 @@ async function failStream(response: ServerResponse) {
 	}
 	await write(response, sanitizedFailureEvent).catch(() => {});
 	if (!response.destroyed && !response.writableEnded) response.end();
+}
+
+async function awaitPersistence<T>(
+	operation: Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	if (signal?.aborted) throw new Error();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abort: (() => void) | undefined;
+	const interrupted = new Promise<never>((_, reject) => {
+		abort = () => reject(new Error());
+		signal?.addEventListener("abort", abort, { once: true });
+		timer = setTimeout(() => reject(new Error()), requestTimeoutMs);
+	});
+	try {
+		return await Promise.race([operation, interrupted]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		if (abort) signal?.removeEventListener("abort", abort);
+	}
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -144,16 +219,21 @@ function nativeTurnFromHeaders(
 	return { threadId: metadata.thread_id, turnId: metadata.turn_id };
 }
 
-function nativeTurnKey(turn: CodexNativeTurn) {
+function nativeThreadKey(conversationKey: string, threadId: string) {
+	return `${conversationKey}\u0000${threadId}`;
+}
+
+function nativeTurnKey(turn: CodexModelTurn) {
 	if (
 		!isPlainRecord(turn) ||
-		Object.keys(turn).length !== 2 ||
+		Object.keys(turn).length !== 3 ||
+		!/^[a-f0-9]{64}$/.test(turn.conversationKey) ||
 		!nativeTurnIdentifierPattern.test(turn.threadId) ||
 		!nativeTurnIdentifierPattern.test(turn.turnId)
 	) {
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	}
-	return `${turn.threadId}\u0000${turn.turnId}`;
+	return `${nativeThreadKey(turn.conversationKey, turn.threadId)}\u0000${turn.turnId}`;
 }
 
 function containsUnsafeModelData(
@@ -626,6 +706,7 @@ function semanticPayload(
 function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
+	modelOnly: boolean,
 ) {
 	if (
 		event.id !== undefined ||
@@ -643,6 +724,7 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
+		(modelOnly && !isModelOnlyEvent(value)) ||
 		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
@@ -667,6 +749,7 @@ function encodeValidatedEvent(
 		if (!projected) return { state: "invalid" as const };
 		return {
 			state: "completed" as const,
+			projected,
 			encoded: `${event.event ? `event: ${value.type}\n` : ""}data: ${JSON.stringify(projected)}\n\n`,
 		};
 	}
@@ -683,6 +766,25 @@ function encodeValidatedEvent(
 		payload,
 		encoded: `${event.event ? `event: ${value.type}\n` : ""}data: ${JSON.stringify(projected)}\n\n`,
 	};
+}
+
+function isModelOnlyEvent(value: Record<string, unknown>) {
+	// Reject before projection, including tool data carried only in the terminal
+	// response. Native must never see a partial or complete tool invocation.
+	if (typeof value.type !== "string" || /tool|function_call/.test(value.type))
+		return false;
+	const items = value.item === undefined ? [] : [value.item];
+	if (isPlainRecord(value.response) && value.response.output !== undefined) {
+		if (!Array.isArray(value.response.output)) return false;
+		items.push(...value.response.output);
+	}
+	return items.every(
+		(item) =>
+			isPlainRecord(item) &&
+			["message", "reasoning", "compaction", "compaction_summary"].includes(
+				String(item.type),
+			),
+	);
 }
 
 // Matcher state retains only a possible credential prefix per semantic channel.
@@ -735,10 +837,16 @@ async function forwardValidatedStream(
 	response: ServerResponse,
 	controller: AbortController,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
+	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
+	modelOnly: boolean,
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let failed = false;
 	let terminal: string | undefined;
+	let usage: CodexModelRequestUsage | undefined;
+	const failure: {
+		code: "provider_error" | "transport_error" | "invalid_response";
+	} = { code: "invalid_response" };
 	let totalBytes = 0;
 	let eventCount = 0;
 	let ending = "";
@@ -762,13 +870,34 @@ async function forwardValidatedStream(
 				failed = true;
 				return;
 			}
-			const result = encodeValidatedEvent(event, credentialMatcher);
+			const result = encodeValidatedEvent(event, credentialMatcher, modelOnly);
 			if (result.state === "invalid" || result.state === "failed") {
+				if (result.state === "failed") failure.code = "provider_error";
 				failed = true;
 				return;
 			}
-			if (result.state === "completed") terminal = result.encoded;
-			else if (result.state === "event") {
+			if (result.state === "completed") {
+				terminal = result.encoded;
+				const completedResponse = result.projected.response;
+				const observedUsage = isPlainRecord(completedResponse)
+					? completedResponse.usage
+					: undefined;
+				if (isPlainRecord(observedUsage)) {
+					const details = observedUsage.input_tokens_details;
+					usage = {
+						...(typeof observedUsage.input_tokens === "number"
+							? { inputTokens: observedUsage.input_tokens }
+							: {}),
+						...(typeof observedUsage.output_tokens === "number"
+							? { outputTokens: observedUsage.output_tokens }
+							: {}),
+						...(isPlainRecord(details) &&
+						typeof details.cached_tokens === "number"
+							? { cachedInputTokens: details.cached_tokens }
+							: {}),
+					};
+				}
+			} else if (result.state === "event") {
 				if (!guard.accept(result.projected, result.payload)) {
 					failed = true;
 					return;
@@ -813,14 +942,21 @@ async function forwardValidatedStream(
 		}
 	} catch {
 		failed = true;
+		failure.code = "transport_error";
 	}
 
 	if (failed || !terminal || !hasTerminatingBlankLine(ending)) {
+		const interrupted = controller.signal.aborted;
 		controller.abort();
 		await body.cancel().catch(() => {});
+		await recordOutcome({
+			phase: failure.code === "provider_error" ? "failed" : "unknown",
+			failureCode: interrupted ? "interrupted" : failure.code,
+		});
 		await failStream(response);
 		return;
 	}
+	await recordOutcome({ phase: "succeeded", ...(usage ? { usage } : {}) });
 	if (!response.headersSent) {
 		response.writeHead(200, { "content-type": "text/event-stream" });
 	}
@@ -889,6 +1025,7 @@ function routedRequest(
 		CodexModelAccess & { model: string; target: URL }
 	>,
 	admittedModel: ModelTurnSelection,
+	modelOnly: boolean,
 ) {
 	const decoded = decodeRequestBody(bytes, encoding);
 	if (decoded.byteLength > maximumRequestBytes) throw new Error();
@@ -897,6 +1034,7 @@ function routedRequest(
 		throw new Error();
 	}
 	if (value.model !== admittedModel.internalModel) return;
+	if (modelOnly && !onlyClientToolDeclarations(value.tools)) return;
 	const route = routes.get(admittedModel.internalModel);
 	if (!route) return;
 	if (value.reasoning !== undefined && !isPlainRecord(value.reasoning)) return;
@@ -913,20 +1051,41 @@ function routedRequest(
 	return { route, body: encodeRequestBody(body, encoding) };
 }
 
+function onlyClientToolDeclarations(value: unknown, depth = 0): boolean {
+	if (value === undefined) return true;
+	if (!Array.isArray(value) || depth > 8) return false;
+	return value.every((tool) => {
+		if (!isPlainRecord(tool)) return false;
+		if (tool.type === "function" || tool.type === "custom") return true;
+		return (
+			tool.type === "namespace" &&
+			Array.isArray(tool.tools) &&
+			onlyClientToolDeclarations(tool.tools, depth + 1)
+		);
+	});
+}
+
 export async function openCodexModelTransport(
 	input: readonly CodexModelRoute[],
+	observer: CodexModelTransportObserver,
 ) {
+	if (!observer || typeof observer.beforeRequest !== "function")
+		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const modelOnly = observer.modelOnly === true;
 	const routes = validatedRoutes(input);
 	const credentials = [
 		...new Set([...routes.values()].map(({ credential }) => credential)),
 	];
 	const credentialMatcher = createCredentialMatcher(credentials);
-	const token = randomBytes(32).toString("base64url");
-	const expectedAuthorization = Buffer.from(`Bearer ${token}`);
+	const processAccess = new Map<
+		string,
+		{ credential: string; authorization: Buffer }
+	>();
+	const boundThreads = new Set<string>();
 	const active = new Set<ActiveTurnRequest>();
 	const activeTurns = new Map<string, Set<ActiveTurnRequest>>();
 	const admittedTurns = new Map<string, ModelTurnSelection>();
-	// Explicit cancellation is final for this token's lifetime; abandoning a
+	// Explicit cancellation is final for this transport's lifetime; abandoning a
 	// provisional capability alone must not prevent validated running recovery.
 	const revokedTurns = new Set<string>();
 	const recognizedTurns = new Map<string, Set<CodexModelTurnAdmission>>();
@@ -936,7 +1095,33 @@ export async function openCodexModelTransport(
 	>();
 	const pendingThreads = new Map<string, Set<CodexModelTurnAdmission>>();
 	const admissionWaiters = new Map<string, Set<AdmissionWaiter>>();
+	const modelRequestWaiters = new Map<string, Set<ModelRequestWaiter>>();
+	const readyModelTurns = new Set<string>();
 	let closing = false;
+	const conversationIsActive = (conversationKey: string) => {
+		const prefix = `${conversationKey}\u0000`;
+		return (
+			// A surviving native process keeps its launch credential between Turns.
+			[...boundThreads].some((key) => key.startsWith(prefix)) ||
+			[...admittedTurns.keys()].some((key) => key.startsWith(prefix)) ||
+			[...readyModelTurns].some((key) => key.startsWith(prefix)) ||
+			[...activeTurns.keys()].some((key) => key.startsWith(prefix)) ||
+			[...pendingThreads.keys()].some((key) => key.startsWith(prefix)) ||
+			[...recognizedTurns.keys()].some((key) => key.startsWith(prefix)) ||
+			[...admissionWaiters.keys()].some((key) => key.startsWith(prefix)) ||
+			[...modelRequestWaiters.keys()].some((key) => key.startsWith(prefix))
+		);
+	};
+	const evictInactiveConversation = (conversationKey: string) => {
+		if (conversationIsActive(conversationKey)) return false;
+		const prefix = `${conversationKey}\u0000`;
+		processAccess.delete(conversationKey);
+		for (const key of readyModelTurns)
+			if (key.startsWith(prefix)) readyModelTurns.delete(key);
+		for (const key of admittedTurns.keys())
+			if (key.startsWith(prefix)) admittedTurns.delete(key);
+		return true;
+	};
 	const settleAdmissionWaiters = (
 		key: string,
 		model: ModelTurnSelection | undefined,
@@ -946,13 +1131,25 @@ export async function openCodexModelTransport(
 		admissionWaiters.delete(key);
 		for (const waiter of waiters) waiter.settle(model);
 	};
+	const settleModelRequestWaiters = (
+		key: string,
+		ready: boolean,
+		rememberReady = ready,
+	) => {
+		if (ready && rememberReady) readyModelTurns.add(key);
+		if (!ready) readyModelTurns.delete(key);
+		const waiters = modelRequestWaiters.get(key);
+		if (!waiters) return;
+		modelRequestWaiters.delete(key);
+		for (const waiter of waiters) waiter.settle(ready);
+	};
 	const removePending = (
 		admission: CodexModelTurnAdmission,
 		state: ModelTurnAdmissionState,
 	) => {
-		const pending = pendingThreads.get(state.threadId);
+		const pending = pendingThreads.get(state.threadKey);
 		pending?.delete(admission);
-		if (pending?.size === 0) pendingThreads.delete(state.threadId);
+		if (pending?.size === 0) pendingThreads.delete(state.threadKey);
 	};
 	const settleBoundWaiters = (
 		admission: CodexModelTurnAdmission,
@@ -986,8 +1183,9 @@ export async function openCodexModelTransport(
 			}
 		}
 	};
-	const revokeTurn = (key: string) => {
+	const revokeTurn = (key: string, settleWaiters = true) => {
 		revokedTurns.add(key);
+		if (settleWaiters) settleModelRequestWaiters(key, false);
 		const recognized = recognizedTurns.get(key);
 		for (const admission of [...(recognized ?? [])]) {
 			closeAdmission(admission);
@@ -1003,7 +1201,7 @@ export async function openCodexModelTransport(
 		if (
 			revokedTurns.has(key) ||
 			state?.state !== "open" ||
-			state.threadId !== key.split("\u0000")[0] ||
+			state.threadKey !== key.slice(0, key.lastIndexOf("\u0000")) ||
 			state.deadline <= Date.now()
 		) {
 			closeAdmission(admission);
@@ -1026,8 +1224,8 @@ export async function openCodexModelTransport(
 		if (closing || signal.aborted) {
 			return Promise.resolve(undefined);
 		}
-		const threadId = key.slice(0, key.indexOf("\u0000"));
-		const pending = [...(pendingThreads.get(threadId) ?? [])];
+		const threadKey = key.slice(0, key.lastIndexOf("\u0000"));
+		const pending = [...(pendingThreads.get(threadKey) ?? [])];
 		if (pending.length !== 1) return Promise.resolve(undefined);
 		const admission = pending[0];
 		if (!admission) return Promise.resolve(undefined);
@@ -1056,14 +1254,45 @@ export async function openCodexModelTransport(
 			signal.addEventListener("abort", abort, { once: true });
 		});
 	};
+	const waitForModelRequest = (
+		turn: CodexModelTurn,
+		deadline: number,
+		signal?: AbortSignal,
+	) => {
+		const key = nativeTurnKey(turn);
+		if (revokedTurns.has(key) || closing || signal?.aborted)
+			return Promise.resolve(false);
+		if (readyModelTurns.has(key)) return Promise.resolve(true);
+		if (deadline <= Date.now()) return Promise.resolve(false);
+		return new Promise<boolean>((resolve) => {
+			const waiters = modelRequestWaiters.get(key) ?? new Set();
+			modelRequestWaiters.set(key, waiters);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const settle = (ready: boolean) => {
+				if (timer !== undefined) clearTimeout(timer);
+				signal?.removeEventListener("abort", abort);
+				waiters.delete(waiter);
+				if (waiters.size === 0 && modelRequestWaiters.get(key) === waiters)
+					modelRequestWaiters.delete(key);
+				resolve(ready);
+			};
+			const abort = () => settle(false);
+			const waiter = { settle };
+			timer = setTimeout(abort, Math.max(0, deadline - Date.now()));
+			waiters.add(waiter);
+			signal?.addEventListener("abort", abort, { once: true });
+		});
+	};
 	const server = createServer(async (request, response) => {
 		const suppliedAuthorization = Buffer.from(
 			request.headers.authorization ?? "",
 		);
-		if (
-			suppliedAuthorization.length !== expectedAuthorization.length ||
-			!timingSafeEqual(suppliedAuthorization, expectedAuthorization)
-		) {
+		const authenticated = [...processAccess].find(
+			([, access]) =>
+				suppliedAuthorization.length === access.authorization.length &&
+				timingSafeEqual(suppliedAuthorization, access.authorization),
+		);
+		if (!authenticated || closing) {
 			reject(response, 401);
 			return;
 		}
@@ -1089,7 +1318,25 @@ export async function openCodexModelTransport(
 			reject(response, 400);
 			return;
 		}
-		const turnKey = nativeTurnKey(nativeTurn);
+		const [conversationKey] = authenticated;
+		const turnKey = nativeTurnKey({ ...nativeTurn, conversationKey });
+		// Preserve the terminal fence for a previously admitted Turn even if its
+		// native thread binding has since been retired by idle access eviction.
+		if (
+			revokedTurns.has(turnKey) &&
+			boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
+		) {
+			reject(response, 409);
+			return;
+		}
+		// Reject a foreign or unbound native thread before it can touch admission,
+		// cancellation, body parsing, or any journal owned by another process.
+		if (
+			!boundThreads.has(nativeThreadKey(conversationKey, nativeTurn.threadId))
+		) {
+			reject(response, 403);
+			return;
+		}
 		const controller = new AbortController();
 		let completeRequest: (() => void) | undefined;
 		const completion = new Promise<void>((resolve) => {
@@ -1107,9 +1354,66 @@ export async function openCodexModelTransport(
 		activeTurns.set(turnKey, turnRequests);
 		request.once("aborted", terminate);
 		response.once("close", terminate);
+		let journal: CodexModelRequestJournal | undefined;
+		let journalPromise: Promise<CodexModelRequestJournal> | undefined;
+		let startedPersistence: Promise<void> | undefined;
+		let upstreamResult: Promise<{ value: Response | undefined }> | undefined;
+		let startedAt: number | undefined;
+		let outcomeReported = false;
+		let outcomeReport: Promise<void> | undefined;
+		const recordOutcome = async (outcome: CodexModelRequestOutcome) => {
+			// A successfully persisted outcome is final. Concurrent callers share the
+			// in-flight write; a failed write is cleared so the catch path can retry.
+			if (outcomeReported) return;
+			if (outcome.phase !== "succeeded")
+				revokeTurn(turnKey, startedAt === undefined);
+			if (outcomeReport) return awaitPersistence(outcomeReport);
+			const pending = (async () => {
+				// A persistence call may outlive the request abort/timeout. Join the
+				// underlying intent and started writes before finishing the journal so a
+				// late durable write can never appear after its terminal outcome.
+				if (!journal && journalPromise) {
+					try {
+						// Only the caller's wait is bounded. Keep ownership of a late
+						// intent so it still receives its terminal write after timeout.
+						journal = await journalPromise;
+					} catch {
+						// The observer rejected admission instead of returning a journal.
+					}
+				}
+				if (startedPersistence) await startedPersistence.catch(() => {});
+				if (!journal) {
+					readyModelTurns.delete(turnKey);
+					outcomeReported = true;
+					return;
+				}
+				await journal.finish({
+					...outcome,
+					finishedAt: new Date().toISOString(),
+					...(startedAt === undefined
+						? {}
+						: {
+								durationMs: Math.max(
+									0,
+									Math.round(performance.now() - startedAt),
+								),
+							}),
+				});
+				readyModelTurns.delete(turnKey);
+				outcomeReported = true;
+			})();
+			outcomeReport = pending;
+			void pending
+				.finally(() => {
+					if (outcomeReport === pending) outcomeReport = undefined;
+				})
+				.catch(() => {});
+			await awaitPersistence(pending);
+		};
 		try {
 			const admittedModel = await waitForAdmission(turnKey, controller.signal);
 			if (admittedModel === undefined) {
+				settleModelRequestWaiters(turnKey, false);
 				reject(response, 409);
 				return;
 			}
@@ -1131,12 +1435,58 @@ export async function openCodexModelTransport(
 				contentEncoding,
 				routes,
 				admittedModel,
+				modelOnly,
 			);
 			if (!routed) {
 				reject(response, 400);
 				return;
 			}
-			const upstream = await fetch(routed.route.target, {
+			journalPromise = observer.beforeRequest(
+				{
+					conversationKey,
+					...nativeTurn,
+					...admittedModel,
+				},
+				controller.signal,
+			);
+			journal = await awaitPersistence(journalPromise, controller.signal);
+			// Stop/revoke may arrive while intent or the Host authorization guard is
+			// awaiting durable storage. No await separates this check from fetch.
+			if (
+				closing ||
+				controller.signal.aborted ||
+				revokedTurns.has(turnKey) ||
+				processAccess.get(conversationKey) !== authenticated[1]
+			) {
+				await recordOutcome({
+					phase: "failed",
+					failureCode: "request_not_started",
+				});
+				reject(response, 409);
+				return;
+			}
+			const requestStartedAt = new Date().toISOString();
+			if (journal) {
+				startedPersistence = journal.started(requestStartedAt);
+				await awaitPersistence(startedPersistence, controller.signal);
+			}
+			// The durable started fact is the commit barrier for the external request.
+			// If it cannot be persisted, do not invoke the provider at all.
+			if (
+				closing ||
+				controller.signal.aborted ||
+				revokedTurns.has(turnKey) ||
+				processAccess.get(conversationKey) !== authenticated[1]
+			) {
+				await recordOutcome({
+					phase: "failed",
+					failureCode: "request_not_started",
+				});
+				reject(response, 409);
+				return;
+			}
+			startedAt = performance.now();
+			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${routed.route.credential}`,
@@ -1149,7 +1499,15 @@ export async function openCodexModelTransport(
 					controller.signal,
 					AbortSignal.timeout(requestTimeoutMs),
 				]),
-			});
+			}).then(
+				(value) => ({ value }),
+				() => ({ value: undefined }),
+			);
+			const upstream = (await upstreamResult).value;
+			if (!upstream) {
+				settleModelRequestWaiters(turnKey, false);
+				throw new Error();
+			}
 			const contentType = upstream.headers.get("content-type") ?? "";
 			if (
 				!upstream.ok ||
@@ -1157,6 +1515,16 @@ export async function openCodexModelTransport(
 				!/^text\/event-stream(?:\s*;|$)/i.test(contentType)
 			) {
 				await upstream.body?.cancel().catch(() => {});
+				await recordOutcome({
+					phase: upstream.ok ? "unknown" : "failed",
+					failureCode: upstream.ok ? "invalid_response" : "http_error",
+				});
+				// A non-streaming response is still an accepted model request. Notify
+				// the Driver only after the durable failure fact is committed.
+				// Wake a Driver that is still waiting for the initial request so it can
+				// observe the durable failure, but never cache readiness for a revoked
+				// Turn or allow a later request to bypass its fence.
+				settleModelRequestWaiters(turnKey, true, false);
 				reject(
 					response,
 					upstream.status === 401 || upstream.status === 403
@@ -1165,14 +1533,39 @@ export async function openCodexModelTransport(
 				);
 				return;
 			}
+			// Streaming model requests are accepted once the upstream headers are
+			// available; the body may continue for the whole inference.
+			settleModelRequestWaiters(turnKey, true);
 			await forwardValidatedStream(
 				upstream.body,
 				response,
 				controller,
 				credentialMatcher,
+				recordOutcome,
+				modelOnly,
 			);
 		} catch {
-			await failStream(response);
+			const interrupted = controller.signal.aborted;
+			controller.abort();
+			// started() can fail while fetch is already running. Join its abort and
+			// release any received body before reporting this request drained.
+			const received = upstreamResult
+				? await awaitPersistence(upstreamResult).catch(() => undefined)
+				: undefined;
+			await received?.value?.body?.cancel().catch(() => {});
+			await recordOutcome(
+				startedAt === undefined
+					? { phase: "failed", failureCode: "request_not_started" }
+					: {
+							phase: "unknown",
+							failureCode: interrupted ? "interrupted" : "transport_error",
+						},
+			).catch(() => {});
+			settleModelRequestWaiters(turnKey, false);
+			// A timed-out persistence wait is not a durable terminal result. Break
+			// the connection while the original write remains owned and fail closed.
+			if (outcomeReported) await failStream(response);
+			else response.destroy();
 		} finally {
 			request.off("aborted", terminate);
 			response.off("close", terminate);
@@ -1203,17 +1596,73 @@ export async function openCodexModelTransport(
 		throw new Error("RUNTIME_STARTUP_FAILED");
 	}
 	let closePromise: Promise<void> | undefined;
+	const endpoint = `http://127.0.0.1:${address.port}`;
 	return {
-		modelAccess: {
-			endpoint: `http://127.0.0.1:${address.port}`,
-			credential: token,
+		endpoint,
+		modelAccessFor: (conversationKey: string): CodexModelAccess => {
+			if (closing || !/^[a-f0-9]{64}$/.test(conversationKey))
+				throw new Error("RUNTIME_STARTUP_FAILED");
+			let access = processAccess.get(conversationKey);
+			if (!access) {
+				if (processAccess.size >= maximumConversationAccessEntries) {
+					for (const candidate of processAccess.keys()) {
+						if (evictInactiveConversation(candidate)) break;
+					}
+					if (processAccess.size >= maximumConversationAccessEntries)
+						throw new Error("RUNTIME_MODEL_ACCESS_CAPACITY");
+				}
+				const credential = randomBytes(32).toString("base64url");
+				access = {
+					credential,
+					authorization: Buffer.from(`Bearer ${credential}`),
+				};
+				processAccess.set(conversationKey, access);
+			} else {
+				// Keep recently used conversations at the end of the bounded map so
+				// eviction prefers the oldest idle access.
+				processAccess.delete(conversationKey);
+				processAccess.set(conversationKey, access);
+			}
+			return { endpoint, credential: access.credential };
 		},
+		bindThread: (conversationKey: string, threadId: string) => {
+			if (
+				closing ||
+				!processAccess.has(conversationKey) ||
+				!nativeTurnIdentifierPattern.test(threadId)
+			)
+				throw new Error("RUNTIME_STARTUP_FAILED");
+			boundThreads.add(nativeThreadKey(conversationKey, threadId));
+		},
+		revokeConversationAccess: (conversationKey: string) => {
+			processAccess.delete(conversationKey);
+			const prefix = `${conversationKey}\u0000`;
+			for (const key of boundThreads)
+				if (key.startsWith(prefix)) boundThreads.delete(key);
+			for (const [key, pending] of pendingThreads) {
+				if (key.startsWith(prefix))
+					for (const admission of [...pending]) closeAdmission(admission);
+			}
+			const turnKeys = new Set([
+				...recognizedTurns.keys(),
+				...admittedTurns.keys(),
+				...modelRequestWaiters.keys(),
+			]);
+			for (const key of turnKeys) if (key.startsWith(prefix)) revokeTurn(key);
+			for (const [key, requests] of activeTurns) {
+				if (key.startsWith(prefix))
+					for (const request of requests) request.terminate();
+			}
+		},
+		waitForModelRequest,
 		beginTurnAdmission: (
 			deadline: number,
 			internalModel: string,
 			threadId: string,
 			reasoningLevel: string,
+			conversationKey: string,
 		) => {
+			const threadKey = nativeThreadKey(conversationKey, threadId);
 			const admission = Object.freeze({}) as CodexModelTurnAdmission;
 			const state: ModelTurnAdmissionState = {
 				state:
@@ -1224,17 +1673,19 @@ export async function openCodexModelTransport(
 					Number.isFinite(deadline) &&
 					deadline > Date.now() &&
 					!closing &&
+					processAccess.has(conversationKey) &&
+					boundThreads.has(threadKey) &&
 					routes.has(internalModel)
 						? "open"
 						: "closed",
 				deadline,
-				threadId,
+				threadKey,
 				internalModel,
 				reasoningLevel,
 			};
 			if (state.state === "open") {
-				const pending = pendingThreads.get(threadId) ?? new Set();
-				pendingThreads.set(threadId, pending);
+				const pending = pendingThreads.get(threadKey) ?? new Set();
+				pendingThreads.set(threadKey, pending);
 				pending.add(admission);
 				if (pending.size > 1) {
 					for (const existing of pending) settleBoundWaiters(existing);
@@ -1249,7 +1700,7 @@ export async function openCodexModelTransport(
 		},
 		recognizeTurn: (
 			admission: CodexModelTurnAdmission,
-			turn: CodexNativeTurn,
+			turn: CodexModelTurn,
 		) => {
 			const key = nativeTurnKey(turn);
 			if (closing) return false;
@@ -1257,7 +1708,7 @@ export async function openCodexModelTransport(
 		},
 		registerTurn: (
 			admission: CodexModelTurnAdmission,
-			turn: CodexNativeTurn,
+			turn: CodexModelTurn,
 		) => {
 			const key = nativeTurnKey(turn);
 			const state = admissions.get(admission);
@@ -1299,10 +1750,10 @@ export async function openCodexModelTransport(
 		abandonTurnAdmission: (admission: CodexModelTurnAdmission) => {
 			closeAdmission(admission);
 		},
-		revokeTurn: (turn: CodexNativeTurn) => {
+		revokeTurn: (turn: CodexModelTurn) => {
 			revokeTurn(nativeTurnKey(turn));
 		},
-		cancelTurn: async (turn: CodexNativeTurn) => {
+		cancelTurn: async (turn: CodexModelTurn) => {
 			const key = nativeTurnKey(turn);
 			revokeTurn(key);
 			const requests = [...(activeTurns.get(key) ?? [])];
@@ -1312,6 +1763,11 @@ export async function openCodexModelTransport(
 		close: () => {
 			closePromise ??= (async () => {
 				closing = true;
+				processAccess.clear();
+				boundThreads.clear();
+				for (const key of modelRequestWaiters.keys())
+					settleModelRequestWaiters(key, false);
+				readyModelTurns.clear();
 				for (const recognized of pendingThreads.values()) {
 					for (const admission of [...recognized]) {
 						closeAdmission(admission);

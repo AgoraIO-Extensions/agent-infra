@@ -17,9 +17,66 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+	type CodexModelRequestOutcome,
+	type CodexModelTransportObserver,
+	type CodexModelTurnAdmission,
 	type CodexNativeTurn,
-	openCodexModelTransport,
+	openCodexModelTransport as openProductionModelTransport,
 } from "./codex-model-transport.js";
+
+// Existing protocol cases use one explicitly bound synthetic native process.
+// Cross-process cases below call the production factory directly.
+const testConversationKey = "a".repeat(64);
+const testObserver: CodexModelTransportObserver = {
+	beforeRequest: async () => ({
+		started: async () => {},
+		finish: async () => {},
+	}),
+};
+async function openCodexModelTransport(
+	input: Parameters<typeof openProductionModelTransport>[0],
+	observer: CodexModelTransportObserver = testObserver,
+) {
+	const value = await openProductionModelTransport(input, observer);
+	const modelAccess = value.modelAccessFor(testConversationKey);
+	value.bindThread(testConversationKey, "thread-synthetic");
+	return {
+		...value,
+		modelAccess,
+		beginTurnAdmission: (
+			deadline: number,
+			model: string,
+			threadId: string,
+			reasoning: string,
+		) => {
+			value.bindThread(testConversationKey, threadId);
+			return value.beginTurnAdmission(
+				deadline,
+				model,
+				threadId,
+				reasoning,
+				testConversationKey,
+			);
+		},
+		recognizeTurn: (
+			admission: CodexModelTurnAdmission,
+			turn: CodexNativeTurn,
+		) =>
+			value.recognizeTurn(admission, {
+				...turn,
+				conversationKey: testConversationKey,
+			}),
+		registerTurn: (admission: CodexModelTurnAdmission, turn: CodexNativeTurn) =>
+			value.registerTurn(admission, {
+				...turn,
+				conversationKey: testConversationKey,
+			}),
+		revokeTurn: (turn: CodexNativeTurn) =>
+			value.revokeTurn({ ...turn, conversationKey: testConversationKey }),
+		cancelTurn: (turn: CodexNativeTurn) =>
+			value.cancelTurn({ ...turn, conversationKey: testConversationKey }),
+	};
+}
 
 const credential = "synthetic-model-credential";
 const sensitiveMarker = "synthetic-sensitive-model-failure";
@@ -29,6 +86,206 @@ const defaultNativeTurn = {
 	turnId: "turn-synthetic",
 } as const;
 const close: (() => Promise<void>)[] = [];
+
+describe("official model-only transport", () => {
+	const toolItems = [
+		{
+			type: "function_call",
+			name: "exec_command",
+			call_id: "synthetic-call",
+			arguments: '{"cmd":"synthetic-command"}',
+		},
+		{
+			type: "custom_tool_call",
+			name: "apply_patch",
+			call_id: "synthetic-call",
+			input: "synthetic-patch",
+		},
+		{ type: "tool_search_call", execution: "client", arguments: {} },
+		{ type: "web_search_call", action: { type: "search", query: "synthetic" } },
+		{ type: "image_generation_call", status: "completed", result: "synthetic" },
+	];
+	it.each(
+		toolItems.flatMap((item) =>
+			[
+				"response.output_item.added",
+				"response.output_item.done",
+				"response.completed",
+			].map((type) => ({ type, item })),
+		),
+	)(
+		"rejects $item.type in $type before native delivery",
+		async ({ type, item }) => {
+			const target = await listen(
+				createServer((_request, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(
+						event(
+							type === "response.completed"
+								? {
+										type,
+										response: {
+											id: "synthetic-response",
+											status: "completed",
+											output: [item],
+										},
+									}
+								: { type, item },
+						) + (type === "response.completed" ? "" : completedEvent()),
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				...testObserver,
+				modelOnly: true,
+			});
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(502);
+			expect(await response.text()).toBe(
+				'{"error":{"message":"Model request failed"}}',
+			);
+		},
+	);
+
+	it.each([
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta",
+		"response.custom_tool_call_input.done",
+		"response.web_search_call.in_progress",
+		"response.image_generation_call.in_progress",
+		"response.code_interpreter_call.in_progress",
+	])("rejects %s even without an output item", async (type) => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type, delta: "synthetic-tool-input", call_id: "synthetic" }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(target, true, {
+			modelOnly: true,
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).not.toContain("synthetic-tool-input");
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "unknown",
+				failureCode: "invalid_response",
+			}),
+		);
+	});
+
+	it.each([
+		"web_search",
+		"web_search_preview",
+		"image_generation",
+		"mcp",
+		"code_interpreter",
+	])("rejects hosted %s before the provider request", async (type) => {
+		let calls = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				calls++;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({ model: selectedInternalModel, tools: [{ type }] }),
+		});
+		expect(response.status).toBe(400);
+		await response.text();
+		expect(calls).toBe(0);
+	});
+
+	it.each(
+		["function_call", "tool_use"].flatMap((type) =>
+			["content", "item-metadata", "text-metadata"].map((location) => ({
+				type,
+				location,
+			})),
+		),
+	)("never forwards nested $type in $location", async ({ type, location }) => {
+		const invocation = { type, name: "synthetic-nested-tool", arguments: "{}" };
+		const text = { type: "output_text", text: "synthetic answer" };
+		const item = {
+			type: "message",
+			role: "assistant",
+			content:
+				location === "content"
+					? [invocation]
+					: [
+							{
+								...text,
+								...(location === "text-metadata" ? { extra: invocation } : {}),
+							},
+						],
+			...(location === "item-metadata" ? { extra: invocation } : {}),
+		};
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_item.done", item }) +
+						event({
+							type: "response.completed",
+							response: {
+								id: "synthetic",
+								status: "completed",
+								output: [item],
+							},
+						}),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess);
+		const body = await response.text();
+		expect(response.status).toBe(location === "content" ? 502 : 200);
+		expect(body).not.toContain("synthetic-nested-tool");
+		expect(body).not.toContain(type);
+		if (location !== "content") expect(body).toContain("synthetic answer");
+	});
+
+	it("retains ordinary model output with local tool declarations", async () => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.output_text.delta",
+						delta: "synthetic text",
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({
+				model: selectedInternalModel,
+				tools: [{ type: "function", name: "update_plan", parameters: {} }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("synthetic text");
+	});
+});
 
 async function listen(server: Server) {
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -46,15 +303,22 @@ async function listen(server: Server) {
 	return `http://127.0.0.1:${address.port}`;
 }
 
-async function transport(endpoint: string, registerDefaultTurn = true) {
-	const value = await openCodexModelTransport([
-		{
-			internalModel: selectedInternalModel,
-			model: "synthetic-selected",
-			endpoint,
-			credential,
-		},
-	]);
+async function transport(
+	endpoint: string,
+	registerDefaultTurn = true,
+	observer?: CodexModelTransportObserver,
+) {
+	const value = await openCodexModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint,
+				credential,
+			},
+		],
+		observer,
+	);
 	if (registerDefaultTurn) admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
 	return value;
@@ -74,6 +338,7 @@ async function transportWithCredentials(
 			endpoint,
 			credential,
 		})),
+		testObserver,
 	);
 	admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
@@ -143,7 +408,307 @@ afterEach(async () => {
 	for (const stop of close.splice(0).reverse()) await stop();
 });
 
+function observePersistenceDeadlines() {
+	// Keep real HTTP and admission clocks; expire only the persistence waits.
+	const callbacks: (() => void)[] = [];
+	const original = globalThis.setTimeout;
+	const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+		callback: (...args: unknown[]) => void,
+		milliseconds?: number,
+		...args: unknown[]
+	) => {
+		if (milliseconds === 120_000) callbacks.push(() => callback(...args));
+		return original(callback, milliseconds, ...args);
+	}) as typeof setTimeout);
+	return {
+		count: () => callbacks.length,
+		expireLast: () => {
+			const callback = callbacks.at(-1);
+			if (!callback) throw new Error("missing persistence deadline");
+			callback();
+		},
+		restore: () => spy.mockRestore(),
+	};
+}
+
 describe("Codex model transport", () => {
+	it.each(["cancel", "close"] as const)(
+		"retains a late intent after both persistence deadlines and bounded %s",
+		async (stop) => {
+			let upstreamRequests = 0;
+			const target = await listen(
+				createServer((_request, response) => {
+					upstreamRequests += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const outcomes: CodexModelRequestOutcome[] = [];
+			let started = 0;
+			let signal: AbortSignal | undefined;
+			const value = await transport(target, true, {
+				beforeRequest: async (context, currentSignal) => {
+					if (context.turnId !== defaultNativeTurn.turnId)
+						return { started: async () => {}, finish: async () => {} };
+					signal = currentSignal;
+					entered.resolve();
+					await release.promise;
+					return {
+						started: async () => {
+							started += 1;
+						},
+						finish: async (outcome) => {
+							outcomes.push(outcome);
+						},
+					};
+				},
+			});
+			const deadlines = observePersistenceDeadlines();
+			try {
+				const pending = request(value.modelAccess)
+					.then(async (response) => ({
+						status: response.status,
+						body: await response.text(),
+					}))
+					.catch(() => undefined);
+				await entered.promise;
+				expect(deadlines.count()).toBe(1);
+				deadlines.expireLast();
+				await delay(0);
+				expect(signal?.aborted).toBe(true);
+				expect(deadlines.count()).toBe(2);
+				deadlines.expireLast();
+				const response = await pending;
+				await Promise.race([
+					stop === "cancel"
+						? value.cancelTurn(defaultNativeTurn)
+						: value.close(),
+					delay(1_000).then(() => {
+						throw new Error("late intent blocked cleanup");
+					}),
+				]);
+				expect(upstreamRequests).toBe(0);
+				expect(started).toBe(0);
+				expect(outcomes).toEqual([]);
+				release.resolve();
+				await delay(0);
+				expect(outcomes).toEqual([
+					expect.objectContaining({
+						phase: "failed",
+						failureCode: "request_not_started",
+					}),
+				]);
+				// An unacknowledged durable result must not become an HTTP/SSE terminal.
+				expect(response).toBeUndefined();
+				if (stop === "cancel") {
+					expect((await request(value.modelAccess)).status).toBe(409);
+					const next = { ...defaultNativeTurn, turnId: "next-synthetic" };
+					admitTurn(value, next);
+					expect(
+						await (await request(value.modelAccess, {}, next)).text(),
+					).toContain("response.completed");
+					expect(upstreamRequests).toBe(1);
+				}
+			} finally {
+				release.resolve();
+				deadlines.restore();
+			}
+		},
+	);
+
+	it("keeps one durable finish in flight after its timeout without publishing a terminal", async () => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		let committed = 0;
+		const value = await transport(target, true, {
+			beforeRequest: async () => ({
+				started: async () => {},
+				finish: async (outcome) => {
+					outcomes.push(outcome);
+					entered.resolve();
+					await release.promise;
+					committed += 1;
+				},
+			}),
+		});
+		const deadlines = observePersistenceDeadlines();
+		try {
+			const pending = request(value.modelAccess)
+				.then(async (response) => ({
+					status: response.status,
+					body: await response.text(),
+				}))
+				.catch(() => undefined);
+			await entered.promise;
+			const beforeTimeout = deadlines.count();
+			deadlines.expireLast();
+			await delay(0);
+			expect(deadlines.count()).toBeGreaterThan(beforeTimeout);
+			deadlines.expireLast();
+			const response = await pending;
+			expect(committed).toBe(0);
+			release.resolve();
+			await delay(0);
+			expect(outcomes).toEqual([
+				expect.objectContaining({ phase: "succeeded" }),
+			]);
+			expect(committed).toBe(1);
+			expect(response).toBeUndefined();
+			expect((await request(value.modelAccess)).status).toBe(409);
+		} finally {
+			release.resolve();
+			deadlines.restore();
+		}
+	});
+
+	it("withholds native completion until the actual model result is durably acknowledged", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.output_text.delta",
+						delta: "synthetic partial",
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			beforeRequest: async () => ({
+				started: async () => {},
+				finish: async (outcome) => {
+					outcomes.push(outcome);
+					entered.resolve();
+					await release.promise;
+				},
+			}),
+		});
+		const response = await request(value.modelAccess);
+		let ended = false;
+		const output = response.text().then((text) => {
+			ended = true;
+			return text;
+		});
+		await entered.promise;
+		expect(ended).toBe(false);
+		expect(outcomes).toEqual([
+			expect.objectContaining({
+				phase: "succeeded",
+				durationMs: expect.any(Number),
+				finishedAt: expect.any(String),
+			}),
+		]);
+		release.resolve();
+		expect(await output).toContain("response.completed");
+	});
+
+	it("rechecks stop after intent/authorization await and before invoking fetch", async () => {
+		let requests = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				requests += 1;
+				response.end();
+			}),
+		);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		const value = await transport(target, true, {
+			beforeRequest: async () => {
+				entered.resolve();
+				await release.promise;
+				return {
+					started: async () => {
+						throw new Error("must not start");
+					},
+					finish: async (outcome) => {
+						outcomes.push(outcome);
+					},
+				};
+			},
+		});
+		const pending = request(value.modelAccess);
+		await entered.promise;
+		value.revokeTurn(defaultNativeTurn);
+		release.resolve();
+		expect((await pending).status).toBe(409);
+		expect(requests).toBe(0);
+		expect(outcomes).toEqual([
+			expect.objectContaining({
+				phase: "failed",
+				failureCode: "request_not_started",
+			}),
+		]);
+		expect(outcomes[0]?.durationMs).toBeUndefined();
+	});
+
+	it.each(["http", "provider", "malformed", "disconnect"] as const)(
+		"records the real %s failure and blocks another request for the uncertain Turn",
+		async (mode) => {
+			let requests = 0;
+			const outcomes: CodexModelRequestOutcome[] = [];
+			const finishing = Promise.withResolvers<void>();
+			const persist = Promise.withResolvers<void>();
+			const target = await listen(
+				createServer((_request, response) => {
+					requests += 1;
+					if (mode === "disconnect") {
+						response.destroy();
+						return;
+					}
+					response.writeHead(mode === "http" ? 503 : 200, {
+						"content-type": "text/event-stream",
+					});
+					response.end(
+						mode === "provider"
+							? event({ type: "response.failed" })
+							: "data: malformed\n\n",
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				beforeRequest: async () => ({
+					started: async () => {},
+					finish: async (outcome) => {
+						outcomes.push(outcome);
+						finishing.resolve();
+						await persist.promise;
+					},
+				}),
+			});
+			const pending = request(value.modelAccess).then((response) =>
+				response.text(),
+			);
+			try {
+				await finishing.promise;
+				// Failure fences the Turn before its durable outcome has committed.
+				expect((await request(value.modelAccess)).status).toBe(409);
+				expect(requests).toBe(1);
+			} finally {
+				persist.resolve();
+			}
+			await pending;
+			expect(outcomes).toHaveLength(1);
+			expect(outcomes[0]).toMatchObject({
+				phase: mode === "http" || mode === "provider" ? "failed" : "unknown",
+			});
+			expect((await request(value.modelAccess)).status).toBe(409);
+			expect(requests).toBe(1);
+		},
+	);
+
 	it("does not retain listeners across repeated real response backpressure", async () => {
 		const delta = "a".repeat(256 * 1024);
 		const body =
@@ -1579,8 +2144,9 @@ describe("Codex model transport", () => {
 		const value = await transport(target, false);
 		const expiringTurn = { threadId: "thread-expiring", turnId: "turn-one" };
 		const unrelatedTurn = { threadId: "thread-unrelated", turnId: "turn-one" };
+		const deadline = Date.now() + 50;
 		const admission = value.beginTurnAdmission(
-			Date.now() + 50,
+			deadline,
 			selectedInternalModel,
 			expiringTurn.threadId,
 			"high",
@@ -1598,11 +2164,18 @@ describe("Codex model transport", () => {
 		expect(await unrelatedResponse.text()).toBe(completedEvent());
 		const expiredResponse = await expiringRequest;
 		expect(expiredResponse.status).toBe(409);
-		expect(value.registerTurn(admission, expiringTurn)).toBe(false);
-		expect(value.recognizeTurn(admission, expiringTurn)).toBe(false);
-		const lateResponse = await request(value.modelAccess, {}, expiringTurn);
-		expect(lateResponse.status).toBe(409);
-		expect(calls).toBe(1);
+		// The HTTP waiter's timer can settle before the wall-clock deadline.
+		// Check late admission with that original absolute deadline reached.
+		const clock = vi.spyOn(Date, "now").mockReturnValue(deadline);
+		try {
+			expect(value.registerTurn(admission, expiringTurn)).toBe(false);
+			expect(value.recognizeTurn(admission, expiringTurn)).toBe(false);
+			const lateResponse = await request(value.modelAccess, {}, expiringTurn);
+			expect(lateResponse.status).toBe(409);
+			expect(calls).toBe(1);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("never reuses concurrent pending admissions after cancellation", async () => {
@@ -2106,3 +2679,393 @@ it("fences an admitted request whose body completes after revocation", async () 
 		client.destroy();
 	}
 });
+
+it("binds HTTP credentials to the owning Conversation before touching foreign admission", async () => {
+	let upstreamCalls = 0;
+	const observed: string[] = [];
+	const target = await listen(
+		createServer((_request, response) => {
+			upstreamCalls++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{
+			beforeRequest: async (context) => {
+				observed.push(context.conversationKey);
+				return { started: async () => {}, finish: async () => {} };
+			},
+		},
+	);
+	close.push(value.close);
+	const owner = "a".repeat(64);
+	const sibling = "b".repeat(64);
+	const ownerAccess = value.modelAccessFor(owner);
+	const siblingAccess = value.modelAccessFor(sibling);
+	expect(siblingAccess.credential).not.toBe(ownerAccess.credential);
+	value.bindThread(owner, defaultNativeTurn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		defaultNativeTurn.threadId,
+		"high",
+		owner,
+	);
+	const turn = { ...defaultNativeTurn, conversationKey: owner };
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	// Even valid foreign IDs, parent metadata and malformed body cannot revoke
+	// another process's actual admission or create a model intent for it.
+	const forged = await request(siblingAccess, {
+		body: "{",
+		headers: {
+			"x-codex-parent-thread-id": defaultNativeTurn.threadId,
+		},
+	});
+	expect(forged.status).toBe(403);
+	await forged.text();
+	expect(upstreamCalls).toBe(0);
+	expect(observed).toEqual([]);
+	const accepted = await request(ownerAccess);
+	expect(accepted.status).toBe(200);
+	await accepted.text();
+	expect(upstreamCalls).toBe(1);
+	expect(observed).toEqual([owner]);
+	value.revokeConversationAccess(owner);
+	const retired = await request(ownerAccess);
+	expect(retired.status).toBe(401);
+	await retired.text();
+	expect(upstreamCalls).toBe(1);
+});
+
+it("partitions identical native IDs and cancellation between Conversation processes", async () => {
+	const observed: string[] = [];
+	const target = await listen(
+		createServer((_request, response) => {
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{
+			beforeRequest: async (context) => {
+				observed.push(context.conversationKey);
+				return { started: async () => {}, finish: async () => {} };
+			},
+		},
+	);
+	close.push(value.close);
+	const first = "c".repeat(64);
+	const second = "d".repeat(64);
+	const accesses = [first, second].map((key) => {
+		const access = value.modelAccessFor(key);
+		value.bindThread(key, defaultNativeTurn.threadId);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			defaultNativeTurn.threadId,
+			"high",
+			key,
+		);
+		const turn = { ...defaultNativeTurn, conversationKey: key };
+		expect(value.recognizeTurn(admission, turn)).toBe(true);
+		expect(value.registerTurn(admission, turn)).toBe(true);
+		return access;
+	});
+	const [firstAccess, secondAccess] = accesses;
+	if (!firstAccess || !secondAccess) throw new Error("missing process access");
+	await value.cancelTurn({ ...defaultNativeTurn, conversationKey: first });
+	const cancelled = await request(firstAccess);
+	expect(cancelled.status).toBe(409);
+	await cancelled.text();
+	const live = await request(secondAccess);
+	expect(live.status).toBe(200);
+	await live.text();
+	expect(observed).toEqual([second]);
+	const renewed = value.modelAccessFor(first);
+	expect(renewed.credential).toBe(firstAccess.credential);
+	value.revokeConversationAccess(first);
+	const reopened = value.modelAccessFor(first);
+	expect(reopened.credential).not.toBe(renewed.credential);
+	expect((await request(renewed)).status).toBe(401);
+	expect((await request(reopened)).status).toBe(403);
+});
+
+it("revokes recognized but not yet registered admissions with Conversation access", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const conversationKey = "e".repeat(64);
+	const threadId = "thread-recognized";
+	const turn = {
+		conversationKey,
+		threadId,
+		turnId: "turn-recognized",
+	};
+	value.modelAccessFor(conversationKey);
+	value.bindThread(conversationKey, threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		threadId,
+		"high",
+		conversationKey,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	value.revokeConversationAccess(conversationKey);
+	expect(value.registerTurn(admission, turn)).toBe(false);
+});
+
+it("evicts the oldest idle Conversation access at the bounded capacity", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const first = "f".repeat(64);
+	const accesses = [first];
+	for (let index = 1; index < 1024; index++)
+		accesses.push(index.toString(16).padStart(64, "0"));
+	const firstAccess = value.modelAccessFor(first);
+	for (const conversationKey of accesses.slice(1))
+		value.modelAccessFor(conversationKey);
+	const replacement = value.modelAccessFor("e".repeat(64));
+	expect(replacement.credential).toBeTruthy();
+	// Eviction invalidates only the idle credential; no active request is
+	// evicted, and the conversation can acquire a fresh credential later.
+	expect((await request(firstAccess)).status).toBe(401);
+	const reopened = value.modelAccessFor(first);
+	expect(reopened.credential).not.toBe(firstAccess.credential);
+});
+
+it("retains access for an admitted native Turn while capacity fills", async () => {
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: "http://127.0.0.1:1",
+				credential,
+			},
+		],
+		testObserver,
+	);
+	close.push(value.close);
+	const first = "f".repeat(64);
+	const firstAccess = value.modelAccessFor(first);
+	const turn = {
+		conversationKey: first,
+		threadId: "thread-live",
+		turnId: "turn-live",
+	};
+	value.bindThread(first, turn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		"thread-live",
+		"high",
+		first,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	for (let index = 1; index < 1024; index++)
+		value.modelAccessFor(index.toString(16).padStart(64, "0"));
+	// The admitted Turn keeps its credential and native thread binding alive;
+	// an unrelated Conversation cannot evict it at the access limit.
+	value.modelAccessFor("e".repeat(64));
+	expect(value.modelAccessFor(first)).toEqual(firstAccess);
+});
+
+it("keeps a bound idle process credential usable for its next Turn at capacity", async () => {
+	let upstreamCalls = 0;
+	const target = await listen(
+		createServer((_request, response) => {
+			upstreamCalls++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const authorize = vi.fn(testObserver.beforeRequest);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{ beforeRequest: authorize },
+	);
+	close.push(value.close);
+	const conversationKey = "f".repeat(64);
+	const access = value.modelAccessFor(conversationKey);
+	const turn = {
+		conversationKey,
+		threadId: "thread-live",
+		turnId: "turn-next",
+	};
+	value.bindThread(conversationKey, turn.threadId);
+	for (let index = 1; index < 1024; index++) {
+		const key = index.toString(16).padStart(64, "0");
+		value.modelAccessFor(key);
+		value.bindThread(key, "thread-bound");
+	}
+	expect
+		.soft(() => value.modelAccessFor("e".repeat(64)))
+		.toThrow("RUNTIME_MODEL_ACCESS_CAPACITY");
+	// The Driver touches access and binds the thread on the next Turn, but a
+	// surviving native process still authenticates with its launch credential.
+	expect
+		.soft(
+			value.modelAccessFor(conversationKey).credential === access.credential,
+		)
+		.toBe(true);
+	value.bindThread(conversationKey, turn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		turn.threadId,
+		"high",
+		conversationKey,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	const response = await request(access, {}, turn);
+	expect.soft(response.status).toBe(200);
+	await response.text();
+	expect.soft(upstreamCalls).toBe(1);
+	expect.soft(authorize).toHaveBeenCalledTimes(1);
+	value.revokeConversationAccess(conversationKey);
+	const retired = await request(access, {}, turn);
+	expect(retired.status).toBe(401);
+	await retired.text();
+	expect(() => value.modelAccessFor("e".repeat(64))).not.toThrow();
+});
+
+it.each(["explicit access revoke", "LRU eviction"] as const)(
+	"retains cancelled Turn revocation across %s of Conversation access",
+	async (retirement) => {
+		let upstreamCalls = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				upstreamCalls++;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await openProductionModelTransport(
+			[
+				{
+					internalModel: selectedInternalModel,
+					model: "synthetic-selected",
+					endpoint: target,
+					credential,
+				},
+			],
+			testObserver,
+		);
+		close.push(value.close);
+		const conversationKey = "a".repeat(64);
+		const threadId = "thread-cancelled";
+		const cancelledTurn = {
+			conversationKey,
+			threadId,
+			turnId: "turn-cancelled",
+		};
+		const firstAccess = value.modelAccessFor(conversationKey);
+		value.bindThread(conversationKey, threadId);
+		const admission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect(value.recognizeTurn(admission, cancelledTurn)).toBe(true);
+		expect(value.registerTurn(admission, cancelledTurn)).toBe(true);
+		await value.cancelTurn(cancelledTurn);
+		if (retirement === "explicit access revoke") {
+			value.revokeConversationAccess(conversationKey);
+		} else {
+			// Only an unbound entry is idle: retire the native process first, then
+			// exercise eviction of access prepared for its eventual replacement.
+			value.revokeConversationAccess(conversationKey);
+			const unbound = value.modelAccessFor(conversationKey);
+			for (let index = 1; index < 1024; index++)
+				value.modelAccessFor(index.toString(16).padStart(64, "0"));
+			expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
+			const evicted = await request(unbound, {}, cancelledTurn);
+			expect(evicted.status).toBe(401);
+			await evicted.text();
+		}
+		const reopened = value.modelAccessFor(conversationKey);
+		expect(reopened.credential).not.toBe(firstAccess.credential);
+		const retired = await request(firstAccess, {}, cancelledTurn);
+		expect(retired.status).toBe(401);
+		await retired.text();
+
+		value.bindThread(conversationKey, threadId);
+		const freshAdmission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect.soft(value.recognizeTurn(freshAdmission, cancelledTurn)).toBe(false);
+		expect.soft(value.registerTurn(freshAdmission, cancelledTurn)).toBe(false);
+		const late = await request(reopened, {}, cancelledTurn);
+		expect.soft(late.status).toBe(409);
+		await late.text();
+		expect.soft(upstreamCalls).toBe(0);
+
+		const nextTurn = { ...cancelledTurn, turnId: "turn-next" };
+		const nextAdmission = value.beginTurnAdmission(
+			Date.now() + 5000,
+			selectedInternalModel,
+			threadId,
+			"high",
+			conversationKey,
+		);
+		expect(value.recognizeTurn(nextAdmission, nextTurn)).toBe(true);
+		expect(value.registerTurn(nextAdmission, nextTurn)).toBe(true);
+		const live = await request(reopened, {}, nextTurn);
+		expect(live.status).toBe(200);
+		await live.text();
+		expect(upstreamCalls).toBe(1);
+	},
+);

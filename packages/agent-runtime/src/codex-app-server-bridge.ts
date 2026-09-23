@@ -196,6 +196,21 @@ const landlockDeviceRights = "read-file,read-dir,write-file";
 // access, so granting that would make every sibling Conversation listable again.
 const linuxNativeSandboxMode = "danger-full-access";
 
+/** Fixed deployment policy for the official lane, never native/user overrides. */
+export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
+	web_search: "disabled",
+	"features.apps": false,
+	"features.multi_agent": false,
+	"features.multi_agent_v2": false,
+	"features.image_generation": false,
+	"features.code_mode": false,
+	"features.code_mode_only": false,
+	"features.code_mode_host": false,
+	"features.hooks": false,
+	"features.memories": false,
+	"features.shell_snapshot": false,
+});
+
 /**
  * Stable native storage key for one Conversation generation. Derived from
  * server-resolved identity only, so a wire field can never select or traverse
@@ -218,6 +233,7 @@ export function codexConversationKey(binding: {
 }
 
 export interface CodexAppServerBridgeOptions {
+	readonly modelOnly?: boolean;
 	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
@@ -485,6 +501,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	modelOnly: boolean;
 	readonly launchPath?: string;
 	dataDirectory: string;
 	conversationKey: string;
@@ -665,6 +682,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"modelOnly",
 		"launchPath",
 		"dataDirectory",
 		"conversationKey",
@@ -721,6 +739,14 @@ function validateOptions(input: unknown): ValidatedOptions {
 	)
 		configurationInvalid();
 	const privateLane = privateNativeLaneRequired(input);
+	if (
+		(input.modelOnly !== undefined && typeof input.modelOnly !== "boolean") ||
+		(input.modelOnly === true &&
+			(privateLane ||
+				input.nativeBarrierRequired === true ||
+				!input.modelAccess))
+	)
+		configurationInvalid();
 	if (
 		input.nativeBarrierRequired === false &&
 		(CODEX_NATIVE_BARRIER_REQUIRED || privateLane)
@@ -786,6 +812,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		nativeBarrierRequired:
 			input.nativeBarrierRequired ??
 			(CODEX_NATIVE_BARRIER_REQUIRED || privateLane),
+		modelOnly: input.modelOnly === true,
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
@@ -1538,6 +1565,14 @@ export class CodexAppServerBridge {
 						: []),
 					"--config",
 					"features.plugins=false",
+					...(validated.modelOnly
+						? Object.entries(CODEX_MODEL_ONLY_CONFIG).flatMap(
+								([key, value]) => [
+									"--config",
+									`${key}=${JSON.stringify(value)}`,
+								],
+							)
+						: []),
 					// On Linux the boundary above is the only filesystem boundary. The
 					// pinned legacy Landlock backend has to read the whole filesystem
 					// tree before it runs a tool, so keeping it enabled would force a
@@ -1569,6 +1604,7 @@ export class CodexAppServerBridge {
 					env: {
 						...nativeLaunchPolicy.environment,
 						...loopbackProxyEnvironment(),
+						...(validated.modelOnly ? { CODEX_EXEC_SERVER_URL: "none" } : {}),
 						...(validated.modelAccess
 							? {
 									[modelCredentialEnvironmentKey]:

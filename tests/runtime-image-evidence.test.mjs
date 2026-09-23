@@ -10,6 +10,7 @@ import {
 const evidence = {
 	schemaVersion: 1,
 	status: "passed",
+	capability: "official-model-only",
 	codexVersion: "0.153.0",
 	configurationSchemaVersion: 2,
 	configVersion: "synthetic-active-v2",
@@ -24,8 +25,8 @@ const evidence = {
 		"http-failures-redacted",
 		"stream-failures-redacted",
 		"cancellation-aborts-upstream",
-		"native-sandboxed-tool-execution",
-		"native-sibling-conversation-denied",
+		"native-shell-rejected-without-side-effects",
+		"native-apply-patch-rejected-without-side-effects",
 		"recursive-native-storage-redacted",
 		"personal-configuration-isolated",
 	],
@@ -37,6 +38,16 @@ test("runtime image evidence requires the complete pinned native probe", () => {
 		null,
 		{},
 		{ ...evidence, status: "failed" },
+		{ ...evidence, capability: undefined },
+		{ ...evidence, capability: "private-native-tools" },
+		{
+			...evidence,
+			checks: evidence.checks.map((check) =>
+				check === "native-shell-rejected-without-side-effects"
+					? "native-sandboxed-tool-execution"
+					: check,
+			),
+		},
 		{ ...evidence, codexVersion: "other" },
 		{ ...evidence, configurationSchemaVersion: 1 },
 		{ ...evidence, checks: ["healthz"] },
