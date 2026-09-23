@@ -1,4 +1,9 @@
-import type { V1Pod, V1Secret, V1StatefulSet } from "@kubernetes/client-node";
+import type {
+	V1Pod,
+	V1Secret,
+	V1Service,
+	V1StatefulSet,
+} from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import { workloadDesiredFixture } from "./kubernetes.fixture.js";
 import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
@@ -286,6 +291,117 @@ describe("persisted recovery candidate Kubernetes operations", () => {
 		).toBe(true);
 		expect(remove).toHaveBeenCalledTimes(2);
 	});
+	it.each([
+		"NodePort",
+		"LoadBalancer",
+		"external IP",
+		"foreign selector",
+		"changed port",
+		"routing annotation",
+	] as const)(
+		"retains recovery resources with probe Service drift: %s",
+		async (mutation) => {
+			const f = await recoveryFixture();
+			expect(
+				await f.adapter.closeAgent(
+					f.desired.agentId,
+					f.desired.workloadRevision,
+					f.desired.fence,
+				),
+			).toBe(true);
+			const probeName = `${f.desired.service.name}-probe`;
+			const probe = await f.client.read<V1Service>("Service", probeName);
+			if (!probe?.spec || !probe.metadata?.annotations) throw new Error();
+			if (mutation === "NodePort" || mutation === "LoadBalancer")
+				probe.spec.type = mutation;
+			if (mutation === "external IP") probe.spec.externalIPs = ["192.0.2.1"];
+			if (mutation === "foreign selector")
+				probe.spec.selector = { "agent-infra.agora.io/agent": "foreign-agent" };
+			if (mutation === "changed port")
+				probe.spec.ports = [{ name: "runtime", port: 9090, targetPort: 9090 }];
+			if (mutation === "routing annotation")
+				probe.metadata.annotations[
+					"external-dns.alpha.kubernetes.io/hostname"
+				] = "probe.example.test";
+			f.resources.set(`Service/${probeName}`, probe);
+			const remove = vi.spyOn(f.client, "delete");
+			expect(
+				await f.adapter.removeRecoveryWorkload(
+					f.desired,
+					f.identity,
+					f.creation,
+				),
+			).toBe(false);
+			expect(remove).not.toHaveBeenCalled();
+			// A retry after the candidate disappeared must also retain its Secret.
+			f.resources.delete(`StatefulSet/${f.desired.service.name}`);
+			f.resources.delete(`Pod/${f.desired.service.name}-0`);
+			expect(
+				await f.adapter.removeRecoverySecret(
+					f.desired,
+					f.reference,
+					f.secretUid,
+					f.creation,
+				),
+			).toBe(false);
+			expect(remove).not.toHaveBeenCalled();
+			expect(await f.client.read("Secret", f.reference.name)).toEqual(f.secret);
+		},
+	);
+	it.each(["internal", "absent"] as const)(
+		"cleans recovery resources with an %s probe under a newer management fence",
+		async (state) => {
+			const f = await recoveryFixture();
+			if (state === "absent")
+				f.resources.delete(`Service/${f.desired.service.name}-probe`);
+			const latest = { ...f.desired, fence: 4 };
+			await f.adapter.closeAgent(
+				latest.agentId,
+				latest.workloadRevision,
+				latest.fence,
+			);
+			expect(
+				await f.adapter.removeRecoveryWorkload(latest, f.identity, f.creation),
+			).toBe(true);
+			expect(
+				await f.adapter.removeRecoverySecret(
+					latest,
+					f.reference,
+					f.secretUid,
+					f.creation,
+				),
+			).toBe(true);
+		},
+	);
+	it.each(["foreign Agent", "newer fence"] as const)(
+		"rejects a probe Service with a %s before deleting recovery resources",
+		async (mutation) => {
+			const f = await recoveryFixture();
+			const probeName = `${f.desired.service.name}-probe`;
+			const probe = await f.client.read<V1Service>("Service", probeName);
+			if (!probe?.metadata?.annotations) throw new Error();
+			if (mutation === "foreign Agent")
+				probe.metadata.annotations["agent-infra.agora.io/agent-id"] = "agent-b";
+			else probe.metadata.annotations[fenceKey] = "3";
+			f.resources.set(`Service/${probeName}`, probe);
+			const remove = vi.spyOn(f.client, "delete");
+			const error = {
+				code: mutation === "foreign Agent" ? "policy" : "conflict",
+			};
+			await expect(
+				f.adapter.removeRecoveryWorkload(f.desired, f.identity, f.creation),
+			).rejects.toMatchObject(error);
+			await expect(
+				f.adapter.removeRecoverySecret(
+					f.desired,
+					f.reference,
+					f.secretUid,
+					f.creation,
+				),
+			).rejects.toMatchObject(error);
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
 	it.each([
 		"no identity",
 		"different UID",

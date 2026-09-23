@@ -209,7 +209,7 @@ export function matchesNetworkPolicySpec(
 				_from: rule._from?.map(peer),
 				ports: rule.ports?.map(port),
 			})),
-			egress: value.egress?.map((rule) => ({
+			egress: (value.egress ?? []).map((rule) => ({
 				...rule,
 				to: rule.to?.map(peer),
 				ports: rule.ports?.map(port),

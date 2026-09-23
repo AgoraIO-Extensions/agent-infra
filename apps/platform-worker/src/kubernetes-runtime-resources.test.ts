@@ -467,6 +467,39 @@ describe("GA Kubernetes Workload adapter", () => {
 			).toHaveLength(1);
 		}
 	});
+	it("accepts omitted empty NetworkPolicy egress without accepting widened access", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const network = await f.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		if (!network?.spec) throw new Error();
+		expect(network.spec.egress).toEqual([]);
+		// The API server omits an empty egress slice when encoding the policy.
+		delete network.spec.egress;
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, network);
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("healthy");
+		expect(f.probe).toHaveBeenCalledTimes(1);
+
+		network.spec.egress = [{}];
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, network);
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
+		delete network.spec.egress;
+		network.spec.policyTypes = ["Ingress"];
+		f.resources.set(`NetworkPolicy/${desired.service.name}`, network);
+		expect(
+			await adapter.observe(desired, identity, "closed", "activation"),
+		).toBe("drifted");
+		expect(f.probe).toHaveBeenCalledTimes(1);
+	});
 	it("repairs widened NetworkPolicy ingress ports before a candidate can route", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

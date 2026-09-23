@@ -288,7 +288,7 @@ export function createKubernetesWorkloadCleanupV1(
 		const resources = await Promise.all([
 			client.read<V1Service>("Service", name),
 			client.read("Ingress", name),
-			client.read("Service", `${name}-probe`),
+			client.read<V1Service>("Service", `${name}-probe`),
 			client.read("ServiceAccount", name),
 			client.read("NetworkPolicy", name),
 			client.read("PersistentVolumeClaim", value.persistentVolume.name),
@@ -302,9 +302,19 @@ export function createKubernetesWorkloadCleanupV1(
 	}
 	async function recoveryCleanupIsClosed(value: AgentWorkloadDesiredV1) {
 		const name = workloadResourceNameV1(value.agentId);
-		const [service, ingress] = await recoveryManagementResources(value);
+		const [service, ingress, probe] = await recoveryManagementResources(value);
 		return (
 			ingress === null &&
+			(probe === null ||
+				(hasOnlyControllerRoutingMetadata(probe) &&
+					matchesServiceSpec(
+						probe.spec,
+						serviceSpec(value, {
+							[ownerLabel]: name,
+							[revisionLabel]:
+								probe.metadata?.labels?.[revisionLabel] ?? "closed",
+						}),
+					))) &&
 			(service === null ||
 				(hasOnlyControllerRoutingMetadata(service) &&
 					service.metadata?.labels?.[revisionLabel] ===
