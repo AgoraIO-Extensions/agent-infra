@@ -901,6 +901,17 @@ export function ConnectionsPage() {
 	);
 }
 
+function actionVersions(connection: Connection) {
+	return [
+		...new Set(
+			connection.actionVersionIds.flatMap((id) => {
+				const version = id.match(/@(v\d+)$/)?.[1];
+				return version ? [version] : [];
+			}),
+		),
+	].sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
+}
+
 function ConnectorManagementWorkspace(props: {
 	connections: Connection[];
 	grants: Grant[];
@@ -1020,33 +1031,39 @@ function ConnectorManagementWorkspace(props: {
 									<p>{accounts.length} 个账号</p>
 								</div>
 							</div>
-							{accounts.map((account) => (
-								<button
-									className={account.id === selected.id ? "active" : ""}
-									key={account.id}
-									onClick={() => setConnectionId(account.id)}
-									type="button"
-								>
-									<span className="connection-account-avatar">
-										{account.displayName.slice(0, 1).toUpperCase()}
-									</span>
-									<span>
-										<b>{account.displayName}</b>
-										<small>{account.externalAccount}</small>
-										<small>
-											{
-												props.grants.filter(
-													(grant) =>
-														grant.connectionId === account.id &&
-														grant.status === "ACTIVE",
-												).length
-											}{" "}
-											个客户端
-										</small>
-									</span>
-									<ChevronRight aria-hidden="true" size={16} />
-								</button>
-							))}
+							{accounts.map((account) => {
+								const versions = actionVersions(account);
+								return (
+									<button
+										className={account.id === selected.id ? "active" : ""}
+										key={account.id}
+										onClick={() => setConnectionId(account.id)}
+										type="button"
+									>
+										<span className="connection-account-avatar">
+											{account.displayName.slice(0, 1).toUpperCase()}
+										</span>
+										<span>
+											<b>{account.displayName}</b>
+											<small>{account.externalAccount}</small>
+											{versions.length ? (
+												<small>授权版本 {versions.join(", ")}</small>
+											) : null}
+											<small>
+												{
+													props.grants.filter(
+														(grant) =>
+															grant.connectionId === account.id &&
+															grant.status === "ACTIVE",
+													).length
+												}{" "}
+												个客户端
+											</small>
+										</span>
+										<ChevronRight aria-hidden="true" size={16} />
+									</button>
+								);
+							})}
 						</section>
 						<section className="connection-grant-list">
 							<div className="connection-selected-account">
