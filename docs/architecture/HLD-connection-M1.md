@@ -132,6 +132,11 @@ Build artifact 有界读取与 HCI OAuth 双层鉴权发布为新的 `@v7` Actio
 以及 `jenkins-ci-connection-v7` 和 `jenkins-release-connection-v7` ProviderRelease；
 Jenkins CI 的用户入口是 `jenkins-ci.agoralab.co`，机器 API 固定访问
 `jenkins-api.bj2.agoralab.co`，
+
+Jenkins v8 增加 `build_job`、`abort_build` 和 `rebuild_job` 三个 WRITE Action。参数仅允许最多
+100 个 string、number 或 boolean 标量；abort 只调用 graceful `/stop`，不开放 `/term`、`/kill`
+或任意请求。WRITE 在提交开始后遇到网络错误或 5xx 必须进入 `UNCERTAIN`，禁止自动重试；rebuild
+只读取历史参数并创建新 Queue item，不修改历史 Build。
 不修改 immutable v4 catalog。Artifact path 逐段校验，响应固定为 identity representation，单页最多
 256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
 Connection/Grant 同样不自动获得该新增 Action。

@@ -16,9 +16,84 @@ test("Jenkins deployment profiles have isolated catalog identities", () => {
 	assert.notEqual(first.provider, second.provider);
 	assert.notEqual(first.providerReleaseId, second.providerReleaseId);
 	assert.equal(first.actions[0]?.name, "jenkins-ci.get_current_user");
-	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v7");
+	assert.equal(first.actions[0]?.id, "jenkins-ci.get_current_user@v8");
 	assert.equal(second.actions[0]?.name, "jenkins-release.get_current_user");
-	assert.equal(second.providerReleaseId, "jenkins-release-connection-v7");
+	assert.equal(second.providerReleaseId, "jenkins-release-connection-v8");
+	assert.deepEqual(
+		first.actions
+			.filter((action) => action.effect === "WRITE")
+			.map((action) => action.name),
+		[
+			"jenkins-ci.build_job",
+			"jenkins-ci.abort_build",
+			"jenkins-ci.rebuild_job",
+		],
+	);
+});
+
+test("Jenkins write actions submit bounded requests", async () => {
+	const requests: Request[] = [];
+	const adapter = new JenkinsAdapter(jenkinsCiProfile, async (input, init) => {
+		const request = new Request(input, init);
+		requests.push(request);
+		if (request.method === "GET")
+			return Response.json({
+				actions: [{ parameters: [{ name: "branch", value: "main" }] }],
+			});
+		return new Response(null, {
+			status: 201,
+			headers: {
+				location: "https://jenkins-api.bj2.agoralab.co/queue/item/42/",
+			},
+		});
+	});
+	const build = await adapter.execute({
+		action: "jenkins-ci.build_job",
+		credential: { accessToken: credential },
+		input: {
+			jobFullName: "SDK/build",
+			parameters: { branch: "dev", clean: true },
+		},
+	});
+	await adapter.execute({
+		action: "jenkins-ci.abort_build",
+		credential: { accessToken: credential },
+		input: { jobFullName: "SDK/build", buildNumber: 9 },
+	});
+	await adapter.execute({
+		action: "jenkins-ci.rebuild_job",
+		credential: { accessToken: credential },
+		input: {
+			jobFullName: "SDK/build",
+			buildNumber: 8,
+			parameters: { clean: false },
+		},
+	});
+	assert.deepEqual(build, {
+		accepted: true,
+		location: "https://jenkins-api.bj2.agoralab.co/queue/item/42/",
+		queueId: 42,
+	});
+	assert.equal(requests[0]?.method, "POST");
+	assert.equal(await requests[0]?.text(), "branch=dev&clean=true");
+	assert.match(requests[1]?.url ?? "", /\/9\/stop$/);
+	assert.equal(requests[2]?.method, "GET");
+	assert.equal(await requests[3]?.text(), "branch=main&clean=false");
+});
+
+test("Jenkins marks lost write responses as submission uncertain", async () => {
+	const adapter = new JenkinsAdapter(jenkinsCiProfile, async () => {
+		throw new TypeError("socket closed");
+	});
+	await assert.rejects(
+		adapter.execute({
+			action: "jenkins-ci.build_job",
+			credential: { accessToken: credential },
+			input: { jobFullName: "SDK/build" },
+		}),
+		(error: Error & { submissionUncertain?: boolean }) =>
+			error.submissionUncertain === true,
+	);
 });
 
 test("Jenkins validates identity without returning the API Token", async () => {
