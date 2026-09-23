@@ -392,7 +392,11 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					);
 					const input: WorkloadReconciliationInputV1 = {
 						management,
-						configuration,
+						// The Worker V2 configuration contract is delivered by the
+						// Kubernetes slice; this legacy store path consumes only the
+						// shared persisted fields until that slice is merged.
+						configuration:
+							configuration as unknown as WorkloadReconciliationInputV1["configuration"],
 						state,
 						requestId,
 						traceId,
