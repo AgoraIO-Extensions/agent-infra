@@ -659,6 +659,7 @@ async function readOperationSuccessorFacts(
 				and event_type = 'execution.operation'
 				and source = 'runtime'
 				and event_payload->'fact'->>'attemptRef' = ${next.attemptRef}
+			order by sequence desc
 			limit 1
 		), parent as (
 			select event_payload
