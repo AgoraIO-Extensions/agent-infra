@@ -167,13 +167,21 @@ export function assemblePlatformApi(
 					intent: "discover",
 				});
 				if (configuration.outcome !== "found") return { outcome: "denied" };
-				supportsSupplementaryInstruction = (
-					await input.presentAgent({
-						agentId,
-						configuration: configuration.configuration,
+				const runtime = await configurationQuery.readRuntimePresentation({
+					agentId,
+					actorId: currentUser.userId,
+					organizationIds: currentUser.organizationIds,
+					accountStatus: currentUser.accountStatus,
+					isAdministrator: identity.roles.includes("system_admin"),
+					expected: {
+						configurationRevision: configuration.configuration.revision,
 						management: agent.management,
-					})
-				).capabilities.supplementaryInstruction;
+					},
+				});
+				if (runtime.outcome !== "found")
+					throw new Error("Current Runtime capability is unavailable");
+				supportsSupplementaryInstruction =
+					runtime.capabilities?.supplementaryInstruction === true;
 			}
 			const taskBoundary = await taskAuthorization.captureUserBoundary({
 				user: currentUser,

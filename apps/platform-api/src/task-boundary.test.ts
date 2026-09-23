@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { CurrentTaskUserV1 } from "@agent-infra/platform-core";
 import {
 	migratePlatformDatabase,
+	PostgresAgentConfigurationQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import {
@@ -20,6 +21,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { startPlatformApi } from "./index.js";
@@ -129,36 +131,8 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			allocateApplicationIds: unavailable,
 			prepareApplicationSecrets: unavailable,
 			prepareConfigurationSecrets: unavailable,
-			presentAgent: async ({ configuration }) => ({
-				source: {
-					kind: "standard",
-					templateId: "template_01",
-					displayName: "Test template",
-				},
-				resourceProfile: {
-					profileId: "test",
-					displayName: "Test",
-					estimatedResources: {
-						cpuMillicores: 1000,
-						memoryMiB: 1024,
-						storageGiB: 1,
-					},
-				},
-				modelOptions: configuration.modelOptions.map((option) => ({
-					...option,
-					reasoningLevels: [...option.reasoningLevels],
-					displayName: option.modelId,
-				})),
-				channels: [{ kind: "web", status: "available" }],
-				capabilities: {
-					modelSelection: true,
-					attachments: false,
-					resultFiles: false,
-					connection: false,
-					supplementaryInstruction: false,
-				},
-				interactionUrl: null,
-			}),
+			// Browser projection availability is not task authorization authority.
+			presentAgent: unavailable,
 		});
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
@@ -243,6 +217,111 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			},
 		]);
 	});
+	it.each(["stale", "unavailable", "failure"] as const)(
+		"rejects a %s capability snapshot without persisting a task",
+		async (mode) => {
+			const conversationId = await createConversation();
+			const before = await snapshot();
+			const read =
+				PostgresAgentConfigurationQueryV1.prototype.readRuntimePresentation;
+			vi.spyOn(
+				PostgresAgentConfigurationQueryV1.prototype,
+				"readRuntimePresentation",
+			).mockImplementationOnce(async function (
+				this: PostgresAgentConfigurationQueryV1,
+				input,
+			) {
+				if (mode === "failure") throw new Error("private Store payload");
+				await db.unsafe(
+					mode === "stale"
+						? "update platform.agent_applications set management_revision=12 where agent_id=$1"
+						: "delete from platform.agent_availability where agent_id=$1",
+					[configuration.agentId],
+				);
+				const result = await read.call(this, input);
+				expect(result.outcome).toBe(mode);
+				return result;
+			});
+			const response = await post(
+				`/conversations/${conversationId}/messages`,
+				{ schemaVersion: 1, text: "synthetic" },
+				"capability-unavailable",
+			);
+			expect(response.status).toBe(503);
+			const body = await response.json();
+			expect(body).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+				retryable: true,
+			});
+			expect(JSON.stringify(body)).not.toContain("private Store payload");
+			expect(await snapshot()).toEqual(before);
+		},
+	);
+	it.each(["enabled", "disabled", "absent", "drifted"] as const)(
+		"accepts supplements only with a currently verified capability: %s",
+		async (mode) => {
+			const deployment = {
+				...workloadDesiredFixture(1, configuration.agentId, "internal-only"),
+				configRevision: configuration.revision,
+			};
+			const configured = {
+				...configuration,
+				source: {
+					...configuration.source,
+					imageDigest: deployment.imageDigest,
+				},
+			};
+			await db.unsafe(
+				"update platform.agent_configuration_revisions set configuration=$2::text::jsonb where agent_id=$1",
+				[configuration.agentId, JSON.stringify(configured)],
+			);
+			const version = { configuration: configured, deployment };
+			if (mode !== "absent")
+				await db.unsafe(
+					"insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at) values($1,1,$2::text::jsonb,now())",
+					[
+						configuration.agentId,
+						JSON.stringify({
+							schemaVersion: 1,
+							agentId: configuration.agentId,
+							sourceConfigurationRevision: configuration.revision,
+							sourceLifecycleRevision: 1,
+							revision: 1,
+							fence: 1,
+							phase: "ready",
+							candidate: version,
+							verified: version,
+							verifiedRevision: mode === "drifted" ? 2 : 1,
+							identity: { uid: "observed-uid", generation: 1 },
+							rollback: false,
+							failureCode: null,
+							attempts: 0,
+							capabilities: { supplementaryInstruction: mode !== "disabled" },
+						}),
+					],
+				);
+			const conversationId = await createConversation();
+			const first = await post(
+				`/conversations/${conversationId}/messages`,
+				{ schemaVersion: 1, text: "first message" },
+				"first",
+			);
+			expect(first.status).toBe(202);
+			const accepted = (await first.json()) as { executionId: string };
+			const before = await snapshot();
+			const supplement = await post(
+				`/conversations/${conversationId}/messages`,
+				{ schemaVersion: 1, text: "supplement" },
+				"supplement",
+			);
+			expect(supplement.status).toBe(mode === "enabled" ? 202 : 409);
+			if (mode === "enabled")
+				expect(await supplement.json()).toMatchObject({
+					executionId: accepted.executionId,
+				});
+			else expect(await snapshot()).toEqual(before);
+		},
+	);
 	it("replays acceptance once and preserves read, stop, and audit bindings", async () => {
 		const conversationId = await createConversation();
 		const body = { schemaVersion: 1, text: "private-task-test-sentinel" };
