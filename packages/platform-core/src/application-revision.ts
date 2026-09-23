@@ -1,20 +1,20 @@
 import {
 	type AgentConfigurationAccessTargetV1,
-	type AgentConfigurationActionV1,
 	type AgentConfigurationActorContextV1,
 	type AgentConfigurationChannelChangeV1,
 	AgentConfigurationError,
 	type AgentConfigurationModelInputV1,
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretReplacementInputV1,
 	type AgentConfigurationSourceSelectionV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentConfigurationWritePlanV1,
 	captureAgentConfigurationWritePlanV1,
-	decodeAgentConfigurationRecordV1,
+	decodeAgentConfigurationRecordV2,
 	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
-	type UpdateAgentConfigurationCommandV1,
+	type UpdateAgentConfigurationCommandV2,
+	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
 import {
 	type AgentManagementActorContextV1,
@@ -37,8 +37,8 @@ import {
 	resolvePendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
 
-export interface ReviseApplicationCommandV1 {
-	readonly schemaVersion: 1;
+export interface ReviseApplicationCommandV2 {
+	readonly schemaVersion: 2;
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -53,7 +53,6 @@ export interface ReviseApplicationCommandV1 {
 		readonly value: string;
 	}[];
 	readonly secrets?: readonly AgentConfigurationSecretReplacementInputV1[];
-	readonly actions: readonly AgentConfigurationActionV1[];
 	readonly channels?: readonly AgentConfigurationChannelChangeV1[];
 }
 
@@ -82,7 +81,7 @@ export interface ApplicationRevisionReadStateV1 {
 		readonly description: string;
 	};
 	readonly management: AgentManagementStateV1;
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly authorizationRevision: string;
 }
 
@@ -161,8 +160,13 @@ export interface ApplicationRevisionTransactionPortV1 {
 }
 
 export interface ApplicationRevisionUseCaseV1 {
+	replayLegacyV1(
+		command: unknown,
+		actorContext: ApplicationRevisionActorContextV1,
+	): Promise<ApplicationRevisionResultV1>;
+
 	revise(
-		command: ReviseApplicationCommandV1,
+		command: ReviseApplicationCommandV2,
 		actorContext: ApplicationRevisionActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<ApplicationRevisionResultV1>;
@@ -221,7 +225,10 @@ function exactObject(
 	}
 }
 
-function parseCommand(input: unknown): ReviseApplicationCommandV1 {
+function parseCommand(
+	input: unknown,
+	legacy = false,
+): ReviseApplicationCommandV2 {
 	const values = exactObject(
 		input,
 		[
@@ -235,12 +242,12 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 			"availability",
 			"source",
 			"environment",
-			"actions",
+			...(legacy ? ["actions"] : []),
 		],
 		["modelConfiguration", "secrets", "channels"],
 	);
 	if (
-		values.schemaVersion !== 1 ||
+		values.schemaVersion !== (legacy ? 1 : 2) ||
 		!isAgentManagementText(values.idempotencyKey, 128) ||
 		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
 		!isAgentManagementText(values.requestId) ||
@@ -251,13 +258,20 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 	) {
 		invalidCommand();
 	}
+	if (legacy) {
+		try {
+			validateLegacyInitialActionsV1(values.actions);
+		} catch {
+			invalidCommand();
+		}
+	}
 	let coOwnerIds: readonly string[];
 	try {
 		coOwnerIds = parseAgentManagementStringArray(values.coOwnerIds, true);
 	} catch {
 		invalidCommand();
 	}
-	let changes: UpdateAgentConfigurationCommandV1["changes"];
+	let changes: UpdateAgentConfigurationCommandV2["changes"];
 	try {
 		changes = parseAgentConfigurationChangesV1({
 			coOwnerIds,
@@ -268,7 +282,6 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 				: {}),
 			environment: values.environment,
 			...(Object.hasOwn(values, "secrets") ? { secrets: values.secrets } : {}),
-			actions: values.actions,
 			...(Object.hasOwn(values, "channels")
 				? { channels: values.channels }
 				: {}),
@@ -280,13 +293,12 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 		!changes.coOwnerIds ||
 		!changes.availability ||
 		!changes.source ||
-		!changes.environment ||
-		!changes.actions
+		!changes.environment
 	) {
 		invalidCommand();
 	}
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
@@ -300,7 +312,6 @@ function parseCommand(input: unknown): ReviseApplicationCommandV1 {
 			: {}),
 		environment: changes.environment,
 		...(Object.hasOwn(changes, "secrets") ? { secrets: changes.secrets } : {}),
-		actions: changes.actions,
 		...(Object.hasOwn(changes, "channels")
 			? { channels: changes.channels }
 			: {}),
@@ -400,7 +411,7 @@ function parseReadState(input: unknown): ApplicationRevisionReadStateV1 {
 		const management = parseAgentManagementPortState(
 			state.management as AgentManagementStateV1,
 		);
-		const configuration = decodeAgentConfigurationRecordV1(state.configuration);
+		const configuration = decodeAgentConfigurationRecordV2(state.configuration);
 		if (
 			state.schemaVersion !== 1 ||
 			!isAgentManagementText(application.applicationId) ||
@@ -517,7 +528,7 @@ async function requireCurrentAuthorization(
 	dependencies: ApplicationRevisionUseCaseDependenciesV1,
 	agentId: string,
 	actorContext: ApplicationRevisionActorContextV1,
-	command: ReviseApplicationCommandV1,
+	command: ReviseApplicationCommandV2,
 ): Promise<string> {
 	let decision: unknown;
 	try {
@@ -707,16 +718,17 @@ export function snapshotApplicationRevisionWritePlanV1(
 			if (
 				configuration.agentId !== application.agentId ||
 				configuration.baseRevision !== expected.configurationRevision ||
-				configuration.nextRevision !== expected.configurationRevision + 1 ||
+				configuration.expectedManagementRevision !==
+					expected.managementRevision ||
 				configuration.expectedAuthorizationRevision !==
 					expected.authorizationRevision ||
 				configuration.nextAuthorizationRevision !==
 					top.nextAuthorizationRevision ||
 				result.configurationRevision !== configuration.nextRevision ||
 				configuration.idempotency.key !== idempotency.key ||
-				configuration.outboxIntent.traceId !== application.traceId ||
-				configuration.outboxIntent.requestId !== application.requestId ||
-				configuration.outboxIntent.occurredAt.getTime() !==
+				configuration.auditEvent.traceId !== application.traceId ||
+				configuration.auditEvent.requestId !== application.requestId ||
+				configuration.auditEvent.occurredAt.getTime() !==
 					management.transition.occurredAt.getTime() ||
 				configuration.auditEvent.actorId !== application.applicantId
 			) {
@@ -801,7 +813,7 @@ function configurationError(error: unknown): ApplicationRevisionError {
 
 async function captureConfigurationPlan(
 	state: ApplicationRevisionReadStateV1,
-	command: ReviseApplicationCommandV1,
+	command: ReviseApplicationCommandV2,
 	actorContext: ApplicationRevisionActorContextV1,
 	dependencies: ApplicationRevisionUseCaseDependenciesV1,
 	now: () => Date,
@@ -831,7 +843,7 @@ async function captureConfigurationPlan(
 	try {
 		capturedPlan = await captureAgentConfigurationWritePlanV1({
 			command: {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: state.application.agentId,
 				idempotencyKey: command.idempotencyKey,
 				requestId: command.requestId,
@@ -849,7 +861,6 @@ async function captureConfigurationPlan(
 					...(Object.hasOwn(command, "secrets")
 						? { secrets: command.secrets }
 						: {}),
-					actions: command.actions,
 					...(Object.hasOwn(command, "channels")
 						? { channels: command.channels }
 						: {}),
@@ -877,7 +888,7 @@ async function captureConfigurationPlan(
 
 async function captureManagementPlan(
 	state: ApplicationRevisionReadStateV1,
-	command: ReviseApplicationCommandV1,
+	command: ReviseApplicationCommandV2,
 	actorContext: ApplicationRevisionActorContextV1,
 	now: () => Date,
 ): Promise<AgentManagementWritePlanV1> {
@@ -977,166 +988,175 @@ export function createApplicationRevisionUseCaseV1(
 	options: ApplicationRevisionUseCaseOptionsV1 = {},
 ): ApplicationRevisionUseCaseV1 {
 	const now = options.now ?? (() => new Date());
-	return {
-		async revise(commandInput, actorContextInput, attachment) {
-			const command = parseCommand(commandInput);
-			const actorContext = parseActorContext(actorContextInput);
-			let readDecision: ApplicationRevisionReadDecisionV1;
-			try {
-				readDecision = parseReadDecision(
-					await dependencies.transaction.read({
-						schemaVersion: 1,
-						applicationId: actorContext.applicationId,
-						actorId: actorContext.userId,
-						idempotencyKey: command.idempotencyKey,
-						requestDigest: actorContext.rawRequestDigest,
-					}),
-				);
-			} catch {
-				throw new ApplicationRevisionError("persistence_failed");
-			}
-			if (readDecision.outcome === "unavailable") {
-				throw new ApplicationRevisionError("not_authorized");
-			}
-			if (readDecision.outcome === "idempotency_conflict") {
-				throw new ApplicationRevisionError("idempotency_conflict");
-			}
-			if (readDecision.outcome === "replayed") {
-				if (
-					readDecision.result.applicationId !== actorContext.applicationId ||
-					actorContext.accountStatus !== "active"
-				) {
-					throw new ApplicationRevisionError("not_authorized");
-				}
-				await requireCurrentAuthorization(
-					dependencies,
-					readDecision.result.agentId,
-					actorContext,
-					command,
-				);
-				return readDecision.result;
-			}
-			const state = readDecision.state;
+	const execute = async (
+		commandInput: unknown,
+		actorContextInput: ApplicationRevisionActorContextV1,
+		attachment?: PendingSecretRecordAttachmentResolverV1,
+		legacy = false,
+	): Promise<ApplicationRevisionResultV1> => {
+		const command = parseCommand(commandInput, legacy);
+		const actorContext = parseActorContext(actorContextInput);
+		let readDecision: ApplicationRevisionReadDecisionV1;
+		try {
+			readDecision = parseReadDecision(
+				await dependencies.transaction.read({
+					schemaVersion: 1,
+					applicationId: actorContext.applicationId,
+					actorId: actorContext.userId,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: actorContext.rawRequestDigest,
+				}),
+			);
+		} catch {
+			throw new ApplicationRevisionError("persistence_failed");
+		}
+		if (readDecision.outcome === "unavailable") {
+			throw new ApplicationRevisionError("not_authorized");
+		}
+		if (readDecision.outcome === "idempotency_conflict") {
+			throw new ApplicationRevisionError("idempotency_conflict");
+		}
+		if (readDecision.outcome === "replayed") {
 			if (
-				state.application.applicationId !== actorContext.applicationId ||
-				state.application.applicantId !== actorContext.userId ||
-				actorContext.accountStatus !== "active" ||
-				(state.management.status !== "pending_approval" &&
-					state.management.status !== "rejected")
+				readDecision.result.applicationId !== actorContext.applicationId ||
+				actorContext.accountStatus !== "active"
 			) {
 				throw new ApplicationRevisionError("not_authorized");
 			}
-			const sharedNow = cachedClock(now);
-			const configuration = await captureConfigurationPlan(
-				state,
-				command,
-				actorContext,
+			await requireCurrentAuthorization(
 				dependencies,
-				sharedNow,
-			);
-			const contentChanged =
-				state.application.name !== command.name ||
-				state.application.description !== command.description;
-			if (
-				!configuration.plan &&
-				!contentChanged &&
-				state.management.status === "pending_approval"
-			) {
-				throw new ApplicationRevisionError("no_change");
-			}
-			let management = await captureManagementPlan(
-				state,
-				command,
+				readDecision.result.agentId,
 				actorContext,
-				sharedNow,
+				command,
 			);
-			if (configuration.plan?.accessUpdate) {
-				management = {
-					...management,
-					state: {
-						...management.state,
-						ownerIds: configuration.plan.accessUpdate.ownerIds,
-						availability: configuration.plan.accessUpdate.availability,
-					},
-				};
-			}
-			const result: ApplicationRevisionResultV1 = {
-				schemaVersion: 1,
+			return readDecision.result;
+		}
+		if (legacy) throw new ApplicationRevisionError("invalid_command");
+		const state = readDecision.state;
+		if (
+			state.application.applicationId !== actorContext.applicationId ||
+			state.application.applicantId !== actorContext.userId ||
+			actorContext.accountStatus !== "active" ||
+			(state.management.status !== "pending_approval" &&
+				state.management.status !== "rejected")
+		) {
+			throw new ApplicationRevisionError("not_authorized");
+		}
+		const sharedNow = cachedClock(now);
+		const configuration = await captureConfigurationPlan(
+			state,
+			command,
+			actorContext,
+			dependencies,
+			sharedNow,
+		);
+		const contentChanged =
+			state.application.name !== command.name ||
+			state.application.description !== command.description;
+		if (
+			!configuration.plan &&
+			!contentChanged &&
+			state.management.status === "pending_approval"
+		) {
+			throw new ApplicationRevisionError("no_change");
+		}
+		let management = await captureManagementPlan(
+			state,
+			command,
+			actorContext,
+			sharedNow,
+		);
+		if (configuration.plan?.accessUpdate) {
+			management = {
+				...management,
+				state: {
+					...management.state,
+					ownerIds: configuration.plan.accessUpdate.ownerIds,
+					availability: configuration.plan.accessUpdate.availability,
+				},
+			};
+		}
+		const result: ApplicationRevisionResultV1 = {
+			schemaVersion: 1,
+			applicationId: state.application.applicationId,
+			agentId: state.application.agentId,
+			status: "pending_approval",
+			managementRevision: management.state.revision,
+			configurationRevision:
+				configuration.plan?.nextRevision ?? state.configuration.revision,
+		};
+		const occurredAt = management.transition.occurredAt;
+		const plan: ApplicationRevisionWritePlanV1 = {
+			schemaVersion: 1,
+			application: {
 				applicationId: state.application.applicationId,
 				agentId: state.application.agentId,
-				status: "pending_approval",
-				managementRevision: management.state.revision,
-				configurationRevision:
-					configuration.plan?.nextRevision ?? state.configuration.revision,
-			};
-			const occurredAt = management.transition.occurredAt;
-			const plan: ApplicationRevisionWritePlanV1 = {
-				schemaVersion: 1,
-				application: {
-					applicationId: state.application.applicationId,
-					agentId: state.application.agentId,
-					applicantId: state.application.applicantId,
-					name: command.name,
-					description: command.description,
-					traceId: command.traceId,
-					requestId: command.requestId,
-				},
-				expected: {
-					managementRevision: state.management.revision,
-					configurationRevision: state.configuration.revision,
-					authorizationRevision: state.authorizationRevision,
-				},
-				nextAuthorizationRevision: configuration.nextAuthorizationRevision,
-				management,
-				configuration: configuration.plan,
-				result,
-				idempotency: {
-					key: command.idempotencyKey,
-					requestDigest: actorContext.rawRequestDigest,
-				},
-				outboxIntent: {
-					operation: "agent.application.revised.v1",
-					payload: result,
-					traceId: command.traceId,
-					requestId: command.requestId,
+				applicantId: state.application.applicantId,
+				name: command.name,
+				description: command.description,
+				traceId: command.traceId,
+				requestId: command.requestId,
+			},
+			expected: {
+				managementRevision: state.management.revision,
+				configurationRevision: state.configuration.revision,
+				authorizationRevision: state.authorizationRevision,
+			},
+			nextAuthorizationRevision: configuration.nextAuthorizationRevision,
+			management,
+			configuration: configuration.plan,
+			result,
+			idempotency: {
+				key: command.idempotencyKey,
+				requestDigest: actorContext.rawRequestDigest,
+			},
+			outboxIntent: {
+				operation: "agent.application.revised.v1",
+				payload: result,
+				traceId: command.traceId,
+				requestId: command.requestId,
+				occurredAt,
+			},
+			auditEvent: management.auditEvent,
+		};
+		let attachments: PendingSecretRecordAttachmentsV1 | undefined;
+		if (plan.configuration !== null) {
+			try {
+				attachments = await resolvePendingSecretRecordAttachmentsV1({
+					attachment,
+					previousConfiguration: state.configuration,
+					configuration: plan.configuration.configuration,
+					ownerId: actorContext.userId,
 					occurredAt,
-				},
-				auditEvent: management.auditEvent,
-			};
-			let attachments: PendingSecretRecordAttachmentsV1 | undefined;
-			if (plan.configuration !== null) {
-				try {
-					attachments = await resolvePendingSecretRecordAttachmentsV1({
-						attachment,
-						previousConfiguration: state.configuration,
-						configuration: plan.configuration.configuration,
-						ownerId: actorContext.userId,
-						occurredAt,
-					});
-				} catch {
-					throw new ApplicationRevisionError("dependency_unavailable");
-				}
-			} else if (attachment !== undefined) {
+				});
+			} catch {
 				throw new ApplicationRevisionError("dependency_unavailable");
 			}
-			let commitDecision: ApplicationRevisionCommitDecisionV1;
-			try {
-				const capturedPlan = snapshotApplicationRevisionWritePlanV1(plan);
-				commitDecision = parseCommitDecision(
-					await dependencies.transaction.commit(capturedPlan, attachments),
-					result,
-				);
-			} catch {
-				throw new ApplicationRevisionError("persistence_failed");
-			}
-			if (commitDecision.outcome === "conflict") {
-				throw new ApplicationRevisionError(
-					commitDecision.reason === "idempotency_conflict"
-						? "idempotency_conflict"
-						: "stale_revision",
-				);
-			}
-			return commitDecision.result;
-		},
+		} else if (attachment !== undefined) {
+			throw new ApplicationRevisionError("dependency_unavailable");
+		}
+		let commitDecision: ApplicationRevisionCommitDecisionV1;
+		try {
+			const capturedPlan = snapshotApplicationRevisionWritePlanV1(plan);
+			commitDecision = parseCommitDecision(
+				await dependencies.transaction.commit(capturedPlan, attachments),
+				result,
+			);
+		} catch {
+			throw new ApplicationRevisionError("persistence_failed");
+		}
+		if (commitDecision.outcome === "conflict") {
+			throw new ApplicationRevisionError(
+				commitDecision.reason === "idempotency_conflict"
+					? "idempotency_conflict"
+					: "stale_revision",
+			);
+		}
+		return commitDecision.result;
+	};
+	return {
+		revise: (command, actor, attachment) => execute(command, actor, attachment),
+		replayLegacyV1: (command, actor) =>
+			execute(command, actor, undefined, true),
 	};
 }

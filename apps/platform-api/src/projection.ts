@@ -108,7 +108,7 @@ export function createPlatformProjectionReaders(
 				modelOptions: presentation.modelOptions,
 				defaultModelOptionId: configuration.defaultModelOptionId,
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
-				actions: configuration.actions,
+				actions: [],
 				environment: configuration.environment,
 				channels: presentation.channels,
 				secrets: configuration.secrets,

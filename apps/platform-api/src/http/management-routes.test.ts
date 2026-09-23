@@ -266,7 +266,7 @@ describe("management routes", () => {
 		expect(submit).toHaveBeenCalledOnce();
 		expect(submit).toHaveBeenCalledWith(
 			expect.objectContaining({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				applicationId: "application-1",
 				agentId: "agent-1",
 				idempotencyKey: "Command.Aa-01",
@@ -279,7 +279,6 @@ describe("management routes", () => {
 				source: applicationBody.source,
 				environment: [],
 				secrets: [{ name: "MODEL_API_KEY", replace: true }],
-				actions: [],
 				channels: [],
 			}),
 			{

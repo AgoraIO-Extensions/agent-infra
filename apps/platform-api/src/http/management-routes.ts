@@ -433,7 +433,6 @@ function applicationCommandFields(
 		source: body.source,
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		environment: body.environment,
-		actions: body.actions,
 	};
 }
 
@@ -487,7 +486,7 @@ export function registerManagementRoutes(
 			);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
@@ -590,7 +589,7 @@ export function registerManagementRoutes(
 			);
 			await dependencies.revision.revise(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,

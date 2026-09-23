@@ -99,6 +99,13 @@
       "when": 1789460914953,
       "tag": "0013_file_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789460914954,
+      "tag": "0014_configuration_v2",
+      "breakpoints": true
     }
   ]
 }

@@ -2,8 +2,8 @@ import { Buffer } from "node:buffer";
 
 import {
 	type AgentConfigurationAccessTargetV1,
-	type AgentConfigurationRecordV1,
-	decodeAgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
+	decodeAgentConfigurationRecordV2,
 } from "./agent-configuration.js";
 import {
 	ApplicationFoundationError,
@@ -45,7 +45,7 @@ export interface ApplicationFoundationSnapshot {
 	configurationRevisions: {
 		agentId: string;
 		revision: number;
-		configuration: AgentConfigurationRecordV1;
+		configuration: AgentConfigurationRecordV2;
 		createdAt: Date;
 	}[];
 	owners: { agentId: string; ownerId: string; createdAt: Date }[];
@@ -135,9 +135,9 @@ function sameValue(left: unknown, right: unknown): boolean {
 }
 
 function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
-	let configuration: ReturnType<typeof decodeAgentConfigurationRecordV1>;
+	let configuration: ReturnType<typeof decodeAgentConfigurationRecordV2>;
 	try {
-		configuration = decodeAgentConfigurationRecordV1(
+		configuration = decodeAgentConfigurationRecordV2(
 			plan.configurationRevision.configuration,
 		);
 	} catch {
@@ -256,7 +256,7 @@ export class FakeApplicationFoundationTransactionV1
 		if (!agent || !current || !Number.isSafeInteger(nextRevision)) {
 			throw new ApplicationFoundationError("persistence_failed");
 		}
-		const configuration = decodeAgentConfigurationRecordV1({
+		const configuration = decodeAgentConfigurationRecordV2({
 			...current.configuration,
 			revision: nextRevision,
 		});
