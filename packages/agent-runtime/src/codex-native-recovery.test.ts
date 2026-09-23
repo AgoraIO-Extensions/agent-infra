@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { RuntimeSubmitTurnRequestV1 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +33,10 @@ import { RuntimeHost } from "./runtime-host.js";
 const directories: string[] = [];
 const closers: (() => Promise<unknown>)[] = [];
 const enabled = process.env.AGENT_INFRA_CODEX_NATIVE_TEST === "1";
+const modelProviders = new Map<
+	string,
+	{ endpoint: string; launchPath: string }
+>();
 
 interface NativeResponses {
 	initialize: unknown;
@@ -175,7 +179,7 @@ async function nativeClient(path: string, experimentalApi = false) {
 	const bridge = await CodexAppServerBridge.open({
 		dataDirectory: path,
 		conversationKey: recoveryConversationKey,
-		model: "gpt-5.3-codex",
+		model: "gpt-5.6-sol",
 		reasoningEffort: "low",
 		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 	});
@@ -193,13 +197,14 @@ function shellQuote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-type LoopbackResponseMode = "active";
+type LoopbackResponseMode = "active" | "tool" | "custom-tool" | "text";
 
 async function loopbackResponsesProvider(
 	root: string,
-	responseMode?: LoopbackResponseMode,
+	responseMode: LoopbackResponseMode = "active",
 ) {
 	let requested = false;
+	let requestCount = 0;
 	const responses = new Set<ServerResponse>();
 	const server = createServer((request, response) => {
 		if (
@@ -207,17 +212,63 @@ async function loopbackResponsesProvider(
 			(request.url === "/v1/responses" || request.url === "/responses")
 		) {
 			requested = true;
+			requestCount++;
 			request.resume();
-			if (responseMode) {
-				response.writeHead(200, {
-					"cache-control": "no-cache",
-					"content-type": "text/event-stream",
-					connection: "keep-alive",
-				});
-				response.flushHeaders();
-				response.write(
-					'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_agent_infra_native"}}\n\n',
-				);
+			response.writeHead(200, {
+				"cache-control": "no-cache",
+				"content-type": "text/event-stream",
+				connection: "keep-alive",
+			});
+			response.flushHeaders();
+			response.write(
+				'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_agent_infra_native"}}\n\n',
+			);
+			if (responseMode !== "active") {
+				const item =
+					responseMode === "text"
+						? {
+								type: "message",
+								id: "synthetic-message",
+								role: "assistant",
+								content: [
+									{
+										type: "output_text",
+										text: "synthetic official response",
+									},
+								],
+							}
+						: responseMode === "custom-tool"
+							? {
+									type: "custom_tool_call",
+									name: "apply_patch",
+									call_id: "synthetic-tool-call",
+									input:
+										"*** Begin Patch\n*** Add File: unexpected-tool-effect\n+prohibited\n*** End Patch",
+								}
+							: {
+									type: "function_call",
+									name: "exec_command",
+									call_id: "synthetic-tool-call",
+									arguments: JSON.stringify({
+										cmd: "printf prohibited > unexpected-tool-effect",
+									}),
+								};
+				for (const event of [
+					{ type: "response.output_item.done", item },
+					{
+						type: "response.completed",
+						response: {
+							id: "resp_synthetic_tool",
+							status: "completed",
+							output: [item],
+							usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+						},
+					},
+				])
+					response.write(
+						`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+					);
+				response.end();
 			}
 			responses.add(response);
 			response.once("close", () => responses.delete(response));
@@ -241,6 +292,13 @@ async function loopbackResponsesProvider(
 	if (!address || typeof address === "string") {
 		throw new Error("Expected loopback provider port");
 	}
+	modelProviders.set(root, {
+		endpoint: `http://127.0.0.1:${address.port}/v1`,
+		launchPath: (process.env.PATH ?? "")
+			.split(delimiter)
+			.filter(isAbsolute)
+			.join(delimiter),
+	});
 	const nativeExecutable = execFileSync("which", ["codex"], {
 		encoding: "utf8",
 	}).trim();
@@ -248,7 +306,7 @@ async function loopbackResponsesProvider(
 		throw new Error("Expected pinned Codex binary");
 	const bin = join(root, "loopback-bin");
 	await mkdir(bin);
-	const provider = "agent_infra_native_fixture";
+	const provider = "agent_infra";
 	const providerConfigs = [
 		`model_provider=${JSON.stringify(provider)}`,
 		`model_providers.${provider}.name=${JSON.stringify("Agent Infra native fixture")}`,
@@ -268,7 +326,7 @@ async function loopbackResponsesProvider(
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
-	return { wasRequested: () => requested };
+	return { wasRequested: () => requested, requestCount: () => requestCount };
 }
 
 function ownedNativeProcesses() {
@@ -311,15 +369,21 @@ async function crash() {
 }
 
 function driverOptions(path: string) {
+	const provider = modelProviders.get(dirname(path));
+	if (!provider) throw new Error("Expected controlled model provider");
 	return {
 		path,
+		launchPath: provider.launchPath,
+		authorizeExternalAction: async () => {},
 		configVersion: "synthetic-config-1",
 		defaultModelOptionId: "synthetic",
 		defaultReasoningLevel: "low",
 		modelOptions: [
 			{
 				modelOptionId: "synthetic",
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
+				endpoint: provider.endpoint,
+				credential: "synthetic-native-model-credential",
 				reasoningLevels: ["low"],
 			},
 		],
@@ -506,6 +570,7 @@ async function seedDriver(path: string) {
 }
 
 afterEach(async () => {
+	modelProviders.clear();
 	vi.unstubAllEnvs();
 	for (const close of closers.splice(0).reverse())
 		await close().catch(() => {});
@@ -516,6 +581,78 @@ afterEach(async () => {
 describe
 	.skipIf(!enabled)
 	.sequential("pinned Codex native process recovery", () => {
+		it.each(["tool", "custom-tool"] as const)(
+			"rejects model-generated %s before execution on the official lane",
+			async (mode) => {
+				const root = await directory();
+				const path = join(root, "driver.json");
+				const provider = await loopbackResponsesProvider(root, mode);
+				const driver = await nativeDriver(path);
+				const accepted = await driver.execute(submit());
+				const state = JSON.parse(await readFile(path, "utf8")) as {
+					sessions: Record<
+						string,
+						{ requiredRuntime: { lane: string; barrier?: unknown } }
+					>;
+				};
+				const sessions = Object.values(state.sessions);
+				expect(sessions).toHaveLength(1);
+				expect(sessions[0]?.requiredRuntime.lane).toBe("official-model-only");
+				expect(sessions[0]?.requiredRuntime.barrier).toBeUndefined();
+				const facts = async () =>
+					(
+						await driver.replayEvents(
+							accepted.nativeSessionRef,
+							"synthetic-execution",
+						)
+					)
+						.filter((event) => event.type === "operation")
+						.map((event) => event.payload);
+				await expect
+					.poll(async () =>
+						(await facts()).some(
+							(fact) =>
+								fact.kind === "model" &&
+								fact.phase === "unknown" &&
+								fact.failureCode === "response_incomplete",
+						),
+					)
+					.toBe(true);
+				expect((await facts()).some((fact) => fact.kind === "tool")).toBe(
+					false,
+				);
+				await expect(
+					access(join(nativeWorkspace(path), "unexpected-tool-effect")),
+				).rejects.toThrow();
+				await driver.close();
+				expect(provider.requestCount()).toBe(1);
+			},
+			90_000,
+		);
+		it("completes an ordinary official model Turn through the guarded transport", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			const provider = await loopbackResponsesProvider(root, "text");
+			const driver = await nativeDriver(path);
+			const accepted = await driver.execute(submit());
+			await expect
+				.poll(() =>
+					driver.getStatus(accepted.nativeSessionRef, "synthetic-execution"),
+				)
+				.toBe("completed");
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"synthetic-execution",
+			);
+			expect(
+				events.some(
+					(event) =>
+						event.type === "text" &&
+						event.payload.delta === "synthetic official response",
+				),
+			).toBe(true);
+			expect(provider.requestCount()).toBe(1);
+		}, 90_000);
 		it("shows that the legacy turns-list read cannot observe a new active Turn", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
@@ -528,7 +665,7 @@ describe
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
 				effort: "low",
 			});
 			const legacy = await client
@@ -555,7 +692,7 @@ describe
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-legacy-first-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
 				effort: "low",
 			});
 			await client.waitForTurnStarted(started.thread.id, first.turn.id);
@@ -580,7 +717,7 @@ describe
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-legacy-next-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
 				effort: "low",
 			});
 			await client.waitForTurnStarted(started.thread.id, next.turn.id);
@@ -606,7 +743,7 @@ describe
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
 				effort: "low",
 			});
 			await client.waitForTurnStarted(started.thread.id, turn.turn.id);
@@ -642,7 +779,7 @@ describe
 				threadId: started.thread.id,
 				clientUserMessageId: "synthetic-operation",
 				input: [{ type: "text", text: "synthetic recovery input" }],
-				model: "gpt-5.3-codex",
+				model: "gpt-5.6-sol",
 				effort: "low",
 			});
 			await client.waitForTurnStarted(started.thread.id, turn.turn.id);

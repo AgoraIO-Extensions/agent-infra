@@ -87,6 +87,8 @@ export interface CodexModelRequestJournal {
 }
 
 export interface CodexModelTransportObserver {
+	/** Official lane has no controlled native tool dispatch boundary. */
+	readonly modelOnly?: boolean;
 	/** Persists intent and checks current authorization before permitting fetch. */
 	beforeRequest(
 		context: CodexModelRequestContext,
@@ -704,6 +706,7 @@ function semanticPayload(
 function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
+	modelOnly: boolean,
 ) {
 	if (
 		event.id !== undefined ||
@@ -721,6 +724,7 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
+		(modelOnly && !isModelOnlyEvent(value)) ||
 		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
@@ -762,6 +766,25 @@ function encodeValidatedEvent(
 		payload,
 		encoded: `${event.event ? `event: ${value.type}\n` : ""}data: ${JSON.stringify(projected)}\n\n`,
 	};
+}
+
+function isModelOnlyEvent(value: Record<string, unknown>) {
+	// Reject before projection, including tool data carried only in the terminal
+	// response. Native must never see a partial or complete tool invocation.
+	if (typeof value.type !== "string" || /tool|function_call/.test(value.type))
+		return false;
+	const items = value.item === undefined ? [] : [value.item];
+	if (isPlainRecord(value.response) && value.response.output !== undefined) {
+		if (!Array.isArray(value.response.output)) return false;
+		items.push(...value.response.output);
+	}
+	return items.every(
+		(item) =>
+			isPlainRecord(item) &&
+			["message", "reasoning", "compaction", "compaction_summary"].includes(
+				String(item.type),
+			),
+	);
 }
 
 // Matcher state retains only a possible credential prefix per semantic channel.
@@ -815,6 +838,7 @@ async function forwardValidatedStream(
 	controller: AbortController,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
+	modelOnly: boolean,
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let failed = false;
@@ -846,7 +870,7 @@ async function forwardValidatedStream(
 				failed = true;
 				return;
 			}
-			const result = encodeValidatedEvent(event, credentialMatcher);
+			const result = encodeValidatedEvent(event, credentialMatcher, modelOnly);
 			if (result.state === "invalid" || result.state === "failed") {
 				if (result.state === "failed") failure.code = "provider_error";
 				failed = true;
@@ -1001,6 +1025,7 @@ function routedRequest(
 		CodexModelAccess & { model: string; target: URL }
 	>,
 	admittedModel: ModelTurnSelection,
+	modelOnly: boolean,
 ) {
 	const decoded = decodeRequestBody(bytes, encoding);
 	if (decoded.byteLength > maximumRequestBytes) throw new Error();
@@ -1009,6 +1034,7 @@ function routedRequest(
 		throw new Error();
 	}
 	if (value.model !== admittedModel.internalModel) return;
+	if (modelOnly && !onlyClientToolDeclarations(value.tools)) return;
 	const route = routes.get(admittedModel.internalModel);
 	if (!route) return;
 	if (value.reasoning !== undefined && !isPlainRecord(value.reasoning)) return;
@@ -1025,12 +1051,27 @@ function routedRequest(
 	return { route, body: encodeRequestBody(body, encoding) };
 }
 
+function onlyClientToolDeclarations(value: unknown, depth = 0): boolean {
+	if (value === undefined) return true;
+	if (!Array.isArray(value) || depth > 8) return false;
+	return value.every((tool) => {
+		if (!isPlainRecord(tool)) return false;
+		if (tool.type === "function" || tool.type === "custom") return true;
+		return (
+			tool.type === "namespace" &&
+			Array.isArray(tool.tools) &&
+			onlyClientToolDeclarations(tool.tools, depth + 1)
+		);
+	});
+}
+
 export async function openCodexModelTransport(
 	input: readonly CodexModelRoute[],
 	observer: CodexModelTransportObserver,
 ) {
 	if (!observer || typeof observer.beforeRequest !== "function")
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const modelOnly = observer.modelOnly === true;
 	const routes = validatedRoutes(input);
 	const credentials = [
 		...new Set([...routes.values()].map(({ credential }) => credential)),
@@ -1394,6 +1435,7 @@ export async function openCodexModelTransport(
 				contentEncoding,
 				routes,
 				admittedModel,
+				modelOnly,
 			);
 			if (!routed) {
 				reject(response, 400);
@@ -1500,6 +1542,7 @@ export async function openCodexModelTransport(
 				controller,
 				credentialMatcher,
 				recordOutcome,
+				modelOnly,
 			);
 		} catch {
 			const interrupted = controller.signal.aborted;

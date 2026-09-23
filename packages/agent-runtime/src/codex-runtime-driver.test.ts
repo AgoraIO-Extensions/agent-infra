@@ -413,6 +413,7 @@ function generationCancelRequest(
 
 function driverOptions(path: string, configVersion = "synthetic-config-1") {
 	return {
+		nativeLane: "private-callback" as const,
 		path,
 		configVersion,
 		defaultModelOptionId: "model-option-primary",
@@ -8399,6 +8400,79 @@ const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
 ];
 
 describe("durable required runtime binding", () => {
+	it.each(["running", "unknown"] as const)(
+		"does not downgrade a private %s Session to the official model-only lane",
+		async (phase) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const command = submitCommand();
+			const first = await RuntimeBindingDriver.openBound(
+				driverOptions(path),
+				async () =>
+					new TestCodexBridge(
+						"private-thread",
+						"private-turn",
+						phase === "unknown",
+					),
+			);
+			drivers.push(first);
+			if (phase === "unknown")
+				await expect(first.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+			else await first.execute(command);
+			await first.close();
+			const before = await readFile(path, "utf8");
+			const state = JSON.parse(before) as StoredCodexDriverState;
+			const [operation] = Object.values(state.operations);
+			if (!operation?.nativeSessionRef)
+				throw new Error("missing private Session");
+			const ref = operation.nativeSessionRef;
+			expect(state.sessions[ref]?.requiredRuntime).toEqual(
+				expectedRuntimeRequirements(),
+			);
+			const authorize = vi.fn(async () => {});
+			const factory = vi.fn(async () => new TestCodexBridge());
+			const recovered = await RuntimeBindingDriver.openBound(
+				{
+					...driverOptions(path),
+					nativeLane: "official-model-only",
+					authorizeExternalAction: authorize,
+					modelOptions: driverOptions(path).modelOptions.map((option) => ({
+						...option,
+						...upstreamModelAccess,
+					})),
+				},
+				factory,
+			);
+			drivers.push(recovered);
+			if (phase === "unknown")
+				expect(await recovered.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+			else {
+				await expect(
+					recovered.getStatus(ref, command.executionId),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				await expect(recovered.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+			}
+			await expect(
+				recovered.execute(
+					submitCommand({
+						operationId: "new",
+						executionId: "new",
+						turnId: "new",
+						nativeSessionRef: ref,
+					}),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(factory).not.toHaveBeenCalled();
+			expect(authorize).not.toHaveBeenCalled();
+			expect(await readFile(path, "utf8")).toBe(before);
+		},
+	);
+
 	it.each(
 		(["intent", "started"] as const).flatMap((phase) =>
 			(["missing", "lane"] as const).map((mismatch) => ({ phase, mismatch })),

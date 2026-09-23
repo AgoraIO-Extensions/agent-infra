@@ -336,6 +336,7 @@ class CodexRuntimeDriverTestAccess extends CodexRuntimeDriver {
 	) {
 		const driver = (await CodexRuntimeDriverTestAccess.openWithBridge(
 			{
+				nativeLane: "private-callback",
 				...options,
 				authorizeExternalAction:
 					options.authorizeExternalAction ?? (async () => {}),

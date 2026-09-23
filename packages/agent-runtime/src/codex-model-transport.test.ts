@@ -87,6 +87,151 @@ const defaultNativeTurn = {
 } as const;
 const close: (() => Promise<void>)[] = [];
 
+describe("official model-only transport", () => {
+	const toolItems = [
+		{
+			type: "function_call",
+			name: "exec_command",
+			call_id: "synthetic-call",
+			arguments: '{"cmd":"synthetic-command"}',
+		},
+		{
+			type: "custom_tool_call",
+			name: "apply_patch",
+			call_id: "synthetic-call",
+			input: "synthetic-patch",
+		},
+		{ type: "tool_search_call", execution: "client", arguments: {} },
+		{ type: "web_search_call", action: { type: "search", query: "synthetic" } },
+		{ type: "image_generation_call", status: "completed", result: "synthetic" },
+	];
+	it.each(
+		toolItems.flatMap((item) =>
+			[
+				"response.output_item.added",
+				"response.output_item.done",
+				"response.completed",
+			].map((type) => ({ type, item })),
+		),
+	)(
+		"rejects $item.type in $type before native delivery",
+		async ({ type, item }) => {
+			const target = await listen(
+				createServer((_request, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(
+						event(
+							type === "response.completed"
+								? {
+										type,
+										response: {
+											id: "synthetic-response",
+											status: "completed",
+											output: [item],
+										},
+									}
+								: { type, item },
+						) + (type === "response.completed" ? "" : completedEvent()),
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				...testObserver,
+				modelOnly: true,
+			});
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(502);
+			expect(await response.text()).toBe(
+				'{"error":{"message":"Model request failed"}}',
+			);
+		},
+	);
+
+	it.each([
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.done",
+		"response.custom_tool_call_input.delta",
+		"response.custom_tool_call_input.done",
+	])("rejects %s even without an output item", async (type) => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type, delta: "synthetic-tool-input", call_id: "synthetic" }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(target, true, {
+			modelOnly: true,
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).not.toContain("synthetic-tool-input");
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "unknown",
+				failureCode: "invalid_response",
+			}),
+		);
+	});
+
+	it.each([
+		"web_search",
+		"web_search_preview",
+		"image_generation",
+		"mcp",
+		"code_interpreter",
+	])("rejects hosted %s before the provider request", async (type) => {
+		let calls = 0;
+		const target = await listen(
+			createServer((_request, response) => {
+				calls++;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({ model: selectedInternalModel, tools: [{ type }] }),
+		});
+		expect(response.status).toBe(400);
+		await response.text();
+		expect(calls).toBe(0);
+	});
+
+	it("retains ordinary model output with local tool declarations", async () => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({
+						type: "response.output_text.delta",
+						delta: "synthetic text",
+					}) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess, {
+			body: JSON.stringify({
+				model: selectedInternalModel,
+				tools: [{ type: "function", name: "update_plan", parameters: {} }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("synthetic text");
+	});
+});
+
 async function listen(server: Server) {
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	close.push(

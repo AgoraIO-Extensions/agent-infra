@@ -365,7 +365,10 @@ class BoundDriver extends CodexRuntimeDriver {
 			options: CodexAppServerBridgeOptions,
 		) => Promise<ScriptedTransport>,
 	) {
-		return BoundDriver.openWithBridge(options, factory);
+		return BoundDriver.openWithBridge(
+			{ nativeLane: "private-callback", ...options },
+			factory,
+		);
 	}
 }
 

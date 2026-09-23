@@ -23,6 +23,7 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_MODEL_ONLY_CONFIG,
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -106,6 +107,8 @@ type OpenCodexBridge = (
 ) => Promise<CodexAppServerTransport>;
 
 export interface CodexRuntimeDriverOptions {
+	/** Deployment-owned. Private execution still requires a verified native barrier. */
+	readonly nativeLane?: "official-model-only" | "private-callback";
 	readonly path: string;
 	// Deployment-owned native executable search path; never supplied by wire commands.
 	readonly launchPath?: string;
@@ -301,12 +304,12 @@ interface CodexRuntimeRequirements {
 	provenance: typeof release.provenance;
 	artifacts: typeof release.artifacts;
 	lane: string;
-	barrier: typeof nativeBarrier;
+	barrier?: typeof nativeBarrier;
 }
 
 // These are requirements of this Driver, not proof that an installed binary
 // provides the private lane. The Bridge must still verify the actual barrier.
-const requiredRuntime = {
+const privateRuntimeRequirements = {
 	schemaVersion: 1,
 	provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 	artifacts: release.artifacts,
@@ -314,9 +317,11 @@ const requiredRuntime = {
 	barrier: nativeBarrier,
 };
 
-const requiredBridgeOptions = {
-	provenance: requiredRuntime.provenance,
-	nativeBarrierRequired: requiredRuntime.lane === "private-callback",
+const officialRuntimeRequirements: CodexRuntimeRequirements = {
+	schemaVersion: 1,
+	provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+	artifacts: release.artifacts,
+	lane: "official-model-only",
 };
 
 interface CodexSession {
@@ -1235,7 +1240,9 @@ function isCodexRuntimeRequirements(
 		!nonEmptyString(value.lane) ||
 		!isPlainRecord(value.provenance) ||
 		!isPlainRecord(value.artifacts) ||
-		!isPlainRecord(value.barrier)
+		(value.barrier === undefined
+			? value.lane !== "official-model-only"
+			: !isPlainRecord(value.barrier))
 	)
 		return false;
 	const { provenance, artifacts, barrier } = value;
@@ -1259,10 +1266,12 @@ function isCodexRuntimeRequirements(
 		Number.isSafeInteger(provenance.protocolVersion) &&
 		Number(provenance.protocolVersion) >= 1 &&
 		provenanceStrings.every((key) => nonEmptyString(provenance[key])) &&
-		hasOnlyKeys(barrier, ["schemaVersion", ...barrierStrings]) &&
-		Number.isSafeInteger(barrier.schemaVersion) &&
-		Number(barrier.schemaVersion) >= 1 &&
-		barrierStrings.every((key) => nonEmptyString(barrier[key])) &&
+		(barrier === undefined ||
+			(isPlainRecord(barrier) &&
+				hasOnlyKeys(barrier, ["schemaVersion", ...barrierStrings]) &&
+				Number.isSafeInteger(barrier.schemaVersion) &&
+				Number(barrier.schemaVersion) >= 1 &&
+				barrierStrings.every((key) => nonEmptyString(barrier[key])))) &&
 		["amd64", "arm64"].every((target) => Object.hasOwn(artifacts, target)) &&
 		Object.values(artifacts).every(
 			(artifact) =>
@@ -1271,14 +1280,6 @@ function isCodexRuntimeRequirements(
 				artifactStrings.every((key) => nonEmptyString(artifact[key])),
 		)
 	);
-}
-
-function runtimeRequirementsMatch(session: CodexSession) {
-	return isDeepStrictEqual(session.requiredRuntime, requiredRuntime);
-}
-
-function assertRuntimeRequirements(session: CodexSession) {
-	if (!runtimeRequirementsMatch(session)) unavailable();
 }
 
 function isCodexSession(
@@ -1823,6 +1824,7 @@ function statusForTurn(
 function assertContainedConfiguration(
 	value: unknown,
 	expected: {
+		modelOnly?: boolean;
 		model: string;
 		reasoningEffort: string;
 		modelAccess?: Pick<CodexModelAccess, "endpoint">;
@@ -1848,6 +1850,27 @@ function assertContainedConfiguration(
 		configurationInvalid();
 	}
 	assertOnlySessionFlagOrigins(value.origins);
+	if (expected.modelOnly) {
+		for (const [key, expectedValue] of Object.entries(
+			CODEX_MODEL_ONLY_CONFIG,
+		)) {
+			const actual = key
+				.split(".")
+				.reduce<unknown>(
+					(current, part) =>
+						isPlainRecord(current) ? current[part] : undefined,
+					value.config,
+				);
+			if (actual !== expectedValue) configurationInvalid();
+			// Pinned structured feature flags serialize false while recording the
+			// session-flag origin under their canonical `.enabled` field.
+			const origin =
+				ownRecordValue(value.origins, key) ??
+				ownRecordValue(value.origins, `${key}.enabled`);
+			if (origin === undefined) configurationInvalid();
+			assertSessionFlagOrigin(origin);
+		}
+	}
 	for (const key of isolatedConfigurationKeys) {
 		if (key === "mcp_servers" && expected.connectionProfile) {
 			// ConfigToml serializes these defaults for a fixed URL-only server.
@@ -2374,6 +2397,14 @@ class CodexRpc {
 }
 
 export class CodexRuntimeDriver implements RuntimeDriver {
+	private runtimeRequirementsMatch(session: CodexSession) {
+		return isDeepStrictEqual(session.requiredRuntime, this.requiredRuntime);
+	}
+
+	private assertRuntimeRequirements(session: CodexSession) {
+		if (!this.runtimeRequirementsMatch(session)) unavailable();
+	}
+
 	private readonly resumedSessions = new Set<string>();
 	private readonly inFlightSessionResumes = new Map<string, Promise<void>>();
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
@@ -2438,6 +2469,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		>,
 		private readonly defaultSelection: { model: string; effort: string },
 		private readonly configVersion: string,
+		private readonly requiredRuntime: CodexRuntimeRequirements,
 		private readonly closeModelTransport?: () => Promise<void>,
 		private readonly revokeModelConversation?: (
 			conversationKey: string,
@@ -2623,7 +2655,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				})
 			)
 				unavailable();
-			assertRuntimeRequirements(session);
+			this.assertRuntimeRequirements(session);
 			return { session, execution, journal };
 		};
 		// Host ordering precedes the Driver file queue for every recovery mutation.
@@ -2871,7 +2903,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				conversationKey: initial.conversationKey,
 				profile: options.profile,
 				authorizedConnectionService: options.authorizedService,
-				nativeBarrierRequired: requiredBridgeOptions.nativeBarrierRequired,
+				nativeBarrierRequired: true,
 				signal: processSignal,
 				recovery,
 				evidence: async (request, callbackSignal) => {
@@ -2953,7 +2985,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return Object.values(this.readState().sessions).some(
 			(session) =>
 				codexConversationKey(session) === conversationKey &&
-				runtimeRequirementsMatch(session) &&
+				this.runtimeRequirementsMatch(session) &&
 				Object.values(session.journals ?? {}).some((journal) =>
 					Object.values(journal.nativeToolAttempts ?? {}).some(matches),
 				),
@@ -2977,7 +3009,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			(nativeThreadId !== undefined && session.threadId !== nativeThreadId)
 		)
 			unavailable();
-		assertRuntimeRequirements(session);
+		this.assertRuntimeRequirements(session);
 		const pending = Object.entries(state.operations).flatMap(
 			([key, operation]) => {
 				const identity: unknown = JSON.parse(key);
@@ -3155,7 +3187,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async rpc(nativeSessionRef: string) {
 		if (this.closed) unavailable();
-		assertRuntimeRequirements(this.session(nativeSessionRef));
+		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		const key = this.conversationKeyFor(nativeSessionRef);
 		const existing = this.conversationRpcs.get(key);
 		if (existing) return existing;
@@ -3295,6 +3327,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		if (
+			options.nativeLane !== undefined &&
+			options.nativeLane !== "official-model-only" &&
+			options.nativeLane !== "private-callback"
+		)
+			configurationInvalid();
+		const privateLane =
+			options.nativeLane === "private-callback" ||
+			options.connectionClient !== undefined;
+		if (
+			options.nativeLane === "official-model-only" &&
+			options.connectionClient
+		)
+			configurationInvalid();
+		const requiredRuntime = privateLane
+			? privateRuntimeRequirements
+			: officialRuntimeRequirements;
+		const requiredBridgeOptions = {
+			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+			nativeBarrierRequired: privateLane,
+			...(!privateLane ? { modelOnly: true } : {}),
+		};
 		let connectionClient: CodexRuntimeDriverOptions["connectionClient"];
 		if (options.connectionClient !== undefined) {
 			if (
@@ -3340,11 +3394,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			defaultSelection,
 			routes,
 		} = configuredModelOptions(options);
+		if (
+			!privateLane &&
+			(routes.length !== modelOptions.size ||
+				typeof options.authorizeExternalAction !== "function")
+		)
+			configurationInvalid();
 		const file = await CodexRuntimeDriver.openState(options.path);
 		let driver: CodexRuntimeDriver | undefined;
 		const modelTransport =
 			routes.length > 0
 				? await openCodexModelTransport(routes, {
+						modelOnly: !privateLane,
 						beforeRequest: (context, signal) => {
 							if (!driver) unavailable();
 							return driver.prepareModelRequest(context, signal);
@@ -3352,6 +3413,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					})
 				: undefined;
 		const containedConfiguration = {
+			modelOnly: !privateLane,
 			model: defaultSelection.model,
 			reasoningEffort: defaultSelection.effort,
 			...(modelTransport
@@ -3370,10 +3432,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				...requiredBridgeOptions,
-				nativeCallback: (request, signal) => {
-					if (!driver) unavailable();
-					return driver.handleNativeCallback(conversationKey, request, signal);
-				},
+				...(privateLane
+					? {
+							nativeCallback: (
+								request: CodexNativeCallbackRequest,
+								signal: AbortSignal,
+							) => {
+								if (!driver) unavailable();
+								return driver.handleNativeCallback(
+									conversationKey,
+									request,
+									signal,
+								);
+							},
+						}
+					: {}),
 				...(connectionClient
 					? {
 							connectionProfile: connectionClient.profile,
@@ -3483,6 +3556,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				modelOptions,
 				defaultSelection,
 				options.configVersion,
+				requiredRuntime,
 				modelTransport ? () => modelTransport.close() : undefined,
 				modelTransport?.revokeConversationAccess,
 				modelTransport
@@ -3575,7 +3649,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			runtimeAuthorizationDenied();
 		const state = this.readState();
 		const session = ownRecordValue(state.sessions, action.nativeSessionRef);
-		if (!session || !runtimeRequirementsMatch(session))
+		if (!session || !this.runtimeRequirementsMatch(session))
 			runtimeAuthorizationDenied();
 		const execution =
 			session && ownRecordValue(session.executions, action.executionId);
@@ -3663,7 +3737,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 		}
 		if (!session.threadId) stateInvalid();
-		assertRuntimeRequirements(this.session(session.nativeSessionRef));
+		this.assertRuntimeRequirements(this.session(session.nativeSessionRef));
 		const admissionKey = operationKey(command);
 		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
 		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
@@ -4099,7 +4173,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				command.kind === "generation-cancel" &&
 				operation.record.result.outcome === "accepted" &&
 				operation.record.result.status === "running" &&
-				runtimeRequirementsMatch(this.session(operation.nativeSessionRef))
+				this.runtimeRequirementsMatch(this.session(operation.nativeSessionRef))
 			) {
 				await this.getStatus(operation.nativeSessionRef, command.executionId);
 				const current = ownRecordValue(
@@ -4194,7 +4268,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		let execution = ownRecordValue(session.executions, executionId);
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
-		if (execution.status === "running") assertRuntimeRequirements(session);
+		if (execution.status === "running") this.assertRuntimeRequirements(session);
 		const journal = session.journals?.[execution.nativeTurnId];
 		const latestFact = journal
 			? latestModelOperationAttemptFact(journal.events)
@@ -4626,7 +4700,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		const operation = this.executionOperation(state, session, execution);
 		return (
-			runtimeRequirementsMatch(session) &&
+			this.runtimeRequirementsMatch(session) &&
 			operation.configVersion === this.configVersion &&
 			this.operationSelection(operation) !== undefined
 		);
@@ -4647,7 +4721,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session: CodexSession,
 		execution: CodexExecution,
 	) {
-		assertRuntimeRequirements(session);
+		this.assertRuntimeRequirements(session);
 		if (this.executionConfigurationMatches(state, session, execution)) return;
 		const operation = this.executionOperation(state, session, execution);
 		const journal = session.journals?.[execution.nativeTurnId];
@@ -6190,7 +6264,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					session &&
 					ownRecordValue(session.journals ?? {}, prepared.journalTurnId);
 				if (!session || !journal) stateInvalid();
-				if (phase === "started") assertRuntimeRequirements(session);
+				if (phase === "started") this.assertRuntimeRequirements(session);
 				const previous = latestOperationAttemptFacts(journal.events).find(
 					(fact) =>
 						operationAttemptKey(fact) === operationAttemptKey(prepared.fact),
@@ -6307,7 +6381,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async recoverUnconfirmedModelOperations() {
 		const pending = Object.values(this.readState().sessions).some(
 			(session) =>
-				runtimeRequirementsMatch(session) &&
+				this.runtimeRequirementsMatch(session) &&
 				Object.values(session.journals ?? {}).some(
 					(journal) =>
 						pendingNativeSources(journal).length > 0 ||
@@ -6321,7 +6395,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			for (const session of Object.values(state.sessions)) {
 				// Preserve incompatible Sessions until their original runtime can
 				// verify them; another Session's recovery must not rewrite their facts.
-				if (!runtimeRequirementsMatch(session)) continue;
+				if (!this.runtimeRequirementsMatch(session)) continue;
 				for (const journal of Object.values(session.journals ?? {})) {
 					// Persisted lineage identifies the original source, but cannot prove
 					// its live task/queue survived. Keep occupancy and seal new actions.
@@ -6657,7 +6731,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (matchingSessions.length !== 1) stateInvalid();
 		const [nativeSessionRef, session] = matchingSessions[0] ?? [];
 		if (!nativeSessionRef || !session) stateInvalid();
-		assertRuntimeRequirements(session);
+		this.assertRuntimeRequirements(session);
 		const execution = Object.values(session.executions).find(
 			(candidate) => candidate.nativeTurnId === nativeTurnId,
 		);
@@ -7403,7 +7477,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return (
 			operation.record?.result.outcome !== "accepted" ||
 			operation.record.result.status !== "running" ||
-			(runtimeRequirementsMatch(this.session(operation.nativeSessionRef)) &&
+			(this.runtimeRequirementsMatch(
+				this.session(operation.nativeSessionRef),
+			) &&
 				operation.configVersion === this.configVersion &&
 				this.operationSelection(operation) !== undefined)
 		);
@@ -7437,7 +7513,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				) {
 					protocolInvalid();
 				}
-				assertRuntimeRequirements(session);
+				this.assertRuntimeRequirements(session);
 				if (
 					session.acceptanceUncertainOperationKey !== undefined ||
 					Object.values(state.operations).some(
@@ -7464,7 +7540,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					agentId: command.agentId,
 					conversationId: command.conversationId,
 					sessionGeneration: command.sessionGeneration,
-					requiredRuntime: structuredClone(requiredRuntime),
+					requiredRuntime: structuredClone(this.requiredRuntime),
 					executions: {},
 				};
 			}
@@ -7745,7 +7821,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async resumeSession(nativeSessionRef: string) {
-		assertRuntimeRequirements(this.session(nativeSessionRef));
+		this.assertRuntimeRequirements(this.session(nativeSessionRef));
 		if (this.resumedSessions.has(nativeSessionRef)) return;
 		const inFlight = this.inFlightSessionResumes.get(nativeSessionRef);
 		if (inFlight) return inFlight;
