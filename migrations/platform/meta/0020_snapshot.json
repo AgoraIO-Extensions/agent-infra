@@ -1,5 +1,5 @@
 {
-  "id": "1900587e-3d56-4a12-86c7-36c9d1e9b4c8",
+  "id": "bd0a66bd-bd12-4526-8dff-66df22bf7f2b",
   "prevId": "69c4c1e4-0b86-4a6e-945b-6410a6fdc38c",
   "version": "7",
   "dialect": "postgresql",
@@ -3344,7 +3344,7 @@
         },
         "task_authorization_boundary_version": {
           "name": "task_authorization_boundary_version",
-          "value": "(\"platform\".\"task_authorization_records\".\"boundary\"->>'schemaVersion' = '1') IS TRUE"
+          "value": "(\"platform\".\"task_authorization_records\".\"boundary\"->'schemaVersion' = '1'::jsonb) IS TRUE"
         }
       },
       "isRLSEnabled": false

@@ -3,4 +3,4 @@ ALTER TABLE "platform"."conversation_generation_tombstones" DROP CONSTRAINT "con
 --> statement-breakpoint
 CREATE UNIQUE INDEX "conversation_execution_id_conversation_generation_unique" ON "platform"."conversation_executions" USING btree ("execution_id","conversation_id","session_generation");--> statement-breakpoint
 ALTER TABLE "platform"."conversation_generation_tombstones" ADD CONSTRAINT "conversation_generation_execution_binding_fk" FOREIGN KEY ("execution_id","conversation_id","session_generation") REFERENCES "platform"."conversation_executions"("execution_id","conversation_id","session_generation") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "platform"."task_authorization_records" ADD CONSTRAINT "task_authorization_boundary_version" CHECK (("platform"."task_authorization_records"."boundary"->>'schemaVersion' = '1') IS TRUE);
+ALTER TABLE "platform"."task_authorization_records" ADD CONSTRAINT "task_authorization_boundary_version" CHECK (("platform"."task_authorization_records"."boundary"->'schemaVersion' = '1'::jsonb) IS TRUE);

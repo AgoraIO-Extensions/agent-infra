@@ -603,7 +603,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 				{},
 				{ schemaVersion: null },
 				{ schemaVersion: 2 },
+				{ schemaVersion: "1" },
+				"1",
+				1,
+				true,
 				[],
+				[{ schemaVersion: 1 }],
 			]) {
 				await expectConstraintFailure(
 					client`
@@ -613,6 +618,13 @@ describe("Platform PostgreSQL migration foundation", () => {
 					"task_authorization_boundary_version",
 				);
 			}
+			await expectConstraintFailure(
+				client`
+					update platform.task_authorization_records set boundary = 'null'::jsonb
+					where id = 'boundary-authorization'
+				`,
+				"task_authorization_boundary_version",
+			);
 			expect(
 				await client`
 				select boundary from platform.task_authorization_records

@@ -109,7 +109,7 @@ export const taskAuthorizationRecords = platformSchema.table(
 		check("task_authorization_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
 			"task_authorization_boundary_version",
-			sql`(${table.boundary}->>'schemaVersion' = '1') IS TRUE`,
+			sql`(${table.boundary}->'schemaVersion' = '1'::jsonb) IS TRUE`,
 		),
 	],
 );
