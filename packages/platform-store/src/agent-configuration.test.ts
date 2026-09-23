@@ -1421,6 +1421,7 @@ async function runtimePresentationFixture(record?: AgentConfigurationRecordV2) {
 		expected: await runtimeExpectation(query),
 		agentId: "agent_01",
 		actorId: "owner_01",
+		accountStatus: "active" as const,
 		organizationIds: [],
 		isAdministrator: false,
 	};
@@ -1687,6 +1688,11 @@ describe("PostgreSQL Agent configuration query", () => {
 			...withoutRuntime,
 			capabilities: state.capabilities,
 		});
+		for (const accountStatus of ["disabled", "revoked"] as const) {
+			await expect(
+				query.readRuntimePresentation({ ...input, accountStatus }),
+			).resolves.toEqual({ outcome: "unavailable" });
+		}
 		await expect(
 			query.readRuntimePresentation({ ...input, actorId: "unrelated" }),
 		).resolves.toEqual({ outcome: "unavailable" });

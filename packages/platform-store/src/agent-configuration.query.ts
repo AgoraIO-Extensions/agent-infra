@@ -96,8 +96,13 @@ export type AgentConfigurationAuthorityQueryResultV1 =
 	  }
 	| { readonly outcome: "unavailable" };
 
-export interface AgentRuntimePresentationQueryInputV1
-	extends AgentConfigurationAuthorityQueryInputV1 {
+export interface AgentRuntimePresentationQueryInputV1 {
+	readonly agentId: string;
+	readonly actorId: string;
+	readonly organizationIds: readonly string[];
+	readonly isAdministrator: boolean;
+	/** Resolved by the authenticated Platform identity adapter; never inferred from ownership. */
+	readonly accountStatus: "active" | "disabled" | "revoked";
 	readonly expected: AgentRuntimePresentationExpectationV1;
 }
 
@@ -263,6 +268,9 @@ export class PostgresAgentConfigurationQueryV1 {
 			if (
 				!validateText(input.agentId) ||
 				!validateText(input.actorId) ||
+				(input.accountStatus !== "active" &&
+					input.accountStatus !== "disabled" &&
+					input.accountStatus !== "revoked") ||
 				typeof input.isAdministrator !== "boolean" ||
 				!Array.isArray(input.organizationIds) ||
 				input.organizationIds.length > maxAccessTargets ||
@@ -275,7 +283,8 @@ export class PostgresAgentConfigurationQueryV1 {
 			const actor = {
 				schemaVersion: 1 as const,
 				userId: input.actorId,
-				accountStatus: "active" as const,
+				accountStatus:
+					input.accountStatus === "active" ? ("active" as const) : ("disabled" as const),
 				organizationIds: [...input.organizationIds],
 				isAdministrator: input.isAdministrator,
 			};
