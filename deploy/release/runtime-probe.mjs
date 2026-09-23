@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,6 +10,49 @@ import { runCommand } from "./run-command.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
+const releasePath = "packages/agent-runtime/src/codex-release.json";
+const sha256 = (bytes) =>
+	`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const hasKeys = (value, keys) =>
+	value &&
+	typeof value === "object" &&
+	!Array.isArray(value) &&
+	Object.keys(value).sort().join(",") === keys;
+
+function officialRelease(bytes) {
+	const release = JSON.parse(bytes);
+	if (
+		!hasKeys(release, "artifacts,legal,provenance") ||
+		!hasKeys(
+			release.provenance,
+			"codexVersion,protocolVersion,schemaSha256,upstreamCommit,upstreamTag",
+		) ||
+		release.provenance.protocolVersion !== 2 ||
+		!/^\d+\.\d+\.\d+$/.test(release.provenance.codexVersion) ||
+		release.provenance.upstreamTag !==
+			`rust-v${release.provenance.codexVersion}` ||
+		!/^([a-f0-9]{40})$/.test(release.provenance.upstreamCommit) ||
+		!digestPattern.test(release.provenance.schemaSha256) ||
+		!hasKeys(release.artifacts, "amd64,arm64") ||
+		!hasKeys(release.legal, "LICENSE,NOTICE") ||
+		!Object.values(release.legal).every((digest) => digestPattern.test(digest))
+	)
+		throw new Error();
+	for (const [architecture, target] of [
+		["amd64", "x86_64"],
+		["arm64", "aarch64"],
+	]) {
+		const artifact = release.artifacts[architecture];
+		if (
+			!hasKeys(artifact, "archiveSha256,executableSha256,name") ||
+			artifact.name !== `codex-${target}-unknown-linux-musl` ||
+			!digestPattern.test(artifact.archiveSha256) ||
+			!digestPattern.test(artifact.executableSha256)
+		)
+			throw new Error();
+	}
+	return release;
+}
 const requiredChecks = [
 	"configuration-fail-closed",
 	"native-active-default-model",
@@ -26,14 +70,31 @@ const requiredChecks = [
 	"personal-configuration-isolated",
 ];
 
-export function validateRuntimeProbe(result) {
+export function validateRuntimeProbe(result, releaseBytes, architecture) {
+	let release;
+	try {
+		release = officialRelease(releaseBytes);
+		if (!["amd64", "arm64"].includes(architecture)) throw new Error();
+	} catch {
+		throw new Error("Codex runtime image probe evidence is invalid");
+	}
+	const artifact = release.artifacts[architecture];
 	if (
 		result?.schemaVersion !== 1 ||
 		result.status !== "passed" ||
 		result.capability !== "official-model-only" ||
 		Object.keys(result).sort().join(",") !==
-			"capability,checks,codexVersion,configVersion,configurationSchemaVersion,schemaVersion,status" ||
-		result.codexVersion !== "0.153.0" ||
+			"capability,checks,codexVersion,configVersion,configurationSchemaVersion,installation,schemaVersion,status" ||
+		result.codexVersion !== release.provenance.codexVersion ||
+		!hasKeys(
+			result.installation,
+			"architecture,archiveSha256,executableSha256,platform,releaseSha256",
+		) ||
+		result.installation.platform !== "linux" ||
+		result.installation.architecture !== architecture ||
+		result.installation.releaseSha256 !== sha256(releaseBytes) ||
+		result.installation.archiveSha256 !== artifact.archiveSha256 ||
+		result.installation.executableSha256 !== artifact.executableSha256 ||
 		result.configurationSchemaVersion !== 2 ||
 		result.configVersion !== "synthetic-active-v2" ||
 		!Array.isArray(result.checks) ||
@@ -89,6 +150,31 @@ export async function probeRuntimeImage({
 		throw new Error("Codex runtime image probe source is invalid");
 	}
 	const { commitSha } = source;
+	const git = process.env.GIT_BIN ?? "git";
+	const gitOptions = {
+		cwd: root,
+		name: "Runtime probe source identity",
+		timeoutMs: 30_000,
+	};
+	const sourceTree = runCommand(
+		git,
+		["rev-parse", `${commitSha}^{tree}`],
+		gitOptions,
+	);
+	if (!/^[a-f0-9]{40}$/.test(sourceTree))
+		throw new Error("Codex runtime image probe source is invalid");
+	const releaseBytes = await readFile(join(contextPath, releasePath));
+	const sourceReleaseBytes = runCommand(
+		git,
+		["show", `${commitSha}:${releasePath}`],
+		{ ...gitOptions, trimOutput: false },
+	);
+	try {
+		officialRelease(releaseBytes);
+		if (sha256(releaseBytes) !== sha256(sourceReleaseBytes)) throw new Error();
+	} catch {
+		throw new Error("Codex runtime image release does not match source");
+	}
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const command = (args, name, timeoutMs = 30_000, onFailure) =>
 		runCommand(docker, args, { cwd: root, name, timeoutMs, onFailure });
@@ -107,6 +193,12 @@ export async function probeRuntimeImage({
 		}
 	};
 	const inspection = inspect();
+	if (
+		inspection.Os !== "linux" ||
+		!["amd64", "arm64"].includes(inspection.Architecture)
+	) {
+		throw new Error("Codex runtime image platform is invalid");
+	}
 	if (
 		inspection.Config?.Labels?.["org.opencontainers.image.revision"] !==
 		commitSha
@@ -158,7 +250,11 @@ export async function probeRuntimeImage({
 		);
 	let result;
 	try {
-		result = validateRuntimeProbe(JSON.parse(run()));
+		result = validateRuntimeProbe(
+			JSON.parse(run()),
+			releaseBytes,
+			inspection.Architecture,
+		);
 	} catch (error) {
 		if (error instanceof RuntimeProbeFailure) throw error;
 		throw new Error("Native Codex HTTP/SSE image probe failed");
@@ -182,12 +278,26 @@ export async function probeRuntimeImage({
 	} catch {
 		throw new Error("Codex image provenance rejection probe failed");
 	}
-	if (inspect().Id !== inspection.Id) {
+	if (
+		sha256(await readFile(join(contextPath, releasePath))) !==
+		sha256(releaseBytes)
+	) {
+		throw new Error("Codex runtime image release changed during probe");
+	}
+	const after = inspect();
+	if (
+		after.Id !== inspection.Id ||
+		after.Architecture !== inspection.Architecture ||
+		after.Os !== inspection.Os ||
+		after.Config?.Labels?.["org.opencontainers.image.revision"] !== commitSha ||
+		after.Descriptor?.digest !== inspection.Descriptor?.digest
+	) {
 		throw new Error("Codex runtime image changed during probe");
 	}
 	return {
 		schemaVersion: 1,
 		...source,
+		sourceTree,
 		imageId: inspection.Id,
 		...(imageDigest
 			? { imageDigest }

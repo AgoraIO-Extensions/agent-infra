@@ -1,0 +1,93 @@
+{{- if eq .Values.dataClaim .Values.candidateClaim -}}
+{{- fail "dataClaim and candidateClaim must be different existing PVCs" -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: runtime-legacy-migration
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migration
+          image: {{ printf "%s@%s" .Values.image.repository .Values.image.digest | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/node", "--disable-sigusr1", "/app/dist/legacy-migration-cli.mjs"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          env:
+            - name: AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE
+              value: {{ .Values.mode | quote }}
+            - name: AGENT_INFRA_RUNTIME_DATA_DIR
+              value: /var/lib/agent-runtime
+            - name: AGENT_INFRA_RUNTIME_LEGACY_CANDIDATE_FILE
+              value: /var/lib/agent-runtime-migration/candidate.json
+            - name: AGENT_INFRA_RUNTIME_AGENT_ID
+              value: {{ .Values.binding.agentId | quote }}
+            - name: AGENT_INFRA_RUNTIME_GRANT_ISSUER
+              value: {{ .Values.issuer | quote }}
+            - name: AGENT_INFRA_RUNTIME_READINESS_BINDING
+              value: {{ .Values.binding | toJson | quote }}
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE
+              value: /etc/agent-infra/legacy-migration/manifest.json
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE
+              value: /etc/agent-infra/legacy-migration/public.pem
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID
+              value: {{ .Values.trust.keyId | quote }}
+            - name: AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID
+              value: "0"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/agent-runtime
+            - name: candidate
+              mountPath: /var/lib/agent-runtime-migration
+            - name: tmp
+              mountPath: /tmp
+            - name: manifest
+              mountPath: /etc/agent-infra/legacy-migration/manifest.json
+              subPath: manifest.json
+              readOnly: true
+            - name: public-key
+              mountPath: /etc/agent-infra/legacy-migration/public.pem
+              subPath: public.pem
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.dataClaim | quote }}
+        - name: candidate
+          persistentVolumeClaim:
+            claimName: {{ .Values.candidateClaim | quote }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: manifest
+          secret:
+            secretName: {{ .Values.trust.manifest.name | quote }}
+            defaultMode: 292 # 0444
+            items:
+              - key: {{ .Values.trust.manifest.key | quote }}
+                path: manifest.json
+        - name: public-key
+          secret:
+            secretName: {{ .Values.trust.publicKey.name | quote }}
+            defaultMode: 292 # 0444
+            items:
+              - key: {{ .Values.trust.publicKey.key | quote }}
+                path: public.pem
