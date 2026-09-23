@@ -1101,6 +1101,8 @@ export async function openCodexModelTransport(
 	const conversationIsActive = (conversationKey: string) => {
 		const prefix = `${conversationKey}\u0000`;
 		return (
+			// A surviving native process keeps its launch credential between Turns.
+			[...boundThreads].some((key) => key.startsWith(prefix)) ||
 			[...admittedTurns.keys()].some((key) => key.startsWith(prefix)) ||
 			[...readyModelTurns].some((key) => key.startsWith(prefix)) ||
 			[...activeTurns.keys()].some((key) => key.startsWith(prefix)) ||
@@ -1114,8 +1116,6 @@ export async function openCodexModelTransport(
 		if (conversationIsActive(conversationKey)) return false;
 		const prefix = `${conversationKey}\u0000`;
 		processAccess.delete(conversationKey);
-		for (const key of boundThreads)
-			if (key.startsWith(prefix)) boundThreads.delete(key);
 		for (const key of readyModelTurns)
 			if (key.startsWith(prefix)) readyModelTurns.delete(key);
 		for (const key of admittedTurns.keys())

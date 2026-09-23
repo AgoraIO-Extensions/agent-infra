@@ -152,6 +152,9 @@ describe("official model-only transport", () => {
 		"response.function_call_arguments.done",
 		"response.custom_tool_call_input.delta",
 		"response.custom_tool_call_input.done",
+		"response.web_search_call.in_progress",
+		"response.image_generation_call.in_progress",
+		"response.code_interpreter_call.in_progress",
 	])("rejects %s even without an output item", async (type) => {
 		const target = await listen(
 			createServer((_request, response) => {
@@ -2839,6 +2842,73 @@ it("retains access for an admitted native Turn while capacity fills", async () =
 	expect(value.modelAccessFor(first)).toEqual(firstAccess);
 });
 
+it("keeps a bound idle process credential usable for its next Turn at capacity", async () => {
+	let upstreamCalls = 0;
+	const target = await listen(
+		createServer((_request, response) => {
+			upstreamCalls++;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(completedEvent());
+		}),
+	);
+	const authorize = vi.fn(testObserver.beforeRequest);
+	const value = await openProductionModelTransport(
+		[
+			{
+				internalModel: selectedInternalModel,
+				model: "synthetic-selected",
+				endpoint: target,
+				credential,
+			},
+		],
+		{ beforeRequest: authorize },
+	);
+	close.push(value.close);
+	const conversationKey = "f".repeat(64);
+	const access = value.modelAccessFor(conversationKey);
+	const turn = {
+		conversationKey,
+		threadId: "thread-live",
+		turnId: "turn-next",
+	};
+	value.bindThread(conversationKey, turn.threadId);
+	for (let index = 1; index < 1024; index++) {
+		const key = index.toString(16).padStart(64, "0");
+		value.modelAccessFor(key);
+		value.bindThread(key, "thread-bound");
+	}
+	expect
+		.soft(() => value.modelAccessFor("e".repeat(64)))
+		.toThrow("RUNTIME_MODEL_ACCESS_CAPACITY");
+	// The Driver touches access and binds the thread on the next Turn, but a
+	// surviving native process still authenticates with its launch credential.
+	expect
+		.soft(
+			value.modelAccessFor(conversationKey).credential === access.credential,
+		)
+		.toBe(true);
+	value.bindThread(conversationKey, turn.threadId);
+	const admission = value.beginTurnAdmission(
+		Date.now() + 5000,
+		selectedInternalModel,
+		turn.threadId,
+		"high",
+		conversationKey,
+	);
+	expect(value.recognizeTurn(admission, turn)).toBe(true);
+	expect(value.registerTurn(admission, turn)).toBe(true);
+	const response = await request(access, {}, turn);
+	expect.soft(response.status).toBe(200);
+	await response.text();
+	expect.soft(upstreamCalls).toBe(1);
+	expect.soft(authorize).toHaveBeenCalledTimes(1);
+	value.revokeConversationAccess(conversationKey);
+	const retired = await request(access, {}, turn);
+	expect(retired.status).toBe(401);
+	await retired.text();
+	expect(() => value.modelAccessFor("e".repeat(64))).not.toThrow();
+});
+
 it.each(["explicit access revoke", "LRU eviction"] as const)(
 	"retains cancelled Turn revocation across %s of Conversation access",
 	async (retirement) => {
@@ -2884,9 +2954,16 @@ it.each(["explicit access revoke", "LRU eviction"] as const)(
 		if (retirement === "explicit access revoke") {
 			value.revokeConversationAccess(conversationKey);
 		} else {
+			// Only an unbound entry is idle: retire the native process first, then
+			// exercise eviction of access prepared for its eventual replacement.
+			value.revokeConversationAccess(conversationKey);
+			const unbound = value.modelAccessFor(conversationKey);
 			for (let index = 1; index < 1024; index++)
 				value.modelAccessFor(index.toString(16).padStart(64, "0"));
 			expect(() => value.modelAccessFor("b".repeat(64))).not.toThrow();
+			const evicted = await request(unbound, {}, cancelledTurn);
+			expect(evicted.status).toBe(401);
+			await evicted.text();
 		}
 		const reopened = value.modelAccessFor(conversationKey);
 		expect(reopened.credential).not.toBe(firstAccess.credential);
