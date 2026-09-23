@@ -20,6 +20,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
@@ -183,6 +184,8 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		{ newId: () => `runtime_event_fixture_${nextRuntimeEventId++}` },
 	);
 	const transaction: ConversationExecutionTransactionPortV1 = {
+		requestMetadataRecovery: (request, decide) =>
+			adapter.requestMetadataRecovery(request, decide),
 		readConversation: (request, project) =>
 			adapter.readConversation(request, project),
 		createConversation: (request, decide) =>
@@ -240,6 +243,7 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 		},
 	);
 	const useCase: ConversationExecutionUseCaseV1 = {
+		requestMetadataRecovery: (query) => inner.requestMetadataRecovery(query),
 		readConversation: (query) => inner.readConversation(query),
 		createConversation: (command) => inner.createConversation(command),
 		async accept(command) {
@@ -539,6 +543,149 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("commits original task authority with acceptance and rolls back control when required audit fails", async () => {
+		await client`insert into platform.agents (id, authorization_revision) values (${authority.agentId}, ${authority.authorizationRevision}) on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
+		const taskBoundary = {
+			schemaVersion: 1 as const,
+			principal: { kind: "user" as const, id: authority.actorId },
+			agentId: authority.agentId,
+			channelId: "web",
+			identityRevision: "identity-different-from-agent",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+		};
+		const { transaction, useCase } = createConversation({
+			...authority,
+			taskBoundary,
+		});
+		const taskStore = new PostgresTaskAuthorizationStoreV1({ databaseUrl });
+		try {
+			await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "task-create",
+				requestId: "task-create",
+				traceId: "task-trace",
+			});
+			const command = {
+				schemaVersion: 1 as const,
+				command: "message" as const,
+				conversationId: "conversation_id_1",
+				text: "secret-task-body-sentinel",
+				idempotencyKey: "task-submit",
+				requestId: "task-submit",
+				traceId: "task-trace",
+			};
+			const accepted = await useCase.accept(command);
+			expect(accepted.outcome).toBe("accepted");
+			const [record] =
+				await client`select id, execution_id, boundary from platform.task_authorization_records`;
+			expect(record?.boundary).toEqual(taskBoundary);
+			if (!record) throw new Error("Task authority was not committed");
+			const [before] =
+				await client`select request_digest, result from platform.idempotency_records where idempotency_key = 'task-submit'`;
+			expect(await useCase.accept(command)).toMatchObject({
+				outcome: "replayed",
+				result: before?.result,
+			});
+			expect(
+				await client`select request_digest, result from platform.idempotency_records where idempotency_key = 'task-submit'`,
+			).toEqual([before]);
+			expect(
+				await client`select id from platform.task_authorization_records`,
+			).toHaveLength(1);
+			const audits =
+				await client`select details from platform.audit_events where action = 'task.authorization.accepted'`;
+			expect(audits).toHaveLength(1);
+			expect(JSON.stringify(audits)).not.toContain(command.text);
+			const control = {
+				executionId: record.execution_id,
+				authorizationRecordId: record.id,
+				reason: "authorization_revoked" as const,
+				workerId: "worker-test",
+				traceId: "task-trace",
+				requestId: "control-request",
+			};
+			for (const boundary of [
+				{
+					...taskBoundary,
+					principal: { kind: "user", id: "other-user" },
+					accessSources: [{ kind: "user", userId: "other-user" }],
+				},
+				{ ...taskBoundary, agentId: "other-agent" },
+				{ ...taskBoundary, channelId: "other-channel" },
+				{ ...taskBoundary, agentAuthorizationRevision: "other-revision" },
+			]) {
+				await client`update platform.task_authorization_records set boundary = ${client.json(boundary)} where id = ${record.id}`;
+				await expect(
+					taskStore.readExecution(record.execution_id),
+				).rejects.toThrow("Task authorization persistence is unavailable");
+				await expect(taskStore.recordControl(control)).rejects.toThrow(
+					"Task authorization persistence is unavailable",
+				);
+			}
+			await client`update platform.task_authorization_records set boundary = ${client.json(taskBoundary)} where id = ${record.id}`;
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(0);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(0);
+			await client.unsafe(
+				`create function platform.fail_task_control_audit() returns trigger as $$ begin if NEW.action = 'task.control.created' then raise exception 'controlled audit failure'; end if; return NEW; end; $$ language plpgsql`,
+			);
+			await client.unsafe(
+				"create trigger fail_task_control_audit before insert on platform.audit_events for each row execute function platform.fail_task_control_audit()",
+			);
+			await expect(taskStore.recordControl(control)).rejects.toThrow(
+				"Task authorization persistence is unavailable",
+			);
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(0);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(0);
+			expect(
+				await client`select id from platform.outbox_items where operation = 'conversation.turn.stop.v1'`,
+			).toHaveLength(0);
+			expect(
+				await client`select revoked_at from platform.task_authorization_records`,
+			).toEqual([{ revoked_at: null }]);
+			await client.unsafe(
+				"drop trigger fail_task_control_audit on platform.audit_events",
+			);
+			const created = await taskStore.recordControl(control);
+			expect(await taskStore.recordControl(control)).toEqual(created);
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(1);
+			expect(
+				await client`select stop_request_id from platform.conversation_stops`,
+			).toHaveLength(1);
+			expect(
+				await client`select id from platform.outbox_items where operation = 'conversation.turn.stop.v1'`,
+			).toHaveLength(1);
+			expect(
+				(
+					await client`select revoked_at from platform.task_authorization_records`
+				)[0]?.revoked_at,
+			).toBeInstanceOf(Date);
+			await expect(
+				taskStore.recordControl({ ...control, executionId: "other-execution" }),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+		} finally {
+			await client.unsafe(
+				"drop trigger if exists fail_task_control_audit on platform.audit_events",
+			);
+			await client.unsafe(
+				"drop function if exists platform.fail_task_control_audit()",
+			);
+			await transaction.close();
+			await taskStore.close();
+		}
+	});
+
 	it("keeps legacy rows valid while enforcing complete model selections", async () => {
 		await client`
 			insert into platform.conversations
@@ -735,34 +882,61 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
-	it("regenerates from an existing user message without creating another message", async () => {
-		const { transaction, useCase } = createConversation();
-		try {
-			await useCase.createConversation({
-				schemaVersion: 1,
-				agentId: authority.agentId,
-				idempotencyKey: "create_02",
-				requestId: "request_create_02",
-				traceId: "trace_create_02",
+	it.each(["ready", "active"] as const)(
+		"regenerates a %s conversation from its existing user message",
+		async (status) => {
+			const { transaction, useCase } = createConversation();
+			const eventTransaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
 			});
-			const initial = await useCase.accept({
-				schemaVersion: 1,
-				command: "message",
-				conversationId: "conversation_id_1",
-				text: "regenerate this answer",
-				idempotencyKey: "message_02",
-				requestId: "request_message_02",
-				traceId: "trace_message_02",
-			});
-			expect(initial).toMatchObject({ outcome: "accepted" });
-			await client`
-				update platform.conversation_executions
-				set status = 'completed'
-				where execution_id = 'conversation_id_3'
-			`;
+			const events = createConversationEventUseCaseV1(
+				{ transaction: eventTransaction },
+				{ newId: () => "terminal_event_02" },
+			);
+			try {
+				await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "create_02",
+					requestId: "request_create_02",
+					traceId: "trace_create_02",
+				});
+				const initial = await useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId: "conversation_id_1",
+					text: "regenerate this answer",
+					idempotencyKey: "message_02",
+					requestId: "request_message_02",
+					traceId: "trace_message_02",
+				});
+				expect(initial).toMatchObject({ outcome: "accepted" });
+				if (status === "ready") {
+					await expect(
+						events.persist({
+							schemaVersion: 1,
+							conversationId: "conversation_id_1",
+							executionId: "conversation_id_3",
+							sessionGeneration: 1,
+							deliveryFence: 0,
+							adapterEventKey: "terminal_02",
+							runtimeCursor: "runtime_terminal_02",
+							occurredAt: "2026-09-04T00:00:00.000Z",
+							event: { type: "execution.status", status: "completed" },
+							transition: {
+								executionStatus: "completed",
+								conversationStatus: "ready",
+							},
+						}),
+					).resolves.toMatchObject({ outcome: "accepted" });
+				} else {
+					await client`update platform.conversation_executions set status = 'completed' where execution_id = 'conversation_id_3'`;
+				}
+				expect(
+					await client`select status from platform.conversations where id = 'conversation_id_1'`,
+				).toEqual([{ status }]);
 
-			await expect(
-				useCase.regenerate({
+				const regeneration = {
 					schemaVersion: 1,
 					command: "regenerate",
 					conversationId: "conversation_id_1",
@@ -770,19 +944,32 @@ describe("PostgreSQL Conversation command transaction", () => {
 					idempotencyKey: "regenerate_02",
 					requestId: "request_regenerate_02",
 					traceId: "trace_regenerate_02",
-				}),
-			).resolves.toEqual({
-				outcome: "accepted",
-				result: {
-					schemaVersion: 1,
-					status: "submitted",
-					messageId: null,
-					executionId: "conversation_id_5",
-				},
-			});
+				} as const;
+				await expect(useCase.regenerate(regeneration)).resolves.toEqual({
+					outcome: "accepted",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "conversation_id_5",
+					},
+				});
+				await expect(useCase.regenerate(regeneration)).resolves.toEqual({
+					outcome: "replayed",
+					result: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId: "conversation_id_5",
+					},
+				});
 
-			const [counts, outbox, audit] = await Promise.all([
-				client`
+				expect(
+					await client`select status from platform.conversations where id = 'conversation_id_1'`,
+				).toEqual([{ status: "active" }]);
+
+				const [counts, outbox, audit] = await Promise.all([
+					client`
 					select
 						(select count(*)::int from platform.conversation_messages) as messages,
 						(select count(*)::int from platform.conversation_executions) as executions,
@@ -790,50 +977,51 @@ describe("PostgreSQL Conversation command transaction", () => {
 						(select count(*)::int from platform.idempotency_records) as idempotency,
 						(select count(*)::int from platform.conversation_audit_events) as audit
 				`,
-				client`
+					client`
 					select operation, payload from platform.outbox_items
 					where operation = 'conversation.turn.regenerate.v1'
 				`,
-				client`
+					client`
 					select action, conversation_id, execution_id
 					from platform.conversation_audit_events
 					where action = 'conversation.regeneration.accepted'
 				`,
-			]);
-			expect(counts[0]).toEqual({
-				messages: 1,
-				executions: 2,
-				outbox: 2,
-				idempotency: 3,
-				audit: 2,
-			});
-			expect(outbox).toEqual([
-				{
-					operation: "conversation.turn.regenerate.v1",
-					payload: {
-						schemaVersion: 1,
-						conversationId: "conversation_id_1",
-						executionId: "conversation_id_5",
-						messageId: "conversation_id_2",
-						turnId: "conversation_id_6",
-						sessionGeneration: 1,
-						modelConfigurationRevision: null,
-						modelOptionId: null,
-						reasoningLevel: null,
+				]);
+				expect(counts[0]).toEqual({
+					messages: 1,
+					executions: 2,
+					outbox: 2,
+					idempotency: 3,
+					audit: 2,
+				});
+				expect(outbox).toEqual([
+					{
+						operation: "conversation.turn.regenerate.v1",
+						payload: {
+							schemaVersion: 1,
+							conversationId: "conversation_id_1",
+							executionId: "conversation_id_5",
+							messageId: "conversation_id_2",
+							turnId: "conversation_id_6",
+							sessionGeneration: 1,
+							modelConfigurationRevision: null,
+							modelOptionId: null,
+							reasoningLevel: null,
+						},
 					},
-				},
-			]);
-			expect(audit).toEqual([
-				{
-					action: "conversation.regeneration.accepted",
-					conversation_id: "conversation_id_1",
-					execution_id: "conversation_id_5",
-				},
-			]);
-		} finally {
-			await transaction.close();
-		}
-	});
+				]);
+				expect(audit).toEqual([
+					{
+						action: "conversation.regeneration.accepted",
+						conversation_id: "conversation_id_1",
+						execution_id: "conversation_id_5",
+					},
+				]);
+			} finally {
+				await Promise.all([transaction.close(), eventTransaction.close()]);
+			}
+		},
+	);
 
 	it("creates one stable stop request for a target execution", async () => {
 		const { transaction, useCase } = createConversation();

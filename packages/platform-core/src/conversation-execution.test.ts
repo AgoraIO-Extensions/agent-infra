@@ -9,6 +9,8 @@ import {
 	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
 	type ConversationExecutionUseCaseV1,
+	type ConversationMetadataRecoveryStateV1,
+	type ConversationMetadataRecoveryWritePlanV1,
 	createConversationExecutionUseCaseV1,
 } from "./conversation-execution.ts";
 import { FakeConversationExecutionV1 } from "./fake-conversation-execution.ts";
@@ -51,6 +53,7 @@ conversationCommandConformanceV1("Fake", async () => {
 	});
 	let loseNextResponse = false;
 	const useCase: ConversationExecutionUseCaseV1 = {
+		requestMetadataRecovery: (query) => fake.requestMetadataRecovery(query),
 		readConversation: (query) => fake.readConversation(query),
 		createConversation: (command) => fake.createConversation(command),
 		async accept(command) {
@@ -351,6 +354,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when transaction results are malformed", async () => {
 		const transaction = {
+			async requestMetadataRecovery() {
+				return { outcome: "not_applicable" as const };
+			},
 			async readConversation() {
 				return { outcome: "found", result: {} } as never;
 			},
@@ -483,6 +489,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when authorization results are malformed", async () => {
 		const transaction = {
+			async requestMetadataRecovery() {
+				return { outcome: "not_applicable" as const };
+			},
 			async readConversation() {
 				throw new Error("Authorization must resolve before a transaction");
 			},
@@ -527,6 +536,9 @@ describe("Conversation execution use case", () => {
 
 	it("fails closed when a transaction throws an internal validation error", async () => {
 		const transaction = {
+			async requestMetadataRecovery() {
+				return { outcome: "not_applicable" as const };
+			},
 			async readConversation() {
 				throw new ConversationExecutionError("invalid_input");
 			},
@@ -656,6 +668,9 @@ describe("Conversation execution use case", () => {
 			activeExecution: undefined,
 		} satisfies ConversationExecutionStateV1;
 		const transaction = {
+			async requestMetadataRecovery() {
+				return { outcome: "not_applicable" as const };
+			},
 			async readConversation() {
 				throw new Error("Not used by this test");
 			},
@@ -1546,5 +1561,489 @@ describe("Conversation execution use case", () => {
 				),
 		).toHaveLength(0);
 		expect(conversation.snapshot()).toEqual(before);
+	});
+});
+
+describe("Conversation metadata recovery planning", () => {
+	const taskBoundary = {
+		schemaVersion: 1 as const,
+		principal: { kind: "user" as const, id: authority.actorId },
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		identityRevision: "identity_01",
+		agentAuthorizationRevision: authority.authorizationRevision,
+		accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+	};
+	const requestedAt = new Date("2026-09-04T00:00:00.000Z");
+	const query = {
+		schemaVersion: 1 as const,
+		conversationId: "conversation_01",
+	};
+	function fixture() {
+		const execution = {
+			executionId: "execution_01",
+			conversationId: query.conversationId,
+			agentId: authority.agentId,
+			actorId: authority.actorId,
+			channelId: authority.channelId,
+			turnId: "turn_01",
+			sessionGeneration: 1,
+			deliveryFence: 7,
+			runtimeCursor: "cursor_03",
+			authorizationRevision: authority.authorizationRevision,
+			status: "completed",
+		};
+		return {
+			conversation: {
+				schemaVersion: 1 as const,
+				conversationId: query.conversationId,
+				agentId: authority.agentId,
+				actorId: authority.actorId,
+				channelId: authority.channelId,
+				status: "ready" as const,
+				sessionGeneration: 1,
+				hostSessionRef: "host_01",
+				authorizationRevision: authority.authorizationRevision,
+				lastConversationCursor: 3,
+				selectedModelOptionId: null,
+				selectedReasoningLevel: null,
+				createdAt: requestedAt,
+				updatedAt: requestedAt,
+			},
+			candidates: [
+				{
+					execution,
+					originalOutboxes: [
+						{
+							itemId: "conversation:turn:execution_01",
+							operation: "conversation.turn.submit.v1",
+							status: "succeeded",
+							payload: {
+								schemaVersion: 1,
+								conversationId: query.conversationId,
+								executionId: execution.executionId,
+								messageId: "message_01",
+								turnId: execution.turnId,
+								sessionGeneration: 1,
+							},
+						},
+					],
+					boundary: taskBoundary,
+					latestToolFacts: [
+						{
+							kind: "tool" as const,
+							toolId: "connection.create_pr",
+							operationRef: "tool_01",
+							attemptRef: "attempt_01",
+							phase: "intent" as const,
+							connection: {
+								serviceRef: "github",
+								verification: "unverified" as const,
+								reason: "receipt_missing",
+							},
+						},
+					],
+				},
+			],
+		} satisfies ConversationMetadataRecoveryStateV1;
+	}
+	async function evaluate(
+		state: ConversationMetadataRecoveryStateV1,
+		executionId?: string,
+	) {
+		let plan: ConversationMetadataRecoveryWritePlanV1 | undefined;
+		let allocatedIds = 0;
+		const unused = async (): Promise<never> => {
+			throw new Error("Unexpected transaction operation");
+		};
+		const useCase = createConversationExecutionUseCaseV1(
+			{
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority };
+					},
+				},
+				transaction: {
+					async requestMetadataRecovery(_request, decide) {
+						plan = decide(state);
+						return plan.result;
+					},
+					readConversation: unused,
+					createConversation: unused,
+					executeMessage: unused,
+					executeRegeneration: unused,
+					executeStop: unused,
+					executeModelSelection: unused,
+				},
+			},
+			{ now: () => requestedAt, newId: () => `pass_${++allocatedIds}` },
+		);
+		const result = await useCase.requestMetadataRecovery({
+			...query,
+			...(executionId ? { executionId } : {}),
+		});
+		return { result, plan, allocatedIds };
+	}
+
+	it.each(["succeeded", "failed"])(
+		"plans original %s outbox recovery without changing input state",
+		async (status) => {
+			const state = fixture();
+			const original = state.candidates[0]?.originalOutboxes[0];
+			if (!original) throw new Error("Missing original outbox fixture");
+			original.status = status;
+			const before = structuredClone(state);
+			expect(await evaluate(state)).toEqual({
+				result: { outcome: "scheduled" },
+				allocatedIds: 1,
+				plan: {
+					result: { outcome: "scheduled" },
+					updates: [
+						{
+							itemId: "conversation:turn:execution_01",
+							metadataRecovery: {
+								id: "pass_1",
+								requestedAt: requestedAt.getTime(),
+								originalStatus: status,
+							},
+						},
+					],
+				},
+			});
+			expect(state).toEqual(before);
+		},
+	);
+
+	it("denies another Conversation principal and ignores unavailable runtime sessions", async () => {
+		const state = fixture();
+		for (const conversation of [
+			undefined,
+			{ ...state.conversation, conversationId: "other" },
+			{ ...state.conversation, actorId: "other" },
+			{ ...state.conversation, agentId: "other" },
+			{ ...state.conversation, channelId: "other" },
+		]) {
+			expect(await evaluate({ ...state, conversation })).toMatchObject({
+				result: { outcome: "denied" },
+				allocatedIds: 0,
+				plan: { updates: [] },
+			});
+		}
+		for (const conversation of [
+			{ ...state.conversation, hostSessionRef: null },
+			{ ...state.conversation, isolationPending: true as const },
+		]) {
+			expect(await evaluate({ ...state, conversation })).toMatchObject({
+				result: { outcome: "not_applicable" },
+				allocatedIds: 0,
+				plan: { updates: [] },
+			});
+		}
+	});
+
+	it("rechecks original execution, outbox and principal eligibility independently of adapter filtering", async () => {
+		const state = fixture();
+		const candidate = state.candidates[0];
+		if (!candidate) throw new Error("Missing original execution fixture");
+		const original = candidate.originalOutboxes[0];
+		if (!original) throw new Error("Missing original outbox fixture");
+		const latest = candidate.latestToolFacts[0];
+		if (!latest) throw new Error("Missing original tool fact fixture");
+		const invalidCandidates: ConversationMetadataRecoveryStateV1["candidates"] =
+			[
+				...[
+					{ conversationId: "other" },
+					{ actorId: "other" },
+					{ agentId: "other" },
+					{ channelId: "other" },
+					{ sessionGeneration: 2 },
+					{ status: "processing" },
+					{ deliveryFence: 0 },
+					{ runtimeCursor: null },
+				].map((patch) => ({
+					...candidate,
+					execution: { ...candidate.execution, ...patch },
+				})),
+				{ ...candidate, originalOutboxes: [] },
+				{ ...candidate, originalOutboxes: [original, original] },
+				{ ...candidate, originalOutboxes: [{ ...original, itemId: "other" }] },
+				{
+					...candidate,
+					originalOutboxes: [
+						{ ...original, operation: "conversation.turn.stop.v1" },
+					],
+				},
+				{
+					...candidate,
+					originalOutboxes: [{ ...original, status: "pending" }],
+				},
+				...[
+					{ conversationId: "other" },
+					{ executionId: "other" },
+					{ turnId: "other" },
+					{ sessionGeneration: 2 },
+					{ messageId: "" },
+				].map((patch) => ({
+					...candidate,
+					originalOutboxes: [
+						{ ...original, payload: { ...original.payload, ...patch } },
+					],
+				})),
+				{ ...candidate, boundary: null },
+				...[
+					{
+						principal: { kind: "user", id: "other" },
+						accessSources: [{ kind: "user", userId: "other" }],
+					},
+					{ principal: { kind: "application", id: authority.actorId } },
+					{ agentId: "other" },
+					{ channelId: "other" },
+					{ agentAuthorizationRevision: "other" },
+				].map((patch) => ({
+					...candidate,
+					boundary: { ...taskBoundary, ...patch },
+				})),
+				{ ...candidate, latestToolFacts: [] },
+				{
+					...candidate,
+					latestToolFacts: [
+						{
+							...latest,
+							connection: {
+								serviceRef: "github",
+								verification: "verified",
+								callRef: "call_01",
+							},
+						},
+					],
+				},
+			];
+		for (const invalid of invalidCandidates) {
+			expect(
+				await evaluate({ ...state, candidates: [invalid] }),
+				JSON.stringify(invalid),
+			).toMatchObject({
+				result: { outcome: "not_applicable" },
+				allocatedIds: 0,
+				plan: { updates: [] },
+			});
+		}
+		expect(await evaluate(state, "execution_other")).toMatchObject({
+			result: { outcome: "not_applicable" },
+			allocatedIds: 0,
+		});
+	});
+
+	it.each(["pending", "processing", "retry_scheduled"])(
+		"coalesces %s recovery without allocating a new pass",
+		async (status) => {
+			const state = fixture();
+			const candidate = state.candidates[0];
+			if (!candidate) throw new Error("Missing original execution fixture");
+			const original = candidate.originalOutboxes[0];
+			if (!original) throw new Error("Missing original outbox fixture");
+			const metadataRecovery = {
+				id: "existing_pass",
+				requestedAt: 1,
+				originalStatus: "failed",
+			};
+			const candidates = [
+				{
+					...candidate,
+					originalOutboxes: [
+						{
+							...original,
+							status,
+							payload: { ...original.payload, metadataRecovery },
+						},
+					],
+				},
+			];
+			expect(await evaluate({ ...state, candidates })).toEqual({
+				result: { outcome: "coalesced" },
+				allocatedIds: 0,
+				plan: { result: { outcome: "coalesced" }, updates: [] },
+			});
+		},
+	);
+
+	it("bounds a pass to sixteen original outboxes and prioritizes the least recently requested", async () => {
+		const state = fixture();
+		const candidate = state.candidates[0];
+		if (!candidate) throw new Error("Missing original execution fixture");
+		const original = candidate.originalOutboxes[0];
+		if (!original) throw new Error("Missing original outbox fixture");
+		const candidates = Array.from({ length: 18 }, (_, index) => {
+			const executionId = `execution_${index}`;
+			return {
+				...candidate,
+				execution: { ...candidate.execution, executionId },
+				originalOutboxes: [
+					{
+						...original,
+						itemId: `conversation:turn:${executionId}`,
+						payload: {
+							...original.payload,
+							executionId,
+							metadataRecovery: {
+								id: `old_${index}`,
+								requestedAt: 18 - index,
+								originalStatus: "succeeded",
+							},
+						},
+					},
+				],
+			};
+		});
+		const result = await evaluate({ ...state, candidates });
+		expect(result.result).toEqual({ outcome: "scheduled" });
+		expect(result.allocatedIds).toBe(16);
+		expect(result.plan?.updates.map((update) => update.itemId)).toEqual(
+			Array.from(
+				{ length: 16 },
+				(_, index) => `conversation:turn:execution_${17 - index}`,
+			),
+		);
+	});
+
+	async function fakeHistory(
+		outboxStatus: "succeeded" | "failed",
+		withBoundary = true,
+	) {
+		const fake = new FakeConversationExecutionV1({
+			authority: { ...authority, ...(withBoundary ? { taskBoundary } : {}) },
+			now: () => requestedAt,
+		});
+		const created = await fake.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create",
+			requestId: "request_create",
+			traceId: "trace_create",
+		});
+		if (created.outcome !== "accepted")
+			throw new Error("Expected Conversation creation");
+		const conversationId = created.result.conversationId;
+		const accepted = await fake.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId,
+			text: "Create a PR",
+			idempotencyKey: "message",
+			requestId: "request_message",
+			traceId: "trace_message",
+		});
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected original Execution");
+		const executionId = accepted.result.executionId;
+		fake.completeExecution(executionId, {
+			hostSessionRef: "host_01",
+			deliveryFence: 7,
+			outboxStatus,
+		});
+		const tool = {
+			kind: "tool" as const,
+			toolId: "connection.create_pr",
+			operationRef: "tool_01",
+			attemptRef: "attempt_01",
+			connection: {
+				serviceRef: "github",
+				verification: "unverified" as const,
+				reason: "receipt_missing" as const,
+			},
+		};
+		const startedAt = requestedAt.toISOString();
+		const outcome = {
+			...tool,
+			phase: "unknown" as const,
+			startedAt,
+			finishedAt: startedAt,
+			durationMs: 0,
+		};
+		let sequence = 0;
+		async function persist(
+			fact: import("./conversation-operation-facts.ts").ConversationOperationFactV2,
+		) {
+			sequence++;
+			expect(
+				await fake.persistRuntimeEvent({
+					schemaVersion: 1,
+					conversationId,
+					executionId,
+					sessionGeneration: 1,
+					deliveryFence: 7,
+					adapterEventKey: `event_${sequence}`,
+					runtimeCursor: `cursor_${sequence}`,
+					occurredAt: startedAt,
+					event: { schemaVersion: 2, type: "execution.operation", fact },
+				}),
+			).toMatchObject({ outcome: "accepted" });
+		}
+		await persist({ ...tool, phase: "intent" });
+		await persist({ ...tool, phase: "started", startedAt });
+		await persist(outcome);
+		return {
+			fake,
+			query: { schemaVersion: 1 as const, conversationId, executionId },
+			outcome,
+			persist,
+		};
+	}
+
+	it.each(["succeeded", "failed"] as const)(
+		"Fake applies the Core plan for original %s delivery and stops when latest metadata is verified",
+		async (status) => {
+			const { fake, query, outcome, persist } = await fakeHistory(status);
+			const before = fake.snapshot();
+			await expect(fake.requestMetadataRecovery(query)).resolves.toEqual({
+				outcome: "scheduled",
+			});
+			const after = fake.snapshot();
+			expect(after.outbox[0]).toMatchObject({
+				status: "pending",
+				metadataRecovery: {
+					requestedAt: requestedAt.getTime(),
+					originalStatus: status,
+				},
+			});
+			expect(after.outbox[0]?.metadataRecovery?.id).toBeTruthy();
+			expect({ ...after, outbox: before.outbox }).toEqual(before);
+			await expect(fake.requestMetadataRecovery(query)).resolves.toEqual({
+				outcome: "coalesced",
+			});
+			expect(fake.snapshot()).toEqual(after);
+			await persist({
+				...outcome,
+				connection: {
+					serviceRef: "github",
+					verification: "verified",
+					callRef: "call_01",
+				},
+			});
+			const verified = fake.snapshot();
+			await expect(fake.requestMetadataRecovery(query)).resolves.toEqual({
+				outcome: "not_applicable",
+			});
+			expect(fake.snapshot()).toEqual(verified);
+		},
+	);
+
+	it("Fake keeps missing original authorization ineligible and rolls back a failed recovery commit", async () => {
+		const missing = await fakeHistory("succeeded", false);
+		const beforeMissing = missing.fake.snapshot();
+		await expect(
+			missing.fake.requestMetadataRecovery(missing.query),
+		).resolves.toEqual({ outcome: "not_applicable" });
+		expect(missing.fake.snapshot()).toEqual(beforeMissing);
+		const valid = await fakeHistory("succeeded");
+		const beforeValid = valid.fake.snapshot();
+		valid.fake.failNextCommit();
+		await expect(
+			valid.fake.requestMetadataRecovery(valid.query),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(valid.fake.snapshot()).toEqual(beforeValid);
+		await expect(
+			valid.fake.requestMetadataRecovery(valid.query),
+		).resolves.toEqual({ outcome: "scheduled" });
 	});
 });
