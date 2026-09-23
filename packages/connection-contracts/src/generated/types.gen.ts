@@ -144,10 +144,10 @@ export type OAuthTransactionRequest = {
 export type ProviderCredentialRequest = {
     providerId: 'datalego';
 } | {
-    providerId: 'bitbucket' | 'rehoboam';
+    providerId: 'bitbucket';
     accessToken: string;
 } | {
-    providerId: 'confluence' | 'jira';
+    providerId: 'confluence' | 'jira' | 'rehoboam';
     username: string;
     password: string;
 } | {

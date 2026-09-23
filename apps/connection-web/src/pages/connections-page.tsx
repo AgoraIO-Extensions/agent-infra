@@ -129,13 +129,16 @@ export function ConnectionsPage() {
 			setBitbucketPending(false);
 		}
 	};
-	const connectRehoboam = async (accessToken: string) => {
+	const connectRehoboam = async (credential: {
+		password: string;
+		username: string;
+	}) => {
 		setRehoboamPending(true);
 		setRehoboamError(null);
 		try {
 			await connectionApi.connectProviderCredential({
-				accessToken,
 				providerId: "rehoboam",
+				...credential,
 			});
 			setRehoboamOpen(false);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
@@ -678,19 +681,33 @@ export function ConnectionsPage() {
 						className="form-stack"
 						onSubmit={(event: FormEvent<HTMLFormElement>) => {
 							event.preventDefault();
-							const accessToken = new FormData(event.currentTarget).get(
-								"accessToken",
-							);
-							if (typeof accessToken === "string")
-								void connectRehoboam(accessToken);
+							const form = new FormData(event.currentTarget);
+							const username = form.get("username");
+							const password = form.get("password");
+							if (
+								typeof username === "string" &&
+								typeof password === "string"
+							) {
+								void connectRehoboam({ password, username });
+							}
 						}}
 					>
-						<label htmlFor="rehoboam-access-token">Rehoboam 访问令牌</label>
+						<label htmlFor="rehoboam-username">Rehoboam 用户名</label>
 						<input
-							autoComplete="off"
-							id="rehoboam-access-token"
-							maxLength={8192}
-							name="accessToken"
+							autoComplete="username"
+							defaultValue={overview.data?.account.email ?? ""}
+							id="rehoboam-username"
+							maxLength={256}
+							name="username"
+							required
+							type="text"
+						/>
+						<label htmlFor="rehoboam-password">Rehoboam 密码</label>
+						<input
+							autoComplete="current-password"
+							id="rehoboam-password"
+							maxLength={1024}
+							name="password"
 							required
 							type="password"
 						/>
