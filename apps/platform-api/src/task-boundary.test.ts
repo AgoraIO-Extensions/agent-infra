@@ -519,25 +519,39 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		},
 	);
 
-	it.each([null, { ...currentUser, accountStatus: "disabled" }])(
-		"returns 403 for confirmed inactive directory user %j",
-		async (value) => {
-			const conversationId = await createConversation();
-			resolveUser.mockResolvedValue(value);
-			const before = await snapshot();
-			const response = await post(
-				`/conversations/${conversationId}/messages`,
-				{ schemaVersion: 1, text: "synthetic" },
-				"revoked",
-			);
-			expect(response.status).toBe(403);
-			expect(await response.json()).toMatchObject({
-				code: "AUTHORIZATION_REVOKED",
-				retryable: false,
-			});
-			expect(await snapshot()).toEqual(before);
-		},
-	);
+	it("returns 503 when the current directory user is missing", async () => {
+		const conversationId = await createConversation();
+		resolveUser.mockResolvedValue(null);
+		const before = await snapshot();
+		const response = await post(
+			`/conversations/${conversationId}/messages`,
+			{ schemaVersion: 1, text: "synthetic" },
+			"directory-missing",
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "RUNTIME_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(await snapshot()).toEqual(before);
+	});
+
+	it("returns 403 for a confirmed disabled directory user", async () => {
+		const conversationId = await createConversation();
+		resolveUser.mockResolvedValue({ ...currentUser, accountStatus: "disabled" });
+		const before = await snapshot();
+		const response = await post(
+			`/conversations/${conversationId}/messages`,
+			{ schemaVersion: 1, text: "synthetic" },
+			"revoked",
+		);
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			code: "AUTHORIZATION_REVOKED",
+			retryable: false,
+		});
+		expect(await snapshot()).toEqual(before);
+	});
 
 	it("cannot use stale organization membership, another user's Conversation, or another Agent", async () => {
 		const conversationId = await createConversation();
