@@ -11,11 +11,12 @@ import {
 } from "../src/features/conversation/conversation-test-fixtures";
 
 const longCode = `const value = "${"long-value-".repeat(80)}";`;
+const longTableValue = "long-table-value-".repeat(40);
 const markdown = [
 	"## 检查结果",
 	"**通过**，请检查以下代码。",
 	`\`\`\`ts\n${longCode}\n\`\`\``,
-	"| 模块 | 状态 | 描述 | 下一步 |\n| --- | --- | --- | --- |\n| Web | 通过 | 长内容检查 | 查看结果 |",
+	`| 模块 | 状态 | 描述 | 下一步 |\n| --- | --- | --- | --- |\n| Web | 通过 | ${longTableValue} | 查看结果 |`,
 	"![禁止加载的远程图片](https://tracker.example/pixel)",
 	"[来源](https://example.com/docs) [危险](javascript:alert%281%29)",
 	...Array.from(

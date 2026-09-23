@@ -24,6 +24,29 @@ describe("assistant Markdown", () => {
 		expect(screen.getByRole<HTMLInputElement>("checkbox").disabled).toBe(true);
 	});
 
+	it("preserves GFM column alignment in headers and cells", () => {
+		render(
+			<AssistantMarkdown>
+				{
+					"| Left | Center | Right |\n| :--- | :---: | ---: |\n| one | two | three |"
+				}
+			</AssistantMarkdown>,
+		);
+		for (const [name, alignment] of [
+			["Left", "left"],
+			["Center", "center"],
+			["Right", "right"],
+			["one", "left"],
+			["two", "center"],
+			["three", "right"],
+		]) {
+			expect(
+				screen.getByText(name).closest<HTMLTableCellElement>("th, td")?.style
+					.textAlign,
+			).toBe(alignment);
+		}
+	});
+
 	it("keeps HTML inert, removes unsafe or local navigation, and never loads remote images", () => {
 		const { container } = render(
 			<AssistantMarkdown>

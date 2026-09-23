@@ -59,8 +59,12 @@ export function AssistantMarkdown({ children }: { children: string }) {
 					thead: ({ children }) => <TableHeader>{children}</TableHeader>,
 					tbody: ({ children }) => <TableBody>{children}</TableBody>,
 					tr: ({ children }) => <TableRow>{children}</TableRow>,
-					th: ({ children }) => <TableHead>{children}</TableHead>,
-					td: ({ children }) => <TableCell>{children}</TableCell>,
+					th: ({ style, children }) => (
+						<TableHead style={style}>{children}</TableHead>
+					),
+					td: ({ style, children }) => (
+						<TableCell style={style}>{children}</TableCell>
+					),
 				}}
 			>
 				{children}
