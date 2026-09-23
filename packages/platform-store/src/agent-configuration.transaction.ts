@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -28,11 +28,8 @@ import {
 import {
 	agentApplications,
 	agentConfigurationRevisions,
-	agentOwners,
 	agents,
 	idempotencyRecords,
-	wecomConnections,
-	wecomSetupSessions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
@@ -133,24 +130,9 @@ export class PostgresAgentConfigurationTransactionV1
 		}
 	}
 
-	async commitWecomSetup(
-		input: AgentConfigurationWritePlanV1,
-		setup: {
-			readonly sessionId: string;
-			readonly holderId: string;
-			readonly fence: number;
-		},
-	) {
-		return this.commit(input, undefined, setup);
-	}
 	async commit(
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
-		setup?: {
-			readonly sessionId: string;
-			readonly holderId: string;
-			readonly fence: number;
-		},
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
@@ -196,58 +178,6 @@ export class PostgresAgentConfigurationTransactionV1
 					agent.authorizationRevision !== plan.expectedAuthorizationRevision
 				) {
 					return { outcome: "stale" as const };
-				}
-				if (setup) {
-					const [candidate] = await transaction
-						.select({ session: wecomSetupSessions })
-						.from(wecomSetupSessions)
-						.innerJoin(
-							wecomConnections,
-							eq(
-								wecomConnections.bindingReference,
-								wecomSetupSessions.sessionId,
-							),
-						)
-						.innerJoin(
-							agentOwners,
-							and(
-								eq(agentOwners.agentId, wecomSetupSessions.agentId),
-								eq(agentOwners.ownerId, wecomSetupSessions.actorId),
-							),
-						)
-						.where(
-							and(
-								eq(wecomSetupSessions.sessionId, setup.sessionId),
-								eq(wecomSetupSessions.status, "verifying"),
-								gt(wecomSetupSessions.expiresAt, sql`clock_timestamp()`),
-								eq(wecomConnections.agentId, wecomSetupSessions.agentId),
-								eq(wecomConnections.botId, wecomSetupSessions.botId),
-								eq(wecomConnections.holderId, setup.holderId),
-								eq(wecomConnections.fence, setup.fence),
-								gt(wecomConnections.leaseUntil, sql`clock_timestamp()`),
-							),
-						)
-						.for("update");
-					if (
-						!candidate ||
-						candidate.session.agentId !== plan.agentId ||
-						candidate.session.actorId !== plan.auditEvent.actorId ||
-						candidate.session.configurationRevision !== plan.baseRevision ||
-						candidate.session.authorizationRevision !==
-							plan.expectedAuthorizationRevision ||
-						plan.result.changedFields.length !== 1 ||
-						plan.result.changedFields[0] !== "channels" ||
-						!plan.configuration.channels.some(
-							(c) =>
-								c.kind === "wecom_bot" &&
-								c.bindingReference === setup.sessionId,
-						)
-					)
-						return { outcome: "stale" as const };
-					await transaction
-						.update(wecomSetupSessions)
-						.set({ status: "active" })
-						.where(eq(wecomSetupSessions.sessionId, setup.sessionId));
 				}
 				let applicationId: string | undefined;
 				if (plan.expectedManagementRevision !== null) {
@@ -347,15 +277,6 @@ export class PostgresAgentConfigurationTransactionV1
 					updatedAt: plan.auditEvent.occurredAt,
 				});
 				await insertAgentConfigurationEffects(transaction, plan);
-				await transaction.execute(sql`with ended as (
- update platform.wecom_setup_sessions set status='conflict',encrypted_credential=null
- where agent_id=${plan.agentId} and status in ('awaiting_input','verifying') and configuration_revision<>${plan.configuration.revision}
- returning session_id,agent_id
- ) insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details)
- select gen_random_uuid()::text,session_id,'system',${setup ? "platform-worker" : "platform-api"},'wecom.setup_failed','agent',agent_id,'failed',session_id,agent_id,NULL from ended`);
-				// Retired channel bindings must not retain decryptable credentials indefinitely.
-				await transaction.execute(sql`update platform.wecom_setup_sessions set status='cancelled',encrypted_credential=null
-					 where agent_id=${plan.agentId} and status='active' and not (${JSON.stringify(plan.configuration.channels)}::jsonb @> jsonb_build_array(jsonb_build_object('kind','wecom_bot','bindingReference',session_id)))`);
 				return { outcome: "committed" as const, result };
 			});
 		} catch (error) {

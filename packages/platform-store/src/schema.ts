@@ -1,6 +1,6 @@
 import type { PlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { sql } from "drizzle-orm";
@@ -315,7 +315,7 @@ export const agentConfigurationRevisions = platformSchema.table(
 		revision: bigint("revision", { mode: "number" }).notNull(),
 		sourceReference: text("source_reference").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-		configuration: jsonb("configuration").$type<AgentConfigurationRecordV1>(),
+		configuration: jsonb("configuration").$type<AgentConfigurationRecordV2>(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.agentId, table.revision] }),
@@ -331,8 +331,9 @@ export const agentConfigurationRevisions = platformSchema.table(
 			"agent_configuration_identity_matches",
 			sql`${table.configuration} IS NULL OR (
 				jsonb_typeof(${table.configuration}) = 'object'
+				and ${table.configuration} ? 'schemaVersion'
+				and ${table.configuration}->'schemaVersion' in ('1'::jsonb, '2'::jsonb)
 				and ${table.configuration} @> jsonb_build_object(
-					'schemaVersion', 1,
 					'agentId', ${table.agentId},
 					'revision', ${table.revision}
 				)
