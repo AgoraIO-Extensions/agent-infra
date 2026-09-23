@@ -73,6 +73,51 @@ image manifest 只标识当前已部署 release。
 
 ## kind 拓扑验证
 
+### 单 Agent 标准模板发布
+
+部署运维包可独立装配 `createProductionSingleAgentTemplateReleaseAppV1`。它消费一个固定发布
+目标，不挂载普通 Owner 配置路由；权限边界见
+[工程 Spec §10.4](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#104-模板与自定义镜像升级)。
+以下是部署包内的装配片段，变量均由部署包从受控配置和 Adapter 装配结果提供：
+
+```ts
+import { createProductionSingleAgentTemplateReleaseAppV1 } from "@agent-infra/platform-api";
+import { serve } from "@hono/node-server";
+
+const release = createProductionSingleAgentTemplateReleaseAppV1({
+  ...deploymentAdapters,
+  target: releaseTarget,
+  loadReleaseBinding: () => loadCurrentReleaseBinding(releaseTarget.releaseId),
+});
+const server = serve({ fetch: release.app.fetch, hostname: "127.0.0.1", port: 3514 });
+
+async function close() {
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => error ? reject(error) : resolve()),
+  );
+  await release.close();
+}
+```
+
+`deploymentAdapters` 对应导出类型 `ProductionSingleAgentTemplateReleaseInputV1` 的其余字段：
+数据库 URL、实际 `IdentityAdapter`、固定镜像 repository、Registry 与准入策略、模板声明、模型
+目录、渠道策略和当前主体目录读取。数据库与 Registry 凭证只从部署 Secret 装配，不进入示例、
+日志或 HTTP 响应。部署包负责在进程退出时调用 `close()`。
+
+`releaseTarget` 必须固定 `schemaVersion: 1`、`releaseId`、`agentId`、`templateId`、
+`expectedConfigurationRevision`、`expectedImageDigest` 和 `targetImageDigest`。
+`loadCurrentReleaseBinding` 每次读取当前 `StandardTemplateReleaseDeploymentBindingV1`：
+`schemaVersion: 1`、非空 `revision`、相同 `target` 和具备运维资格的 `operatorIds`。
+变更目标或撤销资格时更新 binding revision；不得缓存旧身份或将请求中的主体、角色和目标当成
+部署绑定。监听地址为私有地址也仍须完成真实身份校验。
+
+操作者向 `POST /internal/ops/standard-template-releases/{releaseId}/apply` 发送经该部署身份
+Adapter 认证的请求，带 `Idempotency-Key` 和严格 JSON 请求体 `{"schemaVersion":1}`。
+HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key，Workload 验证、提升和任务恢复
+由 Worker 后续完成。仓库测试使用真实 HTTP/PostgreSQL 和受控身份、Registry transport；
+真实账号、Registry、Workload 与首通联合验收仍由
+[#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 跟进。
+
 ### Workload 调谐
 
 生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如 `file:///app/deployment/platform-worker.mjs`；该示例不代表基础镜像包含此文件。仓库基础镜像不提供环境专属装配包，发布前必须在最终镜像内确认模块可加载并导出下述工厂。未配置路径时，生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的
