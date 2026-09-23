@@ -53,7 +53,10 @@ import {
 	runCodexConnectionRecovery,
 	validateModelAccess,
 } from "./codex-app-server-bridge.js";
-import type { CodexConnectionRecoveryResponse } from "./codex-connection-client.js";
+import type {
+	CodexConnectionEvidenceUpdateRequest,
+	CodexConnectionRecoveryResponse,
+} from "./codex-connection-client.js";
 import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
 
 const directories: string[] = [];
@@ -72,6 +75,9 @@ const isolatedEnvironmentKeys = [
 ].sort();
 
 async function installFakeCodex(mode: string, recoveryFrame?: unknown) {
+	const evidenceFrame =
+		recoveryFrame ??
+		(mode.startsWith("recovery-") ? recoveryEvidenceFrame() : null);
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-runtime-codex-bridge-"),
 	);
@@ -138,26 +144,32 @@ if (args.includes("--agent-infra-connection-recovery")) {
  let count = 0;
  const profile = JSON.parse(args[args.indexOf("--agent-infra-connection-profile") + 1]);
  const processNonce = randomUUID();
- const frame = ${JSON.stringify(recoveryFrame ?? null)};
+ const frame = ${JSON.stringify(evidenceFrame)};
  let lastRecoveryId;
  let firstRecoveryId;
+ let repeatedEvidence = false;
  const pull = (previousRecoveryId) => socket.write(JSON.stringify({schemaVersion:2,phase:"connection-recovery",requestId:randomUUID(),profileRef:profile.profileRef,processNonce,...(previousRecoveryId ? {previousRecoveryId} : {})}) + "\\n");
  socket.on("data", (chunk) => {
   const response = JSON.parse(chunk.toString());
-  count++;
-  if (response.decision === "done" || (count === 16 && mode === "recovery-premature")) socket.end(() => process.exit(0));
-  else if (response.phase === "connection-evidence") pull(lastRecoveryId);
-  else if (mode === "recovery-evidence") {
+  if (response.decision === "done") socket.end(() => process.exit(0));
+  else if (response.phase === "connection-evidence") {
+   if (mode === "recovery-duplicate-evidence" && !repeatedEvidence) {
+    repeatedEvidence = true;
+    socket.write(JSON.stringify(frame) + "\\n");
+   }
+   else if (mode === "recovery-premature" && count === 16) socket.end(() => process.exit(0));
+   else if (mode === "recovery-previous-missing") pull();
+   else if (mode === "recovery-previous-foreign") pull(randomUUID());
+   else if (mode === "recovery-previous-stale") pull(firstRecoveryId);
+   else pull(lastRecoveryId);
+  }
+  else {
+   count++;
    lastRecoveryId = response.recoveryId;
-   socket.write(JSON.stringify(frame) + "\\n");
-  }
-  else if (mode === "recovery-previous-missing") pull();
-  else if (mode === "recovery-previous-foreign") pull(randomUUID());
-  else if (mode === "recovery-previous-stale") {
    firstRecoveryId ??= response.recoveryId;
-   pull(firstRecoveryId);
+   if (mode === "recovery-skip-evidence" || (mode === "recovery-skip-final-evidence" && count === 16)) pull(lastRecoveryId);
+   else socket.write(JSON.stringify(frame) + "\\n");
   }
-  else pull(response.recoveryId);
  });
  if (mode === "recovery-frame") socket.write(JSON.stringify(frame) + "\\n");
  else pull(mode === "recovery-previous-initial" ? randomUUID() : undefined);
@@ -1525,6 +1537,13 @@ describe("model access admission", () => {
 	});
 });
 
+function recoveryEvidenceFrame() {
+	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
+	return corpus.cases.find(
+		(entry: { id: string }) => entry.id === "v2-connection-evidence-update",
+	).frame as CodexConnectionEvidenceUpdateRequest;
+}
+
 function recoveryTestOptions(maximumVerifications = 1) {
 	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
 	const fixture = corpus.cases.find(
@@ -1605,10 +1624,7 @@ it.each([
 );
 
 it("allows recovery evidence to be acknowledged before the final pull", async () => {
-	const corpus = JSON.parse(readCallbackCorpusBytes().toString("utf8"));
-	const frame = corpus.cases.find(
-		(entry: { id: string }) => entry.id === "v2-connection-evidence-update",
-	).frame;
+	const frame = recoveryEvidenceFrame();
 	await installFakeCodex("recovery-evidence", frame);
 	const configuration = recoveryTestOptions();
 	await expect(
@@ -1624,6 +1640,14 @@ it("allows recovery evidence to be acknowledged before the final pull", async ()
 	);
 });
 
+it("rejects recovery evidence before a verification has been issued", async () => {
+	await installFakeCodex("recovery-frame", recoveryEvidenceFrame());
+	const configuration = recoveryTestOptions();
+	await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+	expect(configuration.evidence).not.toHaveBeenCalled();
+	expect(configuration.recovery).not.toHaveBeenCalled();
+});
+
 it.each([
 	["initial", 0],
 	["missing", 1],
@@ -1636,7 +1660,7 @@ it.each([
 		const configuration = recoveryTestOptions(2);
 		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
 		expect(configuration.recovery).toHaveBeenCalledTimes(calls);
-		expect(configuration.evidence).not.toHaveBeenCalled();
+		expect(configuration.evidence).toHaveBeenCalledTimes(calls);
 	},
 );
 
@@ -1651,5 +1675,112 @@ it.each(["recovery-premature", "recovery-done"])(
 		expect(configuration.recovery).toHaveBeenCalledTimes(
 			mode === "recovery-premature" ? 16 : 17,
 		);
+		expect(configuration.evidence).toHaveBeenCalledTimes(16);
 	},
 );
+
+it.each([
+	["recovery-skip-evidence", 1, 0],
+	["recovery-skip-final-evidence", 16, 15],
+] as const)(
+	"rejects %s before the next pull handler",
+	async (mode, pulls, acknowledgements) => {
+		await installFakeCodex(mode);
+		const configuration = recoveryTestOptions(
+			mode === "recovery-skip-evidence" ? 1 : 16,
+		);
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.recovery).toHaveBeenCalledTimes(pulls);
+		expect(configuration.evidence).toHaveBeenCalledTimes(acknowledgements);
+	},
+);
+
+it.each([
+	"sessionId",
+	"turnId",
+	"callId",
+	"attemptRef",
+	"toolName",
+	"parentAttemptRef",
+	"permitId",
+	"connectionRequest",
+	"originalResponse",
+	"unverified",
+] as const)(
+	"rejects recovery evidence with foreign %s before its handler",
+	async (field) => {
+		const frame = recoveryEvidenceFrame();
+		if (field === "permitId")
+			frame.permitId = "00000000-0000-4000-8000-999999999999";
+		else if (field === "connectionRequest")
+			frame.connectionRequest.rpcRequestId = 99;
+		else if (field === "originalResponse") {
+			if (!frame.connectionEvidence.originalResponse)
+				throw new Error("fixture");
+			frame.connectionEvidence.originalResponse.receivedAt++;
+		} else if (field === "unverified") {
+			frame.connectionEvidence = {
+				verification: "unverified",
+				reason: "record_unavailable",
+			};
+		} else
+			frame.identity[field] =
+				field === "attemptRef" || field === "parentAttemptRef"
+					? "00000000-0000-4000-8000-999999999999"
+					: "foreign-source";
+		await installFakeCodex("recovery-evidence", frame);
+		const configuration = recoveryTestOptions();
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).not.toHaveBeenCalled();
+		expect(configuration.recovery).toHaveBeenCalledTimes(1);
+	},
+);
+
+it.each([
+	"schemaVersion",
+	"phase",
+	"requestId",
+	"identity",
+	"connectionRequest",
+	"decision",
+	"extra",
+	"throws",
+	"abort",
+] as const)(
+	"rejects recovery evidence ACK %s without permitting the next pull",
+	async (failure) => {
+		await installFakeCodex("recovery-evidence");
+		const configuration = recoveryTestOptions();
+		const controller = new AbortController();
+		configuration.signal = controller.signal;
+		const acknowledge = configuration.evidence.getMockImplementation();
+		if (!acknowledge) throw new Error("fixture");
+		configuration.evidence.mockImplementation(async (request, signal) => {
+			const response = await acknowledge(request, signal);
+			if (failure === "throws")
+				throw new Error("synthetic persistence failure");
+			if (failure === "abort") controller.abort();
+			else
+				Object.assign(response, {
+					[failure]: failure === "schemaVersion" ? 1 : "invalid-ack",
+				});
+			return response;
+		});
+		await expect(runCodexConnectionRecovery(configuration)).rejects.toThrow();
+		expect(configuration.evidence).toHaveBeenCalledTimes(1);
+		expect(configuration.recovery).toHaveBeenCalledTimes(1);
+	},
+);
+
+it("allows identical recovery evidence retries after ACK without advancing the item", async () => {
+	await installFakeCodex("recovery-duplicate-evidence");
+	const configuration = recoveryTestOptions();
+	await expect(
+		runCodexConnectionRecovery(configuration),
+	).resolves.toBeUndefined();
+	expect(configuration.evidence).toHaveBeenCalledTimes(2);
+	expect(configuration.evidence.mock.calls[0]?.[0]).toEqual(
+		configuration.evidence.mock.calls[1]?.[0],
+	);
+	expect(configuration.recovery).toHaveBeenCalledTimes(2);
+});

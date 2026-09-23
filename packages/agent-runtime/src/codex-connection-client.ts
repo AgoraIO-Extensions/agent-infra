@@ -251,6 +251,7 @@ export function createCodexConnectionClient(options: {
 				signal,
 			);
 		} catch {
+			signal.throwIfAborted();
 			return deny("authorization_unavailable");
 		}
 		signal.throwIfAborted();

@@ -2560,11 +2560,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const requests = new Set<string>();
 		let current:
 			| {
+					// Driver journal key; native identity.attemptRef is a different reference.
+					attemptRef: string;
 					original: CodexConnectionRecoveryOriginal;
 					queryClient: CodexConnectionQueryMetadata;
 			  }
 			| undefined;
 		let markScannedEvidence: (() => Promise<void>) | undefined;
+		const requireAcknowledgedEvidence = (pass: CodexConnectionRecoveryPass) => {
+			if (current && !pass.scannedAttemptRefs.includes(current.attemptRef))
+				protocolInvalid();
+		};
 		const recovery = async (
 			request: CodexConnectionRecoveryRequest,
 			callbackSignal: AbortSignal,
@@ -2580,12 +2586,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				protocolInvalid();
 			processNonce = request.processNonce;
 			requests.add(request.requestId);
-			current = undefined;
 			const selected = await change(({ journal }) => {
 				itemSignal.throwIfAborted();
 				const pass = journal.connectionRecovery;
 				if (!pass || pass.recoveryRequestId !== reference.recoveryRequestId)
 					unavailable();
+				requireAcknowledgedEvidence(pass);
+				current = undefined;
 				if (
 					pass.completed ||
 					pass.deadlineAt <= Date.now() ||
@@ -2736,6 +2743,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			previousRecoveryId = randomUUID();
 			current = {
+				attemptRef,
 				original,
 				queryClient: structuredClone({
 					originalBinding: value.originalBinding,
@@ -2808,16 +2816,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			signal.throwIfAborted();
 			read.assertCurrent();
 		} finally {
-			current = undefined;
+			if (!recoveryProcessCompleted) current = undefined;
 		}
 		if (!recoveryProcessCompleted) return;
-		await change(({ journal }) => {
-			if (
-				journal.connectionRecovery?.recoveryRequestId ===
-				reference.recoveryRequestId
-			)
-				journal.connectionRecovery.completed = true;
-		});
+		try {
+			await change(({ journal }) => {
+				const pass = journal.connectionRecovery;
+				if (pass?.recoveryRequestId === reference.recoveryRequestId) {
+					requireAcknowledgedEvidence(pass);
+					pass.completed = true;
+				}
+			});
+		} finally {
+			current = undefined;
+		}
 	}
 
 	private readonly connectionClients = new Map<

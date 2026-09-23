@@ -2751,6 +2751,14 @@ describe("Codex Runtime Driver", () => {
 			},
 		);
 		drivers.push(driver);
+		const recognition = driver as unknown as {
+			waitForNativeTurnStarted(
+				threadId: string,
+				turnId: string,
+				deadline: number,
+			): Promise<boolean>;
+		};
+		const waitForStarted = vi.spyOn(recognition, "waitForNativeTurnStarted");
 		vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 		const submission = driver.execute(command);
 		void submission.catch(() => {});
@@ -2769,6 +2777,8 @@ describe("Codex Runtime Driver", () => {
 				expect.objectContaining({ admissionPending: true }),
 			);
 		});
+		// Persisting admissionPending precedes registration of the recognition timer.
+		await vi.waitFor(() => expect(waitForStarted).toHaveBeenCalledOnce());
 		await vi.advanceTimersByTimeAsync(30_000);
 
 		await expect(submission).rejects.toMatchObject({

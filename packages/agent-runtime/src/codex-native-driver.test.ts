@@ -379,6 +379,7 @@ interface Journal {
 		string,
 		{
 			identity: CodexNativeAttemptIdentityV1;
+			attemptRef: string;
 			connectionOrigin?: CodexConnectionOrigin;
 			connectionRequest?: CodexConnectionOperationRequest["connectionRequest"];
 			connectionEvidence?: CodexConnectionEvidence;
@@ -3496,6 +3497,101 @@ async function recoveryFixture() {
 }
 
 describe("private cross-process Connection evidence recovery", () => {
+	it.each(["missing", "evidence-commit", "scan-commit"] as const)(
+		"rejects the next recovery pull when the prior evidence ACK is %s",
+		async (failure) => {
+			const { env, execution, start, verified, origin, resolveReadOnlyClient } =
+				await recoveryFixture();
+			const context = recoveryRead(execution, origin);
+			let evidenceResult: PromiseSettledResult<unknown> | undefined;
+			let nextPull: PromiseSettledResult<unknown> | undefined;
+			let beforePull: unknown;
+			let afterPull: unknown;
+			vi.spyOn(
+				BoundDriver.prototype,
+				"launchConnectionRecovery",
+			).mockImplementation(async (process) => {
+				const request = recoveryPull(process.profile.profileRef);
+				const response = await process.recovery(request, process.signal);
+				assert(response.decision === "verify");
+				if (failure !== "missing") {
+					verified.recordQuery.credentialRevision =
+						response.currentClient.credential.revision;
+					verified.recordQuery.queriedAt = Date.now();
+					verified.verifiedAt = Date.now();
+					const commit = context.read.commit.bind(context.read);
+					const commitSpy = vi.spyOn(context.read, "commit");
+					if (failure === "scan-commit")
+						commitSpy.mockImplementationOnce(commit);
+					commitSpy.mockRejectedValueOnce(
+						new Error("synthetic commit failure"),
+					);
+					[evidenceResult] = await Promise.allSettled([
+						process.evidence(connectionUpdate(start, verified), process.signal),
+					]);
+					commitSpy.mockRestore();
+				}
+				beforePull = await env.saved();
+				[nextPull] = await Promise.allSettled([
+					process.recovery(
+						recoveryPull(
+							process.profile.profileRef,
+							response.recoveryId,
+							request.processNonce,
+						),
+						process.signal,
+					),
+				]);
+				afterPull = await env.saved();
+				throw new Error("synthetic recovery process terminated");
+			});
+			await env.driver.recoverOriginalEvidence(context.reference, context.read);
+			if (failure !== "missing")
+				expect(evidenceResult).toMatchObject({
+					status: "rejected",
+					reason: { message: "synthetic commit failure" },
+				});
+			expect(nextPull).toMatchObject({
+				status: "rejected",
+				reason: { code: "RUNTIME_CODEX_PROTOCOL_INVALID" },
+			});
+			expect(afterPull).toEqual(beforePull);
+			expect(journal(await env.saved(), execution)).toMatchObject({
+				connectionRecovery: { scannedAttemptRefs: [], completed: false },
+			});
+			expect(facts(await env.saved(), execution).at(-1)).toMatchObject({
+				connection: {
+					verification: failure === "scan-commit" ? "verified" : "unverified",
+				},
+			});
+			expect(resolveReadOnlyClient).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("does not complete a recovery pass when the process exits before evidence ACK", async () => {
+		const { env, execution, origin } = await recoveryFixture();
+		const context = recoveryRead(execution, origin);
+		let decision: string | undefined;
+		vi.spyOn(
+			BoundDriver.prototype,
+			"launchConnectionRecovery",
+		).mockImplementation(async (process) => {
+			decision = (
+				await process.recovery(
+					recoveryPull(process.profile.profileRef),
+					process.signal,
+				)
+			).decision;
+		});
+		await expect(
+			env.driver.recoverOriginalEvidence(context.reference, context.read),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+		expect(decision).toBe("verify");
+		expect(journal(await env.saved(), execution)).toMatchObject({
+			connectionRecovery: { scannedAttemptRefs: [], completed: false },
+		});
+	});
+
 	it("reopens the original journal, uses only the current read credential, commits before ACK, and replays identical bytes", async () => {
 		const { env, execution, start, verified, origin, resolveReadOnlyClient } =
 			await recoveryFixture();
@@ -3668,6 +3764,7 @@ describe("private cross-process Connection evidence recovery", () => {
 					entered.resolve();
 					await release.promise;
 				}
+				throw new Error("synthetic recovery process terminated before ACK");
 			});
 		const active = env.driver.recoverOriginalEvidence(
 			first.reference,
@@ -3715,7 +3812,7 @@ describe("private cross-process Connection evidence recovery", () => {
 			expect(journal(await env.saved(), execution)).toMatchObject({
 				connectionRecovery: {
 					recoveryRequestId: next.reference.recoveryRequestId,
-					completed: true,
+					completed: false,
 				},
 			});
 			expect(decisions).toEqual(["verify", "verify"]);
@@ -3738,34 +3835,68 @@ describe("private cross-process Connection evidence recovery", () => {
 			}),
 		});
 		const execution = await env.start();
+		const evidenceByAttempt = new Map<
+			string,
+			{
+				start: ConnectionStarted;
+				verified: Extract<
+					CodexConnectionEvidence,
+					{ verification: "verified" }
+				>;
+			}
+		>();
 		for (let index = 0; index < 17; index++) {
 			const { request } = await connectionIntent(execution);
 			const start = await connectionStarted(execution, request);
+			const verified = verifiedConnectionEvidence(start);
+			evidenceByAttempt.set(start.identity.attemptRef, { start, verified });
 			await execution.bridge.connectionCallback(
 				connectionOutcome(start, {
 					verification: "unverified",
 					reason: "record_unavailable",
-					originalResponse: verifiedConnectionEvidence(start).originalResponse,
+					originalResponse: verified.originalResponse,
 				}),
 			);
 		}
 		await execution.bridge.completeInferenceTurn();
-		const origin = Object.values(
-			journal(await env.saved(), execution).nativeToolAttempts ?? {},
-		)[0]?.connectionOrigin;
+		const originalAttempts =
+			journal(await env.saved(), execution).nativeToolAttempts ?? {};
+		const origin = Object.values(originalAttempts)[0]?.connectionOrigin;
 		assert(origin);
 		const context = recoveryRead(execution, origin);
 		const passes: string[][] = [];
+		const acknowledged: string[][] = [];
+		const completedPasses: number[] = [];
 		const launch = vi
 			.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
 			.mockImplementation(async (process) => {
 				const selected: string[] = [];
+				const acked: string[] = [];
 				passes.push(selected);
+				acknowledged.push(acked);
 				let request = recoveryPull(process.profile.profileRef);
-				for (let index = 0; index < 16; index++) {
+				for (let index = 0; index <= 16; index++) {
 					const response = await process.recovery(request, process.signal);
+					if (response.decision === "done") {
+						completedPasses.push(passes.length);
+						return;
+					}
 					assert(response.decision === "verify");
 					selected.push(response.original.identity.attemptRef);
+					const evidence = evidenceByAttempt.get(
+						response.original.identity.attemptRef,
+					);
+					assert(evidence);
+					evidence.verified.recordQuery.credentialRevision =
+						response.currentClient.credential.revision;
+					evidence.verified.recordQuery.queriedAt = Date.now();
+					evidence.verified.verifiedAt = Date.now();
+					const ack = await process.evidence(
+						connectionUpdate(evidence.start, evidence.verified),
+						process.signal,
+					);
+					assert(ack.decision === "ack");
+					acked.push(response.original.identity.attemptRef);
 					request = recoveryPull(
 						process.profile.profileRef,
 						response.recoveryId,
@@ -3775,6 +3906,15 @@ describe("private cross-process Connection evidence recovery", () => {
 			});
 		await env.driver.recoverOriginalEvidence(context.reference, context.read);
 		expect(new Set(passes[0]).size).toBe(16);
+		expect(acknowledged[0]).toEqual(passes[0]);
+		expect(journal(await env.saved(), execution)).toMatchObject({
+			connectionRecovery: {
+				scannedAttemptRefs: passes[0]?.map(
+					(attemptRef) => originalAttempts[attemptRef]?.attemptRef,
+				),
+				completed: true,
+			},
+		});
 		await env.driver.close();
 		const reopened = await env.reopen();
 		await reopened.recoverOriginalEvidence(context.reference, context.read);
@@ -3783,8 +3923,10 @@ describe("private cross-process Connection evidence recovery", () => {
 			{ ...context.reference, recoveryRequestId: randomUUID() },
 			context.read,
 		);
-		expect(new Set(passes[1]).size).toBe(16);
+		expect(new Set(passes[1]).size).toBe(1);
+		expect(acknowledged[1]).toEqual(passes[1]);
 		expect(passes[0]).not.toContain(passes[1]?.[0]);
+		expect(completedPasses).toEqual([1, 2]);
 	}, 15_000);
 
 	it("aborts and reaps recovery before generation confirmation and admits no new pass afterward", async () => {
@@ -3922,11 +4064,12 @@ it.each([
 	"reused-request",
 	"phase-request",
 ] as const)(
-	"rejects recovery %s substitution before committing evidence",
+	"rejects recovery %s substitution without advancing the original journal",
 	async (mismatch) => {
 		const { env, execution, start, verified, origin } = await recoveryFixture();
 		const context = recoveryRead(execution, origin);
-		const before = facts(await env.saved(), execution);
+		let before: unknown;
+		let rejected: PromiseSettledResult<unknown> | undefined;
 		vi.spyOn(
 			BoundDriver.prototype,
 			"launchConnectionRecovery",
@@ -3934,11 +4077,22 @@ it.each([
 			const request = recoveryPull(process.profile.profileRef);
 			const response = await process.recovery(request, process.signal);
 			assert(response.decision === "verify");
+			before = await env.saved();
 			if (
 				mismatch === "process" ||
 				mismatch === "previous" ||
 				mismatch === "reused-request"
 			) {
+				// Satisfy the ACK gate so it cannot mask a broken process/request check.
+				verified.recordQuery.credentialRevision =
+					response.currentClient.credential.revision;
+				verified.recordQuery.queriedAt = Date.now();
+				verified.verifiedAt = Date.now();
+				await process.evidence(
+					connectionUpdate(start, verified),
+					process.signal,
+				);
+				before = await env.saved();
 				const next = recoveryPull(
 					process.profile.profileRef,
 					response.recoveryId,
@@ -3947,7 +4101,9 @@ it.each([
 				if (mismatch === "process") next.processNonce = randomUUID();
 				if (mismatch === "previous") next.previousRecoveryId = randomUUID();
 				if (mismatch === "reused-request") next.requestId = request.requestId;
-				await expect(process.recovery(next, process.signal)).rejects.toThrow();
+				[rejected] = await Promise.allSettled([
+					process.recovery(next, process.signal),
+				]);
 			} else {
 				verified.recordQuery.credentialRevision =
 					mismatch === "credential-revision"
@@ -3966,13 +4122,21 @@ it.each([
 					};
 				if (mismatch === "attempt") update.identity.attemptRef = randomUUID();
 				if (mismatch === "phase-request") update.requestId = start.requestId;
-				await expect(
+				[rejected] = await Promise.allSettled([
 					process.evidence(update, process.signal),
-				).rejects.toThrow();
+				]);
 			}
+			throw new Error("synthetic recovery process terminated after rejection");
 		});
 		await env.driver.recoverOriginalEvidence(context.reference, context.read);
-		expect(facts(await env.saved(), execution)).toEqual(before);
+		expect(rejected).toMatchObject({
+			status: "rejected",
+			reason:
+				mismatch === "credential-revision"
+					? { message: "CODEX_CONNECTION_CLIENT_UNAVAILABLE" }
+					: { code: "RUNTIME_CODEX_PROTOCOL_INVALID" },
+		});
+		expect(await env.saved()).toEqual(before);
 	},
 );
 

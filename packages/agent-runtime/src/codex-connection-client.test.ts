@@ -348,6 +348,26 @@ describe("socket-bound independent Connection client", () => {
 			expect(result).not.toHaveProperty("slot");
 		}
 	});
+	it("preserves cancellation when the credential resolver rejects", async () => {
+		const controller = new AbortController();
+		const pending = Promise.withResolvers<unknown>();
+		const resolveOriginalClient = vi.fn(() => pending.promise);
+		const client = createCodexConnectionClient({
+			profile,
+			authorizedService,
+			authorizeRequest: () => true,
+			authorizeOrigin: () => true,
+			resolveOriginalClient,
+			now: () => time,
+		});
+		const result = client.bootstrap(bootstrapRequest(), controller.signal);
+		expect(resolveOriginalClient).toHaveBeenCalledTimes(1);
+		const cancellation = new Error("test cancellation");
+		const rejected = expect(result).rejects.toBe(cancellation);
+		controller.abort(cancellation);
+		pending.reject(new Error("credential resolver unavailable"));
+		await rejected;
+	});
 	it("rejects an unknown or expired dispatch slot", async () => {
 		const { client, descriptor } = await fixture();
 		expect(() =>
