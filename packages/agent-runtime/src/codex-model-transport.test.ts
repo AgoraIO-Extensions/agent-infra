@@ -208,6 +208,58 @@ describe("official model-only transport", () => {
 		expect(calls).toBe(0);
 	});
 
+	it.each(
+		["function_call", "tool_use"].flatMap((type) =>
+			["content", "item-metadata", "text-metadata"].map((location) => ({
+				type,
+				location,
+			})),
+		),
+	)("never forwards nested $type in $location", async ({ type, location }) => {
+		const invocation = { type, name: "synthetic-nested-tool", arguments: "{}" };
+		const text = { type: "output_text", text: "synthetic answer" };
+		const item = {
+			type: "message",
+			role: "assistant",
+			content:
+				location === "content"
+					? [invocation]
+					: [
+							{
+								...text,
+								...(location === "text-metadata" ? { extra: invocation } : {}),
+							},
+						],
+			...(location === "item-metadata" ? { extra: invocation } : {}),
+		};
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_item.done", item }) +
+						event({
+							type: "response.completed",
+							response: {
+								id: "synthetic",
+								status: "completed",
+								output: [item],
+							},
+						}),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			modelOnly: true,
+		});
+		const response = await request(value.modelAccess);
+		const body = await response.text();
+		expect(response.status).toBe(location === "content" ? 502 : 200);
+		expect(body).not.toContain("synthetic-nested-tool");
+		expect(body).not.toContain(type);
+		if (location !== "content") expect(body).toContain("synthetic answer");
+	});
+
 	it("retains ordinary model output with local tool declarations", async () => {
 		const target = await listen(
 			createServer((_request, response) => {
@@ -607,6 +659,8 @@ describe("Codex model transport", () => {
 		async (mode) => {
 			let requests = 0;
 			const outcomes: CodexModelRequestOutcome[] = [];
+			const finishing = Promise.withResolvers<void>();
+			const persist = Promise.withResolvers<void>();
 			const target = await listen(
 				createServer((_request, response) => {
 					requests += 1;
@@ -629,10 +683,23 @@ describe("Codex model transport", () => {
 					started: async () => {},
 					finish: async (outcome) => {
 						outcomes.push(outcome);
+						finishing.resolve();
+						await persist.promise;
 					},
 				}),
 			});
-			await (await request(value.modelAccess)).text();
+			const pending = request(value.modelAccess).then((response) =>
+				response.text(),
+			);
+			try {
+				await finishing.promise;
+				// Failure fences the Turn before its durable outcome has committed.
+				expect((await request(value.modelAccess)).status).toBe(409);
+				expect(requests).toBe(1);
+			} finally {
+				persist.resolve();
+			}
+			await pending;
 			expect(outcomes).toHaveLength(1);
 			expect(outcomes[0]).toMatchObject({
 				phase: mode === "http" || mode === "provider" ? "failed" : "unknown",
