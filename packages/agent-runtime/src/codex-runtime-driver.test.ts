@@ -1454,6 +1454,22 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
+	it("rejects readiness without external action authorization before probing native capabilities", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const driver = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			factory,
+		);
+		drivers.push(driver);
+		const before = await readFile(path, "utf8");
+		await expect(
+			driver.probeReadiness(new AbortController().signal),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(factory).not.toHaveBeenCalled();
+		expect(await readFile(path, "utf8")).toBe(before);
+	});
+
 	it("performs readiness initialize/config handshake in disposable storage without a business session or turn", async () => {
 		class ProbeDriver extends CodexRuntimeDriver {
 			static openProbe(
@@ -1467,8 +1483,9 @@ describe("Codex Runtime Driver", () => {
 		const path = join(directory, "driver.json");
 		const opened: CodexAppServerBridgeOptions[] = [];
 		const bridges: TestCodexBridge[] = [];
+		const authorize = vi.fn(async () => {});
 		const driver = await ProbeDriver.openProbe(
-			driverOptions(path),
+			{ ...driverOptions(path), authorizeExternalAction: authorize },
 			async (options) => {
 				opened.push(options);
 				const bridge = new TestCodexBridge();
@@ -1495,6 +1512,7 @@ describe("Codex Runtime Driver", () => {
 			);
 			expect(bridges[index]?.close).toHaveBeenCalled();
 		}
+		expect(authorize).not.toHaveBeenCalled();
 		expect(await readFile(path, "utf8")).toBe(before);
 		await expect(readFile(`${path}.native`)).rejects.toMatchObject({
 			code: "ENOENT",
@@ -1517,12 +1535,13 @@ describe("Codex Runtime Driver", () => {
 			let probeDirectory = "";
 			const bridge = new TestCodexBridge();
 			const closed = vi.spyOn(bridge, "close");
+			const authorize = vi.fn(async () => {});
 			if (failure === "config")
 				bridge.setConfigReadResult(
 					configReadResult({ config: { model: "forbidden" } }),
 				);
 			const driver = await ProbeDriver.openProbe(
-				driverOptions(path),
+				{ ...driverOptions(path), authorizeExternalAction: authorize },
 				async (options) => {
 					probeDirectory = options.dataDirectory;
 					if (failure === "startup")
@@ -1538,6 +1557,7 @@ describe("Codex Runtime Driver", () => {
 				code: "ENOENT",
 			});
 			if (failure !== "startup") expect(closed).toHaveBeenCalled();
+			expect(authorize).not.toHaveBeenCalled();
 			expect(
 				bridge.requests.every((request) =>
 					["initialize", "config/read"].includes(request.method),
@@ -8653,7 +8673,7 @@ describe("durable required runtime binding", () => {
 			return new TestCodexBridge();
 		};
 		const driver = await RuntimeBindingDriver.openBound(
-			driverOptions(path),
+			{ ...driverOptions(path), authorizeExternalAction: async () => {} },
 			factory,
 		);
 		drivers.push(driver);

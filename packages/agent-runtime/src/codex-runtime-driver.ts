@@ -4396,7 +4396,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async probeReadiness(signal: AbortSignal) {
-		if (this.closed || !this.probeNative) unavailable();
+		if (this.closed || !this.probeNative || !this.authorizeExternalAction)
+			unavailable();
 		return this.probeNative(signal);
 	}
 
