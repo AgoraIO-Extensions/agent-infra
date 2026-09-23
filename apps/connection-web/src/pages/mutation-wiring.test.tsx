@@ -460,20 +460,16 @@ describe("Connection 管理 mutation wiring", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Rehoboam 未连接" }));
 		fireEvent.click(screen.getByRole("button", { name: "连接" }));
-		fireEvent.change(screen.getByLabelText("Rehoboam 用户名"), {
-			target: { value: "user@example.com" },
-		});
-		fireEvent.change(screen.getByLabelText("Rehoboam 密码"), {
-			target: { value: "rehoboam-password" },
+		fireEvent.change(screen.getByLabelText("Rehoboam PAT"), {
+			target: { value: "rehoboam-personal-pat" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		await waitFor(() =>
 			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
-			password: "rehoboam-password",
+			accessToken: "rehoboam-personal-pat",
 			providerId: "rehoboam",
-			username: "user@example.com",
 		});
 	});
 

@@ -27,7 +27,7 @@ describe("Connection Browser OpenAPI", () => {
 					additionalProperties: false,
 					properties: {
 						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
-						providerId: { const: "bitbucket", type: "string" },
+						providerId: { enum: ["bitbucket", "rehoboam"], type: "string" },
 					},
 					required: ["providerId", "accessToken"],
 					type: "object",
@@ -37,7 +37,7 @@ describe("Connection Browser OpenAPI", () => {
 					properties: {
 						password: { maxLength: 1024, minLength: 1, type: "string" },
 						providerId: {
-							enum: ["confluence", "jira", "rehoboam"],
+							enum: ["confluence", "jira"],
 							type: "string",
 						},
 						username: { maxLength: 256, minLength: 1, type: "string" },

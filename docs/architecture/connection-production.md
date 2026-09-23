@@ -79,8 +79,8 @@ credential 规则加密保存，并由 Adapter 与该应用级 Header 一起发�
 本机 Atlassian CLI 配置或脚本。
 
 Rehoboam Provider 的 `REHOBOAM_KONG_API_KEY` 由 Secret Manager 注入服务端，只用于通过固定
-Rehoboam Ingress 的 Kong `key-auth`。浏览器提交的个人用户名/密码只用于服务端调用固定
-`/mcp/v1/auth/login` 换取 Rehoboam Bearer Token；Connection 不持久化密码，只加密保存返回的 Token。
+Rehoboam Ingress 的 Kong `key-auth`。用户从 Rehoboam Security 创建带 `read` scope 的 PAT 并提交给
+Connection；Connection 不接收 Rehoboam 密码，只加密保存该 PAT。
 机器 `apiKey` 不进入浏览器、用户 credential envelope、MCP 参数或调用结果。
 
 ## 验收边界
