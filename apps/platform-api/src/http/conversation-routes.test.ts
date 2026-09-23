@@ -807,4 +807,20 @@ describe("task boundary HTTP authorization", () => {
 			expect(deps.query.list).not.toHaveBeenCalled();
 		},
 	);
+
+	it("fails closed when authorization returns a null authority", async () => {
+		const deps = dependencies({
+			authorization: {
+				authorize: vi.fn().mockResolvedValue({
+					outcome: "allowed",
+					authority: null as never,
+				}),
+			},
+		});
+		const app = new Hono();
+		registerConversationRoutes(app, deps);
+		const response = await app.request("/api/v1/agents/agent-1/conversations");
+		expect(response.status).toBe(503);
+		expect(deps.query.list).not.toHaveBeenCalled();
+	});
 });

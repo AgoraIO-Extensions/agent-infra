@@ -222,6 +222,7 @@ function authorityMatches(
 	identity: IdentityContext,
 	agentId?: string,
 ): boolean {
+	if (typeof authority !== "object" || authority === null) return false;
 	let boundary: ConversationExecutionAuthorityV1["taskBoundary"];
 	try {
 		boundary =
@@ -232,8 +233,6 @@ function authorityMatches(
 		return false;
 	}
 	return (
-		typeof authority === "object" &&
-		authority !== null &&
 		Object.keys(authority).length === (boundary ? 7 : 6) &&
 		authority.schemaVersion === 1 &&
 		authority.actorId === identity.userId &&
