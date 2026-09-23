@@ -22,7 +22,7 @@
 
 ## 2. 架构结论
 
-M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 上游原生源码的受控补丁是唯一非 TypeScript 实现例外，覆盖持久执行屏障及按当前 Execution 选择执行模型切换前置压缩所需的原生接缝，范围与准入见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
+M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 使用固定官方 release，由 Native Driver/Adapter 消费上游能力；第三方源码、私有接缝与执行屏障的边界见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
 
 ### 2.1 技术栈
 
@@ -709,7 +709,7 @@ acceptance-uncertain 路径收敛，不能在期限后恢复普通准入。其�
 
 该路径不得注册或恢复模型准入、转发模型请求、提交或补充 Turn、重发工具操作，也不得
 清除原执行的封闭状态；即使主体权限或配置随后恢复，也不能重新激活已撤销的原执行。
-需要启动原执行的查询或控制进程时，仍校验原生 provenance、隔离与强制屏障，并禁止
+需要启动原执行的查询或控制进程时，仍校验原生 provenance、隔离及原执行所需的屏障能力，并禁止
 业务副作用。已有 accepted/running 回执只证明曾被接受，不能充当当前运行状态；停止
 ACK、模型连接中断或进程退出不能合成原 Turn 终态。状态收敛、占用与事件确认沿用
 [Runtime HLD 7–8](HLD-agent-runtime-M1.md#7-sessionturn-与恢复)，缺少可靠结果时保持
@@ -795,45 +795,50 @@ Claude 原生进程会将模型 API 的错误正文写入会话记录；仅归�
 
 ### 10.11 Codex 上游原生补丁与执行屏障
 
-为满足 PRD 的实际操作意图与事实要求，允许在固定 Codex 上游源码上维护受控 vendor patch，
-将实际原生工具尝试接入 Driver 的持久意图与授权屏障，并在 10.8 规定的模型切换前置压缩
-调用点显式应用当前 Execution 的模型选择。例外仅覆盖这两项所需的原生执行、协议接缝及
-回归测试，不扩张模型授权、重写历史兼容算法或增加推理循环。补丁与构建声明位于
-`deploy/runtime/vendor/codex/`，完整
-上游源码在隔离构建目录取得。仓库不新增自有 Rust crate，Platform、Connection、Host 和 Driver
-继续使用 TypeScript。原生推理循环、标准 built-in catalog、工具执行器、部署单元及 10.9 的
-Linux/Darwin 文件隔离保留，不引入新 loop、服务、插件平台或平台统一 Sandbox。
+M1 的标准 Codex 路径使用固定的官方 upstream release。现有
+[Codex release 声明](../../packages/agent-runtime/src/codex-release.json)是 provenance 的唯一
+版本来源，至少固定上游 tag/commit、协议与 Schema、每个 target 的 archive/executable hash、
+许可证和 NOTICE。安装阶段校验声明与精确字节、Linux sandbox、原生协议以及已声明的 built-in
+能力覆盖；运行时不下载依赖、不编译源码，也不把官方发行物描述为包含不存在的私有 barrier。
+官方 release 未提供可验证的每次尝试 callback 时，标准路径不宣称 Codex 原生屏障 conformance；
+无法观察或控制的隐藏尝试必须记录为能力缺口，不能用日志、普通 approval 或缓存补足。无论
+发行路径如何，PRD 要求的每次实际外部动作持久 intent、当前授权、结果或 unknown 确认仍是
+准入前置；官方路径无法在该边界可靠控制的操作必须拒绝或标记未支持，不能作为正式 conformance。
 
-发布声明是 artifact 的唯一版本来源，在现有
-[Codex release 声明](../../packages/agent-runtime/src/codex-release.json)中固定上游 commit、
-补丁集与最终 source tree、原生屏障协议和 Schema、构建工具链及依赖锁、各 target 的二进制与
-归档 hash；发布记录关联构建脚本/环境 digest、SBOM、许可/NOTICE/修改标识及最终镜像 Digest。
-派生字节使用独立构建标识和部署认可的供应链证明，不能复用上游官方签名或声称是未修改的
-官方发行物。安装阶段按声明校验，运行时不下载或编译；变更声明、补丁或构建输入都须重新
-生成并验证精确产物。声称字节可复现时须有两次独立干净构建的相同输出证据。
+需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 的能力，只有在部署
+provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验证不可关闭的 native barrier 后
+才能启用。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
+结果或 unknown 可靠保存前不得交付原生推理循环；缺失、错配、断连、过期或被模型/Owner
+配置关闭时 fail closed。专用 FD 必须由 native 接管后设置 close-on-exec，工具子进程不能继承
+或重开控制端。普通官方路径与私有 lane 的 capability 必须分别声明和验收。
 
-原生屏障是当前标准 Codex 的强制执行契约。每个进程在业务 Session/Turn 准入前验证构建
-provenance、精确协议及工具覆盖；缺失、错配或配置可被模型/Owner 改写时拒绝执行。
-每次实际外部动作先由 Driver 可靠保存意图并通过当前 Host 业务授权，结果或 unknown 可靠
-保存后才交给原推理循环；控制 Grant、普通 approval、非强制 hook 或已批准缓存不能代替该屏障。
-原生字段和协议保持在 Driver 内部，事实沿现有版本化公共 Schema 和原事务/游标交付。
-详细状态、attempt 覆盖及确认顺序只在 [Runtime HLD 8.5.1](HLD-agent-runtime-M1.md#851-codex-原生执行屏障)维护。
+本 M1 路径不维护第三方 Codex 源码补丁、vendor builder、派生二进制或下载编译流程。若
+上游 release 缺少所需接缝，先走 upstream contribution；引入任何受控 derived/private artifact
+前须由单独架构决策明确其来源、供应链证明、维护责任和退出路径，不能在实现中隐式恢复旧
+vendor 方案。Platform、Connection、Host 和 Driver 继续使用 TypeScript，不新增自有 Rust
+crate、推理循环、服务、插件平台或统一 Sandbox。
+
+PRD 的外部操作持久意图、当前授权和真实结果要求不变；官方 release 的协议可用或部分
+能力通过不能被解释为完整 M1 验收。尚不能满足的实际操作必须标记未通过，不能以本节豁免
+产品门禁。原生字段和私有协议留在 Driver 内部，事实沿现有版本化公共 Schema 和原事务/游标交付。详细状态、attempt 覆盖和确认顺序只在
+[Runtime HLD 8.5.1](HLD-agent-runtime-M1.md#851-codex-原生执行屏障)维护；接缝验收和
+Connection prep 边界见 [Runtime HLD 11.2](HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收)。
 
 升级和回滚完整执行 10.4 的自动恢复流程：候选失败后，将旧 Digest 和 Workload 配置写成
 新的期望修订，实际重新调谐并验证旧修订，不能因缺少预先兼容证明跳过该尝试。回滚仍复用
-原 PVC；Driver 持久记录原 Session/代次要求的屏障协议，旧终态和事件保持可读，旧 active、
-unknown 或新协议状态只能核实原执行，不得新建 Session/Turn、回填成功或重发工具。
-旧修订的业务准入仍须通过强制屏障、状态兼容及 10.9 隔离验证；不符合时记录实际恢复失败，
-保留原数据与核实证据。旧修订实际恢复成功后继续提供服务并显示升级失败原因；只有该恢复
-也失败时才保持路由关闭、显示“暂时不可用”，由平台团队人工恢复。
+原 PVC；Driver 持久记录原 Session/代次要求的 provenance、lane 和 barrier 能力，旧终态和
+事件保持可读，旧 active、unknown 或新协议状态只能核实原执行，不得新建 Session/Turn、
+回填成功或重发工具。旧修订仍须通过原执行要求的状态兼容、屏障及 10.9 隔离验证；缺少任一
+要求时记录实际恢复失败，保留原数据与核实证据。不得把依赖私有 lane 的原执行降级为普通官方路径。旧修订实际恢复成功后继续提供服务并显示升级失败原因；只有该恢复也失败时才
+保持路由关闭、显示“暂时不可用”，由平台团队人工恢复。
 
-候选文档、vendor patch 范围和 native contract 须先完成适用架构/安全/维护评审，随后才实施与
-更新 pin。真实各 target 产物、原 built-ins 正向能力、隔离、故障与恢复均按 HLD 第 11 节验证；
-既有官方 binary 的证明不转移给派生字节。长期维护及上游替代的取舍见
+官方 release、私有接缝声明和 native contract 须先完成适用架构/安全/维护评审，随后才更新
+pin。真实 target 产物、built-ins 正向能力、隔离、故障与恢复均按 Runtime HLD 第 11 节验证；
+官方路径与私有 lane 的证明不能互相转移。长期维护及 barrier 替代的取舍见
 [ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)及
 [ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
-原执行屏障的既有评审不代表新增压缩策略已获评审；本差额的文档和 Issue 范围先完成独立
-架构、安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
+原执行屏障的既有评审不代表新增压缩策略已获评审；差额的文档和 Issue 范围先完成独立架构、
+安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
 
 ## 11. Agent Runtime 边界
 
@@ -949,9 +954,13 @@ sequenceDiagram
 
 关联至少能从平台实际执行定位实际工具调用，再核对 Connection 产生的原调用引用及两侧记录。平台关联写入须来源于绑定 Execution 的受信运行采集，Connection 侧须有真实调用记录支撑；普通调用方自行提交相同 `traceId`、字符串或 URL 不构成已验证绑定。独立客户端缺少可信平台执行来源时只保留可核实的 Connection 记录，不能伪造平台执行关联。
 
+Runtime callback/client 的准备契约边界见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
+其 bootstrap/provenance 投影校验不构成 Connection conformance；真实 HTTP/MCP 接入仍须满足
+Connection HLD 的 ConsumerInstance 安装绑定、sender-constrained token 或获准 PAT 规则。
+
 可信采集在发起工具调用前绑定原 Execution、操作和尝试，并从同一次经过服务端认证的 Connection 请求/响应中取得由 Connection 生成的原调用引用。引用须能在 Connection 自身授权下核实其服务端解析的调用主体、操作和真实记录；受信采集再核对该记录确实属于本次请求。难以猜测的引用、签名、同一主体或相近时间都不能单独证明执行绑定，也不能接受模型或客户端从其他任务转交的真实引用。重试核实只查询原记录，不再次执行 Provider 操作；缺失任一侧证据保持未核实。
 
-Connection HLD 的[独立客户端契约](HLD-connection-M1.md#7-独立客户端身份与调用关联)定义认证主体与 Agent 映射、固定服务 origin、真实请求 nonce/参数摘要、原调用回执及只读核实接口。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行 slot、受保护 FD3 交付及真实 MCP leaf 的可靠采集；这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
+Connection HLD 的 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 与 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 定义独立客户端的安装绑定、身份解析和调用准入；[§11](HLD-connection-M1.md#11-审计与跨系统关联) 定义真实调用关联与分别授权查询。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行 slot、受保护 FD3 交付及真实 MCP leaf 的可靠采集；这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
 
 关联信息不是授权。调用方与两侧管理员分别在各自受控 API/页面查询；无权访问时不返回对方对象、状态或存在性。平台工具成功只表示自身已确认的执行事实，不能替代 Connection 对外部效果的结论。响应丢失、关联缺失或无法核实时如实标记，沿原调用补充核实，不把猜测写为成功。
 
@@ -1384,5 +1393,7 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 - TypeScript Kubernetes 调谐器的测试与值班责任是否可接受，部署是否提供受支持的现代 Kubernetes capability baseline。
 - OpenConnector 固定 allowlist Kernel 的维护归属、来源验证和必要时建立最小 Fork 的批准方式。
 - 部署的 IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、对象存储、加密公钥/Worker-only 解密 keyring 注入和企微 Adapter 是否满足本文 conformance。
+- Codex 采用官方 upstream release provenance；普通官方路径不强制假设私有 vendor barrier。需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 时，必须有不可关闭且可回读的 barrier，并在缺失时 fail closed；不恢复第三方源码补丁、vendor builder、派生二进制或下载编译流程。该纠偏以 [#678](https://github.com/AgoraIO-Extensions/agent-infra/issues/678) 的已确认架构方向为依据，具体实现仍须走独立评审。
+- Runtime callback/client 的准备契约与真实 Connection 接入按 [§13.2](#132-调用与审计关联) 分别验收；不得以准备层通过替代 Connection HLD 的独立授权门禁。
 
 产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。

@@ -33,6 +33,10 @@ flowchart LR
 
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
 
+Runtime callback/client 准备层的范围见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
+其 bootstrap/provenance 投影和内部 slot 不替代本 HLD 的安装注册、请求证明与服务端校验；
+准备层通过不构成 ConsumerInstance 或 Direct MCP conformance。
+
 Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer 的 OAuth Authorization Code + PKCE 安装流程或获准 PAT 访问。每个 ConsumerInstance 必须绑定安装级公钥；OAuth access token 必须通过部署明确选定且可互操作验证的 sender-constrained 方案绑定该公钥；MCP/API 默认使用 DPoP，仅在明确配置并验证客户端证书时使用 mTLS；授权码兑换、刷新和每次调用都必须验证安装私钥持有权，不得接受未绑定安装的 bearer access token。PAT 必须是该安装独立的高熵凭据，签发和每次调用都必须验证已注册 ConsumerInstance 的安装绑定及撤销状态，调用方不得仅提交或选择 ConsumerInstance 标识。Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，无法验证安装绑定或唯一解析主体时，在签发凭据和每次调用前均拒绝。Connection 必须在每次调用时验证 token/PAT 的签名或 hash、issuer、audience、scope、有效期、Principal、Consumer、ConsumerInstance、Actor（如适用）及 recovery generation，并在 ConsumerInstance 或授权撤销后拒绝旧凭据。
 
 ## 4. 部署与模块
