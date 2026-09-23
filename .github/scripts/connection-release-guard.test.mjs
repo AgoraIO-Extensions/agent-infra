@@ -5,7 +5,15 @@ import {
 	assertCanonicalSha,
 	compareCatalogs,
 	parseCatalogSource,
+	providerSources,
 } from "./connection-release-guard.mjs";
+
+test("tracks the Rehoboam provider catalog", () => {
+	assert.equal(
+		providerSources.rehoboam,
+		"packages/openconnector-adapter/src/rehoboam.ts",
+	);
+});
 
 test("parses action and provider release versions", () => {
 	assert.deepEqual(

@@ -142,8 +142,9 @@ Rehoboam 用户名/密码只用于服务端调用 `POST /mcp/v1/auth/login` 换�
 不得持久化密码，只把返回的 Token 作为 provider-specific encrypted credential 保存。机器 `apiKey` 与
 个人 Token 不得进入同一 credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志或 Action 结果。identity proof 固定为
 `GET /api/connection/whoami`，由 Rehoboam 现有 `agent_auth` 服务端解析 Token、角色与启用状态，仅返回
-`user_id`、`username` 和 `role`。首个 `rehoboam-connection-v1` 只发布
-`rehoboam.get_current_user@v1` READ Action，不允许调用方提交 URL、路径、Header、用户身份或任意 Rehoboam
+`user_id`、`username` 和 `role`。首次部署 Token exchange 时发布
+`rehoboam-connection-v2` 与 `rehoboam.get_current_user@v2` READ Action，不修改已由 v0.0.19 发布的 immutable
+v1 catalog；不允许调用方提交 URL、路径、Header、用户身份或任意 Rehoboam
 业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
 Grant 或凭证。
 

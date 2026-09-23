@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const providers = {
+export const providerSources = {
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
 	confluence: "packages/openconnector-adapter/src/confluence-server.ts",
 	datalego: "packages/openconnector-adapter/src/datalego.ts",
 	github: "packages/openconnector-adapter/src/verification/github-v8.ts",
 	jenkins: "packages/openconnector-adapter/src/jenkins.ts",
 	jira: "packages/openconnector-adapter/src/jira-server.ts",
+	rehoboam: "packages/openconnector-adapter/src/rehoboam.ts",
 };
 
 const git = (...args) =>
@@ -74,7 +75,7 @@ export function compareCatalogs(baseline, candidate) {
 
 export function readCatalog(ref) {
 	return Object.fromEntries(
-		Object.entries(providers).map(([provider, file]) => [
+		Object.entries(providerSources).map(([provider, file]) => [
 			provider,
 			parseCatalogSource(git("show", `${ref}:${file}`), provider),
 		]),
