@@ -15,6 +15,9 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
+	type: "json",
+};
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	type CodexAppServerBridgeOptions,
@@ -27,6 +30,7 @@ import type {
 	CodexModelTurnAdmission,
 	CodexNativeTurn,
 } from "./codex-model-transport.js";
+import codexRelease from "./codex-release.json" with { type: "json" };
 import {
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
@@ -171,6 +175,7 @@ interface StoredCodexOperation {
 }
 
 interface StoredCodexSession {
+	requiredRuntime?: StoredRuntimeRequirements;
 	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
 	journals?: Record<string, StoredEventJournal>;
@@ -8284,4 +8289,513 @@ it("revokes model access for every alias when a shared native RPC fails", async 
 		expect((await modelRequest(first, bridge)).status).toBe(401);
 		expect((await modelRequest(second, bridge)).status).toBe(401);
 	});
+});
+
+interface StoredRuntimeRequirements {
+	schemaVersion: number;
+	provenance: Record<string, string | number>;
+	artifacts: Record<string, Record<string, string>>;
+	lane: string;
+	barrier: Record<string, string | number>;
+}
+
+function expectedRuntimeRequirements(): StoredRuntimeRequirements {
+	return structuredClone({
+		schemaVersion: 1,
+		provenance: CODEX_APP_SERVER_V2_PROVENANCE,
+		artifacts: codexRelease.artifacts,
+		lane: "private-callback",
+		barrier: nativeBarrierManifest,
+	});
+}
+
+// Retain production's lazy startup and one process per Conversation; only the
+// subprocess transport is scripted, so opening a Store is not a native launch.
+class RuntimeBindingDriver extends CodexRuntimeDriver {
+	static openBound(
+		options: CodexRuntimeDriverOptions,
+		factory: Parameters<typeof openCodexRuntimeDriverForTest>[1],
+	) {
+		return RuntimeBindingDriver.openWithBridge(options, factory);
+	}
+}
+
+type RuntimeRequirementMutation = [
+	string,
+	(binding: StoredRuntimeRequirements) => StoredRuntimeRequirements | undefined,
+];
+
+const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
+	["missing legacy binding", () => undefined],
+	["schemaVersion", (binding) => ({ ...binding, schemaVersion: 2 })],
+	["lane", (binding) => ({ ...binding, lane: "upstream-only" })],
+	...Object.keys(CODEX_APP_SERVER_V2_PROVENANCE).map(
+		(field): RuntimeRequirementMutation => [
+			`provenance.${field}`,
+			(binding) => {
+				const alternatives: Record<string, string | number> = {
+					protocolVersion: 3,
+					codexVersion: "0.154.0",
+					upstreamTag: "rust-v0.154.0",
+					upstreamCommit: "f".repeat(40),
+					schemaSha256: `sha256:${"f".repeat(64)}`,
+				};
+				binding.provenance[field] = alternatives[field] as string | number;
+				return binding;
+			},
+		],
+	),
+	...Object.entries(codexRelease.artifacts).flatMap(
+		([architecture, artifact]) =>
+			Object.keys(artifact).map(
+				(field): RuntimeRequirementMutation => [
+					`artifacts.${architecture}.${field}`,
+					(binding) => {
+						const current = binding.artifacts[architecture];
+						if (!current) throw new Error("missing pinned artifact");
+						current[field] =
+							field === "name"
+								? "codex-other-archive"
+								: `sha256:${"f".repeat(64)}`;
+						return binding;
+					},
+				],
+			),
+	),
+	...Object.keys(nativeBarrierManifest).map(
+		(field): RuntimeRequirementMutation => [
+			`barrier.${field}`,
+			(binding) => {
+				binding.barrier[field] =
+					field === "schemaVersion"
+						? 2
+						: field === "transport"
+							? "anonymous-unix-stream-fd4"
+							: `sha256:${"f".repeat(64)}`;
+				return binding;
+			},
+		],
+	),
+];
+
+describe("durable required runtime binding", () => {
+	it("atomically persists the required runtime with the prepared Session before native launch", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const driver = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			factory,
+		);
+		drivers.push(driver);
+		const originalUpdate = DurableJsonFile.prototype.update;
+		const crash = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementationOnce(function (
+				this: DurableJsonFile<unknown>,
+				change,
+			) {
+				return originalUpdate.call(this, change).then(() => {
+					throw new Error("process lost after first prepared write");
+				});
+			});
+		await expect(driver.execute(submitCommand())).rejects.toThrow();
+		crash.mockRestore();
+		expect(factory).not.toHaveBeenCalled();
+		await driver.close();
+		const before = await readFile(path, "utf8");
+		const state = JSON.parse(before) as StoredCodexDriverState;
+		const [operation] = Object.values(state.operations);
+		expect(Object.keys(state.sessions)).toHaveLength(1);
+		expect(operation).toMatchObject({ state: "prepared" });
+		if (!operation?.nativeSessionRef)
+			throw new Error("missing prepared Session");
+		expect(state.sessions[operation.nativeSessionRef]?.requiredRuntime).toEqual(
+			expectedRuntimeRequirements(),
+		);
+		const recovered = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			factory,
+		);
+		drivers.push(recovered);
+		expect(await recovered.lookupOperation(submitCommand())).toEqual({
+			state: "unknown",
+		});
+		expect(factory).not.toHaveBeenCalled();
+		expect(await readFile(path, "utf8")).toBe(before);
+	});
+
+	it("uses the same pinned lane for readiness and business launch and retains it after reopen", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const opened: CodexAppServerBridgeOptions[] = [];
+		const factory = async (options: CodexAppServerBridgeOptions) => {
+			opened.push(options);
+			if (options.dataDirectory === `${path}.native`) {
+				const state = JSON.parse(
+					await readFile(path, "utf8"),
+				) as StoredCodexDriverState;
+				const [operation] = Object.values(state.operations);
+				expect(operation).toMatchObject({ state: "prepared" });
+				if (!operation?.nativeSessionRef)
+					throw new Error("missing prepared operation");
+				expect(
+					state.sessions[operation.nativeSessionRef]?.requiredRuntime,
+				).toEqual(expectedRuntimeRequirements());
+			}
+			return new TestCodexBridge();
+		};
+		const driver = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			factory,
+		);
+		drivers.push(driver);
+		const empty = await readFile(path, "utf8");
+		await driver.probeReadiness(new AbortController().signal);
+		expect(await readFile(path, "utf8")).toBe(empty);
+		const accepted = await driver.execute(submitCommand());
+		expect(opened).toHaveLength(2);
+		for (const options of opened) {
+			expect(options.provenance).toEqual(CODEX_APP_SERVER_V2_PROVENANCE);
+			expect(options.nativeBarrierRequired).toBe(true);
+		}
+		expect(opened[1]?.nativeCallback).toBeTypeOf("function");
+		await driver.close();
+		const before = await readFile(path, "utf8");
+		const recoveredFactory = vi.fn(async () => new TestCodexBridge());
+		const recovered = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			recoveredFactory,
+		);
+		drivers.push(recovered);
+		expect(await recovered.lookupOperation(submitCommand())).toEqual({
+			state: "found",
+			record: accepted,
+		});
+		expect(await readFile(path, "utf8")).toBe(before);
+		expect(recoveredFactory).not.toHaveBeenCalled();
+	});
+
+	it.each(
+		(["running", "unknown", "completed"] as const).flatMap((phase) =>
+			runtimeRequirementMutations.map(([field, mutate]) => ({
+				phase,
+				field,
+				mutate,
+			})),
+		),
+	)(
+		"keeps $phase facts readable but refuses native/model recovery for $field",
+		async ({ phase, mutate }) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls++;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const options = {
+				...driverOptions(path),
+				authorizeExternalAction: async () => {},
+				modelOptions: driverOptions(path).modelOptions.map((option) => ({
+					...option,
+					endpoint,
+					credential: upstreamModelAccess.credential,
+				})),
+			};
+			const firstBridge = new TestCodexBridge(
+				"binding-thread",
+				"binding-turn",
+				phase === "unknown",
+			);
+			const first = await RuntimeBindingDriver.openBound(
+				options,
+				async (launch) => {
+					if (!launch.modelAccess) throw new Error("missing model access");
+					firstBridge.setConfigReadResult(
+						modelAccessConfigReadResult(launch.modelAccess),
+					);
+					return firstBridge;
+				},
+			);
+			drivers.push(first);
+			const command = submitCommand();
+			if (phase === "unknown") {
+				await expect(first.execute(command)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+			} else {
+				const accepted = await first.execute(command);
+				if (phase === "completed") {
+					await firstBridge.emitTurnCompleted("completed");
+					await vi.waitFor(async () =>
+						expect(
+							await persistedExecutionStatus(
+								path,
+								accepted.nativeSessionRef,
+								command.executionId,
+							),
+						).toBe("completed"),
+					);
+				}
+			}
+			await first.close();
+			const state = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const [operation] = Object.values(state.operations);
+			if (!operation?.nativeSessionRef)
+				throw new Error("missing original Session");
+			const ref = operation.nativeSessionRef;
+			const session = state.sessions[ref];
+			if (!session) throw new Error("missing original binding");
+			const changed = mutate(expectedRuntimeRequirements());
+			if (changed) session.requiredRuntime = changed;
+			else delete session.requiredRuntime;
+			await writeFile(path, `${JSON.stringify(state)}\n`);
+			const before = await readFile(path, "utf8");
+			const opened: { bridge: TestCodexBridge; access: CodexModelAccess }[] =
+				[];
+			const factory = vi.fn(async (launch: CodexAppServerBridgeOptions) => {
+				if (!launch.modelAccess) throw new Error("missing model access");
+				const bridge = new TestCodexBridge(
+					"independent-binding-thread",
+					"independent-binding-turn",
+				);
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(launch.modelAccess),
+				);
+				opened.push({ bridge, access: launch.modelAccess });
+				return bridge;
+			});
+			const recovered = await RuntimeBindingDriver.openBound(options, factory);
+			drivers.push(recovered);
+			if (phase === "unknown") {
+				expect(await recovered.lookupOperation(command)).toEqual({
+					state: "unknown",
+				});
+				expect((await recovered.execute(command)).result).toMatchObject({
+					outcome: "unknown",
+				});
+			} else {
+				expect(await recovered.lookupOperation(command)).toMatchObject({
+					state: "found",
+					record: { result: { outcome: "accepted", status: phase } },
+				});
+				if (phase === "completed") {
+					expect(await recovered.getStatus(ref, command.executionId)).toBe(
+						"completed",
+					);
+					expect((await recovered.execute(command)).result).toEqual({
+						outcome: "accepted",
+						status: "completed",
+					});
+				} else {
+					await expect(
+						recovered.getStatus(ref, command.executionId),
+					).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+					await expect(recovered.execute(command)).rejects.toMatchObject({
+						code: "RUNTIME_CODEX_UNAVAILABLE",
+					});
+					await expect(
+						recovered.execute(stopCommand(ref)),
+					).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				}
+				const events = await recovered.replayEvents(ref, command.executionId);
+				expect(events.map(({ type, payload }) => ({ type, payload }))).toEqual(
+					Object.values(session.journals ?? {}).flatMap((journal) =>
+						journal.events.map(({ type, payload }) => ({ type, payload })),
+					),
+				);
+			}
+			for (const nativeSessionRef of [ref, undefined]) {
+				await expect(
+					recovered.execute(
+						submitCommand({
+							operationId: "next-binding-execution",
+							executionId: "next-binding-execution",
+							turnId: "next-binding-turn",
+							...(nativeSessionRef ? { nativeSessionRef } : {}),
+						}),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			}
+			expect(factory).not.toHaveBeenCalled();
+			expect(upstreamCalls).toBe(0);
+			expect(await readFile(path, "utf8")).toBe(before);
+			const independent = await recovered.execute(
+				submitCommand({
+					conversationId: "independent-binding-conversation",
+					operationId: "independent-binding-execution",
+					executionId: "independent-binding-execution",
+					turnId: "independent-binding-turn",
+				}),
+			);
+			expect(independent.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			const process = opened[0];
+			if (!process) throw new Error("missing independent process");
+			const response = await modelRequest(process.access, process.bridge);
+			expect(response.status).toBe(200);
+			await response.text();
+			expect(upstreamCalls).toBe(1);
+			expect(factory).toHaveBeenCalledTimes(1);
+			const after = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(after.sessions[ref]).toEqual(session);
+			expect(
+				after.sessions[independent.nativeSessionRef]?.requiredRuntime,
+			).toEqual(expectedRuntimeRequirements());
+		},
+	);
+
+	it("reads a running generation-cancel receipt without recovering an incompatible native Session", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const bridge = new TestCodexBridge();
+		const first = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			async () => bridge,
+		);
+		drivers.push(first);
+		const accepted = await first.execute(submitCommand());
+		const command = generationCancelCommand(accepted.nativeSessionRef);
+		const cancellation = await first.execute(command);
+		expect(cancellation.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		await first.close();
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const session = state.sessions[accepted.nativeSessionRef];
+		if (!session?.requiredRuntime) throw new Error("missing pinned binding");
+		session.requiredRuntime.lane = "upstream-only";
+		await writeFile(path, `${JSON.stringify(state)}\n`);
+		const before = await readFile(path, "utf8");
+		const factory = vi.fn(async () => new TestCodexBridge());
+		const recovered = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			factory,
+		);
+		drivers.push(recovered);
+		expect(await recovered.lookupOperation(command)).toEqual({
+			state: "found",
+			record: cancellation,
+		});
+		await expect(
+			recovered.getStatus(accepted.nativeSessionRef, "execution-codex"),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(factory).not.toHaveBeenCalled();
+		expect(await readFile(path, "utf8")).toBe(before);
+	});
+
+	it.each([false, true])(
+		"guards a cached native RPC and model transport after resume=%s",
+		async (resume) => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			let upstreamCalls = 0;
+			const endpoint = await listen(
+				createServer((_request, response) => {
+					upstreamCalls++;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const options = {
+				...driverOptions(path),
+				authorizeExternalAction: async () => {},
+				modelOptions: driverOptions(path).modelOptions.map((option) => ({
+					...option,
+					endpoint,
+					credential: upstreamModelAccess.credential,
+				})),
+			};
+			const opened: { bridge: TestCodexBridge; access: CodexModelAccess }[] =
+				[];
+			const factory = async (launch: CodexAppServerBridgeOptions) => {
+				if (!launch.modelAccess) throw new Error("missing model access");
+				const bridge = new TestCodexBridge();
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(launch.modelAccess),
+				);
+				opened.push({ bridge, access: launch.modelAccess });
+				return bridge;
+			};
+			let driver = await RuntimeBindingDriver.openBound(options, factory);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			if (resume) {
+				await driver.close();
+				driver = await RuntimeBindingDriver.openBound(options, factory);
+				drivers.push(driver);
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("running");
+			}
+			const process = opened.at(-1);
+			if (!process) throw new Error("missing cached process");
+			const beforeRequests = process.bridge.requests.length;
+			const originalUpdate = DurableJsonFile.prototype.update;
+			// Simulate a durable binding that no longer matches the running build,
+			// through the Store boundary rather than a private Driver cache field.
+			const changeBinding = vi
+				.spyOn(DurableJsonFile.prototype, "update")
+				.mockImplementationOnce(function (
+					this: DurableJsonFile<unknown>,
+					change,
+				) {
+					return originalUpdate.call(this, async (draft) => {
+						const result = await change(draft);
+						const session = (draft as StoredCodexDriverState).sessions[
+							accepted.nativeSessionRef
+						];
+						if (!session?.requiredRuntime)
+							throw new Error("missing pinned binding");
+						session.requiredRuntime.lane = "upstream-only";
+						return result;
+					});
+				});
+			await driver.acknowledgeEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+				"codex-cursor-1",
+			);
+			changeBinding.mockRestore();
+			const before = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(driver.execute(command)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(await driver.lookupOperation(command)).toMatchObject({
+				state: "found",
+			});
+			const response = await modelRequest(process.access, process.bridge);
+			expect(response.status).not.toBe(200);
+			await response.text();
+			expect(upstreamCalls).toBe(0);
+			expect(process.bridge.requests.slice(beforeRequests)).toEqual([]);
+			const after = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(
+				after.sessions[accepted.nativeSessionRef]?.requiredRuntime,
+			).toEqual(before.sessions[accepted.nativeSessionRef]?.requiredRuntime);
+			expect(Object.keys(after.sessions)).toEqual(Object.keys(before.sessions));
+			expect(Object.keys(after.operations)).toEqual(
+				Object.keys(before.operations),
+			);
+		},
+	);
 });

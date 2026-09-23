@@ -397,6 +397,7 @@ interface SavedState {
 	sessions: Record<
 		string,
 		{
+			requiredRuntime?: { lane: string };
 			activeExecutionId?: string;
 			executions: Record<string, { status: string }>;
 			journals: Record<string, Journal>;
@@ -3366,6 +3367,49 @@ describe("Codex Driver Connection journal and admission", () => {
 });
 
 describe("Codex Driver Connection leaf negative boundaries", () => {
+	it.each(["missing", "lane"] as const)(
+		"rejects native callbacks and Connection bootstrap with %s Session runtime requirements",
+		async (mismatch) => {
+			const opened = vi.spyOn(DurableJsonFile, "open");
+			const authorize = vi.fn<Authorize>(async () => {});
+			const { options } = connectionOptions();
+			const env = await setup(authorize, undefined, options);
+			const file = (await opened.mock.results[0]?.value) as
+				| DurableJsonFile<SavedState>
+				| undefined;
+			assert(file instanceof DurableJsonFile);
+			opened.mockRestore();
+			const execution = await env.start();
+			const { request } = await connectionIntent(execution);
+			options.resolveOriginalClient.mockClear();
+			authorize.mockClear();
+			// Model an already-open native process against a persisted incompatible
+			// Session, so a launch-only check cannot satisfy this callback boundary.
+			await file.update((state) => {
+				const session = state.sessions[execution.nativeSessionRef];
+				assert(session?.requiredRuntime);
+				if (mismatch === "missing") delete session.requiredRuntime;
+				else session.requiredRuntime.lane = "ordinary-official";
+			});
+			const before = await env.saved();
+			const methods = [...execution.bridge.methods];
+			await expect(
+				execution.bridge.callback(intent(execution.bridge)),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				execution.bridge.connectionCallback(request),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				execution.bridge.bootstrap(connectionBootstrap()),
+			).resolves.toMatchObject({ decision: "unavailable" });
+			expect(authorize).not.toHaveBeenCalled();
+			expect(options.resolveOriginalClient).not.toHaveBeenCalled();
+			expect(await env.saved()).toEqual(before);
+			expect(execution.bridge.methods).toEqual(methods);
+			expect(execution.bridge.native.turnStarts).toBe(1);
+		},
+	);
+
 	it.each(["before-intent", "during-authorization"])(
 		"rejects an expired slot %s",
 		async (stage) => {
@@ -3581,6 +3625,50 @@ async function recoveryFixture() {
 }
 
 describe("private cross-process Connection evidence recovery", () => {
+	it.each(["missing", "lane"] as const)(
+		"preserves saved facts and rejects independent recovery with %s Session runtime requirements",
+		async (mismatch) => {
+			const { env, execution, origin, resolveReadOnlyClient } =
+				await recoveryFixture();
+			const events = await env.driver.replayEvents(
+				execution.nativeSessionRef,
+				execution.command.executionId,
+			);
+			await env.driver.close();
+			const saved = await env.saved();
+			const session = saved.sessions[execution.nativeSessionRef];
+			assert(session?.requiredRuntime);
+			if (mismatch === "missing") delete session.requiredRuntime;
+			else session.requiredRuntime.lane = "ordinary-official";
+			await writeFile(env.path, JSON.stringify(saved));
+			const reopened = await env.reopen();
+			const context = recoveryRead(execution, origin);
+			const launch = vi
+				.spyOn(BoundDriver.prototype, "launchConnectionRecovery")
+				.mockResolvedValue(undefined);
+			await expect(
+				reopened.recoverOriginalEvidence(context.reference, context.read),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			await expect(
+				reopened.getStatus(
+					execution.nativeSessionRef,
+					execution.command.executionId,
+				),
+			).resolves.toBe("completed");
+			await expect(
+				reopened.replayEvents(
+					execution.nativeSessionRef,
+					execution.command.executionId,
+				),
+			).resolves.toEqual(events);
+			expect(launch).not.toHaveBeenCalled();
+			expect(resolveReadOnlyClient).not.toHaveBeenCalled();
+			expect(await env.saved()).toEqual(saved);
+			expect(env.bridgeFor(execution.command)).toBe(execution.bridge);
+			expect(execution.bridge.native.turnStarts).toBe(1);
+		},
+	);
+
 	it.each(["missing", "evidence-commit", "scan-commit"] as const)(
 		"rejects the next recovery pull when the prior evidence ACK is %s",
 		async (failure) => {
