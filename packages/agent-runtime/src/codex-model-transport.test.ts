@@ -208,7 +208,168 @@ afterEach(async () => {
 	for (const stop of close.splice(0).reverse()) await stop();
 });
 
+function observePersistenceDeadlines() {
+	// Keep real HTTP and admission clocks; expire only the persistence waits.
+	const callbacks: (() => void)[] = [];
+	const original = globalThis.setTimeout;
+	const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+		callback: (...args: unknown[]) => void,
+		milliseconds?: number,
+		...args: unknown[]
+	) => {
+		if (milliseconds === 120_000) callbacks.push(() => callback(...args));
+		return original(callback, milliseconds, ...args);
+	}) as typeof setTimeout);
+	return {
+		count: () => callbacks.length,
+		expireLast: () => {
+			const callback = callbacks.at(-1);
+			if (!callback) throw new Error("missing persistence deadline");
+			callback();
+		},
+		restore: () => spy.mockRestore(),
+	};
+}
+
 describe("Codex model transport", () => {
+	it.each(["cancel", "close"] as const)(
+		"retains a late intent after both persistence deadlines and bounded %s",
+		async (stop) => {
+			let upstreamRequests = 0;
+			const target = await listen(
+				createServer((_request, response) => {
+					upstreamRequests += 1;
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(completedEvent());
+				}),
+			);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const outcomes: CodexModelRequestOutcome[] = [];
+			let started = 0;
+			let signal: AbortSignal | undefined;
+			const value = await transport(target, true, {
+				beforeRequest: async (context, currentSignal) => {
+					if (context.turnId !== defaultNativeTurn.turnId)
+						return { started: async () => {}, finish: async () => {} };
+					signal = currentSignal;
+					entered.resolve();
+					await release.promise;
+					return {
+						started: async () => {
+							started += 1;
+						},
+						finish: async (outcome) => {
+							outcomes.push(outcome);
+						},
+					};
+				},
+			});
+			const deadlines = observePersistenceDeadlines();
+			try {
+				const pending = request(value.modelAccess)
+					.then(async (response) => ({
+						status: response.status,
+						body: await response.text(),
+					}))
+					.catch(() => undefined);
+				await entered.promise;
+				expect(deadlines.count()).toBe(1);
+				deadlines.expireLast();
+				await delay(0);
+				expect(signal?.aborted).toBe(true);
+				expect(deadlines.count()).toBe(2);
+				deadlines.expireLast();
+				const response = await pending;
+				await Promise.race([
+					stop === "cancel"
+						? value.cancelTurn(defaultNativeTurn)
+						: value.close(),
+					delay(1_000).then(() => {
+						throw new Error("late intent blocked cleanup");
+					}),
+				]);
+				expect(upstreamRequests).toBe(0);
+				expect(started).toBe(0);
+				expect(outcomes).toEqual([]);
+				release.resolve();
+				await delay(0);
+				expect(outcomes).toEqual([
+					expect.objectContaining({
+						phase: "failed",
+						failureCode: "request_not_started",
+					}),
+				]);
+				// An unacknowledged durable result must not become an HTTP/SSE terminal.
+				expect(response).toBeUndefined();
+				if (stop === "cancel") {
+					expect((await request(value.modelAccess)).status).toBe(409);
+					const next = { ...defaultNativeTurn, turnId: "next-synthetic" };
+					admitTurn(value, next);
+					expect(
+						await (await request(value.modelAccess, {}, next)).text(),
+					).toContain("response.completed");
+					expect(upstreamRequests).toBe(1);
+				}
+			} finally {
+				release.resolve();
+				deadlines.restore();
+			}
+		},
+	);
+
+	it("keeps one durable finish in flight after its timeout without publishing a terminal", async () => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const outcomes: CodexModelRequestOutcome[] = [];
+		let committed = 0;
+		const value = await transport(target, true, {
+			beforeRequest: async () => ({
+				started: async () => {},
+				finish: async (outcome) => {
+					outcomes.push(outcome);
+					entered.resolve();
+					await release.promise;
+					committed += 1;
+				},
+			}),
+		});
+		const deadlines = observePersistenceDeadlines();
+		try {
+			const pending = request(value.modelAccess)
+				.then(async (response) => ({
+					status: response.status,
+					body: await response.text(),
+				}))
+				.catch(() => undefined);
+			await entered.promise;
+			const beforeTimeout = deadlines.count();
+			deadlines.expireLast();
+			await delay(0);
+			expect(deadlines.count()).toBeGreaterThan(beforeTimeout);
+			deadlines.expireLast();
+			const response = await pending;
+			expect(committed).toBe(0);
+			release.resolve();
+			await delay(0);
+			expect(outcomes).toEqual([
+				expect.objectContaining({ phase: "succeeded" }),
+			]);
+			expect(committed).toBe(1);
+			expect(response).toBeUndefined();
+			expect((await request(value.modelAccess)).status).toBe(409);
+		} finally {
+			release.resolve();
+			deadlines.restore();
+		}
+	});
+
 	it("withholds native completion until the actual model result is durably acknowledged", async () => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();

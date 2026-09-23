@@ -1324,21 +1324,20 @@ export async function openCodexModelTransport(
 			// A successfully persisted outcome is final. Concurrent callers share the
 			// in-flight write; a failed write is cleared so the catch path can retry.
 			if (outcomeReported) return;
-			if (outcomeReport) return outcomeReport;
 			if (outcome.phase !== "succeeded")
 				revokeTurn(turnKey, startedAt === undefined);
+			if (outcomeReport) return awaitPersistence(outcomeReport);
 			const pending = (async () => {
 				// A persistence call may outlive the request abort/timeout. Join the
 				// underlying intent and started writes before finishing the journal so a
 				// late durable write can never appear after its terminal outcome.
 				if (!journal && journalPromise) {
 					try {
-						// The request may already be aborted here. Keep the late intent
-						// join bounded without reusing that signal, otherwise a stalled
-						// observer can keep terminal cleanup alive forever.
-						journal = await awaitPersistence(journalPromise);
+						// Only the caller's wait is bounded. Keep ownership of a late
+						// intent so it still receives its terminal write after timeout.
+						journal = await journalPromise;
 					} catch {
-						// The intent was not durably created; there is no journal to finish.
+						// The observer rejected admission instead of returning a journal.
 					}
 				}
 				if (startedPersistence) await startedPersistence.catch(() => {});
@@ -1347,29 +1346,28 @@ export async function openCodexModelTransport(
 					outcomeReported = true;
 					return;
 				}
-				await awaitPersistence(
-					journal.finish({
-						...outcome,
-						finishedAt: new Date().toISOString(),
-						...(startedAt === undefined
-							? {}
-							: {
-									durationMs: Math.max(
-										0,
-										Math.round(performance.now() - startedAt),
-									),
-								}),
-					}),
-				);
+				await journal.finish({
+					...outcome,
+					finishedAt: new Date().toISOString(),
+					...(startedAt === undefined
+						? {}
+						: {
+								durationMs: Math.max(
+									0,
+									Math.round(performance.now() - startedAt),
+								),
+							}),
+				});
 				readyModelTurns.delete(turnKey);
 				outcomeReported = true;
 			})();
 			outcomeReport = pending;
-			try {
-				await pending;
-			} finally {
-				if (outcomeReport === pending) outcomeReport = undefined;
-			}
+			void pending
+				.finally(() => {
+					if (outcomeReport === pending) outcomeReport = undefined;
+				})
+				.catch(() => {});
+			await awaitPersistence(pending);
 		};
 		try {
 			const admittedModel = await waitForAdmission(turnKey, controller.signal);
@@ -1521,7 +1519,10 @@ export async function openCodexModelTransport(
 						},
 			).catch(() => {});
 			settleModelRequestWaiters(turnKey, false);
-			await failStream(response);
+			// A timed-out persistence wait is not a durable terminal result. Break
+			// the connection while the original write remains owned and fail closed.
+			if (outcomeReported) await failStream(response);
+			else response.destroy();
 		} finally {
 			request.off("aborted", terminate);
 			response.off("close", terminate);
