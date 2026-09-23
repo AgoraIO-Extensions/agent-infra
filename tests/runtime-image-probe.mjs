@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import {
+	createHash,
+	generateKeyPairSync,
+	randomBytes,
+	sign,
+} from "node:crypto";
 import {
 	chmod,
 	mkdir,
@@ -12,6 +17,7 @@ import {
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
 import {
@@ -49,6 +55,7 @@ const toolSiblingRoot = `${toolBoundaryPath}/${"b".repeat(64)}`;
 const toolSiblingFile = `${toolSiblingRoot}/workspace/sibling-control`;
 const toolSiblingContent = "sibling-conversation-control";
 let toolProbePending = false;
+let toolProbeKind = "shell";
 let toolProbeOutput;
 let holdNextSelectedResponse = true;
 let releaseHeldSelectedResponse;
@@ -119,6 +126,30 @@ function syntheticResponse(response, sequence) {
 }
 
 function syntheticToolResponse(response, sequence) {
+	if (toolProbeKind === "apply-patch") {
+		const item = {
+			type: "custom_tool_call",
+			call_id: toolCallId,
+			name: "apply_patch",
+			input: `*** Begin Patch
+*** Add File: ${toolDeniedPath}
++prohibited
+*** End Patch`,
+		};
+		response.writeHead(200, { "content-type": "text/event-stream" });
+		response.end(
+			sse({ type: "response.output_item.done", item }) +
+				sse({
+					type: "response.completed",
+					response: {
+						id: `synthetic-response-${sequence}`,
+						status: "completed",
+						output: [item],
+					},
+				}),
+		);
+		return;
+	}
 	const item = {
 		type: "function_call",
 		id: `synthetic-tool-${sequence}`,
@@ -243,7 +274,8 @@ const model = createServer(async (request, response) => {
 			case "/approved-default/v1/responses":
 			case "/approved-selected/v1/responses":
 				if (toolProbePending) {
-					assert.ok(body.tools.some((tool) => tool.name === "exec_command"));
+					// Inject an unsolicited invocation even when the official lane has
+					// correctly omitted that tool from its advertised capabilities.
 					toolProbePending = false;
 					syntheticToolResponse(response, requests.length);
 					return;
@@ -386,60 +418,164 @@ const model = createServer(async (request, response) => {
 	}
 });
 
-function grant(binding) {
-	const claims = {
-		schemaVersion: 1,
-		issuer: "synthetic-platform",
-		audience: ["runtime_host"],
-		issuedAt: new Date(Date.now() - 30_000).toISOString(),
-		expiresAt: new Date(Date.now() + 300_000).toISOString(),
-		grantId: `grant-${randomBytes(8).toString("hex")}`,
-		agentId: binding.agentId,
-		actorId: binding.actorId,
-		channelId: binding.channelId,
-		conversationId: binding.conversationId,
-		executionId: binding.executionId,
-		turnId: binding.turnId,
-		sessionGeneration: binding.sessionGeneration,
-		traceId: binding.traceId,
-		allowedCommands: [
-			"turn.submit",
-			"turn.stop",
-			"generation.cancel",
-			"session.status",
-			"events.replay",
-		],
-		attachments: [],
-		actionSetVersion: "synthetic-actions",
-		actionIds: [],
-	};
-	const protectedSegment = Buffer.from(
-		JSON.stringify({ alg: "EdDSA", kid: "synthetic-key" }),
-	).toString("base64url");
-	const input = `${protectedSegment}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
-	return {
-		schemaVersion: 1,
-		format: "compact-jws",
-		token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}`,
-	};
-}
+// Only the isolated image probe owns these synthetic identities and signing keys.
+export const runtimeProbeWorkerId = "synthetic-worker";
+let protocol;
 
-function binding(name, overrides = {}) {
-	const value = {
-		schemaVersion: 1,
-		requestId: `request-${name}`,
-		agentId: "synthetic-agent",
-		actorId: "synthetic-actor",
-		channelId: "web",
-		conversationId: `conversation-${name}`,
-		executionId: `execution-${name}`,
-		turnId: `turn-${name}`,
-		sessionGeneration: 1,
-		deliveryFence: 1,
-		traceId: `trace-${name}`,
-		...overrides,
+export function createRuntimeProbeProtocol({
+	contracts,
+	requestDigest,
+	privateKey,
+	now = Date.now,
+}) {
+	const schemas = {
+		"turn.submit": contracts.RuntimeSubmitTurnRequestV3Schema,
+		"turn.stop": contracts.RuntimeStopRequestV3Schema,
+		"generation.cancel": contracts.RuntimeGenerationCancelRequestV3Schema,
+		"session.status": contracts.RuntimeStatusRequestV3Schema,
+		"events.persist": contracts.RuntimeEventPersistRequestV3Schema,
+		"events.ack": contracts.RuntimeEventAckRequestV3Schema,
 	};
-	return { ...value, grant: grant(value) };
+	function signRequest(value, command, reason) {
+		const request = {
+			...value,
+			requestId: `request-${randomBytes(12).toString("hex")}`,
+		};
+		const issuedAt = now();
+		const claims = contracts.RuntimeExecutionGrantClaimsV2Schema.parse({
+			schemaVersion: 2,
+			issuer: "synthetic-platform",
+			audience: "runtime_host",
+			workerId: runtimeProbeWorkerId,
+			issuedAt,
+			expiresAt: issuedAt + contracts.RuntimeExecutionGrantMaximumLifetimeMsV2,
+			grantId: `grant-${randomBytes(12).toString("hex")}`,
+			principal: request.principal,
+			agentId: request.agentId,
+			channelId: request.channelId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			traceId: request.traceId,
+			hostSessionRef: request.hostSessionRef,
+			operation: request.operation,
+			allowedCommands: [command],
+			requestDigest: createHash("sha256")
+				.update(contracts.runtimeRequestSigningPayloadV3(request))
+				.digest("hex"),
+			...(reason
+				? {
+						purpose: "control",
+						controlRecordId: `control-${request.executionId}-${reason}`,
+						reason,
+					}
+				: {
+						purpose: "business",
+						authorizationRecordId: `authorization-${request.executionId}`,
+						attachments: (request.input?.attachments ?? []).map(
+							(attachmentId) => ({ attachmentId, operations: ["read"] }),
+						),
+					}),
+			...(command === "events.persist"
+				? {
+						eventAccess: {
+							command,
+							consumer: request.consumer,
+							afterCursor: request.afterCursor,
+						},
+					}
+				: command === "events.ack"
+					? {
+							eventAccess: {
+								command,
+								consumer: request.consumer,
+								confirmedCursor: request.confirmedCursor,
+							},
+						}
+					: {}),
+		});
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: "synthetic-key",
+				typ: "runtime-execution+jws",
+			}),
+		).toString("base64url");
+		const input = `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+		return schemas[command].parse({
+			...request,
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}`,
+			},
+		});
+	}
+	function binding(name, overrides = {}) {
+		const value = {
+			schemaVersion: 3,
+			requestId: `request-${name}`,
+			agentId: "synthetic-agent",
+			principal: { kind: "user", id: "synthetic-actor" },
+			channelId: "web",
+			conversationId: `conversation-${name}`,
+			executionId: `execution-${name}`,
+			turnId: `turn-${name}`,
+			sessionGeneration: 1,
+			hostSessionRef: null,
+			traceId: `trace-${name}`,
+			...overrides,
+		};
+		return {
+			...value,
+			operation: {
+				kind: "execution",
+				id: value.executionId,
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			},
+		};
+	}
+	function originalOperationDigest(submit) {
+		return requestDigest({
+			kind: "submit-turn",
+			agentId: submit.agentId,
+			conversationId: submit.conversationId,
+			executionId: submit.executionId,
+			turnId: submit.turnId,
+			sessionGeneration: submit.sessionGeneration,
+			input: submit.input,
+			...(submit.selection ? { selection: submit.selection } : {}),
+		});
+	}
+	return {
+		binding,
+		signRequest,
+		originalOperationDigest,
+		status(submitted, reason = "recovery") {
+			return signRequest(
+				{
+					...submitted.lookup,
+					originalOperationDigest: submitted.originalOperationDigest,
+				},
+				"session.status",
+				reason,
+			);
+		},
+		parseEvents(text, executionId) {
+			return text
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) => {
+					const event = contracts.RuntimeEventSchema.parse(
+						JSON.parse(line.slice(6)),
+					);
+					assert.equal(event.executionId, executionId);
+					return event;
+				});
+		},
+	};
 }
 
 function deployment(origin, directory) {
@@ -452,6 +588,7 @@ function deployment(origin, directory) {
 		OPENAI_BASE_URL: "http://127.0.0.1:1/forbidden",
 		AGENT_INFRA_RUNTIME_DRIVER: "codex",
 		AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+		AGENT_INFRA_RUNTIME_WORKER_ID: runtimeProbeWorkerId,
 		AGENT_INFRA_RUNTIME_DATA_DIR: directory,
 		AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "synthetic-key",
 		AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKeyPem,
@@ -468,7 +605,7 @@ function deployment(origin, directory) {
 				{
 					modelOptionId: "default-option",
 					endpoint: `${origin}/approved-default/v1`,
-					model: "gpt-5.2",
+					model: "gpt-5.6-sol",
 					reasoningLevels: ["medium"],
 					credentialEnvironmentVariable:
 						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT",
@@ -476,7 +613,7 @@ function deployment(origin, directory) {
 				{
 					modelOptionId: "selected-option",
 					endpoint: `${origin}/approved-selected/v1`,
-					model: "gpt-5.2",
+					model: "gpt-5.6-sol",
 					reasoningLevels: ["high"],
 					credentialEnvironmentVariable:
 						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_SELECTED",
@@ -630,7 +767,7 @@ async function request(path, body, token = serviceToken) {
 }
 
 async function submitTurn(name, selection, session = undefined) {
-	const base = binding(
+	const base = protocol.binding(
 		name,
 		session
 			? {
@@ -639,13 +776,15 @@ async function submitTurn(name, selection, session = undefined) {
 				}
 			: {},
 	);
-	const submit = {
-		...base,
-		schemaVersion: selection ? 2 : 1,
-		input: { text: "synthetic-runtime-input", attachments: [] },
-		...(selection ? { selection } : {}),
-	};
-	const path = `v${submit.schemaVersion}/turns`;
+	const submit = protocol.signRequest(
+		{
+			...base,
+			input: { text: "synthetic-runtime-input", attachments: [] },
+			...(selection ? { selection } : {}),
+		},
+		"turn.submit",
+	);
+	const path = "v3/turns";
 	let accepted;
 	return probeStep(
 		`${name}-submit`,
@@ -655,10 +794,17 @@ async function submitTurn(name, selection, session = undefined) {
 			assert.equal(accepted.status, 200);
 			assert.equal(result.result.outcome, "accepted");
 			const lookup = { ...base, hostSessionRef: result.hostSessionRef };
-			return { lookup, submit, path, accepted: result };
+			return {
+				lookup,
+				submit,
+				path,
+				accepted: result,
+				originalOperationDigest: protocol.originalOperationDigest(submit),
+			};
 		},
 		() => ({
 			httpStatus: accepted?.status,
+			responseCode,
 			resultStatus: accepted
 				? JSON.parse(accepted.text).result?.status
 				: undefined,
@@ -666,25 +812,27 @@ async function submitTurn(name, selection, session = undefined) {
 	);
 }
 
-async function turn(
-	name,
-	selection,
-	expectedStatus = "completed",
-	session = undefined,
-) {
-	const submitted = await submitTurn(name, selection, session);
+async function persistTurnEvents(name, submitted, expectedStatus) {
 	const { lookup } = submitted;
 	let events;
+	let frames;
 	await probeStep(
 		`${name}-events`,
 		async () => {
-			events = await request("v1/events/stream", lookup);
+			events = await request(
+				"v3/events/stream",
+				protocol.signRequest(
+					{
+						...lookup,
+						consumer: "platform_worker_persistence",
+						afterCursor: null,
+					},
+					"events.persist",
+				),
+			);
 			assert.equal(events.status, 200);
 			assert.ok(events.contentType.includes("text/event-stream"));
-			const frames = events.text
-				.split("\n")
-				.filter((line) => line.startsWith("data: "))
-				.map((line) => JSON.parse(line.slice(6)));
+			frames = protocol.parseEvents(events.text, lookup.executionId);
 			assert.ok(
 				frames.some(
 					(event) =>
@@ -700,15 +848,37 @@ async function turn(
 							event.payload.delta.includes("synthetic runtime answer"),
 					),
 				);
+			const confirmedCursor = frames.at(-1).cursor;
+			const ack = await request(
+				"v3/events/ack",
+				protocol.signRequest(
+					{
+						...lookup,
+						consumer: "platform_worker_persistence",
+						confirmedCursor,
+					},
+					"events.ack",
+				),
+			);
+			assert.equal(ack.status, 200);
+			assert.deepEqual(JSON.parse(ack.text), {
+				schemaVersion: 3,
+				executionId: lookup.executionId,
+				confirmedCursor,
+			});
 		},
 		() => ({ httpStatus: events?.status }),
 	);
+}
+
+async function assertTurnStatus(name, submitted, expectedStatus) {
 	let status;
 	await probeStep(
 		`${name}-status`,
 		async () => {
-			status = await request("v1/status", lookup);
+			status = await request("v3/status", protocol.status(submitted));
 			assert.equal(status.status, 200);
+			assert.equal(JSON.parse(status.text).outcome, "found");
 			assert.equal(JSON.parse(status.text).status, expectedStatus);
 		},
 		() => ({
@@ -716,6 +886,17 @@ async function turn(
 			resultStatus: status ? JSON.parse(status.text).status : undefined,
 		}),
 	);
+}
+
+async function turn(
+	name,
+	selection,
+	expectedStatus = "completed",
+	session = undefined,
+) {
+	const submitted = await submitTurn(name, selection, session);
+	await persistTurnEvents(name, submitted, expectedStatus);
+	await assertTurnStatus(name, submitted, expectedStatus);
 	return submitted;
 }
 
@@ -746,7 +927,19 @@ async function assertNoSensitiveDataOnDisk(directory) {
 	}
 }
 
-try {
+async function runImageProbe() {
+	// These are the deployed Host dependencies, never a source checkout fallback.
+	const contracts = await import(
+		"/app/node_modules/@agent-infra/contracts/dist/runtime/index.mjs"
+	);
+	const { requestDigest } = await import(
+		"/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs"
+	);
+	protocol = createRuntimeProbeProtocol({
+		contracts,
+		requestDigest,
+		privateKey,
+	});
 	await new Promise((resolve) => model.listen(0, "127.0.0.1", resolve));
 	const origin = `http://127.0.0.1:${model.address().port}`;
 	await mkdir("/tmp/personal", { recursive: true });
@@ -779,59 +972,82 @@ try {
 			requests.length === 1 &&
 				requests[0].authenticated &&
 				requests[0].path === "/approved-default/v1/responses" &&
-				requests[0].model === "gpt-5.2" &&
+				requests[0].model === "gpt-5.6-sol" &&
 				requests[0].effort === "medium" &&
 				requests[0].input,
 		);
 		stage = "execution-selection";
-		const selected = await turn(
+		const selected = await submitTurn(
 			"selected",
 			{
 				schemaVersion: 1,
 				modelOptionId: "selected-option",
 				reasoningLevel: "high",
 			},
-			"completed",
 			defaultTurn.lookup,
 		);
+		await persistTurnEvents("selected", selected, "completed");
 		check(
 			"native-execution-selection",
 			requests.length === 2 &&
 				requests[1].path === "/approved-selected/v1/responses" &&
-				requests[1].model === "gpt-5.2" &&
+				requests[1].model === "gpt-5.6-sol" &&
 				requests[1].effort === "high" &&
 				requests[1].authenticated,
 		);
-		const replayed = await request(selected.path, selected.submit);
+		const replayed = await request(
+			selected.path,
+			protocol.signRequest(
+				{ ...selected.submit, hostSessionRef: selected.lookup.hostSessionRef },
+				"turn.submit",
+			),
+		);
 		check(
 			"submit-idempotency",
 			replayed.status === 200 && requests.length === 2,
 		);
-		const conflicting = await request(selected.path, {
-			...selected.submit,
-			selection: {
-				schemaVersion: 1,
-				modelOptionId: "default-option",
-				reasoningLevel: "medium",
-			},
-		});
+		const conflicting = await request(
+			selected.path,
+			protocol.signRequest(
+				{
+					...selected.submit,
+					hostSessionRef: selected.lookup.hostSessionRef,
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "default-option",
+						reasoningLevel: "medium",
+					},
+				},
+				"turn.submit",
+			),
+		);
 		check(
 			"selection-conflict",
 			conflicting.status === 409 && requests.length === 2,
 		);
 		stage = "grant-rejections";
+		const freshSubmission = protocol.signRequest(
+			selected.submit,
+			"turn.submit",
+		);
 		const invalid = await request(selected.path, {
-			...selected.submit,
+			...freshSubmission,
 			grant: {
-				...selected.submit.grant,
-				token: `${selected.submit.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
+				...freshSubmission.grant,
+				token: `${freshSubmission.grant.token.split(".").slice(0, 2).join(".")}.${randomBytes(64).toString("base64url")}`,
 			},
 		});
-		const other = binding("other", { agentId: "other-agent" });
-		const wrongAgent = await request("v1/turns", {
-			...other,
-			input: selected.submit.input,
-		});
+		const other = protocol.binding("other", { agentId: "other-agent" });
+		const wrongAgent = await request(
+			"v3/turns",
+			protocol.signRequest(
+				{
+					...other,
+					input: selected.submit.input,
+				},
+				"turn.submit",
+			),
+		);
 		const unauthorized = await request(
 			selected.path,
 			selected.submit,
@@ -844,10 +1060,13 @@ try {
 				unauthorized.status === 401 &&
 				requests.length === 2,
 		);
+		// A control recovery query changes authority. Exercise business replay
+		// first, then verify current status before restarting the process.
+		await assertTurnStatus("selected", selected, "completed");
 		stage = "process-restart";
 		await runtime.stop();
 		runtime = await launch(env);
-		const restored = await request("v1/status", selected.lookup);
+		const restored = await request("v3/status", protocol.status(selected));
 		await turn(
 			"resumed",
 			selected.submit.selection,
@@ -861,7 +1080,7 @@ try {
 				requests.length === 3 &&
 				requests[2].history &&
 				requests[2].path === "/approved-selected/v1/responses" &&
-				requests[2].model === "gpt-5.2" &&
+				requests[2].model === "gpt-5.6-sol" &&
 				requests[2].effort === "high" &&
 				requests[2].authenticated,
 		);
@@ -965,12 +1184,21 @@ try {
 			},
 			() => ({ authenticated: independentRequest.authenticated }),
 		);
-		const stopConfirmation = request("v1/stops", {
-			...stopped.lookup,
-			requestId: "request-stop-generation",
-			stopRequestId: "stop-generation-synthetic",
-			executionDeliveryFence: 1,
-		});
+		const stopConfirmation = request(
+			"v3/stops",
+			protocol.signRequest(
+				{
+					...stopped.lookup,
+					operation: {
+						...stopped.lookup.operation,
+						kind: "stop",
+						id: "stop-generation-synthetic",
+					},
+				},
+				"turn.stop",
+				"stop",
+			),
+		);
 		const stopResult = await assertUpstreamClosedBeforeConfirmation(
 			stopRequest,
 			stopConfirmation,
@@ -1044,11 +1272,21 @@ try {
 		httpStatus = undefined;
 		responseCode = undefined;
 		stage = "model-cancellation-close-before-confirmation";
-		const cancelConfirmation = request("v1/generations/cancel", {
-			...cancellation.lookup,
-			requestId: "request-cancel-generation",
-			tombstoneId: "generation-cancel-synthetic",
-		});
+		const cancelConfirmation = request(
+			"v3/generations/cancel",
+			protocol.signRequest(
+				{
+					...cancellation.lookup,
+					operation: {
+						...cancellation.lookup.operation,
+						kind: "generation",
+						id: "generation-cancel-synthetic",
+					},
+				},
+				"generation.cancel",
+				"generation_isolation",
+			),
+		);
 		const cancelResult = await assertUpstreamClosedBeforeConfirmation(
 			cancellationRequest,
 			cancelConfirmation,
@@ -1076,28 +1314,45 @@ try {
 			}),
 		);
 		stage = "model-cancellation-status";
-		const cancelledStatus = await request("v1/status", cancellation.lookup);
+		const cancelledStatus = await request(
+			"v3/status",
+			protocol.status(cancellation, "generation_isolation"),
+		);
+		const cancelledReplay = await request(
+			cancellation.path,
+			protocol.signRequest(cancellation.submit, "turn.submit"),
+		);
 		await runtime.stop();
 		stage = "model-cancellation-restart";
 		runtime = await launch(cancellationEnvironment);
 		const restartedCancelledStatus = await request(
-			"v1/status",
-			cancellation.lookup,
+			"v3/status",
+			protocol.status(cancellation, "generation_isolation"),
+		);
+		const restartedCancelledReplay = await request(
+			cancellation.path,
+			protocol.signRequest(cancellation.submit, "turn.submit"),
 		);
 		check(
 			"cancellation-aborts-upstream",
 			stopRequest.closed &&
 				cancellationRequest.closed &&
-				cancelledStatus.status === 409 &&
-				JSON.parse(cancelledStatus.text).code ===
+				cancelledStatus.status === 200 &&
+				JSON.parse(cancelledStatus.text).outcome === "found" &&
+				JSON.parse(cancelledStatus.text).status === "cancelled" &&
+				restartedCancelledStatus.status === 200 &&
+				JSON.parse(restartedCancelledStatus.text).outcome === "found" &&
+				JSON.parse(restartedCancelledStatus.text).status === "cancelled" &&
+				cancelledReplay.status === 409 &&
+				JSON.parse(cancelledReplay.text).code ===
 					"RUNTIME_GENERATION_CANCELLED" &&
-				restartedCancelledStatus.status === 409 &&
-				JSON.parse(restartedCancelledStatus.text).code ===
+				restartedCancelledReplay.status === 409 &&
+				JSON.parse(restartedCancelledReplay.text).code ===
 					"RUNTIME_GENERATION_CANCELLED",
 		);
 		await runtime.stop();
 
-		stage = "native-sandboxed-tool-execution";
+		stage = "native-model-only-tool-rejection";
 		await writeFile(toolDeniedPath, "owner-write-control");
 		await unlink(toolDeniedPath);
 		await writeFile(toolExistingPath, "owner-truncate-control");
@@ -1107,8 +1362,8 @@ try {
 		});
 		assert.equal(await readFile(toolExistingPath, "utf8"), "");
 		await writeFile(toolExistingPath, "owner-truncate-control");
-		// The sibling Conversation directory exists before the owning process
-		// starts, so the boundary is the only reason the tool cannot reach it.
+		// Keep controls writable to the image user: rejection must precede any tool
+		// execution, rather than attributing an unsupported action to sandbox success.
 		await mkdir(`${toolSiblingRoot}/workspace`, {
 			recursive: true,
 			mode: 0o700,
@@ -1124,30 +1379,25 @@ try {
 		runtime = await launch(
 			deployment(origin, "/var/lib/agent-runtime/tool-probe"),
 		);
-		toolProbePending = true;
-		await turn("tool-probe");
-		check(
-			"native-sandboxed-tool-execution",
-			typeof toolProbeOutput === "string" &&
-				toolProbeOutput.includes("Process exited with code 0") &&
-				toolProbeOutput.includes("runtime-tool-ok") &&
-				toolProbeOutput.includes("runtime-truncate-denied") &&
-				toolProbeOutput.includes("Permission denied"),
-		);
-		// The same marker also covers the process environment channel: a readable
-		// `/proc` would let a model tool lift the model credential straight out of
-		// a native process's environment.
-		check(
-			"native-sibling-conversation-denied",
-			typeof toolProbeOutput === "string" &&
-				toolProbeOutput.includes("runtime-sibling-denied"),
-		);
-		assert.equal(await readFile(toolSiblingFile, "utf8"), toolSiblingContent);
-		await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
-		assert.equal(
-			await readFile(toolExistingPath, "utf8"),
-			"owner-truncate-control",
-		);
+		for (const kind of ["shell", "apply-patch"]) {
+			toolProbeKind = kind;
+			toolProbePending = true;
+			toolProbeOutput = undefined;
+			const beforeRequests = requests.length;
+			await turn(`tool-probe-${kind}`, undefined, "failed");
+			assert.equal(await readFile(toolSiblingFile, "utf8"), toolSiblingContent);
+			await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
+			assert.equal(
+				await readFile(toolExistingPath, "utf8"),
+				"owner-truncate-control",
+			);
+			check(
+				`native-${kind}-rejected-without-side-effects`,
+				!toolProbePending &&
+					requests.length === beforeRequests + 1 &&
+					toolProbeOutput === undefined,
+			);
+		}
 		await runtime.stop();
 
 		stage = "recursive-native-storage-redaction";
@@ -1160,10 +1410,26 @@ try {
 		const release = JSON.parse(
 			await readFile("/opt/codex/share/release.json", "utf8"),
 		);
+		const sessions = Object.values(
+			JSON.parse(
+				await readFile(
+					"/var/lib/agent-runtime/success/codex-driver.json",
+					"utf8",
+				),
+			).sessions,
+		);
+		assert.ok(sessions.length > 0);
+		const capability = sessions[0].requiredRuntime.lane;
+		assert.equal(capability, "official-model-only");
+		for (const session of sessions) {
+			assert.equal(session.requiredRuntime.lane, capability);
+			assert.equal(session.requiredRuntime.barrier, undefined);
+		}
 		console.info(
 			JSON.stringify({
 				schemaVersion: 1,
 				status: "passed",
+				capability,
 				codexVersion: release.provenance.codexVersion,
 				configurationSchemaVersion: 2,
 				configVersion: observedConfigVersion,
@@ -1171,26 +1437,33 @@ try {
 			}),
 		);
 	}
-} catch (error) {
-	console.error(
-		JSON.stringify(
-			error instanceof ProbeStepFailure
-				? error.diagnostic
-				: {
-						status: "failed",
-						stage,
-						startupCode,
-						httpStatus,
-						responseCode,
-						resultStatus,
-						isolationFileKind,
-						modelRequests: requests.length,
-					},
-		),
-	);
-	process.exitCode = 1;
-} finally {
-	for (const child of processes) child.kill("SIGKILL");
-	model.closeAllConnections();
-	await new Promise((resolve) => model.close(resolve));
+}
+
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+	try {
+		await runImageProbe();
+	} catch (error) {
+		console.error(
+			JSON.stringify(
+				error instanceof ProbeStepFailure
+					? error.diagnostic
+					: {
+							status: "failed",
+							stage,
+							startupCode,
+							httpStatus,
+							responseCode,
+							resultStatus,
+							isolationFileKind,
+							modelRequests: requests.length,
+						},
+			),
+		);
+		process.exitCode = 1;
+	} finally {
+		for (const child of processes) child.kill("SIGKILL");
+		model.closeAllConnections();
+		await new Promise((resolve) => model.close(resolve));
+	}
 }
