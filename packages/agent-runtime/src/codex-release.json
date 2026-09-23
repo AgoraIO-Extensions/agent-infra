@@ -9,8 +9,8 @@
 	"artifacts": {
 		"arm64": {
 			"target": "aarch64-unknown-linux-musl",
-			"archiveSha256": "sha256:b2b8750aa3d61f0deafe6dd45396a74e091090cd564fbd3dca35d53a8be30732",
-			"candidateManifestSha256": "sha256:32a537502f4bd62746ddadd23d815784c67c81cb33d0753153c7aa666a5e6211",
+			"archiveSha256": "sha256:fd23c9be3260cfa9287cc09fd5dfb8b0280454c0ca841dcfbe46f2d06218fb90",
+			"candidateManifestSha256": "sha256:3204f3130331c05094ac4cc12a41a900102291733f4a21d172f1cd943b1ae315",
 			"executableSha256": "sha256:b0a3c7e06577dd18a36a984b123c7a3e84116b272c4ce4ce6def91ae1588a2eb",
 			"binaries": {
 				"codex": "sha256:b0a3c7e06577dd18a36a984b123c7a3e84116b272c4ce4ce6def91ae1588a2eb",
@@ -22,8 +22,8 @@
 				"kind": "github-actions",
 				"repository": "AgoraIO-Extensions/agent-infra",
 				"runId": 35460531562,
-				"runAttempt": 1,
-				"artifactId": 10590191504,
+				"runAttempt": 2,
+				"artifactId": 10735677489,
 				"sourceHead": "28f46788736fc1d77aeadbcd484b31fd7ed4325e"
 			}
 		}
@@ -35,7 +35,7 @@
 	"schemaVersion": 2,
 	"distribution": {
 		"kind": "derived",
-		"buildId": "agent-infra-0.153.0-arm64-25d8ebe99a39-run35460531562.1",
+		"buildId": "agent-infra-0.153.0-arm64-25d8ebe99a39-run35460531562.2",
 		"sourceTree": "3534973977c758d189ab378830323e439e605082",
 		"buildInputSha256": "sha256:3b5111408f510b493a6023f8b42461a887a46fb404d65124881eb160ee25c281"
 	}
