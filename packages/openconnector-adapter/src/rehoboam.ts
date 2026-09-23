@@ -22,7 +22,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取当前通过 Rehoboam 个人 Token 鉴权的用户。",
 			effect: "READ" as const,
-			id: "rehoboam.get_current_user@v3",
+			id: "rehoboam.get_current_user@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
