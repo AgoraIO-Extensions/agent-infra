@@ -21,6 +21,7 @@ import {
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
 	parseConversationPersistedEventPayloadV1,
+	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
 	projectConversationMessagesV1,
 } from "@agent-infra/platform-core";
@@ -66,7 +67,8 @@ type AuthorizationDecision =
 			readonly authority: ConversationExecutionAuthorityV1;
 	  }
 	| { readonly outcome: "denied" }
-	| { readonly outcome: "unavailable" };
+	| { readonly outcome: "unavailable" }
+	| { readonly outcome: "revoked" };
 
 export interface ConversationAuthorization {
 	authorize(
@@ -198,6 +200,8 @@ async function authorize(
 	} catch {
 		return fail("DEPENDENCY_UNAVAILABLE", traceId);
 	}
+	if (decision.outcome === "revoked")
+		return fail("AUTHORIZATION_REVOKED", traceId);
 	if (decision.outcome === "unavailable") {
 		return fail("RUNTIME_UNAVAILABLE", traceId);
 	}
@@ -218,14 +222,29 @@ function authorityMatches(
 	identity: IdentityContext,
 	agentId?: string,
 ): boolean {
+	let boundary: ConversationExecutionAuthorityV1["taskBoundary"];
+	try {
+		boundary =
+			authority.taskBoundary === undefined
+				? undefined
+				: parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+	} catch {
+		return false;
+	}
 	return (
 		typeof authority === "object" &&
 		authority !== null &&
-		Object.keys(authority).length === 6 &&
+		Object.keys(authority).length === (boundary ? 7 : 6) &&
 		authority.schemaVersion === 1 &&
 		authority.actorId === identity.userId &&
 		authority.channelId === "web" &&
-		authority.authorizationRevision === identity.authorizationRevision &&
+		(boundary
+			? boundary.principal.kind === "user" &&
+				boundary.principal.id === identity.userId &&
+				boundary.agentId === authority.agentId &&
+				boundary.channelId === "web" &&
+				boundary.agentAuthorizationRevision === authority.authorizationRevision
+			: authority.authorizationRevision === identity.authorizationRevision) &&
 		(agentId === undefined || authority.agentId === agentId) &&
 		typeof authority.agentId === "string" &&
 		authority.agentId.length > 0 &&
