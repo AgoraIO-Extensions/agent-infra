@@ -45,7 +45,10 @@ import {
 	startRuntimeHost,
 } from "./index.js";
 
-import { createLegacyMigrationFixture } from "./legacy-migration.test-support.js";
+import {
+	createLegacyMigrationFixture,
+	writeSignedLegacyManifest,
+} from "./legacy-migration.test-support.js";
 
 const directories: string[] = [];
 const { publicKey } = generateKeyPairSync("ed25519");
@@ -75,7 +78,7 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it.each(["codex", "claude", "acp", "pi"])(
+	it.each(["codex", "claude", "acp", "pi", "fake"])(
 		"checks %s process protection before reading private deployment inputs even through programmatic assembly",
 		async (driver) => {
 			const configuration = await environment();
@@ -243,6 +246,26 @@ describe("RuntimeHost environment assembly", () => {
 		expect(JSON.parse(await readFile(fixture.hostPath, "utf8"))).toEqual(
 			fixture.before,
 		);
+		expect(await fixture.driver.sideEffectCount()).toBe(1);
+	});
+
+	it("rejects an incomplete signed migration before normalizing the original journal", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "runtime-incomplete-migration-"),
+		);
+		directories.push(directory);
+		const fixture = await createLegacyMigrationFixture(directory);
+		delete fixture.before.sessionBindings;
+		const before = Buffer.from(`${JSON.stringify(fixture.before)}\n`);
+		await writeFile(fixture.hostPath, before);
+		await writeSignedLegacyManifest(fixture.manifestPath, {
+			...fixture.manifest,
+			executions: fixture.manifest.executions.slice(0, 1),
+		});
+		await expect(
+			assembleRuntimeHost(fixture.environment, fixture.filesystem),
+		).rejects.toThrow(/^RUNTIME_LEGACY_MIGRATION_INVALID$/);
+		expect(await readFile(fixture.hostPath)).toEqual(before);
 		expect(await fixture.driver.sideEffectCount()).toBe(1);
 	});
 

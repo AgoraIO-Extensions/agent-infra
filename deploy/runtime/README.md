@@ -12,13 +12,14 @@
 [`codex-release.json`](../../packages/agent-runtime/src/codex-release.json)。安装程序验证压缩包、
 解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
 安装仅接受该官方 release，不接受派生二进制。新文件先在同级临时目录完整校验，再替换原安装；
-替换失败时恢复原目录。目录和二进制固定为 `0555`，元数据为 `0444`，镜像内统一归 root 所有。
+替换失败时恢复原目录；替换成功后清理旧目录失败只输出警告，不撤销已生效的新安装。
+目录和二进制固定为 `0555`，元数据为 `0444`，镜像内统一归 root 所有。
 正式入口在启动原生进程前复验摘要、ELF 架构、精确文件清单及从根目录开始的不可写目录链，
 拒绝软链接、可写文件或 root Runtime。Bridge 再验证版本与协议 Schema。启动不下载依赖。
 
 正式启动使用 `sh ./start-runtime-host.sh`（镜像内为 `/app/start-runtime-host.sh`）。launcher
 在启动 Node 前拒绝 `LD_*`、`DYLD_*` 及 Node preload/诊断环境变量，将 core dump 的软、硬上限
-均设为零，并传入 `--disable-sigusr1`。所有非 fake Driver 装配在读取私有配置前复验实际进程保护；直接运行
+均设为零，并传入 `--disable-sigusr1`。所有 Driver 装配在读取私有配置前复验实际进程保护；直接运行
 `node dist/index.mjs` 不能替代正式入口。生产入口固定使用 `/usr/local/bin/node` 和可信 `PATH`，
 不消费 Workload 提供的可执行路径。本地开发先构建，再用 `pnpm dev` 显式传入当前 pnpm 的
 Node 绝对路径（`--dev <path>`）；需要自动构建时另开
@@ -79,8 +80,9 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 
 旧 Session 只有在部署方核实历史来源和 Platform 已提交的迁移审计后，才能使用独立 Ed25519
 信任根签发的映射建立原主体关联。Host 校验完整旧执行集合及当前 Workload 绑定，保留原
-native Session、操作摘要与已知结果；没有证明时继续拒绝恢复。签名映射不是业务或控制 Grant，
-后续操作仍须单独授权。
+native Session、操作摘要与已知结果；没有证明时继续拒绝恢复。启动时先在隔离副本中验证迁移，
+通过后才打开原 journal 并应用；无效执行集合不会触发原文件的启动恢复写入。
+签名映射不是业务或控制 Grant，后续操作仍须单独授权。
 
 | 环境变量 | 内容 |
 | --- | --- |

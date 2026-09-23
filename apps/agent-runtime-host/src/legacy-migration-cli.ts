@@ -1,52 +1,31 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import {
 	lstat,
 	mkdir,
-	mkdtemp,
 	open,
-	readFile,
 	realpath,
 	rename,
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { FileRuntimeStore } from "@agent-infra/agent-runtime";
 import { readWorkloadReadinessBindingV1 } from "./configuration.js";
 import {
 	RuntimeLegacyMigrationError,
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
+import {
+	readRuntimeLegacyJournal as journal,
+	previewRuntimeLegacyMigration,
+} from "./legacy-migration-journal.js";
 
-const maximumJournalBytes = 64 * 1024 * 1024;
 const hash = (bytes: Uint8Array) =>
 	createHash("sha256").update(bytes).digest("hex");
 function fail(): never {
 	throw new RuntimeLegacyMigrationError();
-}
-
-async function journal(path: string) {
-	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-	try {
-		const stat = await file.stat();
-		if (
-			!stat.isFile() ||
-			stat.nlink !== 1 ||
-			stat.size < 1 ||
-			stat.size > maximumJournalBytes
-		)
-			fail();
-		const bytes = await file.readFile();
-		if (bytes.length > maximumJournalBytes) fail();
-		return { bytes, stat };
-	} finally {
-		await file.close();
-	}
 }
 
 /** FileRuntimeStore.open may normalize/quarantine old state. None of those changes
@@ -102,7 +81,6 @@ export async function runRuntimeLegacyMigrationCli(
 	environment: NodeJS.ProcessEnv,
 	filesystem?: RuntimeLegacyMigrationFilesystem,
 ) {
-	let temporaryDirectory: string | undefined;
 	let ownedLock: string | undefined;
 	let createdCandidatePath: string | undefined;
 	let preserveCandidate = false;
@@ -166,16 +144,7 @@ export async function runRuntimeLegacyMigrationCli(
 		ownedLock = lock;
 		const path = join(canonicalDirectory, "host.json");
 		const before = await journal(path); // Missing original state must never initialize.
-		temporaryDirectory = await mkdtemp(join(tmpdir(), "runtime-legacy-"));
-		const stagedPath = join(temporaryDirectory, "host.json");
-		await writeFile(stagedPath, before.bytes, { flag: "wx", mode: 0o600 });
-		const store = await FileRuntimeStore.open(stagedPath);
-		try {
-			await migration.apply(store);
-		} finally {
-			await store.close();
-		}
-		const after = await readFile(stagedPath);
+		const after = await previewRuntimeLegacyMigration(before.bytes, migration);
 		const changed = onlyPrincipalAdded(before.bytes, after);
 		const current = await journal(path);
 		if (
@@ -268,17 +237,6 @@ export async function runRuntimeLegacyMigrationCli(
 				JSON.stringify({
 					service: "agent-runtime-host",
 					code: "RUNTIME_LEGACY_MIGRATION_LOCK_CLEANUP_FAILED",
-				}),
-			);
-		}
-		try {
-			if (temporaryDirectory)
-				await rm(temporaryDirectory, { recursive: true, force: true });
-		} catch {
-			console.warn(
-				JSON.stringify({
-					service: "agent-runtime-host",
-					code: "RUNTIME_LEGACY_MIGRATION_TEMP_CLEANUP_FAILED",
 				}),
 			);
 		}

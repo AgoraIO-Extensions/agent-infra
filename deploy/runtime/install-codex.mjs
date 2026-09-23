@@ -156,7 +156,15 @@ try {
 		}
 		throw error;
 	}
-	if (previousRoot) await removeIsolatedTree(previousRoot);
+	if (previousRoot) {
+		try {
+			await removeIsolatedTree(previousRoot);
+		} catch {
+			console.warn(
+				"Codex installation committed; previous installation cleanup failed",
+			);
+		}
+	}
 } finally {
 	if (!committed) await removeIsolatedTree(stagingRoot);
 }

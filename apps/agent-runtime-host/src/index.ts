@@ -36,6 +36,10 @@ import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
 } from "./legacy-migration.js";
+import {
+	previewRuntimeLegacyMigration,
+	readRuntimeLegacyJournal,
+} from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
@@ -108,7 +112,7 @@ export async function assembleRuntimeHost(
 		binding !== "fake"
 	)
 		runtimeConfigurationInvalid();
-	if (binding !== "fake") assertRuntimeProcessProtection();
+	assertRuntimeProcessProtection();
 	const dataDirectory = required("AGENT_INFRA_RUNTIME_DATA_DIR");
 	if (
 		!isAbsolute(dataDirectory) ||
@@ -181,7 +185,12 @@ export async function assembleRuntimeHost(
 		}
 	};
 	try {
-		const store = await FileRuntimeStore.open(join(dataDirectory, "host.json"));
+		const storePath = join(dataDirectory, "host.json");
+		if (legacyMigration) {
+			const { bytes } = await readRuntimeLegacyJournal(storePath);
+			await previewRuntimeLegacyMigration(bytes, legacyMigration);
+		}
+		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
 		await legacyMigration?.apply(store);
 		const driver = configuration

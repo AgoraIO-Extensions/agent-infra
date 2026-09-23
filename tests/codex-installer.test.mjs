@@ -30,15 +30,18 @@ async function cleanFixture(path) {
 	await rm(path, { recursive: true, force: true });
 }
 
-for (const scenario of ["new", "replace", "rollback"])
+for (const scenario of ["new", "replace", "rollback", "cleanup-failure"])
 	test(
 		scenario === "rollback"
 			? "upstream installer restores the previous install when atomic swap fails"
 			: scenario === "replace"
 				? "upstream installer replaces read-only installs without touching old symlink targets"
-				: "upstream installer produces the verifier's immutable file modes",
+				: scenario === "cleanup-failure"
+					? "upstream installer preserves a committed install when backup cleanup fails"
+					: "upstream installer produces the verifier's immutable file modes",
 		async () => {
 			const failCommit = scenario === "rollback";
+			const failCleanup = scenario === "cleanup-failure";
 			const root = await mkdtemp(join(tmpdir(), "codex-installer-test-"));
 			const destination = join(root, "installed");
 			try {
@@ -77,7 +80,7 @@ for (const scenario of ["new", "replace", "rollback"])
 					join(root, "packages/agent-runtime/src/codex-release.json"),
 					JSON.stringify(manifest),
 				);
-				if (failCommit) {
+				if (failCommit || failCleanup) {
 					await mkdir(destination);
 					await writeFile(
 						join(destination, "sentinel"),
@@ -91,6 +94,13 @@ for (const scenario of ["new", "replace", "rollback"])
 					`import fs, { readFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 const originalRename = fs.rename;
+const originalReaddir = fs.readdir;
+fs.readdir = async (path, ...options) => {
+  if (${failCleanup} && path.includes(".codex-install-previous-")) {
+    throw Object.assign(new Error("injected backup cleanup failure"), { code: "EIO" });
+  }
+  return originalReaddir(path, ...options);
+};
 fs.rename = async (source, target) => {
   if (${failCommit} && source.includes(".codex-install-") && !source.includes(".codex-install-previous-") && target.endsWith("/installed")) {
     throw new Error("injected installer commit failure");
@@ -122,6 +132,16 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 					return;
 				}
 				install();
+				if (failCleanup) {
+					const backups = (await readdir(root)).filter((name) =>
+						name.startsWith(".codex-install-previous-"),
+					);
+					assert.equal(backups.length, 1);
+					assert.equal(
+						await readFile(join(root, backups[0], "sentinel"), "utf8"),
+						"keep-existing-install",
+					);
+				}
 				if (scenario === "replace") {
 					const oldInode = (await stat(destination)).ino;
 					const external = join(root, "external");
