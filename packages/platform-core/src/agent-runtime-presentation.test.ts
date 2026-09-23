@@ -92,6 +92,27 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it.each([false, true])(
+		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
+		(hasRuntime) => {
+			const input = fixture();
+			expect(
+				decideAgentRuntimePresentationV1({
+					...input,
+					facts: {
+						...input.facts,
+						configuration: {
+							...input.facts.configuration,
+							agentId: "another-agent",
+						},
+						sourceReference: "another-agent-source",
+						runtime: hasRuntime ? input.facts.runtime : null,
+					},
+				}),
+			).toEqual({ outcome: "stale" });
+		},
+	);
+
 	it("keeps administrator visibility separate from Owner authority and hides stale resources from unrelated or disabled subjects", () => {
 		const input = fixture();
 		const administrator = {

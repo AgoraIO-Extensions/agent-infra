@@ -107,6 +107,7 @@ export function decideAgentRuntimePresentationV1(input: {
 	const management = parseAgentManagementPortState(facts.management);
 	if (management.agentId !== input.agentId) return { outcome: "unavailable" };
 	if (
+		facts.configuration.agentId !== input.agentId ||
 		facts.configuration.revision !== input.expected.configurationRevision ||
 		!isDeepStrictEqual(management, input.expected.management)
 	)
