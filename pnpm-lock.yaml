@@ -340,6 +340,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.1
         version: 0.85.1(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       eventsource-parser:
         specifier: 3.1.0
         version: 3.1.0
@@ -350,6 +353,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3
+      json-schema-to-ts:
+        specifier: 3.1.1
+        version: 3.1.1
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
