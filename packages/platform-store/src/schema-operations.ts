@@ -109,7 +109,7 @@ export const taskAuthorizationRecords = platformSchema.table(
 		check("task_authorization_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
 			"task_authorization_boundary_version",
-			sql`${table.boundary}->>'schemaVersion' = '1'`,
+			sql`(${table.boundary}->>'schemaVersion' = '1') IS TRUE`,
 		),
 	],
 );
@@ -185,9 +185,17 @@ export const conversationGenerationTombstones = platformSchema.table(
 	},
 	(table) => [
 		foreignKey({
-			columns: [table.executionId],
-			foreignColumns: [conversationExecutions.executionId],
-			name: "conversation_generation_execution_fk",
+			columns: [
+				table.executionId,
+				table.conversationId,
+				table.sessionGeneration,
+			],
+			foreignColumns: [
+				conversationExecutions.executionId,
+				conversationExecutions.conversationId,
+				conversationExecutions.sessionGeneration,
+			],
+			name: "conversation_generation_execution_binding_fk",
 		}),
 		foreignKey({
 			columns: [table.controlRecordId, table.executionId],

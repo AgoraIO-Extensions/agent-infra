@@ -114,7 +114,7 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
-	it.each(["file-authority", "configuration-v2"] as const)(
+	it.each(["file-authority", "configuration-v2", "task-integrity"] as const)(
 		"upgrades the existing %s migration history without losing either schema",
 		async (history) => {
 			const database = await startPostgresTestDatabase("migration-branches");
@@ -126,7 +126,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 				const legacy =
 					history === "file-authority"
 						? migrations.slice(0, 14)
-						: migrations.slice(0, 15);
+						: history === "configuration-v2"
+							? migrations.slice(0, 15)
+							: migrations.slice(0, 20);
 				for (const migration of legacy) {
 					for (const statement of migration.sql) await client.unsafe(statement);
 					await client`insert into platform_migrations.history (hash, created_at)
@@ -574,6 +576,54 @@ describe("Platform PostgreSQL migration foundation", () => {
 		}
 	}, 120_000);
 
+	it("requires an explicit supported task authorization boundary version", async () => {
+		await builtStore.migratePlatformDatabase({ databaseUrl });
+		const client = postgres(databaseUrl, { max: 1 });
+		try {
+			await client`
+				insert into platform.conversations
+					(id, agent_id, actor_id, channel_id, status, session_generation,
+					 authorization_revision)
+				values ('boundary-conversation', 'agent-a', 'actor-a', 'web', 'ready', 1,
+					'authorization-1')
+			`;
+			await client`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, agent_id, actor_id, channel_id,
+					 turn_id, status, session_generation, authorization_revision, created_at)
+				values ('boundary-execution', 'boundary-conversation', 'agent-a', 'actor-a',
+					'web', 'boundary-turn', 'completed', 1, 'authorization-1', now())
+			`;
+			await client`
+				insert into platform.task_authorization_records (id, execution_id, boundary)
+				values ('boundary-authorization', 'boundary-execution',
+					${client.json({ schemaVersion: 1 })})
+			`;
+			for (const boundary of [
+				{},
+				{ schemaVersion: null },
+				{ schemaVersion: 2 },
+				[],
+			]) {
+				await expectConstraintFailure(
+					client`
+						update platform.task_authorization_records set boundary = ${client.json(boundary)}
+						where id = 'boundary-authorization'
+					`,
+					"task_authorization_boundary_version",
+				);
+			}
+			expect(
+				await client`
+				select boundary from platform.task_authorization_records
+				where id = 'boundary-authorization'
+			`,
+			).toEqual([{ boundary: { schemaVersion: 1 } }]);
+		} finally {
+			await client.end();
+		}
+	});
+
 	it("keeps task controls and generation tombstones bound to the original execution", async () => {
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		const client = postgres(databaseUrl, { max: 1 });
@@ -651,6 +701,22 @@ describe("Platform PostgreSQL migration foundation", () => {
 					where operation_id = 'integrity-isolation-a'
 				`,
 				"conversation_generation_control_execution_fk",
+			);
+			await expectConstraintFailure(
+				client`
+					update platform.conversation_generation_tombstones
+					set conversation_id = 'integrity-conversation-b'
+					where operation_id = 'integrity-isolation-a'
+				`,
+				"conversation_generation_execution_binding_fk",
+			);
+			await expectConstraintFailure(
+				client`
+					update platform.conversation_generation_tombstones
+					set session_generation = 2
+					where operation_id = 'integrity-isolation-a'
+				`,
+				"conversation_generation_execution_binding_fk",
 			);
 			expect(
 				await client`

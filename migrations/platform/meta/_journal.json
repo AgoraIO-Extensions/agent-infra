@@ -141,6 +141,13 @@
       "when": 1789819160039,
       "tag": "0019_trusted_task_authorization_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790156849845,
+      "tag": "0020_task_boundary_generation_binding",
+      "breakpoints": true
     }
   ]
 }

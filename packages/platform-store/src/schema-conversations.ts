@@ -187,6 +187,11 @@ export const conversationExecutions = platformSchema.table(
 			table.executionId,
 			table.conversationId,
 		),
+		uniqueIndex("conversation_execution_id_conversation_generation_unique").on(
+			table.executionId,
+			table.conversationId,
+			table.sessionGeneration,
+		),
 		uniqueIndex("conversation_active_execution_unique")
 			.on(table.conversationId)
 			.where(sql`${table.status} in ('submitted', 'processing', 'unknown')`),

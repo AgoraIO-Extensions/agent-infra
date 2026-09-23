@@ -103,11 +103,13 @@ describe("platform-store package surface", () => {
 				"dist/migrations/0017_wecom_text.sql",
 				"dist/migrations/0018_wecom_setup.sql",
 				"dist/migrations/0019_trusted_task_authorization_integrity.sql",
+				"dist/migrations/0020_task_boundary_generation_binding.sql",
 				"dist/migrations/meta/0015_snapshot.json",
 				"dist/migrations/meta/0016_snapshot.json",
 				"dist/migrations/meta/0017_snapshot.json",
 				"dist/migrations/meta/0018_snapshot.json",
 				"dist/migrations/meta/0019_snapshot.json",
+				"dist/migrations/meta/0020_snapshot.json",
 				"dist/migrations/meta/_journal.json",
 			]),
 		);
