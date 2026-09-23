@@ -3,7 +3,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	RetireSecretKeyCommandV1,
 	RotateSecretKeyCommandV1,
 	SecretKeyRotationAuditIntentV1,
@@ -236,7 +236,7 @@ async function admitPendingRecord(secretRecord: PlatformSecretRecordV1) {
 			},
 		],
 		modelConfiguration: null,
-	} as unknown as AgentConfigurationRecordV1;
+	} as unknown as AgentConfigurationRecordV2;
 	const attachments = {
 		schemaVersion: 1 as const,
 		expected: [
@@ -1095,5 +1095,23 @@ describe("PostgreSQL Secret key rotation Store", () => {
 			outcome: "failed",
 			progress: { state: "failed" },
 		});
+	});
+	it("blocks retirement of a key referenced only by channel credentials", async () => {
+		await client`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,encrypted_credential) values ('channel-rotation','agent_01','owner_01',1,'fixture',${"a".repeat(64)},now()+interval '5 minutes','verifying','{"crypto":{"wrappingKeyVersion":"channel-key"}}'::jsonb)`;
+		const command = {
+			schemaVersion: 1 as const,
+			keyVersion: "channel-key",
+			workerId: "worker_01",
+			traceId: "channel-retire",
+		};
+		const input = {
+			command,
+			activeWrappingKeyVersion: "key_02",
+			retiredAuditEvent: retirementAudit(command, "succeeded"),
+			rejectedAuditEvent: retirementAudit(command, "rejected"),
+		};
+		await expect(store.retireKey(input)).resolves.toBe("referenced");
+		await client`update platform.wecom_setup_sessions set encrypted_credential=null where session_id='channel-rotation'`;
+		await expect(store.retireKey(input)).resolves.toBe("retired");
 	});
 });

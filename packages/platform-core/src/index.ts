@@ -2,7 +2,6 @@ export type {
 	AgentConfigurationAccessAuthorityV1,
 	AgentConfigurationAccessPlanV1,
 	AgentConfigurationAccessTargetV1,
-	AgentConfigurationActionAdmissionPortV1,
 	AgentConfigurationActionV1,
 	AgentConfigurationActorContextV1,
 	AgentConfigurationAuthorityContextV1,
@@ -19,6 +18,7 @@ export type {
 	AgentConfigurationModelOptionV1,
 	AgentConfigurationModelV1,
 	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationResultV1,
 	AgentConfigurationSecretAdmissionPortV1,
 	AgentConfigurationSecretMetadataV1,
@@ -30,15 +30,22 @@ export type {
 	AgentConfigurationUseCaseOptionsV1,
 	AgentConfigurationUseCaseV1,
 	AgentConfigurationWritePlanV1,
-	UpdateAgentConfigurationCommandV1,
+	ReleaseStandardTemplateCommandV1,
+	StandardTemplateReleaseAuthorizationPortV1,
+	StandardTemplateReleaseAuthorizationV1,
+	StandardTemplateReleaseTargetV1,
+	UpdateAgentConfigurationCommandV2,
 	UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration.js";
 export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
+	parseAgentConfigurationChangesV1,
+	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
+export * from "./agent-runtime-presentation.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";
@@ -78,3 +85,4 @@ export type {
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
 export * from "./workload-reconciliation.js";
+export * from "./workload-secret-recovery.js";

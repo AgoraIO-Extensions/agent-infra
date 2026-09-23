@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import type {
 	AgentConfigurationActionV1,
 	AgentConfigurationChangedFieldV1,
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationResultV1,
 	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
@@ -170,7 +170,7 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 
 function modelConfiguration(
 	input: unknown,
-): AgentConfigurationRecordV1["modelConfiguration"] {
+): AgentConfigurationRecordV2["modelConfiguration"] {
 	if (input === null) return null;
 	const value = object(input, [
 		"catalogRevision",
@@ -262,7 +262,7 @@ function actions(input: unknown): AgentConfigurationActionV1[] {
 
 function environment(
 	input: unknown,
-): AgentConfigurationRecordV1["environment"] {
+): AgentConfigurationRecordV2["environment"] {
 	const names = new Set<string>();
 	return array(input, 128)
 		.map((entry) => {
@@ -285,7 +285,7 @@ function environment(
 		.toSorted((left, right) => compare(left.name, right.name));
 }
 
-function secrets(input: unknown): AgentConfigurationRecordV1["secrets"] {
+function secrets(input: unknown): AgentConfigurationRecordV2["secrets"] {
 	const names = new Set<string>();
 	return array(input, 128)
 		.map((entry) => {
@@ -310,7 +310,7 @@ function secrets(input: unknown): AgentConfigurationRecordV1["secrets"] {
 		.toSorted((left, right) => compare(left.name, right.name));
 }
 
-function channels(input: unknown): AgentConfigurationRecordV1["channels"] {
+function channels(input: unknown): AgentConfigurationRecordV2["channels"] {
 	const kinds = new Set<string>();
 	return array(input, 2)
 		.map((entry) => {
@@ -330,24 +330,27 @@ function channels(input: unknown): AgentConfigurationRecordV1["channels"] {
 
 export function decodeAgentConfigurationRecord(
 	input: unknown,
-): AgentConfigurationRecordV1 {
+): AgentConfigurationRecordV2 {
+	if (!input || typeof input !== "object" || Array.isArray(input)) invalid();
+	const legacy =
+		Object.getOwnPropertyDescriptor(input, "schemaVersion")?.value === 1;
 	const value = object(input, [
 		"schemaVersion",
 		"agentId",
 		"revision",
 		"source",
 		"modelConfiguration",
-		"actions",
-		"actionSetRevision",
+		...(legacy ? ["actions", "actionSetRevision"] : []),
 		"environment",
 		"secrets",
 		"channels",
 		"channelRevision",
 	]);
-	if (value.schemaVersion !== 1) invalid();
+	if (value.schemaVersion !== 1 && value.schemaVersion !== 2) invalid();
 	const parsedSource = source(value.source);
 	const parsedModel = modelConfiguration(value.modelConfiguration);
-	const parsedActions = actions(value.actions);
+	const parsedActions = legacy ? actions(value.actions) : [];
+	if (legacy) text(value.actionSetRevision);
 	const parsedEnvironment = environment(value.environment);
 	const parsedSecrets = secrets(value.secrets);
 	const parsedChannels = channels(value.channels);
@@ -373,13 +376,11 @@ export function decodeAgentConfigurationRecord(
 		invalid();
 	}
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		agentId: text(value.agentId),
 		revision: positiveInteger(value.revision),
 		source: parsedSource,
 		modelConfiguration: parsedModel,
-		actions: parsedActions,
-		actionSetRevision: text(value.actionSetRevision),
 		environment: parsedEnvironment,
 		secrets: parsedSecrets,
 		channels: parsedChannels,

@@ -2,7 +2,7 @@ import type {
 	AgentManagementStateV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
-	ReviseApplicationCommandV1,
+	ReviseApplicationCommandV2,
 } from "@agent-infra/platform-core";
 import { createApplicationRevisionUseCaseV1 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
@@ -110,9 +110,9 @@ function actor(digest = "0".repeat(64)) {
 function command(
 	key = "application-revision-01",
 	access = false,
-): ReviseApplicationCommandV1 {
+): ReviseApplicationCommandV2 {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		idempotencyKey: key,
 		requestId: "request_01",
 		traceId: "trace_01",
@@ -138,7 +138,6 @@ function command(
 		},
 		environment: [{ name: "LOG_LEVEL", value: "debug" }],
 		secrets: [{ name: "BOT_TOKEN", replace: true }],
-		actions: agentConfigurationConformanceAdmissionsV1.actions,
 		channels: [
 			{
 				kind: "wecom_bot",
@@ -149,9 +148,9 @@ function command(
 	};
 }
 
-function nameOnlyCommand(): ReviseApplicationCommandV1 {
+function nameOnlyCommand(): ReviseApplicationCommandV2 {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		idempotencyKey: "application-name-only",
 		requestId: "request_name_only",
 		traceId: "trace_name_only",
@@ -175,7 +174,6 @@ function nameOnlyCommand(): ReviseApplicationCommandV1 {
 		},
 		environment: [{ name: "LOG_LEVEL", value: "info" }],
 		secrets: [],
-		actions: [],
 		channels: [],
 	};
 }
@@ -218,7 +216,6 @@ function admissions(
 					models: agentConfigurationConformanceAdmissionsV1.models.map(
 						(model) => ({ ...model, catalogRevision: "catalog_3" }),
 					),
-					actionSetRevision: "actions_1",
 					channelRevision: "channels_1",
 				}
 			: {}),
@@ -243,7 +240,6 @@ function useCase(
 			imageAdmission: admission,
 			modelAdmission: admission,
 			secretAdmission: admission,
-			actionAdmission: admission,
 			channelAdmission: admission,
 		},
 		{ now: () => new Date(occurredAt) },
@@ -577,6 +573,60 @@ afterAll(async () => {
 describe("PostgreSQL application revision transaction", () => {
 	applicationRevisionTransactionConformance(createConformanceHarness);
 
+	it("reads an application revision without UPDATE permission on immutable configuration revisions", async () => {
+		await resetDatabase();
+		await seed();
+		await adminClient`create role application_revision_api login password 'controlled_revision_test'`;
+		let adapter: PostgresApplicationRevisionTransactionV1 | undefined;
+		try {
+			await adminClient`grant usage on schema platform to application_revision_api`;
+			await adminClient`grant select, update on platform.agents,
+				platform.agent_applications to application_revision_api`;
+			await adminClient`grant select, insert on platform.agent_configuration_revisions
+				to application_revision_api`;
+			await adminClient`grant select on platform.agent_owners,
+				platform.agent_availability, platform.idempotency_records to application_revision_api`;
+			const [permissions] = await adminClient`
+				select has_table_privilege('application_revision_api',
+					'platform.agent_configuration_revisions', 'SELECT') as can_read,
+					has_table_privilege('application_revision_api',
+						'platform.agent_configuration_revisions', 'INSERT') as can_append,
+					has_table_privilege('application_revision_api',
+						'platform.agent_configuration_revisions', 'UPDATE') as can_update
+			`;
+			expect(permissions).toEqual({
+				can_read: true,
+				can_append: true,
+				can_update: false,
+			});
+			const restrictedUrl = new URL(databaseUrl);
+			restrictedUrl.username = "application_revision_api";
+			restrictedUrl.password = "controlled_revision_test";
+			adapter = new PostgresApplicationRevisionTransactionV1({
+				databaseUrl: restrictedUrl.toString(),
+			});
+			await expect(
+				adapter.read({
+					schemaVersion: 1,
+					applicationId,
+					actorId: applicantId,
+					idempotencyKey: "restricted-revision-read",
+					requestDigest: "0".repeat(64),
+				}),
+			).resolves.toMatchObject({
+				outcome: "ready",
+				state: { configuration: { agentId, revision: 7 } },
+			});
+		} finally {
+			try {
+				await adapter?.close();
+			} finally {
+				await adminClient`drop owned by application_revision_api`;
+				await adminClient`drop role application_revision_api`;
+			}
+		}
+	});
+
 	it("atomically persists revision Secret ciphertext records", async () => {
 		await resetDatabase();
 		await seed("rejected");
@@ -838,7 +888,7 @@ describe("PostgreSQL application revision transaction", () => {
 						outboxIntent: {
 							...structuredClone(plan.configuration.outboxIntent),
 							payload: {
-								...structuredClone(plan.configuration.outboxIntent.payload),
+								...structuredClone(plan.configuration.outboxIntent?.payload),
 								plaintext: "database-secret",
 							},
 						},

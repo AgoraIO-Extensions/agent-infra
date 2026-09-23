@@ -1,11 +1,12 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
 	type AgentConfigurationAccessAuthorityV1,
-	type AgentConfigurationActionAdmissionPortV1,
 	type AgentConfigurationAuthorizationAdmissionPortV1,
 	type AgentConfigurationChannelAdmissionPortV1,
 	type AgentConfigurationImageAdmissionPortV1,
 	type AgentConfigurationModelAdmissionPortV1,
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type AgentConfigurationTransactionPortV1,
@@ -15,7 +16,7 @@ import {
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 
 export interface FakeAgentConfigurationSnapshotV1 {
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
 	readonly idempotencyCount: number;
@@ -33,7 +34,7 @@ export interface FakeAgentConfigurationTransactionOptionsV1 {
 export class FakeAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
 {
-	#configuration: AgentConfigurationRecordV1;
+	#configuration: AgentConfigurationRecordV2;
 	#commitCount = 0;
 	#lastPlan: AgentConfigurationWritePlanV1 | null = null;
 	#failCommit = false;
@@ -48,7 +49,7 @@ export class FakeAgentConfigurationTransactionV1
 	>();
 
 	constructor(
-		configuration: AgentConfigurationRecordV1,
+		configuration: AgentConfigurationRecordV2,
 		options: FakeAgentConfigurationTransactionOptionsV1 = {},
 	) {
 		this.#configuration = structuredClone(configuration);
@@ -112,13 +113,18 @@ export class FakeAgentConfigurationTransactionV1
 			plan.agentId !== this.#configuration.agentId ||
 			plan.baseRevision !== this.#configuration.revision ||
 			plan.expectedAuthorizationRevision !== this.#authorizationRevision ||
-			(plan.accessUpdate !== null &&
+			(plan.expectedManagementRevision !== null &&
 				(this.#managementState === null ||
 					this.#managementState.agentId !== plan.agentId ||
-					this.#managementState.revision !==
-						plan.accessUpdate.expectedRevision))
+					this.#managementState.revision !== plan.expectedManagementRevision))
 		) {
 			return { outcome: "stale" };
+		}
+		if (
+			plan.nextRevision === plan.baseRevision &&
+			!isDeepStrictEqual(plan.configuration, this.#configuration)
+		) {
+			throw new Error("Access update cannot change the runtime configuration");
 		}
 		const configuration = structuredClone(plan.configuration);
 		const lastPlan = structuredClone(plan);
@@ -147,7 +153,7 @@ export class FakeAgentConfigurationTransactionV1
 		this.#lastPlan = lastPlan;
 		this.#idempotency = idempotency;
 		this.#commitCount += 1;
-		this.#outboxCount += 1;
+		if (plan.outboxIntent !== null) this.#outboxCount += 1;
 		this.#auditCount += 1;
 		return { outcome: "committed", result: structuredClone(plan.result) };
 	}
@@ -216,12 +222,6 @@ export interface FakeAgentConfigurationAdmissionsOptionsV1 {
 		readonly secretId: string;
 		readonly version: number;
 	}[];
-	readonly actions?: readonly {
-		readonly providerId: string;
-		readonly actionId: string;
-		readonly actionVersion: string;
-	}[];
-	readonly actionSetRevision?: string;
 	readonly channelBindings?: readonly {
 		readonly kind: "wecom_bot" | "wecom_app";
 		readonly bindingReference: string;
@@ -231,14 +231,13 @@ export interface FakeAgentConfigurationAdmissionsOptionsV1 {
 		readonly selection: Parameters<
 			AgentConfigurationImageAdmissionPortV1["admitImage"]
 		>[0]["requested"];
-		readonly source: AgentConfigurationRecordV1["source"];
+		readonly source: AgentConfigurationRecordV2["source"];
 	}[];
 	readonly mismatchedAdmission?:
 		| "authorization"
 		| "image"
 		| "model"
 		| "secret"
-		| "action"
 		| "channel";
 	readonly mismatchedAgentId?: string;
 }
@@ -249,7 +248,6 @@ export class FakeAgentConfigurationAdmissionsV1
 		AgentConfigurationImageAdmissionPortV1,
 		AgentConfigurationModelAdmissionPortV1,
 		AgentConfigurationSecretAdmissionPortV1,
-		AgentConfigurationActionAdmissionPortV1,
 		AgentConfigurationChannelAdmissionPortV1
 {
 	readonly #options: FakeAgentConfigurationAdmissionsOptionsV1;
@@ -401,40 +399,6 @@ export class FakeAgentConfigurationAdmissionsV1
 			agentId: this.#resultAgentId("secret", input.agentId),
 			requestId: input.requestId,
 			secrets,
-		};
-	}
-
-	async admitActions(
-		input: Parameters<
-			AgentConfigurationActionAdmissionPortV1["admitActions"]
-		>[0],
-	): ReturnType<AgentConfigurationActionAdmissionPortV1["admitActions"]> {
-		const allowed = this.#options.actions ?? [];
-		if (
-			input.requested.some(
-				(requested) =>
-					!allowed.some(
-						(candidate) =>
-							candidate.providerId === requested.providerId &&
-							candidate.actionId === requested.actionId &&
-							candidate.actionVersion === requested.actionVersion,
-					),
-			)
-		) {
-			return {
-				schemaVersion: 1,
-				status: "rejected",
-				agentId: this.#resultAgentId("action", input.agentId),
-				requestId: input.requestId,
-			};
-		}
-		return {
-			schemaVersion: 1,
-			status: "admitted",
-			agentId: this.#resultAgentId("action", input.agentId),
-			requestId: input.requestId,
-			actionSetRevision: this.#options.actionSetRevision ?? "actions_1",
-			actions: structuredClone(input.requested),
 		};
 	}
 

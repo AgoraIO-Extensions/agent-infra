@@ -3,7 +3,7 @@ import { types } from "node:util";
 
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "@agent-infra/platform-core";
@@ -129,7 +129,7 @@ function configurationReferenceKey(input: {
 }
 
 function configurationReferenceKeys(
-	configuration: AgentConfigurationRecordV1,
+	configuration: AgentConfigurationRecordV2,
 ): ReadonlySet<string> {
 	const references = [
 		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
@@ -168,8 +168,8 @@ function configurationReferenceKeys(
 export async function insertPendingSecretRecordAttachments(
 	transaction: Transaction,
 	attachments: PendingSecretRecordAttachmentsV1 | undefined,
-	configuration: AgentConfigurationRecordV1,
-	previousConfiguration?: AgentConfigurationRecordV1,
+	configuration: AgentConfigurationRecordV2,
+	previousConfiguration?: AgentConfigurationRecordV2,
 ): Promise<void> {
 	try {
 		const configurationReferences = configurationReferenceKeys(configuration);
