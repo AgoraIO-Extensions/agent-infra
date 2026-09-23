@@ -845,7 +845,7 @@ pin。真实 target 产物、built-ins 正向能力、隔离、故障与恢复�
 
 ### 10.12 Builder 与平台受控镜像构建
 
-Builder 是现有对话式 Web 中的一个受授权任务能力，复用 Platform 的 IdentityContext、Agent 可用范围、Conversation/Execution、审计和部署状态；M1 不新增独立 Builder 生成 API。API 仍只提供普通非对话 Agent 创建和管理能力。Builder 读取或修改 Repo 必须经现有 Connection 授权，使用隔离分支和独立临时工作区，不接受调用方粘贴的 Token，也不能直接写入受保护分支。代码变更须可查看、可审计并提交 PR，但 PR 与构建/推送是独立链路，构建不等待 PR 合并。
+Builder 是现有对话式 Web 中的一个受授权任务能力，复用 Platform 的 IdentityContext、Agent 可用范围、Conversation/Execution、审计和部署状态；M1 不新增独立 Builder 生成 API。API 仍只提供普通非对话 Agent 创建和管理能力。Builder 读取或修改 Repo 必须经现有 Connection 授权，使用隔离分支和独立临时工作区，不接受调用方粘贴的 Token，也不能直接写入受保护分支。源码构建前，Builder 通过 Connection 将变更 push 到远端分支并创建 PR，构建使用该 PR 的 head commit，不等待 PR 合并；平台不自动合并 PR。
 
 Builder 可以生成或修改 Dockerfile、构建定义以及受平台约束的 System Manifest/Helm 部署。多服务系统在 Platform DB 中仍表示为一个 Agent 管理对象；每个服务的镜像、Service 和部署描述属于该 Agent 的同一版本。平台不创建多 Agent 生命周期，也不为多服务切换提供分布式原子性。数据库迁移、持久业务数据兼容和恢复由系统部署流程与 System Owner 负责，Builder 可以分析、提示或阻断高风险发布，但不自动回退或恢复业务数据。
 
@@ -855,12 +855,12 @@ BuildServiceAdapter 至少提供以下语义：
 - 按部署目标 ACK 的 Linux OCI 与节点架构构建；目标架构无法产出或验证时失败。GPU、Windows、特定内核和特权运行要求在 M1 中明确不支持。
 - 允许受平台网络策略约束的公网依赖下载；不提供私有依赖凭证注入。构建所需私有凭证不可用时失败并说明原因，不能向用户索取粘贴 Token。
 - 强制禁止宿主 Docker socket、`privileged`、`hostNetwork`、`hostPath`、Kubernetes API 和内核模块；不得为使构建成功自动放宽隔离。任务超过平台时间、CPU、内存或磁盘上限时终止，不自动申请更高资源。
-- 平台负责 Registry 推送和部署拉取权限。镜像仓库统一位于 `agent-infra` 项目，命名为 `agent-infra/<agent-name>/<service-name>`；任务只有在所有服务镜像构建、推送并取得不可变 Digest 后才可提交 Agent 创建。非研发用户不需要 Harbor/OCI Registry 账号、仓库管理权限或 `imagePullSecret`。
+- 受控 Build Service 负责 Registry 推送和部署拉取权限。M1 的部署实现可以复用已接入 Connection 的统一参数化 Jenkins CI Job：Jenkins 执行器负责实际构建和推送，Platform Worker 通过 Connection 轮询队列与构建状态，不依赖回调。镜像仓库统一位于 `agent-infra` 项目，命名为 `agent-infra/<agent-name>/<service-name>`；任务只有在所有服务镜像构建、推送并取得不可变 Digest 后才进入待发布，用户确认后才提交 Agent 创建。非研发用户不需要 Harbor/OCI Registry 账号、仓库管理权限或 `imagePullSecret`。
 - Builder 可临时安装工具或依赖，但最终镜像必须包含自身运行时依赖。未完成镜像和中间产物不得进入 Agent 版本；跨 Registry 复制私有镜像不属于 M1 P0。
 
 Builder 在构建前根据 Repo、构建定义、声明依赖、网络/环境约束和 ACK 政策进行可部署性预检，部署启动后执行真实能力检查。预检发现必需或核心能力不可用时阻断发布；可选能力缺失只能在明确展示限制并获得用户确认后降级发布；无法判断核心性的能力必须说明不确定并取得确认。静态分析、healthz 或 mock 不能单独证明能力可用；无法部署或证据不足时返回如实的自然语言限制说明，不发布未就绪系统。
 
-BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败和取消，并持久保存输入摘要、源码版本、构建后端版本、目标架构、镜像 Digest、脱敏日志摘要和错误/取消原因。凭证和敏感内容不得进入日志、错误、Trace 或审计正文。取消必须终止任务、清理临时资源及未完成产物，并阻止后续 Agent 创建。
+BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败、取消和待确认，并持久保存输入摘要、Repo/ref/commit、PR、构建后端 Job/Build 标识、目标架构、镜像 Digest、Agent 版本、脱敏日志摘要和错误/取消原因。Jenkins 暂时不可达或状态未知时不得盲目重复触发；新的构建尝试由 Builder 或用户决定，并作为独立尝试审计。凭证和敏感内容不得进入日志、错误、Trace 或审计正文。取消必须终止任务、清理临时资源及未完成产物，并阻止后续 Agent 创建。构建失败且无法修复时，Builder 可以转入平台已纳管模板或已有 `image@digest` 的部署路径。
 
 成功结果形成不可变 Agent/系统版本；发布需要用户确认，Platform DB 保留当前运行版本与版本历史，升级和回滚复用既有 Agent 生命周期。合并受保护分支和正式生产发布仍需现有相应授权主体明确确认。签名、扫描和 Registry 准入沿用部署政策，不在 BuildServiceAdapter 外新增 Builder 审批流程。当前真实构建、OCI 导出/Digest 及 Registry push 尚待验证；本 Spec 不将某个具体构建器、rootless 实现或探针结果视为已验收事实。
 
@@ -1408,7 +1408,7 @@ PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
 13. 四模板有真实模型/工具观测与任务关联，采集缺失和故障如实呈现；运行后端覆盖服务/任务/依赖并验证告警，恢复不重复计数。
 14. 审计 API 与基础管理页完整覆盖治理、执行和 Eval；必要审计与状态可靠保存，外部意图先记录，查询故障不显示空结果，记录不随 Trace 采样丢失。
 15. 固定集基线/候选真实对比，支持规则/人工/模型评分、逐例分析、复核和新版本再跑；分母/覆盖/评分故障及独立反馈可见，Eval 用途授权与数据生命周期有正负向验证。
-16. Builder 仅通过现有对话式 Web 和 Connection 授权工作；构建任务具备独立工作区、资源/网络/隔离上限、目标 ACK 架构约束、脱敏审计和取消清理语义。所有服务镜像成功推送并取得不可变 Digest 后才创建 Agent；核心能力缺失阻断发布，可选或不确定能力按用户确认规则处理，真实构建与 Registry push 证据齐全后才能宣称验收。
+16. Builder 仅通过现有对话式 Web 和 Connection 授权工作；源码构建前将变更 push 到远端分支并创建 PR，构建使用 PR head 且不等待合并。构建任务具备独立工作区、资源/网络/隔离上限、目标 ACK 架构约束、脱敏审计和取消清理语义。所有服务镜像成功推送并取得不可变 Digest 后进入待发布，用户确认后才创建 Agent；核心能力缺失阻断发布，可选或不确定能力按用户确认规则处理，真实构建与 Registry push 证据齐全后才能宣称验收。
 
 ## 25. 评审结论记录
 

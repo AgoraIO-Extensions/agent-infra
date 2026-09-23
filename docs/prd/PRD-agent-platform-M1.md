@@ -149,13 +149,13 @@ M1 的 Base Image 不要求预集成身份、消息、Connection 或其他平台
 ### 5.7 Builder 与受控镜像构建
 
 - M1 通过现有对话式 Web 提供 Builder。Builder 复用现有对话、任务、身份、授权、审计和部署逻辑；M1 不提供独立的 Builder 生成 API，管理 API 的创建能力与普通非对话创建表单一致。
-- Builder 读取或修改 Repo 时只能通过现有 Connection 授权，在隔离分支和临时工作区中执行，不接受用户粘贴的 Token，也不能直接写入受保护分支。源码变更必须可查看、可审计并提交 PR；PR 与镜像构建、推送是独立链路，PR 不是构建或推送的前置条件。
+- Builder 读取或修改 Repo 时只能通过现有 Connection 授权，在隔离分支和临时工作区中执行，不接受用户粘贴的 Token，也不能直接写入受保护分支。源码构建前，Builder 通过 Connection 将修改 push 到远端分支并创建 PR；构建使用该 PR 的 head commit，不等待合并。PR 的创建、评审和合并与镜像发布保持独立，平台不自动合并 PR。
 - Builder 可以生成或修改 Dockerfile、构建定义及受平台约束的 System Manifest/Helm 部署。复杂的多服务系统在产品层仍是一个 Agent 管理对象，沿用现有版本、升级、回滚、失败和重试语义；不新增多 Agent 生命周期，也不承诺多服务切换具有分布式原子性。数据库迁移、持久业务数据兼容和恢复由系统及 System Owner 负责，平台不承诺自动回退或恢复业务数据。
 - 发布前 Builder 根据 Repo、构建定义、声明依赖、网络和环境约束以及 ACK 政策评估可部署性；启动后继续进行真实能力检查。缺失必需或核心能力时阻断发布；缺失可选能力时，只有在明确展示限制并获得用户确认后才允许降级发布；无法判断核心性时必须说明不确定并获得确认。不能部署或证据不足时必须如实拒绝，不能把 mock、静态分析或 healthz 当作部署成功。
-- 平台只提供受控 Build Service，不在本 PRD 固定具体构建后端。所有服务镜像均构建成功、推送成功并取得不可变 Digest 后，才进入 Agent 创建；任一服务失败时不创建 Agent，只保留 Builder 任务、脱敏日志和错误证据。已创建 Agent 的 ACK 启动或能力验证失败沿用“创建失败”和重试逻辑。
+- 平台只提供受控 Build Service，不要求在 ACK 或 HCI 运行平台内执行 Docker build。M1 的部署实现可以复用已接入 Connection 的统一参数化 Jenkins CI Job：Job 在受控执行器上构建、推送并返回状态，Platform Worker 通过 Connection 轮询队列和构建结果，不依赖回调。所有服务镜像均构建成功、推送成功并取得不可变 Digest 后，才进入“待发布”；用户确认后才创建 Agent。任一服务失败或取消时不创建 Agent，只保留 Builder 任务、PR、脱敏日志和错误证据；无法修复时可改用平台已纳管的模板或已有镜像。
 - Registry 统一使用 `agent-infra` 项目；单服务使用 `agent-infra/<agent-name>/<service-name>`，平台保存版本和不可变 Digest。非研发用户不需要 Harbor/OCI Registry 账号、仓库管理权限或 `imagePullSecret` 配置。跨 Registry 复制私有镜像不属于本轮 P0；保留平台可访问的预设/已纳管镜像和授权代码构建路径。
 - 每个构建任务使用独立临时工作区；任务完成或取消后清理源码、运行时依赖、缓存和未完成产物，禁止跨用户或跨 Agent 复用。Builder 可以临时安装工具或依赖，但最终镜像必须包含自身运行所需依赖，不能把 Builder 环境冒充部署产物。允许受平台网络策略约束的公网依赖下载；M1 不提供私有依赖凭证注入，所需凭证不可用时说明原因并失败，不向用户索取粘贴 Token。
-- 构建不得使用宿主 Docker socket、`privileged`、`hostNetwork`、`hostPath`、Kubernetes API 或内核模块，也不能为使项目成功而自动放宽隔离。超过平台时间、CPU、内存或磁盘上限时终止并解释，Builder 不自动申请更高资源。构建日志仅展示实时或最终脱敏摘要，凭证和敏感内容不进入日志；输入摘要、源码版本、构建后端版本、镜像 Digest 和失败/取消结果进入审计。
+- 构建不得使用宿主 Docker socket、`privileged`、`hostNetwork`、`hostPath`、Kubernetes API 或内核模块，也不能为使项目成功而自动放宽隔离。超过平台时间、CPU、内存或磁盘上限时终止并解释，Builder 不自动申请更高资源。构建日志仅展示实时或最终脱敏摘要，凭证和敏感内容不进入日志；输入摘要、Repo/ref/commit、PR、构建后端 Job/Build 标识、镜像 Digest、Agent 版本和失败/取消结果进入审计。Jenkins 暂时不可达或状态未知时不得盲目重复触发，保留“待确认”状态，由 Builder 或用户决定是否发起新的构建尝试。
 - M1 只承诺目标 ACK 支持的 Linux OCI 镜像。GPU、Windows、特定内核、特权运行等要求明确不支持；构建必须匹配并验证 ACK 节点目标架构，无法产出目标架构镜像时失败。用户取消时终止任务、清理临时资源和未完成产物，不继续创建 Agent。
 - 成功的 Builder 结果形成不可变 Agent/系统版本。发布需要用户确认，平台保留运行版本与版本历史并支持后续升级和回滚；合并受保护分支和正式生产发布仍需具备既有授权的用户或组织主体明确确认。真实构建、OCI 导出/Digest 及 Registry push 在当前文档更新时尚待验证，不将某个具体构建器或已跑通的探针写成验收事实。
 
