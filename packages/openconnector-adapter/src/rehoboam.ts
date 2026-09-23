@@ -9,14 +9,14 @@ const apiOrigin = "https://justinia.gz3.agoralab.co";
 const credentialScope = "rehoboam.read";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
-const providerReleaseId = "rehoboam-connection-v1";
+const providerReleaseId = "rehoboam-connection-v2";
 
 export const rehoboamConnectionCatalog = {
 	actions: [
 		{
 			description: "获取当前通过 Rehoboam 个人 Token 鉴权的用户。",
 			effect: "READ" as const,
-			id: "rehoboam.get_current_user@v1",
+			id: "rehoboam.get_current_user@v2",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},

@@ -16,7 +16,7 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 test("Rehoboam catalog exposes one bounded read action", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
-		["rehoboam.get_current_user@v1"],
+		["rehoboam.get_current_user@v2"],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
 });
