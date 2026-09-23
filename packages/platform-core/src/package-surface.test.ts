@@ -61,15 +61,22 @@ describe("platform-core package surface", () => {
 			"createSecretActivationUseCaseV1",
 			"createSecretKeyRotationUseCaseV1",
 			"createWorkloadReconciliationV1",
+			"decideAgentRuntimePresentationV1",
 			"immutableSecretNameV1",
+			"isAgentAccessAllowedV1",
+			"isAgentOwnerV1",
+			"isAgentRuntimePresentationVisibleV1",
 			"isConfirmedResultFileV1",
+			"parseAgentConfigurationChangesV1",
 			"parseConversationPersistedEventPayloadV1",
+			"parseStandardTemplateReleaseTargetV1",
 			"platformIdempotencyV1",
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",
 			"resolveFileLimitsV1",
 			"snapshotAgentConfigurationWritePlanV1",
 			"snapshotAgentManagementWritePlanV1",
+			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
 			"workloadManagementObservationV1",
@@ -110,9 +117,9 @@ describe("platform-core package surface", () => {
 		expect(surface).not.toHaveProperty("decideAgentAccessUpdatePolicy");
 		expect(
 			Object.keys(surface.createApplicationFoundationUseCaseV1({})),
-		).toEqual(["submit"]);
+		).toEqual(["submit", "replayLegacyV1"]);
 		expect(Object.keys(surface.createApplicationRevisionUseCaseV1({}))).toEqual(
-			["revise"],
+			["revise", "replayLegacyV1"],
 		);
 
 		const pack = JSON.parse(

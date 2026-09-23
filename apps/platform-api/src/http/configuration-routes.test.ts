@@ -126,7 +126,7 @@ describe("configuration routes", () => {
 			Record<string, unknown>,
 		];
 		expect(command).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			agentId: "agent-1",
 			idempotencyKey: "configuration-1",
 			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
