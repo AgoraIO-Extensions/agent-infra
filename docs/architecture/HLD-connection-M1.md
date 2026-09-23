@@ -138,10 +138,10 @@ Connection/Grant 同样不自动获得该新增 Action。
 
 Rehoboam 的首个 **[设计决策]** Provider profile 固定为
 `https://justinia.gz3.agoralab.co`。Kong `key-auth` 使用部署级 `apiKey` 放行机器请求，用户个人
-用户在 Rehoboam Security 创建带 `read` scope 的 Personal Access Token；Connection 只把该 PAT 作为
+用户在 Rehoboam Security 创建 Personal Access Token；每枚 PAT 隐含 `metadata:read`，Connection 只把该 PAT 作为
 provider-specific encrypted credential 保存，不接收 Rehoboam 密码。机器 `apiKey` 与
 个人 Token 不得进入同一 credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志或 Action 结果。identity proof 固定为
-`GET /api/connection/whoami`，由 Rehoboam PAT 服务解析 owner、scope、过期与撤销状态，仅返回
+`GET /api/connection/whoami`，由 Rehoboam PAT 服务解析 owner、`metadata:read`、过期与撤销状态，仅返回
 `user_id`、`username` 和 `role`。PAT 模式发布 `rehoboam-connection-v3` 与
 `rehoboam.get_current_user@v3` READ Action，不修改 immutable v1/v2 catalog；不允许调用方提交
 URL、路径、Header、用户身份或任意 Rehoboam

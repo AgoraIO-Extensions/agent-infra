@@ -6,7 +6,7 @@ import type {
 import { rehoboamExecutorDigest } from "./rehoboam-integrity.ts";
 
 const apiOrigin = "https://justinia.gz3.agoralab.co";
-const credentialScope = "rehoboam.read";
+const credentialScope = "rehoboam.metadata.read";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
 const providerReleaseId = "rehoboam-connection-v3";

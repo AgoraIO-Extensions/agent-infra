@@ -46,6 +46,7 @@ test("Rehoboam validates a scoped personal access token", async () => {
 	assert.equal(identity.externalAccount, "user-1");
 	assert.equal(identity.displayName, "user@example.com");
 	assert.equal(identity.accessToken, "personal-pat");
+	assert.deepEqual(identity.grantedScopes, ["rehoboam.metadata.read"]);
 	assert.equal(JSON.stringify(identity).includes("machine-key"), false);
 });
 
