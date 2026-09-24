@@ -1,11 +1,41 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DeploymentConfigurationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 
-import { AgentApplicationForm } from "./agent-application-form.js";
-import { pendingApplication } from "./test-fixtures.js";
+import { AgentApplicationForm as AgentApplicationFormView } from "./agent-application-form.js";
+import {
+	deploymentConfiguration,
+	pendingApplication,
+} from "./test-fixtures.js";
 
 afterEach(cleanup);
+
+type FormTestProps<T> = T extends unknown
+	? Omit<T, "deploymentConfiguration"> & {
+			deploymentConfiguration?: DeploymentConfigurationProjectionV2;
+		}
+	: never;
+
+function AgentApplicationForm(
+	props: FormTestProps<Parameters<typeof AgentApplicationFormView>[0]>,
+) {
+	return (
+		<AgentApplicationFormView
+			deploymentConfiguration={deploymentConfiguration}
+			{...props}
+		/>
+	);
+}
+
+function choose(label: string, option: string) {
+	fireEvent.click(screen.getByRole("combobox", { name: label }));
+	fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
+function check(label: string) {
+	fireEvent.click(screen.getByRole("checkbox", { name: label }));
+}
 
 describe("AgentApplicationForm", () => {
 	it("shows required model fields for a standard-template application", () => {
@@ -24,12 +54,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
-			target: { value: "codex" },
-		});
-		expect(
-			(screen.getByLabelText("模型选项 ID") as HTMLInputElement).required,
-		).toBe(true);
+		choose("标准模板 ID", "Codex");
 		expect(
 			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
 		).toBe(true);
@@ -54,27 +79,13 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
-			target: { value: "codex" },
-		});
-		fireEvent.change(screen.getByLabelText("模型选项 ID"), {
-			target: { value: "model-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("获准端点 ID"), {
-			target: { value: "endpoint-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("模型 ID"), {
-			target: { value: "gpt-5" },
-		});
-		fireEvent.change(screen.getByLabelText("允许的推理档位"), {
-			target: { value: "medium" },
-		});
-		fireEvent.change(screen.getByLabelText("默认模型选项 ID"), {
-			target: { value: "model-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("默认推理档位"), {
-			target: { value: "medium" },
-		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		check("medium");
+		check("high");
+		choose("默认模型", "Primary endpoint · gpt-5");
+		choose("默认推理档位", "medium");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
@@ -189,9 +200,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(await screen.findByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
-		fireEvent.click(
-			screen.getByRole("combobox", { name: "入口身份校验" }),
-		);
+		fireEvent.click(screen.getByRole("combobox", { name: "入口身份校验" }));
 		const identityOption = await screen.findByRole("option", {
 			name: "由自有入口校验",
 		});
@@ -227,9 +236,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
-			target: { value: "codex" },
-		});
+		choose("标准模板 ID", "Codex");
 		fireEvent.change(screen.getByLabelText("共同 Owner 用户 ID"), {
 			target: { value: "owner-2\nowner-3" },
 		});
@@ -241,40 +248,24 @@ describe("AgentApplicationForm", () => {
 		});
 		expect(screen.queryByRole("button", { name: "Add action" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
-		fireEvent.change(screen.getByLabelText("变量名称"), {
-			target: { value: "LOG_LEVEL" },
-		});
+		choose("变量名称", "LOG_LEVEL");
 		fireEvent.change(screen.getByLabelText("变量值"), {
 			target: { value: "debug" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret 名称"), {
-			target: { value: "MODEL_API_KEY" },
-		});
+		choose("Secret 名称", "MODEL_API_KEY");
 		fireEvent.change(screen.getByLabelText("替换值"), {
 			target: { value: "never-echo" },
 		});
-		fireEvent.change(screen.getByLabelText("模型选项 ID"), {
-			target: { value: "model-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("获准端点 ID"), {
-			target: { value: "endpoint-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("模型 ID"), {
-			target: { value: "gpt-5" },
-		});
-		fireEvent.change(screen.getByLabelText("允许的推理档位"), {
-			target: { value: "medium\nhigh" },
-		});
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		check("medium");
+		check("high");
 		fireEvent.change(screen.getByLabelText("模型凭证"), {
 			target: { value: "never-echo-model" },
 		});
-		fireEvent.change(screen.getByLabelText("默认模型选项 ID"), {
-			target: { value: "model-primary" },
-		});
-		fireEvent.change(screen.getByLabelText("默认推理档位"), {
-			target: { value: "medium" },
-		});
+		choose("默认模型", "Primary endpoint · gpt-5");
+		choose("默认推理档位", "medium");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
@@ -293,14 +284,14 @@ describe("AgentApplicationForm", () => {
 			modelConfiguration: {
 				options: [
 					{
-						optionId: "model-primary",
+						optionId: "endpoint-primary:gpt-5",
 						endpointId: "endpoint-primary",
 						modelId: "gpt-5",
 						reasoningLevels: ["medium", "high"],
 						credentialValue: "never-echo-model",
 					},
 				],
-				defaultOptionId: "model-primary",
+				defaultOptionId: "endpoint-primary:gpt-5",
 				defaultReasoningLevel: "medium",
 			},
 		});
@@ -322,18 +313,115 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("标准模板 ID"), {
-			target: { value: "codex" },
-		});
+		choose("标准模板 ID", "Codex");
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
-		fireEvent.change(screen.getByLabelText("变量名称"), {
-			target: { value: "github" },
-		});
+		choose("变量名称", "LOG_LEVEL");
 		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
 			true,
 		);
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("blocks an empty deployment catalog with a recoverable message", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "empty",
+					templates: [],
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "empty",
+						endpoints: [],
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByRole("status").textContent).toContain(
+			"没有可用的标准模板",
+		);
+		expect(
+			screen.getByRole("combobox", { name: "标准模板 ID" }),
+		).toHaveProperty("disabled", true);
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("marks a removed existing template instead of submitting it", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			source: { kind: "standard", templateId: "removed-template" },
+			status: "rejected",
+			decision: { decidedAt: "2026-09-04T00:00:00Z", reason: "Removed" },
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="resubmit"
+				deploymentConfiguration={deploymentConfiguration}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByRole("status").textContent).toContain("已移除");
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("blocks an unavailable model catalog without duplicate submission", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "unavailable",
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "unavailable",
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByRole("status").textContent).toContain("暂不可用");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("marks a stale deployment projection before submission", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "stale",
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "stale",
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByRole("status").textContent).toContain("过期");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 

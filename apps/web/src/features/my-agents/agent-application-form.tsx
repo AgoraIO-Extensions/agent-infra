@@ -17,6 +17,8 @@ import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
 	AgentApplicationUpdateRequestV2Writable,
+	DeploymentConfigurationProjectionV2,
+	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type AgentApplicationEnvironmentDraft,
@@ -34,12 +36,14 @@ import {
 type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 	| {
 			mode: "create";
+			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			submitting: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
+			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			submitting: boolean;
@@ -50,6 +54,7 @@ type DraftField<T extends string> = {
 	key: T;
 	label: string;
 	multiline?: boolean;
+	options?: readonly { value: string; label: string; disabled?: boolean }[];
 	required?: boolean;
 	type?: "password" | "text";
 };
@@ -78,6 +83,178 @@ function blankModel(): AgentApplicationModelDraft {
 	};
 }
 
+function optionIdFor(endpointId: string, modelId: string) {
+	return `${endpointId}:${modelId}`;
+}
+
+function modelLabel(
+	endpoint: DeploymentModelEndpointProjectionV2,
+	modelId: string,
+) {
+	return `${endpoint.displayName} · ${modelId}`;
+}
+
+function templateFor(
+	configuration: DeploymentConfigurationProjectionV2,
+	templateId: string,
+) {
+	return configuration.templates.find(
+		(template) => template.templateId === templateId,
+	);
+}
+
+function ModelRows({
+	models,
+	endpoints,
+	requiresReplacementCredential,
+	onChange,
+	onRemove,
+}: {
+	models: readonly AgentApplicationModelDraft[];
+	endpoints: readonly DeploymentModelEndpointProjectionV2[];
+	requiresReplacementCredential: boolean;
+	onChange: (
+		index: number,
+		key: keyof AgentApplicationModelDraft,
+		value: string,
+	) => void;
+	onRemove: (index: number) => void;
+}) {
+	return (
+		<>
+			{models.map((model, index) => {
+				const endpoint = endpoints.find(
+					(item) => item.endpointId === model.endpointId,
+				);
+				const selectedModel = endpoint?.models.find(
+					(item) => item.modelId === model.modelId,
+				);
+				const modelOptions =
+					endpoint?.models.map((item) => ({
+						value: item.modelId,
+						label: item.modelId,
+					})) ?? [];
+				return (
+					<fieldset
+						className="grid min-w-0 gap-3 sm:grid-cols-2"
+						key={`model-${index}`}
+					>
+						<legend className="mb-3 font-medium">模型选项 {index + 1}</legend>
+						<div className="space-y-2">
+							<Label htmlFor={`application-model-option-endpoint-${index}`}>
+								模型端点
+							</Label>
+							<Select
+								value={model.endpointId}
+								disabled={endpoints.length === 0}
+								onValueChange={(value) =>
+									value && onChange(index, "endpointId", value)
+								}
+							>
+								<SelectTrigger
+									id={`application-model-option-endpoint-${index}`}
+									className="h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="选择模型端点" />
+								</SelectTrigger>
+								<SelectContent>
+									{endpoints.map((item) => (
+										<SelectItem key={item.endpointId} value={item.endpointId}>
+											{item.displayName}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor={`application-model-option-model-${index}`}>
+								模型
+							</Label>
+							<Select
+								value={model.modelId}
+								disabled={modelOptions.length === 0}
+								onValueChange={(value) =>
+									value && onChange(index, "modelId", value)
+								}
+							>
+								<SelectTrigger
+									id={`application-model-option-model-${index}`}
+									className="h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue placeholder="选择模型" />
+								</SelectTrigger>
+								<SelectContent>
+									{modelOptions.map((item) => (
+										<SelectItem key={item.value} value={item.value}>
+											{item.label}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-2">
+							<Label>允许的推理档位</Label>
+							<div className="flex min-h-11 flex-wrap items-center gap-4">
+								{(selectedModel?.reasoningLevels ?? []).map((level) => {
+									const selected = model.reasoningLevels
+										.split("\n")
+										.includes(level);
+									return (
+										<Label className="min-h-8 gap-2" key={level}>
+											<Checkbox
+												checked={selected}
+												onCheckedChange={(checked) => {
+													const levels = new Set(
+														model.reasoningLevels.split("\n").filter(Boolean),
+													);
+													if (checked) levels.add(level);
+													else levels.delete(level);
+													onChange(
+														index,
+														"reasoningLevels",
+														[...levels].join("\n"),
+													);
+												}}
+											/>
+											{level}
+										</Label>
+									);
+								})}
+							</div>
+						</div>
+						<div className="space-y-2">
+							<Label htmlFor={`application-model-option-credential-${index}`}>
+								模型凭证
+							</Label>
+							<Input
+								autoComplete="new-password"
+								id={`application-model-option-credential-${index}`}
+								onChange={(event) =>
+									onChange(index, "credentialValue", event.target.value)
+								}
+								required={requiresReplacementCredential}
+								type="password"
+								value={model.credentialValue}
+							/>
+						</div>
+						{models.length > 1 ? (
+							<Button
+								variant="outline"
+								className="self-end"
+								onClick={() => onRemove(index)}
+								type="button"
+							>
+								<Trash2Icon aria-hidden="true" data-icon="inline-start" />
+								移除模型选项
+							</Button>
+						) : null}
+					</fieldset>
+				);
+			})}
+		</>
+	);
+}
+
 function DraftRows<T extends string>({
 	fields,
 	idPrefix,
@@ -102,7 +279,33 @@ function DraftRows<T extends string>({
 							<Label htmlFor={`application-${idPrefix}-${field.key}-${index}`}>
 								{field.label}
 							</Label>
-							{field.multiline ? (
+							{field.options ? (
+								<Select
+									disabled={field.options.length === 0}
+									value={row[field.key]}
+									onValueChange={(value) =>
+										value && onChange(index, field.key, value)
+									}
+								>
+									<SelectTrigger
+										id={`application-${idPrefix}-${field.key}-${index}`}
+										className="h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="选择一项" />
+									</SelectTrigger>
+									<SelectContent>
+										{field.options.map((option) => (
+											<SelectItem
+												key={option.value}
+												value={option.value}
+												disabled={option.disabled}
+											>
+												{option.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							) : field.multiline ? (
 								<Textarea
 									className="min-h-20"
 									id={`application-${idPrefix}-${field.key}-${index}`}
@@ -148,6 +351,7 @@ function DraftRows<T extends string>({
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
+	const deployment = props.deploymentConfiguration;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
 		application?.description ?? "",
@@ -196,11 +400,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		[],
 	);
 	const [configureModels, setConfigureModels] = useState(false);
-	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() =>
-		props.mode === "create" ? [blankModel()] : [],
+	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
+		if (props.mode === "create") return [blankModel()];
+		return (
+			configuration?.modelOptions.map((option) => ({
+				credentialValue: "",
+				endpointId: "",
+				modelId: option.modelId,
+				optionId: option.optionId,
+				reasoningLevels: option.reasoningLevels.join("\n"),
+			})) ?? []
+		);
+	});
+	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
+		configuration?.defaultModelOptionId ?? "",
 	);
-	const [defaultModelOptionId, setDefaultModelOptionId] = useState("");
-	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState("");
+	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
+		configuration?.defaultReasoningLevel ?? "",
+	);
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
 		sourceKind,
@@ -209,8 +426,69 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const requiresReplacementCredential =
 		props.mode === "create" ||
 		(application?.source.kind !== "standard" && sourceKind === "standard");
+	const selectedTemplate = templateFor(deployment, templateId);
+	const modelCatalogReady = deployment.modelCatalog.status === "populated";
+	const standardChoicesBlocked =
+		sourceKind === "standard" &&
+		(deployment.templates.length === 0 || !modelCatalogReady);
+	const modelEndpoints = deployment.modelCatalog.endpoints;
+	const environmentOptions = Array.from(
+		new Set([
+			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
+			...environment.map((item) => item.name).filter(Boolean),
+		]),
+	).map((value) => ({
+		value,
+		label: value,
+		disabled: !selectedTemplate?.allowedEnvironmentKeys.includes(value),
+	}));
+	const secretOptions = (selectedTemplate?.allowedSecretKeys ?? []).map(
+		(value) => ({ value, label: value }),
+	);
+	const staleTemplate = templateId.length > 0 && selectedTemplate === undefined;
+	const staleModel = models.some(
+		(model) =>
+			model.endpointId.length > 0 &&
+			(!model.modelId ||
+				!model.reasoningLevels.trim() ||
+				!modelEndpoints.some(
+					(endpoint) =>
+						endpoint.endpointId === model.endpointId &&
+						endpoint.models.some((entry) => entry.modelId === model.modelId),
+				) ||
+				!model.reasoningLevels
+					.split("\n")
+					.filter(Boolean)
+					.every((level) =>
+						modelEndpoints
+							.find((endpoint) => endpoint.endpointId === model.endpointId)
+							?.models.find((entry) => entry.modelId === model.modelId)
+							?.reasoningLevels.includes(level),
+					)),
+	);
+	const defaultModel = models.find(
+		(model) => model.optionId === defaultModelOptionId,
+	);
+	const defaultModelDefinition = modelEndpoints
+		.find((endpoint) => endpoint.endpointId === defaultModel?.endpointId)
+		?.models.find((model) => model.modelId === defaultModel?.modelId);
+	const configurationMessage =
+		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
+			? "部署选项已过期，请重新加载后再提交。"
+			: deployment.status === "unavailable" ||
+					deployment.modelCatalog.status === "unavailable"
+				? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+				: deployment.status === "empty" ||
+						(deployment.templates.length === 0 && sourceKind === "standard") ||
+						(deployment.modelCatalog.status === "empty" &&
+							sourceKind === "standard")
+					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
+					: staleTemplate || staleModel
+						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
+						: undefined;
 
 	const submit = () => {
+		if (standardChoicesBlocked || staleTemplate || staleModel) return;
 		const draft = {
 			name,
 			description,
@@ -289,8 +567,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						className="text-muted-foreground text-sm"
 						id="application-source-help"
 					>
-						填写部署提供的标准模板 ID 或镜像地址。已有申请的来源不能更改。
+						从部署提供的标准模板中选择，或填写自定义镜像地址。已有申请的来源不能更改。
 					</p>
+					{configurationMessage ? (
+						<p className="alert text-destructive" role="status">
+							{configurationMessage}
+						</p>
+					) : null}
 					<div className="form-grid">
 						<div className="space-y-2">
 							<Label htmlFor="application-source-kind">Agent 来源</Label>
@@ -329,14 +612,43 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						{sourceKind === "standard" ? (
 							<div className="space-y-2">
 								<Label htmlFor="application-template-id">标准模板 ID</Label>
-								<Input
-									disabled={props.mode === "update"}
-									id="application-template-id"
-									aria-describedby="application-source-help"
-									onChange={(event) => setTemplateId(event.target.value)}
-									required
+								<Select
+									disabled={
+										props.mode === "update" || deployment.templates.length === 0
+									}
 									value={templateId}
-								/>
+									onValueChange={(value) => value && setTemplateId(value)}
+								>
+									<SelectTrigger
+										id="application-template-id"
+										aria-describedby="application-source-help"
+										className="h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="选择标准模板" />
+									</SelectTrigger>
+									<SelectContent>
+										{deployment.templates.map((template) => (
+											<SelectItem
+												key={template.templateId}
+												value={template.templateId}
+											>
+												{template.displayName}
+											</SelectItem>
+										))}
+										{staleTemplate ? (
+											<SelectItem disabled value={templateId}>
+												已移除模板（请重新加载）
+											</SelectItem>
+										) : null}
+									</SelectContent>
+								</Select>
+								{selectedTemplate ? (
+									<p className="text-muted-foreground text-sm">
+										{selectedTemplate.connectionEnabled
+											? "支持 Connection"
+											: "不支持 Connection"}
+									</p>
+								) : null}
 							</div>
 						) : (
 							<div className="space-y-2">
@@ -442,7 +754,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					</p>
 					<DraftRows
 						fields={[
-							{ key: "name", label: "变量名称", required: true },
+							{
+								key: "name",
+								label: "变量名称",
+								options:
+									sourceKind === "standard" ? environmentOptions : undefined,
+								required: true,
+							},
 							{ key: "value", label: "变量值", required: true },
 						]}
 						idPrefix="environment"
@@ -482,7 +800,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					</p>
 					<DraftRows
 						fields={[
-							{ key: "name", label: "Secret 名称", required: true },
+							{
+								key: "name",
+								label: "Secret 名称",
+								options: sourceKind === "standard" ? secretOptions : undefined,
+								required: true,
+							},
 							{
 								key: "value",
 								label: "替换值",
@@ -543,39 +866,33 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						) : null}
 						{modelConfigurationVisible ? (
 							<>
-								<DraftRows
-									fields={[
-										{
-											key: "optionId",
-											label: "模型选项 ID",
-											required: true,
-										},
-										{
-											key: "endpointId",
-											label: "获准端点 ID",
-											required: true,
-										},
-										{ key: "modelId", label: "模型 ID", required: true },
-										{
-											key: "reasoningLevels",
-											label: "允许的推理档位",
-											multiline: true,
-											required: true,
-										},
-										{
-											key: "credentialValue",
-											label: "模型凭证",
-											required: requiresReplacementCredential,
-											type: "password",
-										},
-									]}
-									idPrefix="model-option"
-									label="模型选项"
-									minimumRows={1}
+								<ModelRows
+									endpoints={modelEndpoints}
+									models={models}
+									requiresReplacementCredential={requiresReplacementCredential}
 									onChange={(index, key, value) =>
 										setModels((current) =>
 											current.map((item, itemIndex) =>
-												itemIndex === index ? { ...item, [key]: value } : item,
+												itemIndex !== index
+													? item
+													: key === "endpointId" || key === "modelId"
+														? {
+																...item,
+																[key]: value,
+																...(key === "endpointId"
+																	? {
+																			modelId: "",
+																			reasoningLevels: "",
+																			optionId: "",
+																		}
+																	: {
+																			optionId:
+																				item.endpointId && value
+																					? optionIdFor(item.endpointId, value)
+																					: "",
+																		}),
+															}
+														: { ...item, [key]: value },
 											),
 										)
 									}
@@ -584,34 +901,71 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											current.filter((_, itemIndex) => itemIndex !== index),
 										)
 									}
-									rows={models}
 								/>
 								<div className="form-grid">
 									<div className="space-y-2">
 										<Label htmlFor="application-default-model-option">
-											默认模型选项 ID
+											默认模型
 										</Label>
-										<Input
-											id="application-default-model-option"
-											onChange={(event) =>
-												setDefaultModelOptionId(event.target.value)
-											}
-											required
+										<Select
 											value={defaultModelOptionId}
-										/>
+											disabled={models.length === 0}
+											onValueChange={(value) =>
+												value && setDefaultModelOptionId(value)
+											}
+										>
+											<SelectTrigger
+												id="application-default-model-option"
+												className="h-11 w-full text-base md:text-sm"
+											>
+												<SelectValue placeholder="选择默认模型" />
+											</SelectTrigger>
+											<SelectContent>
+												{models.map((model) => {
+													const endpoint = modelEndpoints.find(
+														(item) => item.endpointId === model.endpointId,
+													);
+													return (
+														<SelectItem
+															key={model.optionId}
+															value={model.optionId}
+														>
+															{endpoint
+																? modelLabel(endpoint, model.modelId)
+																: "已移除模型"}
+														</SelectItem>
+													);
+												})}
+											</SelectContent>
+										</Select>
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="application-default-reasoning-level">
 											默认推理档位
 										</Label>
-										<Input
-											id="application-default-reasoning-level"
-											onChange={(event) =>
-												setDefaultReasoningLevel(event.target.value)
-											}
-											required
+										<Select
 											value={defaultReasoningLevel}
-										/>
+											disabled={!defaultModelDefinition}
+											onValueChange={(value) =>
+												value && setDefaultReasoningLevel(value)
+											}
+										>
+											<SelectTrigger
+												id="application-default-reasoning-level"
+												className="h-11 w-full text-base md:text-sm"
+											>
+												<SelectValue placeholder="选择默认推理档位" />
+											</SelectTrigger>
+											<SelectContent>
+												{defaultModelDefinition?.reasoningLevels.map(
+													(value) => (
+														<SelectItem key={value} value={value}>
+															{value}
+														</SelectItem>
+													),
+												)}
+											</SelectContent>
+										</Select>
 									</div>
 								</div>
 								<Button
