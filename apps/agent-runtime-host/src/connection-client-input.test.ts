@@ -193,6 +193,13 @@ describe("independent Connection input", () => {
 		await expect(env.read()).resolves.toBeUndefined();
 	});
 
+	it("rejects malformed private input UTF-8", async () => {
+		const env = await fixture();
+		if (process.platform !== "linux") return;
+		await writeFile(env.file, Buffer.from([0xc3, 0x28]));
+		await expect(env.read()).resolves.toBeUndefined();
+	});
+
 	it("rejects readable-by-others files, hardlinks and symlinks", async () => {
 		const env = await fixture();
 		if (process.platform !== "linux") return;

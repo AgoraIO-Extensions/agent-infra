@@ -182,7 +182,9 @@ async function readIndependentInput(
 						after.ctimeMs !== before.ctimeMs
 					)
 						return undefined;
-					const input: unknown = JSON.parse(bytes.toString("utf8"));
+					const input: unknown = JSON.parse(
+						new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+					);
 					if (
 						!record(input) ||
 						Object.keys(input).sort().join(",") !==
