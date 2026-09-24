@@ -11,6 +11,8 @@ export interface InstallationBinding {
 	recoveryGeneration: number;
 	/** Fingerprint of the installation public key or equivalent registration secret. */
 	keyFingerprint: string;
+	/** Canonical public JWK used by the concrete DPoP verifier. */
+	publicKeyJwk?: string;
 }
 
 export interface AccessTokenRecord {
@@ -64,7 +66,14 @@ export interface InstallationProofVerifier {
 	verify(input: {
 		installation: InstallationBinding;
 		token: AccessTokenRecord;
+		accessToken: string;
 		proof: string;
+		request?: { method: string; url: string };
+	}): Promise<boolean> | boolean;
+	verifyInstallation?(input: {
+		installation: InstallationBinding;
+		proof: string;
+		request: { method: string; url: string };
 	}): Promise<boolean> | boolean;
 }
 
@@ -114,9 +123,27 @@ export class ConnectionTokenService {
 	async issue(
 		input: IssueTokenInput,
 	): Promise<{ secret: string; record: AccessTokenRecord }> {
-		if (input.installation.status !== "active")
+		const [installation, principal, consumer] = await Promise.all([
+			this.installations.findById(input.installation.id),
+			this.principals.findById(input.installation.principalId),
+			this.consumers.findById(input.installation.consumerId),
+		]);
+		if (
+			!installation ||
+			installation.id !== input.installation.id ||
+			installation.consumerId !== input.installation.consumerId ||
+			installation.principalId !== input.installation.principalId ||
+			installation.status !== "active" ||
+			!principal ||
+			principal.status !== "active" ||
+			!consumer ||
+			consumer.status !== "active"
+		)
 			throw new Error("installation is not active");
-		if (input.recoveryGeneration !== input.installation.recoveryGeneration)
+		if (
+			input.recoveryGeneration !== installation.recoveryGeneration ||
+			input.recoveryGeneration !== principal.recoveryGeneration
+		)
 			throw new Error("installation recovery generation mismatch");
 		if (!input.audience.trim() || input.scopes.length === 0)
 			throw new Error("token audience and scopes are required");
@@ -133,10 +160,10 @@ export class ConnectionTokenService {
 			id: randomBytes(16).toString("hex"),
 			kind: input.kind,
 			tokenHash: hashConnectionToken(secret),
-			principalId: input.installation.principalId,
-			consumerId: input.installation.consumerId,
-			consumerInstanceId: input.installation.id,
-			actorId: input.installation.actorId,
+			principalId: installation.principalId,
+			consumerId: installation.consumerId,
+			consumerInstanceId: installation.id,
+			actorId: installation.actorId,
 			audience: input.audience,
 			scopes: [...new Set(input.scopes)],
 			recoveryGeneration: input.recoveryGeneration,
@@ -154,6 +181,7 @@ export class ConnectionTokenService {
 		proof: string;
 		audience: string;
 		requiredScope?: string;
+		request?: { method: string; url: string };
 	}): Promise<AuthenticatedConnectionContext | undefined> {
 		if (!input.secret || !input.proof || !input.audience.trim())
 			return undefined;
@@ -189,7 +217,9 @@ export class ConnectionTokenService {
 			!(await this.proofVerifier.verify({
 				installation,
 				token,
+				accessToken: input.secret,
 				proof: input.proof,
+				request: input.request,
 			}))
 		)
 			return undefined;

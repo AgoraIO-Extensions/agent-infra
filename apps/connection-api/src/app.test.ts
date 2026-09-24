@@ -1,4 +1,9 @@
-import type { CatalogEntry } from "@agent-infra/connection-core";
+import type {
+	CatalogEntry,
+	ConnectionTokenService,
+	InstallationStore,
+	OAuthAuthorizationService,
+} from "@agent-infra/connection-core";
 import type { BrowserSessionService } from "@agent-infra/connection-identity";
 import { describe, expect, it, vi } from "vitest";
 
@@ -250,5 +255,62 @@ describe("Direct MCP boundary", () => {
 		});
 		expect(response.status).toBe(400);
 		expect(execute).not.toHaveBeenCalled();
+	});
+});
+
+describe("OAuth token exchange", () => {
+	it("requires an installation proof before redeeming a PKCE code", async () => {
+		const authorization = {
+			inspectAuthorizationCode: vi.fn(async () => ({
+				principalId: "p",
+				consumerId: "c",
+				consumerInstanceId: "i",
+				actorId: null,
+				audience: "connection-mcp",
+				scopes: ["action:read"],
+				recoveryGeneration: 1,
+				tokenId: "code",
+				clientId: "client",
+				redirectUri: "https://client.example/callback",
+			})),
+			redeemAuthorizationCode: vi.fn(async () => undefined),
+		} as unknown as OAuthAuthorizationService;
+		const app = createConnectionApp({
+			oauth: {
+				authorization,
+				tokens: {} as ConnectionTokenService,
+				installations: {
+					findById: vi.fn(async () => ({
+						id: "i",
+						principalId: "p",
+						consumerId: "c",
+						actorId: null,
+						status: "active" as const,
+						recoveryGeneration: 1,
+						keyFingerprint: "key",
+					})),
+				} as InstallationStore,
+				proofVerifier: {
+					verify: vi.fn(async () => false),
+					verifyInstallation: vi.fn(async () => false),
+				},
+			},
+		});
+		const response = await app.request("/v1/oauth/token", {
+			method: "POST",
+			headers: {
+				"content-type": "application/x-www-form-urlencoded",
+				DPoP: "proof",
+			},
+			body: new URLSearchParams({
+				grant_type: "authorization_code",
+				code: "code-secret",
+				client_id: "client",
+				redirect_uri: "https://client.example/callback",
+				code_verifier: "a".repeat(43),
+			}).toString(),
+		});
+		expect(response.status).toBe(400);
+		expect(authorization.redeemAuthorizationCode).not.toHaveBeenCalled();
 	});
 });

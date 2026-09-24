@@ -48,6 +48,7 @@ CREATE TABLE "connection"."consumer_instances" (
   "consumer_id" text NOT NULL,
   "principal_id" text NOT NULL,
   "installation_key" text NOT NULL,
+  "installation_public_key" text,
   "status" varchar(32) DEFAULT 'active' NOT NULL,
   "recovery_generation" bigint DEFAULT 1 NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -97,6 +98,68 @@ CREATE TABLE "connection"."access_tokens" (
   CONSTRAINT "access_token_id_non_empty" CHECK (char_length("id") > 0),
   CONSTRAINT "access_token_audience_non_empty" CHECK (char_length("audience") > 0),
   CONSTRAINT "access_token_family_id_non_empty" CHECK (char_length("family_id") > 0)
+);
+
+CREATE TABLE "connection"."authorization_codes" (
+  "id" text PRIMARY KEY NOT NULL,
+  "code_hash" varchar(64) NOT NULL,
+  "client_id" text NOT NULL,
+  "principal_id" text NOT NULL,
+  "consumer_id" text NOT NULL,
+  "consumer_instance_id" text NOT NULL,
+  "actor_id" text NOT NULL,
+  "redirect_uri" text NOT NULL,
+  "code_challenge" varchar(128) NOT NULL,
+  "code_challenge_method" varchar(16) NOT NULL,
+  "audience" varchar(255) NOT NULL,
+  "scopes" jsonb NOT NULL,
+  "recovery_generation" bigint NOT NULL,
+  "issued_at" timestamp with time zone NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "consumed_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "authorization_codes_principal_fk" FOREIGN KEY ("principal_id") REFERENCES "connection"."principals" ("id"),
+  CONSTRAINT "authorization_codes_consumer_fk" FOREIGN KEY ("consumer_id") REFERENCES "connection"."consumers" ("id"),
+  CONSTRAINT "authorization_codes_instance_binding_fk" FOREIGN KEY ("consumer_instance_id", "consumer_id", "principal_id") REFERENCES "connection"."consumer_instances" ("id", "consumer_id", "principal_id"),
+  CONSTRAINT "authorization_codes_hash_format" CHECK ("code_hash" ~ '^[a-f0-9]{64}$'),
+  CONSTRAINT "authorization_codes_pkce_method_check" CHECK ("code_challenge_method" = 'S256'),
+  CONSTRAINT "authorization_codes_recovery_generation_positive" CHECK ("recovery_generation" > 0),
+  CONSTRAINT "authorization_code_id_non_empty" CHECK (char_length("id") > 0),
+  CONSTRAINT "authorization_code_client_id_non_empty" CHECK (char_length("client_id") > 0),
+  CONSTRAINT "authorization_code_redirect_uri_non_empty" CHECK (char_length("redirect_uri") > 0),
+  CONSTRAINT "authorization_code_audience_non_empty" CHECK (char_length("audience") > 0)
+);
+
+CREATE TABLE "connection"."refresh_tokens" (
+  "id" text PRIMARY KEY NOT NULL,
+  "token_hash" varchar(64) NOT NULL,
+  "family_id" text NOT NULL,
+  "principal_id" text NOT NULL,
+  "consumer_id" text NOT NULL,
+  "consumer_instance_id" text NOT NULL,
+  "actor_id" text NOT NULL,
+  "audience" varchar(255) NOT NULL,
+  "scopes" jsonb NOT NULL,
+  "recovery_generation" bigint NOT NULL,
+  "issued_at" timestamp with time zone NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "used_at" timestamp with time zone,
+  "revoked_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "refresh_tokens_principal_fk" FOREIGN KEY ("principal_id") REFERENCES "connection"."principals" ("id"),
+  CONSTRAINT "refresh_tokens_consumer_fk" FOREIGN KEY ("consumer_id") REFERENCES "connection"."consumers" ("id"),
+  CONSTRAINT "refresh_tokens_instance_binding_fk" FOREIGN KEY ("consumer_instance_id", "consumer_id", "principal_id") REFERENCES "connection"."consumer_instances" ("id", "consumer_id", "principal_id"),
+  CONSTRAINT "refresh_tokens_hash_format" CHECK ("token_hash" ~ '^[a-f0-9]{64}$'),
+  CONSTRAINT "refresh_tokens_recovery_generation_positive" CHECK ("recovery_generation" > 0),
+  CONSTRAINT "refresh_token_id_non_empty" CHECK (char_length("id") > 0),
+  CONSTRAINT "refresh_token_family_id_non_empty" CHECK (char_length("family_id") > 0),
+  CONSTRAINT "refresh_token_audience_non_empty" CHECK (char_length("audience") > 0)
+);
+
+CREATE TABLE "connection"."dpop_replay" (
+  "jti" text PRIMARY KEY NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  CONSTRAINT "dpop_replay_jti_non_empty" CHECK (char_length("jti") > 0)
 );
 
 CREATE TABLE "connection"."providers" (
@@ -329,6 +392,9 @@ CREATE UNIQUE INDEX "principals_issuer_uid_unique" ON "connection"."principals" 
 CREATE UNIQUE INDEX "browser_sessions_token_hash_unique" ON "connection"."browser_sessions" USING btree ("token_hash");
 CREATE UNIQUE INDEX "access_tokens_token_hash_unique" ON "connection"."access_tokens" USING btree ("token_hash");
 CREATE INDEX "access_tokens_family_idx" ON "connection"."access_tokens" USING btree ("family_id");
+CREATE UNIQUE INDEX "authorization_codes_hash_unique" ON "connection"."authorization_codes" USING btree ("code_hash");
+CREATE UNIQUE INDEX "refresh_tokens_hash_unique" ON "connection"."refresh_tokens" USING btree ("token_hash");
+CREATE INDEX "refresh_tokens_family_idx" ON "connection"."refresh_tokens" USING btree ("family_id");
 CREATE UNIQUE INDEX "consumer_instances_installation_unique" ON "connection"."consumer_instances" USING btree ("installation_key");
 CREATE UNIQUE INDEX "action_versions_provider_action_version_unique" ON "connection"."action_versions" USING btree ("provider_id", "action_id", "version");
 CREATE UNIQUE INDEX "connections_provider_external_account_unique" ON "connection"."connections" USING btree ("provider_id", "external_account_id");

@@ -3,7 +3,11 @@ import {
 	type AuthenticatedConnectionContext,
 	type CatalogReader,
 	type ConnectionInstallationService,
+	type ConnectionTokenService,
 	catalogEtag,
+	type InstallationProofVerifier,
+	type InstallationStore,
+	type OAuthAuthorizationService,
 } from "@agent-infra/connection-core";
 import {
 	type BrowserSessionPrincipal,
@@ -39,6 +43,12 @@ export interface ConnectionApiDependencies {
 			arguments: unknown;
 			idempotencyKey: string;
 		}) => Promise<Response | unknown>;
+	};
+	readonly oauth?: {
+		readonly authorization: OAuthAuthorizationService;
+		readonly tokens: ConnectionTokenService;
+		readonly installations: InstallationStore;
+		readonly proofVerifier: InstallationProofVerifier;
 	};
 }
 
@@ -90,6 +100,28 @@ function browserMutationAllowed(
 	return Boolean(
 		csrf && csrf === cookieValue(request, "__Host-connection_csrf"),
 	);
+}
+
+async function oauthForm(
+	request: Request,
+): Promise<URLSearchParams | undefined> {
+	const contentType = request.headers.get("content-type")?.split(";", 1)[0];
+	if (contentType !== "application/x-www-form-urlencoded") return undefined;
+	return new URLSearchParams(await request.text());
+}
+
+function accessTokenLifetime(record: { issuedAt: number; expiresAt: number }) {
+	return Math.max(0, Math.floor((record.expiresAt - record.issuedAt) / 1000));
+}
+
+function proofRequest(request: Request, publicOrigin: string | undefined) {
+	const url = new URL(request.url);
+	if (publicOrigin) {
+		const origin = new URL(publicOrigin);
+		url.protocol = origin.protocol;
+		url.host = origin.host;
+	}
+	return { method: request.method, url: url.toString() };
 }
 
 export function createConnectionApp(
@@ -209,6 +241,106 @@ export function createConnectionApp(
 			},
 			activeState: "directory_entry_exists",
 		});
+	});
+
+	app.post("/v1/oauth/token", async (context) => {
+		const oauth = dependencies.oauth;
+		if (!oauth) return context.json({ error: "oauth_unavailable" }, 503);
+		const form = await oauthForm(context.req.raw);
+		const proof = context.req.header("DPoP") ?? "";
+		if (!form || !proof || !oauth.proofVerifier.verifyInstallation)
+			return context.json({ error: "invalid_request" }, 400);
+		const request = proofRequest(context.req.raw, dependencies.publicOrigin);
+		try {
+			if (form.get("grant_type") === "authorization_code") {
+				const code = form.get("code");
+				const clientId = form.get("client_id");
+				const redirectUri = form.get("redirect_uri");
+				const codeVerifier = form.get("code_verifier");
+				if (!code || !clientId || !redirectUri || !codeVerifier)
+					return context.json({ error: "invalid_request" }, 400);
+				const inspected = await oauth.authorization.inspectAuthorizationCode({
+					secret: code,
+					clientId,
+					redirectUri,
+					codeVerifier,
+				});
+				if (!inspected) return context.json({ error: "invalid_grant" }, 400);
+				const installation = await oauth.installations.findById(
+					inspected.consumerInstanceId,
+				);
+				if (
+					!installation ||
+					!(await oauth.proofVerifier.verifyInstallation({
+						installation,
+						proof,
+						request,
+					}))
+				)
+					return context.json({ error: "invalid_grant" }, 400);
+				const codeContext = await oauth.authorization.redeemAuthorizationCode({
+					secret: code,
+					clientId,
+					redirectUri,
+					codeVerifier,
+				});
+				if (!codeContext) return context.json({ error: "invalid_grant" }, 400);
+				const access = await oauth.tokens.issue({
+					kind: "oauth_access",
+					installation,
+					audience: codeContext.audience,
+					scopes: codeContext.scopes,
+					recoveryGeneration: codeContext.recoveryGeneration,
+				});
+				const refresh =
+					await oauth.authorization.issueRefreshToken(codeContext);
+				return context.json({
+					access_token: access.secret,
+					refresh_token: refresh.secret,
+					token_type: "DPoP",
+					expires_in: accessTokenLifetime(access.record),
+				});
+			}
+			if (form.get("grant_type") === "refresh_token") {
+				const secret = form.get("refresh_token");
+				if (!secret) return context.json({ error: "invalid_request" }, 400);
+				const current = await oauth.authorization.inspectRefreshToken(secret);
+				if (!current) return context.json({ error: "invalid_grant" }, 400);
+				const installation = await oauth.installations.findById(
+					current.consumerInstanceId,
+				);
+				if (
+					!installation ||
+					!(await oauth.proofVerifier.verifyInstallation({
+						installation,
+						proof,
+						request,
+					}))
+				)
+					return context.json({ error: "invalid_grant" }, 400);
+				const rotated = await oauth.authorization.rotateRefreshToken({
+					secret,
+					context: current,
+				});
+				if (!rotated) return context.json({ error: "invalid_grant" }, 400);
+				const access = await oauth.tokens.issue({
+					kind: "oauth_access",
+					installation,
+					audience: current.audience,
+					scopes: current.scopes,
+					recoveryGeneration: current.recoveryGeneration,
+				});
+				return context.json({
+					access_token: access.secret,
+					refresh_token: rotated.secret,
+					token_type: "DPoP",
+					expires_in: accessTokenLifetime(access.record),
+				});
+			}
+		} catch {
+			return context.json({ error: "invalid_grant" }, 400);
+		}
+		return context.json({ error: "unsupported_grant_type" }, 400);
 	});
 
 	app.delete("/v1/browser-session", async (context) => {

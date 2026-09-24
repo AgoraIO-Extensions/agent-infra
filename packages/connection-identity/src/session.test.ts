@@ -80,6 +80,28 @@ describe("hash-only BrowserSession", () => {
 		expect(await service.resolve(created.token)).toBeUndefined();
 	});
 
+	it("disables the Principal when the directory entry disappears", async () => {
+		const { principal, service, records } = setup();
+		const created = await service.create(principal);
+		const record = records[0];
+		if (!record) throw new Error("session record missing");
+		const disablePrincipal = vi.fn(async () => {});
+		const missingDirectoryService = new BrowserSessionService(
+			{
+				insert: async () => {},
+				findByTokenHash: async () => record,
+				revoke: async () => {},
+			},
+			{ findById: async () => principal },
+			{ check: async () => ({ exists: false }), disablePrincipal },
+			() => 1_000,
+		);
+		expect(
+			await missingDirectoryService.resolve(created.token),
+		).toBeUndefined();
+		expect(disablePrincipal).toHaveBeenCalledWith(principal.id);
+	});
+
 	it("uses a bounded opaque token format", () => {
 		expect(() => browserSessionCookie("short", 60)).toThrow();
 		expect(

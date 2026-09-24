@@ -27,10 +27,12 @@ export interface BrowserSessionStore {
 
 export interface BrowserSessionPrincipalStore {
 	findById(id: string): Promise<BrowserSessionPrincipal | undefined>;
+	disable?(id: string): Promise<void>;
 }
 
 export interface BrowserSessionDirectory {
 	check(issuer: string, uid: string): Promise<{ exists: boolean }>;
+	disablePrincipal?(principalId: string): Promise<void>;
 }
 
 export const browserSessionCookieName = "__Host-connection_session";
@@ -120,6 +122,7 @@ export class BrowserSessionService {
 			return undefined;
 		const entry = await this.directory.check(record.issuer, record.uid);
 		if (!entry.exists) {
+			await this.directory.disablePrincipal?.(record.principalId);
 			await this.sessions.revoke(record.id, this.now());
 			return undefined;
 		}

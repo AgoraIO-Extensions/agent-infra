@@ -116,6 +116,7 @@ export const consumerInstances = connectionSchema.table(
 		consumerId: text("consumer_id").notNull(),
 		principalId: text("principal_id").notNull(),
 		installationKey: text("installation_key").notNull(),
+		installationPublicKey: text("installation_public_key"),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
 		recoveryGeneration: bigint("recovery_generation", { mode: "number" })
 			.default(1)
@@ -246,6 +247,141 @@ export const accessTokens = connectionSchema.table(
 		nonEmpty("access_token_audience", table.audience),
 		nonEmpty("access_token_family_id", table.familyId),
 	],
+);
+
+export const authorizationCodes = connectionSchema.table(
+	"authorization_codes",
+	{
+		id: text("id").primaryKey(),
+		codeHash: varchar("code_hash", { length: 64 }).notNull(),
+		clientId: text("client_id").notNull(),
+		principalId: text("principal_id").notNull(),
+		consumerId: text("consumer_id").notNull(),
+		consumerInstanceId: text("consumer_instance_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		redirectUri: text("redirect_uri").notNull(),
+		codeChallenge: varchar("code_challenge", { length: 128 }).notNull(),
+		codeChallengeMethod: varchar("code_challenge_method", {
+			length: 16,
+		}).notNull(),
+		audience: varchar("audience", { length: 255 }).notNull(),
+		scopes: jsonb("scopes").$type<readonly string[]>().notNull(),
+		recoveryGeneration: bigint("recovery_generation", {
+			mode: "number",
+		}).notNull(),
+		issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		consumedAt: timestamp("consumed_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.principalId],
+			foreignColumns: [principals.id],
+			name: "authorization_codes_principal_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerId],
+			foreignColumns: [consumers.id],
+			name: "authorization_codes_consumer_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerInstanceId, table.consumerId, table.principalId],
+			foreignColumns: [
+				consumerInstances.id,
+				consumerInstances.consumerId,
+				consumerInstances.principalId,
+			],
+			name: "authorization_codes_instance_binding_fk",
+		}),
+		uniqueIndex("authorization_codes_hash_unique").on(table.codeHash),
+		check(
+			"authorization_codes_hash_format",
+			sql`${table.codeHash} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"authorization_codes_pkce_method_check",
+			sql`${table.codeChallengeMethod} = 'S256'`,
+		),
+		check(
+			"authorization_codes_recovery_generation_positive",
+			sql`${table.recoveryGeneration} > 0`,
+		),
+		nonEmpty("authorization_code_id", table.id),
+		nonEmpty("authorization_code_client_id", table.clientId),
+		nonEmpty("authorization_code_redirect_uri", table.redirectUri),
+		nonEmpty("authorization_code_audience", table.audience),
+	],
+);
+
+export const refreshTokens = connectionSchema.table(
+	"refresh_tokens",
+	{
+		id: text("id").primaryKey(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		familyId: text("family_id").notNull(),
+		principalId: text("principal_id").notNull(),
+		consumerId: text("consumer_id").notNull(),
+		consumerInstanceId: text("consumer_instance_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		audience: varchar("audience", { length: 255 }).notNull(),
+		scopes: jsonb("scopes").$type<readonly string[]>().notNull(),
+		recoveryGeneration: bigint("recovery_generation", {
+			mode: "number",
+		}).notNull(),
+		issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		usedAt: timestamp("used_at", { withTimezone: true }),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.principalId],
+			foreignColumns: [principals.id],
+			name: "refresh_tokens_principal_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerId],
+			foreignColumns: [consumers.id],
+			name: "refresh_tokens_consumer_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerInstanceId, table.consumerId, table.principalId],
+			foreignColumns: [
+				consumerInstances.id,
+				consumerInstances.consumerId,
+				consumerInstances.principalId,
+			],
+			name: "refresh_tokens_instance_binding_fk",
+		}),
+		uniqueIndex("refresh_tokens_hash_unique").on(table.tokenHash),
+		index("refresh_tokens_family_idx").on(table.familyId),
+		check(
+			"refresh_tokens_hash_format",
+			sql`${table.tokenHash} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"refresh_tokens_recovery_generation_positive",
+			sql`${table.recoveryGeneration} > 0`,
+		),
+		nonEmpty("refresh_token_id", table.id),
+		nonEmpty("refresh_token_family_id", table.familyId),
+		nonEmpty("refresh_token_audience", table.audience),
+	],
+);
+
+export const dpopReplay = connectionSchema.table(
+	"dpop_replay",
+	{
+		jti: text("jti").primaryKey(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [nonEmpty("dpop_replay_jti", table.jti)],
 );
 
 export const providers = connectionSchema.table(
@@ -744,6 +880,9 @@ export const connectionInfrastructureTables = [
 	consumerInstances,
 	actors,
 	accessTokens,
+	authorizationCodes,
+	refreshTokens,
+	dpopReplay,
 	providers,
 	actionVersions,
 	connections,
