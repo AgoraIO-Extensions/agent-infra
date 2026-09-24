@@ -54,7 +54,9 @@ export async function startAuthentikPlatformApi(input: {
 		app = input.runtime.createPlatformApp(assembly.dependencies);
 		const currentApp = app;
 		server = serve({
-			hostname: "127.0.0.1",
+			// The host port remains loopback-only in deploy/local/compose.yaml;
+			// the container must also accept the Web container's network traffic.
+			hostname: "0.0.0.0",
 			port: input.port,
 			fetch: async (request) =>
 				(await currentBrowser.handleRequest(request)) ??
