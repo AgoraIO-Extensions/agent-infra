@@ -8,6 +8,7 @@ export const providerSources = {
 	github: "packages/openconnector-adapter/src/verification/github-v8.ts",
 	jenkins: "packages/openconnector-adapter/src/jenkins.ts",
 	jira: "packages/openconnector-adapter/src/jira-server.ts",
+	manhattan: "packages/openconnector-adapter/src/manhattan.ts",
 	rehoboam: "packages/openconnector-adapter/src/rehoboam.ts",
 };
 
@@ -47,9 +48,15 @@ export function parseCatalogSource(source, providerHint) {
 
 export function compareCatalogs(baseline, candidate) {
 	const rows = [];
-	for (const provider of Object.keys(baseline).sort()) {
+	for (const provider of Object.keys(baseline)) {
 		if (!candidate[provider]) throw new Error(`Provider removed: ${provider}`);
-		const before = baseline[provider];
+	}
+	for (const provider of Object.keys(candidate).sort()) {
+		const before = baseline[provider] ?? {
+			actions: {},
+			actionVersion: 0,
+			providerReleaseVersion: null,
+		};
 		const after = candidate[provider];
 		for (const [actionId, beforeVersion] of Object.entries(before.actions)) {
 			const afterVersion = after.actions[actionId];
@@ -74,12 +81,12 @@ export function compareCatalogs(baseline, candidate) {
 }
 
 export function readCatalog(ref) {
-	return Object.fromEntries(
-		Object.entries(providerSources).map(([provider, file]) => [
-			provider,
-			parseCatalogSource(git("show", `${ref}:${file}`), provider),
-		]),
-	);
+	const catalog = {};
+	for (const [provider, file] of Object.entries(providerSources)) {
+		if (!git("ls-tree", "--name-only", ref, "--", file)) continue;
+		catalog[provider] = parseCatalogSource(git("show", `${ref}:${file}`), provider);
+	}
+	return catalog;
 }
 
 export function assertCanonicalSha(current, canonical, canonicalRef = "origin/connection") {
