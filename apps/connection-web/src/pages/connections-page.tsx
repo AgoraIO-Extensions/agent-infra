@@ -347,19 +347,39 @@ export function ConnectionsPage() {
 				total: connectionIds.length,
 			});
 		}
-		const refreshed = await connectionApi.getConnections();
+		const refreshed = await connectionApi.getConnections().catch(() => null);
+		if (!refreshed) {
+			setBulkUpgrade({
+				completed,
+				failedConnectionIds: [],
+				running: false,
+				total: connectionIds.length,
+			});
+			setUpgradeNotice(
+				"批量升级请求已处理，但刷新结果失败；请刷新页面确认最新状态。",
+			);
+			return;
+		}
 		queryClient.setQueryData(["connections"], refreshed);
+		const pendingConnectionIds = new Set(
+			refreshed.overview.upgradeTasks
+				.filter((task) => task.status === "PENDING_CONNECTION")
+				.map((task) => task.connectionId),
+		);
+		const retryableFailedConnectionIds = failedConnectionIds.filter(
+			(connectionId) => pendingConnectionIds.has(connectionId),
+		);
 		const needsAuthorization = refreshed.overview.upgradeTasks.filter(
 			(task) => task.status === "PENDING_AUTHORIZATION",
 		).length;
 		setBulkUpgrade({
 			completed,
-			failedConnectionIds,
+			failedConnectionIds: retryableFailedConnectionIds,
 			running: false,
 			total: connectionIds.length,
 		});
 		setUpgradeNotice(
-			`批量处理完成：${connectionIds.length - failedConnectionIds.length} 个连接已升级，${failedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
+			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
 		);
 	};
 	return (

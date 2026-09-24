@@ -379,6 +379,59 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 	});
 
+	it("批量升级刷新失败后解除进行中状态", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha",
+			},
+			{
+				campaignId: "campaign-2",
+				connectionId: "connection-beta",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-beta",
+			},
+		];
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockRejectedValueOnce(new Error("refresh failed"));
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "一键升级 2 个连接",
+			}),
+		);
+
+		expect(
+			await screen.findByText(
+				"批量升级请求已处理，但刷新结果失败；请刷新页面确认最新状态。",
+			),
+		).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "一键升级 2 个连接",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
 	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
 		window.history.replaceState(
 			{},
