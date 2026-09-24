@@ -203,6 +203,7 @@ export class PostgresConversationDispatchStoreV1
 	async findDispatchable(input: {
 		readonly limit: number;
 		readonly afterItemId?: string;
+		readonly signal?: AbortSignal;
 	}): Promise<
 		readonly {
 			readonly itemId: string;
@@ -218,7 +219,7 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Conversation dispatch discovery is invalid");
 		}
 		return databaseOperation(async () => {
-			const rows = await this.#client<
+			const query = this.#client<
 				{ id: string; operation: ConversationDispatchOperationV1 }[]
 			>`
 				select id, operation from platform.outbox_items
@@ -240,7 +241,20 @@ export class PostgresConversationDispatchStoreV1
 					id
 				limit ${input.limit}
 			`;
-			return rows.map((row) => ({ itemId: row.id, operation: row.operation }));
+			const onAbort = () => query.cancel();
+			if (input.signal) {
+				if (input.signal.aborted) query.cancel();
+				input.signal.addEventListener("abort", onAbort, { once: true });
+			}
+			try {
+				const rows = await query;
+				return rows.map((row) => ({
+					itemId: row.id,
+					operation: row.operation,
+				}));
+			} finally {
+				input.signal?.removeEventListener("abort", onAbort);
+			}
 		});
 	}
 

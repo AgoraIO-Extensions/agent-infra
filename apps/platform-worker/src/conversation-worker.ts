@@ -121,6 +121,7 @@ export function createPlatformConversationWorkerV2(
 		const items = await store.findDispatchable({
 			limit,
 			...(afterItemId ? { afterItemId } : {}),
+			signal,
 		});
 		let launched = 0;
 		for (const item of items) {

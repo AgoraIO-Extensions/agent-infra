@@ -127,6 +127,36 @@ describe("Conversation Worker discovery and shutdown", () => {
 		await worker.stop();
 		expect(mocks.dispatch).not.toHaveBeenCalled();
 	});
+	it("passes the worker cancellation signal to discovery", async () => {
+		mocks.find.mockImplementation(async (input: { signal?: AbortSignal }) => {
+			expect(input.signal).toBe(mocks.signal);
+			return [];
+		});
+		const worker = createPlatformConversationWorkerV2(options);
+		await worker.tick();
+		await worker.stop();
+	});
+	it("aborts in-flight discovery before closing stores", async () => {
+		mocks.find.mockImplementation(
+			(input: { signal?: AbortSignal }) =>
+				new Promise<[]>((resolve) => {
+					input.signal?.addEventListener(
+						"abort",
+						() => {
+							resolve([]);
+							resolve([]);
+						},
+						{ once: true },
+					);
+				}),
+		);
+		const worker = createPlatformConversationWorkerV2(options);
+		const polling = worker.tick();
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalled());
+		await worker.stop();
+		await expect(polling).resolves.toBe(0);
+		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
+	});
 	it("scans past a saturated page to stop and revisits deferred work after release", async () => {
 		const pending = Promise.withResolvers<void>();
 		const items = Array.from({ length: 300 }, (_, index) => ({
@@ -154,7 +184,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 				"turn-000",
 				"zz-stop",
 			]);
-			expect(mocks.find.mock.calls[1]?.[0]).toEqual({
+			expect(mocks.find.mock.calls[1]?.[0]).toMatchObject({
 				limit: 256,
 				afterItemId: "turn-255",
 			});
@@ -180,7 +210,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		try {
 			expect(await worker.tick()).toBe(1);
 			expect(await worker.tick()).toBe(1);
-			expect(mocks.find.mock.calls[1]?.[0]).toEqual({ limit: 256 });
+			expect(mocks.find.mock.calls[1]?.[0]).toMatchObject({ limit: 256 });
 			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
 				"turn-b",
 				"turn-a",
