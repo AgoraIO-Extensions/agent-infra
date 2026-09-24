@@ -16,6 +16,29 @@ import {
 type Directory = ReturnType<typeof createAuthentikDirectory>;
 type Browser = ReturnType<typeof createAuthentikBrowserAdapter>;
 
+/**
+ * Reconstruct the public HTTPS URL after the local TLS proxy terminates TLS.
+ *
+ * The local nginx configuration owns this boundary: it preserves the public
+ * Host and sets one exact X-Forwarded-Proto value.  Do not trust a forwarded
+ * host or scheme from arbitrary requests; requests that do not match the
+ * configured public origin remain unchanged and are rejected by the browser
+ * adapter's origin check.
+ */
+function requestAtPublicOrigin(request: Request, publicOrigin: URL): Request {
+	if (
+		request.headers.get("x-forwarded-proto") !== "https" ||
+		request.headers.get("host") !== publicOrigin.host
+	)
+		return request;
+	const incoming = new URL(request.url);
+	if (incoming.origin === publicOrigin.origin) return request;
+	const target = new URL(publicOrigin);
+	target.pathname = incoming.pathname;
+	target.search = incoming.search;
+	return new Request(target, request);
+}
+
 /** The deployment supplies the actual API module and its non-identity policies. */
 export async function startAuthentikPlatformApi(input: {
 	directory: AuthentikDirectoryConfiguration;
@@ -44,6 +67,7 @@ export async function startAuthentikPlatformApi(input: {
 	try {
 		browser = createAuthentikBrowserAdapter(input.browser, directory);
 		const currentBrowser = browser;
+		const publicOrigin = new URL(input.browser.publicOrigin);
 		const assemblyInput = await input.createAssemblyInput({
 			identity: currentBrowser.identityAdapter,
 			loadAuthorityContext: directory.loadAuthorityContext,
@@ -58,9 +82,13 @@ export async function startAuthentikPlatformApi(input: {
 			// the container must also accept the Web container's network traffic.
 			hostname: "0.0.0.0",
 			port: input.port,
-			fetch: async (request) =>
-				(await currentBrowser.handleRequest(request)) ??
-				currentApp.fetch(request),
+			fetch: async (request) => {
+				const externalRequest = requestAtPublicOrigin(request, publicOrigin);
+				return (
+					(await currentBrowser.handleRequest(externalRequest)) ??
+					currentApp.fetch(request)
+				);
+			},
 		});
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);
