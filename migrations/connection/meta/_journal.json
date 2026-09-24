@@ -48,7 +48,14 @@
       "idx": 6,
       "version": "7",
       "when": 1790240600000,
-      "tag": "0006_direct_client_installation",
+      "tag": "0006_login_throttle",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790240700000,
+      "tag": "0007_direct_client_installation",
       "breakpoints": true
     }
   ]

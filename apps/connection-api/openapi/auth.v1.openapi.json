@@ -1,0 +1,313 @@
+{
+	"openapi": "3.1.0",
+	"info": {
+		"title": "Connection Browser Authentication API",
+		"version": "1.0.0"
+	},
+	"paths": {
+		"/auth/login": {
+			"post": {
+				"operationId": "loginConnectionBrowser",
+				"parameters": [
+					{
+						"in": "header",
+						"name": "origin",
+						"schema": {
+							"type": "string",
+							"minLength": 1
+						},
+						"required": true
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/AuthLoginRequestV1"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Browser Session cookie issued",
+						"headers": {
+							"Set-Cookie": {
+								"description": "__Host-connection_session; HttpOnly; Secure; SameSite=Strict; Path=/",
+								"schema": {
+									"type": "string"
+								}
+							}
+						},
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthLoginResponseV1"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Invalid login request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "Login rejected",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "Origin or CSRF validation failed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"429": {
+						"description": "Login rate limited",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "Connection login is unavailable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/auth/session": {
+			"get": {
+				"operationId": "getConnectionBrowserSession",
+				"security": [
+					{
+						"browserSession": []
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Current Browser Session",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthSessionResponseV1"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "Browser Session is unavailable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "Connection login is unavailable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/auth/logout": {
+			"post": {
+				"operationId": "logoutConnectionBrowser",
+				"security": [
+					{
+						"browserSession": []
+					}
+				],
+				"parameters": [
+					{
+						"in": "header",
+						"name": "origin",
+						"schema": {
+							"type": "string",
+							"minLength": 1
+						},
+						"required": true
+					},
+					{
+						"in": "header",
+						"name": "x-csrf-token",
+						"schema": {
+							"type": "string",
+							"minLength": 1
+						},
+						"required": true
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Browser Session revoked and cookie cleared",
+						"headers": {
+							"Set-Cookie": {
+								"description": "__Host-connection_session; HttpOnly; Secure; SameSite=Strict; Path=/",
+								"schema": {
+									"type": "string"
+								}
+							}
+						}
+					},
+					"401": {
+						"description": "Browser Session is unavailable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"403": {
+						"description": "Origin or CSRF validation failed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "Connection login is unavailable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuthErrorV1"
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"components": {
+		"schemas": {
+			"AuthLoginRequestV1": {
+				"type": "object",
+				"properties": {
+					"username": {
+						"type": "string",
+						"maxLength": 256
+					},
+					"password": {
+						"type": "string",
+						"maxLength": 1024
+					}
+				},
+				"required": ["username", "password"],
+				"additionalProperties": false
+			},
+			"AuthErrorV1": {
+				"type": "object",
+				"properties": {
+					"error": {
+						"type": "string",
+						"enum": [
+							"Forbidden",
+							"Invalid request",
+							"Login failed",
+							"Login temporarily unavailable",
+							"Login unavailable",
+							"Unauthorized",
+							"Unavailable"
+						]
+					}
+				},
+				"required": ["error"],
+				"additionalProperties": false
+			},
+			"AuthLoginResponseV1": {
+				"type": "object",
+				"properties": {
+					"principal": {
+						"type": "object",
+						"properties": {
+							"id": {
+								"type": "string",
+								"minLength": 1
+							},
+							"uid": {
+								"type": "string",
+								"minLength": 1
+							}
+						},
+						"required": ["id", "uid"],
+						"additionalProperties": false
+					}
+				},
+				"required": ["principal"],
+				"additionalProperties": false
+			},
+			"AuthSessionResponseV1": {
+				"type": "object",
+				"properties": {
+					"principal": {
+						"type": "object",
+						"properties": {
+							"id": {
+								"type": "string",
+								"minLength": 1
+							},
+							"uid": {
+								"type": "string",
+								"minLength": 1
+							}
+						},
+						"required": ["id", "uid"],
+						"additionalProperties": false
+					},
+					"csrfToken": {
+						"type": "string",
+						"minLength": 1
+					}
+				},
+				"required": ["principal", "csrfToken"],
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {
+			"browserSession": {
+				"type": "apiKey",
+				"in": "cookie",
+				"name": "__Host-connection_session"
+			}
+		}
+	}
+}

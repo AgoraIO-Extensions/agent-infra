@@ -4,21 +4,17 @@ import {
 	BrowserSessionService,
 	ConnectionLoginService,
 	LoginRejectedError,
-	LoginThrottle,
 	LoginUnavailableError,
 	PrincipalIdentityResolver,
 	recheckDirectClientPrincipal,
 } from "@agent-infra/connection-core";
-import {
-	createLdaptsAuthenticator,
-	LdapAuthenticationError,
-} from "@agent-infra/connection-identity";
 import {
 	connectionDatabaseUrlFromEnvironment,
 	createAuditEventStore,
 	createBrowserSessionStore,
 	createConnectionClientRepository,
 	createConnectionDatabase,
+	createPostgresLoginThrottle,
 	createPostgresPrincipalDirectory,
 	createPrincipalIdentityStore,
 } from "@agent-infra/connection-store";
@@ -29,6 +25,8 @@ import { connectionApiService, createConnectionApp } from "./app";
 import { redactedLoginMarker } from "./audit-marker";
 import type { ConnectionAuthDependencies } from "./auth";
 import type { ConnectionClientDependencies } from "./client";
+import { LdapAuthenticationError } from "./identity/ldap";
+import { createLdaptsAuthenticator } from "./identity/ldapts-transport";
 
 interface StartOptions {
 	log?: (message: string) => void;
@@ -123,9 +121,9 @@ function authFromEnvironment():
 			principalStore,
 			createPostgresPrincipalDirectory(database.db, profile.issuer, ldap),
 		),
-		throttle: new LoginThrottle(),
+		throttle: createPostgresLoginThrottle(database.db),
 		environment,
-		failureFloorMs: 5_250,
+		failureFloorMs: 8_000,
 		marker,
 		audit: async (input) => {
 			await auditStore.insert({

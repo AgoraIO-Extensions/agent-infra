@@ -1,5 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
-import { PrincipalIdentityResolver, stablePrincipalId } from "./principal.js";
+import {
+	PrincipalIdentityResolver,
+	principalDirectoryCheckState,
+	principalStateFromDirectoryEntry,
+	stablePrincipalId,
+} from "./principal.js";
+
+it("rechecks after 15 minutes and disables a missing LDAP entry", () => {
+	const checkedAt = 1_000;
+	expect(principalDirectoryCheckState("active", checkedAt, checkedAt)).toBe(
+		"cached",
+	);
+	expect(
+		principalDirectoryCheckState("active", checkedAt, checkedAt + 15 * 60_000),
+	).toBe("recheck");
+	expect(principalDirectoryCheckState("disabled", checkedAt, checkedAt)).toBe(
+		"inactive",
+	);
+	expect(principalStateFromDirectoryEntry(false)).toBe("disabled");
+});
 
 describe("stable LDAP Principal mapping", () => {
 	it("keys only issuer and uid and preserves the existing authority", async () => {

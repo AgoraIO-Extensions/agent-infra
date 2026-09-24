@@ -1,6 +1,6 @@
 import {
 	LoginRateLimitedError,
-	type LoginThrottle,
+	type LoginThrottleOutcome,
 	normalizeLoginAccount,
 } from "./login-throttle.js";
 import type { PrincipalIdentityInput } from "./principal.js";
@@ -44,7 +44,13 @@ export interface ConnectionLoginDependencies {
 		resolve(input: PrincipalIdentityInput): Promise<BrowserSessionPrincipal>;
 	};
 	sessions: Pick<BrowserSessionService, "create" | "resolve" | "revoke">;
-	throttle: LoginThrottle;
+	throttle: {
+		begin(input: {
+			environment: string;
+			sourceMarker: string;
+			accountMarker: string;
+		}): Promise<(outcome: LoginThrottleOutcome) => Promise<void>>;
+	};
 	audit: (event: LoginAuditEvent) => Promise<void>;
 	marker: (kind: "account" | "source", value: string) => string;
 	environment: string;
@@ -70,6 +76,32 @@ export class ConnectionLoginService {
 	}
 
 	async login(input: { username: string; password: string; source: string }) {
+		let expired = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(
+				() => {
+					expired = true;
+					reject(new LoginUnavailableError());
+				},
+				Math.max(1_000, this.dependencies.failureFloorMs + 250),
+			);
+		});
+		try {
+			return await Promise.race([
+				this.performLogin(input, () => expired),
+				deadline,
+			]);
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
+	}
+
+	private async performLogin(
+		input: { username: string; password: string; source: string },
+		expired: () => boolean,
+	) {
+		if (!input.source.trim()) throw new LoginUnavailableError();
 		const startedAt = Date.now();
 		const audit = {
 			action: "auth.login" as const,
@@ -85,12 +117,12 @@ export class ConnectionLoginService {
 			!/^[a-f0-9]{64}$/.test(audit.sourceMarker)
 		)
 			throw new LoginUnavailableError();
-		let finish: (succeeded: boolean) => void;
+		let finish: (outcome: LoginThrottleOutcome) => Promise<void>;
 		try {
-			finish = this.dependencies.throttle.begin({
+			finish = await this.dependencies.throttle.begin({
 				environment: this.dependencies.environment,
-				source: input.source,
-				username: input.username,
+				sourceMarker: audit.sourceMarker,
+				accountMarker: audit.accountMarker,
 			});
 		} catch (error) {
 			if (!(error instanceof LoginRateLimitedError))
@@ -106,22 +138,36 @@ export class ConnectionLoginService {
 			| Awaited<ReturnType<BrowserSessionService["create"]>>
 			| undefined;
 		try {
+			if (expired()) throw new LoginUnavailableError();
 			const identity = await this.dependencies.authenticator.authenticate(
 				input.username,
 				input.password,
 			);
+			if (expired()) throw new LoginUnavailableError();
 			const principal = await this.dependencies.principals.resolve(identity);
 			if (principal.status !== "active") throw new PrincipalInactiveError();
+			if (expired()) throw new LoginUnavailableError();
 			created = await this.dependencies.sessions.create(principal);
+			if (expired()) throw new LoginUnavailableError();
 			await this.dependencies.audit({
 				...audit,
 				principalId: principal.id,
 				outcome: "succeeded",
 			});
-			finish(true);
+			if (expired()) throw new LoginUnavailableError();
+			await finish("succeeded");
+			if (expired()) throw new LoginUnavailableError();
 			return { principal, ...created };
 		} catch (error) {
-			finish(false);
+			let failure = error;
+			const rejected =
+				error instanceof LoginRejectedError ||
+				error instanceof PrincipalInactiveError;
+			try {
+				await finish(rejected ? "rejected" : "unavailable");
+			} catch {
+				failure = new LoginUnavailableError();
+			}
 			if (created)
 				await this.dependencies.sessions.revoke(created.token).catch(() => {});
 			try {
@@ -130,10 +176,15 @@ export class ConnectionLoginService {
 				throw new LoginUnavailableError();
 			}
 			if (
-				error instanceof LoginRejectedError ||
-				error instanceof PrincipalInactiveError
+				failure instanceof LoginRejectedError ||
+				failure instanceof PrincipalInactiveError
 			) {
 				await this.padFailure(startedAt);
+				if (
+					expired() ||
+					Date.now() - startedAt > this.dependencies.failureFloorMs + 100
+				)
+					throw new LoginUnavailableError();
 				throw new LoginRejectedError();
 			}
 			throw new LoginUnavailableError();

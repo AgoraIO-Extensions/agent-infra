@@ -11,15 +11,17 @@
 		"check-types": "tsc --noEmit",
 		"dev": "tsx watch src/index.ts",
 		"start": "node dist/index.mjs",
-		"test": "vitest run src"
+		"test": "vitest run src && node scripts/generate-auth-openapi.mjs --check",
+		"generate:auth-openapi": "node scripts/generate-auth-openapi.mjs --write"
 	},
 	"dependencies": {
 		"@agent-infra/connection-core": "workspace:*",
-		"@agent-infra/connection-identity": "workspace:*",
 		"@agent-infra/connection-store": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
 		"@hono/node-server": "^2.0.12",
-		"hono": "^4.12.32"
+		"hono": "^4.12.32",
+		"ldapts": "9.2.0",
+		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
@@ -27,6 +29,7 @@
 		"tsdown": "^0.22.14",
 		"tsx": "^4.23.1",
 		"typescript": "catalog:",
-		"vitest": "catalog:"
+		"vitest": "catalog:",
+		"zod-openapi": "catalog:"
 	}
 }
