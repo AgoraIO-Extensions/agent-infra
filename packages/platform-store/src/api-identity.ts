@@ -450,6 +450,13 @@ export class PostgresApiIdentityStoreV1 {
 			throw new Error("Application credential transport is unavailable");
 		}
 		return this.#database.transaction(async (transaction) => {
+			const [application] = await transaction
+				.select({ id: platformApplications.id })
+				.from(platformApplications)
+				.where(eq(platformApplications.id, input.applicationId))
+				.limit(1)
+				.for("update");
+			if (!application) return false;
 			const rows = await transaction
 				.update(apiCredentialDeliveryGrants)
 				.set({ revokedAt: input.revokedAt ?? new Date() })
@@ -590,6 +597,13 @@ export class PostgresApiIdentityStoreV1 {
 		readonly audit?: ApiIdentityAuditInputV1;
 	}): Promise<boolean> {
 		return this.#database.transaction(async (transaction) => {
+			const [agent] = await transaction
+				.select({ id: agents.id })
+				.from(agents)
+				.where(eq(agents.id, input.agentId))
+				.limit(1)
+				.for("update");
+			if (!agent) return false;
 			const rows = await transaction
 				.update(agentPrincipalGrants)
 				.set({ revokedAt: input.revokedAt ?? new Date() })
