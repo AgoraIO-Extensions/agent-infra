@@ -578,6 +578,21 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 					event.payload.phase === "failed",
 			),
 		).toHaveLength(4);
+		const modelFacts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(modelFacts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(modelFacts[0]?.operationRef).toBe(modelFacts[3]?.operationRef);
+		expect(modelFacts[0]?.attemptRef).not.toBe(modelFacts[3]?.attemptRef);
 	}
 }, 30000);
 
