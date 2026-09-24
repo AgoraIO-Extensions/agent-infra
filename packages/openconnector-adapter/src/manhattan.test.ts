@@ -5,6 +5,20 @@ import test from "node:test";
 import { ManhattanAdapter, manhattanConnectionCatalog } from "./manhattan.ts";
 import { manhattanExecutorDigest } from "./manhattan-integrity.ts";
 
+function session(accessToken: string) {
+	const payload = Buffer.from(
+		JSON.stringify({ access_token: accessToken }),
+	).toString("base64url");
+	return `header.${payload}.signature`;
+}
+
+function credential(accessToken: string) {
+	return JSON.stringify({
+		email: "user@example.com",
+		sessionToken: session(accessToken),
+	});
+}
+
 test("Manhattan executor digest pins its reviewed source", () => {
 	const digest = createHash("sha256")
 		.update(readFileSync(new URL("./manhattan.ts", import.meta.url)))
@@ -14,6 +28,15 @@ test("Manhattan executor digest pins its reviewed source", () => {
 
 test("Manhattan catalog is read only", () => {
 	assert.equal(manhattanConnectionCatalog.actions.length, 4);
+	assert.deepEqual(
+		manhattanConnectionCatalog.actions.map((action) => action.id),
+		[
+			"manhattan.get_current_user@v2",
+			"manhattan.list_sdk_dumps@v2",
+			"manhattan.get_sdk_dump@v2",
+			"manhattan.list_symbols@v2",
+		],
+	);
 	assert.ok(
 		manhattanConnectionCatalog.actions.every(
 			(action) => action.effect === "READ",
@@ -27,11 +50,14 @@ test("Manhattan validates identity with machine and personal credentials", async
 		headers = new Headers(init?.headers);
 		return Response.json({ email: "user@example.com", displayName: "User" });
 	}, "machine-key");
-	const credential = await adapter.validateCredential("personal-token");
+	const identity = await adapter.validateCredential(
+		credential("personal-token"),
+	);
 	assert.equal(headers.get("apikey"), "machine-key");
 	assert.equal(headers.get("authorization"), "Bearer personal-token");
-	assert.equal(credential.externalAccount, "user@example.com");
-	assert.deepEqual(credential.grantedScopes, ["manhattan.sdk.read"]);
+	assert.equal(identity.externalAccount, "user@example.com");
+	assert.deepEqual(identity.grantedScopes, ["manhattan.sdk.read"]);
+	assert.equal(JSON.parse(identity.accessToken).email, "user@example.com");
 });
 
 test("Manhattan maps actions only to fixed endpoints", async () => {
@@ -42,12 +68,12 @@ test("Manhattan maps actions only to fixed endpoints", async () => {
 	}, "machine-key");
 	await adapter.execute({
 		action: "manhattan.list_sdk_dumps",
-		credential: { accessToken: "token" },
+		credential: { accessToken: credential("token") },
 		input: { current: 1 },
 	});
 	await adapter.execute({
 		action: "manhattan.list_symbols",
-		credential: { accessToken: "token" },
+		credential: { accessToken: credential("token") },
 		input: { pageSize: 20 },
 	});
 	assert.equal(
@@ -69,9 +95,41 @@ test("Manhattan stops reading responses above 64 KiB", async () => {
 	await assert.rejects(
 		adapter.execute({
 			action: "manhattan.get_current_user",
-			credential: { accessToken: "token" },
+			credential: { accessToken: credential("token") },
 			input: {},
 		}),
 		/response is too large/,
+	);
+});
+
+test("Manhattan refreshes an expired HCI session once", async () => {
+	const requests: string[] = [];
+	const adapter = new ManhattanAdapter(async (input) => {
+		requests.push(String(input));
+		if (String(input) === "https://grafana.bj2.agoralab.co/") {
+			return new Response(null, {
+				headers: {
+					"set-cookie": `HCIAuthToken=${session("fresh-token")}; Path=/`,
+				},
+				status: 200,
+			});
+		}
+		if (requests.filter((url) => url.includes("/api/connection/")).length === 1)
+			return new Response(null, { status: 401 });
+		return Response.json({ email: "user@example.com", displayName: "User" });
+	}, "machine-key");
+
+	const identity = await adapter.validateCredential(
+		credential("expired-token"),
+	);
+
+	assert.deepEqual(requests, [
+		"https://manhattan-api.agoralab.co/api/connection/whoami",
+		"https://grafana.bj2.agoralab.co/",
+		"https://manhattan-api.agoralab.co/api/connection/whoami",
+	]);
+	assert.equal(
+		JSON.parse(identity.accessToken).sessionToken,
+		session("fresh-token"),
 	);
 });
