@@ -1,9 +1,12 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	HookCallbackMatcher,
+	HookInput,
+	Options,
+} from "@anthropic-ai/claude-agent-sdk";
 import { workspacePathAllowed } from "./workspace-path.js";
 
 export type ClaudeToolRequestObserver = (request: {
 	name: string;
-	input: unknown;
 	toolUseID: string;
 	permitted: boolean;
 }) => Promise<void>;
@@ -57,7 +60,6 @@ export function claudeWorkspaceTools(
 							try {
 								await observer?.({
 									name: input.tool_name,
-									input: input.tool_input,
 									toolUseID: input.tool_use_id,
 									permitted,
 								});
@@ -83,42 +85,33 @@ export function claudeWorkspaceTools(
 					],
 				},
 			],
-			PostToolUse: [
-				{
-					hooks: [
-						async (input) => {
-							if (input.hook_event_name === "PostToolUse")
-								try {
-									await executionObserver?.({
-										name: input.tool_name,
-										toolUseID: input.tool_use_id,
-									});
-								} catch {
-									// The tool has already run; its result remains authoritative.
-								}
-							return {};
-						},
-					],
-				},
-			],
+			PostToolUse: [executionHook(executionObserver, "PostToolUse")],
 			PostToolUseFailure: [
-				{
-					hooks: [
-						async (input) => {
-							if (input.hook_event_name === "PostToolUseFailure")
-								try {
-									await executionObserver?.({
-										name: input.tool_name,
-										toolUseID: input.tool_use_id,
-									});
-								} catch {
-									// The tool has already run; its result remains authoritative.
-								}
-							return {};
-						},
-					],
-				},
+				executionHook(executionObserver, "PostToolUseFailure"),
 			],
 		},
+	};
+}
+
+function executionHook(
+	executionObserver: ClaudeToolExecutionObserver | undefined,
+	hookEventName: "PostToolUse" | "PostToolUseFailure",
+): HookCallbackMatcher {
+	return {
+		hooks: [
+			async (input: HookInput) => {
+				if (input.hook_event_name === hookEventName)
+					if ("tool_name" in input && "tool_use_id" in input)
+						try {
+							await executionObserver?.({
+								name: input.tool_name,
+								toolUseID: input.tool_use_id,
+							});
+						} catch {
+							// The tool has already run; its result remains authoritative.
+						}
+				return {};
+			},
+		],
 	};
 }
