@@ -110,9 +110,9 @@ export function createDeploymentConfigurationProjectionV2(input: {
 							reasoningLevels: [...endpoint.capabilities.reasoningLevels],
 						})),
 					}));
-					catalogStatus = endpoints.some((endpoint) => endpoint.models.length > 0)
-						? "populated"
-						: "empty";
+				catalogStatus = endpoints.some((endpoint) => endpoint.models.length > 0)
+					? "populated"
+					: "empty";
 			}
 		} catch {
 			catalogStatus = "unavailable";
