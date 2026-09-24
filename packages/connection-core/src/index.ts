@@ -1118,9 +1118,7 @@ export class ConnectionApplicationService {
 			identity.providerId !== current.providerId ||
 			identity.providerId !== connector.providerId ||
 			identity.providerReleaseId !== connector.providerReleaseId ||
-			identity.externalAccount !== current.externalAccount ||
-			JSON.stringify([...identity.grantedScopes].sort()) !==
-				JSON.stringify([...current.grantedScopes].sort())
+			identity.externalAccount !== current.externalAccount
 		) {
 			throw new ConnectionError(
 				"PROVIDER_FAILED",
