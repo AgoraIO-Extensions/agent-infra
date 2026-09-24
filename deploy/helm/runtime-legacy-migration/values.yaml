@@ -1,0 +1,22 @@
+# Render this independent chart only after establishing the documented offline window.
+image:
+  repository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
+  digest: ""
+mode: candidate
+dataClaim: ""
+candidateClaim: ""
+issuer: ""
+binding:
+  workerId: ""
+  agentId: ""
+  workloadRevision: 1
+  fence: 1
+  imageDigest: ""
+trust:
+  keyId: ""
+  manifest:
+    name: ""
+    key: manifest.json
+  publicKey:
+    name: ""
+    key: public.pem

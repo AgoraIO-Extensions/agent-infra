@@ -1407,9 +1407,21 @@ async function runImageProbe() {
 			"personal-configuration-isolated",
 			(await readFile("/tmp/personal/config.toml", "utf8")) === personalConfig,
 		);
-		const release = JSON.parse(
-			await readFile("/opt/codex/share/release.json", "utf8"),
-		);
+		const releaseBytes = await readFile("/opt/codex/share/release.json");
+		const release = JSON.parse(releaseBytes);
+		const architecture =
+			process.arch === "x64"
+				? "amd64"
+				: process.arch === "arm64"
+					? "arm64"
+					: undefined;
+		assert.equal(process.platform, "linux");
+		assert.ok(architecture);
+		const artifact = release.artifacts[architecture];
+		const executableSha256 = `sha256:${createHash("sha256")
+			.update(await readFile("/opt/codex/bin/codex"))
+			.digest("hex")}`;
+		assert.equal(executableSha256, artifact.executableSha256);
 		const sessions = Object.values(
 			JSON.parse(
 				await readFile(
@@ -1431,6 +1443,14 @@ async function runImageProbe() {
 				status: "passed",
 				capability,
 				codexVersion: release.provenance.codexVersion,
+				installation: {
+					platform: process.platform,
+					architecture,
+					releaseSha256: `sha256:${createHash("sha256").update(releaseBytes).digest("hex")}`,
+					// The installer verified the downloaded archive against this installed pin.
+					archiveSha256: artifact.archiveSha256,
+					executableSha256,
+				},
 				configurationSchemaVersion: 2,
 				configVersion: observedConfigVersion,
 				checks,

@@ -442,6 +442,11 @@ Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
+历史迁移的部署入口使用独立的[一次性迁移 Job](../../deploy/helm/runtime-legacy-migration/README.md)，
+由既有 CLI 消费原 PVC 及独立只读信任文件。部署方先完成正常停机和 PVC 清退；提交模式还须
+维持全部 Platform API/Worker 入口的隔离维护窗口。该 Job 不属于主应用升级 hook，不改变
+第 8.1 节的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
+
 ### 10.1 Codex Linux sandbox 启动准入
 
 Codex Native Bridge 在 Linux 由部署可信 `setpriv` 的 Landlock 边界承担全部文件约束，并把固定 Codex 版本的后端选择保持在 legacy Landlock（`features.use_legacy_landlock=true`），避免残留代码路径落到需要 namespace 权限的后端。原生自身的文件 sandbox 在 Linux 关闭，理由与代价见工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)。部署支持范围以工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)为准。

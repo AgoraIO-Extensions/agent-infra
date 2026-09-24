@@ -34,6 +34,10 @@ if (args[0] === "ls-tree" && process.env.FAKE_GIT_TREE_RECORD) {
   process.stdout.write(process.env.FAKE_GIT_TREE_RECORD + "\0");
   process.exit(0);
 }
+if (args[0] === "show" && args[1]?.includes(":packages/agent-runtime/src/codex-release.json")) {
+  const result = spawnSync("git", ["show", "HEAD:packages/agent-runtime/src/codex-release.json"], { cwd: process.cwd(), stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 if (args[0] === "ls-tree" || args[0] === "archive") {
   const result = spawnSync("git", args.map((arg) => arg === "${commitSha}" ? "HEAD" : arg), { cwd: process.cwd(), stdio: "inherit" });
   process.exit(result.status ?? 1);
@@ -42,7 +46,7 @@ if (args[0] === "status") {
   if (existsSync(process.env.FAKE_GIT_DRIFT_MARKER)) console.log(" M source");
   process.exit(0);
 }
-if (args[0] === "rev-parse") console.log("${commitSha}");
+if (args[0] === "rev-parse") console.log(args[1]?.endsWith("^{tree}") ? "2".repeat(40) : "${commitSha}");
 else if (args[0] === "show") console.log("1700000000");
 else process.exit(1);`,
 	);
@@ -75,7 +79,7 @@ if (args[0] === "buildx" && args[1] === "build") {
 }
 if (args[0] === "image" && args[1] === "inspect") {
   if (args.includes("{{json .}}")) {
-    const inspection = { Id: "sha256:" + "a".repeat(64), Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } };
+    const inspection = { Id: "sha256:" + "a".repeat(64), Architecture: process.env.PLATFORM.split("/")[1], Os: "linux", Config: { Labels: { "org.opencontainers.image.revision": process.env.FAKE_RUNTIME_SOURCE_SHA ?? "${commitSha}" } } };
     if (!process.env.FAKE_RUNTIME_DIGEST_MISSING) inspection.Descriptor = { digest: "sha256:" + createHash("sha256").update(args.at(-1) + ":stable").digest("hex") };
     console.log(JSON.stringify(inspection));
     process.exit(0);
@@ -94,7 +98,14 @@ if (args[0] === "run") {
   if (args.includes("/probe/runtime-image-probe.mjs")) {
     if (process.env.FAKE_RUNTIME_PROBE_FAIL) { console.error(process.env.FAKE_RUNTIME_PROBE_STDERR ?? "synthetic-credential-do-not-log"); process.exit(42); }
     if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
-    else console.log(JSON.stringify({ schemaVersion: 1, status: "passed", capability: "official-model-only", codexVersion: "0.153.0", configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-shell-rejected-without-side-effects", "native-apply-patch-rejected-without-side-effects", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
+    else {
+      const context = args.find((arg) => arg.endsWith("dst=/probe/runtime-image-probe.mjs,readonly")).split("src=")[1].split(",dst=")[0].slice(0, -"tests/runtime-image-probe.mjs".length);
+      const bytes = readFileSync(join(context, "packages/agent-runtime/src/codex-release.json"));
+      const release = JSON.parse(bytes);
+      const architecture = process.env.PLATFORM.split("/")[1];
+      const artifact = release.artifacts[architecture];
+      console.log(JSON.stringify({ schemaVersion: 1, status: "passed", capability: "official-model-only", codexVersion: release.provenance.codexVersion, installation: { platform: "linux", architecture, releaseSha256: "sha256:" + createHash("sha256").update(bytes).digest("hex"), archiveSha256: artifact.archiveSha256, executableSha256: artifact.executableSha256 }, configurationSchemaVersion: 2, configVersion: "synthetic-active-v2", checks: ["configuration-fail-closed", "native-active-default-model", "native-execution-selection", "submit-idempotency", "selection-conflict", "grant-and-agent-binding", "persistent-runtime-restart", "http-failures-redacted", "stream-failures-redacted", "cancellation-aborts-upstream", "native-shell-rejected-without-side-effects", "native-apply-patch-rejected-without-side-effects", "recursive-native-storage-redacted", "personal-configuration-isolated"] }));
+    }
     process.exit(0);
   }
   if (args.includes("--entrypoint")) console.log(process.env.FAKE_RUNTIME_UID ?? "1000");
@@ -257,6 +268,8 @@ test("image build validates reproducibility and read-only non-root execution", a
 		);
 		assert.equal(runtimeEvidence.commitSha, commitSha);
 		assert.equal(runtimeEvidence.sourceDirty, false);
+		assert.equal(runtimeEvidence.sourceTree, "2".repeat(40));
+		assert.equal(runtimeEvidence.probe.installation.architecture, "amd64");
 		assert.equal(runtimeEvidence.imageId, `sha256:${"a".repeat(64)}`);
 		assert.equal("imageConfigDigest" in runtimeEvidence, false);
 		assert.equal(
