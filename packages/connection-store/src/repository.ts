@@ -2,11 +2,13 @@ import {
 	type AccessTokenRecord,
 	type ActionCallRecord,
 	type ActionCallStatus,
+	type AuditEventStore,
 	type AuthorizationCodeRecord,
 	type AuthorizationCodeStore,
 	assertActionCallTransition,
 	type CatalogEntry,
 	type CatalogReader,
+	type ConnectionAuditEvent,
 	type ConnectionAuthorityRepository,
 	type ConnectionTokenStore,
 	type ConsumerTokenStore,
@@ -35,6 +37,7 @@ import {
 	actionCalls,
 	actionVersions,
 	actors,
+	auditEvents,
 	authorizationCodes,
 	browserSessions,
 	consumerInstances,
@@ -73,6 +76,7 @@ function actionCallRecord(
 	return {
 		id: row.id,
 		requestId: row.requestId,
+		traceId: row.traceId,
 		callId: row.callId,
 		idempotencyKey: row.idempotencyKey,
 		namespaceKey: row.namespaceKey,
@@ -86,6 +90,29 @@ function actionCallRecord(
 		actionVersionId: row.actionVersionId,
 		requestDigest: row.requestDigest,
 		status: row.status as ActionCallStatus,
+	};
+}
+
+export function createAuditEventStore(db: ConnectionDatabase): AuditEventStore {
+	return {
+		async insert(event: ConnectionAuditEvent) {
+			await db.insert(auditEvents).values({
+				id: event.id,
+				traceId: event.traceId,
+				principalId: event.principalId ?? null,
+				consumerInstanceId: event.consumerInstanceId ?? null,
+				actorId: event.actorId ?? null,
+				action: event.action,
+				targetType: event.targetType,
+				targetId: event.targetId,
+				outcome: event.outcome,
+				metadata: event.metadata,
+				occurredAt:
+					event.occurredAt !== undefined
+						? new Date(event.occurredAt)
+						: new Date(),
+			});
+		},
 	};
 }
 
@@ -163,6 +190,7 @@ export function createConnectionAuthorityRepository(
 			await db.insert(actionCalls).values({
 				id: record.id,
 				requestId: record.requestId,
+				traceId: record.traceId,
 				callId: record.callId,
 				idempotencyKey: record.idempotencyKey,
 				namespaceKey: record.namespaceKey,

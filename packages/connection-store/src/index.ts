@@ -8,6 +8,7 @@ export {
 	migrateConnectionDatabase,
 } from "./migrate.js";
 export {
+	createAuditEventStore,
 	createAuthorizationCodeStore,
 	createBrowserSessionPrincipalStore,
 	createBrowserSessionStore,

@@ -267,6 +267,7 @@ CREATE TABLE "connection"."grant_actions" (
 CREATE TABLE "connection"."action_calls" (
   "id" text PRIMARY KEY NOT NULL,
   "request_id" text NOT NULL,
+  "trace_id" text NOT NULL,
   "call_id" text NOT NULL,
   "idempotency_key" varchar(128) NOT NULL,
   "namespace_key" text NOT NULL,
@@ -296,6 +297,7 @@ CREATE TABLE "connection"."action_calls" (
   CONSTRAINT "action_calls_status_check" CHECK ("status" IN ('created', 'submission_started', 'provider_succeeded', 'provider_failed', 'result_pending', 'needs_manual_review', 'unresolved')),
   CONSTRAINT "action_call_id_non_empty" CHECK (char_length("id") > 0),
   CONSTRAINT "action_call_request_id_non_empty" CHECK (char_length("request_id") > 0),
+  CONSTRAINT "action_call_trace_id_non_empty" CHECK (char_length("trace_id") > 0),
   CONSTRAINT "action_call_namespace_key_non_empty" CHECK (char_length("namespace_key") > 0),
   CONSTRAINT "action_call_credential_version_id_non_empty" CHECK (char_length("credential_version_id") > 0)
 );

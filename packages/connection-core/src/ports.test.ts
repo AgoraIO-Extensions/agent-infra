@@ -38,6 +38,7 @@ function callRecord(): ActionCallRecord {
 	return {
 		id: "call-ports-1",
 		requestId: request.requestId,
+		traceId: "trace-ports-1",
 		callId: "call-ref-ports-1",
 		idempotencyKey: request.idempotencyKey,
 		namespaceKey: actionCallNamespaceKey(request),

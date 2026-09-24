@@ -82,6 +82,7 @@ export interface GrantRecord {
 export interface ActionCallRecord {
 	id: string;
 	requestId: string;
+	traceId: string;
 	callId: string;
 	idempotencyKey: string;
 	namespaceKey: string;

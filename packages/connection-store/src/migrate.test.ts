@@ -16,6 +16,7 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
 import {
+	createAuditEventStore,
 	createCatalogReader,
 	createConnectionAuthorityRepository,
 } from "./repository.js";
@@ -113,6 +114,34 @@ describe("Connection PostgreSQL migration", () => {
 		try {
 			const repository = createConnectionAuthorityRepository(handle.db);
 			const catalog = createCatalogReader(handle.db);
+			const audit = createAuditEventStore(handle.db);
+			await audit.insert({
+				id: "audit-store-1",
+				traceId: "trace-store-1",
+				principalId: "principal-a",
+				consumerInstanceId: "instance-a",
+				actorId: "actor-a",
+				action: "mcp.request",
+				targetType: "action_version",
+				targetId: "action-a-v1",
+				outcome: "succeeded",
+				metadata: { requestId: "request-store-audit" },
+			});
+			const [auditRow] = await databaseClient`
+				select trace_id, principal_id, consumer_instance_id, actor_id, action, target_id, outcome, metadata
+				from connection.audit_events
+				where id = 'audit-store-1'
+			`;
+			expect(auditRow).toMatchObject({
+				trace_id: "trace-store-1",
+				principal_id: "principal-a",
+				consumer_instance_id: "instance-a",
+				actor_id: "actor-a",
+				action: "mcp.request",
+				target_id: "action-a-v1",
+				outcome: "succeeded",
+				metadata: { requestId: "request-store-audit" },
+			});
 			expect(
 				await catalog.list({
 					principalId: "principal-a",
@@ -175,6 +204,7 @@ describe("Connection PostgreSQL migration", () => {
 			const record: ActionCallRecord = {
 				id: "call-store-1",
 				requestId: request.requestId,
+				traceId: "trace-store-1",
 				callId: "call-ref-store-1",
 				idempotencyKey: request.idempotencyKey,
 				namespaceKey,
@@ -220,6 +250,7 @@ describe("Connection PostgreSQL migration", () => {
 				...record,
 				id: "call-store-consumer",
 				requestId: consumerRequest.requestId,
+				traceId: "trace-consumer",
 				callId: "call-ref-store-consumer",
 				idempotencyKey: consumerRequest.idempotencyKey,
 				namespaceKey: actionCallNamespaceKey(consumerRequest),

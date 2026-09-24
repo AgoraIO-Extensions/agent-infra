@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
+	type AuditEventStore,
 	type AuthenticatedConnectionContext,
 	type CatalogReader,
 	type ConnectionInstallationService,
@@ -37,13 +38,21 @@ export interface ConnectionApiDependencies {
 		audience: string;
 	}) => Promise<AuthenticatedConnectionContext | undefined>;
 	readonly mcp?: {
+		readonly validateArguments: (input: {
+			context: AuthenticatedConnectionContext;
+			actionVersionId: string;
+			arguments: unknown;
+		}) => Promise<boolean> | boolean;
 		readonly execute: (input: {
 			context: AuthenticatedConnectionContext;
 			actionVersionId: string;
 			arguments: unknown;
 			idempotencyKey: string;
+			requestId: string;
+			traceId: string;
 		}) => Promise<Response | unknown>;
 	};
+	readonly audit?: AuditEventStore;
 	readonly oauth?: {
 		readonly authorization: OAuthAuthorizationService;
 		readonly tokens: ConnectionTokenService;
@@ -410,7 +419,7 @@ export function createConnectionApp(
 	});
 
 	app.post("/v1/mcp", async (context) => {
-		if (!dependencies.mcp || !dependencies.authenticate)
+		if (!dependencies.mcp || !dependencies.authenticate || !dependencies.audit)
 			return context.json({ error: "mcp_unavailable" }, 503);
 		const token = bearerToken(context.req.raw);
 		const authentication = token
@@ -424,7 +433,14 @@ export function createConnectionApp(
 		if (!authentication) return context.json({ error: "invalid_token" }, 401);
 		let input: Record<string, unknown>;
 		try {
-			input = await context.req.json();
+			const parsed: unknown = await context.req.json();
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				Array.isArray(parsed)
+			)
+				return context.json({ error: "invalid_request" }, 400);
+			input = parsed as Record<string, unknown>;
 		} catch {
 			return context.json({ error: "invalid_request" }, 400);
 		}
@@ -437,11 +453,41 @@ export function createConnectionApp(
 			input.idempotencyKey.length === 0
 		)
 			return context.json({ error: "invalid_request" }, 400);
+		if (
+			!(await dependencies.mcp.validateArguments({
+				context: authentication,
+				actionVersionId: input.actionVersionId,
+				arguments: input.arguments,
+			}))
+		)
+			return context.json({ error: "invalid_arguments" }, 400);
+		const requestId = randomUUID();
+		// Ignore caller-supplied traceparent values. Connection owns the
+		// authoritative correlation identifier.
+		const traceId = randomUUID();
+		await dependencies.audit.insert({
+			id: randomUUID(),
+			traceId,
+			principalId: authentication.principalId,
+			consumerInstanceId: authentication.consumerInstanceId,
+			actorId: authentication.actorId ?? undefined,
+			action: "mcp.admission",
+			targetType: "action_version",
+			targetId: input.actionVersionId,
+			outcome: "succeeded",
+			metadata: {
+				phase: "admitted",
+				requestId,
+				tokenId: authentication.tokenId,
+			},
+		});
 		const result = await dependencies.mcp.execute({
 			context: authentication,
 			actionVersionId: input.actionVersionId,
 			arguments: input.arguments,
 			idempotencyKey: input.idempotencyKey,
+			requestId,
+			traceId,
 		});
 		return result instanceof Response ? result : context.json(result);
 	});

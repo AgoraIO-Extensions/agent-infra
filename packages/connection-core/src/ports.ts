@@ -13,6 +13,24 @@ import type {
 	GrantRecord,
 } from "./types.js";
 
+export interface ConnectionAuditEvent {
+	id: string;
+	traceId: string;
+	principalId?: string;
+	consumerInstanceId?: string;
+	actorId?: string;
+	action: string;
+	targetType: string;
+	targetId: string;
+	outcome: "succeeded" | "rejected" | "failed";
+	metadata: Record<string, unknown>;
+	occurredAt?: number;
+}
+
+export interface AuditEventStore {
+	insert(event: ConnectionAuditEvent): Promise<void>;
+}
+
 /**
  * The repository receives a fully resolved server-side context. It must not
  * accept a caller-selected Principal, Connection or Credential selector as a

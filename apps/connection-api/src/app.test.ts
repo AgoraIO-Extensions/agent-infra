@@ -202,11 +202,13 @@ describe("Direct MCP boundary", () => {
 				tokenId: "t",
 			}),
 			mcp: {
+				validateArguments: async () => true,
 				execute: async (input) => {
 					received = input;
 					return { callId: "call-1", status: "created" };
 				},
 			},
+			audit: { insert: async () => {} },
 		});
 		const response = await app.request("/v1/mcp", {
 			method: "POST",
@@ -242,7 +244,8 @@ describe("Direct MCP boundary", () => {
 				recoveryGeneration: 1,
 				tokenId: "t",
 			}),
-			mcp: { execute },
+			mcp: { validateArguments: async () => true, execute },
+			audit: { insert: async () => {} },
 		});
 		const response = await app.request("/v1/mcp", {
 			method: "POST",
@@ -254,6 +257,112 @@ describe("Direct MCP boundary", () => {
 			}),
 		});
 		expect(response.status).toBe(400);
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it("validates action arguments before execution and audit", async () => {
+		const execute = vi.fn(async () => ({ ok: true }));
+		const validateArguments = vi.fn(async () => false);
+		const audit = { insert: vi.fn(async () => {}) };
+		const app = createConnectionApp({
+			authenticate: async () => ({
+				principalId: "p",
+				consumerId: "c",
+				consumerInstanceId: "i",
+				actorId: null,
+				audience: "connection-api",
+				scopes: [],
+				recoveryGeneration: 1,
+				tokenId: "t",
+			}),
+			mcp: { validateArguments, execute },
+			audit,
+		});
+		const response = await app.request("/v1/mcp", {
+			method: "POST",
+			headers: { authorization: "Bearer token" },
+			body: JSON.stringify({
+				actionVersionId: "a",
+				idempotencyKey: "i",
+				arguments: { unexpected: true },
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "invalid_arguments" });
+		expect(validateArguments).toHaveBeenCalledOnce();
+		expect(execute).not.toHaveBeenCalled();
+		expect(audit.insert).not.toHaveBeenCalled();
+	});
+
+	it("generates trusted request and trace IDs for audit and execution", async () => {
+		let execution: { requestId: string; traceId: string } | undefined;
+		const audit = { insert: vi.fn(async () => {}) };
+		const app = createConnectionApp({
+			authenticate: async () => ({
+				principalId: "p",
+				consumerId: "c",
+				consumerInstanceId: "i",
+				actorId: null,
+				audience: "connection-api",
+				scopes: [],
+				recoveryGeneration: 1,
+				tokenId: "t",
+			}),
+			mcp: {
+				validateArguments: async () => true,
+				execute: async ({ requestId, traceId }) => {
+					execution = { requestId, traceId };
+					return { ok: true };
+				},
+			},
+			audit,
+		});
+		const response = await app.request("/v1/mcp", {
+			method: "POST",
+			headers: {
+				authorization: "Bearer token",
+				traceparent: "attacker-selected-trace",
+			},
+			body: JSON.stringify({
+				actionVersionId: "a",
+				idempotencyKey: "i",
+				arguments: {},
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(execution?.requestId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(execution?.traceId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(execution?.traceId).not.toBe("attacker-selected-trace");
+		expect(audit.insert).toHaveBeenCalledOnce();
+		expect(audit.insert).toHaveBeenCalledWith(
+			expect.objectContaining({
+				traceId: execution?.traceId,
+				principalId: "p",
+				targetId: "a",
+				metadata: expect.objectContaining({
+					requestId: execution?.requestId,
+					tokenId: "t",
+				}),
+			}),
+		);
+	});
+
+	it("fails closed when audit persistence is unavailable", async () => {
+		const execute = vi.fn(async () => ({ ok: true }));
+		const app = createConnectionApp({
+			authenticate: async () => undefined,
+			mcp: { validateArguments: async () => true, execute },
+		});
+		const response = await app.request("/v1/mcp", {
+			method: "POST",
+			body: JSON.stringify({
+				actionVersionId: "a",
+				idempotencyKey: "i",
+				arguments: {},
+			}),
+		});
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: "mcp_unavailable" });
 		expect(execute).not.toHaveBeenCalled();
 	});
 });

@@ -652,6 +652,7 @@ export const actionCalls = connectionSchema.table(
 	{
 		id: text("id").primaryKey(),
 		requestId: text("request_id").notNull(),
+		traceId: text("trace_id").notNull(),
 		callId: text("call_id").notNull(),
 		idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
 		namespaceKey: text("namespace_key").notNull(),
@@ -757,6 +758,7 @@ export const actionCalls = connectionSchema.table(
 		),
 		nonEmpty("action_call_id", table.id),
 		nonEmpty("action_call_request_id", table.requestId),
+		nonEmpty("action_call_trace_id", table.traceId),
 		nonEmpty("action_call_namespace_key", table.namespaceKey),
 		nonEmpty("action_call_credential_version_id", table.credentialVersionId),
 	],
