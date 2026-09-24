@@ -1861,6 +1861,158 @@
           }
         ]
       },
+      "DeploymentConfigurationProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "modelCatalog": {
+            "$ref": "#/components/schemas/DeploymentModelCatalogProjectionV2"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeploymentConfigurationStatusV2"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentTemplateProjectionV2"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "status",
+          "templates",
+          "modelCatalog"
+        ],
+        "type": "object"
+      },
+      "DeploymentConfigurationStatusV2": {
+        "enum": [
+          "populated",
+          "empty",
+          "unavailable",
+          "stale"
+        ],
+        "type": "string"
+      },
+      "DeploymentModelCatalogProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentModelEndpointProjectionV2"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeploymentConfigurationStatusV2"
+          }
+        },
+        "required": [
+          "status",
+          "revision",
+          "endpoints"
+        ],
+        "type": "object"
+      },
+      "DeploymentModelEndpointProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "endpointId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentModelProjectionV2"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "endpointId",
+          "displayName",
+          "models"
+        ],
+        "type": "object"
+      },
+      "DeploymentModelProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "modelId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reasoningLevels": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "modelId",
+          "reasoningLevels"
+        ],
+        "type": "object"
+      },
+      "DeploymentTemplateProjectionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedEnvironmentKeys": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "allowedSecretKeys": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "connectionEnabled": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "templateId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "templateId",
+          "displayName",
+          "connectionEnabled",
+          "allowedEnvironmentKeys",
+          "allowedSecretKeys"
+        ],
+        "type": "object"
+      },
       "ExecutionDetailProjectionV2": {
         "oneOf": [
           {
@@ -5127,6 +5279,93 @@
               }
             },
             "description": "Execution detail with original structured operation facts and event history"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v2/deployment/configuration": {
+      "get": {
+        "operationId": "getDeploymentConfigurationV2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentConfigurationProjectionV2"
+                }
+              }
+            },
+            "description": "Deployment-owned application choices"
           },
           "400": {
             "content": {

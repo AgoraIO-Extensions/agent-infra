@@ -26,6 +26,7 @@ import {
 } from "./file-assembly.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
+import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import {
 	type IdentityAdapter,
 	resolveCurrentTaskUser,
@@ -50,6 +51,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
+	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
@@ -288,6 +290,9 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
+		...(input.deploymentConfiguration === undefined
+			? {}
+			: { deploymentConfiguration: input.deploymentConfiguration }),
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,

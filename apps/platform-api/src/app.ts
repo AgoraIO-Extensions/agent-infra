@@ -5,6 +5,10 @@ import {
 	registerConfigurationRoutes,
 } from "./http/configuration-routes.js";
 import {
+	type DeploymentConfigurationRoutesDependencies,
+	registerDeploymentConfigurationRoutes,
+} from "./http/deployment-configuration-routes.js";
+import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
@@ -30,6 +34,7 @@ export interface PlatformAppDependencies {
 	) => Promise<void>;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
+	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
@@ -64,6 +69,11 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
+	if (dependencies.deploymentConfiguration)
+		registerDeploymentConfigurationRoutes(
+			app,
+			dependencies.deploymentConfiguration,
+		);
 	registerConversationRoutes(app, {
 		...dependencies.conversation,
 		files: dependencies.files,

@@ -7,9 +7,11 @@ import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	ModelCatalogSnapshotV1Schema,
 	modelIdentifier,
 	modelOperationV1,
 } from "@agent-infra/model-catalog";
+import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,
@@ -41,7 +43,7 @@ export interface DeploymentAdmissionInputV1 {
 		| "allowedSecretKeys"
 		| "platformManagedKeys"
 		| "connectionEnabled"
-	> & { readonly imageReference: string })[];
+	> & { readonly imageReference: string; readonly displayName?: string })[];
 	readonly modelCatalog: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
@@ -58,6 +60,75 @@ export interface DeploymentAdmissionInputV1 {
 
 function revision(prefix: string, value: unknown) {
 	return `${prefix}-${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+}
+
+/**
+ * Read-only choices for the browser. This reads the same deployment inputs and
+ * catalog snapshot used by admission; it never returns image, URL, or secret
+ * material and does not become an authorization source.
+ */
+export function createDeploymentConfigurationProjectionV2(input: {
+	readonly templates: DeploymentAdmissionInputV1["templates"];
+	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
+}) {
+	const templates = structuredClone(input.templates);
+	const loadModelCatalog = input.modelCatalog.load;
+	const templateOptions = templates.map((template) => ({
+		templateId: template.templateId,
+		displayName: template.displayName ?? template.templateId,
+		connectionEnabled: template.connectionEnabled,
+		allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
+		allowedSecretKeys: [...template.allowedSecretKeys],
+	}));
+	return async () => {
+		let catalogStatus: "populated" | "empty" | "unavailable" | "stale";
+		let catalogRevision: string | null = null;
+		let endpoints: Array<{
+			endpointId: string;
+			displayName: string;
+			models: Array<{ modelId: string; reasoningLevels: string[] }>;
+		}> = [];
+		const signal = AbortSignal.timeout(10_000);
+		try {
+			const snapshot = ModelCatalogSnapshotV1Schema.parse(
+				await modelOperationV1(signal, () => loadModelCatalog(signal)),
+			);
+			catalogRevision = snapshot.revision;
+			if (snapshot.validUntil <= Date.now()) {
+				catalogStatus = "stale";
+			} else {
+				endpoints = snapshot.endpoints
+					.filter((endpoint) => endpoint.available)
+					.map((endpoint) => ({
+						endpointId: endpoint.endpointId,
+						displayName: endpoint.endpointId,
+						models: (endpoint.allowedModels ?? []).map((modelId) => ({
+							modelId,
+							reasoningLevels: [...endpoint.capabilities.reasoningLevels],
+						})),
+					}));
+				catalogStatus = endpoints.length > 0 ? "populated" : "empty";
+			}
+		} catch {
+			catalogStatus = "unavailable";
+		}
+		const status =
+			catalogStatus === "unavailable" || catalogStatus === "stale"
+				? catalogStatus
+				: templateOptions.length > 0 || catalogStatus === "populated"
+					? "populated"
+					: "empty";
+		return DeploymentConfigurationProjectionV2Schema.parse({
+			schemaVersion: 2,
+			status,
+			templates: templateOptions,
+			modelCatalog: {
+				status: catalogStatus,
+				revision: catalogRevision,
+				endpoints,
+			},
+		});
+	};
 }
 
 function repositoryOf(imageReference: string) {
@@ -130,6 +201,13 @@ export function createDeploymentAdmissionsV1(
 					throw new Error();
 			}
 			if (typeof template.connectionEnabled !== "boolean") throw new Error();
+			if (
+				template.displayName !== undefined &&
+				(typeof template.displayName !== "string" ||
+					template.displayName.length < 1 ||
+					template.displayName.length > 256)
+			)
+				throw new Error();
 		}
 		if (
 			new Set(
