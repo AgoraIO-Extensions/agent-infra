@@ -160,6 +160,7 @@ export function assemblePlatformApi(
 						)) !== undefined
 					);
 				if (
+					actor.principal === undefined &&
 					principal.kind === "user" &&
 					(await managementQuery.getAgent(
 						{ kind: "owner", ownerId: principal.id },

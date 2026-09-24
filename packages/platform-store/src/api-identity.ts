@@ -189,6 +189,18 @@ export class PostgresApiIdentityStoreV1 {
 		) {
 			throw new TypeError("Credential scopes are invalid");
 		}
+		if (
+			input.principal.kind === "application" &&
+			(input.recipient === undefined || input.recipient.kind === "application")
+		) {
+			await writeApiIdentityAudit(this.#database, {
+				...input.audit,
+				recipient: input.recipient ?? input.principal,
+				outcome: "rejected",
+				targetId: input.principal.id,
+			});
+			throw new Error("Application credential transport is unavailable");
+		}
 		const id = input.credentialId ?? randomUUID();
 		const row = await this.#database.transaction(async (transaction) => {
 			if (input.principal.kind === "application" && input.recipient) {
@@ -371,6 +383,15 @@ export class PostgresApiIdentityStoreV1 {
 		readonly authorizationRevision: string;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void> {
+		if (input.principal.kind === "application") {
+			await writeApiIdentityAudit(this.#database, {
+				...input.audit,
+				recipient: input.principal,
+				outcome: "rejected",
+				targetId: input.applicationId,
+			});
+			throw new Error("Application credential transport is unavailable");
+		}
 		await this.#database.transaction(async (transaction) => {
 			const [application] = await transaction
 				.select({
@@ -419,6 +440,15 @@ export class PostgresApiIdentityStoreV1 {
 		readonly revokedAt?: Date;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<boolean> {
+		if (input.principal.kind === "application") {
+			await writeApiIdentityAudit(this.#database, {
+				...input.audit,
+				recipient: input.principal,
+				outcome: "rejected",
+				targetId: input.applicationId,
+			});
+			throw new Error("Application credential transport is unavailable");
+		}
 		return this.#database.transaction(async (transaction) => {
 			const rows = await transaction
 				.update(apiCredentialDeliveryGrants)

@@ -345,6 +345,40 @@ describe("API identity management authorization", () => {
 		);
 	});
 
+	it("audits rejected Agent grant authorization attempts", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const restrictedActor = {
+			...actor(),
+			credential: {
+				...actor().credential,
+				scopes: ["agent:read"] as const,
+			},
+		};
+		await expect(
+			useCase.grantAgent({
+				actor: restrictedActor,
+				agentId: "agent-1",
+				principal: { kind: "user", id: "recipient-1" },
+				grantType: "use",
+				audit: {
+					...audit,
+					action: "api.agent.grant.granted",
+				},
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(store.writeAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "api.agent.grant.granted",
+				recipient: { kind: "user", id: "recipient-1" },
+				grantType: "use",
+				outcome: "rejected",
+				targetId: "agent-1",
+			}),
+		);
+		expect(store.grantAgent).not.toHaveBeenCalled();
+	});
+
 	it("fails closed for a disabled actor", async () => {
 		const useCase = management(storeFixture());
 		await expect(

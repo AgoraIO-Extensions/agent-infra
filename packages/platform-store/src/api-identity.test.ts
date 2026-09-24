@@ -229,4 +229,63 @@ describe("PostgreSQL API identity store", () => {
 			},
 		]);
 	});
+
+	it("rejects application credential transport at the Store boundary", async () => {
+		await adminClient`truncate platform.audit_events,
+			platform.api_credential_delivery_grants, platform.platform_api_credentials,
+			platform.platform_applications cascade`;
+		await store.createApplication({
+			applicationId: "application_transport_boundary",
+			name: "Transport boundary test application",
+			responsibleUserId: "user_owner",
+			authorizationRevision: "application_revision_1",
+			audit: userAudit,
+		});
+		const issueAudit = {
+			...userAudit,
+			action: "api.credential.issued" as const,
+		};
+		await expect(
+			store.issueCredential({
+				principal: {
+					kind: "application",
+					id: "application_transport_boundary",
+				},
+				credential: "application-secret-value",
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: issueAudit,
+			}),
+		).rejects.toThrow("Application credential transport is unavailable");
+		await expect(
+			store.grantCredentialDelivery({
+				applicationId: "application_transport_boundary",
+				principal: { kind: "application", id: "recipient-application" },
+				authorizationRevision: "application_revision_1",
+				audit: { ...userAudit, action: "api.credential.delivery.granted" },
+			}),
+		).rejects.toThrow("Application credential transport is unavailable");
+		await expect(
+			store.revokeCredentialDelivery({
+				applicationId: "application_transport_boundary",
+				principal: { kind: "application", id: "recipient-application" },
+				audit: { ...userAudit, action: "api.credential.delivery.revoked" },
+			}),
+		).rejects.toThrow("Application credential transport is unavailable");
+		const audits = await adminClient`
+			select action, outcome
+			from platform.audit_events
+			order by occurred_at, id
+		`;
+		expect(audits).toEqual([
+			{ action: "api.application.created", outcome: "succeeded" },
+			{ action: "api.credential.issued", outcome: "rejected" },
+			{ action: "api.credential.delivery.granted", outcome: "rejected" },
+			{ action: "api.credential.delivery.revoked", outcome: "rejected" },
+		]);
+		const credentials = await store.listCredentials({
+			applicationId: "application_transport_boundary",
+		});
+		expect(credentials).toHaveLength(0);
+	});
 });

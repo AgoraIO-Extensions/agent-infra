@@ -496,6 +496,27 @@ export class PostgresApplicationFoundationTransactionV1
 					outcome: plan.auditEvent.outcome,
 					occurredAt: plan.auditEvent.occurredAt,
 				});
+				if (plan.result.status === "creating") {
+					await transaction.insert(auditEvents).values(
+						(["manage", "use"] as const).map((grantType) => ({
+							id: randomUUID(),
+							traceId: plan.auditEvent.traceId,
+							requestId: plan.auditEvent.requestId,
+							agentId: plan.auditEvent.agentId,
+							actorType: plan.auditEvent.actorType,
+							actorId: plan.auditEvent.actorId,
+							action: "api.agent.grant.granted" as const,
+							targetType: "grant" as const,
+							targetId: plan.agent.agentId,
+							outcome: "succeeded" as const,
+							details: {
+								recipient: grantPrincipal,
+								grantType,
+							},
+							occurredAt: plan.auditEvent.occurredAt,
+						})),
+					);
+				}
 				const [completed] = await transaction
 					.update(idempotencyRecords)
 					.set({
