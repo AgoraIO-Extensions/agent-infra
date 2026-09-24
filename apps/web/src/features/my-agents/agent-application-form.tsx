@@ -5,9 +5,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-	NativeSelect,
-	NativeSelectOption,
-} from "@/components/ui/native-select";
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
 import type {
@@ -291,11 +294,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<div className="form-grid">
 						<div className="space-y-2">
 							<Label htmlFor="application-source-kind">Agent 来源</Label>
-							<NativeSelect
+							<Select
 								disabled={props.mode === "update"}
-								id="application-source-kind"
-								onChange={(event) => {
-									const kind = event.target.value as AgentApplicationSourceKind;
+								value={sourceKind}
+								onValueChange={(value) => {
+									if (!value) return;
+									const kind = value as AgentApplicationSourceKind;
 									setSourceKind(kind);
 									if (kind === "standard") {
 										if (models.length === 0) setModels([blankModel()]);
@@ -303,18 +307,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									}
 									if (kind !== "standard") setConfigureModels(false);
 								}}
-								value={sourceKind}
 							>
-								<NativeSelectOption value="standard">
-									标准模板
-								</NativeSelectOption>
-								<NativeSelectOption value="custom-platform-adapter">
-									自定义 Agent · 平台交互入口
-								</NativeSelectOption>
-								<NativeSelectOption value="custom-self-managed">
-									自定义 Agent · 自有交互入口
-								</NativeSelectOption>
-							</NativeSelect>
+								<SelectTrigger
+									id="application-source-kind"
+									aria-describedby="application-source-help"
+									className="h-11 w-full text-base md:text-sm"
+								>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="standard">标准模板</SelectItem>
+									<SelectItem value="custom-platform-adapter">
+										自定义 Agent · 平台交互入口
+									</SelectItem>
+									<SelectItem value="custom-self-managed">
+										自定义 Agent · 自有交互入口
+									</SelectItem>
+								</SelectContent>
+							</Select>
 						</div>
 						{sourceKind === "standard" ? (
 							<div className="space-y-2">
@@ -345,23 +355,28 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<Label htmlFor="application-identity-responsibility">
 									入口身份校验
 								</Label>
-								<NativeSelect
+								<Select
 									disabled={props.mode === "update"}
-									id="application-identity-responsibility"
-									onChange={(event) =>
-										setIdentityResponsibility(
-											event.target.value as "platform-managed" | "self-managed",
-										)
-									}
 									value={identityResponsibility}
+									onValueChange={(value) => {
+										if (
+											value === "platform-managed" ||
+											value === "self-managed"
+										)
+											setIdentityResponsibility(value);
+									}}
 								>
-									<NativeSelectOption value="platform-managed">
-										由平台校验
-									</NativeSelectOption>
-									<NativeSelectOption value="self-managed">
-										由自有入口校验
-									</NativeSelectOption>
-								</NativeSelect>
+									<SelectTrigger
+										id="application-identity-responsibility"
+										className="h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="platform-managed">由平台校验</SelectItem>
+										<SelectItem value="self-managed">由自有入口校验</SelectItem>
+									</SelectContent>
+								</Select>
 							</div>
 						) : null}
 					</div>
