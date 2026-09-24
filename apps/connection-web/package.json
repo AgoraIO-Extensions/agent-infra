@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"prototype:approval": "vite --host 127.0.0.1 --port 4174",
 		"dev": "vite dev",
 		"build": "vite build",
 		"serve": "vite preview",
