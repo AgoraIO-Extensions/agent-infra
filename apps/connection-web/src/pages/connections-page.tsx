@@ -62,6 +62,9 @@ export function ConnectionsPage() {
 	const [rehoboamOpen, setRehoboamOpen] = useState(false);
 	const [rehoboamPending, setRehoboamPending] = useState(false);
 	const [rehoboamError, setRehoboamError] = useState<Error | null>(null);
+	const [manhattanOpen, setManhattanOpen] = useState(false);
+	const [manhattanPending, setManhattanPending] = useState(false);
+	const [manhattanError, setManhattanError] = useState<Error | null>(null);
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
@@ -92,6 +95,7 @@ export function ConnectionsPage() {
 		const provider = search.get("provider");
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
+		if (provider === "manhattan") setManhattanOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
 		if (provider === "jenkins-ci" || provider === "jenkins-release") {
@@ -151,6 +155,24 @@ export function ConnectionsPage() {
 			);
 		} finally {
 			setRehoboamPending(false);
+		}
+	};
+	const connectManhattan = async (accessToken: string) => {
+		setManhattanPending(true);
+		setManhattanError(null);
+		try {
+			await connectionApi.connectProviderCredential({
+				accessToken,
+				providerId: "manhattan",
+			});
+			setManhattanOpen(false);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setManhattanError(
+				error instanceof Error ? error : new Error("Manhattan 连接失败"),
+			);
+		} finally {
+			setManhattanPending(false);
 		}
 	};
 	const connectJira = async (credential: {
@@ -267,6 +289,7 @@ export function ConnectionsPage() {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "datalego") void connectDatalego();
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
+		else if (providerId === "manhattan") setManhattanOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -414,6 +437,7 @@ export function ConnectionsPage() {
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
+			{manhattanError ? <PageError error={manhattanError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{datalegoError ? <PageError error={datalegoError} /> : null}
@@ -580,6 +604,8 @@ export function ConnectionsPage() {
 								setBitbucketOpen(true);
 							else if (connection.providerId === "rehoboam")
 								setRehoboamOpen(true);
+							else if (connection.providerId === "manhattan")
+								setManhattanOpen(true);
 							else if (connection.providerId === "jira") setJiraOpen(true);
 							else if (connection.providerId === "confluence")
 								setConfluenceOpen(true);
@@ -746,6 +772,59 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={jenkinsPending}>
 								<SlidersHorizontal aria-hidden="true" size={17} />
 								{jenkinsPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
+				open={manhattanOpen}
+				onOpenChange={(open) => {
+					setManhattanOpen(open);
+					if (!open) setManhattanError(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接 Manhattan</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const accessToken = new FormData(event.currentTarget).get(
+								"accessToken",
+							);
+							if (typeof accessToken === "string")
+								void connectManhattan(accessToken);
+						}}
+					>
+						<label htmlFor="manhattan-access-token">
+							HCI OAuth Access Token
+						</label>
+						<input
+							autoComplete="off"
+							id="manhattan-access-token"
+							maxLength={8192}
+							name="accessToken"
+							required
+							type="password"
+						/>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={manhattanPending}>
+								<KeyRound aria-hidden="true" size={17} />
+								{manhattanPending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>
