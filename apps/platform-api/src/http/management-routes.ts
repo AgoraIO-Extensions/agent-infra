@@ -526,6 +526,24 @@ function apiIdentityOrUnavailable(
 	return store;
 }
 
+async function resolveAgentGrantContext(
+	dependencies: ManagementRouteDependencies,
+	request: Request,
+	traceId: string,
+) {
+	const api = hasBearerCredential(request)
+		? await resolveApiIdentity(dependencies.identity, request, traceId)
+		: null;
+	const identity = api
+		? apiIdentityContext(api)
+		: await resolveIdentity(dependencies.identity, request, traceId);
+	return {
+		identity,
+		management: apiIdentityOrUnavailable(dependencies.apiIdentity, traceId),
+		managementActor: api ? apiActor(api) : actor(identity),
+	};
+}
+
 function apiCredentialProjection(
 	metadata: ApiCredentialMetadataV1,
 	traceId: string,
@@ -910,31 +928,18 @@ export function registerManagementRoutes(
 
 	app.post("/api/v1/agents/:agentId/grants", (context) =>
 		boundary(context, async (metadata) => {
-			const api = hasBearerCredential(context.req.raw)
-				? await resolveApiIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					)
-				: null;
-			const identity = api
-				? apiIdentityContext(api)
-				: await resolveIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					);
+			const { identity, management, managementActor } =
+				await resolveAgentGrantContext(
+					dependencies,
+					context.req.raw,
+					metadata.traceId,
+				);
 			const { value: body } = await parseJson(
 				context.req.raw,
 				ApiAgentGrantRequestV1Schema,
 				metadata.traceId,
 			);
 			const agentId = context.req.param("agentId");
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const managementActor = api ? apiActor(api) : actor(identity);
 			const authorizationRevision = await queryOrUnavailable(
 				() =>
 					management.grantAgent({
@@ -961,31 +966,18 @@ export function registerManagementRoutes(
 
 	app.delete("/api/v1/agents/:agentId/grants", (context) =>
 		boundary(context, async (metadata) => {
-			const api = hasBearerCredential(context.req.raw)
-				? await resolveApiIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					)
-				: null;
-			const identity = api
-				? apiIdentityContext(api)
-				: await resolveIdentity(
-						dependencies.identity,
-						context.req.raw,
-						metadata.traceId,
-					);
+			const { identity, management, managementActor } =
+				await resolveAgentGrantContext(
+					dependencies,
+					context.req.raw,
+					metadata.traceId,
+				);
 			const { value: body } = await parseJson(
 				context.req.raw,
 				ApiAgentGrantRequestV1Schema,
 				metadata.traceId,
 			);
 			const agentId = context.req.param("agentId");
-			const management = apiIdentityOrUnavailable(
-				dependencies.apiIdentity,
-				metadata.traceId,
-			);
-			const managementActor = api ? apiActor(api) : actor(identity);
 			await queryOrUnavailable(
 				() =>
 					management.revokeAgentGrant({
