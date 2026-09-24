@@ -9,7 +9,7 @@ export { safeRuntimeProbeFailure } from "../../tests/support/runtime-probe-diagn
 import { runCommand } from "./run-command.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
-const digestPattern = /^sha256:[a-f0-9]{64}$/;
+const digestPattern = /^sha256:(?!0{64}$)[a-f0-9]{64}$/;
 const releasePath = "packages/agent-runtime/src/codex-release.json";
 const sha256 = (bytes) =>
 	`sha256:${createHash("sha256").update(bytes).digest("hex")}`;

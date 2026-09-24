@@ -220,6 +220,13 @@ test("runtime evidence binds the exact official release bytes and installed arch
 		JSON.stringify({ ...release, distribution: { kind: "derived" } }),
 		JSON.stringify({
 			...release,
+			provenance: {
+				...release.provenance,
+				schemaSha256: `sha256:${"0".repeat(64)}`,
+			},
+		}),
+		JSON.stringify({
+			...release,
 			artifacts: {
 				...release.artifacts,
 				amd64: { ...release.artifacts.amd64, archiveSha256: "untrusted" },
