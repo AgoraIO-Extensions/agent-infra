@@ -243,9 +243,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 						() => primary.stop(),
 					]) {
 						results.push(
-							...(await Promise.allSettled([
-								Promise.resolve().then(stop),
-							])),
+							...(await Promise.allSettled([Promise.resolve().then(stop)])),
 						);
 					}
 					const failure = results.find(
