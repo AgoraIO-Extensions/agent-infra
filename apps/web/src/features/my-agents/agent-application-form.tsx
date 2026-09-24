@@ -74,6 +74,22 @@ type DraftRowsProps<T extends string> = {
 
 function fieldId(key: string) {
 	if (key === "defaultModelOptionId") return "application-default-model-option";
+	if (key === "defaultReasoningLevel")
+		return "application-default-reasoning-level";
+	const modelField =
+		/^model\.(\d+)\.(endpointId|modelId|reasoningLevels|credentialValue)$/.exec(
+			key,
+		);
+	if (modelField) {
+		const [, index, field] = modelField;
+		const control =
+			field === "endpointId"
+				? "endpoint"
+				: field === "modelId" || field === "reasoningLevels"
+					? "model"
+					: "credential";
+		return `application-model-option-${control}-${index}`;
+	}
 	return `application-${key
 		.replaceAll(".", "-")
 		.replace(/[A-Z]/g, (character) => `-${character.toLowerCase()}`)}`;
@@ -606,7 +622,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		};
 		const errors = validateAgentApplicationDraft(draft, {
 			configurationMessage,
-			defaultModelReasoningLevels: defaultModelDefinition?.reasoningLevels,
+			defaultModelReasoningLevels: defaultModel?.reasoningLevels
+				?.split("\n")
+				.filter(Boolean),
 			modelConfigurationVisible,
 			requiresReplacementCredential,
 			staleModel,
@@ -1050,6 +1068,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																				item.endpointId && value
 																					? optionIdFor(item.endpointId, value)
 																					: "",
+																			reasoningLevels: "",
 																		}),
 															}
 														: { ...item, [key]: value },

@@ -109,7 +109,7 @@ export function AgentApplicationSubmissionScreen(
 						<Alert variant="destructive" className="my-3">
 							<AlertDescription>
 								{validationError
-									? "申请内容未通过校验，请修正标记字段后重试。"
+									? "申请内容未通过服务端校验，请检查字段后重试。"
 									: props.error.retryable === false
 										? "申请已变更或当前不可用，请刷新页面后核对。"
 										: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}

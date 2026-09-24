@@ -147,7 +147,12 @@ export function validateAgentApplicationDraft(
 			if (context.staleModel)
 				errors[`model.${index}.modelId`] = "模型选项已移除，请重新选择。";
 		});
-		if (!draft.defaultModelOptionId)
+		if (
+			!draft.defaultModelOptionId ||
+			draft.models.filter(
+				(model) => model.optionId === draft.defaultModelOptionId,
+			).length !== 1
+		)
 			errors.defaultModelOptionId = "请选择默认模型。";
 		if (!draft.defaultReasoningLevel)
 			errors.defaultReasoningLevel = "请选择默认推理档位。";

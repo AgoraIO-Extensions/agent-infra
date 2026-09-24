@@ -96,7 +96,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 			/>,
 		);
 		expect(screen.getByRole("alert").textContent).toBe(
-			"申请内容未通过校验，请修正标记字段后重试。",
+			"申请内容未通过服务端校验，请检查字段后重试。",
 		);
 	});
 
