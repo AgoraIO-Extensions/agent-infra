@@ -242,6 +242,59 @@ describe("API identity management authorization", () => {
 		);
 	});
 
+	it("rejects application recipients until a trusted transport exists", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		await expect(
+			useCase.issueApplicationCredential(actor(), application.id, {
+				credential: "application-secret",
+				recipient: { kind: "application", id: application.id },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...audit, action: "api.credential.issued" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		expect(store.issueCredential).not.toHaveBeenCalled();
+		expect(store.writeAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				recipient: { kind: "application", id: application.id },
+				outcome: "rejected",
+				targetId: application.id,
+			}),
+		);
+	});
+
+	it("audits rejected delivery grant and revoke attempts", async () => {
+		const store = storeFixture({
+			revokeCredentialDelivery: vi.fn().mockResolvedValue(false),
+		});
+		const useCase = management(store);
+		await expect(
+			useCase.grantCredentialDelivery({
+				actor: actor(),
+				applicationId: application.id,
+				principal: { kind: "user", id: "owner-1" },
+				audit,
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
+			useCase.revokeCredentialDelivery({
+				actor: actor(),
+				applicationId: application.id,
+				principal: { kind: "user", id: "recipient-1" },
+				audit: { ...audit, action: "api.credential.delivery.revoked" },
+			}),
+		).rejects.toMatchObject({ code: "resource_unavailable" });
+		expect(store.writeAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "api.credential.delivery.revoked",
+				recipient: { kind: "user", id: "recipient-1" },
+				outcome: "rejected",
+				targetId: application.id,
+			}),
+		);
+	});
+
 	it("binds application actors to grant audits and validates recipients", async () => {
 		const store = storeFixture();
 		const useCase = management(store);

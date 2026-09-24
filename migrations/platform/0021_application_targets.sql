@@ -59,6 +59,29 @@ CREATE TABLE "platform"."platform_applications" (
 	CONSTRAINT "platform_application_revision_non_empty" CHECK (char_length("platform"."platform_applications"."authorization_revision") > 0)
 );
 --> statement-breakpoint
+UPDATE "platform"."agents"
+SET "authorization_revision" = 'legacy:' || "platform"."agents"."id"
+WHERE "platform"."agents"."authorization_revision" IS NULL;
+--> statement-breakpoint
+INSERT INTO "platform"."agent_principal_grants" (
+	"agent_id",
+	"principal_type",
+	"principal_id",
+	"grant_type",
+	"created_at",
+	"authorization_revision"
+)
+SELECT
+	owners."agent_id",
+	'user',
+	owners."owner_id",
+	grant_types."grant_type",
+	owners."created_at",
+	agents."authorization_revision"
+FROM "platform"."agent_owners" AS owners
+JOIN "platform"."agents" AS agents ON agents."id" = owners."agent_id"
+CROSS JOIN (VALUES ('manage'), ('use')) AS grant_types("grant_type");
+--> statement-breakpoint
 ALTER TABLE "platform"."agent_applications" DROP CONSTRAINT "agent_application_management_state_valid";--> statement-breakpoint
 ALTER TABLE "platform"."agent_principal_grants" ADD CONSTRAINT "agent_principal_grants_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "platform"."api_credential_delivery_grants" ADD CONSTRAINT "api_credential_delivery_application_fk" FOREIGN KEY ("application_id") REFERENCES "platform"."platform_applications"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

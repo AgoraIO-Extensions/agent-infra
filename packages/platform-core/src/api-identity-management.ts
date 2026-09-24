@@ -339,6 +339,19 @@ export function createApiIdentityManagementV1(input: {
 			});
 		throw new ApiIdentityError("resource_unavailable");
 	};
+	const rejectWithAudit = async (
+		audit: ApiIdentityAuditInputV1,
+		targetId: string,
+		recipient?: ApiPrincipalV1,
+	): Promise<void> => {
+		if (!input.store.writeAudit) return;
+		await input.store.writeAudit({
+			...audit,
+			...(recipient === undefined ? {} : { recipient }),
+			outcome: "rejected",
+			targetId,
+		});
+	};
 	const requireAgentAccess = async (
 		actor: ApiIdentityActorV1,
 		agentId: string,
@@ -423,17 +436,28 @@ export function createApiIdentityManagementV1(input: {
 		},
 		async issueApplicationCredential(actor, applicationId, value) {
 			const principal = requireActiveActor(actor);
-			const application = await input.store.getApplication(applicationId);
-			if (!application) throw new ApiIdentityError("resource_unavailable");
-			if (application.status !== "active")
-				throw new ApiIdentityError("resource_unavailable");
 			const audit = checkedAudit(actor, value.audit);
 			const recipient = value.recipient ?? principal;
+			if (recipient.kind === "application") {
+				await rejectWithAudit(audit, applicationId, recipient);
+				throw new ApiIdentityError("resource_unavailable");
+			}
+			const application = await input.store.getApplication(applicationId);
+			if (!application) {
+				await rejectWithAudit(audit, applicationId, recipient);
+				throw new ApiIdentityError("resource_unavailable");
+			}
+			if (application.status !== "active") {
+				await rejectWithAudit(audit, application.id, recipient);
+				throw new ApiIdentityError("resource_unavailable");
+			}
 			const isResponsibleUser =
 				principal.kind === "user" &&
 				application.responsibleUserId === principal.id;
-			if (!isResponsibleUser && !sameApiPrincipalV1(principal, recipient))
+			if (!isResponsibleUser && !sameApiPrincipalV1(principal, recipient)) {
+				await rejectWithAudit(audit, application.id, recipient);
 				throw new ApiIdentityError("resource_unavailable");
+			}
 			try {
 				await requireCredentialDelivery(application.id, recipient, audit);
 				return await input.store.issueCredential({
@@ -477,23 +501,34 @@ export function createApiIdentityManagementV1(input: {
 				throw new ApiIdentityError("resource_unavailable");
 		},
 		async grantCredentialDelivery(value) {
-			const application = await applicationForActor(
-				value.actor,
-				value.applicationId,
-			);
-			if (application.status !== "active")
-				throw new ApiIdentityError("resource_unavailable");
-			const actor = actorPrincipal(value.actor);
-			if (sameApiPrincipalV1(actor, value.principal))
-				throw new ApiIdentityError("not_authorized");
-			await requireActiveRecipient(
-				value.principal,
-				checkedAudit(value.actor, value.audit),
-			);
 			const audit = checkedAudit(value.actor, {
 				...value.audit,
 				recipient: value.principal,
 			});
+			if (value.principal.kind === "application") {
+				await rejectWithAudit(audit, value.applicationId, value.principal);
+				throw new ApiIdentityError("resource_unavailable");
+			}
+			let application: ApiIdentityApplicationV1;
+			try {
+				application = await applicationForActor(
+					value.actor,
+					value.applicationId,
+				);
+			} catch (error) {
+				await rejectWithAudit(audit, value.applicationId, value.principal);
+				throw error;
+			}
+			if (application.status !== "active") {
+				await rejectWithAudit(audit, application.id, value.principal);
+				throw new ApiIdentityError("resource_unavailable");
+			}
+			const actor = actorPrincipal(value.actor);
+			if (sameApiPrincipalV1(actor, value.principal)) {
+				await rejectWithAudit(audit, application.id, value.principal);
+				throw new ApiIdentityError("not_authorized");
+			}
+			await requireActiveRecipient(value.principal, audit);
 			try {
 				await input.store.grantCredentialDelivery({
 					applicationId: application.id,
@@ -512,21 +547,30 @@ export function createApiIdentityManagementV1(input: {
 			}
 		},
 		async revokeCredentialDelivery(value) {
-			const application = await applicationForActor(
-				value.actor,
-				value.applicationId,
-			);
+			const audit = checkedAudit(value.actor, {
+				...value.audit,
+				recipient: value.principal,
+			});
+			let application: ApiIdentityApplicationV1;
+			try {
+				application = await applicationForActor(
+					value.actor,
+					value.applicationId,
+				);
+			} catch (error) {
+				await rejectWithAudit(audit, value.applicationId, value.principal);
+				throw error;
+			}
 			if (
 				!(await input.store.revokeCredentialDelivery({
 					applicationId: application.id,
 					principal: value.principal,
-					audit: checkedAudit(value.actor, {
-						...value.audit,
-						recipient: value.principal,
-					}),
+					audit,
 				}))
-			)
+			) {
+				await rejectWithAudit(audit, application.id, value.principal);
 				throw new ApiIdentityError("resource_unavailable");
+			}
 		},
 		async grantAgent(value) {
 			await requireAgentAccess(value.actor, value.agentId);
