@@ -76,6 +76,12 @@ export function ConnectionsPage() {
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
+	const [bulkUpgrade, setBulkUpgrade] = useState<{
+		completed: number;
+		failedConnectionIds: string[];
+		running: boolean;
+		total: number;
+	} | null>(null);
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
@@ -308,6 +314,74 @@ export function ConnectionsPage() {
 			? data.grants
 			: data.grants.filter((grant) => grant.status === "ACTIVE")
 		: [];
+	const bulkUpgradeConnectionIds = data
+		? [
+				...new Set(
+					data.upgradeTasks
+						.filter((task) => task.status === "PENDING_CONNECTION")
+						.map((task) => task.connectionId),
+				),
+			]
+		: [];
+	const runBulkUpgrade = async (connectionIds: string[]) => {
+		setUpgradeNotice(null);
+		setBulkUpgrade({
+			completed: 0,
+			failedConnectionIds: [],
+			running: true,
+			total: connectionIds.length,
+		});
+		const failedConnectionIds: string[] = [];
+		let completed = 0;
+		for (const connectionId of connectionIds) {
+			try {
+				await connectionApi.upgradeProviderConnection(connectionId);
+			} catch {
+				failedConnectionIds.push(connectionId);
+			}
+			completed += 1;
+			setBulkUpgrade({
+				completed,
+				failedConnectionIds: [...failedConnectionIds],
+				running: true,
+				total: connectionIds.length,
+			});
+		}
+		const refreshed = await connectionApi.getConnections().catch(() => null);
+		if (!refreshed) {
+			setBulkUpgrade({
+				completed,
+				failedConnectionIds: [],
+				running: false,
+				total: connectionIds.length,
+			});
+			setUpgradeNotice(
+				"批量升级请求已处理，但刷新结果失败；请刷新页面确认最新状态。",
+			);
+			return;
+		}
+		queryClient.setQueryData(["connections"], refreshed);
+		const pendingConnectionIds = new Set(
+			refreshed.overview.upgradeTasks
+				.filter((task) => task.status === "PENDING_CONNECTION")
+				.map((task) => task.connectionId),
+		);
+		const retryableFailedConnectionIds = failedConnectionIds.filter(
+			(connectionId) => pendingConnectionIds.has(connectionId),
+		);
+		const needsAuthorization = refreshed.overview.upgradeTasks.filter(
+			(task) => task.status === "PENDING_AUTHORIZATION",
+		).length;
+		setBulkUpgrade({
+			completed,
+			failedConnectionIds: retryableFailedConnectionIds,
+			running: false,
+			total: connectionIds.length,
+		});
+		setUpgradeNotice(
+			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
+		);
+	};
 	return (
 		<ConsoleShell>
 			<PageHeader
@@ -381,6 +455,25 @@ export function ConnectionsPage() {
 									<h2 id="upgrade-tasks-title">需要处理的升级</h2>
 									<p>完成连接升级后，可能还需要重新确认客户端授权。</p>
 								</div>
+								{bulkUpgradeConnectionIds.length >= 2 ||
+								bulkUpgrade?.failedConnectionIds.length ? (
+									<Button
+										disabled={bulkUpgrade?.running || upgrade.isPending}
+										onClick={() =>
+											void runBulkUpgrade(
+												bulkUpgrade?.failedConnectionIds.length
+													? bulkUpgrade.failedConnectionIds
+													: bulkUpgradeConnectionIds,
+											)
+										}
+									>
+										{bulkUpgrade?.running
+											? `正在升级 ${bulkUpgrade.completed}/${bulkUpgrade.total}`
+											: bulkUpgrade?.failedConnectionIds.length
+												? `重试 ${bulkUpgrade.failedConnectionIds.length} 个失败项`
+												: `一键升级 ${bulkUpgradeConnectionIds.length} 个连接`}
+									</Button>
+								) : null}
 							</div>
 							<div className="table-scroll">
 								<table className="management-table">
