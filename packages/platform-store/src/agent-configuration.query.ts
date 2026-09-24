@@ -476,7 +476,9 @@ export class PostgresAgentConfigurationQueryV1 {
 						ownerIds.some((ownerId) => !validateText(ownerId)) ||
 						availabilityRows.some(
 							({ targetType, targetId }) =>
-								(targetType !== "user" && targetType !== "organization") ||
+								(targetType !== "user" &&
+									targetType !== "organization" &&
+									targetType !== "application") ||
 								!validateText(targetId),
 						)
 					) {
@@ -487,27 +489,37 @@ export class PostgresAgentConfigurationQueryV1 {
 							.map(({ targetType, targetId }) =>
 								targetType === "user"
 									? { kind: "user" as const, userId: targetId }
-									: {
-											kind: "organization" as const,
-											organizationId: targetId,
-										},
+									: targetType === "organization"
+										? {
+												kind: "organization" as const,
+												organizationId: targetId,
+											}
+										: {
+												kind: "application" as const,
+												applicationId: targetId,
+											},
 							)
 							.toSorted((left, right) => {
 								const leftKey =
 									left.kind === "user"
 										? `user\0${left.userId}`
-										: `organization\0${left.organizationId}`;
+										: left.kind === "organization"
+											? `organization\0${left.organizationId}`
+											: `application\0${left.applicationId}`;
 								const rightKey =
 									right.kind === "user"
 										? `user\0${right.userId}`
-										: `organization\0${right.organizationId}`;
+										: right.kind === "organization"
+											? `organization\0${right.organizationId}`
+											: `application\0${right.applicationId}`;
 								return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 							});
 					const owner = ownerIds.includes(input.actorId);
 					const available = availability.some((target) =>
 						target.kind === "user"
 							? target.userId === input.actorId
-							: input.organizationIds.includes(target.organizationId),
+							: target.kind === "organization" &&
+								input.organizationIds.includes(target.organizationId),
 					);
 					if (
 						!input.isAdministrator &&

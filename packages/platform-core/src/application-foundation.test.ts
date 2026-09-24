@@ -93,6 +93,21 @@ async function rejectedBeforePersistence(
 }
 
 describe("Application foundation use case", () => {
+	it("accepts API creation without creating a pending approval state", async () => {
+		const transaction = new FakeApplicationFoundationTransactionV1();
+		const useCase = createUseCase(transaction);
+		const result = await useCase.submit(applicationFoundationCommandV1, {
+			...applicationFoundationActorContextV1,
+			principal: { kind: "application", id: "application-caller" },
+			creationMode: "api",
+		});
+		expect(result.status).toBe("creating");
+		expect(transaction.snapshot().applications[0]?.status).toBe("creating");
+		expect(transaction.snapshot().auditEvents[0]?.actorType).toBe(
+			"application",
+		);
+	});
+
 	it("rejects a staged actor getter without reading it", async () => {
 		let getterReads = 0;
 		const context = Object.defineProperty(

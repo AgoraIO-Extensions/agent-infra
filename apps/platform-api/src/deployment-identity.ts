@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { type IdentityAdapter, resolveIdentity } from "./http/identity.js";
+import {
+	type IdentityAdapter,
+	resolveApiIdentity,
+	resolveIdentity,
+} from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 
 /** Bind admission to the authenticated HTTP request across concurrent awaits. */
@@ -21,8 +25,38 @@ export function createDeploymentIdentityScope(identity: IdentityAdapter) {
 			if (!request)
 				throw new Error("Authenticated request scope is unavailable");
 			// Resolve again at admission: a previous session lookup is not authority.
+			if (
+				/^Bearer\s+[^\s]+$/.test(request.headers.get("authorization") ?? "")
+			) {
+				const api = await resolveApiIdentity(identity, request, traceId);
+				return {
+					schemaVersion: 1 as const,
+					userId: api.ownerId,
+					displayName: api.principal.id,
+					accountStatus: "active" as const,
+					organizationIds: api.organizationIds,
+					roles: [] as const,
+					authorizationRevision: api.authorizationRevision,
+					principal: api.principal,
+				};
+			}
 			return resolveIdentity(identity, request, traceId);
 		},
+	};
+}
+
+export function allocateDeploymentDirectApplicationIds(
+	principalKind: "user" | "application",
+	principalId: string,
+	idempotencyKey: string,
+): { readonly applicationId: string; readonly agentId: string } {
+	const digest = createHash("sha256")
+		.update(`${principalKind}\0${principalId}\0${idempotencyKey}`, "utf8")
+		.digest("hex")
+		.slice(0, 32);
+	return {
+		applicationId: `application_api_${digest}`,
+		agentId: `agent_api_${digest}`,
 	};
 }
 

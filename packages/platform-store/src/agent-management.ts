@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
+import type { ApiPrincipalV1 } from "@agent-infra/platform-core";
 import {
 	type AgentManagementAcceptedResultV1,
 	type AgentManagementDecisionV1,
@@ -24,6 +25,7 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	idempotencyRecords,
 } from "./schema.js";
@@ -177,7 +179,7 @@ export async function readAgentManagementState(
 		.where(eq(agentApplications.agentId, agentId))
 		.limit(1);
 	if (!application) return undefined;
-	const [owners, availability] = await Promise.all([
+	const [owners, availability, principalGrants] = await Promise.all([
 		database
 			.select({ ownerId: agentOwners.ownerId })
 			.from(agentOwners)
@@ -194,7 +196,32 @@ export async function readAgentManagementState(
 				asc(agentAvailability.targetType),
 				asc(agentAvailability.targetId),
 			),
+		database
+			.select({
+				principalType: agentPrincipalGrants.principalType,
+				principalId: agentPrincipalGrants.principalId,
+				grantType: agentPrincipalGrants.grantType,
+				authorizationRevision: agentPrincipalGrants.authorizationRevision,
+				revokedAt: agentPrincipalGrants.revokedAt,
+			})
+			.from(agentPrincipalGrants)
+			.where(eq(agentPrincipalGrants.agentId, agentId))
+			.orderBy(
+				asc(agentPrincipalGrants.principalType),
+				asc(agentPrincipalGrants.principalId),
+				asc(agentPrincipalGrants.grantType),
+			),
 	]);
+	if (
+		principalGrants.some(
+			({ principalType, principalId, grantType, authorizationRevision }) =>
+				(principalType !== "user" && principalType !== "application") ||
+				!validText(principalId) ||
+				(grantType !== "manage" && grantType !== "use") ||
+				!validText(authorizationRevision),
+		)
+	)
+		throw new AgentManagementError("unavailable");
 	return {
 		schemaVersion: 1,
 		...application,
@@ -202,7 +229,26 @@ export async function readAgentManagementState(
 		availability: availability.map(({ targetType, targetId }) =>
 			targetType === "user"
 				? { kind: "user" as const, userId: targetId }
-				: { kind: "organization" as const, organizationId: targetId },
+				: targetType === "organization"
+					? { kind: "organization" as const, organizationId: targetId }
+					: { kind: "application" as const, applicationId: targetId },
+		),
+		principalGrants: principalGrants.map(
+			({
+				principalType,
+				principalId,
+				grantType,
+				authorizationRevision,
+				revokedAt,
+			}) => ({
+				principal: {
+					kind: principalType as "user" | "application",
+					id: principalId,
+				},
+				grantType: grantType as "manage" | "use",
+				authorizationRevision,
+				revokedAt,
+			}),
 		),
 	};
 }
@@ -273,6 +319,9 @@ function requireAcceptedEnvelope(
 		!sameValue(writePlan.state.availability, current.availability) ||
 		writePlan.transition.from !== current.status ||
 		writePlan.auditEvent.actorId !== request.actorId ||
+		(writePlan.auditEvent.actorType !== undefined &&
+			writePlan.auditEvent.actorType !== "user" &&
+			writePlan.auditEvent.actorType !== "application") ||
 		result.applicationId !== writePlan.state.applicationId ||
 		result.agentId !== writePlan.state.agentId ||
 		result.status !== writePlan.state.status ||
@@ -447,6 +496,11 @@ export type AgentManagementAgentScopeV1 =
 	| { readonly kind: "owner"; readonly ownerId: string }
 	| { readonly kind: "administrator" }
 	| {
+			readonly kind: "principal";
+			readonly principal: ApiPrincipalV1;
+			readonly grantType: "manage" | "use" | "any";
+	  }
+	| {
 			readonly kind: "user";
 			readonly userId: string;
 			readonly organizationIds: readonly string[];
@@ -536,6 +590,58 @@ function requireAgentScope(
 			return { kind: "administrator" };
 		}
 		if (
+			values.kind === "principal" &&
+			exact(["kind", "principal", "grantType"])
+		) {
+			const principal = values.principal;
+			if (
+				typeof principal !== "object" ||
+				principal === null ||
+				Array.isArray(principal) ||
+				types.isProxy(principal)
+			)
+				throw new Error();
+			const principalValues = Object.getOwnPropertyDescriptors(principal);
+			const principalKeys = Reflect.ownKeys(principalValues);
+			if (
+				principalKeys.length !== 2 ||
+				principalKeys.some((key) => typeof key !== "string") ||
+				principalKeys.some((key) => {
+					const descriptor = principalValues[key as string];
+					return (
+						descriptor?.enumerable !== true ||
+						!Object.hasOwn(descriptor, "value") ||
+						Object.hasOwn(descriptor, "get") ||
+						Object.hasOwn(descriptor, "set")
+					);
+				})
+			)
+				throw new Error();
+			const principalValue = Object.fromEntries(
+				principalKeys.map((key) => [
+					key,
+					principalValues[key as string]?.value,
+				]),
+			);
+			if (
+				(principalValue.kind !== "user" &&
+					principalValue.kind !== "application") ||
+				!validText(principalValue.id) ||
+				(values.grantType !== "manage" &&
+					values.grantType !== "use" &&
+					values.grantType !== "any")
+			)
+				throw new Error();
+			return {
+				kind: "principal",
+				principal: {
+					kind: principalValue.kind,
+					id: principalValue.id,
+				},
+				grantType: values.grantType,
+			};
+		}
+		if (
 			values.kind === "owner" &&
 			exact(["kind", "ownerId"]) &&
 			validText(values.ownerId)
@@ -563,6 +669,20 @@ function applicationScopeCondition(scope: AgentManagementApplicationScopeV1) {
 
 function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
 	if (scope.kind === "administrator") return undefined;
+	if (scope.kind === "principal") {
+		return sql<boolean>`exists (
+			select 1 from ${agentPrincipalGrants}
+			where ${agentPrincipalGrants.agentId} = ${agentApplications.agentId}
+				and ${agentPrincipalGrants.principalType} = ${scope.principal.kind}
+				and ${agentPrincipalGrants.principalId} = ${scope.principal.id}
+				and ${
+					scope.grantType === "any"
+						? inArray(agentPrincipalGrants.grantType, ["manage", "use"])
+						: eq(agentPrincipalGrants.grantType, scope.grantType)
+				}
+				and ${agentPrincipalGrants.revokedAt} is null
+		)`;
+	}
 	const owner = sql<boolean>`exists (
 		select 1 from ${agentOwners}
 		where ${agentOwners.agentId} = ${agentApplications.agentId}
@@ -605,9 +725,14 @@ const projectionAccessSelection = {
 					then jsonb_build_object(
 						'kind', 'user', 'userId', ${agentAvailability.targetId}
 					)
-				else jsonb_build_object(
+				when ${agentAvailability.targetType} = 'organization'
+					then jsonb_build_object(
 					'kind', 'organization',
 					'organizationId', ${agentAvailability.targetId}
+				)
+				else jsonb_build_object(
+					'kind', 'application',
+					'applicationId', ${agentAvailability.targetId}
 				)
 			end
 			order by ${agentAvailability.targetType}, ${agentAvailability.targetId}

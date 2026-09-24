@@ -46,6 +46,23 @@ export {
 } from "./agent-configuration.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
+export type {
+	ApiCredentialMetadataV1,
+	ApiCredentialScopeV1,
+	ApiIdentityAuditActionV1,
+	ApiIdentityAuditInputV1,
+	ApiPrincipalV1,
+	CurrentApiPrincipalV1,
+} from "./api-identity.js";
+export {
+	apiCredentialScopesV1,
+	generateApiCredentialV1,
+	hasApiCredentialScopeV1,
+	hashApiCredentialV1,
+	isApiCredentialScopeV1,
+	sameApiPrincipalV1,
+} from "./api-identity.js";
+export * from "./api-identity-management.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";

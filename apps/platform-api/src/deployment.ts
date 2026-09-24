@@ -1,6 +1,7 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import type { AgentConfigurationAuthorityContextV1 } from "@agent-infra/platform-core";
+import { PostgresApiIdentityStoreV1 } from "@agent-infra/platform-store";
 import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
@@ -57,7 +58,23 @@ export function createProductionPlatformApiAssemblyInputV1(
 	} catch {
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
-	const identityScope = createDeploymentIdentityScope(input.identity);
+	const apiIdentity = new PostgresApiIdentityStoreV1({
+		databaseUrl: input.databaseUrl,
+	});
+	const identity: IdentityAdapter = input.identity.resolveApiCredential
+		? input.identity
+		: {
+				...input.identity,
+				resolveApiCredential: (credential) =>
+					apiIdentity.resolveApiCredential(
+						credential,
+						input.identity.resolveUser
+							? async (userId) =>
+									(await input.identity.resolveUser?.(userId)) ?? null
+							: undefined,
+					),
+			};
+	const identityScope = createDeploymentIdentityScope(identity);
 	const admissions = createDeploymentAdmissionsV1({
 		...input,
 		currentIdentity: identityScope.currentIdentity,
@@ -67,7 +84,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 	);
 	return {
 		databaseUrl: input.databaseUrl,
-		identity: input.identity,
+		identity,
+		apiIdentity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,

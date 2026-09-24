@@ -364,6 +364,24 @@ describe("PostgreSQL Platform audit query", () => {
 		}
 	});
 
+	it("preserves an application actor for API-created applications", async () => {
+		await seedAudit({
+			auditId: "audit_application_actor",
+			occurredAt: new Date("2026-09-03T00:00:00.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+		});
+		const adapter = openAdapter();
+		const page = await adapter.listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toMatchObject({
+			action: "agent.application.submitted",
+			actor: { kind: "application", actorId: "application_api" },
+		});
+	});
+
 	it("returns only whitelisted metadata and normalizes rejected outcomes", async () => {
 		await seedAudit({
 			auditId: "audit_configuration",

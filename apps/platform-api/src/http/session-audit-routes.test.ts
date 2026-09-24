@@ -212,6 +212,41 @@ describe("session and audit routes", () => {
 		expect(identityAdapter.hydrateUsers).toHaveBeenCalledWith(["actor-1"]);
 	});
 
+	it("projects application audit actors without directory hydration", async () => {
+		const { app, identityAdapter, audit } = createApp();
+		audit.listAudit.mockResolvedValue({
+			items: [
+				{
+					schemaVersion: 1,
+					auditId: "audit-application",
+					actor: { kind: "application", actorId: "application-1" },
+					action: "api.application.created",
+					subject: { kind: "grant", subjectId: "application-1" },
+					result: "succeeded",
+					summary: "api.application.created",
+					occurredAt: new Date("2026-09-02T06:02:00.000Z"),
+					traceId: "trace-application",
+				},
+			],
+			nextCursor: null,
+		});
+
+		for (const [path, schema] of [
+			["/api/v1/admin/audit", PlatformAuditProjectionV1Schema],
+			["/api/v2/admin/audit", PlatformAuditProjectionV2Schema],
+		] as const) {
+			const response = await app.request(path);
+			expect(response.status).toBe(200);
+			const payload = (await response.json()) as { items: unknown[] };
+			const item = payload.items[0];
+			expect(schema.parse(item).actor).toEqual({
+				kind: "application",
+				actorId: "application-1",
+			});
+		}
+		expect(identityAdapter.hydrateUsers).not.toHaveBeenCalled();
+	});
+
 	it("maps internal Secret audit subjects to the stable v2 contract", async () => {
 		const { app, audit } = createApp();
 		const rawKeyVersion = "key-internal-raw-version-2026-09";

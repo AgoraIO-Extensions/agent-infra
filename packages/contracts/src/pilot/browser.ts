@@ -70,6 +70,10 @@ export const AvailabilityTargetV1Schema = z.discriminatedUnion("kind", [
 		kind: z.literal("organization"),
 		organizationId: OpaqueIdV1Schema,
 	}),
+	z.strictObject({
+		kind: z.literal("application"),
+		applicationId: OpaqueIdV1Schema,
+	}),
 ]);
 
 export const AgentSourceInputV1Schema = z.union([
@@ -252,6 +256,86 @@ export const AgentProjectionV1Schema = z.strictObject({
 		.nullable(),
 });
 
+export const AgentDirectCreationProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	applicationId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	status: z.literal("creating"),
+});
+
+export const ApiCredentialScopeV1Schema = z.enum([
+	"agent:create",
+	"agent:manage",
+	"agent:use",
+	"agent:read",
+]);
+
+export const ApiPrincipalV1Schema = z.strictObject({
+	kind: z.enum(["user", "application"]),
+	id: OpaqueIdV1Schema,
+});
+
+export const ApiCredentialMetadataProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	credentialId: OpaqueIdV1Schema,
+	principal: ApiPrincipalV1Schema,
+	scopes: z.array(ApiCredentialScopeV1Schema).min(1),
+	expiresAt: Rfc3339TimestampV1Schema.nullable(),
+	revokedAt: Rfc3339TimestampV1Schema.nullable(),
+	createdAt: Rfc3339TimestampV1Schema,
+});
+
+export const ApiCredentialIssueRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	scopes: z.array(ApiCredentialScopeV1Schema).min(1),
+	expiresAt: Rfc3339TimestampV1Schema.nullable(),
+	recipient: ApiPrincipalV1Schema.optional(),
+});
+
+export const ApiCredentialIssueProjectionV1Schema = z.strictObject({
+	metadata: ApiCredentialMetadataProjectionV1Schema,
+	credential: nonEmptyString(),
+});
+
+export const ApiApplicationCreateRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	name: nonEmptyString().max(200),
+});
+
+export const ApiApplicationProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	applicationId: OpaqueIdV1Schema,
+	name: nonEmptyString(),
+	responsibleUserId: OpaqueIdV1Schema,
+	status: z.enum(["active", "disabled"]),
+	authorizationRevision: nonEmptyString(),
+});
+
+export const ApiAgentGrantRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	principal: ApiPrincipalV1Schema,
+	grantType: z.enum(["manage", "use"]),
+});
+
+export const ApiAgentGrantProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	agentId: OpaqueIdV1Schema,
+	principal: ApiPrincipalV1Schema,
+	grantType: z.enum(["manage", "use"]),
+	authorizationRevision: nonEmptyString(),
+	revokedAt: Rfc3339TimestampV1Schema.nullable(),
+});
+
+const apiCredentialPageV1 = z.strictObject({
+	items: z.array(ApiCredentialMetadataProjectionV1Schema),
+	nextCursor: OpaqueCursorV1Schema.nullable(),
+});
+
+const apiApplicationPageV1 = z.strictObject({
+	items: z.array(ApiApplicationProjectionV1Schema),
+	nextCursor: OpaqueCursorV1Schema.nullable(),
+});
+
 export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	coOwnerIds: idArray().optional(),
@@ -294,7 +378,13 @@ export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(
 	[
 		z.strictObject({
 			schemaVersion: SchemaVersionV1Schema,
-			command: z.enum(["stop", "restart", "retry_creation", "disable"]),
+			command: z.enum([
+				"start",
+				"stop",
+				"restart",
+				"retry_creation",
+				"disable",
+			]),
 		}),
 		z.strictObject({
 			schemaVersion: SchemaVersionV1Schema,
@@ -464,7 +554,13 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	auditId: OpaqueIdV1Schema,
 	action: nonEmptyString(),
-	actor: BrowserUserProjectionV1Schema,
+	actor: z.union([
+		BrowserUserProjectionV1Schema,
+		z.strictObject({
+			kind: z.literal("application"),
+			actorId: OpaqueIdV1Schema,
+		}),
+	]),
 	subjectType: z.enum(["agent_application", "agent", "configuration", "grant"]),
 	subjectId: OpaqueIdV1Schema,
 	result: z.enum(["succeeded", "failed"]),
@@ -478,6 +574,10 @@ export const PlatformAuditProjectionV2Schema =
 		schemaVersion: z.literal(2),
 		actor: z.union([
 			BrowserUserProjectionV1Schema,
+			z.strictObject({
+				kind: z.literal("application"),
+				actorId: OpaqueIdV1Schema,
+			}),
 			z.strictObject({
 				kind: z.literal("system"),
 				actorId: OpaqueIdV1Schema,
@@ -513,6 +613,11 @@ const auditPageV2 = z.strictObject({
 });
 const applicationPath = z.strictObject({ applicationId: pathId() });
 const agentPath = z.strictObject({ agentId: pathId() });
+const credentialPath = z.strictObject({ credentialId: pathId() });
+const applicationCredentialPath = z.strictObject({
+	applicationId: pathId(),
+	credentialId: pathId(),
+});
 const conversationPath = z.strictObject({ conversationId: pathId() });
 const executionPath = z.strictObject({
 	conversationId: pathId(),
@@ -567,6 +672,113 @@ const wecomSetupPath = z.strictObject({
 	sessionId: pathId(),
 });
 export const pilotBrowserHttpOpenApiPathsV1 = {
+	"/api/v1/api-credentials": {
+		get: {
+			operationId: "listApiCredentials",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("API credentials", apiCredentialPageV1),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "issueApiCredential",
+			requestBody: requiredJsonRequestBody(ApiCredentialIssueRequestV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Issued API credential",
+					ApiCredentialIssueProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/api-credentials/{credentialId}": {
+		delete: {
+			operationId: "revokeApiCredential",
+			requestParams: { path: credentialPath },
+			responses: {
+				"204": { description: "API credential revoked" },
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/applications": {
+		get: {
+			operationId: "listApiApplications",
+			requestParams: { query: pageQuery },
+			responses: {
+				"200": jsonResponse("API applications", apiApplicationPageV1),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "createApiApplication",
+			requestBody: requiredJsonRequestBody(ApiApplicationCreateRequestV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"API application",
+					ApiApplicationProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/applications/{applicationId}/credentials": {
+		get: {
+			operationId: "listApplicationCredentials",
+			requestParams: { path: applicationPath, query: pageQuery },
+			responses: {
+				"200": jsonResponse(
+					"Application credential metadata",
+					apiCredentialPageV1,
+				),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "issueApplicationCredential",
+			requestParams: { path: applicationPath },
+			requestBody: requiredJsonRequestBody(ApiCredentialIssueRequestV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Issued application credential",
+					ApiCredentialIssueProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/applications/{applicationId}/credentials/{credentialId}": {
+		delete: {
+			operationId: "revokeApplicationCredential",
+			requestParams: { path: applicationCredentialPath },
+			responses: {
+				"204": { description: "Application credential revoked" },
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/applications/{applicationId}/credential-delivery": {
+		post: {
+			operationId: "grantApplicationCredentialDelivery",
+			requestParams: { path: applicationPath },
+			requestBody: requiredJsonRequestBody(ApiPrincipalV1Schema),
+			responses: {
+				"204": { description: "Credential delivery granted" },
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokeApplicationCredentialDelivery",
+			requestParams: { path: applicationPath },
+			requestBody: requiredJsonRequestBody(ApiPrincipalV1Schema),
+			responses: {
+				"204": { description: "Credential delivery revoked" },
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v1/agents/{agentId}/wecom-bot": {
 		get: {
 			operationId: "getWecomBotConnection",
@@ -808,6 +1020,20 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 				...errorResponses,
 			},
 		},
+		post: {
+			operationId: "createAgentDirectly",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationCreateRequestV2Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Agent creation accepted",
+					AgentDirectCreationProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 	},
 	"/api/v1/agents/{agentId}": {
 		get: {
@@ -815,6 +1041,29 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			requestParams: { path: agentPath },
 			responses: {
 				"200": jsonResponse("Agent detail", AgentProjectionV1Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/agents/{agentId}/grants": {
+		post: {
+			operationId: "grantAgentPrincipal",
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(ApiAgentGrantRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Agent principal grant",
+					ApiAgentGrantProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokeAgentPrincipalGrant",
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(ApiAgentGrantRequestV1Schema),
+			responses: {
+				"204": { description: "Agent principal grant revoked" },
 				...errorResponses,
 			},
 		},
@@ -1117,9 +1366,20 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 export const pilotBrowserOpenApiPathsV2 = pilotBrowserHttpOpenApiPathsV2;
 
 export const pilotBrowserSchemasV1 = {
+	ApiAgentGrantProjectionV1: ApiAgentGrantProjectionV1Schema,
+	ApiAgentGrantRequestV1: ApiAgentGrantRequestV1Schema,
+	ApiApplicationCreateRequestV1: ApiApplicationCreateRequestV1Schema,
+	ApiApplicationProjectionV1: ApiApplicationProjectionV1Schema,
+	ApiCredentialIssueProjectionV1: ApiCredentialIssueProjectionV1Schema,
+	ApiCredentialIssueRequestV1: ApiCredentialIssueRequestV1Schema,
+	ApiCredentialMetadataProjectionV1: ApiCredentialMetadataProjectionV1Schema,
+	ApiCredentialScopeV1: ApiCredentialScopeV1Schema,
+	ApiPrincipalV1: ApiPrincipalV1Schema,
 	ActionSelectionV1: ActionSelectionV1Schema,
 	AgentApplicationCreateRequestV1: AgentApplicationCreateRequestV1Schema,
+	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
 	AgentApplicationProjectionV1: AgentApplicationProjectionV1Schema,
+	AgentDirectCreationProjectionV1: AgentDirectCreationProjectionV1Schema,
 	AgentApplicationUpdateRequestV1: AgentApplicationUpdateRequestV1Schema,
 	AgentConfigurationProjectionV1: AgentConfigurationProjectionV1Schema,
 	AgentConfigurationUpdateRequestV1: AgentConfigurationUpdateRequestV1Schema,

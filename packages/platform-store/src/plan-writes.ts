@@ -80,7 +80,11 @@ export async function replaceAgentAccess(
 				agentId: access.agentId,
 				targetType: target.kind,
 				targetId:
-					target.kind === "user" ? target.userId : target.organizationId,
+					target.kind === "user"
+						? target.userId
+						: target.kind === "organization"
+							? target.organizationId
+							: target.applicationId,
 			})),
 		);
 	}
@@ -174,7 +178,9 @@ export async function insertAgentManagementEffects(
 		traceId: plan.auditEvent.traceId,
 		requestId: plan.auditEvent.requestId,
 		agentId: plan.state.agentId,
-		actorType: plan.operation.startsWith("observe_") ? "system" : "user",
+		actorType: plan.operation.startsWith("observe_")
+			? "system"
+			: (plan.auditEvent.actorType ?? "user"),
 		actorId: plan.auditEvent.actorId,
 		action: plan.auditEvent.action,
 		targetType: plan.auditEvent.subjectType,

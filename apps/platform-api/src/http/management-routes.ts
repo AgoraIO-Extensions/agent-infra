@@ -1,9 +1,20 @@
+import { randomBytes, randomUUID } from "node:crypto";
+
 import {
 	AgentApplicationCreateRequestV1Schema,
+	AgentApplicationCreateRequestV2Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationUpdateRequestV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
+	ApiAgentGrantProjectionV1Schema,
+	ApiAgentGrantRequestV1Schema,
+	ApiApplicationCreateRequestV1Schema,
+	ApiApplicationProjectionV1Schema,
+	ApiCredentialIssueProjectionV1Schema,
+	ApiCredentialIssueRequestV1Schema,
+	ApiCredentialMetadataProjectionV1Schema,
+	ApiPrincipalV1Schema,
 	ApprovalDecisionRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
@@ -12,10 +23,16 @@ import type {
 	AgentConfigurationUseCaseV1,
 	AgentManagementActorContextV1,
 	AgentManagementInterfaceV1,
+	ApiCredentialMetadataV1,
+	ApiCredentialScopeV1,
+	ApiIdentityAuditActionV1,
+	ApiIdentityAuditInputV1,
+	ApiIdentityManagementInterfaceV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
+import { generateApiCredentialV1 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -25,6 +42,7 @@ import type {
 	AgentManagementPageV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
+import { allocateDeploymentDirectApplicationIds } from "../deployment-identity.js";
 import { parsePendingSecretRecordAttachmentResolverV1 } from "../secret-preparation.js";
 import {
 	HttpProtocolError,
@@ -38,18 +56,56 @@ import { mapCoreError } from "./core-errors.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
+	resolveApiIdentity,
 	resolveIdentity,
 } from "./identity.js";
 
 type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV1Schema.parse
 >;
+type LegacyApiIdentityStore = {
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly createApplication: (input: any) => Promise<void>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly getApplication: (id: string) => Promise<any>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly listApplications: (userId: string) => Promise<any>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly issueCredential: (input: any) => Promise<any>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly listCredentials: (input: any) => Promise<any>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly grantCredentialDelivery: (input: any) => Promise<void>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly revokeCredentialDelivery: (input: any) => Promise<boolean>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly grantAgent: (input: any) => Promise<void>;
+	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+	readonly revokeAgentGrant: (input: any) => Promise<boolean>;
+	readonly revokeCredential: (
+		id: string,
+		at: Date,
+		// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
+		audit: any,
+	) => Promise<boolean>;
+};
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
 type ApplicationCreateInput = ReturnType<
 	typeof AgentApplicationCreateRequestV1Schema.parse
 >;
-type ApplicationUpdateInput = ReturnType<
-	typeof AgentApplicationUpdateRequestV1Schema.parse
+type ApplicationPreparationInput = Pick<
+	ApplicationCreateInput,
+	"modelConfiguration"
+> & { readonly secrets?: ApplicationCreateInput["secrets"] };
+type ApplicationCommandInput = Pick<
+	ApplicationCreateInput,
+	| "name"
+	| "description"
+	| "coOwnerIds"
+	| "availability"
+	| "source"
+	| "environment"
+	| "modelConfiguration"
 >;
 
 export interface ManagementQuery {
@@ -102,6 +158,9 @@ export interface ManagementRouteDependencies {
 		AgentManagementInterfaceV1,
 		"executeManagementCommand"
 	>;
+	readonly apiIdentity?:
+		| ApiIdentityManagementInterfaceV1
+		| LegacyApiIdentityStore;
 	readonly configuration: Pick<
 		AgentConfigurationUseCaseV1,
 		"upgradeCustomImage"
@@ -132,7 +191,38 @@ function actor(identity: IdentityContext): AgentManagementActorContextV1 {
 		accountStatus: identity.accountStatus,
 		organizationIds: identity.organizationIds,
 		isAdministrator: identity.roles.includes("system_admin"),
+		...(identity.principal === undefined
+			? {}
+			: { principal: identity.principal }),
 	};
+}
+
+function hasBearerCredential(request: Request): boolean {
+	return /^Bearer\s+[^\s]+$/.test(request.headers.get("authorization") ?? "");
+}
+
+function apiIdentityContext(
+	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
+): IdentityContext {
+	return {
+		schemaVersion: 1,
+		userId: identity.ownerId,
+		displayName: identity.principal.id,
+		accountStatus: "active",
+		organizationIds: identity.organizationIds,
+		roles: [],
+		authorizationRevision: identity.authorizationRevision,
+		principal: identity.principal,
+	};
+}
+
+function hasApiScope(
+	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
+	...scopes: readonly string[]
+): boolean {
+	return scopes.some((scope) =>
+		identity.credential.scopes.includes(scope as never),
+	);
 }
 
 function applicantScope(
@@ -285,7 +375,7 @@ async function agentOrUnavailable(
 
 function modelInput(
 	prepared: SecretPreparationResult,
-	body: ApplicationCreateInput | ApplicationUpdateInput,
+	body: Pick<ApplicationCreateInput, "modelConfiguration">,
 	traceId: string,
 ):
 	| Pick<
@@ -305,7 +395,7 @@ function modelInput(
 
 async function prepareApplicationInput(
 	dependencies: ManagementRouteDependencies,
-	body: ApplicationCreateInput | ApplicationUpdateInput,
+	body: ApplicationPreparationInput,
 	identity: IdentityContext,
 	metadata: RequestMetadata,
 	resource: { readonly applicationId: string; readonly agentId: string },
@@ -420,7 +510,7 @@ async function prepareApplicationInput(
 }
 
 function applicationCommandFields(
-	body: ApplicationCreateInput | ApplicationUpdateInput,
+	body: ApplicationCommandInput,
 	prepared: SecretPreparationResult,
 	traceId: string,
 ) {
@@ -446,10 +536,621 @@ async function requireManagementAccepted(
 	if (decision.outcome === "conflict") fail("CONFLICT", traceId);
 }
 
+function apiIdentityOrUnavailable(
+	store: ApiIdentityManagementInterfaceV1 | LegacyApiIdentityStore | undefined,
+	traceId: string,
+): ApiIdentityManagementInterfaceV1 {
+	if (!store) fail("DEPENDENCY_UNAVAILABLE", traceId);
+	if ("listUserCredentials" in store) return store;
+	const legacy = store as LegacyApiIdentityStore;
+	return {
+		listUserCredentials: (a) =>
+			legacy.listCredentials({
+				principal: a.principal ?? { kind: "user", id: a.userId },
+			}),
+		issueUserCredential: (a, value) =>
+			legacy.issueCredential({
+				...value,
+				principal: { kind: "user", id: a.userId },
+			}),
+		revokeUserCredential: async (_a, id, at, audit) => {
+			if (!(await legacy.revokeCredential(id, at, audit)))
+				throw new Error("missing");
+		},
+		listApplications: (a) => legacy.listApplications(a.userId),
+		createApplication: async (v) => {
+			await legacy.createApplication({
+				...v,
+				responsibleUserId: v.actor.userId,
+			});
+			const app = await legacy.getApplication(v.applicationId);
+			if (!app) throw new Error("missing");
+			return app;
+		},
+		listApplicationCredentials: (_a, id) =>
+			legacy.listCredentials({ principal: { kind: "application", id } }),
+		issueApplicationCredential: (_a, id, value) =>
+			legacy.issueCredential({
+				...value,
+				principal: { kind: "application", id },
+			}),
+		revokeApplicationCredential: async (_a, _app, id, at, audit) => {
+			if (!(await legacy.revokeCredential(id, at, audit)))
+				throw new Error("missing");
+		},
+		grantCredentialDelivery: (v) =>
+			legacy.grantCredentialDelivery({ ...v, authorizationRevision: "legacy" }),
+		revokeCredentialDelivery: async (v) => {
+			if (!(await legacy.revokeCredentialDelivery(v)))
+				throw new Error("missing");
+		},
+		grantAgent: async (v) => {
+			const revision = randomUUID();
+			await legacy.grantAgent({ ...v, authorizationRevision: revision });
+			return revision;
+		},
+		revokeAgentGrant: async (v) => {
+			if (!(await legacy.revokeAgentGrant(v))) throw new Error("missing");
+		},
+	};
+}
+
+function apiCredentialProjection(
+	metadata: ApiCredentialMetadataV1,
+	traceId: string,
+) {
+	try {
+		return ApiCredentialMetadataProjectionV1Schema.parse({
+			schemaVersion: 1,
+			credentialId: metadata.credentialId,
+			principal: metadata.principal,
+			scopes: metadata.scopes,
+			expiresAt: metadata.expiresAt?.toISOString() ?? null,
+			revokedAt: metadata.revokedAt?.toISOString() ?? null,
+			createdAt: metadata.createdAt.toISOString(),
+		});
+	} catch {
+		fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+}
+
+function apiAudit(
+	identity: IdentityContext,
+	metadata: RequestMetadata,
+	action: ApiIdentityAuditActionV1,
+): ApiIdentityAuditInputV1 {
+	return {
+		traceId: metadata.traceId,
+		requestId: metadata.requestId,
+		actor: identity.principal ?? { kind: "user", id: identity.userId },
+		action,
+	};
+}
+
 export function registerManagementRoutes(
 	app: Hono,
 	dependencies: ManagementRouteDependencies,
 ): void {
+	app.get("/api/v1/api-credentials", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const items = await queryOrUnavailable(
+				() => management.listUserCredentials(actor(identity)),
+				metadata.traceId,
+			);
+			return context.json({
+				items: items.map((item) =>
+					apiCredentialProjection(item, metadata.traceId),
+				),
+				nextCursor: null,
+			});
+		}),
+	);
+
+	app.post("/api/v1/api-credentials", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				ApiCredentialIssueRequestV1Schema,
+				metadata.traceId,
+			);
+			if (body.recipient !== undefined) fail("FORBIDDEN", metadata.traceId);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const credential = generateApiCredentialV1(randomBytes);
+			const issued = await queryOrUnavailable(
+				() =>
+					management.issueUserCredential(actor(identity), {
+						credential,
+						scopes: body.scopes as ApiCredentialScopeV1[],
+						expiresAt:
+							body.expiresAt === null ? null : new Date(body.expiresAt),
+						audit: apiAudit(identity, metadata, "api.credential.issued"),
+					}),
+				metadata.traceId,
+			);
+			return context.json(
+				ApiCredentialIssueProjectionV1Schema.parse({
+					metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
+					credential,
+				}),
+				201,
+			);
+		}),
+	);
+
+	app.delete("/api/v1/api-credentials/:credentialId", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			await queryOrUnavailable(
+				() =>
+					management.revokeUserCredential(
+						actor(identity),
+						context.req.param("credentialId"),
+						new Date(),
+						apiAudit(identity, metadata, "api.credential.revoked"),
+					),
+				metadata.traceId,
+			);
+			return new Response(null, { status: 204 });
+		}),
+	);
+
+	app.get("/api/v1/applications", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const items = await queryOrUnavailable(
+				() => management.listApplications(actor(identity)),
+				metadata.traceId,
+			);
+			return context.json({
+				items: items.map((item) =>
+					ApiApplicationProjectionV1Schema.parse({
+						schemaVersion: 1,
+						applicationId: item.id,
+						name: item.name,
+						responsibleUserId: item.responsibleUserId,
+						status: item.status,
+						authorizationRevision: item.authorizationRevision,
+					}),
+				),
+				nextCursor: null,
+			});
+		}),
+	);
+
+	app.post("/api/v1/applications", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				ApiApplicationCreateRequestV1Schema,
+				metadata.traceId,
+			);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const applicationId = `application_${randomUUID()}`;
+			const application = await queryOrUnavailable(
+				() =>
+					management.createApplication({
+						actor: actor(identity),
+						applicationId,
+						name: body.name,
+						authorizationRevision: randomUUID(),
+						audit: apiAudit(identity, metadata, "api.application.created"),
+					}),
+				metadata.traceId,
+			);
+			return context.json(
+				ApiApplicationProjectionV1Schema.parse({
+					schemaVersion: 1,
+					applicationId: application.id,
+					name: application.name,
+					responsibleUserId: application.responsibleUserId,
+					status: application.status,
+					authorizationRevision: application.authorizationRevision,
+				}),
+				201,
+			);
+		}),
+	);
+
+	app.post(
+		"/api/v1/applications/:applicationId/credential-delivery",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const { value: principal } = await parseJson(
+					context.req.raw,
+					ApiPrincipalV1Schema,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				await queryOrUnavailable(
+					() =>
+						management.grantCredentialDelivery({
+							actor: actor(identity),
+							applicationId: context.req.param("applicationId"),
+							principal,
+							audit: apiAudit(
+								identity,
+								metadata,
+								"api.credential.delivery.granted",
+							),
+						}),
+					metadata.traceId,
+				);
+				return new Response(null, { status: 204 });
+			}),
+	);
+
+	app.delete(
+		"/api/v1/applications/:applicationId/credential-delivery",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const { value: principal } = await parseJson(
+					context.req.raw,
+					ApiPrincipalV1Schema,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				await queryOrUnavailable(
+					() =>
+						management.revokeCredentialDelivery({
+							actor: actor(identity),
+							applicationId: context.req.param("applicationId"),
+							principal,
+							audit: apiAudit(
+								identity,
+								metadata,
+								"api.credential.delivery.revoked",
+							),
+						}),
+					metadata.traceId,
+				);
+				return new Response(null, { status: 204 });
+			}),
+	);
+
+	app.get("/api/v1/applications/:applicationId/credentials", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const items = await queryOrUnavailable(
+				() =>
+					management.listApplicationCredentials(
+						actor(identity),
+						context.req.param("applicationId"),
+					),
+				metadata.traceId,
+			);
+			return context.json({
+				items: items.map((item) =>
+					apiCredentialProjection(item, metadata.traceId),
+				),
+				nextCursor: null,
+			});
+		}),
+	);
+
+	app.post("/api/v1/applications/:applicationId/credentials", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				ApiCredentialIssueRequestV1Schema,
+				metadata.traceId,
+			);
+			if (!body.recipient) fail("FORBIDDEN", metadata.traceId);
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const credential = generateApiCredentialV1(randomBytes);
+			const issued = await queryOrUnavailable(
+				() =>
+					management.issueApplicationCredential(
+						actor(identity),
+						context.req.param("applicationId"),
+						{
+							credential,
+							recipient: body.recipient,
+							scopes: body.scopes as ApiCredentialScopeV1[],
+							expiresAt:
+								body.expiresAt === null ? null : new Date(body.expiresAt),
+							audit: apiAudit(identity, metadata, "api.credential.issued"),
+						},
+					),
+				metadata.traceId,
+			);
+			return context.json(
+				ApiCredentialIssueProjectionV1Schema.parse({
+					metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
+					credential,
+				}),
+				201,
+			);
+		}),
+	);
+
+	app.delete(
+		"/api/v1/applications/:applicationId/credentials/:credentialId",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				await queryOrUnavailable(
+					() =>
+						management.revokeApplicationCredential(
+							actor(identity),
+							context.req.param("applicationId"),
+							context.req.param("credentialId"),
+							new Date(),
+							apiAudit(identity, metadata, "api.credential.revoked"),
+						),
+					metadata.traceId,
+				);
+				return new Response(null, { status: 204 });
+			}),
+	);
+
+	app.post("/api/v1/agents/:agentId/grants", (context) =>
+		boundary(context, async (metadata) => {
+			const api = hasBearerCredential(context.req.raw)
+				? await resolveApiIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					)
+				: null;
+			const identity = api
+				? apiIdentityContext(api)
+				: await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+			if (api && !hasApiScope(api, "agent:manage"))
+				fail("FORBIDDEN", metadata.traceId);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				ApiAgentGrantRequestV1Schema,
+				metadata.traceId,
+			);
+			const agentId = context.req.param("agentId");
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			const authorizationRevision = await queryOrUnavailable(
+				() =>
+					management.grantAgent({
+						actor: actor(identity),
+						agentId,
+						principal: body.principal,
+						grantType: body.grantType,
+						audit: apiAudit(identity, metadata, "api.agent.grant.granted"),
+					}),
+				metadata.traceId,
+			);
+			return context.json(
+				ApiAgentGrantProjectionV1Schema.parse({
+					schemaVersion: 1,
+					agentId,
+					principal: body.principal,
+					grantType: body.grantType,
+					authorizationRevision,
+					revokedAt: null,
+				}),
+			);
+		}),
+	);
+
+	app.delete("/api/v1/agents/:agentId/grants", (context) =>
+		boundary(context, async (metadata) => {
+			const api = hasBearerCredential(context.req.raw)
+				? await resolveApiIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					)
+				: null;
+			const identity = api
+				? apiIdentityContext(api)
+				: await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+			if (api && !hasApiScope(api, "agent:manage"))
+				fail("FORBIDDEN", metadata.traceId);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				ApiAgentGrantRequestV1Schema,
+				metadata.traceId,
+			);
+			const agentId = context.req.param("agentId");
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			await queryOrUnavailable(
+				() =>
+					management.revokeAgentGrant({
+						actor: actor(identity),
+						agentId,
+						principal: body.principal,
+						grantType: body.grantType,
+						audit: apiAudit(identity, metadata, "api.agent.grant.revoked"),
+					}),
+				metadata.traceId,
+			);
+			return new Response(null, { status: 204 });
+		}),
+	);
+
+	app.post("/api/v1/agents", (context) =>
+		boundary(context, async (metadata) => {
+			const apiIdentity = await resolveApiIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (!apiIdentity.credential.scopes.includes("agent:create")) {
+				fail("FORBIDDEN", metadata.traceId);
+			}
+			const { value: body, rawRequestDigest } = await parseJson(
+				context.req.raw,
+				AgentApplicationCreateRequestV2Schema,
+				metadata.traceId,
+			);
+			const idempotencyKey = parseIdempotencyKey(
+				context.req.raw,
+				metadata.traceId,
+			);
+			const ids = allocateDeploymentDirectApplicationIds(
+				apiIdentity.principal.kind,
+				apiIdentity.principal.id,
+				idempotencyKey,
+			);
+			const identity: IdentityContext = {
+				schemaVersion: 1,
+				userId: apiIdentity.ownerId,
+				displayName: apiIdentity.principal.id,
+				accountStatus: "active",
+				organizationIds: apiIdentity.organizationIds,
+				roles: [],
+				authorizationRevision: apiIdentity.authorizationRevision,
+				principal: apiIdentity.principal,
+			};
+			const prepared = await prepareApplicationInput(
+				dependencies,
+				body,
+				identity,
+				metadata,
+				ids,
+			);
+			const availability =
+				apiIdentity.principal.kind === "application" &&
+				!body.availability.some(
+					(target) =>
+						target.kind === "application" &&
+						target.applicationId === apiIdentity.principal.id,
+				)
+					? [
+							...body.availability,
+							{
+								kind: "application" as const,
+								applicationId: apiIdentity.principal.id,
+							},
+						]
+					: body.availability;
+			await dependencies.foundation.submit(
+				{
+					schemaVersion: 2,
+					...ids,
+					idempotencyKey,
+					requestId: metadata.requestId,
+					traceId: metadata.traceId,
+					...applicationCommandFields(
+						{ ...body, availability },
+						prepared,
+						metadata.traceId,
+					),
+					secrets: prepared.secrets,
+					channels: [],
+				},
+				{
+					schemaVersion: 1,
+					userId: apiIdentity.ownerId,
+					rawRequestDigest,
+					principal: apiIdentity.principal,
+					creationMode: "api",
+				},
+				undefined,
+			);
+			return context.json(
+				{
+					schemaVersion: 1,
+					applicationId: ids.applicationId,
+					agentId: ids.agentId,
+					status: "creating",
+				},
+				201,
+			);
+		}),
+	);
+
 	app.post("/api/v1/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -768,14 +1469,37 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
+			const api = hasBearerCredential(context.req.raw)
+				? await resolveApiIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					)
+				: null;
+			const identity = api
+				? apiIdentityContext(api)
+				: await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+			if (api && !hasApiScope(api, "agent:read", "agent:use", "agent:manage"))
+				fail("FORBIDDEN", metadata.traceId);
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
+			const scope = api
+				? ({
+						kind: "principal" as const,
+						principal: api.principal,
+						grantType:
+							hasApiScope(api, "agent:manage") && hasApiScope(api, "agent:use")
+								? ("any" as const)
+								: hasApiScope(api, "agent:manage")
+									? ("manage" as const)
+									: ("use" as const),
+					} satisfies AgentManagementAgentScopeV1)
+				: userScope(identity);
 			const page = await queryOrUnavailable(
-				() => dependencies.query.listAgents(userScope(identity), queryPage),
+				() => dependencies.query.listAgents(scope, queryPage),
 				metadata.traceId,
 			);
 			return context.json({
@@ -791,14 +1515,37 @@ export function registerManagementRoutes(
 
 	app.get("/api/v1/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
+			const api = hasBearerCredential(context.req.raw)
+				? await resolveApiIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					)
+				: null;
+			const identity = api
+				? apiIdentityContext(api)
+				: await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
+			if (api && !hasApiScope(api, "agent:read", "agent:use", "agent:manage"))
+				fail("FORBIDDEN", metadata.traceId);
+			const scope = api
+				? ({
+						kind: "principal" as const,
+						principal: api.principal,
+						grantType:
+							hasApiScope(api, "agent:manage") && hasApiScope(api, "agent:use")
+								? ("any" as const)
+								: hasApiScope(api, "agent:manage")
+									? ("manage" as const)
+									: ("use" as const),
+					} satisfies AgentManagementAgentScopeV1)
+				: userScope(identity);
 			const agent = await agentOrUnavailable(
 				dependencies,
-				userScope(identity),
+				scope,
 				context.req.param("agentId"),
 				metadata.traceId,
 			);
@@ -810,11 +1557,20 @@ export function registerManagementRoutes(
 
 	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
 		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
+			const api = hasBearerCredential(context.req.raw)
+				? await resolveApiIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					)
+				: null;
+			const identity = api
+				? apiIdentityContext(api)
+				: await resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
 				AgentLifecycleCommandRequestV1Schema,
@@ -825,7 +1581,10 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
+			if (api && !hasApiScope(api, "agent:manage"))
+				fail("FORBIDDEN", metadata.traceId);
 			if (body.command === "upgrade_custom_image") {
+				if (api) fail("FORBIDDEN", metadata.traceId);
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -855,9 +1614,14 @@ export function registerManagementRoutes(
 					202,
 				);
 			}
-			const scope =
-				identity.roles.includes("system_admin") &&
-				(body.command === "disable" || body.command === "retry_creation")
+			const scope = api
+				? ({
+						kind: "principal" as const,
+						principal: api.principal,
+						grantType: "manage" as const,
+					} satisfies AgentManagementAgentScopeV1)
+				: identity.roles.includes("system_admin") &&
+						(body.command === "disable" || body.command === "retry_creation")
 					? ({ kind: "administrator" } as const)
 					: ownerScope(identity);
 			const current = await agentOrUnavailable(
@@ -866,9 +1630,18 @@ export function registerManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
+			if (api && body.command === "disable")
+				fail("FORBIDDEN", metadata.traceId);
+			if (
+				api &&
+				body.command === "start" &&
+				current.management.status !== "stopped"
+			)
+				fail("CONFLICT", metadata.traceId);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
+				start: "restart_agent",
 				retry_creation: "retry_agent_creation",
 				disable: "disable_agent",
 			} as const;

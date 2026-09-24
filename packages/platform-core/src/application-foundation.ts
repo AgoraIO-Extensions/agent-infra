@@ -12,6 +12,7 @@ import {
 	type InitialAgentConfigurationCommandV2,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
+import type { ApiPrincipalV1 } from "./api-identity.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
 	type PendingSecretRecordAttachmentsV1,
@@ -30,6 +31,9 @@ export interface ApplicationFoundationActorContextV1 {
 	readonly schemaVersion: 1;
 	readonly userId: string;
 	readonly rawRequestDigest: string;
+	/** API calls may be made by an application while the responsible user remains the Owner. */
+	readonly principal?: ApiPrincipalV1;
+	readonly creationMode?: "web" | "api";
 }
 
 export interface CommitApplicationFoundationResultV1 {
@@ -37,11 +41,12 @@ export interface CommitApplicationFoundationResultV1 {
 	readonly applicationId: string;
 	readonly agentId: string;
 	readonly configurationRevision: 1;
-	readonly status: "pending_approval";
+	readonly status: "pending_approval" | "creating";
 }
 
 export interface ApplicationFoundationWritePlanV1 {
 	readonly schemaVersion: 1;
+	readonly principal?: ApiPrincipalV1;
 	readonly agent: {
 		readonly agentId: string;
 		readonly currentConfigurationRevision: 1;
@@ -54,7 +59,7 @@ export interface ApplicationFoundationWritePlanV1 {
 		readonly applicantId: string;
 		readonly name: string;
 		readonly description: string;
-		readonly status: "pending_approval";
+		readonly status: "pending_approval" | "creating";
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly submittedAt: Date;
@@ -94,7 +99,7 @@ export interface ApplicationFoundationWritePlanV1 {
 		readonly traceId: string;
 		readonly requestId: string;
 		readonly agentId: string;
-		readonly actorType: "user";
+		readonly actorType: "user" | "application";
 		readonly actorId: string;
 		readonly action: "agent.application.submitted";
 		readonly targetType: "agent_application";
@@ -258,6 +263,7 @@ const actorContextKeys = [
 	"userId",
 	"rawRequestDigest",
 ] as const;
+const actorContextOptionalKeys = ["principal", "creationMode"] as const;
 
 function isEnumerableDataDescriptor(
 	descriptor: PropertyDescriptor | undefined,
@@ -392,7 +398,11 @@ function parseApplicationFoundationCommandV1(
 function parseApplicationFoundationActorContextV1(
 	actorContext: unknown,
 ): ApplicationFoundationActorContextV1 {
-	const values = snapshotExactDataValues(actorContext, actorContextKeys);
+	const values = snapshotExactDataValues(
+		actorContext,
+		actorContextKeys,
+		actorContextOptionalKeys,
+	);
 	if (!values) invalidApplicationFoundationInput();
 	const { schemaVersion, userId, rawRequestDigest } = values;
 	if (
@@ -403,7 +413,28 @@ function parseApplicationFoundationActorContextV1(
 	) {
 		invalidApplicationFoundationInput();
 	}
-	return { schemaVersion, userId, rawRequestDigest };
+	let principal: ApiPrincipalV1 | undefined;
+	if (Object.hasOwn(values, "principal")) {
+		const value = snapshotExactDataValues(values.principal, ["kind", "id"]);
+		if (
+			!value ||
+			(value.kind !== "user" && value.kind !== "application") ||
+			!isCapturedText(value.id)
+		) {
+			invalidApplicationFoundationInput();
+		}
+		principal = { kind: value.kind, id: value.id };
+	}
+	const creationMode = Object.hasOwn(values, "creationMode")
+		? values.creationMode
+		: "web";
+	if (creationMode !== "web" && creationMode !== "api") {
+		invalidApplicationFoundationInput();
+	}
+	if (principal?.kind === "application" && creationMode !== "api") {
+		invalidApplicationFoundationInput();
+	}
+	return { schemaVersion, userId, rawRequestDigest, principal, creationMode };
 }
 
 function requiredPlanObject(
@@ -459,6 +490,13 @@ function snapshotPlanAccessTarget(
 			organizationId: organization.organizationId as string,
 		};
 	}
+	const application = snapshotExactDataValues(input, ["kind", "applicationId"]);
+	if (application?.kind === "application") {
+		return {
+			kind: "application",
+			applicationId: application.applicationId as string,
+		};
+	}
 	throw new ApplicationFoundationError("persistence_failed");
 }
 
@@ -466,17 +504,22 @@ export function snapshotApplicationFoundationWritePlanV1(
 	input: unknown,
 ): ApplicationFoundationWritePlanV1 {
 	try {
-		const plan = requiredPlanObject(input, [
-			"schemaVersion",
-			"agent",
-			"application",
-			"configurationRevision",
-			"access",
-			"result",
-			"idempotency",
-			"outboxIntent",
-			"auditEvent",
-		]);
+		const plan = snapshotExactDataValues(
+			input,
+			[
+				"schemaVersion",
+				"agent",
+				"application",
+				"configurationRevision",
+				"access",
+				"result",
+				"idempotency",
+				"outboxIntent",
+				"auditEvent",
+			],
+			["principal"],
+		);
+		if (!plan) throw new ApplicationFoundationError("persistence_failed");
 		const agent = requiredPlanObject(plan.agent, [
 			"agentId",
 			"currentConfigurationRevision",
@@ -550,8 +593,21 @@ export function snapshotApplicationFoundationWritePlanV1(
 			"outcome",
 			"occurredAt",
 		]);
+		let principal: ApiPrincipalV1 | undefined;
+		if (Object.hasOwn(plan, "principal")) {
+			const value = snapshotExactDataValues(plan.principal, ["kind", "id"]);
+			if (
+				!value ||
+				(value.kind !== "user" && value.kind !== "application") ||
+				!isCapturedText(value.id)
+			) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
+			principal = { kind: value.kind, id: value.id };
+		}
 		return {
 			schemaVersion: plan.schemaVersion as 1,
+			...(principal === undefined ? {} : { principal }),
 			agent: {
 				agentId: agent.agentId as string,
 				currentConfigurationRevision: agent.currentConfigurationRevision as 1,
@@ -564,7 +620,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				applicantId: application.applicantId as string,
 				name: application.name as string,
 				description: application.description as string,
-				status: application.status as "pending_approval",
+				status: application.status as "pending_approval" | "creating",
 				traceId: application.traceId as string,
 				requestId: application.requestId as string,
 				submittedAt: snapshotPlanDate(application.submittedAt),
@@ -590,7 +646,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				applicationId: result.applicationId as string,
 				agentId: result.agentId as string,
 				configurationRevision: result.configurationRevision as 1,
-				status: result.status as "pending_approval",
+				status: result.status as "pending_approval" | "creating",
 			},
 			idempotency: {
 				key: idempotency.key as string,
@@ -614,7 +670,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				traceId: auditEvent.traceId as string,
 				requestId: auditEvent.requestId as string,
 				agentId: auditEvent.agentId as string,
-				actorType: auditEvent.actorType as "user",
+				actorType: auditEvent.actorType as "user" | "application",
 				actorId: auditEvent.actorId as string,
 				action: auditEvent.action as "agent.application.submitted",
 				targetType: auditEvent.targetType as "agent_application",
@@ -753,6 +809,11 @@ export function createApplicationFoundationUseCaseV1(
 		const actorContext =
 			parseApplicationFoundationActorContextV1(actorContextInput);
 		const command = parseApplicationFoundationCommandV1(commandInput, legacy);
+		const principal: ApiPrincipalV1 = actorContext.principal ?? {
+			kind: "user",
+			id: actorContext.userId,
+		};
+		const creationMode = actorContext.creationMode ?? "web";
 		let admission: Awaited<
 			ReturnType<typeof beginInitialAgentConfigurationAdmissionV1>
 		>;
@@ -788,7 +849,7 @@ export function createApplicationFoundationUseCaseV1(
 			applicationId: command.applicationId,
 			agentId: command.agentId,
 			configurationRevision: initialConfigurationRevision,
-			status: "pending_approval",
+			status: creationMode === "api" ? "creating" : "pending_approval",
 		};
 		let readDecision: ApplicationFoundationReadDecisionV1;
 		try {
@@ -797,7 +858,7 @@ export function createApplicationFoundationUseCaseV1(
 					schemaVersion: 1,
 					applicationId: command.applicationId,
 					agentId: command.agentId,
-					actorId: actorContext.userId,
+					actorId: principal.id,
 					idempotencyKey: command.idempotencyKey,
 					requestDigest: actorContext.rawRequestDigest,
 				}),
@@ -827,6 +888,9 @@ export function createApplicationFoundationUseCaseV1(
 		}
 		const plan: ApplicationFoundationWritePlanV1 = {
 			schemaVersion: 1,
+			...(actorContext.principal === undefined
+				? {}
+				: { principal: actorContext.principal }),
 			agent: {
 				agentId: command.agentId,
 				currentConfigurationRevision: initialConfigurationRevision,
@@ -839,7 +903,7 @@ export function createApplicationFoundationUseCaseV1(
 				applicantId: actorContext.userId,
 				name: command.name,
 				description: command.description,
-				status: "pending_approval",
+				status: result.status,
 				traceId: command.traceId,
 				requestId: command.requestId,
 				submittedAt,
@@ -879,8 +943,8 @@ export function createApplicationFoundationUseCaseV1(
 				traceId: command.traceId,
 				requestId: command.requestId,
 				agentId: command.agentId,
-				actorType: "user",
-				actorId: actorContext.userId,
+				actorType: principal.kind,
+				actorId: principal.id,
 				action: "agent.application.submitted",
 				targetType: "agent_application",
 				targetId: command.applicationId,

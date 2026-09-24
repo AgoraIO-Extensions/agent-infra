@@ -129,7 +129,9 @@ function resultValue(input: unknown): ApplicationRevisionResultV1 {
 function accessKey(target: AgentConfigurationAccessTargetV1): string {
 	return target.kind === "user"
 		? `user\0${target.userId}`
-		: `organization\0${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization\0${target.organizationId}`
+			: `application\0${target.applicationId}`;
 }
 
 function compareAccessTargets(
@@ -172,7 +174,9 @@ function validateAccess(
 		availability.some((target) =>
 			target.kind === "user"
 				? !validText(target.userId)
-				: target.kind !== "organization" || !validText(target.organizationId),
+				: target.kind === "organization"
+					? !validText(target.organizationId)
+					: !validText(target.applicationId),
 		)
 	) {
 		unavailable();
