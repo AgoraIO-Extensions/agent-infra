@@ -337,6 +337,7 @@ export type ConnectorProviderId =
 	| "jenkins-ci"
 	| "jenkins-release"
 	| "jira"
+	| "manhattan"
 	| "rehoboam";
 
 export const connectorDefinitions: Array<{
@@ -380,6 +381,13 @@ export const connectorDefinitions: Array<{
 		icon: Boxes,
 		name: "DataLego",
 		providerId: "datalego",
+	},
+	{
+		category: "研发协作",
+		description: "SDK dump、崩溃分析与 Symbol",
+		icon: Boxes,
+		name: "Manhattan",
+		providerId: "manhattan",
 	},
 	{
 		category: "CI/CD",
@@ -568,6 +576,7 @@ export function providerLabel(value: string) {
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 			rehoboam: "Rehoboam",
+			manhattan: "Manhattan",
 		}[value] ?? value
 	);
 }

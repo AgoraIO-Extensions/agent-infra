@@ -7,6 +7,7 @@
 		"./jira-server": "./src/jira-server.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
+		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts"
 	},
 	"scripts": {

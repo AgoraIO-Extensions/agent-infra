@@ -853,7 +853,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"enum": ["bitbucket", "rehoboam"]
+								"enum": ["bitbucket", "manhattan", "rehoboam"]
 							},
 							"accessToken": {
 								"type": "string",

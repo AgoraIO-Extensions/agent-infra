@@ -162,6 +162,15 @@ Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员�
 `auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
 exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
 
+Manhattan 的首个 **[设计决策]** Provider profile 固定为
+`https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
+`apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
+个人身份只接受 HCI OAuth Bearer，并由 Manhattan 服务端调用固定 user-info endpoint 验证后继续执行
+现有 RBAC 校验。Connection 加密保存个人 Bearer，机器 key 只由 Secret Manager 注入，二者不得进入
+同一 credential envelope。`manhattan-connection-v1` 只发布当前用户、SDK dump 列表/详情和 Symbol
+列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
+为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
+
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly

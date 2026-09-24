@@ -150,6 +150,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./jira-server": "./src/jira-server.ts",
+		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);
