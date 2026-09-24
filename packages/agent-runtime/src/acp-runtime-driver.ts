@@ -67,6 +67,7 @@ export const GenericAcpRuntimeDriver = {
 					? async (tool: {
 							readonly toolCallId: string;
 							readonly name: string;
+							readonly permitted?: boolean;
 						}) =>
 							toolRequestStarted({
 								...tool,
@@ -107,8 +108,10 @@ export const GenericAcpRuntimeDriver = {
 									? "completed"
 									: event.status === "failed"
 										? "failed"
-										: "started";
-							if (phases.get(event.toolCallId) !== phase) {
+										: event.status === "in_progress"
+											? "started"
+											: undefined;
+							if (phase && phases.get(event.toolCallId) !== phase) {
 								phases.set(event.toolCallId, phase);
 								await update({
 									type: "tool",

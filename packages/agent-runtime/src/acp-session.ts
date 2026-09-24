@@ -39,6 +39,7 @@ export async function openAcpSession(options: {
 	toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
+		readonly permitted?: boolean;
 	}) => Promise<void>;
 }) {
 	const native = await spawnAcpProcess(
@@ -94,12 +95,13 @@ export async function openAcpSession(options: {
 				once &&
 				(await options.launch.authorize?.(tool).catch(() => false));
 			const admitted =
-				allowed && currentToolRequestStarted
+				tool && currentToolRequestStarted
 					? await currentToolRequestStarted({
 							toolCallId: params.toolCall.toolCallId,
 							name: tool?.kind ?? "unknown",
+							permitted: Boolean(allowed),
 						}).then(
-							() => true,
+							() => Boolean(allowed),
 							() => false,
 						)
 					: false;
@@ -171,6 +173,7 @@ export async function openAcpSession(options: {
 				toolRequestStarted?: (tool: {
 					readonly toolCallId: string;
 					readonly name: string;
+					readonly permitted?: boolean;
 				}) => Promise<void>;
 			}) {
 				currentModelRequestStarted = next.modelRequestStarted;
@@ -234,11 +237,14 @@ export async function openAcpSession(options: {
 			},
 			async prompt(text: string) {
 				tools.clear();
-				await currentModelRequestStarted?.();
-				const response = await connection.agent.request("session/prompt", {
+				const responsePromise = connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],
 				});
+				// The request is dispatched before recording the model boundary, while
+				// still persisting the fact before the ACP response can complete.
+				await currentModelRequestStarted?.();
+				const response = await responsePromise;
 				await updates;
 				return response;
 			},

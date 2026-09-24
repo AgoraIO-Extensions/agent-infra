@@ -66,6 +66,8 @@ export interface NativeSessionOptions {
 	toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
+		/** False means the native permission boundary rejected the request. */
+		readonly permitted?: boolean;
 	}) => Promise<void>;
 	update: (event?: RuntimeEventInput) => Promise<void>;
 }
@@ -1216,56 +1218,77 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private async toolRequestStarted(
 		file: DurableJsonFile<Session>,
 		executionId: string,
-		value: { readonly toolCallId: string; readonly name: string },
+		value: {
+			readonly toolCallId: string;
+			readonly name: string;
+			readonly permitted?: boolean;
+		},
 	) {
-		const turn = file
-			.read()
-			.turns.find((entry) => entry.executionId === executionId);
-		if (!turn || terminal(turn.status)) unavailable();
-		const identity = turn.toolOperations?.[value.toolCallId];
-		const previousEvent = identity
-			? [...turn.events]
-					.reverse()
-					.find(
-						(event) =>
-							event.type === "operation" &&
-							event.payload.kind === "tool" &&
-							event.payload.operationRef === identity.operationRef &&
-							event.payload.attemptRef === identity.attemptRef,
-					)
-			: undefined;
-		const previous =
-			previousEvent?.type === "operation" &&
-			previousEvent.payload.kind === "tool"
-				? previousEvent.payload
+		let recorded = false;
+		const ref = file.read().binding.ref;
+		await this.exclusive(ref, async () => {
+			const turn = file
+				.read()
+				.turns.find((entry) => entry.executionId === executionId);
+			if (!turn || terminal(turn.status)) unavailable();
+			const identity = turn.toolOperations?.[value.toolCallId];
+			const previousEvent = identity
+				? [...turn.events]
+						.reverse()
+						.find(
+							(event) =>
+								event.type === "operation" &&
+								event.payload.kind === "tool" &&
+								event.payload.operationRef === identity.operationRef &&
+								event.payload.attemptRef === identity.attemptRef,
+						)
 				: undefined;
-		if (previous && ["intent", "started"].includes(previous.phase)) return;
-		const model = latestFact(turn, "model");
-		const created = {
-			kind: "tool" as const,
-			operationRef: previous?.operationRef ?? randomUUID(),
-			attemptRef: randomUUID(),
-			phase: "intent" as const,
-			toolId: metadataId(value.name, "tool"),
-			...(model ? { parentOperationRef: model.operationRef } : {}),
-		};
-		await file.update((state) => {
-			const current = state.turns.find(
-				(entry) => entry.executionId === executionId,
-			);
-			if (!current || terminal(current.status)) unavailable();
-			current.toolOperations ??= {};
-			current.toolOperations[value.toolCallId] = {
-				operationRef: created.operationRef,
-				attemptRef: created.attemptRef,
+			const previous =
+				previousEvent?.type === "operation" &&
+				previousEvent.payload.kind === "tool"
+					? previousEvent.payload
+					: undefined;
+			if (previous && ["intent", "started"].includes(previous.phase)) return;
+			const model = latestFact(turn, "model");
+			const created = {
+				kind: "tool" as const,
+				operationRef: previous?.operationRef ?? randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent" as const,
+				toolId: metadataId(value.name, "tool"),
+				...(model ? { parentOperationRef: model.operationRef } : {}),
 			};
+			await file.update((state) => {
+				const current = state.turns.find(
+					(entry) => entry.executionId === executionId,
+				);
+				if (!current || terminal(current.status)) unavailable();
+				current.toolOperations ??= {};
+				current.toolOperations[value.toolCallId] = {
+					operationRef: created.operationRef,
+					attemptRef: created.attemptRef,
+				};
+			});
+			await this.appendOperationFact(file, executionId, created);
+			recorded = true;
 		});
-		await this.appendOperationFact(file, executionId, created);
+		if (recorded && value.permitted === false)
+			await this.toolPhase(file, executionId, {
+				toolCallId: value.toolCallId,
+				name: value.name,
+				phase: "failed",
+				failureCode: "authorization_denied",
+			});
 	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,
 		executionId: string,
-		value: Extract<RuntimeEventV1, { type: "tool" }>["payload"],
+		value: {
+			toolCallId: string;
+			name: string;
+			phase: "started" | "completed" | "failed";
+			failureCode?: RuntimeOperationFactV2["failureCode"];
+		},
 	): Promise<void> {
 		const turn = file
 			.read()
@@ -1326,7 +1349,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 			...(value.phase === "failed"
-				? { failureCode: "operation_failed" as const }
+				? { failureCode: value.failureCode ?? ("operation_failed" as const) }
 				: {}),
 		});
 	}

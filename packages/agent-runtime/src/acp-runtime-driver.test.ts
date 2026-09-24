@@ -109,6 +109,81 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 	}
 });
 
+it.each([true, false])(
+	"records ACP permission %s as a durable tool fact",
+	async (permitted) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			launch: async () => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: "tool-permission" },
+				authorize: async () => permitted,
+			}),
+		});
+		try {
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-permission",
+				turnId: "turn-permission",
+				operationId: "operation-permission",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			};
+			const accepted = await driver.execute(command);
+			await vi.waitFor(async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			);
+			const tools = (
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(tools.map((fact) => fact.phase)).toEqual(
+				permitted ? ["intent", "started", "completed"] : ["intent", "failed"],
+			);
+			if (!permitted)
+				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
 it("keeps a lost active turn unknown after restart and blocks another turn without quarantining its session", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
 	const options = {

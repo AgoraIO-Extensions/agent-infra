@@ -339,6 +339,20 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					);
 					if (toolName === "read")
 						expect(calls.at(-1)).toContain("SYNTHETIC_OWNER_CANARY");
+					const ownerEvents = await driver.replayEvents(
+						accepted.nativeSessionRef,
+						"execution-a",
+					);
+					const ownerToolFacts = ownerEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "tool"
+							? [event.payload]
+							: [],
+					);
+					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual([
+						"intent",
+						"started",
+						"completed",
+					]);
 					expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe(
 						toolName === "write"
 							? "synthetic replacement"
@@ -515,6 +529,18 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						escaped.nativeSessionRef,
 						"execution-escape",
 					);
+					const escapeToolFacts = escapeEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "tool"
+							? [event.payload]
+							: [],
+					);
+					expect(escapeToolFacts.at(-1)?.phase).toBe("failed");
+					expect(escapeToolFacts.at(-1)?.failureCode).toBe(
+						runtime === "OpenCode"
+							? "authorization_denied"
+							: "operation_failed",
+					);
+					expect(escapeToolFacts[0]?.phase).toBe("intent");
 					expect(escapeEvents.filter((e) => e.type === "tool")).toContainEqual(
 						expect.objectContaining({
 							payload: expect.objectContaining({ phase: "failed" }),

@@ -125,6 +125,15 @@ const connection = new AgentSideConnection(
 						status: "pending",
 					},
 				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "in_progress",
+					},
+				});
 				if (process.env.ACP_TEST_MODE === "tool-hold")
 					await new Promise((resolve) => {
 						finishPrompt = resolve;
@@ -136,6 +145,52 @@ const connection = new AgentSideConnection(
 						toolCallId: "tool-1",
 						kind: "read",
 						status: "completed",
+					},
+				});
+			}
+			if (process.env.ACP_TEST_MODE === "tool-permission") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tool-permission",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				const permission = await connection.requestPermission({
+					sessionId,
+					toolCall: {
+						toolCallId: "tool-permission",
+						kind: "read",
+						status: "pending",
+						title: "Read synthetic file",
+					},
+					options: [
+						{ optionId: "allow", name: "Allow", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+					],
+				});
+				const allowed =
+					permission.outcome?.outcome === "selected" &&
+					permission.outcome.optionId === "allow";
+				if (allowed)
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "tool-permission",
+							kind: "read",
+							status: "in_progress",
+						},
+					});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-permission",
+						kind: "read",
+						status: allowed ? "completed" : "failed",
 					},
 				});
 			}
