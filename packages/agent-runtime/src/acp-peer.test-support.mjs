@@ -115,7 +115,7 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
-			if (process.env.ACP_TEST_MODE === "tool") {
+			if (["tool", "tool-hold"].includes(process.env.ACP_TEST_MODE)) {
 				await connection.sessionUpdate({
 					sessionId,
 					update: {
@@ -125,6 +125,10 @@ const connection = new AgentSideConnection(
 						status: "pending",
 					},
 				});
+				if (process.env.ACP_TEST_MODE === "tool-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
 				await connection.sessionUpdate({
 					sessionId,
 					update: {

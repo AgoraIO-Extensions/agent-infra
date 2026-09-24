@@ -128,7 +128,7 @@ it("keeps a lost active turn unknown after restart and blocks another turn witho
 			args: [
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
-			env: { ACP_TEST_MODE: "hold" },
+			env: { ACP_TEST_MODE: "tool-hold" },
 		}),
 	};
 	let driver = await GenericAcpRuntimeDriver.open(options);
@@ -154,11 +154,40 @@ it("keeps a lost active turn unknown after restart and blocks another turn witho
 		expect(
 			await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
 		).toBe("running");
+		await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-a",
+			);
+			expect(
+				events.some(
+					(event) =>
+						event.type === "operation" &&
+						event.payload.kind === "tool" &&
+						event.payload.phase === "started",
+				),
+			).toBe(true);
+		});
 		await driver.close();
 		driver = await GenericAcpRuntimeDriver.open(options);
 		expect(
 			await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
 		).toBe("unknown");
+		const recoveredEvents = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-a",
+		);
+		const toolFacts = recoveredEvents.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload]
+				: [],
+		);
+		expect(toolFacts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"unknown",
+		]);
+		expect(toolFacts.at(-1)?.failureCode).toBe("recovery_unconfirmed");
 		expect(await driver.execute(command)).toEqual(accepted);
 		expect(await driver.lookupOperation(command)).toEqual({
 			state: "found",
