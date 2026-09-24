@@ -10,6 +10,7 @@ export {
 	createPostgresPrincipalDirectory,
 	createPrincipalIdentityStore,
 } from "./identity-repository.js";
+export { createPostgresLoginThrottle } from "./login-throttle-repository.js";
 export {
 	connectionDatabaseUrlFromEnvironment,
 	migrateConnectionDatabase,
