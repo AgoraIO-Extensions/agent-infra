@@ -1,5 +1,11 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeploymentConfigurationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 
@@ -400,6 +406,55 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("keeps custom-image applications available when choices are unavailable", async () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "unavailable",
+					templates: [],
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "unavailable",
+						endpoints: [],
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Custom assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs a custom image" },
+		});
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 平台交互入口",
+		});
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		await waitFor(() => expect(screen.getByText("镜像地址")).toBeTruthy());
+		fireEvent.change(screen.getByLabelText("镜像地址"), {
+			target: { value: "registry.example/agents/custom:v1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/custom:v1",
+					interactionMode: "platform-adapter",
+				},
+			}),
+		);
 	});
 
 	it("marks a stale deployment projection before submission", () => {

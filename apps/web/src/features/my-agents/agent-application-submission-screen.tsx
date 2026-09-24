@@ -81,7 +81,8 @@ export function AgentApplicationSubmissionScreen(
 			</header>
 			<div className="form-layout">
 				<div className="min-w-0">
-					{props.deploymentConfiguration.status !== "populated" ? (
+					{props.deploymentConfiguration.status !== "populated" ||
+					props.deploymentConfiguration.modelCatalog.status !== "populated" ? (
 						<div className="mb-4 flex items-center gap-3" role="status">
 							<p className="text-muted-foreground text-sm">
 								部署选项需要刷新后才能提交标准模板申请。

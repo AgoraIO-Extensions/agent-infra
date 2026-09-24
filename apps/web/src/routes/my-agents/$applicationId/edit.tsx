@@ -1,9 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
-import { Button } from "../../../components/ui/button.js";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
+import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
@@ -18,29 +18,6 @@ function EditAgentApplicationRoute() {
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
 	const deployment = useDeploymentConfiguration();
-	if (deployment.isPending) {
-		return (
-			<main className="platform-content management-content">
-				<p aria-live="polite">正在读取部署选项…</p>
-			</main>
-		);
-	}
-	if (deployment.isError || deployment.data?.kind !== "ready") {
-		return (
-			<main className="platform-content management-content">
-				<section className="space-y-4" aria-live="assertive">
-					<p>部署选项暂不可用，请重试。</p>
-					<Button
-						variant="outline"
-						onClick={() => void deployment.refetch()}
-						type="button"
-					>
-						重新加载
-					</Button>
-				</section>
-			</main>
-		);
-	}
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取申请…</p>;
 	}
@@ -94,6 +71,10 @@ function EditAgentApplicationRoute() {
 		submission.isError && submission.error instanceof Error
 			? submission.error
 			: null;
+	const deploymentConfiguration =
+		deployment.data?.kind === "ready"
+			? deployment.data.configuration
+			: unavailableDeploymentConfiguration;
 
 	return (
 		<main className="platform-content management-content">
@@ -105,7 +86,7 @@ function EditAgentApplicationRoute() {
 				onSubmit={(body) => submission.update(applicationId, body)}
 				result={submission.data}
 				submitting={submission.isPending}
-				deploymentConfiguration={deployment.data.configuration}
+				deploymentConfiguration={deploymentConfiguration}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

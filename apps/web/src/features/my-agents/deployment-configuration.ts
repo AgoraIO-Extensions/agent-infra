@@ -26,6 +26,18 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 	};
 }
 
+export const unavailableDeploymentConfiguration: DeploymentConfigurationProjectionV2 =
+	{
+		modelCatalog: {
+			endpoints: [],
+			revision: null,
+			status: "unavailable",
+		},
+		schemaVersion: 2,
+		status: "unavailable",
+		templates: [],
+	};
+
 export async function loadDeploymentConfiguration(
 	client?: Client,
 ): Promise<DeploymentConfigurationState> {

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Button } from "../../components/ui/button.js";
 
 import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
+import { unavailableDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 
@@ -19,22 +19,10 @@ function NewAgentApplicationRoute() {
 			</main>
 		);
 	}
-	if (deployment.isError || deployment.data?.kind !== "ready") {
-		return (
-			<main className="platform-content management-content">
-				<section className="space-y-4" aria-live="assertive">
-					<p>部署选项暂不可用，请重试。</p>
-					<Button
-						variant="outline"
-						onClick={() => void deployment.refetch()}
-						type="button"
-					>
-						重新加载
-					</Button>
-				</section>
-			</main>
-		);
-	}
+	const deploymentConfiguration =
+		deployment.data?.kind === "ready"
+			? deployment.data.configuration
+			: unavailableDeploymentConfiguration;
 	const error =
 		submission.isError && submission.error instanceof Error
 			? submission.error
@@ -48,7 +36,7 @@ function NewAgentApplicationRoute() {
 				onSubmit={submission.create}
 				result={submission.data}
 				submitting={submission.isPending}
-				deploymentConfiguration={deployment.data.configuration}
+				deploymentConfiguration={deploymentConfiguration}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>
