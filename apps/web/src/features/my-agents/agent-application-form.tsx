@@ -297,6 +297,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<Select
 								disabled={props.mode === "update"}
 								value={sourceKind}
+								itemToStringLabel={(value) =>
+									(
+										({
+											standard: "标准模板",
+											"custom-platform-adapter": "自定义 Agent · 平台交互入口",
+											"custom-self-managed": "自定义 Agent · 自有交互入口",
+										}) as Record<string, string>
+									)[String(value)] ?? String(value)
+								}
 								onValueChange={(value) => {
 									if (!value) return;
 									const kind = value as AgentApplicationSourceKind;
@@ -306,6 +315,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										if (sourceKind !== "standard") setConfigureModels(true);
 									}
 									if (kind !== "standard") setConfigureModels(false);
+									document.getElementById("application-source-kind")?.focus();
 								}}
 							>
 								<SelectTrigger
