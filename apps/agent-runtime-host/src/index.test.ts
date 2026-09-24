@@ -473,6 +473,77 @@ describe("RuntimeHost environment assembly", () => {
 		},
 	);
 
+	it("wires the private Connection client only into Codex", async () => {
+		const values = await environment();
+		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		let openedWith: CodexRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema-sha256",
+		});
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (options: CodexRuntimeDriverOptions) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, "codex-connection-test.json"),
+				);
+			},
+		);
+		const profile = {
+			profileRef: "connection-fixture",
+			serviceRef: "connection-service",
+			issuer: "https://connection.example.test",
+			resource: "https://connection.example.test/mcp",
+		};
+		const runtime = await assembleRuntimeHost({
+			...values,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 2,
+				configVersion: "active-revision-17",
+				defaultModelOptionId: "model-option-primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						endpoint: "https://models.example.test/v1",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			}),
+			AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: JSON.stringify(profile),
+		});
+		try {
+			expect(openedWith?.connectionClient).toMatchObject({
+				profile,
+				authorizedService: {
+					serviceRef: profile.serviceRef,
+					issuer: profile.issuer,
+					resource: profile.resource,
+				},
+				resolveOriginalClient: expect.any(Function),
+				resolveReadOnlyClient: expect.any(Function),
+			});
+		} finally {
+			await runtime.close();
+		}
+		await expect(
+			assembleRuntimeHost({
+				...(await environment()),
+				AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: JSON.stringify(profile),
+			}),
+		).rejects.toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+	});
+
 	it.each([
 		{ AGENT_INFRA_RUNTIME_DRIVER: "plugin" },
 		{ AGENT_INFRA_RUNTIME_DATA_DIR: "relative" },

@@ -31,6 +31,10 @@ import {
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
+import {
+	createIndependentConnectionClientInput,
+	readConnectionClientProfile,
+} from "./connection-client-input.js";
 
 import {
 	type RuntimeLegacyMigrationFilesystem,
@@ -152,6 +156,10 @@ export async function assembleRuntimeHost(
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	const connectionProfile = readConnectionClientProfile(
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
+	);
+	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -195,6 +203,25 @@ export async function assembleRuntimeHost(
 		await legacyMigration?.apply(store);
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					...(connectionProfile
+						? {
+								connectionClient: createIndependentConnectionClientInput({
+									dataDirectory,
+									profile: connectionProfile,
+									// The deployment profile is the only configured service
+									// authority; native input cannot choose another service.
+									authorizedService: {
+										serviceRef: connectionProfile.serviceRef,
+										issuer: connectionProfile.issuer,
+										resource: connectionProfile.resource,
+									},
+									// The committed Store is ready before Host startup
+									// recovery invokes native bootstrap.
+									resolveOriginalBinding: (reference) =>
+										store.resolveOriginalExecutionBinding(reference, Date.now),
+								}),
+							}
+						: {}),
 					authorizeExternalAction: async (action) => {
 						if (!assembledHost)
 							throw new RuntimeHostError(
