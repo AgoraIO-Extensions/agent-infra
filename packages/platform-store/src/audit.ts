@@ -7,6 +7,12 @@ import postgres from "postgres";
 import { auditEvents } from "./schema.js";
 
 const platformAuditActionMetadata = {
+	"api.access.rejected": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_access",
+	},
 	"api.application.created": {
 		actorKind: "user",
 		actorKinds: ["user", "application"],
@@ -309,7 +315,7 @@ function validDate(input: unknown): input is Date {
 function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
-): readonly PlatformAuditChangedFieldV1[] {
+): readonly string[] {
 	const detailKind = platformAuditActionMetadata[action].details;
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
@@ -375,6 +381,36 @@ function changedFields(
 				throw new PlatformAuditQueryError("unavailable");
 		}
 		return [];
+	}
+	if (detailKind === "api_access") {
+		if (!exactObject(details, ["reason", "requiredScopes"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly reason: unknown;
+			readonly requiredScopes: unknown;
+		};
+		if (
+			value.reason !== "account_inactive" &&
+			value.reason !== "invalid_credential" &&
+			value.reason !== "missing_scope" &&
+			value.reason !== "operation_forbidden" &&
+			value.reason !== "resource_unavailable"
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (
+			!Array.isArray(value.requiredScopes) ||
+			value.requiredScopes.some(
+				(scope) =>
+					scope !== "agent:create" &&
+					scope !== "agent:manage" &&
+					scope !== "agent:use" &&
+					scope !== "agent:read",
+			) ||
+			new Set(value.requiredScopes).size !== value.requiredScopes.length
+		) {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+		return [value.reason as string];
 	}
 	if (!exactObject(details, ["changedFields"])) {
 		throw new PlatformAuditQueryError("unavailable");

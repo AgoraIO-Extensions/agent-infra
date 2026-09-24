@@ -26,9 +26,11 @@ import type {
 	AgentManagementInterfaceV1,
 	ApiCredentialMetadataV1,
 	ApiCredentialScopeV1,
+	ApiIdentityAccessAuditContextV1,
 	ApiIdentityActorV1,
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
+	ApiIdentityAuditReasonV1,
 	ApiIdentityManagementInterfaceV1,
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
@@ -513,8 +515,12 @@ async function requireManagementAccepted(
 		ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>
 	>,
 	traceId: string,
+	onDenied?: () => Promise<void>,
 ): Promise<void> {
-	if (decision.outcome === "denied") fail("RESOURCE_UNAVAILABLE", traceId);
+	if (decision.outcome === "denied") {
+		await onDenied?.();
+		fail("RESOURCE_UNAVAILABLE", traceId);
+	}
 	if (decision.outcome === "conflict") fail("CONFLICT", traceId);
 }
 
@@ -573,6 +579,21 @@ function apiAudit(
 		requestId: metadata.requestId,
 		actor: identity.principal ?? { kind: "user", id: identity.userId },
 		action,
+	};
+}
+
+function apiAccessAudit(
+	identity: IdentityContext,
+	metadata: RequestMetadata,
+	targetId: string,
+	reason: ApiIdentityAuditReasonV1,
+	requiredScopes?: readonly ApiCredentialScopeV1[],
+): ApiIdentityAccessAuditContextV1 {
+	return {
+		audit: apiAudit(identity, metadata, "api.access.rejected"),
+		targetId,
+		reason,
+		...(requiredScopes === undefined ? {} : { requiredScopes }),
 	};
 }
 
@@ -1005,9 +1026,17 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
-			management.authorizeCredentialScope(apiActor(apiIdentity), [
-				"agent:create",
-			]);
+			await management.authorizeCredentialScope(
+				apiActor(apiIdentity),
+				["agent:create"],
+				apiAccessAudit(
+					apiIdentityContext(apiIdentity),
+					metadata,
+					"agents",
+					"missing_scope",
+					["agent:create"],
+				),
+			);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
 				AgentApplicationCreateRequestV2Schema,
@@ -1408,10 +1437,19 @@ export function registerManagementRoutes(
 				? ({
 						kind: "principal" as const,
 						principal: api.principal,
-						grantType: apiIdentityOrUnavailable(
+						grantType: await apiIdentityOrUnavailable(
 							dependencies.apiIdentity,
 							metadata.traceId,
-						).resolveAgentQueryGrantType(apiActor(api)),
+						).resolveAgentQueryGrantType(
+							apiActor(api),
+							apiAccessAudit(
+								apiIdentityContext(api),
+								metadata,
+								"agents",
+								"missing_scope",
+								["agent:read"],
+							),
+						),
 					} satisfies AgentManagementAgentScopeV1)
 				: userScope(identity);
 			const page = await queryOrUnavailable(
@@ -1449,10 +1487,19 @@ export function registerManagementRoutes(
 				? ({
 						kind: "principal" as const,
 						principal: api.principal,
-						grantType: apiIdentityOrUnavailable(
+						grantType: await apiIdentityOrUnavailable(
 							dependencies.apiIdentity,
 							metadata.traceId,
-						).resolveAgentQueryGrantType(apiActor(api)),
+						).resolveAgentQueryGrantType(
+							apiActor(api),
+							apiAccessAudit(
+								apiIdentityContext(api),
+								metadata,
+								context.req.param("agentId"),
+								"missing_scope",
+								["agent:read"],
+							),
+						),
 					} satisfies AgentManagementAgentScopeV1)
 				: userScope(identity);
 			const agent = await agentOrUnavailable(
@@ -1494,13 +1541,39 @@ export function registerManagementRoutes(
 				metadata.traceId,
 			);
 			if (api) {
-				apiIdentityOrUnavailable(
+				const management = apiIdentityOrUnavailable(
 					dependencies.apiIdentity,
 					metadata.traceId,
-				).authorizeCredentialScope(apiActor(api), ["agent:manage"]);
+				);
+				await management.authorizeCredentialScope(
+					apiActor(api),
+					["agent:manage"],
+					apiAccessAudit(
+						apiIdentityContext(api),
+						metadata,
+						agentId,
+						"missing_scope",
+						["agent:manage"],
+					),
+				);
 			}
 			if (body.command === "upgrade_custom_image") {
-				if (api) fail("FORBIDDEN", metadata.traceId);
+				if (api) {
+					const management = apiIdentityOrUnavailable(
+						dependencies.apiIdentity,
+						metadata.traceId,
+					);
+					await management.recordAccessRejection(
+						apiActor(api),
+						apiAccessAudit(
+							apiIdentityContext(api),
+							metadata,
+							agentId,
+							"operation_forbidden",
+						),
+					);
+					fail("FORBIDDEN", metadata.traceId);
+				}
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -1546,8 +1619,22 @@ export function registerManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
-			if (api && body.command === "disable")
+			if (api && body.command === "disable") {
+				const management = apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				);
+				await management.recordAccessRejection(
+					apiActor(api),
+					apiAccessAudit(
+						apiIdentityContext(api),
+						metadata,
+						agentId,
+						"operation_forbidden",
+					),
+				);
 				fail("FORBIDDEN", metadata.traceId);
+			}
 			if (
 				api &&
 				body.command === "start" &&
@@ -1575,6 +1662,23 @@ export function registerManagementRoutes(
 					actor(identity),
 				),
 				metadata.traceId,
+				api
+					? async () => {
+							const management = apiIdentityOrUnavailable(
+								dependencies.apiIdentity,
+								metadata.traceId,
+							);
+							await management.recordAccessRejection(
+								apiActor(api),
+								apiAccessAudit(
+									apiIdentityContext(api),
+									metadata,
+									agentId,
+									"resource_unavailable",
+								),
+							);
+						}
+					: undefined,
 			);
 			const agent = await agentOrUnavailable(
 				dependencies,

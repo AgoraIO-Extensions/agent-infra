@@ -26,6 +26,7 @@ export {
 export {
 	type ApiIdentityAuditActionV1,
 	type ApiIdentityAuditInputV1,
+	type ApiIdentityAuditReasonV1,
 	type PostgresApiIdentityStoreOptionsV1,
 	PostgresApiIdentityStoreV1,
 } from "./api-identity.ts";

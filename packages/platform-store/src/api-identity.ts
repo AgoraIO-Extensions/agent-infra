@@ -29,6 +29,7 @@ export interface PostgresApiIdentityStoreOptionsV1 {
 export type {
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
+	ApiIdentityAuditReasonV1,
 } from "@agent-infra/platform-core";
 
 type ApiIdentityDatabase = ReturnType<typeof drizzle>;
@@ -42,6 +43,16 @@ async function writeApiIdentityAudit(
 	database: ApiIdentityAuditDatabase,
 	input: ApiIdentityAuditTargetV1,
 ): Promise<void> {
+	const details =
+		input.action === "api.access.rejected"
+			? {
+					reason: input.reason,
+					requiredScopes: input.requiredScopes ?? [],
+				}
+			: {
+					recipient: input.recipient ?? null,
+					grantType: input.grantType ?? null,
+				};
 	await database.insert(auditEvents).values({
 		id: randomUUID(),
 		traceId: input.traceId,
@@ -52,10 +63,7 @@ async function writeApiIdentityAudit(
 		targetType: "grant",
 		targetId: input.targetId,
 		outcome: input.outcome ?? "succeeded",
-		details: {
-			recipient: input.recipient ?? null,
-			grantType: input.grantType ?? null,
-		},
+		details,
 		occurredAt: new Date(),
 	});
 }

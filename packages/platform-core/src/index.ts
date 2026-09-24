@@ -51,6 +51,7 @@ export type {
 	ApiCredentialScopeV1,
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
+	ApiIdentityAuditReasonV1,
 	ApiPrincipalV1,
 	CurrentApiPrincipalV1,
 } from "./api-identity.js";

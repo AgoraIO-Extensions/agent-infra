@@ -33,6 +33,7 @@ export interface ApiCredentialMetadataV1 {
 }
 
 export type ApiIdentityAuditActionV1 =
+	| "api.access.rejected"
 	| "api.application.created"
 	| "api.credential.issued"
 	| "api.credential.revoked"
@@ -40,6 +41,13 @@ export type ApiIdentityAuditActionV1 =
 	| "api.credential.delivery.revoked"
 	| "api.agent.grant.granted"
 	| "api.agent.grant.revoked";
+
+export type ApiIdentityAuditReasonV1 =
+	| "account_inactive"
+	| "invalid_credential"
+	| "missing_scope"
+	| "operation_forbidden"
+	| "resource_unavailable";
 
 export interface ApiIdentityAuditInputV1 {
 	readonly traceId: string;
@@ -49,6 +57,8 @@ export interface ApiIdentityAuditInputV1 {
 	readonly recipient?: ApiPrincipalV1;
 	readonly grantType?: "manage" | "use";
 	readonly outcome?: "succeeded" | "rejected" | "failed";
+	readonly reason?: ApiIdentityAuditReasonV1;
+	readonly requiredScopes?: readonly ApiCredentialScopeV1[];
 }
 
 function validText(value: unknown, maxBytes = 1024): value is string {

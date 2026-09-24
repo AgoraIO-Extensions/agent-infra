@@ -2,6 +2,7 @@ import {
 	type ApiCredentialMetadataV1,
 	type ApiCredentialScopeV1,
 	type ApiIdentityAuditInputV1,
+	type ApiIdentityAuditReasonV1,
 	type ApiPrincipalV1,
 	hasApiCredentialScopeV1,
 	sameApiPrincipalV1,
@@ -130,10 +131,16 @@ export interface ApiIdentityManagementInterfaceV1 {
 	authorizeCredentialScope(
 		actor: ApiIdentityActorV1,
 		required: readonly ApiCredentialScopeV1[],
-	): void;
+		audit?: ApiIdentityAccessAuditContextV1,
+	): Promise<void>;
 	resolveAgentQueryGrantType(
 		actor: ApiIdentityActorV1,
-	): "any" | "manage" | "use";
+		audit?: ApiIdentityAccessAuditContextV1,
+	): Promise<"any" | "manage" | "use">;
+	recordAccessRejection(
+		actor: ApiIdentityActorV1,
+		input: ApiIdentityAccessAuditContextV1,
+	): Promise<void>;
 	listUserCredentials(
 		actor: ApiIdentityActorV1,
 	): Promise<readonly ApiCredentialMetadataV1[]>;
@@ -199,6 +206,13 @@ export interface ApiIdentityManagementInterfaceV1 {
 		readonly grantType: "manage" | "use";
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void>;
+}
+
+export interface ApiIdentityAccessAuditContextV1 {
+	readonly audit: ApiIdentityAuditInputV1;
+	readonly targetId: string;
+	readonly reason: ApiIdentityAuditReasonV1;
+	readonly requiredScopes?: readonly ApiCredentialScopeV1[];
 }
 
 export type ApiIdentityErrorCode =
@@ -356,6 +370,29 @@ export function createApiIdentityManagementV1(input: {
 			targetId,
 		});
 	};
+	const accessAudit = (
+		actor: ApiIdentityActorV1,
+		input: ApiIdentityAccessAuditContextV1,
+	): ApiIdentityAuditInputV1 => ({
+		...checkedAudit(actor, input.audit),
+		action: "api.access.rejected",
+		outcome: "rejected",
+		reason: input.reason,
+		...(input.requiredScopes === undefined
+			? {}
+			: { requiredScopes: [...input.requiredScopes] }),
+	});
+	const accessRejectionReason = (
+		actor: ApiIdentityActorV1,
+		required: readonly ApiCredentialScopeV1[],
+	): ApiIdentityAuditReasonV1 =>
+		actor.accountStatus !== "active"
+			? "account_inactive"
+			: actor.credential === undefined
+				? "invalid_credential"
+				: required.length > 0
+					? "missing_scope"
+					: "invalid_credential";
 	const requireAgentAccess = async (
 		actor: ApiIdentityActorV1,
 		agentId: string,
@@ -367,23 +404,54 @@ export function createApiIdentityManagementV1(input: {
 			throw new ApiIdentityError("resource_unavailable");
 	};
 	return {
-		authorizeCredentialScope(actor, required) {
-			requireCredentialScope(actor, required);
+		async authorizeCredentialScope(actor, required, audit) {
+			try {
+				requireCredentialScope(actor, required);
+			} catch (error) {
+				if (audit && input.store.writeAudit) {
+					await rejectWithAudit(
+						accessAudit(actor, {
+							...audit,
+							reason: accessRejectionReason(actor, required),
+							requiredScopes: required,
+						}),
+						audit.targetId,
+					);
+				}
+				throw error;
+			}
 		},
-		resolveAgentQueryGrantType(actor) {
-			const credential = requireCredential(actor);
-			if (
-				hasApiCredentialScopeV1(credential, "agent:manage") &&
-				hasApiCredentialScopeV1(credential, "agent:use")
-			)
-				return "any";
-			if (hasApiCredentialScopeV1(credential, "agent:manage")) return "manage";
-			if (
-				hasApiCredentialScopeV1(credential, "agent:use") ||
-				hasApiCredentialScopeV1(credential, "agent:read")
-			)
-				return "use";
-			throw new ApiIdentityError("not_authorized");
+		async resolveAgentQueryGrantType(actor, audit) {
+			try {
+				const credential = requireCredential(actor);
+				if (
+					hasApiCredentialScopeV1(credential, "agent:manage") &&
+					hasApiCredentialScopeV1(credential, "agent:use")
+				)
+					return "any";
+				if (hasApiCredentialScopeV1(credential, "agent:manage"))
+					return "manage";
+				if (
+					hasApiCredentialScopeV1(credential, "agent:use") ||
+					hasApiCredentialScopeV1(credential, "agent:read")
+				)
+					return "use";
+				throw new ApiIdentityError("not_authorized");
+			} catch (error) {
+				if (audit && input.store.writeAudit) {
+					await rejectWithAudit(
+						accessAudit(actor, {
+							...audit,
+							reason: accessRejectionReason(actor, ["agent:read"]),
+						}),
+						audit.targetId,
+					);
+				}
+				throw error;
+			}
+		},
+		async recordAccessRejection(actor, input) {
+			await rejectWithAudit(accessAudit(actor, input), input.targetId);
 		},
 		async listUserCredentials(actor) {
 			const userId = requireUserActor(actor);

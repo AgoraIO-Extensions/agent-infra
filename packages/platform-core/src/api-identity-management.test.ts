@@ -94,14 +94,14 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
-	it("checks API scopes in Core and resolves query visibility", () => {
+	it("checks API scopes in Core and resolves query visibility", async () => {
 		const useCase = management(storeFixture());
 		const apiActor = actor({ kind: "application", id: "application-caller" });
-		expect(() =>
+		await expect(
 			useCase.authorizeCredentialScope(apiActor, ["agent:manage"]),
-		).not.toThrow();
-		expect(useCase.resolveAgentQueryGrantType(apiActor)).toBe("any");
-		expect(() =>
+		).resolves.toBeUndefined();
+		expect(await useCase.resolveAgentQueryGrantType(apiActor)).toBe("any");
+		await expect(
 			useCase.authorizeCredentialScope(
 				{
 					...apiActor,
@@ -114,8 +114,8 @@ describe("API identity management authorization", () => {
 				},
 				["agent:manage"],
 			),
-		).toThrow();
-		expect(() =>
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
 			useCase.authorizeCredentialScope(
 				{
 					...apiActor,
@@ -126,13 +126,61 @@ describe("API identity management authorization", () => {
 				},
 				["agent:manage"],
 			),
-		).toThrow();
-		expect(() =>
+		).rejects.toMatchObject({ code: "not_authorized" });
+		await expect(
 			useCase.resolveAgentQueryGrantType({
 				...apiActor,
 				credential: undefined,
 			}),
-		).toThrow();
+		).rejects.toMatchObject({ code: "not_authorized" });
+	});
+
+	it("audits rejected scope and query authorization in the same API audit port", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const applicationAudit = {
+			...audit,
+			actor: { kind: "application" as const, id: "application-caller" },
+		};
+		await expect(
+			useCase.authorizeCredentialScope(
+				{
+					...actor({ kind: "application", id: "application-caller" }),
+					credential: {
+						...actor({ kind: "application", id: "application-caller" })
+							.credential,
+						scopes: ["agent:read"],
+					},
+				},
+				["agent:create"],
+				{
+					audit: applicationAudit,
+					targetId: "agents",
+					reason: "missing_scope",
+				},
+			),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(store.writeAudit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "api.access.rejected",
+				targetId: "agents",
+				outcome: "rejected",
+				reason: "missing_scope",
+				requiredScopes: ["agent:create"],
+			}),
+		);
+		await useCase.recordAccessRejection?.(actor(), {
+			audit,
+			targetId: "agent-1",
+			reason: "operation_forbidden",
+		});
+		expect(store.writeAudit).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				action: "api.access.rejected",
+				targetId: "agent-1",
+				reason: "operation_forbidden",
+			}),
+		);
 	});
 
 	it("rejects disabled or missing recipients before granting delivery", async () => {
