@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
 	OciImageReferenceV1Schema,
@@ -6,12 +7,11 @@ import {
 import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
 	createDeploymentModelCatalogAdapterV1,
-	ModelConfigurationErrorV1,
 	ModelCatalogSnapshotV1Schema,
+	ModelConfigurationErrorV1,
 	modelIdentifier,
 	modelOperationV1,
 } from "@agent-infra/model-catalog";
-import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import {
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,

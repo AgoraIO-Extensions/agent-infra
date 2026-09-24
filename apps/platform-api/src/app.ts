@@ -5,13 +5,13 @@ import {
 	registerConfigurationRoutes,
 } from "./http/configuration-routes.js";
 import {
-	type DeploymentConfigurationRoutesDependencies,
-	registerDeploymentConfigurationRoutes,
-} from "./http/deployment-configuration-routes.js";
-import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
+import {
+	type DeploymentConfigurationRoutesDependencies,
+	registerDeploymentConfigurationRoutes,
+} from "./http/deployment-configuration-routes.js";
 import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,

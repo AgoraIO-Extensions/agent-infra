@@ -1,6 +1,4 @@
-import {
-	DeploymentConfigurationProjectionV2Schema,
-} from "@agent-infra/contracts/pilot";
+import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { createDeploymentConfigurationProjectionV2 } from "../deployment-admissions.js";
@@ -50,7 +48,7 @@ const snapshot = (validUntil: number, endpoints = true) => ({
 					available: true,
 				},
 			]
-			: [],
+		: [],
 });
 
 function createApp(read: () => Promise<unknown>) {
@@ -61,7 +59,10 @@ function createApp(read: () => Promise<unknown>) {
 			: context.json({ error: "internal" }, 500),
 	);
 	registerDeploymentConfigurationRoutes(app, {
-		identity: { resolve: vi.fn().mockResolvedValue(identity), hydrateUsers: vi.fn() },
+		identity: {
+			resolve: vi.fn().mockResolvedValue(identity),
+			hydrateUsers: vi.fn(),
+		},
 		read,
 	});
 	return app;
@@ -82,9 +83,7 @@ describe("deployment configuration projection", () => {
 
 		expect(response.status).toBe(200);
 		const body = await response.json();
-		expect(
-			DeploymentConfigurationProjectionV2Schema.parse(body),
-		).toEqual({
+		expect(DeploymentConfigurationProjectionV2Schema.parse(body)).toEqual({
 			schemaVersion: 2,
 			status: "populated",
 			templates: [
