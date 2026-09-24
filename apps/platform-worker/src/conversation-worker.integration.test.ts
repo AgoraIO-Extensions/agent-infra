@@ -13,11 +13,13 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
+	CodexRuntimeDriver,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
+	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import { createConversationExecutionUseCaseV1 } from "@agent-infra/platform-core";
 import {
@@ -39,6 +41,62 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
+const realCodexE2e = process.env.AGENT_INFRA_REAL_CODEX_E2E === "1";
+
+function syntheticModelEvents() {
+	const item = {
+		type: "message",
+		id: "worker-codex-message",
+		role: "assistant",
+		status: "completed",
+		content: [
+			{ type: "output_text", text: "controlled dispatch", annotations: [] },
+		],
+	};
+	return [
+		{
+			type: "response.created",
+			response: {
+				id: "worker-codex-response",
+				status: "in_progress",
+				output: [],
+			},
+		},
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { ...item, status: "in_progress", content: [] },
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: item.id,
+			output_index: 0,
+			content_index: 0,
+			delta: "controlled dispatch",
+		},
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id: "worker-codex-response",
+				status: "completed",
+				output: [item],
+				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+			},
+		},
+	];
+}
+
+function writeSyntheticModelResponse(
+	response: import("node:http").ServerResponse,
+) {
+	response.writeHead(200, { "content-type": "text/event-stream" });
+	for (const event of syntheticModelEvents()) {
+		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	}
+	response.end();
+}
+
 async function waitUntil(check: () => Promise<boolean>, label: string) {
 	for (let attempt = 0; attempt < 150; attempt++) {
 		if (await check()) return;
@@ -48,7 +106,8 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 }
 
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
-// and Runtime HTTP. This is not real model, identity-provider or Connection acceptance.
+// and Runtime HTTP. AGENT_INFRA_REAL_CODEX_E2E adds the fixed Codex/provider lane;
+// neither mode is identity-provider, Connection, or browser acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-766-"));
 	const database = await startPostgresTestDatabase("766-worker-dispatch");
@@ -63,6 +122,9 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		confirmedCursor?: string;
 		responseStatus?: number;
 	}[] = [];
+	const modelRequests: { body: string; authenticated: boolean }[] = [];
+	let modelServer: ReturnType<typeof createServer> | undefined;
+	let modelPort: number | undefined;
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const signing = {
@@ -144,6 +206,31 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	let moduleDirectory: string | undefined;
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+		if (realCodexE2e) {
+			modelServer = createServer(async (request, response) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of request) chunks.push(chunk);
+				const body = Buffer.concat(chunks).toString();
+				modelRequests.push({
+					body,
+					authenticated:
+						request.headers.authorization ===
+						"Bearer worker-controlled-model-credential",
+				});
+				if (!modelRequests.at(-1)?.authenticated) {
+					response.writeHead(401);
+					response.end();
+					return;
+				}
+				if (!response.destroyed) writeSyntheticModelResponse(response);
+			});
+			modelServer.listen(0, "127.0.0.1");
+			await once(modelServer, "listening");
+			const modelAddress = modelServer.address();
+			if (!modelAddress || typeof modelAddress === "string")
+				throw Error("Controlled model server did not bind");
+			modelPort = modelAddress.port;
+		}
 		const desired = workloadDesiredFixture(1, "agent-cli", "internal-only");
 		const adapter = createKubernetesRuntimeAdapterV1({
 			client: fake.client,
@@ -212,7 +299,38 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
 		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(configuration)})`;
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(state)}, now() + interval '1 hour')`;
-		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const fakeDriver = realCodexE2e
+			? undefined
+			: await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const driver = realCodexE2e
+			? await (async () => {
+					await verifyCodexPilotInstallation();
+					return CodexRuntimeDriver.open({
+						nativeLane: "official-model-only",
+						path: join(directory, "driver.json"),
+						launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
+						configVersion: "worker-controlled-codex-v1",
+						defaultModelOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+						modelOptions: [
+							{
+								modelOptionId: "worker-controlled-model",
+								model: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								endpoint: `http://127.0.0.1:${modelPort}/v1`,
+								credential: "worker-controlled-model-credential",
+							},
+						],
+						authorizeExternalAction: async () => undefined,
+					});
+				})()
+			: fakeDriver;
+		if (!driver) throw Error("Runtime driver was not assembled");
+		const dispatchCount = async () => {
+			if (realCodexE2e) return modelRequests.length;
+			if (!fakeDriver) throw Error("Fake runtime driver was not assembled");
+			return fakeDriver.sideEffectCount();
+		};
 		host = await RuntimeHost.open({
 			driver: Object.assign(driver, {
 				probeReadiness: () => driver.getCapabilities(),
@@ -449,9 +567,13 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		start();
 		start();
 		await waitUntil(
-			async () => (await driver.sideEffectCount()) === 1,
+			async () => (await dispatchCount()) === 1,
 			"single effective first dispatch",
 		);
+		if (realCodexE2e) {
+			expect(modelRequests[0]?.authenticated).toBe(true);
+			expect(modelRequests[0]?.body).toContain("controlled dispatch");
+		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
 		await waitUntil(
 			async () =>
@@ -477,7 +599,52 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [active] =
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
 		if (!active) throw Error("No running execution");
-		expect(await driver.sideEffectCount()).toBe(1);
+		expect(await dispatchCount()).toBe(1);
+		if (realCodexE2e) {
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return ["intent", "started", "completed"].every((phase) =>
+					phases.has(phase),
+				);
+			}, "persisted Codex model operation facts");
+			const operationFacts = await sql<
+				{
+					phase: string;
+					kind: string;
+					modelOptionId: string | null;
+				}[]
+			>`
+				select event_payload->'fact'->>'phase' as phase,
+				       event_payload->'fact'->>'kind' as kind,
+				       event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId"
+				from platform.conversation_events
+				where execution_id=${active.execution_id}
+				  and event_type='execution.operation'
+				order by sequence
+			`;
+			expect(operationFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
+			expect(
+				operationFacts.every(
+					(fact) => fact.modelOptionId === "worker-controlled-model",
+				),
+			).toBe(true);
+			const operationAudits = await sql`
+				select id
+				from platform.audit_events
+				where target_id=${active.execution_id}
+				  and action='execution.operation.observed'
+			`;
+			expect(operationAudits.length).toBeGreaterThanOrEqual(3);
+		}
 		// Kill both process owners, expire only this test's owned lease, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
 		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
@@ -512,7 +679,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					),
 			"takeover acknowledges existing committed cursor",
 		);
-		expect(await driver.sideEffectCount()).toBe(1);
+		expect(await dispatchCount()).toBe(1);
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
 		).toHaveLength(1);
@@ -620,6 +787,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			sql.end({ timeout: 0 }),
 		]);
 		await host?.close();
+		modelServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
 		kube.closeAllConnections();
 		await Promise.all([
@@ -627,6 +795,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				? new Promise<void>((done) => runtimeServer?.close(() => done()))
 				: undefined,
 			new Promise<void>((done) => kube.close(() => done())),
+			modelServer
+				? new Promise<void>((done) => modelServer?.close(() => done()))
+				: undefined,
 		]);
 		await database.stop();
 		if (moduleDirectory)
