@@ -192,6 +192,10 @@ function ModelRows({
 							<Select
 								value={model.endpointId}
 								disabled={endpoints.length === 0}
+								itemToStringLabel={(value) =>
+									endpoints.find((item) => item.endpointId === value)
+										?.displayName ?? String(value)
+								}
 								onValueChange={(value) =>
 									value && onChange(index, "endpointId", value)
 								}
@@ -230,6 +234,10 @@ function ModelRows({
 							<Select
 								value={model.modelId}
 								disabled={modelOptions.length === 0}
+								itemToStringLabel={(value) =>
+									modelOptions.find((item) => item.value === value)?.label ??
+									String(value)
+								}
 								onValueChange={(value) =>
 									value && onChange(index, "modelId", value)
 								}
@@ -373,6 +381,11 @@ function DraftRows<T extends string>({
 											<Select
 												disabled={field.options.length === 0}
 												value={row[field.key]}
+												itemToStringLabel={(value) =>
+													field.options?.find(
+														(option) => option.value === value,
+													)?.label ?? String(value)
+												}
 												onValueChange={(value) =>
 													value && onChange(index, field.key, value)
 												}
@@ -719,6 +732,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<Select
 								disabled={props.mode === "update"}
 								value={sourceKind}
+								itemToStringLabel={(value) =>
+									(
+										({
+											standard: "标准模板",
+											"custom-platform-adapter": "自定义 Agent · 平台交互入口",
+											"custom-self-managed": "自定义 Agent · 自有交互入口",
+										}) as Record<string, string>
+									)[String(value)] ?? String(value)
+								}
 								onValueChange={(value) => {
 									if (!value) return;
 									const kind = value as AgentApplicationSourceKind;
@@ -756,6 +778,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										props.mode === "update" || deployment.templates.length === 0
 									}
 									value={templateId}
+									itemToStringLabel={(value) =>
+										deployment.templates.find(
+											(template) => template.templateId === value,
+										)?.displayName ??
+										(staleTemplate ? "已移除模板（请重新加载）" : String(value))
+									}
 									onValueChange={(value) => value && setTemplateId(value)}
 								>
 									<SelectTrigger
@@ -824,6 +852,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<Select
 									disabled={props.mode === "update"}
 									value={identityResponsibility}
+									itemToStringLabel={(value) =>
+										(
+											({
+												"platform-managed": "由平台校验",
+												"self-managed": "由自有入口校验",
+											}) as Record<string, string>
+										)[String(value)] ?? String(value)
+									}
 									onValueChange={(value) => {
 										if (
 											value === "platform-managed" ||
@@ -1089,6 +1125,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										<Select
 											value={defaultModelOptionId}
 											disabled={models.length === 0}
+											itemToStringLabel={(value) => {
+												const model = models.find(
+													(item) => item.optionId === value,
+												);
+												const endpoint = model
+													? modelEndpoints.find(
+															(item) => item.endpointId === model.endpointId,
+														)
+													: undefined;
+												return model && endpoint
+													? modelLabel(endpoint, model.modelId)
+													: "已移除模型";
+											}}
 											onValueChange={(value) =>
 												value && setDefaultModelOptionId(value)
 											}
