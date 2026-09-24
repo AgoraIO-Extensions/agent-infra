@@ -74,18 +74,62 @@ export function decideInstallationApproval(
 	consumer: RegisteredConsumer,
 	now = Date.now(),
 ): string {
+	assertInstallationConsentAvailable(request, consumer, now);
+	if (
+		request.principalId !== null ||
+		request.browserSessionHash !== null ||
+		principal.status !== "active"
+	)
+		throw new ClientAuthorizationDenied();
+	return consumer.actorRequired ? randomUUID() : consumerActorSentinel;
+}
+
+export function assertInstallationConsentAvailable(
+	request: {
+		consumedAt: Date | null;
+		expiresAt: Date;
+		redirectUri: string;
+		scopes: readonly string[];
+	},
+	consumer: RegisteredConsumer,
+	now = Date.now(),
+): void {
 	if (
 		request.consumedAt !== null ||
 		request.expiresAt.getTime() <= now ||
-		request.principalId !== null ||
-		request.browserSessionHash !== null ||
-		principal.status !== "active" ||
 		consumer.status !== "active" ||
 		!consumer.redirectUris.includes(request.redirectUri) ||
 		request.scopes.some((scope) => !consumer.allowedScopes.includes(scope))
 	)
 		throw new ClientAuthorizationDenied();
-	return consumer.actorRequired ? randomUUID() : consumerActorSentinel;
+}
+
+export function assertAuthorizationCodeExchange(
+	code: {
+		consumedAt: Date | null;
+		expiresAt: Date;
+		consumerId: string;
+		redirectUri: string;
+		keyThumbprint: string;
+		codeChallenge: string;
+	},
+	input: {
+		consumerId: string;
+		redirectUri: string;
+		keyThumbprint: string;
+		verifier: string;
+	},
+	now = Date.now(),
+): void {
+	if (
+		code.consumedAt !== null ||
+		code.expiresAt.getTime() <= now ||
+		code.consumerId !== input.consumerId ||
+		code.redirectUri !== input.redirectUri ||
+		code.keyThumbprint !== input.keyThumbprint
+	)
+		throw new ClientAuthorizationDenied();
+	verifyPkceChallenge(input.verifier, code.codeChallenge);
 }
 
 export function decideRefreshTokenUse(
@@ -228,6 +272,45 @@ export function assertCurrentClientCredential(
 		credential.consumedAt !== null ||
 		(input.kind === "pat" && !state.consumerPatApproved) ||
 		(input.kind !== "pat" && state.familyStatus !== "active")
+	)
+		throw new ClientAuthorizationDenied();
+}
+
+export function decidePatIssueScopes(
+	credential: ClientCredentialClaims,
+	state: CurrentClientCredentialState,
+	audience: string,
+): string[] {
+	assertCurrentClientCredential(credential, state, {
+		kind: "access",
+		audience,
+		requiredScope: "pat:issue",
+	});
+	if (!state.consumerPatApproved) throw new ClientAuthorizationDenied();
+	return credential.scopes.filter((scope) => scope !== "pat:issue");
+}
+
+export function assertInstanceRevocable(
+	principal: { status: string } | undefined,
+	instance: { principalId: string; status: string } | undefined,
+	principalId: string,
+): void {
+	if (
+		principal?.status !== "active" ||
+		instance?.principalId !== principalId ||
+		instance.status !== "active"
+	)
+		throw new ClientAuthorizationDenied();
+}
+
+export function assertPatRevocable(
+	credential: { kind: string; principalId: string; revokedAt: Date | null },
+	principalId: string,
+): void {
+	if (
+		credential.kind !== "pat" ||
+		credential.principalId !== principalId ||
+		credential.revokedAt !== null
 	)
 		throw new ClientAuthorizationDenied();
 }

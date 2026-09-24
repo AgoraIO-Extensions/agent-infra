@@ -1,18 +1,22 @@
 import { randomUUID } from "node:crypto";
 import {
+	assertAuthorizationCodeExchange,
 	assertCurrentClientBinding,
 	assertCurrentClientCredential,
+	assertInstallationConsentAvailable,
+	assertInstanceRevocable,
+	assertPatRevocable,
 	ClientAuthorizationDenied,
 	clientCredentialLifetimeMs,
 	consumerActorSentinel,
 	decideInstallationApproval,
+	decidePatIssueScopes,
 	decideRefreshTokenUse,
 	hashClientSecret,
 	type InstallationAuthorizationInput,
 	opaqueClientSecret,
 	type VerifiedDpopProof,
 	validateInstallationAuthorization,
-	verifyPkceChallenge,
 } from "@agent-infra/connection-core";
 import { and, eq } from "drizzle-orm";
 import type { ConnectionDatabase } from "./database.js";
@@ -260,13 +264,13 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 				.select()
 				.from(oauthInstallationRequests)
 				.where(eq(oauthInstallationRequests.id, id));
-			if (!row || row.consumedAt || row.expiresAt.getTime() <= Date.now())
-				throw new ClientAuthorizationDenied();
+			if (!row) throw new ClientAuthorizationDenied();
 			const [consumer] = await db
 				.select()
 				.from(consumers)
 				.where(eq(consumers.id, row.consumerId));
-			if (consumer?.status !== "active") throw new ClientAuthorizationDenied();
+			if (!consumer) throw new ClientAuthorizationDenied();
+			assertInstallationConsentAvailable(row, consumer);
 			return {
 				consumerId: consumer.id,
 				consumerName: consumer.name,
@@ -377,16 +381,13 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 						eq(oauthAuthorizationCodes.codeHash, hashClientSecret(input.code)),
 					)
 					.for("update");
-				if (
-					!code ||
-					code.consumedAt ||
-					code.expiresAt.getTime() <= Date.now() ||
-					code.consumerId !== input.consumerId ||
-					code.redirectUri !== input.redirectUri ||
-					code.keyThumbprint !== input.proof.thumbprint
-				)
-					throw new ClientAuthorizationDenied();
-				verifyPkceChallenge(input.verifier, code.codeChallenge);
+				if (!code) throw new ClientAuthorizationDenied();
+				assertAuthorizationCodeExchange(code, {
+					consumerId: input.consumerId,
+					redirectUri: input.redirectUri,
+					keyThumbprint: input.proof.thumbprint,
+					verifier: input.verifier,
+				});
 				const state = await currentBinding(tx, code);
 				assertCurrentClientBinding(code, state);
 				await recordProof(tx, input.proof);
@@ -559,18 +560,12 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					.for("update");
 				if (!row) throw new ClientAuthorizationDenied();
 				const state = await currentBinding(tx, row);
-				assertCurrentClientCredential(credentialClaims(row), state, {
-					kind: "access",
-					audience: input.audience,
-					requiredScope: "pat:issue",
-				});
-				if (!state.consumerPatApproved) throw new ClientAuthorizationDenied();
-				const id = await insertPatCredential(
-					tx,
-					row,
-					input.pat,
-					row.scopes.filter((scope) => scope !== "pat:issue"),
+				const scopes = decidePatIssueScopes(
+					credentialClaims(row),
+					state,
+					input.audience,
 				);
+				const id = await insertPatCredential(tx, row, input.pat, scopes);
 				await audit(
 					tx,
 					"pat.issued",
@@ -667,12 +662,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					.from(consumerInstances)
 					.where(eq(consumerInstances.id, instanceId))
 					.for("update");
-				if (
-					principal?.status !== "active" ||
-					instance?.principalId !== principalId ||
-					instance.status !== "active"
-				)
-					throw new ClientAuthorizationDenied();
+				assertInstanceRevocable(principal, instance, principalId);
 				await tx
 					.update(consumerInstances)
 					.set({ status: "revoked" })
@@ -695,12 +685,8 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					.from(clientCredentials)
 					.where(eq(clientCredentials.id, patId))
 					.for("update");
-				if (
-					row?.kind !== "pat" ||
-					row.principalId !== principalId ||
-					row.revokedAt
-				)
-					throw new ClientAuthorizationDenied();
+				if (!row) throw new ClientAuthorizationDenied();
+				assertPatRevocable(row, principalId);
 				await tx
 					.update(clientCredentials)
 					.set({ revokedAt: new Date() })
