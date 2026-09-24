@@ -141,6 +141,8 @@ export function isPlatformConversationChannelCurrentV1(
 		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
 	// Standard templates always expose the platform channel, including during reconciliation.
 	if (configuration.source.kind === "standard") return true;
+	if (configuration.source.kind !== "custom")
+		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
 	if (configuration.source.interactionMode === "self-managed") return false;
 	// A previously verified platform adapter keeps its channel during an upgrade.
 	// Current business readiness remains enforced by current() and the Runtime resolver.

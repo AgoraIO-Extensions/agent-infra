@@ -102,6 +102,22 @@ describe("current platform conversation channel", () => {
 		Object.assign(source, { interactionMode: "self-managed" });
 		expect(isPlatformConversationChannelCurrentV1(current)).toBe(false);
 	});
+	it("rejects an unknown configuration source kind", () => {
+		const current = record("custom");
+		const workload = current.workload;
+		if (!workload) throw Error();
+		Object.assign(workload.candidate.configuration.source, {
+			kind: "future",
+		});
+		try {
+			isPlatformConversationChannelCurrentV1(current);
+			throw Error("expected channel authorization to be unavailable");
+		} catch (error) {
+			expect(error).toMatchObject({
+				code: "CHANNEL_AUTHORIZATION_UNAVAILABLE",
+			});
+		}
+	});
 	it.each([
 		"unknown-channel",
 		"missing-workload",
