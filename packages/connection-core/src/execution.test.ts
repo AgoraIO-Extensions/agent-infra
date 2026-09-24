@@ -36,7 +36,9 @@ const grant: GrantRecord = {
 	principalRecoveryGeneration: 1,
 };
 
-function repository(options: { revoked?: boolean } = {}) {
+function repository(
+	options: { revoked?: boolean; revokeAfterReserve?: boolean } = {},
+) {
 	let call: ActionCallRecord | undefined;
 	let dispatch: DispatchRecord | undefined;
 	let effect: EffectRecord | undefined;
@@ -69,45 +71,31 @@ function repository(options: { revoked?: boolean } = {}) {
 				call = input.actionCall;
 				dispatch = input.dispatch;
 				effect = input.effect;
+				if (options.revokeAfterReserve) options.revoked = true;
 			},
 		),
-		claimDispatch: vi.fn(async () => {
-			if (dispatch?.status !== "pending") return false;
+		claimAuthorizedDispatch: vi.fn(async () => {
+			if (
+				options.revoked ||
+				dispatch?.status !== "pending" ||
+				call?.status !== "created"
+			)
+				return false;
 			dispatch = { ...dispatch, status: "claimed", attemptCount: 1 };
+			call = { ...call, status: "submission_started" };
+			if (effect) effect = { ...effect, status: "submitted" };
 			return true;
 		}),
-		transitionDispatch: vi.fn(
-			async (
-				_id: string,
-				from: DispatchRecord["status"],
-				to: DispatchRecord["status"],
-			) => {
-				if (!dispatch || dispatch.status !== from) return false;
-				dispatch = {
-					...dispatch,
-					status: to,
-					leaseOwner: null,
-					leaseExpiresAt: null,
-				};
-				return true;
-			},
-		),
-		transitionEffect: vi.fn(
-			async (
-				_id: string,
-				from: EffectRecord["status"],
-				to: EffectRecord["status"],
-				result?: Record<string, unknown> | null,
-			) => {
-				if (!effect || effect.status !== from) return false;
-				effect = {
-					...effect,
-					status: to,
-					result: result === undefined ? effect.result : result,
-				};
-				return true;
-			},
-		),
+		failPendingDispatch: vi.fn(async () => {
+			if (dispatch?.status !== "pending") return false;
+			dispatch = {
+				...dispatch,
+				status: "failed",
+				leaseOwner: null,
+				leaseExpiresAt: null,
+			};
+			return true;
+		}),
 		recordProviderOutcome: vi.fn(
 			async (input: {
 				actionCallId: string;
@@ -203,6 +191,8 @@ describe("Connection provider execution", () => {
 		expect(store.state.effect?.status).toBe("succeeded");
 		expect(store.state.call?.status).toBe("provider_succeeded");
 		expect(result.kind).toBe("completed");
+		if (result.kind === "completed")
+			expect(result.actionCall.status).toBe("provider_succeeded");
 	});
 
 	it("marks transport exceptions unknown without retrying the provider", async () => {
@@ -226,6 +216,8 @@ describe("Connection provider execution", () => {
 		expect(store.state.effect?.status).toBe("unknown");
 		expect(store.state.call?.status).toBe("result_pending");
 		expect(result.kind).toBe("completed");
+		if (result.kind === "completed")
+			expect(result.actionCall.status).toBe("result_pending");
 	});
 
 	it("does not call a provider when revocation wins the preflight", async () => {
@@ -248,6 +240,30 @@ describe("Connection provider execution", () => {
 			}),
 		).rejects.toThrow("Connection authorization denied");
 		expect(provider.execute).not.toHaveBeenCalled();
+	});
+
+	it("does not call a provider when revocation commits after reservation", async () => {
+		const store = repository({ revokeAfterReserve: true });
+		const provider = {
+			execute: vi.fn(async () => ({
+				kind: "succeeded" as const,
+				result: null,
+			})),
+		};
+		await expect(
+			executeActionCall(store, {
+				request,
+				principalRecoveryGeneration: 1,
+				requestId: "request-1",
+				traceId: "trace-1",
+				effect: "write",
+				provider,
+				audit,
+			}),
+		).rejects.toThrow("Connection authorization denied");
+		expect(provider.execute).not.toHaveBeenCalled();
+		expect(store.state.dispatch?.status).toBe("failed");
+		expect(store.state.call?.status).toBe("provider_failed");
 	});
 
 	it("reuses an identical idempotent call", async () => {

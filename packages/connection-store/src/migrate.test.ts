@@ -102,12 +102,14 @@ describe("Connection PostgreSQL migration", () => {
 		await databaseClient`insert into connection.providers (id, name) values ('provider-a', 'Provider A')`;
 		await databaseClient`insert into connection.action_versions (id, provider_id, action_id, version, effect, input_schema, output_schema, required_scopes)
 			values ('action-a-v1', 'provider-a', 'action-a', 'v1', 'read', '{}', '{}', '["action:read"]')`;
+		await databaseClient`insert into connection.action_versions (id, provider_id, action_id, version, effect, input_schema, output_schema, required_scopes)
+			values ('action-write-v1', 'provider-a', 'action-write', 'v1', 'write', '{}', '{}', '["action:write"]')`;
 		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-a', 'provider-a', 'account-a')`;
 		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-a-v1', 'connection-a', 1, 'ciphertext')`;
 		await databaseClient`update connection.connections set current_credential_version_id = 'credential-a-v1' where id = 'connection-a'`;
 		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
 			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', 1)`;
-		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-a', 'action-a-v1')`;
+		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-a', 'action-a-v1'), ('grant-a', 'action-write-v1')`;
 		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
 			values ('grant-consumer', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', 1)`;
 		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-a-v1')`;
@@ -279,6 +281,11 @@ describe("Connection PostgreSQL migration", () => {
 				callId: "call-ref-store-execution",
 				idempotencyKey: "store-key-execution",
 				namespaceKey: actionCallNamespaceKey(request),
+				actionVersionId: "action-write-v1",
+				requestDigest: actionRequestDigest({
+					...request,
+					actionVersionId: "action-write-v1",
+				}),
 			};
 			const dispatch: DispatchRecord = {
 				id: "dispatch-store-execution",
@@ -316,27 +323,109 @@ describe("Connection PostgreSQL migration", () => {
 				effect_status: "planned",
 			});
 			expect(
-				await repository.claimDispatch(
-					dispatch.id,
-					"lease-store-execution",
-					Date.now() + 60_000,
-				),
-			).toBe(true);
-			expect(
-				await repository.transitionEffect(effect.id, "planned", "submitted"),
-			).toBe(true);
-			expect(
-				await repository.transitionEffect(effect.id, "submitted", "succeeded", {
-					ok: true,
+				await repository.claimAuthorizedDispatch({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-execution",
+					leaseExpiresAt: Date.now() + 60_000,
 				}),
 			).toBe(true);
 			expect(
-				await repository.transitionDispatch(
-					dispatch.id,
-					"claimed",
-					"completed",
+				(
+					await databaseClient`
+					select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+					from connection.action_calls a
+					join connection.dispatches d on d.action_call_id = a.id
+					join connection.effects e on e.action_call_id = a.id
+					where a.id = 'call-store-execution'
+				`
+				)[0],
+			).toMatchObject({
+				action_status: "submission_started",
+				dispatch_status: "claimed",
+				effect_status: "submitted",
+			});
+			expect(
+				await repository.recordProviderOutcome({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					outcome: { kind: "succeeded", result: { ok: true } },
+				}),
+			).toBe(true);
+
+			const revokedCall: ActionCallRecord = {
+				...executionCall,
+				id: "call-store-revoked",
+				requestId: "request-store-revoked",
+				callId: "call-ref-store-revoked",
+				idempotencyKey: "store-key-revoked",
+			};
+			const revokedDispatch: DispatchRecord = {
+				...dispatch,
+				id: "dispatch-store-revoked",
+				actionCallId: revokedCall.id,
+			};
+			const revokedEffect: EffectRecord = {
+				...effect,
+				id: "effect-store-revoked",
+				actionCallId: revokedCall.id,
+			};
+			await repository.reserveExecution({
+				actionCall: revokedCall,
+				dispatch: revokedDispatch,
+				effect: revokedEffect,
+			});
+			const { claim } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a'`;
+				const claim = repository.claimAuthorizedDispatch({
+					actionCallId: revokedCall.id,
+					dispatchId: revokedDispatch.id,
+					effectId: revokedEffect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-revoked",
+					leaseExpiresAt: Date.now() + 60_000,
+				});
+				expect(
+					await Promise.race([
+						claim.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { claim };
+			});
+			expect(await claim).toBe(false);
+			expect(await repository.failPendingDispatch(revokedDispatch.id)).toBe(
+				true,
+			);
+			expect(
+				await repository.transition(
+					revokedCall.id,
+					"created",
+					"provider_failed",
 				),
 			).toBe(true);
+			expect(
+				(
+					await databaseClient`
+				select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+				from connection.action_calls a
+				join connection.dispatches d on d.action_call_id = a.id
+				join connection.effects e on e.action_call_id = a.id
+				where a.id = 'call-store-revoked'
+			`
+				)[0],
+			).toMatchObject({
+				action_status: "provider_failed",
+				dispatch_status: "failed",
+				effect_status: "planned",
+			});
 		} finally {
 			await handle.close();
 		}

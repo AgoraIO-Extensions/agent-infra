@@ -162,8 +162,16 @@ export function createConnectionAuthorityRepository(
 						),
 						eq(grants.status, "active"),
 						eq(principals.status, "active"),
+						eq(
+							principals.recoveryGeneration,
+							context.principalRecoveryGeneration,
+						),
 						eq(consumers.status, "active"),
 						eq(consumerInstances.status, "active"),
+						eq(
+							consumerInstances.recoveryGeneration,
+							context.principalRecoveryGeneration,
+						),
 						eq(connections.status, "active"),
 						eq(
 							connections.currentCredentialVersionId,
@@ -288,54 +296,167 @@ export function createConnectionAuthorityRepository(
 			});
 		},
 
-		async claimDispatch(id, leaseOwner, leaseExpiresAt) {
-			const updated = await db
-				.update(dispatches)
-				.set({
-					status: "claimed",
-					attemptCount: sql`${dispatches.attemptCount} + 1`,
-					leaseOwner,
-					leaseExpiresAt: new Date(leaseExpiresAt),
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(dispatches.id, id),
-						eq(dispatches.status, "pending"),
-						isNull(dispatches.leaseOwner),
-						isNull(dispatches.leaseExpiresAt),
-					),
-				)
-				.returning({ id: dispatches.id });
-			return updated.length === 1;
+		async claimAuthorizedDispatch({
+			actionCallId,
+			dispatchId,
+			effectId,
+			grantRevision,
+			principalRecoveryGeneration,
+			leaseOwner,
+			leaseExpiresAt,
+		}) {
+			class ClaimLost extends Error {}
+			try {
+				return await db.transaction(async (tx) => {
+					const authorized = await tx
+						.select({
+							effect: actionVersions.effect,
+							actorId: actionCalls.actorId,
+							consumerInstanceId: actionCalls.consumerInstanceId,
+						})
+						.from(grants)
+						.innerJoin(actionCalls, eq(actionCalls.grantId, grants.id))
+						.innerJoin(principals, eq(grants.principalId, principals.id))
+						.innerJoin(consumers, eq(grants.consumerId, consumers.id))
+						.innerJoin(
+							consumerInstances,
+							eq(grants.consumerInstanceId, consumerInstances.id),
+						)
+						.innerJoin(connections, eq(grants.connectionId, connections.id))
+						.innerJoin(
+							credentialVersions,
+							eq(grants.credentialVersionId, credentialVersions.id),
+						)
+						.innerJoin(grantActions, eq(grantActions.grantId, grants.id))
+						.innerJoin(
+							actionVersions,
+							eq(grantActions.actionVersionId, actionVersions.id),
+						)
+						.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+						.where(
+							and(
+								eq(actionCalls.id, actionCallId),
+								eq(actionCalls.status, "created"),
+								eq(grants.principalId, actionCalls.principalId),
+								eq(grants.consumerId, actionCalls.consumerId),
+								eq(grants.consumerInstanceId, actionCalls.consumerInstanceId),
+								eq(grants.actorId, actionCalls.actorId),
+								eq(grants.connectionId, actionCalls.connectionId),
+								eq(grants.credentialVersionId, actionCalls.credentialVersionId),
+								eq(grants.revision, grantRevision),
+								eq(
+									grants.principalRecoveryGeneration,
+									principalRecoveryGeneration,
+								),
+								eq(grants.status, "active"),
+								eq(principals.status, "active"),
+								eq(principals.recoveryGeneration, principalRecoveryGeneration),
+								eq(consumers.status, "active"),
+								eq(consumerInstances.status, "active"),
+								eq(
+									consumerInstances.recoveryGeneration,
+									principalRecoveryGeneration,
+								),
+								eq(connections.status, "active"),
+								eq(
+									connections.currentCredentialVersionId,
+									grants.credentialVersionId,
+								),
+								eq(credentialVersions.connectionId, grants.connectionId),
+								eq(credentialVersions.status, "active"),
+								eq(actionVersions.id, actionCalls.actionVersionId),
+								eq(actionVersions.providerId, connections.providerId),
+								eq(actionVersions.status, "published"),
+								eq(providers.status, "active"),
+							),
+						)
+						.limit(2)
+						.for("update");
+					if (
+						authorized.length !== 1 ||
+						(authorized[0]?.effect === "write") !== Boolean(effectId)
+					)
+						return false;
+					const authority = authorized[0];
+					if (!authority) return false;
+					if (authority.actorId !== consumerActorSentinel) {
+						const activeActor = await tx
+							.select({ id: actors.id })
+							.from(actors)
+							.where(
+								and(
+									eq(actors.id, authority.actorId),
+									eq(actors.consumerInstanceId, authority.consumerInstanceId),
+									eq(actors.status, "active"),
+								),
+							)
+							.for("update");
+						if (activeActor.length !== 1) return false;
+					}
+					const updatedDispatch = await tx
+						.update(dispatches)
+						.set({
+							status: "claimed",
+							attemptCount: sql`${dispatches.attemptCount} + 1`,
+							leaseOwner,
+							leaseExpiresAt: new Date(leaseExpiresAt),
+							updatedAt: new Date(),
+						})
+						.where(
+							and(
+								eq(dispatches.id, dispatchId),
+								eq(dispatches.actionCallId, actionCallId),
+								eq(dispatches.status, "pending"),
+								isNull(dispatches.leaseOwner),
+								isNull(dispatches.leaseExpiresAt),
+							),
+						)
+						.returning({ id: dispatches.id });
+					if (updatedDispatch.length !== 1) throw new ClaimLost();
+					const updatedCall = await tx
+						.update(actionCalls)
+						.set({ status: "submission_started", updatedAt: new Date() })
+						.where(
+							and(
+								eq(actionCalls.id, actionCallId),
+								eq(actionCalls.status, "created"),
+							),
+						)
+						.returning({ id: actionCalls.id });
+					if (updatedCall.length !== 1) throw new ClaimLost();
+					if (effectId) {
+						const updatedEffect = await tx
+							.update(effects)
+							.set({ status: "submitted", updatedAt: new Date() })
+							.where(
+								and(
+									eq(effects.id, effectId),
+									eq(effects.actionCallId, actionCallId),
+									eq(effects.status, "planned"),
+								),
+							)
+							.returning({ id: effects.id });
+						if (updatedEffect.length !== 1) throw new ClaimLost();
+					}
+					return true;
+				});
+			} catch (error) {
+				if (error instanceof ClaimLost) return false;
+				throw error;
+			}
 		},
 
-		async transitionDispatch(id, from, to) {
-			assertDispatchTransition(from, to);
+		async failPendingDispatch(id) {
 			const updated = await db
 				.update(dispatches)
 				.set({
-					status: to,
+					status: "failed",
 					leaseOwner: null,
 					leaseExpiresAt: null,
 					updatedAt: new Date(),
 				})
-				.where(and(eq(dispatches.id, id), eq(dispatches.status, from)))
+				.where(and(eq(dispatches.id, id), eq(dispatches.status, "pending")))
 				.returning({ id: dispatches.id });
-			return updated.length === 1;
-		},
-
-		async transitionEffect(id, from, to, result) {
-			assertEffectTransition(from, to);
-			const updated = await db
-				.update(effects)
-				.set({
-					status: to,
-					...(result === undefined ? {} : { result }),
-					updatedAt: new Date(),
-				})
-				.where(and(eq(effects.id, id), eq(effects.status, from)))
-				.returning({ id: effects.id });
 			return updated.length === 1;
 		},
 

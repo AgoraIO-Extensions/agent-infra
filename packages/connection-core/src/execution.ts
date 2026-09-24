@@ -28,22 +28,16 @@ export interface ActionExecutionRepository
 		dispatch: DispatchRecord;
 		effect?: EffectRecord;
 	}): Promise<void>;
-	claimDispatch(
-		id: string,
-		leaseOwner: string,
-		leaseExpiresAt: number,
-	): Promise<boolean>;
-	transitionDispatch(
-		id: string,
-		from: DispatchRecord["status"],
-		to: DispatchRecord["status"],
-	): Promise<boolean>;
-	transitionEffect(
-		id: string,
-		from: EffectRecord["status"],
-		to: EffectRecord["status"],
-		result?: Record<string, unknown> | null,
-	): Promise<boolean>;
+	claimAuthorizedDispatch(input: {
+		actionCallId: string;
+		dispatchId: string;
+		effectId?: string;
+		grantRevision: number;
+		principalRecoveryGeneration: number;
+		leaseOwner: string;
+		leaseExpiresAt: number;
+	}): Promise<boolean>;
+	failPendingDispatch(id: string): Promise<boolean>;
 	recordProviderOutcome(input: {
 		actionCallId: string;
 		dispatchId: string;
@@ -198,17 +192,22 @@ export async function executeActionCall(
 		},
 	});
 
-	// Re-check the grant after persistence and immediately before any provider
-	// access. Revocation wins the compare-and-set race and no provider call runs.
-	try {
-		await authorizeActionCall(
-			repository,
-			input.request,
-			input.principalRecoveryGeneration,
-		);
-	} catch {
+	// The repository locks current authority and claims Dispatch in one
+	// transaction. A committed revocation and a provider submission therefore
+	// have a single database order.
+	const now = input.now ?? Date.now;
+	const claimed = await repository.claimAuthorizedDispatch({
+		actionCallId: actionCall.id,
+		dispatchId: dispatch.id,
+		effectId: effect?.id,
+		grantRevision: grant.revision,
+		principalRecoveryGeneration: input.principalRecoveryGeneration,
+		leaseOwner: actionCall.callId,
+		leaseExpiresAt: now() + 60_000,
+	});
+	if (!claimed) {
 		assertTransition(
-			await repository.transitionDispatch(dispatch.id, "pending", "failed"),
+			await repository.failPendingDispatch(dispatch.id),
 			"Dispatch",
 		);
 		assertTransition(
@@ -217,25 +216,6 @@ export async function executeActionCall(
 		);
 		throw new Error("Connection authorization denied");
 	}
-
-	const now = input.now ?? Date.now;
-	assertTransition(
-		await repository.claimDispatch(
-			dispatch.id,
-			actionCall.callId,
-			now() + 60_000,
-		),
-		"Dispatch claim",
-	);
-	assertTransition(
-		await repository.transition(actionCall.id, "created", "submission_started"),
-		"ActionCall",
-	);
-	if (effect)
-		assertTransition(
-			await repository.transitionEffect(effect.id, "planned", "submitted"),
-			"Effect",
-		);
 
 	let outcome: ProviderOutcome;
 	try {
@@ -283,5 +263,17 @@ export async function executeActionCall(
 			reason: outcome.kind === "unknown" ? outcome.reason : undefined,
 		},
 	});
-	return { kind: "completed", actionCall, outcome };
+	return {
+		kind: "completed",
+		actionCall: {
+			...actionCall,
+			status:
+				outcome.kind === "succeeded"
+					? "provider_succeeded"
+					: outcome.kind === "failed"
+						? "provider_failed"
+						: "result_pending",
+		},
+		outcome,
+	};
 }
