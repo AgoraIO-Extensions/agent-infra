@@ -547,9 +547,22 @@ describe("platform worker lifecycle", () => {
 
 describe("Platform Worker production V2 lifecycle", () => {
 	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
-		const primary = { stop: vi.fn(async () => {}) };
-		const workload = { stop: vi.fn(async () => {}) };
-		const conversation = { stop: vi.fn(async () => {}) };
+		const stopOrder: string[] = [];
+		const primary = {
+			stop: vi.fn(async () => {
+				stopOrder.push("primary");
+			}),
+		};
+		const workload = {
+			stop: vi.fn(async () => {
+				stopOrder.push("workload");
+			}),
+		};
+		const conversation = {
+			stop: vi.fn(async () => {
+				stopOrder.push("conversation");
+			}),
+		};
 		const worker = await startPlatformWorkerFromDeploymentV2({
 			startPrimary: () => primary,
 			startWorkload: async () => workload,
@@ -561,6 +574,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(primary.stop).toHaveBeenCalledOnce();
 		expect(workload.stop).toHaveBeenCalledOnce();
 		expect(conversation.stop).toHaveBeenCalledOnce();
+		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
 	});
 	it("drains already-started loops when conversation assembly fails", async () => {
 		const primary = { stop: vi.fn(async () => {}) };

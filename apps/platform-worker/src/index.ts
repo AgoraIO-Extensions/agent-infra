@@ -235,17 +235,25 @@ export async function startPlatformWorkerFromDeploymentV2(
 		let stopping: Promise<void> | undefined;
 		return {
 			stop() {
-				stopping ??= Promise.allSettled([
-					Promise.resolve().then(() => primary.stop()),
-					Promise.resolve().then(() => workload?.stop()),
-					Promise.resolve().then(() => conversation?.stop()),
-				]).then((results) => {
+				stopping ??= (async () => {
+					const results: PromiseSettledResult<void>[] = [];
+					for (const stop of [
+						() => conversation?.stop(),
+						() => workload?.stop(),
+						() => primary.stop(),
+					]) {
+						results.push(
+							...(await Promise.allSettled([
+								Promise.resolve().then(stop),
+							])),
+						);
+					}
 					const failure = results.find(
 						(result): result is PromiseRejectedResult =>
 							result.status === "rejected",
 					);
 					if (failure) throw failure.reason;
-				});
+				})();
 				return stopping;
 			},
 		};
