@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import type {
+	RuntimeOperationFactV2,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
-import { SessionRuntimeDriver } from "./session-runtime-driver.js";
+import {
+	type NativeSessionOptions,
+	SessionRuntimeDriver,
+} from "./session-runtime-driver.js";
 
 export interface AcpRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -23,6 +27,13 @@ export interface GenericAcpRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		modelRequestStarted?: () => Promise<void>,
+		modelUsage?: (
+			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>,
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+		}) => Promise<void>,
 	) => Promise<AcpLaunch>;
 }
 
@@ -46,19 +57,37 @@ export const GenericAcpRuntimeDriver = {
 				selection,
 				admit,
 				modelRequestStarted,
+				modelUsage,
+				toolRequestStarted,
 				update,
 				...session
 			}) => {
 				const phases = new Map<string, string>();
-				return openAcpSession({
+				const normalizedToolRequestStarted = toolRequestStarted
+					? async (tool: {
+							readonly toolCallId: string;
+							readonly name: string;
+						}) =>
+							toolRequestStarted({
+								...tool,
+								toolCallId: createHash("sha256")
+									.update(tool.toolCallId)
+									.digest("hex"),
+							})
+					: undefined;
+				const launch = await options.launch(
+					session.directory,
+					selection,
+					admit,
+					modelRequestStarted,
+					modelUsage,
+					normalizedToolRequestStarted,
+				);
+				const native = await openAcpSession({
 					...session,
 					modelRequestStarted,
-					launch: await options.launch(
-						session.directory,
-						selection,
-						admit,
-						modelRequestStarted,
-					),
+					toolRequestStarted: normalizedToolRequestStarted,
+					launch,
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
@@ -98,6 +127,13 @@ export const GenericAcpRuntimeDriver = {
 						} else await update();
 					},
 				});
+				return {
+					...native,
+					startTurn: (next: NativeSessionOptions) => {
+						native.startTurn?.(next);
+						launch.onTurn?.({ modelUsage: next.modelUsage });
+					},
+				};
 			},
 		});
 	},

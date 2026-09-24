@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
@@ -12,10 +13,15 @@ export interface RuntimeMessagesTransportOptions {
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
 	readonly started?: () => Promise<void>;
+	readonly toolRequestStarted?: (tool: {
+		readonly toolCallId: string;
+		readonly name: string;
+	}) => Promise<void>;
 	readonly fetch?: typeof fetch;
 	readonly receipt?: (
 		state: "sent" | "completed" | "failed" | "unknown",
 		endTurn?: boolean,
+		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) => Promise<void>;
 }
 
@@ -63,6 +69,48 @@ export async function openRuntimeMessagesTransport(
 	let failure: "failed" | "unknown" | undefined;
 	const server = createServer((request, response) => {
 		const operation = (async () => {
+			if (
+				request.method === "POST" &&
+				request.url === "/internal/tool-intent" &&
+				!closed &&
+				!failure &&
+				request.headers["x-api-key"] === token
+			) {
+				try {
+					const chunks: Buffer[] = [];
+					let size = 0;
+					for await (const chunk of request) {
+						size += chunk.length;
+						if (size > 64 * 1024) throw new Error();
+						chunks.push(chunk);
+					}
+					const body: unknown = JSON.parse(
+						new TextDecoder("utf-8", { fatal: true }).decode(
+							Buffer.concat(chunks),
+						),
+					);
+					if (
+						!body ||
+						typeof body !== "object" ||
+						Array.isArray(body) ||
+						typeof (body as Record<string, unknown>).toolCallId !== "string" ||
+						!(body as Record<string, unknown>).toolCallId ||
+						typeof (body as Record<string, unknown>).name !== "string" ||
+						!(body as Record<string, unknown>).name ||
+						!options.toolRequestStarted
+					)
+						throw new Error();
+					const tool = body as { toolCallId: string; name: string };
+					await options.toolRequestStarted({
+						toolCallId: tool.toolCallId,
+						name: tool.name,
+					});
+					response.writeHead(204).end();
+				} catch {
+					reject(response, 403);
+				}
+				return;
+			}
 			if (
 				closed ||
 				failure ||
@@ -212,8 +260,8 @@ export async function openRuntimeMessagesTransport(
 					options.model,
 					[access.credential, access.endpoint],
 					controller.signal,
-					async (reason) => {
-						await options.receipt?.("completed", reason === "end_turn");
+					async (reason, usage) => {
+						await options.receipt?.("completed", reason === "end_turn", usage);
 					},
 				);
 			} catch {
@@ -257,6 +305,10 @@ export async function openRuntimeMessagesTransport(
 	return {
 		modelAccess: {
 			endpoint: `http://127.0.0.1:${address.port}`,
+			credential: token,
+		},
+		toolPermit: {
+			endpoint: `http://127.0.0.1:${address.port}/internal/tool-intent`,
 			credential: token,
 		},
 		failure: () => failure,

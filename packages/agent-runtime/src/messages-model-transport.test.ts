@@ -1,6 +1,42 @@
 import { expect, it } from "vitest";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 
+it("admits Pi tool execution only after the token-protected intent callback", async () => {
+	const requests: { toolCallId: string; name: string }[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-model-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		toolRequestStarted: async (tool) => {
+			requests.push(tool);
+		},
+	});
+	try {
+		const body = JSON.stringify({ toolCallId: "tool-1", name: "read" });
+		const denied = await fetch(transport.toolPermit.endpoint, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body,
+		});
+		expect(denied.status).toBe(400);
+		const admitted = await fetch(transport.toolPermit.endpoint, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-api-key": transport.toolPermit.credential,
+			},
+			body,
+		});
+		expect(admitted.status).toBe(204);
+		expect(requests).toEqual([{ toolCallId: "tool-1", name: "read" }]);
+	} finally {
+		await transport.close();
+	}
+});
+
 function messages(text: string[]) {
 	return [
 		{
@@ -37,6 +73,47 @@ function messages(text: string[]) {
 		.map((value) => `event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`)
 		.join("");
 }
+
+it("forwards Messages usage without inventing missing counters", async () => {
+	const receipts: unknown[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-model-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		receipt: async (state, _endTurn, usage) => {
+			if (state === "completed") receipts.push(usage);
+		},
+		fetch: async () =>
+			new Response(messages(["OK"]), {
+				headers: { "content-type": "text/event-stream" },
+			}),
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			},
+		);
+		await response.text();
+		expect(receipts).toEqual([{ inputTokens: 10, outputTokens: 2 }]);
+	} finally {
+		await transport.close();
+	}
+});
 
 it.each(["valid", "credential", "late-error", "incomplete"])(
 	"forwards a %s Messages stream with errors contained before native persistence",

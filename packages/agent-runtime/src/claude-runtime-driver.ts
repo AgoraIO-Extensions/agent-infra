@@ -849,6 +849,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
+			const workspaceTools = claudeWorkspaceTools(
+				join(directory, "workspace"),
+				join(directory, "memory"),
+			);
 			native = claudeQuery(
 				{
 					pathToClaudeCodeExecutable: this.executable,
@@ -862,10 +866,25 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 					},
 					settingSources: [],
-					...claudeWorkspaceTools(
-						join(directory, "workspace"),
-						join(directory, "memory"),
-					),
+					...workspaceTools,
+					canUseTool: async (name, input, toolOptions) => {
+						const permission = (await workspaceTools.canUseTool?.(
+							name,
+							input,
+							toolOptions,
+						)) ?? {
+							behavior: "deny" as const,
+							message: "Tool access is unavailable",
+						};
+						if (permission?.behavior !== "allow") return permission;
+						await this.toolRequestStarted(file, command.executionId, {
+							toolCallId: createHash("sha256")
+								.update(toolOptions.toolUseID)
+								.digest("hex"),
+							name,
+						});
+						return permission;
+					},
 					strictMcpConfig: true,
 					mcpServers: {},
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
@@ -1246,6 +1265,55 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await this.modelPhase(file, executionId, "started");
 		}
 	}
+	private async toolRequestStarted(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		value: { readonly toolCallId: string; readonly name: string },
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (!turn || terminal(turn.status)) unavailable();
+		const identity = turn.toolOperations?.[value.toolCallId];
+		const previousEvent = identity
+			? [...turn.events]
+					.reverse()
+					.find(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "tool" &&
+							event.payload.operationRef === identity.operationRef &&
+							event.payload.attemptRef === identity.attemptRef,
+					)
+			: undefined;
+		const previous =
+			previousEvent?.type === "operation" &&
+			previousEvent.payload.kind === "tool"
+				? previousEvent.payload
+				: undefined;
+		if (previous && ["intent", "started"].includes(previous.phase)) return;
+		const model = latestFact(turn, "model");
+		const created = {
+			kind: "tool" as const,
+			operationRef: previous?.operationRef ?? randomUUID(),
+			attemptRef: randomUUID(),
+			phase: "intent" as const,
+			toolId: metadataId(value.name, "tool"),
+			...(model ? { parentOperationRef: model.operationRef } : {}),
+		};
+		await file.update((state) => {
+			const current = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!current || terminal(current.status)) unavailable();
+			current.toolOperations ??= {};
+			current.toolOperations[value.toolCallId] = {
+				operationRef: created.operationRef,
+				attemptRef: created.attemptRef,
+			};
+		});
+		await this.appendOperationFact(file, executionId, created);
+	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,
 		executionId: string,
@@ -1254,7 +1322,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			name: string;
 			phase: "started" | "completed" | "failed";
 		},
-	) {
+	): Promise<void> {
 		const turn = file
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
@@ -1276,71 +1344,43 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			previousEvent.payload.kind === "tool"
 				? previousEvent.payload
 				: undefined;
-		if (previous && ["completed", "failed", "unknown"].includes(previous.phase))
-			return;
 		if (value.phase === "started") {
-			if (previous) return;
-			const model = latestFact(turn, "model");
-			const created = {
-				kind: "tool" as const,
-				operationRef: randomUUID(),
-				attemptRef: randomUUID(),
-				phase: "intent" as const,
-				toolId: metadataId(value.name, "tool"),
-				...(model ? { parentOperationRef: model.operationRef } : {}),
-			};
-			await file.update((state) => {
-				const current = state.turns.find(
-					(entry) => entry.executionId === executionId,
-				);
-				if (!current) return;
-				if (!current.toolOperations) current.toolOperations = {};
-				current.toolOperations[value.toolCallId] = {
-					operationRef: created.operationRef,
-					attemptRef: created.attemptRef,
-				};
-			});
-			await this.appendOperationFact(file, executionId, created);
+			if (
+				!previous ||
+				["completed", "failed", "unknown"].includes(previous.phase)
+			) {
+				await this.toolRequestStarted(file, executionId, {
+					toolCallId: value.toolCallId,
+					name: value.name,
+				});
+				return this.toolPhase(file, executionId, value);
+			}
+			if (previous.phase !== "intent") return;
 			const startedAt = new Date().toISOString();
 			await this.appendOperationFact(file, executionId, {
-				...created,
+				...previous,
 				phase: "started",
 				startedAt,
 			});
 			return;
 		}
 		if (!previous) {
-			const model = latestFact(turn, "model");
-			const created = {
-				kind: "tool" as const,
-				operationRef: randomUUID(),
-				attemptRef: randomUUID(),
-				phase: "unknown" as const,
-				failureCode: "recovery_unconfirmed" as const,
-				toolId: metadataId(value.name, "tool"),
-				...(model ? { parentOperationRef: model.operationRef } : {}),
-			};
-			await file.update((state) => {
-				const current = state.turns.find(
-					(entry) => entry.executionId === executionId,
-				);
-				if (!current) return;
-				current.toolOperations ??= {};
-				current.toolOperations[value.toolCallId] = {
-					operationRef: created.operationRef,
-					attemptRef: created.attemptRef,
-				};
-			});
-			await this.appendOperationFact(file, executionId, created);
-			return;
+			unavailable();
 		}
+		if (["completed", "failed", "unknown"].includes(previous.phase)) return;
 		const now = new Date().toISOString();
-		const startedAt = previous.startedAt ?? now;
 		await this.appendOperationFact(file, executionId, {
 			...previous,
 			phase: value.phase,
 			finishedAt: now,
-			durationMs: Math.max(0, Date.parse(now) - Date.parse(startedAt)),
+			...(previous.startedAt
+				? {
+						durationMs: Math.max(
+							0,
+							Date.parse(now) - Date.parse(previous.startedAt),
+						),
+					}
+				: {}),
 			...(value.phase === "failed"
 				? { failureCode: "operation_failed" as const }
 				: {}),

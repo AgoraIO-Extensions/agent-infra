@@ -51,17 +51,28 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			modelFactId: option.model,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit, modelRequestStarted) => {
+		launch: async (
+			directory,
+			selection,
+			admit,
+			modelRequestStarted,
+			_modelUsage,
+			_toolRequestStarted,
+		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			let currentModelUsage = _modelUsage;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
 				started: modelRequestStarted,
+				receipt: async (state, _endTurn, usage) => {
+					if (state === "completed" && usage) await currentModelUsage?.(usage);
+				},
 			});
 			try {
 				for (const name of [
@@ -154,6 +165,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						);
 					},
 					close: () => transport.close(),
+					onTurn: (callbacks) => {
+						currentModelUsage = callbacks.modelUsage;
+					},
 				};
 			} catch {
 				await transport.close();

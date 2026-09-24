@@ -67,6 +67,27 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
 		if (!["read", "write", "edit"].includes(event.toolName))
 			return { block: true, reason: "RUNTIME_WORKSPACE_ACCESS_DENIED" };
+		const endpoint = process.env.AGENT_INFRA_PI_TOOL_PERMIT_URL;
+		const token = process.env.AGENT_INFRA_PI_TOOL_PERMIT_TOKEN;
+		if (!endpoint || !token || typeof event.toolCallId !== "string")
+			return { block: true, reason: "RUNTIME_TOOL_INTENT_UNAVAILABLE" };
+		try {
+			const response = await fetch(endpoint, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-api-key": token,
+				},
+				body: JSON.stringify({
+					toolCallId: event.toolCallId,
+					name: event.toolName,
+				}),
+			});
+			if (response.ok) return;
+		} catch {
+			// A missing durable permit must block the native action.
+		}
+		return { block: true, reason: "RUNTIME_TOOL_INTENT_UNAVAILABLE" };
 	});
 	pi.on("before_agent_start", async (event) => {
 		const file = join(memory, "MEMORY.md");

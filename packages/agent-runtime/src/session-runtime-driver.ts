@@ -59,6 +59,14 @@ export interface NativeSessionOptions {
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
 	modelRequestStarted?: () => Promise<void>;
+	modelUsage?: (
+		usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+	) => Promise<void>;
+	/** Persist a tool intent before the native adapter is allowed to execute it. */
+	toolRequestStarted?: (tool: {
+		readonly toolCallId: string;
+		readonly name: string;
+	}) => Promise<void>;
 	update: (event?: RuntimeEventInput) => Promise<void>;
 }
 export interface NativeSession {
@@ -825,6 +833,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			admitted = resolve;
 		});
 		let dispatched = false;
+		let modelUsage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"];
 		let native: NativeSession;
 		try {
 			const sessionOptions: NativeSessionOptions = {
@@ -849,6 +858,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				modelRequestStarted: () =>
 					this.modelRequestStarted(file, command.executionId),
+				modelUsage: async (usage) => {
+					modelUsage = usage;
+				},
+				toolRequestStarted: (tool) =>
+					this.toolRequestStarted(file, command.executionId, tool),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -962,6 +976,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					this.options.completionStatus(response.stopReason),
 					response.stopReason,
 					response.checkpoint,
+					true,
+					modelUsage,
 				);
 				admitted();
 			} catch {
@@ -1026,6 +1042,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		phase: "started" | "completed" | "failed" | "unknown",
 		failureCode?: RuntimeOperationFactV2["failureCode"],
+		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) {
 		const turn = file
 			.read()
@@ -1060,6 +1077,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			...(startedAt ? { startedAt } : {}),
 			...(finishedAt ? { finishedAt } : {}),
 			...(durationMs === undefined ? {} : { durationMs }),
+			...(usage ? { usage } : {}),
 			...(phase === "completed" || phase === "started"
 				? {}
 				: {
@@ -1188,11 +1206,60 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
+	private async toolRequestStarted(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		value: { readonly toolCallId: string; readonly name: string },
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (!turn || terminal(turn.status)) unavailable();
+		const identity = turn.toolOperations?.[value.toolCallId];
+		const previousEvent = identity
+			? [...turn.events]
+					.reverse()
+					.find(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "tool" &&
+							event.payload.operationRef === identity.operationRef &&
+							event.payload.attemptRef === identity.attemptRef,
+					)
+			: undefined;
+		const previous =
+			previousEvent?.type === "operation" &&
+			previousEvent.payload.kind === "tool"
+				? previousEvent.payload
+				: undefined;
+		if (previous && ["intent", "started"].includes(previous.phase)) return;
+		const model = latestFact(turn, "model");
+		const created = {
+			kind: "tool" as const,
+			operationRef: previous?.operationRef ?? randomUUID(),
+			attemptRef: randomUUID(),
+			phase: "intent" as const,
+			toolId: metadataId(value.name, "tool"),
+			...(model ? { parentOperationRef: model.operationRef } : {}),
+		};
+		await file.update((state) => {
+			const current = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!current || terminal(current.status)) unavailable();
+			current.toolOperations ??= {};
+			current.toolOperations[value.toolCallId] = {
+				operationRef: created.operationRef,
+				attemptRef: created.attemptRef,
+			};
+		});
+		await this.appendOperationFact(file, executionId, created);
+	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		value: Extract<RuntimeEventV1, { type: "tool" }>["payload"],
-	) {
+	): Promise<void> {
 		const turn = file
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
@@ -1214,71 +1281,43 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			previousEvent.payload.kind === "tool"
 				? previousEvent.payload
 				: undefined;
-		if (previous && ["completed", "failed", "unknown"].includes(previous.phase))
-			return;
 		if (value.phase === "started") {
-			if (previous) return;
-			const model = latestFact(turn, "model");
-			const created = {
-				kind: "tool" as const,
-				operationRef: randomUUID(),
-				attemptRef: randomUUID(),
-				phase: "intent" as const,
-				toolId: metadataId(value.name, "tool"),
-				...(model ? { parentOperationRef: model.operationRef } : {}),
-			};
-			await file.update((state) => {
-				const current = state.turns.find(
-					(entry) => entry.executionId === executionId,
-				);
-				if (!current) return;
-				if (!current.toolOperations) current.toolOperations = {};
-				current.toolOperations[value.toolCallId] = {
-					operationRef: created.operationRef,
-					attemptRef: created.attemptRef,
-				};
-			});
-			await this.appendOperationFact(file, executionId, created);
+			if (
+				!previous ||
+				["completed", "failed", "unknown"].includes(previous.phase)
+			) {
+				await this.toolRequestStarted(file, executionId, {
+					toolCallId: value.toolCallId,
+					name: value.name,
+				});
+				return this.toolPhase(file, executionId, value);
+			}
+			if (previous.phase !== "intent") return;
 			const startedAt = new Date().toISOString();
 			await this.appendOperationFact(file, executionId, {
-				...created,
+				...previous,
 				phase: "started",
 				startedAt,
 			});
 			return;
 		}
 		if (!previous) {
-			const model = latestFact(turn, "model");
-			const created = {
-				kind: "tool" as const,
-				operationRef: randomUUID(),
-				attemptRef: randomUUID(),
-				phase: "unknown" as const,
-				failureCode: "recovery_unconfirmed" as const,
-				toolId: metadataId(value.name, "tool"),
-				...(model ? { parentOperationRef: model.operationRef } : {}),
-			};
-			await file.update((state) => {
-				const current = state.turns.find(
-					(entry) => entry.executionId === executionId,
-				);
-				if (!current) return;
-				current.toolOperations ??= {};
-				current.toolOperations[value.toolCallId] = {
-					operationRef: created.operationRef,
-					attemptRef: created.attemptRef,
-				};
-			});
-			await this.appendOperationFact(file, executionId, created);
-			return;
+			unavailable();
 		}
+		if (["completed", "failed", "unknown"].includes(previous.phase)) return;
 		const now = new Date().toISOString();
-		const startedAt = previous.startedAt ?? now;
 		await this.appendOperationFact(file, executionId, {
 			...previous,
 			phase: value.phase,
 			finishedAt: now,
-			durationMs: Math.max(0, Date.parse(now) - Date.parse(startedAt)),
+			...(previous.startedAt
+				? {
+						durationMs: Math.max(
+							0,
+							Date.parse(now) - Date.parse(previous.startedAt),
+						),
+					}
+				: {}),
 			...(value.phase === "failed"
 				? { failureCode: "operation_failed" as const }
 				: {}),
@@ -1291,11 +1330,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		nativeStopReason?: string,
 		nativeTerminalCheckpoint?: string,
 		markModel = true,
+		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) {
 		if (markModel && status === "running")
 			await this.modelPhase(file, executionId, "started");
 		else if (status === "completed")
-			await this.modelPhase(file, executionId, "completed");
+			await this.modelPhase(file, executionId, "completed", undefined, usage);
 		else if (status === "failed")
 			await this.modelPhase(file, executionId, "failed", "operation_failed");
 		else if (status === "cancelled")

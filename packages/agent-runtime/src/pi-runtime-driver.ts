@@ -8,6 +8,7 @@ import {
 } from "./native-process.js";
 import { openPiSession } from "./pi-session.js";
 import {
+	type NativeSessionOptions,
 	SessionRuntimeDriver,
 	type SessionRuntimeModelOption,
 } from "./session-runtime-driver.js";
@@ -23,6 +24,11 @@ export interface PiRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		modelRequestStarted?: () => Promise<void>,
+		modelUsage?: NativeSessionOptions["modelUsage"],
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+		}) => Promise<void>,
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -46,26 +52,41 @@ export const PiRuntimeDriver = {
 				const callbacks = {
 					admit: session.admit,
 					modelRequestStarted: session.modelRequestStarted,
+					modelUsage: session.modelUsage,
+					toolRequestStarted: session.toolRequestStarted,
 					update: session.update,
 				};
+				const launch = await options.launch(
+					session.directory,
+					session.selection,
+					() => callbacks.admit(),
+					async () => {
+						await callbacks.modelRequestStarted?.();
+					},
+					async (usage) => {
+						await callbacks.modelUsage?.(usage);
+					},
+					async (tool) => {
+						await callbacks.toolRequestStarted?.(tool);
+					},
+				);
 				const native = await openPiSession({
 					...session,
 					update: (event) => callbacks.update(event),
-					launch: await options.launch(
-						session.directory,
-						session.selection,
-						() => callbacks.admit(),
-						async () => {
-							await callbacks.modelRequestStarted?.();
-						},
-					),
+					launch,
 				});
 				return {
 					...native,
 					startTurn: (next) => {
 						callbacks.admit = next.admit;
 						callbacks.modelRequestStarted = next.modelRequestStarted;
+						callbacks.modelUsage = next.modelUsage;
+						callbacks.toolRequestStarted = next.toolRequestStarted;
 						callbacks.update = next.update;
+						launch.onTurn?.({
+							modelUsage: next.modelUsage,
+							toolRequestStarted: next.toolRequestStarted,
+						});
 					},
 				};
 			},

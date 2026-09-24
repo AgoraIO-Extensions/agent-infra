@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,17 +59,36 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			modelFactId: option.model,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit, modelRequestStarted) => {
+		launch: async (
+			directory,
+			selection,
+			admit,
+			modelRequestStarted,
+			modelUsage,
+			toolRequestStarted,
+		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			let currentModelUsage = modelUsage;
+			let currentToolRequestStarted = toolRequestStarted;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
 				client: "pi",
 				started: modelRequestStarted,
+				receipt: async (state, _endTurn, usage) => {
+					if (state === "completed" && usage) await currentModelUsage?.(usage);
+				},
+				toolRequestStarted: async (tool) =>
+					currentToolRequestStarted?.({
+						...tool,
+						toolCallId: createHash("sha256")
+							.update(tool.toolCallId)
+							.digest("hex"),
+					}),
 			});
 			try {
 				for (const name of [
@@ -162,9 +182,15 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						PI_CODING_AGENT_DIR: config,
 						AGENT_INFRA_PI_WORKSPACE: join(directory, "workspace"),
 						AGENT_INFRA_PI_MODEL_TOKEN: transport.modelAccess.credential,
+						AGENT_INFRA_PI_TOOL_PERMIT_URL: transport.toolPermit.endpoint,
+						AGENT_INFRA_PI_TOOL_PERMIT_TOKEN: transport.toolPermit.credential,
 					},
 					close: () => transport.close(),
 					reusable: () => !transport.failure(),
+					onTurn: (callbacks) => {
+						currentModelUsage = callbacks.modelUsage;
+						currentToolRequestStarted = callbacks.toolRequestStarted;
+					},
 				};
 			} catch {
 				await transport.close();
