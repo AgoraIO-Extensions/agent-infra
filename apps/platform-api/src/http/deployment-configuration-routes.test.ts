@@ -145,4 +145,25 @@ describe("deployment configuration projection", () => {
 		expect(body.templates).toEqual([]);
 		expect(body.modelCatalog.endpoints).toEqual([]);
 	});
+
+	it("marks a loader revision mismatch stale before presenting choices", async () => {
+		const read = createDeploymentConfigurationProjectionV2({
+			templates: [],
+			modelCatalog: {
+				revision: "catalog-current",
+				load: async () => snapshot(Date.now() + 60_000),
+			},
+		});
+		const response = await createApp(read).request(
+			"/api/v2/deployment/configuration",
+		);
+
+		expect(response.status).toBe(200);
+		const body = DeploymentConfigurationProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(body.status).toBe("stale");
+		expect(body.modelCatalog.status).toBe("stale");
+		expect(body.modelCatalog.endpoints).toEqual([]);
+	});
 });

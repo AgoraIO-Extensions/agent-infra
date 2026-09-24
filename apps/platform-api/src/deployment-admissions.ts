@@ -94,7 +94,10 @@ export function createDeploymentConfigurationProjectionV2(input: {
 				await modelOperationV1(signal, () => loadModelCatalog(signal)),
 			);
 			catalogRevision = snapshot.revision;
-			if (snapshot.validUntil <= Date.now()) {
+			if (
+				snapshot.revision !== input.modelCatalog.revision ||
+				snapshot.validUntil <= Date.now()
+			) {
 				catalogStatus = "stale";
 			} else {
 				endpoints = snapshot.endpoints
@@ -107,7 +110,9 @@ export function createDeploymentConfigurationProjectionV2(input: {
 							reasoningLevels: [...endpoint.capabilities.reasoningLevels],
 						})),
 					}));
-				catalogStatus = endpoints.length > 0 ? "populated" : "empty";
+					catalogStatus = endpoints.some((endpoint) => endpoint.models.length > 0)
+						? "populated"
+						: "empty";
 			}
 		} catch {
 			catalogStatus = "unavailable";
