@@ -11,6 +11,10 @@ import { expect, it, vi } from "vitest";
 import { createConnectionApp } from "./app";
 import { redactedLoginMarker } from "./audit-marker";
 import type { ConnectionAuthDependencies } from "./auth";
+import {
+	AuthLoginResponseV1Schema,
+	AuthSessionResponseV1Schema,
+} from "./auth-schema";
 
 function setup() {
 	const principals = new Map<string, BrowserSessionPrincipal>();
@@ -102,13 +106,16 @@ it("logs in with an opaque cookie and requires the matching Origin, session and 
 	const { app, audit } = setup();
 	const aliceLogin = await login(app, "alice", "correct");
 	expect(aliceLogin.status).toBe(200);
+	AuthLoginResponseV1Schema.parse(await aliceLogin.json());
 	const aliceCookie = aliceLogin.headers.get("set-cookie")?.split(";")[0];
 	expect(aliceCookie).toMatch(/^__Host-connection_session=/);
 	const aliceSession = await app.request("/auth/session", {
 		headers: { cookie: aliceCookie ?? "" },
 	});
 	expect(aliceSession.status).toBe(200);
-	const aliceBody = (await aliceSession.json()) as { csrfToken: string };
+	const aliceBody = AuthSessionResponseV1Schema.parse(
+		await aliceSession.json(),
+	);
 	const aliceCsrf = aliceBody.csrfToken;
 	const bobLogin = await login(app, "bob", "correct");
 	const bobCookie = bobLogin.headers.get("set-cookie")?.split(";")[0];
@@ -163,6 +170,26 @@ it("logs in with an opaque cookie and requires the matching Origin, session and 
 			outcome: "succeeded",
 		}),
 	);
+});
+
+it("validates login request against the browser wire schema", async () => {
+	const { app, audit } = setup();
+	for (const body of [
+		{ username: "alice", password: 123 },
+		{ username: "alice", password: "correct", principalId: "forged" },
+	]) {
+		const response = await app.request("/auth/login", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				origin: "https://connection.example.test",
+			},
+			body: JSON.stringify(body),
+		});
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "Invalid request" });
+	}
+	expect(audit).not.toHaveBeenCalled();
 });
 
 it("returns a single redacted credential failure for unknown user, wrong password and disabled Principal", async () => {

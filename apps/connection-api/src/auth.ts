@@ -7,6 +7,12 @@ import {
 	readBrowserSessionCookie,
 } from "@agent-infra/connection-core";
 import type { Context, Hono } from "hono";
+import {
+	AuthLoginRequestV1Schema,
+	AuthLoginResponseV1Schema,
+	AuthSessionResponseV1Schema,
+	authError,
+} from "./auth-schema";
 
 export interface ConnectionAuthDependencies {
 	service: Pick<ConnectionLoginService, "login" | "currentSession" | "logout">;
@@ -47,41 +53,35 @@ export function addConnectionAuthRoutes(
 				auth.publicOrigin,
 			)
 		)
-			return context.json({ error: "Forbidden" }, 403);
+			return context.json(authError("Forbidden"), 403);
 		let body: unknown;
 		try {
 			body = await context.req.json();
 		} catch {
-			return context.json({ error: "Invalid request" }, 400);
+			return context.json(authError("Invalid request"), 400);
 		}
-		if (
-			!body ||
-			typeof body !== "object" ||
-			!("username" in body) ||
-			!("password" in body) ||
-			typeof body.username !== "string" ||
-			typeof body.password !== "string" ||
-			body.username.length > 256 ||
-			body.password.length > 1024
-		)
-			return context.json({ error: "Invalid request" }, 400);
+		const request = AuthLoginRequestV1Schema.safeParse(body);
+		if (!request.success)
+			return context.json(authError("Invalid request"), 400);
 		try {
 			const result = await auth.service.login({
-				username: body.username,
-				password: body.password,
+				username: request.data.username,
+				password: request.data.password,
 				source: auth.source(context),
 			});
 			return context.json(
-				{ principal: { id: result.principal.id, uid: result.principal.uid } },
+				AuthLoginResponseV1Schema.parse({
+					principal: { id: result.principal.id, uid: result.principal.uid },
+				}),
 				200,
 				{ "Set-Cookie": result.cookie, "Cache-Control": "no-store" },
 			);
 		} catch (error) {
 			if (error instanceof LoginRejectedError)
-				return context.json({ error: "Login failed" }, 401);
+				return context.json(authError("Login failed"), 401);
 			if (error instanceof LoginRateLimitedError)
-				return context.json({ error: "Login temporarily unavailable" }, 429);
-			return context.json({ error: "Login unavailable" }, 503);
+				return context.json(authError("Login temporarily unavailable"), 429);
+			return context.json(authError("Login unavailable"), 503);
 		}
 	});
 
@@ -90,17 +90,17 @@ export function addConnectionAuthRoutes(
 		try {
 			const principal = await auth.service.currentSession(token);
 			if (!principal || !token)
-				return context.json({ error: "Unauthorized" }, 401);
+				return context.json(authError("Unauthorized"), 401);
 			return context.json(
-				{
+				AuthSessionResponseV1Schema.parse({
 					principal: { id: principal.id, uid: principal.uid },
 					csrfToken: csrfToken(token, auth.csrfKey),
-				},
+				}),
 				200,
 				{ "Cache-Control": "no-store" },
 			);
 		} catch {
-			return context.json({ error: "Unavailable" }, 503);
+			return context.json(authError("Unavailable"), 503);
 		}
 	});
 
@@ -112,7 +112,7 @@ export function addConnectionAuthRoutes(
 				auth.publicOrigin,
 			)
 		)
-			return context.json({ error: "Forbidden" }, 403);
+			return context.json(authError("Forbidden"), 403);
 		const token = readBrowserSessionCookie(context.req.header("cookie"));
 		if (
 			!token ||
@@ -121,16 +121,16 @@ export function addConnectionAuthRoutes(
 				csrfToken(token, auth.csrfKey),
 			)
 		)
-			return context.json({ error: "Forbidden" }, 403);
+			return context.json(authError("Forbidden"), 403);
 		try {
 			const principal = await auth.service.logout(token);
-			if (!principal) return context.json({ error: "Unauthorized" }, 401);
+			if (!principal) return context.json(authError("Unauthorized"), 401);
 			return context.body(null, 204, {
 				"Set-Cookie": `${browserSessionCookieName}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
 				"Cache-Control": "no-store",
 			});
 		} catch {
-			return context.json({ error: "Unavailable" }, 503);
+			return context.json(authError("Unavailable"), 503);
 		}
 	});
 }
