@@ -44,7 +44,7 @@ export function addConnectionCatalogRoutes(
 				throw new ClientAuthorizationDenied();
 			const binding = await authenticateDirectClient(context, client);
 			const body = DirectCatalogResponseV1Schema.parse(
-				projectDirectCatalog(await repository.list(), binding.scopes),
+				projectDirectCatalog(await repository.list()),
 			);
 			await repository.auditRead(
 				binding,

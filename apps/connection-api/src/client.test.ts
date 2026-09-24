@@ -181,16 +181,17 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		effect: "read",
 		inputSchema: { type: "object", properties: {} },
 		outputSchema: { type: "object", properties: { id: { type: "string" } } },
-		requiredScopes: ["action:read"],
+		requiredScopes: ["read:user"],
 		status: "published",
 	};
 	await database.db.insert(actionVersions).values([
 		{ ...action, id: "visible", actionId: "get_current_user" },
 		{
 			...action,
-			id: "scope-hidden",
-			actionId: "write_action",
-			requiredScopes: ["action:write"],
+			id: "provider-scoped",
+			actionId: "create_pull_request",
+			effect: "write",
+			requiredScopes: ["repo"],
 		},
 		{
 			...action,
@@ -380,15 +381,23 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 	expect(catalogBody.actions).toMatchObject([
 		{
 			providerId: "github",
+			actionId: "create_pull_request",
+			actionVersion: "v1",
+			effect: "WRITE",
+			requiredScopes: ["repo"],
+			status: "published",
+		},
+		{
+			providerId: "github",
 			actionId: "get_current_user",
 			actionVersion: "v1",
 			effect: "READ",
-			requiredScopes: ["action:read"],
+			requiredScopes: ["read:user"],
 			status: "published",
 		},
 	]);
 	expect(JSON.stringify(catalogBody)).not.toMatch(
-		/principal|connection|grant|credential|write_action|unpublished|disabled/i,
+		/principal|connection|grant|credential|unpublished|disabled/i,
 	);
 	const etag = catalog.headers.get("etag") ?? "";
 	expect(etag).toBe(`W/"${catalogBody.catalogVersion}"`);
@@ -423,6 +432,9 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		(row) => row.action === "catalog.read",
 	);
 	expect(catalogAudits).toHaveLength(3);
+	expect(catalogAudits.map((row) => row.metadata.actionCount).sort()).toEqual([
+		0, 2, 2,
+	]);
 	expect(
 		catalogAudits.every(
 			(row) =>

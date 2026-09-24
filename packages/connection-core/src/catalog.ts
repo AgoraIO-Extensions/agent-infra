@@ -14,18 +14,13 @@ export interface CatalogActionState {
 	status: string;
 }
 
-export function projectDirectCatalog(
-	rows: readonly CatalogActionState[],
-	grantedScopes: readonly string[],
-) {
-	const allowedScopes = new Set(grantedScopes);
+export function projectDirectCatalog(rows: readonly CatalogActionState[]) {
 	const actions = rows
 		.filter(
 			(row) =>
 				row.providerStatus === "active" &&
 				row.releaseStatus === "active" &&
-				row.status === "published" &&
-				row.requiredScopes.every((scope) => allowedScopes.has(scope)),
+				row.status === "published",
 		)
 		.map((row) => {
 			if (row.effect !== "read" && row.effect !== "write")
