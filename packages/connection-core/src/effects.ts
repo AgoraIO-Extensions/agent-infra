@@ -5,7 +5,7 @@ const effectTransitions: Record<EffectStatus, readonly EffectStatus[]> = {
 	submitted: ["succeeded", "failed", "unknown"],
 	succeeded: [],
 	failed: [],
-	unknown: [],
+	unknown: ["succeeded", "failed"],
 };
 
 const dispatchTransitions: Record<DispatchStatus, readonly DispatchStatus[]> = {
@@ -13,7 +13,7 @@ const dispatchTransitions: Record<DispatchStatus, readonly DispatchStatus[]> = {
 	claimed: ["completed", "failed", "unknown"],
 	completed: [],
 	failed: [],
-	unknown: [],
+	unknown: ["completed", "failed"],
 };
 
 export function assertEffectTransition(

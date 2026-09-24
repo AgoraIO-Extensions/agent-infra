@@ -6,9 +6,7 @@ describe("Connection Effect and Dispatch invariants", () => {
 	it("allows only forward provider-result transitions", () => {
 		expect(() => assertEffectTransition("planned", "submitted")).not.toThrow();
 		expect(() => assertEffectTransition("submitted", "unknown")).not.toThrow();
-		expect(() => assertEffectTransition("unknown", "succeeded")).toThrow(
-			/invalid Effect/,
-		);
+		expect(() => assertEffectTransition("unknown", "succeeded")).not.toThrow();
 		expect(() => assertEffectTransition("succeeded", "failed")).toThrow(
 			/invalid Effect/,
 		);
@@ -25,5 +23,8 @@ describe("Connection Effect and Dispatch invariants", () => {
 		expect(() => assertDispatchTransition("failed", "completed")).toThrow(
 			/invalid Dispatch/,
 		);
+		expect(() =>
+			assertDispatchTransition("unknown", "completed"),
+		).not.toThrow();
 	});
 });

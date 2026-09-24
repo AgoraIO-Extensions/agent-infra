@@ -1,3 +1,4 @@
+export * from "./authority.js";
 export * from "./calls.js";
 export * from "./effects.js";
 export * from "./execution.js";

@@ -102,7 +102,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(4);
+		expect(history?.count).toBe(5);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {
@@ -514,6 +514,23 @@ describe("Connection PostgreSQL migration", () => {
 					await databaseClient`select status from connection.action_calls where id = 'call-store-execution'`
 				)[0]?.status,
 			).toBe("submission_started");
+			await expect(
+				repository.recordProviderOutcome({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					outcome: { kind: "succeeded", result: { ok: true } },
+					audit: {
+						...stateAudit(executionCall, "outcome"),
+						principalId: "principal-b",
+					},
+				}),
+			).rejects.toThrow();
+			expect(
+				(
+					await databaseClient`select status from connection.action_calls where id = 'call-store-execution'`
+				)[0]?.status,
+			).toBe("submission_started");
 			expect(
 				await repository.recordProviderOutcome({
 					actionCallId: executionCall.id,
@@ -523,6 +540,21 @@ describe("Connection PostgreSQL migration", () => {
 					audit: stateAudit(executionCall, "outcome"),
 				}),
 			).toBe(true);
+			await expect(
+				databaseClient`update connection.action_calls set status = 'created' where id = 'call-store-execution'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.dispatches set status = 'pending' where id = 'dispatch-store-execution'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.effects set status = 'planned' where id = 'effect-store-execution'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.action_calls set trace_id = 'other-trace' where id = 'call-store-execution'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.audit_events set principal_id = 'principal-b' where target_id = 'call-store-execution'`,
+			).rejects.toThrow();
 
 			const revokedCall: ActionCallRecord = {
 				...executionCall,

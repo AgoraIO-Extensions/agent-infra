@@ -10,6 +10,7 @@ import {
 	type ConnectionAuthorityRepository,
 	consumerActorSentinel,
 	type GrantRecord,
+	isCurrentAuthority,
 	outcomeStatuses,
 } from "@agent-infra/connection-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -32,6 +33,28 @@ import {
 	providers,
 } from "./schema.js";
 
+const authorityColumns = {
+	grant: grants,
+	principalStatus: principals.status,
+	principalGeneration: principals.recoveryGeneration,
+	consumerStatus: consumers.status,
+	consumerActorRequired: consumers.actorRequired,
+	instanceStatus: consumerInstances.status,
+	instancePrincipalId: consumerInstances.principalId,
+	instanceConsumerId: consumerInstances.consumerId,
+	instanceGeneration: consumerInstances.recoveryGeneration,
+	connectionStatus: connections.status,
+	connectionProviderId: connections.providerId,
+	currentCredentialVersionId: connections.currentCredentialVersionId,
+	credentialStatus: credentialVersions.status,
+	credentialConnectionId: credentialVersions.connectionId,
+	actionStatus: actionVersions.status,
+	actionProviderId: actionVersions.providerId,
+	actionEffect: actionVersions.effect,
+	providerStatus: providers.status,
+	releaseStatus: providerReleases.status,
+};
+
 function grantRecord(row: typeof grants.$inferSelect): GrantRecord {
 	return {
 		id: row.id,
@@ -47,6 +70,27 @@ function grantRecord(row: typeof grants.$inferSelect): GrantRecord {
 		principalRecoveryGeneration: row.principalRecoveryGeneration,
 		issuedAt: row.createdAt.getTime(),
 		expiresAt: row.expiresAt.getTime(),
+	};
+}
+
+function actionCallValues(record: ActionCallRecord) {
+	return {
+		id: record.id,
+		requestId: record.requestId,
+		traceId: record.traceId,
+		callId: record.callId,
+		idempotencyKey: record.idempotencyKey,
+		namespaceKey: record.namespaceKey,
+		principalId: record.principalId,
+		consumerId: record.consumerId,
+		consumerInstanceId: record.consumerInstanceId,
+		actorId: record.actorId,
+		grantId: record.grantId,
+		connectionId: record.connectionId,
+		credentialVersionId: record.credentialVersionId,
+		actionVersionId: record.actionVersionId,
+		requestDigest: record.requestDigest,
+		status: record.status,
 	};
 }
 
@@ -114,7 +158,7 @@ export function createConnectionAuthorityRepository(
 		async findActiveGrant(context) {
 			const actorId = context.actorId ?? consumerActorSentinel;
 			const rows = await db
-				.select({ grant: grants })
+				.select(authorityColumns)
 				.from(grants)
 				.innerJoin(principals, eq(grants.principalId, principals.id))
 				.innerJoin(consumers, eq(grants.consumerId, consumers.id))
@@ -146,55 +190,35 @@ export function createConnectionAuthorityRepository(
 						eq(grants.consumerId, context.consumerId),
 						eq(grants.consumerInstanceId, context.consumerInstanceId),
 						eq(grants.actorId, actorId),
-						eq(
-							grants.principalRecoveryGeneration,
-							context.principalRecoveryGeneration,
-						),
-						eq(grants.status, "active"),
-						sql`${grants.expiresAt} > clock_timestamp()`,
-						eq(principals.status, "active"),
-						eq(
-							principals.recoveryGeneration,
-							context.principalRecoveryGeneration,
-						),
-						eq(consumers.status, "active"),
-						eq(consumerInstances.status, "active"),
-						eq(
-							consumerInstances.recoveryGeneration,
-							context.principalRecoveryGeneration,
-						),
-						eq(connections.status, "active"),
-						eq(
-							connections.currentCredentialVersionId,
-							grants.credentialVersionId,
-						),
-						eq(credentialVersions.connectionId, grants.connectionId),
-						eq(credentialVersions.status, "active"),
 						eq(actionVersions.id, context.actionVersionId),
-						eq(actionVersions.providerId, connections.providerId),
-						eq(actionVersions.status, "published"),
-						eq(providerReleases.status, "active"),
-						eq(providers.status, "active"),
 					),
 				)
 				.limit(2);
-			const row = rows[0]?.grant;
+			const row = rows[0];
 			if (rows.length !== 1 || !row) return undefined;
+			let actorStatus: string | null = null;
+			let actorInstanceId: string | null = null;
 			if (actorId !== consumerActorSentinel) {
 				const [actor] = await db
-					.select({ id: actors.id })
+					.select({
+						status: actors.status,
+						instanceId: actors.consumerInstanceId,
+					})
 					.from(actors)
-					.where(
-						and(
-							eq(actors.id, actorId),
-							eq(actors.consumerInstanceId, context.consumerInstanceId),
-							eq(actors.status, "active"),
-						),
-					)
+					.where(eq(actors.id, actorId))
 					.limit(1);
 				if (!actor) return undefined;
+				actorStatus = actor.status;
+				actorInstanceId = actor.instanceId;
 			}
-			return grantRecord(row);
+			const grant = grantRecord(row.grant);
+			return isCurrentAuthority(
+				grant,
+				{ ...row, actorStatus, actorInstanceId },
+				context,
+			)
+				? grant
+				: undefined;
 		},
 
 		async findByIdempotency(namespaceKey, idempotencyKey) {
@@ -215,24 +239,7 @@ export function createConnectionAuthorityRepository(
 		async insert(record, audit) {
 			requireCallAudit(audit, record.id);
 			await db.transaction(async (tx) => {
-				await tx.insert(actionCalls).values({
-					id: record.id,
-					requestId: record.requestId,
-					traceId: record.traceId,
-					callId: record.callId,
-					idempotencyKey: record.idempotencyKey,
-					namespaceKey: record.namespaceKey,
-					principalId: record.principalId,
-					consumerId: record.consumerId,
-					consumerInstanceId: record.consumerInstanceId,
-					actorId: record.actorId,
-					grantId: record.grantId,
-					connectionId: record.connectionId,
-					credentialVersionId: record.credentialVersionId,
-					actionVersionId: record.actionVersionId,
-					requestDigest: record.requestDigest,
-					status: record.status,
-				});
+				await tx.insert(actionCalls).values(actionCallValues(record));
 				await tx.insert(auditEvents).values(auditValues(audit));
 			});
 		},
@@ -240,24 +247,7 @@ export function createConnectionAuthorityRepository(
 		async reserveExecution({ actionCall, dispatch, effect, audit }) {
 			requireCallAudit(audit, actionCall.id);
 			await db.transaction(async (tx) => {
-				await tx.insert(actionCalls).values({
-					id: actionCall.id,
-					requestId: actionCall.requestId,
-					traceId: actionCall.traceId,
-					callId: actionCall.callId,
-					idempotencyKey: actionCall.idempotencyKey,
-					namespaceKey: actionCall.namespaceKey,
-					principalId: actionCall.principalId,
-					consumerId: actionCall.consumerId,
-					consumerInstanceId: actionCall.consumerInstanceId,
-					actorId: actionCall.actorId,
-					grantId: actionCall.grantId,
-					connectionId: actionCall.connectionId,
-					credentialVersionId: actionCall.credentialVersionId,
-					actionVersionId: actionCall.actionVersionId,
-					requestDigest: actionCall.requestDigest,
-					status: actionCall.status,
-				});
+				await tx.insert(actionCalls).values(actionCallValues(actionCall));
 				await tx.insert(dispatches).values({
 					id: dispatch.id,
 					actionCallId: dispatch.actionCallId,
@@ -297,9 +287,8 @@ export function createConnectionAuthorityRepository(
 				return await db.transaction(async (tx) => {
 					const authorized = await tx
 						.select({
-							effect: actionVersions.effect,
-							actorId: actionCalls.actorId,
-							consumerInstanceId: actionCalls.consumerInstanceId,
+							...authorityColumns,
+							actionCall: actionCalls,
 						})
 						.from(grants)
 						.innerJoin(actionCalls, eq(actionCalls.grantId, grants.id))
@@ -337,58 +326,49 @@ export function createConnectionAuthorityRepository(
 								eq(grants.actorId, actionCalls.actorId),
 								eq(grants.connectionId, actionCalls.connectionId),
 								eq(grants.credentialVersionId, actionCalls.credentialVersionId),
-								eq(grants.revision, grantRevision),
-								eq(
-									grants.principalRecoveryGeneration,
-									principalRecoveryGeneration,
-								),
-								eq(grants.status, "active"),
-								sql`${grants.expiresAt} > clock_timestamp()`,
-								eq(principals.status, "active"),
-								eq(principals.recoveryGeneration, principalRecoveryGeneration),
-								eq(consumers.status, "active"),
-								eq(consumerInstances.status, "active"),
-								eq(
-									consumerInstances.recoveryGeneration,
-									principalRecoveryGeneration,
-								),
-								eq(connections.status, "active"),
-								eq(
-									connections.currentCredentialVersionId,
-									grants.credentialVersionId,
-								),
-								eq(credentialVersions.connectionId, grants.connectionId),
-								eq(credentialVersions.status, "active"),
 								eq(actionVersions.id, actionCalls.actionVersionId),
-								eq(actionVersions.providerId, connections.providerId),
-								eq(actionVersions.status, "published"),
-								eq(providerReleases.status, "active"),
-								eq(providers.status, "active"),
 							),
 						)
 						.limit(2)
 						.for("update");
-					if (
-						authorized.length !== 1 ||
-						(authorized[0]?.effect === "write") !== Boolean(effectId)
-					)
-						return false;
+					if (authorized.length !== 1) return false;
 					const authority = authorized[0];
 					if (!authority) return false;
-					if (authority.actorId !== consumerActorSentinel) {
-						const activeActor = await tx
-							.select({ id: actors.id })
+					let actorStatus: string | null = null;
+					let actorInstanceId: string | null = null;
+					if (authority.actionCall.actorId !== consumerActorSentinel) {
+						const [actor] = await tx
+							.select({
+								status: actors.status,
+								instanceId: actors.consumerInstanceId,
+							})
 							.from(actors)
-							.where(
-								and(
-									eq(actors.id, authority.actorId),
-									eq(actors.consumerInstanceId, authority.consumerInstanceId),
-									eq(actors.status, "active"),
-								),
-							)
+							.where(eq(actors.id, authority.actionCall.actorId))
 							.for("update");
-						if (activeActor.length !== 1) return false;
+						if (!actor) return false;
+						actorStatus = actor.status;
+						actorInstanceId = actor.instanceId;
 					}
+					if (
+						!isCurrentAuthority(
+							grantRecord(authority.grant),
+							{ ...authority, actorStatus, actorInstanceId },
+							{
+								principalId: authority.actionCall.principalId,
+								consumerId: authority.actionCall.consumerId,
+								consumerInstanceId: authority.actionCall.consumerInstanceId,
+								actorId:
+									authority.actionCall.actorId === consumerActorSentinel
+										? null
+										: authority.actionCall.actorId,
+								actionVersionId: authority.actionCall.actionVersionId,
+								principalRecoveryGeneration,
+								expectedGrantRevision: grantRevision,
+								expectedEffectPresent: Boolean(effectId),
+							},
+						)
+					)
+						return false;
 					const updatedDispatch = await tx
 						.update(dispatches)
 						.set({
