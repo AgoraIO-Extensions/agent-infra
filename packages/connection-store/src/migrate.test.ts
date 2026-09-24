@@ -4,6 +4,7 @@ import {
 	actionCallNamespaceKey,
 	actionRequestDigest,
 	authorizeActionCall,
+	consumerActorSentinel,
 	reserveActionCall,
 } from "@agent-infra/connection-core";
 import postgres from "postgres";
@@ -96,6 +97,9 @@ describe("Connection PostgreSQL migration", () => {
 		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
 			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', 1)`;
 		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-a', 'action-a-v1')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
+			values ('grant-consumer', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', 1)`;
+		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-a-v1')`;
 
 		const handle = createConnectionDatabase(database.databaseUrl);
 		try {
@@ -165,6 +169,41 @@ describe("Connection PostgreSQL migration", () => {
 					)
 				).id,
 			).toBe(record.id);
+
+			const consumerRequest: ActionCallRequest = {
+				...request,
+				requestId: "request-store-consumer",
+				idempotencyKey: "store-key-consumer",
+				actorId: null,
+				grantId: "grant-consumer",
+			};
+			const consumerGrant = await authorizeActionCall(
+				repository,
+				consumerRequest,
+				1,
+			);
+			expect(consumerGrant.id).toBe("grant-consumer");
+			const consumerRecord: ActionCallRecord = {
+				...record,
+				id: "call-store-consumer",
+				requestId: consumerRequest.requestId,
+				callId: "call-ref-store-consumer",
+				idempotencyKey: consumerRequest.idempotencyKey,
+				namespaceKey: actionCallNamespaceKey(consumerRequest),
+				actorId: consumerActorSentinel,
+				grantId: consumerRequest.grantId,
+				requestDigest: actionRequestDigest(consumerRequest),
+			};
+			expect(
+				(
+					await reserveActionCall(
+						repository,
+						consumerRecord,
+						consumerRequest,
+						consumerGrant,
+					)
+				).id,
+			).toBe(consumerRecord.id);
 		} finally {
 			await handle.close();
 		}

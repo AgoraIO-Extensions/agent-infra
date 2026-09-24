@@ -50,6 +50,7 @@ CREATE TABLE "connection"."actors" (
   CONSTRAINT "actors_consumer_instance_fk" FOREIGN KEY ("consumer_instance_id") REFERENCES "connection"."consumer_instances" ("id"),
   CONSTRAINT "actors_instance_binding_unique" UNIQUE ("id", "consumer_instance_id"),
   CONSTRAINT "actors_status_check" CHECK ("status" IN ('active', 'revoked')),
+  CONSTRAINT "actors_id_not_consumer_sentinel" CHECK ("id" <> '__consumer_actor__'),
   CONSTRAINT "actor_id_non_empty" CHECK (char_length("id") > 0)
 );
 
@@ -135,8 +136,6 @@ CREATE TABLE "connection"."grants" (
   CONSTRAINT "grants_consumer_fk" FOREIGN KEY ("consumer_id") REFERENCES "connection"."consumers" ("id"),
   CONSTRAINT "grants_consumer_instance_fk" FOREIGN KEY ("consumer_instance_id") REFERENCES "connection"."consumer_instances" ("id"),
   CONSTRAINT "grants_instance_binding_fk" FOREIGN KEY ("consumer_instance_id", "consumer_id", "principal_id") REFERENCES "connection"."consumer_instances" ("id", "consumer_id", "principal_id"),
-  CONSTRAINT "grants_actor_fk" FOREIGN KEY ("actor_id") REFERENCES "connection"."actors" ("id"),
-  CONSTRAINT "grants_actor_instance_fk" FOREIGN KEY ("actor_id", "consumer_instance_id") REFERENCES "connection"."actors" ("id", "consumer_instance_id"),
   CONSTRAINT "grants_connection_fk" FOREIGN KEY ("connection_id") REFERENCES "connection"."connections" ("id"),
   CONSTRAINT "grants_credential_version_fk" FOREIGN KEY ("credential_version_id") REFERENCES "connection"."credential_versions" ("id"),
   CONSTRAINT "grants_credential_connection_fk" FOREIGN KEY ("credential_version_id", "connection_id") REFERENCES "connection"."credential_versions" ("id", "connection_id"),
@@ -184,7 +183,6 @@ CREATE TABLE "connection"."action_calls" (
   CONSTRAINT "action_calls_connection_fk" FOREIGN KEY ("connection_id") REFERENCES "connection"."connections" ("id"),
   CONSTRAINT "action_calls_credential_version_fk" FOREIGN KEY ("credential_version_id") REFERENCES "connection"."credential_versions" ("id"),
   CONSTRAINT "action_calls_action_version_fk" FOREIGN KEY ("action_version_id") REFERENCES "connection"."action_versions" ("id"),
-  CONSTRAINT "action_calls_actor_instance_fk" FOREIGN KEY ("actor_id", "consumer_instance_id") REFERENCES "connection"."actors" ("id", "consumer_instance_id"),
   CONSTRAINT "action_calls_idempotency_key_format" CHECK ("idempotency_key" ~ '^[A-Za-z0-9._~-]{1,128}$'),
   CONSTRAINT "action_calls_request_digest_format" CHECK ("request_digest" ~ '^[a-f0-9]{64}$'),
   CONSTRAINT "action_calls_status_check" CHECK ("status" IN ('created', 'submission_started', 'provider_succeeded', 'provider_failed', 'result_pending', 'needs_manual_review', 'unresolved')),
@@ -245,6 +243,42 @@ CREATE TABLE "connection"."audit_events" (
   CONSTRAINT "audit_event_target_type_non_empty" CHECK (char_length("target_type") > 0),
   CONSTRAINT "audit_event_target_id_non_empty" CHECK (char_length("target_id") > 0)
 );
+
+-- Consumer-level grants use a reserved non-null actor sentinel. A normal
+-- foreign key cannot express that conditional binding, so keep the invariant
+-- in one database trigger for both grants and persisted calls.
+CREATE FUNCTION "connection"."enforce_actor_binding"()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  bound_instance text;
+BEGIN
+  IF NEW."actor_id" = '__consumer_actor__' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT "consumer_instance_id"
+    INTO bound_instance
+    FROM "connection"."actors"
+   WHERE "id" = NEW."actor_id";
+
+  IF bound_instance IS NULL OR bound_instance <> NEW."consumer_instance_id" THEN
+    RAISE EXCEPTION 'actor is not bound to consumer instance';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "grants_actor_binding_trigger"
+BEFORE INSERT OR UPDATE OF "actor_id", "consumer_instance_id"
+ON "connection"."grants"
+FOR EACH ROW EXECUTE FUNCTION "connection"."enforce_actor_binding"();
+
+CREATE TRIGGER "action_calls_actor_binding_trigger"
+BEFORE INSERT OR UPDATE OF "actor_id", "consumer_instance_id"
+ON "connection"."action_calls"
+FOR EACH ROW EXECUTE FUNCTION "connection"."enforce_actor_binding"();
 
 CREATE UNIQUE INDEX "principals_issuer_uid_unique" ON "connection"."principals" USING btree ("issuer", "uid");
 CREATE UNIQUE INDEX "consumer_instances_installation_unique" ON "connection"."consumer_instances" USING btree ("installation_key");
