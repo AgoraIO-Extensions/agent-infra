@@ -128,16 +128,6 @@ async function hydrateAuditUsers(
 	return new Map(actors.map((actor) => [actor.userId, actor]));
 }
 
-function projectAuditActor(
-	item: PlatformAuditPageV1["items"][number],
-	actors: ReadonlyMap<string, unknown>,
-) {
-	if (item.actor.kind === "application") {
-		return { kind: "application" as const, actorId: item.actor.actorId };
-	}
-	return actors.get(item.actor.actorId);
-}
-
 export function registerSessionAuditRoutes(
 	app: Hono,
 	dependencies: SessionAuditRoutesDependencies,
@@ -172,11 +162,7 @@ export function registerSessionAuditRoutes(
 		);
 
 		try {
-			if (
-				auditPage.items.some(
-					({ actor }) => actor.kind !== "user" && actor.kind !== "application",
-				)
-			) {
+			if (auditPage.items.some(({ actor }) => actor.kind !== "user")) {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			const actorById = await hydrateAuditUsers(
@@ -188,7 +174,7 @@ export function registerSessionAuditRoutes(
 				PlatformAuditProjectionV1Schema.parse({
 					schemaVersion: 1,
 					...publicAuditFields(item),
-					actor: projectAuditActor(item, actorById),
+					actor: actorById.get(item.actor.actorId),
 				}),
 			);
 			return context.json({ items, nextCursor: auditPage.nextCursor });
@@ -219,7 +205,7 @@ export function registerSessionAuditRoutes(
 					actor:
 						item.actor.kind === "system"
 							? { kind: "system", actorId: item.actor.actorId }
-							: projectAuditActor(item, actorById),
+							: actorById.get(item.actor.actorId),
 				}),
 			);
 			return context.json({ items, nextCursor: auditPage.nextCursor });
