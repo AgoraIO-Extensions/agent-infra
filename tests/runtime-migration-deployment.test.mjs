@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 
@@ -7,6 +8,7 @@ const chart = "deploy/helm/runtime-legacy-migration";
 const digest = `sha256:${"a".repeat(64)}`;
 const values = {
 	image: { digest },
+	mode: "candidate",
 	dataClaim: "original-data",
 	candidateClaim: "migration-output",
 	issuer: "platform-fixture",
@@ -41,6 +43,20 @@ function render(...args) {
 	);
 }
 
+function migrationJobName({ dataClaim, candidateClaim, mode }) {
+	const suffix = createHash("sha256")
+		.update(`${dataClaim}|${candidateClaim}|${mode}`)
+		.digest("hex")
+		.slice(0, 12);
+	return `migration-fixture-${suffix}`;
+}
+
+function renderedJob(result) {
+	return parseAllDocuments(result.stdout)
+		.map((doc) => doc.toJSON())
+		.find((item) => item.kind === "Job");
+}
+
 test("migration chart runs the real offline CLI with ordinary trust files and retained evidence", () => {
 	const result = render();
 	assert.equal(result.status, 0, result.stderr);
@@ -50,6 +66,8 @@ test("migration chart runs the real offline CLI with ordinary trust files and re
 	const policy = resources.find((item) => item.kind === "NetworkPolicy");
 	assert.ok(job);
 	assert.ok(policy);
+	assert.equal(job.metadata.name, migrationJobName(values));
+	assert.ok(job.metadata.name.length <= 63);
 	assert.equal(job.metadata.annotations?.["helm.sh/hook"], undefined);
 	assert.equal(job.spec.backoffLimit, 0);
 	assert.equal(job.spec.ttlSecondsAfterFinished, undefined);
@@ -114,6 +132,31 @@ test("migration chart runs the real offline CLI with ordinary trust files and re
 	assert.deepEqual(policy.spec.policyTypes, ["Ingress", "Egress"]);
 	assert.deepEqual(policy.spec.ingress, []);
 	assert.deepEqual(policy.spec.egress, []);
+});
+
+test("migration input changes create a distinct Job instead of reusing a completed one", () => {
+	const candidate = render("--set", "candidateClaim=another-migration-output");
+	assert.equal(candidate.status, 0, candidate.stderr);
+	const candidateJob = renderedJob(candidate);
+	assert.ok(candidateJob);
+	assert.equal(
+		candidateJob.metadata.name,
+		migrationJobName({
+			...values,
+			candidateClaim: "another-migration-output",
+		}),
+	);
+	assert.notEqual(candidateJob.metadata.name, migrationJobName(values));
+
+	const offlineCommit = render("--set", "mode=offline-commit");
+	assert.equal(offlineCommit.status, 0, offlineCommit.stderr);
+	const offlineJob = renderedJob(offlineCommit);
+	assert.ok(offlineJob);
+	assert.equal(
+		offlineJob.metadata.name,
+		migrationJobName({ ...values, mode: "offline-commit" }),
+	);
+	assert.notEqual(offlineJob.metadata.name, candidateJob.metadata.name);
 });
 
 test("offline commit is explicit and cannot add process input or weaken trust mounts", () => {

@@ -1,10 +1,12 @@
 {{- if eq .Values.dataClaim .Values.candidateClaim -}}
 {{- fail "dataClaim and candidateClaim must be different existing PVCs" -}}
 {{- end -}}
+{{- $migrationInputHash := printf "%s|%s|%s" .Values.dataClaim .Values.candidateClaim .Values.mode | sha256sum | trunc 12 -}}
+{{- $jobName := printf "%s-%s" (.Release.Name | trunc 50 | trimSuffix "-") $migrationInputHash | trimSuffix "-" -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ $jobName }}
 spec:
   backoffLimit: 0
   template:
