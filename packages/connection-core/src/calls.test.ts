@@ -47,6 +47,7 @@ describe("Connection ActionCall invariants", () => {
 		const record = {
 			id: "call-1",
 			requestId: request.requestId,
+			traceId: "trace-1",
 			callId: "call-ref-1",
 			idempotencyKey: request.idempotencyKey,
 			namespaceKey: actionCallNamespaceKey(request),

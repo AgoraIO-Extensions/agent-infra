@@ -8,6 +8,27 @@
       "when": 1790240000000,
       "tag": "0000_connection_core",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790240100000,
+      "tag": "0001_current_grant_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790240200000,
+      "tag": "0002_provider_release",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790240300000,
+      "tag": "0003_grant_lifetime_actor_policy",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,14 @@
+import { randomUUID } from "node:crypto";
 import {
 	type ActionCallRecord,
 	type ActionCallRequest,
 	actionCallNamespaceKey,
 	actionRequestDigest,
 	authorizeActionCall,
+	type ConnectionAuditEvent,
 	consumerActorSentinel,
+	type DispatchRecord,
+	type EffectRecord,
 	reserveActionCall,
 } from "@agent-infra/connection-core";
 import postgres from "postgres";
@@ -15,10 +19,31 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
-import { createConnectionAuthorityRepository } from "./repository.js";
+import {
+	createAuditEventStore,
+	createConnectionAuthorityRepository,
+} from "./repository.js";
 
 let testDatabase: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres> | undefined;
+
+function stateAudit(
+	call: ActionCallRecord,
+	phase: string,
+): ConnectionAuditEvent {
+	return {
+		id: randomUUID(),
+		traceId: call.traceId,
+		principalId: call.principalId,
+		consumerInstanceId: call.consumerInstanceId,
+		actorId: call.actorId === consumerActorSentinel ? undefined : call.actorId,
+		action: `mcp.${phase}`,
+		targetType: "action_call",
+		targetId: call.id,
+		outcome: "succeeded",
+		metadata: { phase },
+	};
+}
 
 beforeAll(async () => {
 	testDatabase = await startPostgresTestDatabase("connection-store-migrations");
@@ -54,11 +79,13 @@ describe("Connection PostgreSQL migration", () => {
 			"consumer_instances",
 			"consumers",
 			"credential_versions",
+			"current_grant_actions",
 			"dispatches",
 			"effects",
 			"grant_actions",
 			"grants",
 			"principals",
+			"provider_releases",
 			"providers",
 		]);
 
@@ -75,7 +102,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(1);
+		expect(history?.count).toBe(4);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {
@@ -84,26 +111,110 @@ describe("Connection PostgreSQL migration", () => {
 		if (!database || !databaseClient)
 			throw new Error("PostgreSQL test database was not initialized");
 		await databaseClient`insert into connection.principals (id, issuer, uid) values ('principal-a', 'ldap', 'alice'), ('principal-b', 'ldap', 'bob')`;
-		await databaseClient`insert into connection.consumers (id, name) values ('consumer-a', 'Consumer A')`;
+		await databaseClient`insert into connection.consumers (id, name, actor_required) values
+			('consumer-a', 'Consumer A', true), ('consumer-b', 'Consumer B', true), ('consumer-consumer', 'Consumer without Actors', false)`;
 		await databaseClient`insert into connection.consumer_instances (id, consumer_id, principal_id, installation_key) values
-			('instance-a', 'consumer-a', 'principal-a', 'install-a'), ('instance-b', 'consumer-a', 'principal-b', 'install-b')`;
-		await databaseClient`insert into connection.actors (id, consumer_instance_id) values ('actor-a', 'instance-a'), ('actor-b', 'instance-b')`;
+			('instance-a', 'consumer-a', 'principal-a', 'install-a'),
+			('instance-b', 'consumer-a', 'principal-b', 'install-b'),
+			('instance-other-consumer', 'consumer-b', 'principal-a', 'install-other-consumer'),
+			('instance-consumer', 'consumer-consumer', 'principal-a', 'install-consumer')`;
+		await databaseClient`insert into connection.actors (id, consumer_instance_id) values ('actor-a', 'instance-a'), ('actor-b', 'instance-b'), ('actor-other-consumer', 'instance-other-consumer')`;
+		await expect(
+			databaseClient`insert into connection.actors (id, consumer_instance_id) values ('actor-consumer', 'instance-consumer')`,
+		).rejects.toThrow();
 		await databaseClient`insert into connection.providers (id, name) values ('provider-a', 'Provider A')`;
-		await databaseClient`insert into connection.action_versions (id, provider_id, action_id, version, effect, input_schema, output_schema, required_scopes)
-			values ('action-a-v1', 'provider-a', 'action-a', 'v1', 'read', '{}', '{}', '[]')`;
+		await databaseClient`insert into connection.provider_releases (id, provider_id, version)
+			values ('release-a-v1', 'provider-a', 'v1')`;
+		await databaseClient`insert into connection.action_versions (id, provider_id, provider_release_id, action_id, version, effect, input_schema, output_schema, required_scopes, status)
+			values ('action-a-v1', 'provider-a', 'release-a-v1', 'action-a', 'v1', 'read', '{}', '{}', '["action:read"]', 'published')`;
+		await databaseClient`insert into connection.action_versions (id, provider_id, provider_release_id, action_id, version, effect, input_schema, output_schema, required_scopes, status)
+			values ('action-write-v1', 'provider-a', 'release-a-v1', 'action-write', 'v1', 'write', '{}', '{}', '["action:write"]', 'published')`;
 		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-a', 'provider-a', 'account-a')`;
 		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-a-v1', 'connection-a', 1, 'ciphertext')`;
 		await databaseClient`update connection.connections set current_credential_version_id = 'credential-a-v1' where id = 'connection-a'`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
-			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', 1)`;
-		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-a', 'action-a-v1')`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
-			values ('grant-consumer', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', 1)`;
-		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-a-v1')`;
+		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-bob', 'provider-a', 'account-bob')`;
+		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-bob-v1', 'connection-bob', 1, 'ciphertext-bob')`;
+		await databaseClient`update connection.connections set current_credential_version_id = 'credential-bob-v1' where id = 'connection-bob'`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1', 'action-write-v1'], 1, now() + interval '1 hour')`;
+		await expect(
+			databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+			values ('grant-invalid-sentinel', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`,
+		).rejects.toThrow();
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+			values ('grant-consumer', 'principal-a', 'consumer-consumer', 'instance-consumer', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, created_at, expires_at)
+			values ('grant-expired', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-a', 'credential-a-v1', ARRAY['action-write-v1'], 1, now() - interval '2 hours', now() - interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+			values ('grant-bob', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-bob', 'credential-bob-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+			values ('grant-other-consumer', 'principal-a', 'consumer-b', 'instance-other-consumer', 'actor-other-consumer', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
 
 		const handle = createConnectionDatabase(database.databaseUrl);
 		try {
 			const repository = createConnectionAuthorityRepository(handle.db);
+			const audit = createAuditEventStore(handle.db);
+			const [release] =
+				await databaseClient`select status from connection.provider_releases where id = 'release-a-v1'`;
+			expect(release?.status).toBe("disabled");
+			await expect(
+				databaseClient`update connection.provider_releases set version = 'v2' where id = 'release-a-v1'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.action_versions set effect = 'write' where id = 'action-a-v1'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.action_versions set input_schema = '{"type":"object"}' where id = 'action-a-v1'`,
+			).rejects.toThrow();
+			await databaseClient`update connection.provider_releases set status = 'active' where id = 'release-a-v1'`;
+			await expect(
+				databaseClient`update connection.grants set approved_action_version_ids = ARRAY['action-a-v1', 'action-write-v1'] where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.grants set revision = revision + 1 where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.grants set expires_at = expires_at + interval '1 hour' where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.consumers set actor_required = true where id = 'consumer-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-write-v1')`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`delete from connection.grant_actions where grant_id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`delete from connection.current_grant_actions where grant_id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await audit.insert({
+				id: "audit-store-1",
+				traceId: "trace-store-1",
+				principalId: "principal-a",
+				consumerInstanceId: "instance-a",
+				actorId: "actor-a",
+				action: "mcp.request",
+				targetType: "action_version",
+				targetId: "action-a-v1",
+				outcome: "succeeded",
+				metadata: { requestId: "request-store-audit" },
+			});
+			const [auditRow] = await databaseClient`
+				select trace_id, principal_id, consumer_instance_id, actor_id, action, target_id, outcome, metadata
+				from connection.audit_events
+				where id = 'audit-store-1'
+			`;
+			expect(auditRow).toMatchObject({
+				trace_id: "trace-store-1",
+				principal_id: "principal-a",
+				consumer_instance_id: "instance-a",
+				actor_id: "actor-a",
+				action: "mcp.request",
+				target_id: "action-a-v1",
+				outcome: "succeeded",
+				metadata: { requestId: "request-store-audit" },
+			});
 			const request: ActionCallRequest = {
 				requestId: "request-store-1",
 				idempotencyKey: "store-key-1",
@@ -111,22 +222,38 @@ describe("Connection PostgreSQL migration", () => {
 				consumerId: "consumer-a",
 				consumerInstanceId: "instance-a",
 				actorId: "actor-a",
-				grantId: "grant-a",
-				connectionId: "connection-a",
 				actionVersionId: "action-a-v1",
 				arguments: { repositoryId: 7 },
 			};
 			const resolved = await authorizeActionCall(repository, request, 1);
 			expect(resolved.id).toBe("grant-a");
+			const bobRequest = {
+				...request,
+				principalId: "principal-b",
+				actorId: "actor-b",
+				consumerInstanceId: "instance-b",
+			};
+			expect((await authorizeActionCall(repository, bobRequest, 1)).id).toBe(
+				"grant-bob",
+			);
+			expect(
+				(
+					await authorizeActionCall(
+						repository,
+						{
+							...request,
+							consumerId: "consumer-b",
+							consumerInstanceId: "instance-other-consumer",
+							actorId: "actor-other-consumer",
+						},
+						1,
+					)
+				).id,
+			).toBe("grant-other-consumer");
 			await expect(
 				authorizeActionCall(
 					repository,
-					{
-						...request,
-						principalId: "principal-b",
-						actorId: "actor-b",
-						consumerInstanceId: "instance-b",
-					},
+					{ ...bobRequest, actionVersionId: "action-write-v1" },
 					1,
 				),
 			).rejects.toThrow("Connection authorization denied");
@@ -137,11 +264,32 @@ describe("Connection PostgreSQL migration", () => {
 					1,
 				),
 			).rejects.toThrow("Connection authorization denied");
+			for (const crossBinding of [
+				{ consumerId: "consumer-b" },
+				{ actorId: "actor-b" },
+				{ actorId: "actor-other-consumer" },
+				{ principalId: "principal-b" },
+			]) {
+				await expect(
+					authorizeActionCall(repository, { ...request, ...crossBinding }, 1),
+				).rejects.toThrow("Connection authorization denied");
+			}
+			for (const selector of [
+				{ connectionId: "connection-bob" },
+				{ credentialVersionId: "credential-bob-v1" },
+				{ grantId: "grant-bob" },
+				{ revision: 1 },
+			]) {
+				await expect(
+					authorizeActionCall(repository, { ...request, ...selector }, 1),
+				).rejects.toThrow("Connection authorization denied");
+			}
 
 			const namespaceKey = actionCallNamespaceKey(request);
 			const record: ActionCallRecord = {
 				id: "call-store-1",
 				requestId: request.requestId,
+				traceId: "trace-store-1",
 				callId: "call-ref-store-1",
 				idempotencyKey: request.idempotencyKey,
 				namespaceKey,
@@ -149,11 +297,14 @@ describe("Connection PostgreSQL migration", () => {
 				consumerId: request.consumerId,
 				consumerInstanceId: request.consumerInstanceId,
 				actorId: "actor-a",
-				grantId: request.grantId,
-				connectionId: request.connectionId,
+				grantId: resolved.id,
+				connectionId: resolved.connectionId,
 				credentialVersionId: "credential-a-v1",
 				actionVersionId: request.actionVersionId,
-				requestDigest: actionRequestDigest(request),
+				requestDigest: actionRequestDigest({
+					...request,
+					connectionId: resolved.connectionId,
+				}),
 				status: "created",
 			};
 			expect(
@@ -174,8 +325,9 @@ describe("Connection PostgreSQL migration", () => {
 				...request,
 				requestId: "request-store-consumer",
 				idempotencyKey: "store-key-consumer",
+				consumerId: "consumer-consumer",
+				consumerInstanceId: "instance-consumer",
 				actorId: null,
-				grantId: "grant-consumer",
 			};
 			const consumerGrant = await authorizeActionCall(
 				repository,
@@ -187,12 +339,18 @@ describe("Connection PostgreSQL migration", () => {
 				...record,
 				id: "call-store-consumer",
 				requestId: consumerRequest.requestId,
+				traceId: "trace-consumer",
 				callId: "call-ref-store-consumer",
 				idempotencyKey: consumerRequest.idempotencyKey,
 				namespaceKey: actionCallNamespaceKey(consumerRequest),
+				consumerId: consumerRequest.consumerId,
+				consumerInstanceId: consumerRequest.consumerInstanceId,
 				actorId: consumerActorSentinel,
-				grantId: consumerRequest.grantId,
-				requestDigest: actionRequestDigest(consumerRequest),
+				grantId: consumerGrant.id,
+				requestDigest: actionRequestDigest({
+					...consumerRequest,
+					connectionId: consumerGrant.connectionId,
+				}),
 			};
 			expect(
 				(
@@ -204,6 +362,292 @@ describe("Connection PostgreSQL migration", () => {
 					)
 				).id,
 			).toBe(consumerRecord.id);
+
+			const executionCall: ActionCallRecord = {
+				...record,
+				id: "call-store-execution",
+				requestId: "request-store-execution",
+				traceId: "trace-store-execution",
+				callId: "call-ref-store-execution",
+				idempotencyKey: "store-key-execution",
+				namespaceKey: actionCallNamespaceKey(request),
+				actionVersionId: "action-write-v1",
+				requestDigest: actionRequestDigest({
+					...request,
+					connectionId: resolved.connectionId,
+					actionVersionId: "action-write-v1",
+				}),
+			};
+			const dispatch: DispatchRecord = {
+				id: "dispatch-store-execution",
+				actionCallId: executionCall.id,
+				status: "pending",
+				attemptCount: 0,
+				leaseOwner: null,
+				leaseExpiresAt: null,
+			};
+			const effect: EffectRecord = {
+				id: "effect-store-execution",
+				actionCallId: executionCall.id,
+				status: "planned",
+				providerRequestKey: "provider-request-store-execution",
+				result: null,
+			};
+			await repository.reserveExecution({
+				actionCall: executionCall,
+				dispatch,
+				effect,
+				audit: stateAudit(executionCall, "reserved"),
+			});
+			expect(
+				(
+					await databaseClient`
+					select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+					from connection.action_calls a
+					join connection.dispatches d on d.action_call_id = a.id
+					join connection.effects e on e.action_call_id = a.id
+					where a.id = 'call-store-execution'
+				`
+				)[0],
+			).toMatchObject({
+				action_status: "created",
+				dispatch_status: "pending",
+				effect_status: "planned",
+			});
+			const auditRejectedCall = {
+				...executionCall,
+				id: "call-store-audit-rejected",
+				requestId: "request-store-audit-rejected",
+				callId: "call-ref-store-audit-rejected",
+				idempotencyKey: "store-key-audit-rejected",
+			};
+			await expect(
+				repository.reserveExecution({
+					actionCall: auditRejectedCall,
+					dispatch: {
+						...dispatch,
+						id: "dispatch-store-audit-rejected",
+						actionCallId: auditRejectedCall.id,
+					},
+					effect: {
+						...effect,
+						id: "effect-store-audit-rejected",
+						actionCallId: auditRejectedCall.id,
+					},
+					audit: {
+						...stateAudit(auditRejectedCall, "reserved"),
+						id: "audit-store-1",
+					},
+				}),
+			).rejects.toThrow();
+			expect(
+				await databaseClient`select id from connection.action_calls where id = 'call-store-audit-rejected'`,
+			).toHaveLength(0);
+			const { disabledClaim } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.provider_releases set status = 'disabled' where id = 'release-a-v1'`;
+				const disabledClaim = repository.claimCurrentDispatchState({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-disabled-release",
+					leaseExpiresAt: Date.now() + 60_000,
+					audit: stateAudit(executionCall, "claimed"),
+				});
+				expect(
+					await Promise.race([
+						disabledClaim.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { disabledClaim };
+			});
+			expect(await disabledClaim).toBe(false);
+			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
+				"Connection authorization denied",
+			);
+			await databaseClient`update connection.provider_releases set status = 'active' where id = 'release-a-v1'`;
+			expect(
+				await repository.claimCurrentDispatchState({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-execution",
+					leaseExpiresAt: Date.now() + 60_000,
+					audit: stateAudit(executionCall, "claimed"),
+				}),
+			).toBe(true);
+			expect(
+				(
+					await databaseClient`
+					select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+					from connection.action_calls a
+					join connection.dispatches d on d.action_call_id = a.id
+					join connection.effects e on e.action_call_id = a.id
+					where a.id = 'call-store-execution'
+				`
+				)[0],
+			).toMatchObject({
+				action_status: "submission_started",
+				dispatch_status: "claimed",
+				effect_status: "submitted",
+			});
+			await expect(
+				repository.recordProviderOutcome({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					outcome: { kind: "succeeded", result: { ok: true } },
+					audit: {
+						...stateAudit(executionCall, "outcome"),
+						id: "audit-store-1",
+					},
+				}),
+			).rejects.toThrow();
+			expect(
+				(
+					await databaseClient`select status from connection.action_calls where id = 'call-store-execution'`
+				)[0]?.status,
+			).toBe("submission_started");
+			expect(
+				await repository.recordProviderOutcome({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					outcome: { kind: "succeeded", result: { ok: true } },
+					audit: stateAudit(executionCall, "outcome"),
+				}),
+			).toBe(true);
+
+			const revokedCall: ActionCallRecord = {
+				...executionCall,
+				id: "call-store-revoked",
+				requestId: "request-store-revoked",
+				callId: "call-ref-store-revoked",
+				idempotencyKey: "store-key-revoked",
+			};
+			const revokedDispatch: DispatchRecord = {
+				...dispatch,
+				id: "dispatch-store-revoked",
+				actionCallId: revokedCall.id,
+			};
+			const revokedEffect: EffectRecord = {
+				...effect,
+				id: "effect-store-revoked",
+				actionCallId: revokedCall.id,
+			};
+			await repository.reserveExecution({
+				actionCall: revokedCall,
+				dispatch: revokedDispatch,
+				effect: revokedEffect,
+				audit: stateAudit(revokedCall, "reserved"),
+			});
+			const { claim } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a'`;
+				const claim = repository.claimCurrentDispatchState({
+					actionCallId: revokedCall.id,
+					dispatchId: revokedDispatch.id,
+					effectId: revokedEffect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-revoked",
+					leaseExpiresAt: Date.now() + 60_000,
+					audit: stateAudit(revokedCall, "claimed"),
+				});
+				expect(
+					await Promise.race([
+						claim.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { claim };
+			});
+			expect(await claim).toBe(false);
+			expect(
+				await repository.failPendingDispatch(
+					revokedDispatch.id,
+					stateAudit(revokedCall, "denied"),
+				),
+			).toBe(true);
+			expect(
+				await repository.transition(
+					revokedCall.id,
+					"created",
+					"provider_failed",
+					stateAudit(revokedCall, "denied"),
+				),
+			).toBe(true);
+			expect(
+				(
+					await databaseClient`
+				select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+				from connection.action_calls a
+				join connection.dispatches d on d.action_call_id = a.id
+				join connection.effects e on e.action_call_id = a.id
+				where a.id = 'call-store-revoked'
+			`
+				)[0],
+			).toMatchObject({
+				action_status: "provider_failed",
+				dispatch_status: "failed",
+				effect_status: "planned",
+			});
+
+			await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-b', 'provider-a', 'account-b')`;
+			await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-b-v1', 'connection-b', 1, 'ciphertext-b')`;
+			await databaseClient`update connection.connections set current_credential_version_id = 'credential-b-v1' where id = 'connection-b'`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+				values ('grant-a2', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+			await expect(
+				databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`,
+			).rejects.toThrow();
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-a2",
+			);
+			await databaseClient`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a2'`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-b",
+			);
+			const callerSelectedRequest = {
+				...request,
+				connectionId: "connection-a",
+			};
+			await expect(
+				authorizeActionCall(repository, callerSelectedRequest, 1),
+			).rejects.toThrow("Connection authorization denied");
+			const { nextGrant } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-b'`;
+				const nextGrant = databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
+					values ('grant-c', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+				expect(
+					await Promise.race([
+						nextGrant.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { nextGrant };
+			});
+			await nextGrant;
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-c",
+			);
+			await databaseClient`update connection.principals set recovery_generation = 2 where id = 'principal-a'`;
+			await databaseClient`update connection.consumer_instances set recovery_generation = 2 where id = 'instance-a'`;
+			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
+				"Connection authorization denied",
+			);
 		} finally {
 			await handle.close();
 		}

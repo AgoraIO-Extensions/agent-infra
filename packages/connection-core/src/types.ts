@@ -49,6 +49,7 @@ export interface PrincipalRecord {
 export interface ConsumerRecord {
 	id: string;
 	status: "active" | "disabled";
+	actorRequired: boolean;
 }
 
 export interface ConsumerInstanceRecord {
@@ -77,11 +78,14 @@ export interface GrantRecord {
 	revision: number;
 	status: ConnectionGrantStatus;
 	principalRecoveryGeneration: number;
+	issuedAt: number;
+	expiresAt: number;
 }
 
 export interface ActionCallRecord {
 	id: string;
 	requestId: string;
+	traceId: string;
 	callId: string;
 	idempotencyKey: string;
 	namespaceKey: string;
@@ -104,10 +108,31 @@ export interface ActionCallRequest {
 	consumerId: string;
 	consumerInstanceId: string;
 	actorId: string | null;
-	grantId: string;
-	connectionId: string;
 	actionVersionId: string;
 	arguments: unknown;
+}
+
+/** Bound only after Connection resolves one current Grant. */
+export interface ResolvedActionCallRequest extends ActionCallRequest {
+	grantId: string;
+	connectionId: string;
+}
+
+export interface EffectRecord {
+	id: string;
+	actionCallId: string;
+	status: EffectStatus;
+	providerRequestKey: string;
+	result: Record<string, unknown> | null;
+}
+
+export interface DispatchRecord {
+	id: string;
+	actionCallId: string;
+	status: DispatchStatus;
+	attemptCount: number;
+	leaseOwner: string | null;
+	leaseExpiresAt: number | null;
 }
 
 export const consumerActorSentinel = "__consumer_actor__";

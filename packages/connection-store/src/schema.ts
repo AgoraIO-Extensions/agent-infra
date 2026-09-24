@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
 	bigint,
+	boolean,
 	check,
 	foreignKey,
 	index,
@@ -56,6 +57,7 @@ export const consumers = connectionSchema.table(
 	{
 		id: text("id").primaryKey(),
 		name: varchar("name", { length: 200 }).notNull(),
+		actorRequired: boolean("actor_required").notNull(),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -167,11 +169,46 @@ export const providers = connectionSchema.table(
 	],
 );
 
+export const providerReleases = connectionSchema.table(
+	"provider_releases",
+	{
+		id: text("id").primaryKey(),
+		providerId: text("provider_id").notNull(),
+		version: varchar("version", { length: 64 }).notNull(),
+		status: varchar("status", { length: 32 }).default("disabled").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.providerId],
+			foreignColumns: [providers.id],
+			name: "provider_releases_provider_fk",
+		}),
+		uniqueIndex("provider_releases_provider_version_unique").on(
+			table.providerId,
+			table.version,
+		),
+		uniqueIndex("provider_releases_binding_unique").on(
+			table.id,
+			table.providerId,
+		),
+		check(
+			"provider_releases_status_check",
+			sql`${table.status} IN ('active', 'disabled')`,
+		),
+		nonEmpty("provider_release_id", table.id),
+		nonEmpty("provider_release_version", table.version),
+	],
+);
+
 export const actionVersions = connectionSchema.table(
 	"action_versions",
 	{
 		id: text("id").primaryKey(),
 		providerId: text("provider_id").notNull(),
+		providerReleaseId: text("provider_release_id").notNull(),
 		actionId: text("action_id").notNull(),
 		version: varchar("version", { length: 64 }).notNull(),
 		effect: varchar("effect", { length: 16 }).notNull(),
@@ -184,7 +221,7 @@ export const actionVersions = connectionSchema.table(
 		requiredScopes: jsonb("required_scopes")
 			.$type<readonly string[]>()
 			.notNull(),
-		status: varchar("status", { length: 32 }).default("published").notNull(),
+		status: varchar("status", { length: 32 }).default("disabled").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -194,6 +231,11 @@ export const actionVersions = connectionSchema.table(
 			columns: [table.providerId],
 			foreignColumns: [providers.id],
 			name: "action_versions_provider_fk",
+		}),
+		foreignKey({
+			columns: [table.providerReleaseId, table.providerId],
+			foreignColumns: [providerReleases.id, providerReleases.providerId],
+			name: "action_versions_release_binding_fk",
 		}),
 		uniqueIndex("action_versions_provider_action_version_unique").on(
 			table.providerId,
@@ -304,6 +346,9 @@ export const grants = connectionSchema.table(
 		actorId: text("actor_id").notNull(),
 		connectionId: text("connection_id").notNull(),
 		credentialVersionId: text("credential_version_id").notNull(),
+		approvedActionVersionIds: text("approved_action_version_ids")
+			.array()
+			.notNull(),
 		revision: bigint("revision", { mode: "number" }).default(1).notNull(),
 		principalRecoveryGeneration: bigint("principal_recovery_generation", {
 			mode: "number",
@@ -312,6 +357,7 @@ export const grants = connectionSchema.table(
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 		revokedAt: timestamp("revoked_at", { withTimezone: true }),
 	},
 	(table) => [
@@ -373,7 +419,15 @@ export const grants = connectionSchema.table(
 			)
 			.where(sql`${table.status} = 'active'`),
 		check("grants_status_check", sql`${table.status} IN ('active', 'revoked')`),
+		check(
+			"grants_approved_actions_nonempty",
+			sql`cardinality(${table.approvedActionVersionIds}) > 0`,
+		),
 		check("grants_revision_positive", sql`${table.revision} > 0`),
+		check(
+			"grants_lifetime_check",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
 		check(
 			"grants_principal_generation_positive",
 			sql`${table.principalRecoveryGeneration} > 0`,
@@ -410,11 +464,47 @@ export const grantActions = connectionSchema.table(
 	],
 );
 
+export const currentGrantActions = connectionSchema.table(
+	"current_grant_actions",
+	{
+		grantId: text("grant_id").notNull(),
+		principalId: text("principal_id").notNull(),
+		consumerId: text("consumer_id").notNull(),
+		consumerInstanceId: text("consumer_instance_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		actionVersionId: text("action_version_id").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.grantId, table.actionVersionId],
+			name: "current_grant_actions_pk",
+		}),
+		foreignKey({
+			columns: [table.grantId],
+			foreignColumns: [grants.id],
+			name: "current_grant_actions_grant_fk",
+		}),
+		foreignKey({
+			columns: [table.actionVersionId],
+			foreignColumns: [actionVersions.id],
+			name: "current_grant_actions_action_fk",
+		}),
+		uniqueIndex("current_grant_actions_subject_action_unique").on(
+			table.principalId,
+			table.consumerId,
+			table.consumerInstanceId,
+			table.actorId,
+			table.actionVersionId,
+		),
+	],
+);
+
 export const actionCalls = connectionSchema.table(
 	"action_calls",
 	{
 		id: text("id").primaryKey(),
 		requestId: text("request_id").notNull(),
+		traceId: text("trace_id").notNull(),
 		callId: text("call_id").notNull(),
 		idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
 		namespaceKey: text("namespace_key").notNull(),
@@ -520,6 +610,7 @@ export const actionCalls = connectionSchema.table(
 		),
 		nonEmpty("action_call_id", table.id),
 		nonEmpty("action_call_request_id", table.requestId),
+		nonEmpty("action_call_trace_id", table.traceId),
 		nonEmpty("action_call_namespace_key", table.namespaceKey),
 		nonEmpty("action_call_credential_version_id", table.credentialVersionId),
 	],
@@ -642,11 +733,13 @@ export const connectionInfrastructureTables = [
 	consumerInstances,
 	actors,
 	providers,
+	providerReleases,
 	actionVersions,
 	connections,
 	credentialVersions,
 	grants,
 	grantActions,
+	currentGrantActions,
 	actionCalls,
 	effects,
 	dispatches,

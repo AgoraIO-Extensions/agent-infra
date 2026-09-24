@@ -7,5 +7,8 @@ export {
 	connectionDatabaseUrlFromEnvironment,
 	migrateConnectionDatabase,
 } from "./migrate.js";
-export { createConnectionAuthorityRepository } from "./repository.js";
+export {
+	createAuditEventStore,
+	createConnectionAuthorityRepository,
+} from "./repository.js";
 export * from "./schema.js";

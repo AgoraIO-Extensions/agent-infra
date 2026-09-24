@@ -17,27 +17,29 @@ const request: ActionCallRequest = {
 	consumerId: "consumer-a",
 	consumerInstanceId: "instance-a",
 	actorId: null,
-	grantId: "grant-a",
-	connectionId: "connection-a",
 	actionVersionId: "action-a@1",
 	arguments: { repositoryId: 7 },
 };
 
 const grant = createGrant({
-	id: request.grantId,
+	id: "grant-a",
 	principalId: request.principalId,
 	consumerId: request.consumerId,
 	consumerInstanceId: request.consumerInstanceId,
-	connectionId: request.connectionId,
+	consumerActorRequired: false,
+	connectionId: "connection-a",
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: [request.actionVersionId],
 	principalRecoveryGeneration: 3,
+	issuedAt: Date.now() - 1000,
+	expiresAt: Date.now() + 60_000,
 });
 
 function callRecord(): ActionCallRecord {
 	return {
 		id: "call-ports-1",
 		requestId: request.requestId,
+		traceId: "trace-ports-1",
 		callId: "call-ref-ports-1",
 		idempotencyKey: request.idempotencyKey,
 		namespaceKey: actionCallNamespaceKey(request),
@@ -45,11 +47,14 @@ function callRecord(): ActionCallRecord {
 		consumerId: request.consumerId,
 		consumerInstanceId: request.consumerInstanceId,
 		actorId: "__consumer_actor__",
-		grantId: request.grantId,
-		connectionId: request.connectionId,
+		grantId: grant.id,
+		connectionId: grant.connectionId,
 		credentialVersionId: "credential-a-v1",
 		actionVersionId: request.actionVersionId,
-		requestDigest: actionRequestDigest(request),
+		requestDigest: actionRequestDigest({
+			...request,
+			connectionId: grant.connectionId,
+		}),
 		status: "created",
 	};
 }
@@ -87,6 +92,10 @@ describe("Connection repository ports", () => {
 		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
 		await expect(
 			authorizeActionCall(repository, request, 4),
+		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
+		const callerSelectedRequest = { ...request, connectionId: "connection-b" };
+		await expect(
+			authorizeActionCall(repository, callerSelectedRequest, 3),
 		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
 	});
 
@@ -129,6 +138,22 @@ describe("Connection repository ports", () => {
 		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
 	});
 
+	it("reuses a concurrent insert winner without exposing its unique-key error", async () => {
+		const record = callRecord();
+		let stored: ActionCallRecord | undefined;
+		const repository = {
+			findByIdempotency: async () => stored,
+			insert: async () => {
+				stored = { ...record, id: "concurrent-winner" };
+				throw new Error("duplicate key value violates unique constraint");
+			},
+			transition: async () => true,
+		};
+		expect(
+			(await reserveActionCall(repository, record, request, grant)).id,
+		).toBe("concurrent-winner");
+	});
+
 	it("uses a compare-and-set transition and rejects an illegal transition", async () => {
 		const repository = {
 			findByIdempotency: async () => undefined,
@@ -145,6 +170,15 @@ describe("Connection repository ports", () => {
 				"call-1",
 				"created",
 				"submission_started",
+				{
+					id: "audit-1",
+					traceId: "trace-1",
+					action: "mcp.transition",
+					targetType: "action_call",
+					targetId: "call-1",
+					outcome: "succeeded",
+					metadata: {},
+				},
 			),
 		).resolves.toBeUndefined();
 		await expect(
@@ -153,6 +187,15 @@ describe("Connection repository ports", () => {
 				"call-1",
 				"provider_succeeded",
 				"result_pending",
+				{
+					id: "audit-2",
+					traceId: "trace-1",
+					action: "mcp.transition",
+					targetType: "action_call",
+					targetId: "call-1",
+					outcome: "failed",
+					metadata: {},
+				},
 			),
 		).rejects.toThrow(/invalid ActionCall/);
 	});

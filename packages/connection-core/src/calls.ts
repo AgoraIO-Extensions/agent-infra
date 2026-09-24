@@ -5,6 +5,7 @@ import {
 	type ActionCallRequest,
 	type ActionCallStatus,
 	consumerActorSentinel,
+	type ResolvedActionCallRequest,
 	requireNonEmpty,
 } from "./types.js";
 
@@ -51,7 +52,7 @@ export function canonicalJson(value: unknown): string {
 
 export function actionRequestDigest(
 	input: Pick<
-		ActionCallRequest,
+		ResolvedActionCallRequest,
 		"connectionId" | "actionVersionId" | "arguments"
 	>,
 ): string {
@@ -73,7 +74,7 @@ export type ActionCallReplay =
 
 export function decideActionCallReplay(
 	existing: ActionCallRecord | undefined,
-	request: ActionCallRequest,
+	request: ResolvedActionCallRequest,
 ): ActionCallReplay {
 	if (!existing) return { kind: "new" };
 	const namespaceKey = actionCallNamespaceKey(request);
