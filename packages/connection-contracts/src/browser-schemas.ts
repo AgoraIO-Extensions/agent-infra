@@ -24,7 +24,7 @@ export const oauthTransactionRequestSchema = z.strictObject({
 
 export const providerCredentialRequestSchema = z.union([
 	z.strictObject({
-		providerId: z.enum(["datalego", "manhattan"]),
+		providerId: z.literal("datalego"),
 	}),
 	z.strictObject({
 		accessToken: z.string().min(1).max(8_192),
@@ -32,7 +32,7 @@ export const providerCredentialRequestSchema = z.union([
 	}),
 	z.strictObject({
 		password: z.string().min(1).max(1_024),
-		providerId: z.enum(["confluence", "jira"]),
+		providerId: z.enum(["confluence", "jira", "manhattan"]),
 		username: z.string().trim().min(1).max(256),
 	}),
 	z.strictObject({

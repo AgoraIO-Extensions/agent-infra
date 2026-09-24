@@ -966,24 +966,17 @@ export function createConnectionOAuthApp(
 					},
 					() => {
 						const hciSession =
-							body.providerId === "datalego" || body.providerId === "manhattan"
+							body.providerId === "datalego"
 								? getCookie(context, "HCIAuthToken")
 								: undefined;
-						if (
-							(body.providerId === "datalego" ||
-								body.providerId === "manhattan") &&
-							!hciSession
-						) {
+						if (body.providerId === "datalego" && !hciSession) {
 							throw new ConnectionError(
 								"AUTHENTICATION_FAILED",
 								"Company HCI login is required",
 							);
 						}
 						let credential: string;
-						if (
-							body.providerId === "datalego" ||
-							body.providerId === "manhattan"
-						) {
+						if (body.providerId === "datalego") {
 							credential = JSON.stringify({
 								email: session.account.email,
 								sessionToken: hciSession,
