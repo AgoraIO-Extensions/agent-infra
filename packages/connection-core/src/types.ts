@@ -49,6 +49,7 @@ export interface PrincipalRecord {
 export interface ConsumerRecord {
 	id: string;
 	status: "active" | "disabled";
+	actorRequired: boolean;
 }
 
 export interface ConsumerInstanceRecord {
@@ -77,6 +78,8 @@ export interface GrantRecord {
 	revision: number;
 	status: ConnectionGrantStatus;
 	principalRecoveryGeneration: number;
+	issuedAt: number;
+	expiresAt: number;
 }
 
 export interface ActionCallRecord {

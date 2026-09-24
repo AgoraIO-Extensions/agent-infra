@@ -10,11 +10,14 @@ export interface GrantInput {
 	principalId: string;
 	consumerId: string;
 	consumerInstanceId: string;
+	consumerActorRequired: boolean;
 	actorId?: string | null;
 	connectionId: string;
 	credentialVersionId: string;
 	actionVersionIds: readonly string[];
 	principalRecoveryGeneration: number;
+	issuedAt: number;
+	expiresAt: number;
 }
 
 export interface GrantUseContext {
@@ -26,6 +29,7 @@ export interface GrantUseContext {
 	credentialVersionId: string;
 	actionVersionId: string;
 	principalRecoveryGeneration: number;
+	now?: number;
 }
 
 function actorIdForGrant(actorId: string | null | undefined): string {
@@ -35,6 +39,12 @@ function actorIdForGrant(actorId: string | null | undefined): string {
 }
 
 export function createGrant(input: GrantInput): GrantRecord {
+	const actorId = actorIdForGrant(input.actorId);
+	if (
+		typeof input.consumerActorRequired !== "boolean" ||
+		input.consumerActorRequired === (actorId === consumerActorSentinel)
+	)
+		throw new Error("Actor mode does not match Consumer");
 	const actionVersionIds = [
 		...new Set(
 			input.actionVersionIds.map((id) =>
@@ -50,6 +60,12 @@ export function createGrant(input: GrantInput): GrantRecord {
 	) {
 		throw new Error("principalRecoveryGeneration must be a positive integer");
 	}
+	if (
+		!Number.isSafeInteger(input.issuedAt) ||
+		!Number.isSafeInteger(input.expiresAt) ||
+		input.expiresAt <= input.issuedAt
+	)
+		throw new Error("Grant lifetime is invalid");
 	return {
 		id: requireNonEmpty(input.id, "grant id"),
 		principalId: requireNonEmpty(input.principalId, "principalId"),
@@ -58,7 +74,7 @@ export function createGrant(input: GrantInput): GrantRecord {
 			input.consumerInstanceId,
 			"consumerInstanceId",
 		),
-		actorId: actorIdForGrant(input.actorId),
+		actorId,
 		connectionId: requireNonEmpty(input.connectionId, "connectionId"),
 		credentialVersionId: requireNonEmpty(
 			input.credentialVersionId,
@@ -68,6 +84,8 @@ export function createGrant(input: GrantInput): GrantRecord {
 		revision: 1,
 		status: "active",
 		principalRecoveryGeneration: input.principalRecoveryGeneration,
+		issuedAt: input.issuedAt,
+		expiresAt: input.expiresAt,
 	};
 }
 
@@ -81,6 +99,7 @@ export function assertGrantUsable(
 	context: GrantUseContext,
 ): void {
 	const actorId = actorIdForGrant(context.actorId);
+	const now = context.now ?? Date.now();
 	if (
 		grant.status !== "active" ||
 		grant.principalId !== context.principalId ||
@@ -90,6 +109,7 @@ export function assertGrantUsable(
 		grant.connectionId !== context.connectionId ||
 		grant.credentialVersionId !== context.credentialVersionId ||
 		grant.principalRecoveryGeneration !== context.principalRecoveryGeneration ||
+		grant.expiresAt <= now ||
 		!grant.actionVersionIds.includes(context.actionVersionId)
 	) {
 		throw new Error("Connection grant is not valid for this request");

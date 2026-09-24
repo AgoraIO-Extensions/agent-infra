@@ -26,10 +26,13 @@ const grant = createGrant({
 	principalId: request.principalId,
 	consumerId: request.consumerId,
 	consumerInstanceId: request.consumerInstanceId,
+	consumerActorRequired: false,
 	connectionId: "connection-a",
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: [request.actionVersionId],
 	principalRecoveryGeneration: 3,
+	issuedAt: Date.now() - 1000,
+	expiresAt: Date.now() + 60_000,
 });
 
 function callRecord(): ActionCallRecord {

@@ -71,6 +71,8 @@ function grantRecord(row: typeof grants.$inferSelect): GrantRecord {
 		revision: row.revision,
 		status: row.status as GrantRecord["status"],
 		principalRecoveryGeneration: row.principalRecoveryGeneration,
+		issuedAt: row.createdAt.getTime(),
+		expiresAt: row.expiresAt.getTime(),
 	};
 }
 
@@ -165,6 +167,7 @@ export function createConnectionAuthorityRepository(
 							context.principalRecoveryGeneration,
 						),
 						eq(grants.status, "active"),
+						sql`${grants.expiresAt} > clock_timestamp()`,
 						eq(principals.status, "active"),
 						eq(
 							principals.recoveryGeneration,
@@ -348,6 +351,7 @@ export function createConnectionAuthorityRepository(
 									principalRecoveryGeneration,
 								),
 								eq(grants.status, "active"),
+								sql`${grants.expiresAt} > clock_timestamp()`,
 								eq(principals.status, "active"),
 								eq(principals.recoveryGeneration, principalRecoveryGeneration),
 								eq(consumers.status, "active"),
@@ -741,8 +745,12 @@ export function createInstallationStore(
 	return {
 		async findById(id): Promise<InstallationBinding | undefined> {
 			const [row] = await db
-				.select()
+				.select({
+					instance: consumerInstances,
+					actorRequired: consumers.actorRequired,
+				})
 				.from(consumerInstances)
+				.innerJoin(consumers, eq(consumerInstances.consumerId, consumers.id))
 				.where(eq(consumerInstances.id, id))
 				.limit(1);
 			if (!row) return undefined;
@@ -752,16 +760,16 @@ export function createInstallationStore(
 				.where(
 					and(eq(actors.consumerInstanceId, id), eq(actors.status, "active")),
 				);
-			if (actorRows.length > 1) return undefined;
+			if (actorRows.length !== (row.actorRequired ? 1 : 0)) return undefined;
 			return {
-				id: row.id,
-				consumerId: row.consumerId,
-				principalId: row.principalId,
+				id: row.instance.id,
+				consumerId: row.instance.consumerId,
+				principalId: row.instance.principalId,
 				actorId: actorRows[0]?.id ?? null,
-				status: row.status as InstallationBinding["status"],
-				recoveryGeneration: row.recoveryGeneration,
-				keyFingerprint: row.installationKey,
-				publicKeyJwk: row.installationPublicKey ?? undefined,
+				status: row.instance.status as InstallationBinding["status"],
+				recoveryGeneration: row.instance.recoveryGeneration,
+				keyFingerprint: row.instance.installationKey,
+				publicKeyJwk: row.instance.installationPublicKey ?? undefined,
 			};
 		},
 	};
@@ -1060,6 +1068,7 @@ export function createCatalogReader(db: ConnectionDatabase): CatalogReader {
 						eq(grants.consumerInstanceId, context.consumerInstanceId),
 						eq(grants.actorId, actorId),
 						eq(grants.status, "active"),
+						sql`${grants.expiresAt} > clock_timestamp()`,
 						eq(actionVersions.status, "published"),
 						eq(providerReleases.status, "active"),
 						eq(providers.status, "active"),

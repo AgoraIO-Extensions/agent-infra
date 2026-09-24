@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
 	bigint,
+	boolean,
 	check,
 	foreignKey,
 	index,
@@ -94,6 +95,7 @@ export const consumers = connectionSchema.table(
 	{
 		id: text("id").primaryKey(),
 		name: varchar("name", { length: 200 }).notNull(),
+		actorRequired: boolean("actor_required").notNull(),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -592,6 +594,7 @@ export const grants = connectionSchema.table(
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 		revokedAt: timestamp("revoked_at", { withTimezone: true }),
 	},
 	(table) => [
@@ -658,6 +661,10 @@ export const grants = connectionSchema.table(
 			sql`cardinality(${table.approvedActionVersionIds}) > 0`,
 		),
 		check("grants_revision_positive", sql`${table.revision} > 0`),
+		check(
+			"grants_lifetime_check",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
 		check(
 			"grants_principal_generation_positive",
 			sql`${table.principalRecoveryGeneration} > 0`,

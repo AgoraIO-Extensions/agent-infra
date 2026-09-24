@@ -32,6 +32,8 @@ const grant: GrantRecord = {
 	revision: 1,
 	status: "active",
 	principalRecoveryGeneration: 1,
+	issuedAt: Date.now() - 1000,
+	expiresAt: Date.now() + 60_000,
 };
 
 function repository(
