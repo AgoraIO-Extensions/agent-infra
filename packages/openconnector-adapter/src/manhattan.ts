@@ -111,9 +111,17 @@ export class ManhattanAdapter
 
 	async validateCredential(encodedCredential: string) {
 		const credential = parseCredential(encodedCredential);
-		const result = await this.request("/api/connection/whoami", credential);
+		const result = await this.request(
+			"/api/connection/whoami",
+			credential,
+			undefined,
+			true,
+		);
 		const identity = result.data;
-		const email = typeof identity.email === "string" ? identity.email : "";
+		const email =
+			typeof identity.email === "string"
+				? identity.email.trim().toLowerCase()
+				: "";
 		if (!email || email !== credential.email)
 			throw invalidCredential("Manhattan identity is incomplete");
 		return {
@@ -168,6 +176,7 @@ export class ManhattanAdapter
 		path: string,
 		credential: ManhattanCredential,
 		body?: Record<string, unknown>,
+		allowRefresh = false,
 	) {
 		let sessionToken = credential.sessionToken;
 		let response: Response | undefined;
@@ -182,7 +191,7 @@ export class ManhattanAdapter
 				},
 				redirect: "manual",
 			});
-			if (response.status !== 401 || attempt > 0) break;
+			if (response.status !== 401 || attempt > 0 || !allowRefresh) break;
 			sessionToken = await this.refreshSession(sessionToken);
 		}
 		if (!response || response.status === 401 || response.status === 403)
@@ -228,7 +237,8 @@ type ManhattanCredential = { email: string; sessionToken: string };
 function parseCredential(encoded: string): ManhattanCredential {
 	try {
 		const value = JSON.parse(encoded) as Record<string, unknown>;
-		const email = typeof value.email === "string" ? value.email.trim() : "";
+		const email =
+			typeof value.email === "string" ? value.email.trim().toLowerCase() : "";
 		const sessionToken =
 			typeof value.sessionToken === "string" ? value.sessionToken : "";
 		if (!email || !sessionToken) throw new Error();

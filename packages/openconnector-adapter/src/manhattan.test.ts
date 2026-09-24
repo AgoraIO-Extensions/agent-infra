@@ -133,3 +133,31 @@ test("Manhattan refreshes an expired HCI session once", async () => {
 		session("fresh-token"),
 	);
 });
+
+test("Manhattan compares HCI email identity case-insensitively", async () => {
+	const adapter = new ManhattanAdapter(
+		async () => Response.json({ email: "USER@example.com" }),
+		"machine-key",
+	);
+	const identity = await adapter.validateCredential(credential("token"));
+	assert.equal(identity.externalAccount, "user@example.com");
+});
+
+test("Manhattan does not rotate credentials during action execution", async () => {
+	const requests: string[] = [];
+	const adapter = new ManhattanAdapter(async (input) => {
+		requests.push(String(input));
+		return new Response(null, { status: 401 });
+	}, "machine-key");
+	await assert.rejects(
+		adapter.execute({
+			action: "manhattan.get_current_user",
+			credential: { accessToken: credential("expired-token") },
+			input: {},
+		}),
+		/credential was rejected/,
+	);
+	assert.deepEqual(requests, [
+		"https://manhattan-api.agoralab.co/api/connection/whoami",
+	]);
+});
