@@ -56,7 +56,14 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 		close() {
 			closing ??= (async () => {
 				finishInput();
-				native.close();
+				// The SDK's `close()` starts async cleanup but deliberately returns
+				// void. Calling it here can leave an abort rejection detached from
+				// the driver when a streaming request is still pending. Returning
+				// the async generator lets us observe that cleanup promise while
+				// keeping the SDK's forceful close semantics.
+				if (typeof native.return === "function")
+					await native.return().catch(() => {});
+				else native.close();
 				if (!child) return;
 				const pid = child.pid;
 				if (!pid) throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");

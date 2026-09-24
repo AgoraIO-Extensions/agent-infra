@@ -208,6 +208,10 @@ export async function openRuntimeMessagesTransport(
 						signal: controller.signal,
 					},
 				);
+				// `started` may perform durable bookkeeping before the response is
+				// awaited. Attach an eager rejection handler so closing the transport
+				// during that window cannot create an unhandled abort rejection.
+				void upstreamPromise.catch(() => {});
 				if (counting) sent = true;
 				if (!counting) await options.started?.();
 				const upstream = await upstreamPromise;
