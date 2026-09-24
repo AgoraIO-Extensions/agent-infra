@@ -17,20 +17,20 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v4",
-			"rehoboam.list_releases@v1",
-			"rehoboam.get_release@v1",
-			"rehoboam.list_release_pipelines@v1",
-			"rehoboam.get_release_pipeline@v1",
-			"rehoboam.prepare_release_pipeline_run@v1",
-			"rehoboam.execute_release_pipeline@v1",
-			"rehoboam.list_execution_requests@v1",
-			"rehoboam.get_execution_request@v1",
-			"rehoboam.approve_execution_request@v1",
-			"rehoboam.withdraw_execution_request@v1",
-			"rehoboam.reject_execution_request@v1",
-			"rehoboam.list_release_pipeline_runs@v1",
-			"rehoboam.get_release_pipeline_run@v1",
+			"rehoboam.get_current_user@v5",
+			"rehoboam.list_releases@v2",
+			"rehoboam.get_release@v2",
+			"rehoboam.list_release_pipelines@v2",
+			"rehoboam.get_release_pipeline@v2",
+			"rehoboam.prepare_release_pipeline_run@v2",
+			"rehoboam.execute_release_pipeline@v2",
+			"rehoboam.list_execution_requests@v2",
+			"rehoboam.get_execution_request@v2",
+			"rehoboam.approve_execution_request@v2",
+			"rehoboam.withdraw_execution_request@v2",
+			"rehoboam.reject_execution_request@v2",
+			"rehoboam.list_release_pipeline_runs@v2",
+			"rehoboam.get_release_pipeline_run@v2",
 		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
@@ -167,4 +167,42 @@ test("Rehoboam rejects redirects and invalid PATs", async () => {
 				error.providerCredentialInvalid === true,
 		);
 	}
+});
+
+test("Rehoboam preserves the bounded MCP error contract", async () => {
+	const adapter = new RehoboamAdapter(
+		async () =>
+			Response.json(
+				{
+					data: null,
+					error: {
+						code: "PIPELINE_REF_NOT_FOUND",
+						details: { ref: "missing", workflow: "build.yml" },
+						message: "GitHub ref does not exist: missing",
+						retryable: false,
+						submission_outcome: "rejected",
+					},
+					success: false,
+				},
+				{ status: 400 },
+			),
+		"machine-key",
+	);
+
+	await assert.rejects(
+		adapter.execute({
+			action: "rehoboam.execute_release_pipeline",
+			credential: { accessToken: "stored-token" },
+			input: { cardId: "card-1", releaseId: "rel-1" },
+		}),
+		(error: Error & Record<string, unknown>) =>
+			error.providerCode === "PIPELINE_REF_NOT_FOUND" &&
+			error.providerMessage === "GitHub ref does not exist: missing" &&
+			error.providerStatus === 400 &&
+			error.providerSubmissionOutcome === "rejected" &&
+			error.providerRetryable === false &&
+			error.submissionUncertain !== true &&
+			JSON.stringify(error.providerDetails) ===
+				JSON.stringify({ ref: "missing", workflow: "build.yml" }),
+	);
 });

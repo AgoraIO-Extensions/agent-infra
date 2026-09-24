@@ -162,6 +162,12 @@ Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员�
 `auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
 exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
 
+Rehoboam 统一错误契约发布为 immutable `rehoboam-connection-v5` 与对应的新 ActionVersion。错误码、
+用户可见消息、有界脱敏详情、可重试性和提交结果由 Rehoboam MCP API 定义；Connection Adapter 仅解析并
+透传该标准 envelope，Connection Core 仅按 HTTP 与提交结果执行通用的 `FAILED` / `UNCERTAIN` 分类，禁止
+加入 Release、Pipeline、GitHub、Jenkins 或分支相关业务判断。v4 保持不可变，既有 Connection/Grant 不得
+静默切换到 v5。
+
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
 浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly

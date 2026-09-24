@@ -1037,6 +1037,46 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("preserves Provider-owned details for deterministic write rejection", async () => {
+		const repository = new MemoryRepository();
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				throw Object.assign(new Error("Rehoboam rejected dispatch"), {
+					providerCode: "PIPELINE_REF_NOT_FOUND",
+					providerDetails: { ref: "missing", workflow: "build.yml" },
+					providerMessage: "GitHub ref does not exist: missing",
+					providerRetryable: false,
+					providerStatus: 400,
+					providerSubmissionOutcome: "rejected",
+				});
+			},
+		});
+
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				base: "main",
+				head: "feature/invalid",
+				idempotencyKey: "rehoboam-invalid-1",
+				repository: "acme/widgets",
+				title: "Invalid",
+			}),
+		).rejects.toMatchObject({
+			code: "INVALID_REQUEST",
+			data: {
+				providerCode: "PIPELINE_REF_NOT_FOUND",
+				providerDetails: { ref: "missing", workflow: "build.yml" },
+				providerHttpStatus: 400,
+				retryable: false,
+				submissionOutcome: "rejected",
+			},
+			message:
+				"Provider rejected the action: GitHub ref does not exist: missing",
+		});
+
+		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(repository.reconciliationJobs).toHaveLength(0);
+	});
+
 	it("requires reauthorization when a Provider rejects the credential", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
