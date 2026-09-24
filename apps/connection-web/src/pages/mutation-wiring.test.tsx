@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { ProviderUpgradeTask } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
@@ -138,6 +139,7 @@ const api = vi.hoisted(() => ({
 					status: "ACTIVE",
 				},
 			],
+			upgradeTasks: [] as ProviderUpgradeTask[],
 		},
 	})),
 	getSharedConnections: vi.fn(async () => ({
@@ -297,6 +299,84 @@ describe("Connection 管理 mutation wiring", () => {
 			(await screen.findByText("连接已升级，可以重新确认客户端授权。"))
 				.textContent,
 		).toBe("连接已升级，可以重新确认客户端授权。");
+	});
+
+	it("批量升级按 Connection 去重并隔离失败", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha-codex",
+			},
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-rehoboam",
+				consumerName: "RehoboamAI",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha-rehoboam",
+			},
+			{
+				campaignId: "campaign-2",
+				connectionId: "connection-beta",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-beta-codex",
+			},
+		];
+		const refreshed = structuredClone(initial);
+		refreshed.overview.upgradeTasks = [
+			{
+				...initial.overview.upgradeTasks[0],
+				status: "PENDING_AUTHORIZATION",
+			},
+			initial.overview.upgradeTasks[2],
+		];
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockResolvedValueOnce(refreshed);
+		api.upgradeProviderConnection
+			.mockResolvedValueOnce({ connectionId: "connection-alpha" })
+			.mockRejectedValueOnce(new Error("upgrade failed"));
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "一键升级 2 个连接",
+			}),
+		);
+
+		await waitFor(() =>
+			expect(api.upgradeProviderConnection).toHaveBeenCalledTimes(2),
+		);
+		expect(calls(api.upgradeProviderConnection).map((call) => call[0])).toEqual(
+			["connection-alpha", "connection-beta"],
+		);
+		expect(
+			await screen.findByText(
+				"批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。",
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "重试 1 个失败项" }),
+		).toBeTruthy();
 	});
 
 	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
