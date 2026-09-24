@@ -55,7 +55,11 @@ export interface ActionCallRepository {
 		namespaceKey: string,
 		idempotencyKey: string,
 	): Promise<ActionCallRecord | undefined>;
-	insert(record: ActionCallRecord, audit: ConnectionAuditEvent): Promise<void>;
+	insert(
+		record: ActionCallRecord,
+		audit: ConnectionAuditEvent,
+		grant: GrantRecord,
+	): Promise<void>;
 	transition(
 		id: string,
 		from: ActionCallStatus,
@@ -158,19 +162,23 @@ export async function reserveActionCall(
 		throw new ConnectionAuthorizationDenied();
 	}
 	try {
-		await repository.insert(record, {
-			id: randomUUID(),
-			traceId: record.traceId,
-			principalId: record.principalId,
-			consumerInstanceId: record.consumerInstanceId,
-			actorId:
-				record.actorId === consumerActorSentinel ? undefined : record.actorId,
-			action: "mcp.call_reserved",
-			targetType: "action_call",
-			targetId: record.id,
-			outcome: "succeeded",
-			metadata: {},
-		});
+		await repository.insert(
+			record,
+			{
+				id: randomUUID(),
+				traceId: record.traceId,
+				principalId: record.principalId,
+				consumerInstanceId: record.consumerInstanceId,
+				actorId:
+					record.actorId === consumerActorSentinel ? undefined : record.actorId,
+				action: "mcp.call_reserved",
+				targetType: "action_call",
+				targetId: record.id,
+				outcome: "succeeded",
+				metadata: {},
+			},
+			grant,
+		);
 	} catch (error) {
 		const raced = await repository.findByIdempotency(
 			record.namespaceKey,

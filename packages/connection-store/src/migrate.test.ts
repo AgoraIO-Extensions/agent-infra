@@ -393,7 +393,54 @@ describe("Connection PostgreSQL migration", () => {
 				providerRequestKey: "provider-request-store-execution",
 				result: null,
 			};
+			const writeWithoutEffect = {
+				...executionCall,
+				id: "call-store-write-without-effect",
+				requestId: "request-store-write-without-effect",
+				callId: "call-ref-store-write-without-effect",
+				idempotencyKey: "store-key-write-without-effect",
+			};
+			await expect(
+				repository.reserveExecution({
+					grant: resolved,
+					actionCall: writeWithoutEffect,
+					dispatch: {
+						...dispatch,
+						id: "dispatch-store-write-without-effect",
+						actionCallId: writeWithoutEffect.id,
+					},
+					audit: stateAudit(writeWithoutEffect, "reserved"),
+				}),
+			).rejects.toThrow("Connection authorization denied");
+			const readWithEffect = {
+				...record,
+				id: "call-store-read-with-effect",
+				requestId: "request-store-read-with-effect",
+				callId: "call-ref-store-read-with-effect",
+				idempotencyKey: "store-key-read-with-effect",
+			};
+			await expect(
+				repository.reserveExecution({
+					grant: resolved,
+					actionCall: readWithEffect,
+					dispatch: {
+						...dispatch,
+						id: "dispatch-store-read-with-effect",
+						actionCallId: readWithEffect.id,
+					},
+					effect: {
+						...effect,
+						id: "effect-store-read-with-effect",
+						actionCallId: readWithEffect.id,
+					},
+					audit: stateAudit(readWithEffect, "reserved"),
+				}),
+			).rejects.toThrow("Connection authorization denied");
+			expect(
+				await databaseClient`select id from connection.action_calls where id in ('call-store-write-without-effect', 'call-store-read-with-effect')`,
+			).toHaveLength(0);
 			await repository.reserveExecution({
+				grant: resolved,
 				actionCall: executionCall,
 				dispatch,
 				effect,
@@ -423,6 +470,41 @@ describe("Connection PostgreSQL migration", () => {
 			};
 			await expect(
 				repository.reserveExecution({
+					grant: resolved,
+					actionCall: auditRejectedCall,
+					dispatch: {
+						...dispatch,
+						id: "dispatch-store-cross-call",
+						actionCallId: record.id,
+					},
+					effect: {
+						...effect,
+						id: "effect-store-cross-call",
+						actionCallId: auditRejectedCall.id,
+					},
+					audit: stateAudit(auditRejectedCall, "reserved"),
+				}),
+			).rejects.toThrow("Execution binding mismatch");
+			await expect(
+				repository.reserveExecution({
+					grant: resolved,
+					actionCall: auditRejectedCall,
+					dispatch: {
+						...dispatch,
+						id: "dispatch-store-cross-effect",
+						actionCallId: auditRejectedCall.id,
+					},
+					effect: {
+						...effect,
+						id: "effect-store-cross-effect",
+						actionCallId: record.id,
+					},
+					audit: stateAudit(auditRejectedCall, "reserved"),
+				}),
+			).rejects.toThrow("Execution binding mismatch");
+			await expect(
+				repository.reserveExecution({
+					grant: resolved,
 					actionCall: auditRejectedCall,
 					dispatch: {
 						...dispatch,
@@ -526,6 +608,14 @@ describe("Connection PostgreSQL migration", () => {
 					},
 				}),
 			).rejects.toThrow();
+			await expect(
+				repository.recordProviderOutcome({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					outcome: { kind: "succeeded", result: { ok: true } },
+					audit: stateAudit(executionCall, "outcome"),
+				}),
+			).rejects.toThrow("Effect binding mismatch");
 			expect(
 				(
 					await databaseClient`select status from connection.action_calls where id = 'call-store-execution'`
@@ -574,13 +664,35 @@ describe("Connection PostgreSQL migration", () => {
 				actionCallId: revokedCall.id,
 			};
 			await repository.reserveExecution({
+				grant: resolved,
 				actionCall: revokedCall,
 				dispatch: revokedDispatch,
 				effect: revokedEffect,
 				audit: stateAudit(revokedCall, "reserved"),
 			});
-			const { claim } = await databaseClient.begin(async (tx) => {
+			const lateRequest = {
+				...request,
+				requestId: "request-store-late",
+				idempotencyKey: "store-key-late",
+			};
+			const lateCall: ActionCallRecord = {
+				...record,
+				id: "call-store-late",
+				requestId: lateRequest.requestId,
+				callId: "call-ref-store-late",
+				idempotencyKey: lateRequest.idempotencyKey,
+			};
+			const { claim, reservation } = await databaseClient.begin(async (tx) => {
 				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a'`;
+				const reservation = reserveActionCall(
+					repository,
+					lateCall,
+					lateRequest,
+					resolved,
+				).then(
+					() => "accepted",
+					() => "denied",
+				);
 				const claim = repository.claimCurrentDispatchState({
 					actionCallId: revokedCall.id,
 					dispatchId: revokedDispatch.id,
@@ -599,9 +711,21 @@ describe("Connection PostgreSQL migration", () => {
 						),
 					]),
 				).toBe("waiting");
-				return { claim };
+				expect(
+					await Promise.race([
+						reservation,
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { claim, reservation };
 			});
 			expect(await claim).toBe(false);
+			expect(await reservation).toBe("denied");
+			expect(
+				await databaseClient`select id from connection.action_calls where id = 'call-store-late'`,
+			).toHaveLength(0);
 			expect(
 				await repository.failPendingDispatch(
 					revokedDispatch.id,

@@ -32,6 +32,9 @@ describe("Connection ActionCall invariants", () => {
 				arguments: { repositoryId: 7, head: "feature", base: "main" },
 			}),
 		);
+		expect(actionRequestDigest({ ...request, arguments: { z: 1, ä: 2 } })).toBe(
+			actionRequestDigest({ ...request, arguments: { ä: 2, z: 1 } }),
+		);
 	});
 
 	it("rejects non-JSON argument values instead of hashing them ambiguously", () => {
@@ -41,6 +44,9 @@ describe("Connection ActionCall invariants", () => {
 		expect(() =>
 			actionRequestDigest({ ...request, arguments: { value: Number.NaN } }),
 		).toThrow(/finite numbers/);
+		expect(() =>
+			actionRequestDigest({ ...request, arguments: { value: new Date(0) } }),
+		).toThrow(/JSON values/);
 	});
 
 	it("reuses an identical call and rejects another principal or request", () => {

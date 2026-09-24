@@ -8,6 +8,7 @@ import {
 	assertEffectTransition,
 	type ConnectionAuditEvent,
 	type ConnectionAuthorityRepository,
+	ConnectionAuthorizationDenied,
 	consumerActorSentinel,
 	type GrantRecord,
 	isCurrentAuthority,
@@ -142,6 +143,88 @@ function requireCallAudit(
 		throw new Error("ActionCall audit target mismatch");
 }
 
+type ConnectionTransaction = Parameters<
+	Parameters<ConnectionDatabase["transaction"]>[0]
+>[0];
+
+async function requireCurrentCallAuthority(
+	tx: ConnectionTransaction,
+	call: ActionCallRecord,
+	grant: GrantRecord,
+	effectPresent: boolean,
+): Promise<void> {
+	const rows = await tx
+		.select(authorityColumns)
+		.from(grants)
+		.innerJoin(principals, eq(grants.principalId, principals.id))
+		.innerJoin(consumers, eq(grants.consumerId, consumers.id))
+		.innerJoin(
+			consumerInstances,
+			eq(grants.consumerInstanceId, consumerInstances.id),
+		)
+		.innerJoin(connections, eq(grants.connectionId, connections.id))
+		.innerJoin(
+			credentialVersions,
+			eq(grants.credentialVersionId, credentialVersions.id),
+		)
+		.innerJoin(currentGrantActions, eq(currentGrantActions.grantId, grants.id))
+		.innerJoin(
+			actionVersions,
+			eq(currentGrantActions.actionVersionId, actionVersions.id),
+		)
+		.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+		.innerJoin(
+			providerReleases,
+			eq(actionVersions.providerReleaseId, providerReleases.id),
+		)
+		.where(
+			and(
+				eq(grants.id, call.grantId),
+				eq(grants.principalId, call.principalId),
+				eq(grants.consumerId, call.consumerId),
+				eq(grants.consumerInstanceId, call.consumerInstanceId),
+				eq(grants.actorId, call.actorId),
+				eq(grants.connectionId, call.connectionId),
+				eq(grants.credentialVersionId, call.credentialVersionId),
+				eq(actionVersions.id, call.actionVersionId),
+			),
+		)
+		.limit(2)
+		.for("update");
+	const row = rows[0];
+	if (rows.length !== 1 || !row || row.grant.id !== grant.id)
+		throw new ConnectionAuthorizationDenied();
+	let actorStatus: string | null = null;
+	let actorInstanceId: string | null = null;
+	if (call.actorId !== consumerActorSentinel) {
+		const [actor] = await tx
+			.select({ status: actors.status, instanceId: actors.consumerInstanceId })
+			.from(actors)
+			.where(eq(actors.id, call.actorId))
+			.for("update");
+		if (!actor) throw new ConnectionAuthorizationDenied();
+		actorStatus = actor.status;
+		actorInstanceId = actor.instanceId;
+	}
+	if (
+		!isCurrentAuthority(
+			grantRecord(row.grant),
+			{ ...row, actorStatus, actorInstanceId },
+			{
+				principalId: call.principalId,
+				consumerId: call.consumerId,
+				consumerInstanceId: call.consumerInstanceId,
+				actorId: call.actorId === consumerActorSentinel ? null : call.actorId,
+				actionVersionId: call.actionVersionId,
+				principalRecoveryGeneration: grant.principalRecoveryGeneration,
+				expectedGrantRevision: grant.revision,
+				expectedEffectPresent: effectPresent,
+			},
+		)
+	)
+		throw new ConnectionAuthorizationDenied();
+}
+
 export function createAuditEventStore(db: ConnectionDatabase): AuditEventStore {
 	return {
 		async insert(event: ConnectionAuditEvent) {
@@ -236,17 +319,29 @@ export function createConnectionAuthorityRepository(
 			return rows.length === 1 && row ? actionCallRecord(row) : undefined;
 		},
 
-		async insert(record, audit) {
+		async insert(record, audit, grant) {
 			requireCallAudit(audit, record.id);
 			await db.transaction(async (tx) => {
+				await requireCurrentCallAuthority(tx, record, grant, false);
 				await tx.insert(actionCalls).values(actionCallValues(record));
 				await tx.insert(auditEvents).values(auditValues(audit));
 			});
 		},
 
-		async reserveExecution({ actionCall, dispatch, effect, audit }) {
+		async reserveExecution({ grant, actionCall, dispatch, effect, audit }) {
 			requireCallAudit(audit, actionCall.id);
+			if (
+				dispatch.actionCallId !== actionCall.id ||
+				(effect && effect.actionCallId !== actionCall.id)
+			)
+				throw new Error("Execution binding mismatch");
 			await db.transaction(async (tx) => {
+				await requireCurrentCallAuthority(
+					tx,
+					actionCall,
+					grant,
+					Boolean(effect),
+				);
 				await tx.insert(actionCalls).values(actionCallValues(actionCall));
 				await tx.insert(dispatches).values({
 					id: dispatch.id,
@@ -460,6 +555,13 @@ export function createConnectionAuthorityRepository(
 			assertDispatchTransition("claimed", dispatchStatus);
 			assertActionCallTransition("submission_started", actionStatus);
 			await db.transaction(async (tx) => {
+				const [storedEffect] = await tx
+					.select({ id: effects.id })
+					.from(effects)
+					.where(eq(effects.actionCallId, actionCallId))
+					.limit(1);
+				if ((storedEffect?.id ?? undefined) !== effectId)
+					throw new Error("Effect binding mismatch");
 				if (effectId) {
 					const updatedEffect = await tx
 						.update(effects)

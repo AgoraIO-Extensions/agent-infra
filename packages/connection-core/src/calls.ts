@@ -44,8 +44,11 @@ export function canonicalJson(value: unknown): string {
 	if (typeof value !== "object")
 		throw new Error("Action arguments must contain JSON values");
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null)
+		throw new Error("Action arguments must contain JSON values");
 	const entries = Object.entries(value as Record<string, unknown>).sort(
-		([left], [right]) => left.localeCompare(right),
+		([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
 	);
 	return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
 }

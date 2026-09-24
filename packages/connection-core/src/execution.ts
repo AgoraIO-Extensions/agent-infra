@@ -10,6 +10,7 @@ import type {
 	DispatchStatus,
 	EffectRecord,
 	EffectStatus,
+	GrantRecord,
 } from "./types.js";
 
 /** Persistence contract for the state baseline. Provider dispatch belongs to #392. */
@@ -17,6 +18,7 @@ export interface ActionExecutionRepository
 	extends ActiveGrantRepository,
 		ActionCallRepository {
 	reserveExecution(input: {
+		grant: GrantRecord;
 		actionCall: ActionCallRecord;
 		dispatch: DispatchRecord;
 		effect?: EffectRecord;
