@@ -26,6 +26,7 @@ import type {
 	AgentManagementInterfaceV1,
 	ApiCredentialMetadataV1,
 	ApiCredentialScopeV1,
+	ApiIdentityActorV1,
 	ApiIdentityAuditActionV1,
 	ApiIdentityAuditInputV1,
 	ApiIdentityManagementInterfaceV1,
@@ -33,7 +34,10 @@ import type {
 	ApplicationRevisionUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 } from "@agent-infra/platform-core";
-import { generateApiCredentialV1 } from "@agent-infra/platform-core";
+import {
+	ApiIdentityError,
+	generateApiCredentialV1,
+} from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -189,13 +193,17 @@ function apiIdentityContext(
 	};
 }
 
-function hasApiScope(
+function apiActor(
 	identity: Awaited<ReturnType<typeof resolveApiIdentity>>,
-	...scopes: readonly string[]
-): boolean {
-	return scopes.some((scope) =>
-		identity.credential.scopes.includes(scope as never),
-	);
+): ApiIdentityActorV1 {
+	return {
+		schemaVersion: 1,
+		userId: identity.ownerId,
+		accountStatus: identity.accountStatus,
+		principal: identity.principal,
+		isAdministrator: false,
+		credential: identity.credential,
+	};
 }
 
 function applicantScope(
@@ -251,7 +259,8 @@ async function queryOrUnavailable<T>(
 ): Promise<T> {
 	try {
 		return await task();
-	} catch {
+	} catch (error) {
+		if (error instanceof ApiIdentityError) throw error;
 		fail("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 }
@@ -915,8 +924,6 @@ export function registerManagementRoutes(
 						context.req.raw,
 						metadata.traceId,
 					);
-			if (api && !hasApiScope(api, "agent:manage"))
-				fail("FORBIDDEN", metadata.traceId);
 			const { value: body } = await parseJson(
 				context.req.raw,
 				ApiAgentGrantRequestV1Schema,
@@ -927,10 +934,11 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const managementActor = api ? apiActor(api) : actor(identity);
 			const authorizationRevision = await queryOrUnavailable(
 				() =>
 					management.grantAgent({
-						actor: actor(identity),
+						actor: managementActor,
 						agentId,
 						principal: body.principal,
 						grantType: body.grantType,
@@ -967,8 +975,6 @@ export function registerManagementRoutes(
 						context.req.raw,
 						metadata.traceId,
 					);
-			if (api && !hasApiScope(api, "agent:manage"))
-				fail("FORBIDDEN", metadata.traceId);
 			const { value: body } = await parseJson(
 				context.req.raw,
 				ApiAgentGrantRequestV1Schema,
@@ -979,10 +985,11 @@ export function registerManagementRoutes(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const managementActor = api ? apiActor(api) : actor(identity);
 			await queryOrUnavailable(
 				() =>
 					management.revokeAgentGrant({
-						actor: actor(identity),
+						actor: managementActor,
 						agentId,
 						principal: body.principal,
 						grantType: body.grantType,
@@ -1001,9 +1008,13 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			if (!apiIdentity.credential.scopes.includes("agent:create")) {
-				fail("FORBIDDEN", metadata.traceId);
-			}
+			const management = apiIdentityOrUnavailable(
+				dependencies.apiIdentity,
+				metadata.traceId,
+			);
+			management.authorizeCredentialScope(apiActor(apiIdentity), [
+				"agent:create",
+			]);
 			const { value: body, rawRequestDigest } = await parseJson(
 				context.req.raw,
 				AgentApplicationCreateRequestV2Schema,
@@ -1399,19 +1410,15 @@ export function registerManagementRoutes(
 						context.req.raw,
 						metadata.traceId,
 					);
-			if (api && !hasApiScope(api, "agent:read", "agent:use", "agent:manage"))
-				fail("FORBIDDEN", metadata.traceId);
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
 			const scope = api
 				? ({
 						kind: "principal" as const,
 						principal: api.principal,
-						grantType:
-							hasApiScope(api, "agent:manage") && hasApiScope(api, "agent:use")
-								? ("any" as const)
-								: hasApiScope(api, "agent:manage")
-									? ("manage" as const)
-									: ("use" as const),
+						grantType: apiIdentityOrUnavailable(
+							dependencies.apiIdentity,
+							metadata.traceId,
+						).resolveAgentQueryGrantType(apiActor(api)),
 					} satisfies AgentManagementAgentScopeV1)
 				: userScope(identity);
 			const page = await queryOrUnavailable(
@@ -1445,18 +1452,14 @@ export function registerManagementRoutes(
 						context.req.raw,
 						metadata.traceId,
 					);
-			if (api && !hasApiScope(api, "agent:read", "agent:use", "agent:manage"))
-				fail("FORBIDDEN", metadata.traceId);
 			const scope = api
 				? ({
 						kind: "principal" as const,
 						principal: api.principal,
-						grantType:
-							hasApiScope(api, "agent:manage") && hasApiScope(api, "agent:use")
-								? ("any" as const)
-								: hasApiScope(api, "agent:manage")
-									? ("manage" as const)
-									: ("use" as const),
+						grantType: apiIdentityOrUnavailable(
+							dependencies.apiIdentity,
+							metadata.traceId,
+						).resolveAgentQueryGrantType(apiActor(api)),
 					} satisfies AgentManagementAgentScopeV1)
 				: userScope(identity);
 			const agent = await agentOrUnavailable(
@@ -1497,8 +1500,12 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			if (api && !hasApiScope(api, "agent:manage"))
-				fail("FORBIDDEN", metadata.traceId);
+			if (api) {
+				apiIdentityOrUnavailable(
+					dependencies.apiIdentity,
+					metadata.traceId,
+				).authorizeCredentialScope(apiActor(api), ["agent:manage"]);
+			}
 			if (body.command === "upgrade_custom_image") {
 				if (api) fail("FORBIDDEN", metadata.traceId);
 				await dependencies.configuration.upgradeCustomImage(

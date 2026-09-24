@@ -3,6 +3,7 @@ import {
 	type ApiCredentialScopeV1,
 	type ApiIdentityAuditInputV1,
 	type ApiPrincipalV1,
+	hasApiCredentialScopeV1,
 	sameApiPrincipalV1,
 } from "./api-identity.js";
 
@@ -20,6 +21,11 @@ export interface ApiIdentityActorV1 {
 	readonly accountStatus?: "active" | "disabled";
 	readonly principal?: ApiPrincipalV1;
 	readonly isAdministrator: boolean;
+	/** Present when this actor was authenticated with an API credential. */
+	readonly credential?: Pick<
+		ApiCredentialMetadataV1,
+		"scopes" | "expiresAt" | "revokedAt"
+	>;
 }
 
 export interface ApiIdentityCredentialIssueInputV1 {
@@ -121,6 +127,13 @@ export interface ApiIdentityAgentAccessPortV1 {
 
 export interface ApiIdentityManagementInterfaceV1 {
 	readonly [key: string]: unknown;
+	authorizeCredentialScope(
+		actor: ApiIdentityActorV1,
+		required: readonly ApiCredentialScopeV1[],
+	): void;
+	resolveAgentQueryGrantType(
+		actor: ApiIdentityActorV1,
+	): "any" | "manage" | "use";
 	listUserCredentials(
 		actor: ApiIdentityActorV1,
 	): Promise<readonly ApiCredentialMetadataV1[]>;
@@ -241,6 +254,19 @@ export function createApiIdentityManagementV1(input: {
 			throw new ApiIdentityError("not_authorized");
 		return actorPrincipal(actor);
 	};
+	const requireCredentialScope = (
+		actor: ApiIdentityActorV1,
+		required: readonly ApiCredentialScopeV1[],
+	): void => {
+		requireActiveActor(actor);
+		const credential = actor.credential;
+		if (
+			credential === undefined ||
+			!required.some((scope) => hasApiCredentialScopeV1(credential, scope))
+		) {
+			throw new ApiIdentityError("not_authorized");
+		}
+	};
 	const requireUserActor = (actor: ApiIdentityActorV1): string => {
 		const principal = requireActiveActor(actor);
 		if (principal.kind !== "user") throw new ApiIdentityError("not_authorized");
@@ -295,10 +321,33 @@ export function createApiIdentityManagementV1(input: {
 		agentId: string,
 	): Promise<void> => {
 		requireActiveActor(actor);
+		if (actor.credential !== undefined)
+			requireCredentialScope(actor, ["agent:manage"]);
 		if (!(await input.agentAccess.canManage({ actor, agentId })))
 			throw new ApiIdentityError("resource_unavailable");
 	};
 	return {
+		authorizeCredentialScope(actor, required) {
+			requireCredentialScope(actor, required);
+		},
+		resolveAgentQueryGrantType(actor) {
+			requireActiveActor(actor);
+			const credential = actor.credential;
+			if (credential === undefined)
+				throw new ApiIdentityError("not_authorized");
+			if (
+				hasApiCredentialScopeV1(credential, "agent:manage") &&
+				hasApiCredentialScopeV1(credential, "agent:use")
+			)
+				return "any";
+			if (hasApiCredentialScopeV1(credential, "agent:manage")) return "manage";
+			if (
+				hasApiCredentialScopeV1(credential, "agent:use") ||
+				hasApiCredentialScopeV1(credential, "agent:read")
+			)
+				return "use";
+			throw new ApiIdentityError("not_authorized");
+		},
 		async listUserCredentials(actor) {
 			const userId = requireUserActor(actor);
 			return input.store.listCredentials({

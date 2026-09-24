@@ -65,6 +65,16 @@ function actor(
 		accountStatus: "active" as const,
 		principal,
 		isAdministrator: false,
+		credential: {
+			scopes: [
+				"agent:create",
+				"agent:manage",
+				"agent:use",
+				"agent:read",
+			] as const,
+			expiresAt: null,
+			revokedAt: null,
+		},
 	};
 }
 
@@ -83,6 +93,28 @@ function management(store: ApiIdentityStorePortV1) {
 }
 
 describe("API identity management authorization", () => {
+	it("checks API scopes in Core and resolves query visibility", () => {
+		const useCase = management(storeFixture());
+		const apiActor = actor({ kind: "application", id: "application-caller" });
+		expect(() =>
+			useCase.authorizeCredentialScope(apiActor, ["agent:manage"]),
+		).not.toThrow();
+		expect(useCase.resolveAgentQueryGrantType(apiActor)).toBe("any");
+		expect(() =>
+			useCase.authorizeCredentialScope(
+				{
+					...apiActor,
+					credential: {
+						scopes: ["agent:read"],
+						expiresAt: null,
+						revokedAt: null,
+					},
+				},
+				["agent:manage"],
+			),
+		).toThrow();
+	});
+
 	it("rejects disabled or missing recipients before granting delivery", async () => {
 		const store = storeFixture();
 		const resolveUser = vi
