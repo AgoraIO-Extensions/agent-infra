@@ -928,8 +928,14 @@ export function createWorkloadRuntimeV1(
 					workloadGeneration: state.identity.generation,
 				},
 			});
-			// The original probe remains usable before and after business-route closure.
-			// Both observations enforce the same UID, resource, health and readiness checks.
+			// Before route closure, controls use the verified business route directly.
+			if (state.phase === "ready" || state.phase === "preflight")
+				return observation.observe(
+					original,
+					state.identity,
+					"open",
+					"required",
+				);
 			const health = await observation.observe(
 				original,
 				state.identity,
@@ -937,8 +943,8 @@ export function createWorkloadRuntimeV1(
 				"required",
 				{ workloadRevision: state.revision, fence: state.fence },
 			);
-			return health === "drifted"
-				? observation.observe(original, state.identity, "open")
+			return state.phase === "closing" && health === "drifted"
+				? observation.observe(original, state.identity, "open", "required")
 				: health;
 		},
 		async observe(state) {

@@ -80,12 +80,15 @@ export function createPlatformConversationWorkerV2(
 		);
 	} catch (error) {
 		controller.abort();
+		const runtimeForCleanup = runtime;
 		void Promise.allSettled([
-			...(runtime ? [runtime.close()] : []),
-			transaction.close(),
-			store.close(),
-			taskAuthorizationStore.close(),
-			legacyControlStore.close(),
+			...(runtimeForCleanup
+				? [Promise.resolve().then(() => runtimeForCleanup.close())]
+				: []),
+			Promise.resolve().then(() => transaction.close()),
+			Promise.resolve().then(() => store.close()),
+			Promise.resolve().then(() => taskAuthorizationStore.close()),
+			Promise.resolve().then(() => legacyControlStore.close()),
 		]);
 		throw error;
 	}
@@ -184,10 +187,10 @@ export function createPlatformConversationWorkerV2(
 			const runtimeClose = Promise.resolve().then(() => runtime.close());
 			closing = (async () => {
 				const closeResultsPromise = Promise.allSettled([
-					transaction.close(),
-					store.close(),
-					taskAuthorizationStore.close(),
-					legacyControlStore.close(),
+					Promise.resolve().then(() => transaction.close()),
+					Promise.resolve().then(() => store.close()),
+					Promise.resolve().then(() => taskAuthorizationStore.close()),
+					Promise.resolve().then(() => legacyControlStore.close()),
 				]);
 				const runningResults = await Promise.allSettled([
 					runtimeClose,

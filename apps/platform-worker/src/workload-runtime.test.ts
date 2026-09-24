@@ -2773,3 +2773,59 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
 	});
 });
+
+it("preserves cancellation and only reopens a closing verified route", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (!ready?.identity || !ready.verified)
+		throw Error("Expected ready fixture");
+	const runtime = createWorkloadRuntimeV1(f.options);
+	await expect(runtime.observeVerifiedControl(ready)).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "preflight" }),
+	).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "closing" }),
+	).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "applying" }),
+	).resolves.toBe("drifted");
+
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	const controller = new AbortController();
+	controller.abort();
+	await expect(
+		resolver({
+			agentId: ready.agentId,
+			workload: ready,
+			signal: controller.signal,
+			purpose: "business",
+			command: "turn.submit",
+		}),
+	).rejects.toMatchObject({ name: "AbortError" });
+});

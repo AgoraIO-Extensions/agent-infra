@@ -200,6 +200,19 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
 	});
+	it("closes every database resource when one close throws synchronously", async () => {
+		mocks.find.mockResolvedValue([]);
+		mocks.storeClose.mockImplementationOnce(() => {
+			throw new Error("synthetic synchronous close failure");
+		});
+		const worker = createPlatformConversationWorkerV2(options);
+		await expect(worker.stop()).rejects.toThrow(
+			"synthetic synchronous close failure",
+		);
+		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
+		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
+		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
+	});
 	it("closes the runtime when dispatch assembly fails", async () => {
 		mocks.dispatchAssemblyThrows = true;
 		mocks.find.mockResolvedValue([]);

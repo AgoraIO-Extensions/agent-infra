@@ -80,6 +80,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				workerId: signing.workerId,
 			};
 		} catch {
+			input.signal.throwIfAborted();
 			throw new ConversationRuntimeHostError(
 				"RUNTIME_WORKLOAD_UNAVAILABLE",
 				true,
