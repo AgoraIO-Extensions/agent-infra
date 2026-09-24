@@ -586,11 +586,11 @@ function buildArtifacts() {
 			title: "Agent Infra Pilot Direct MCP/API",
 			version: "1.0.0",
 		},
-		security: [{ PrincipalBearer: [] }],
+		security: [{ DirectDpopToken: [] }],
 		paths: { ...pilotDirectOpenApiPathsV1, ...pilotDirectOAuthOpenApiPathsV1 },
 		components: {
 			securitySchemes: {
-				PrincipalBearer: { type: "http", scheme: "bearer" },
+				DirectDpopToken: { type: "http", scheme: "DPoP" },
 				ConnectionBrowserSession: {
 					type: "apiKey",
 					in: "cookie",

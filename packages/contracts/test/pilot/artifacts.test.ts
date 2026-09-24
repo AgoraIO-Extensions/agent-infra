@@ -547,18 +547,18 @@ describe("Pilot standard artifacts", () => {
 				title: "Agent Infra Pilot Direct MCP/API",
 				version: "1.0.0",
 			},
-			security: [{ PrincipalBearer: [] }],
+			security: [{ DirectDpopToken: [] }],
 			paths: pilotDirectOpenApiPathsV1,
 			components: {
 				securitySchemes: {
-					PrincipalBearer: { type: "http", scheme: "bearer" },
+					DirectDpopToken: { type: "http", scheme: "DPoP" },
 				},
 				schemas: pilotDirectSchemasV1,
 			},
 		});
 
 		expect(document.openapi).toBe("3.1.0");
-		expect(document.security).toEqual([{ PrincipalBearer: [] }]);
+		expect(document.security).toEqual([{ DirectDpopToken: [] }]);
 		expect(document.paths).toHaveProperty(
 			"/api/v1/actions.post.operationId",
 			"executeConnectionAction",
@@ -566,6 +566,14 @@ describe("Pilot standard artifacts", () => {
 		expect(document.paths).toHaveProperty(
 			"/api/v1/catalog.get.operationId",
 			"listConnectionCatalog",
+		);
+		expect(document.paths).toHaveProperty(
+			"/api/v1/catalog.get.parameters.0.name",
+			"DPoP",
+		);
+		expect(document.paths).toHaveProperty(
+			"/api/v1/catalog.get.responses.304.description",
+			"Catalog unchanged after current authentication",
 		);
 		expect(document.components?.schemas).toHaveProperty("DirectActionResultV1");
 	});

@@ -3219,8 +3219,8 @@
         "name": "__Host-connection_session",
         "type": "apiKey"
       },
-      "PrincipalBearer": {
-        "scheme": "bearer",
+      "DirectDpopToken": {
+        "scheme": "DPoP",
         "type": "http"
       }
     }
@@ -3762,6 +3762,16 @@
     "/api/v1/catalog": {
       "get": {
         "operationId": "listConnectionCatalog",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "DPoP",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3772,6 +3782,9 @@
               }
             },
             "description": "Published Connection Action catalog"
+          },
+          "304": {
+            "description": "Catalog unchanged after current authentication"
           },
           "401": {
             "content": {
@@ -5036,7 +5049,7 @@
   },
   "security": [
     {
-      "PrincipalBearer": []
+      "DirectDpopToken": []
     }
   ]
 }

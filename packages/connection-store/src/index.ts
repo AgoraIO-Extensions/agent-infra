@@ -1,3 +1,4 @@
+export { createConnectionCatalogRepository } from "./catalog-repository.js";
 export { createConnectionClientRepository } from "./client-repository.js";
 export type {
 	ConnectionDatabase,

@@ -1138,11 +1138,17 @@ export const pilotDirectOpenApiPathsV1 = {
 	"/api/v1/catalog": {
 		get: {
 			operationId: "listConnectionCatalog",
+			requestParams: {
+				header: z.strictObject({ DPoP: z.string() }),
+			},
 			responses: {
 				"200": directJsonResponse(
 					"Published Connection Action catalog",
 					DirectCatalogResponseV1Schema,
 				),
+				"304": {
+					description: "Catalog unchanged after current authentication",
+				},
 				"401": directJsonResponse(
 					"Authentication required",
 					PilotProtocolErrorV1Schema,

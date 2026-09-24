@@ -17,6 +17,7 @@ import {
 	connectionDatabaseUrlFromEnvironment,
 	createAuditEventStore,
 	createBrowserSessionStore,
+	createConnectionCatalogRepository,
 	createConnectionClientRepository,
 	createConnectionDatabase,
 	createPostgresPrincipalDirectory,
@@ -47,6 +48,7 @@ function authFromEnvironment():
 	| {
 			dependencies: ConnectionAuthDependencies;
 			client: ConnectionClientDependencies;
+			catalog: ReturnType<typeof createConnectionCatalogRepository>;
 			close: () => Promise<void>;
 	  }
 	| undefined {
@@ -164,6 +166,7 @@ function authFromEnvironment():
 					ldap,
 				),
 		},
+		catalog: createConnectionCatalogRepository(database.db),
 		close: database.close,
 	};
 }
@@ -174,7 +177,11 @@ export function startConnectionApi(options: StartOptions = {}) {
 	const auth = authFromEnvironment();
 	const server = serve(
 		{
-			fetch: createConnectionApp(auth?.dependencies, auth?.client).fetch,
+			fetch: createConnectionApp(
+				auth?.dependencies,
+				auth?.client,
+				auth?.catalog,
+			).fetch,
 			port,
 		},
 		(info) =>

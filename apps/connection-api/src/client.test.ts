@@ -6,15 +6,20 @@ import {
 	sign,
 } from "node:crypto";
 import {
+	actionVersions,
 	auditEvents,
 	clientCredentials,
 	consumerInstances,
 	consumers,
+	createConnectionCatalogRepository,
 	createConnectionClientRepository,
 	createConnectionDatabase,
 	migrateConnectionDatabase,
 	principals,
+	providerReleases,
+	providers,
 } from "@agent-infra/connection-store";
+import { DirectCatalogResponseV1Schema } from "@agent-infra/contracts/pilot";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
@@ -150,7 +155,68 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			if (principalId !== "alice") throw new Error("Unexpected Principal");
 		},
 	};
-	const app = createConnectionApp(auth, client);
+	await database.db.insert(providers).values([
+		{ id: "github", name: "GitHub" },
+		{ id: "disabled-provider", name: "Disabled", status: "disabled" },
+	]);
+	await database.db.insert(providerReleases).values([
+		{ id: "github-v1", providerId: "github", version: "v1", status: "active" },
+		{
+			id: "github-v2",
+			providerId: "github",
+			version: "v2",
+			status: "disabled",
+		},
+		{
+			id: "disabled-v1",
+			providerId: "disabled-provider",
+			version: "v1",
+			status: "active",
+		},
+	]);
+	const action = {
+		providerId: "github",
+		providerReleaseId: "github-v1",
+		version: "v1",
+		effect: "read",
+		inputSchema: { type: "object", properties: {} },
+		outputSchema: { type: "object", properties: { id: { type: "string" } } },
+		requiredScopes: ["action:read"],
+		status: "published",
+	};
+	await database.db.insert(actionVersions).values([
+		{ ...action, id: "visible", actionId: "get_current_user" },
+		{
+			...action,
+			id: "scope-hidden",
+			actionId: "write_action",
+			requiredScopes: ["action:write"],
+		},
+		{
+			...action,
+			id: "unpublished",
+			actionId: "unpublished",
+			status: "disabled",
+		},
+		{
+			...action,
+			id: "release-disabled",
+			actionId: "release_disabled",
+			providerReleaseId: "github-v2",
+		},
+		{
+			...action,
+			id: "provider-disabled",
+			actionId: "provider_disabled",
+			providerId: "disabled-provider",
+			providerReleaseId: "disabled-v1",
+		},
+	]);
+	const app = createConnectionApp(
+		auth,
+		client,
+		createConnectionCatalogRepository(database.db),
+	);
 	app.get("/probe", async (context) => {
 		try {
 			return context.json(
@@ -296,6 +362,77 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		principalId: "alice",
 		consumerId: "client",
 	});
+	const catalogRequest = (
+		token: string,
+		headers: Record<string, string> = {},
+		path = "/api/v1/catalog",
+	) =>
+		app.request(path, {
+			headers: {
+				authorization: `DPoP ${token}`,
+				dpop: dpop("/api/v1/catalog", { method: "GET", token }),
+				...headers,
+			},
+		});
+	const catalog = await catalogRequest(tokens.access_token);
+	expect(catalog.status).toBe(200);
+	const catalogBody = DirectCatalogResponseV1Schema.parse(await catalog.json());
+	expect(catalogBody.actions).toMatchObject([
+		{
+			providerId: "github",
+			actionId: "get_current_user",
+			actionVersion: "v1",
+			effect: "READ",
+			requiredScopes: ["action:read"],
+			status: "published",
+		},
+	]);
+	expect(JSON.stringify(catalogBody)).not.toMatch(
+		/principal|connection|grant|credential|write_action|unpublished|disabled/i,
+	);
+	const etag = catalog.headers.get("etag") ?? "";
+	expect(etag).toBe(`W/"${catalogBody.catalogVersion}"`);
+	expect(
+		(await catalogRequest(tokens.access_token, { "if-none-match": etag }))
+			.status,
+	).toBe(304);
+	expect(
+		(await catalogRequest(tokens.access_token, { "x-principal-id": "bob" }))
+			.status,
+	).toBe(401);
+	expect(
+		(
+			await catalogRequest(
+				tokens.access_token,
+				{},
+				"/api/v1/catalog?providerId=disabled-provider",
+			)
+		).status,
+	).toBe(401);
+	expect((await app.request("/api/v1/catalog")).status).toBe(401);
+	await database.db.update(actionVersions).set({ status: "disabled" });
+	const changedCatalog = await catalogRequest(tokens.access_token, {
+		"if-none-match": etag,
+	});
+	expect(changedCatalog.status).toBe(200);
+	expect((await changedCatalog.json()) as { actions: unknown[] }).toMatchObject(
+		{ actions: [] },
+	);
+	expect(changedCatalog.headers.get("etag")).not.toBe(etag);
+	const catalogAudits = (await database.db.select().from(auditEvents)).filter(
+		(row) => row.action === "catalog.read",
+	);
+	expect(catalogAudits).toHaveLength(3);
+	expect(
+		catalogAudits.every(
+			(row) =>
+				row.principalId === "alice" &&
+				row.consumerInstanceId !== null &&
+				row.actorId !== null &&
+				row.metadata.actionCount !== undefined,
+		),
+	).toBe(true);
+	expect(JSON.stringify(catalogAudits)).not.toContain(tokens.access_token);
 	const reusedProof = dpop("/probe", {
 		method: "GET",
 		token: tokens.access_token,
@@ -411,6 +548,13 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		).status,
 	).toBe(204);
 	expect((await probe(rotatedPat.token)).status).toBe(401);
+	expect(
+		(
+			await catalogRequest(rotatedPat.token, {
+				"if-none-match": changedCatalog.headers.get("etag") ?? "",
+			})
+		).status,
+	).toBe(401);
 	const stored = (await database.db.select().from(clientCredentials)).find(
 		(row) => row.id === rotatedPat.id,
 	);

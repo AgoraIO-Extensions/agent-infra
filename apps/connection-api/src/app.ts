@@ -1,8 +1,10 @@
+import type { createConnectionCatalogRepository } from "@agent-infra/connection-store";
 import { Hono } from "hono";
 import {
 	addConnectionAuthRoutes,
 	type ConnectionAuthDependencies,
 } from "./auth.js";
+import { addConnectionCatalogRoutes } from "./catalog.js";
 import {
 	addConnectionClientRoutes,
 	type ConnectionClientDependencies,
@@ -13,6 +15,7 @@ export const connectionApiService = "connection-api";
 export function createConnectionApp(
 	auth?: ConnectionAuthDependencies,
 	client?: ConnectionClientDependencies,
+	catalog?: ReturnType<typeof createConnectionCatalogRepository>,
 ) {
 	const app = new Hono();
 
@@ -24,6 +27,7 @@ export function createConnectionApp(
 	);
 	if (auth) addConnectionAuthRoutes(app, auth);
 	if (client) addConnectionClientRoutes(app, client);
+	if (client && catalog) addConnectionCatalogRoutes(app, client, catalog);
 
 	return app;
 }
