@@ -1,12 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
 	AgentApplicationUpdateRequestV2Writable,
+	DeploymentConfigurationProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
@@ -19,20 +20,26 @@ type RequestError = Error & { readonly retryable?: boolean };
 
 type AgentApplicationSubmissionScreenProps =
 	| {
+			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
+			onRefreshDeploymentConfiguration?: () => void;
+			refreshingDeploymentConfiguration?: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
+			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
+			onRefreshDeploymentConfiguration?: () => void;
+			refreshingDeploymentConfiguration?: boolean;
 	  };
 
 export function AgentApplicationSubmissionScreen(
@@ -74,6 +81,23 @@ export function AgentApplicationSubmissionScreen(
 			</header>
 			<div className="form-layout">
 				<div className="min-w-0">
+					{props.deploymentConfiguration.status !== "populated" ? (
+						<div className="mb-4 flex items-center gap-3" role="status">
+							<p className="text-muted-foreground text-sm">
+								部署选项需要刷新后才能提交标准模板申请。
+							</p>
+							<Button
+								variant="outline"
+								disabled={props.refreshingDeploymentConfiguration}
+								onClick={props.onRefreshDeploymentConfiguration}
+								type="button"
+							>
+								{props.refreshingDeploymentConfiguration
+									? "正在刷新…"
+									: "重新加载部署选项"}
+							</Button>
+						</div>
+					) : null}
 					{props.error ? (
 						<Alert variant="destructive" className="my-3">
 							<AlertDescription>
