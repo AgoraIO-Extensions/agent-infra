@@ -379,6 +379,35 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 	});
 
+	it("升级任务复用服务端保存的凭证", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-rehoboam",
+				connectionId: "connection-rehoboam",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-rehoboam",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(initial);
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "处理升级" }));
+
+		await waitFor(() =>
+			expect(calls(api.upgradeProviderConnection)[0]?.[0]).toBe(
+				"connection-rehoboam",
+			),
+		);
+		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
+	});
+
 	it("批量升级刷新失败后解除进行中状态", async () => {
 		const initial = await api.getConnections();
 		initial.overview.upgradeTasks = [

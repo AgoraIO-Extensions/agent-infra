@@ -503,12 +503,18 @@ export function ConnectionsPage() {
 												</td>
 												<td className="table-action">
 													{task.status === "PENDING_CONNECTION" ? (
-														<a
-															className="button button-secondary"
-															href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
+														<Button
+															disabled={
+																upgrade.isPending || bulkUpgrade?.running
+															}
+															onClick={() => upgrade.mutate(task.connectionId)}
+															variant="secondary"
 														>
-															处理升级
-														</a>
+															{upgrade.isPending &&
+															upgrade.variables === task.connectionId
+																? "正在升级"
+																: "处理升级"}
+														</Button>
 													) : task.status === "PENDING_AUTHORIZATION" ? (
 														<button
 															className="button button-secondary"
