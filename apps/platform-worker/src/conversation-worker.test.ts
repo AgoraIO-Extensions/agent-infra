@@ -219,7 +219,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		const worker = createPlatformConversationWorkerV2(options);
 		const stopping = worker.stop();
 		await Promise.resolve();
-		expect(mocks.storeClose).not.toHaveBeenCalled();
+		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
 		runtimeClosed.resolve();
 		await stopping;
 		expect(mocks.runtimeClose).toHaveBeenCalledTimes(1);
