@@ -423,8 +423,8 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeDisabled();
 	api.release();
 	await expect(page.getByRole("status")).toBeFocused();
-	await page.getByRole("button", { name: "重启 Agent" }).click();
-	await page.getByRole("button", { name: "确认重启" }).click();
+	await page.getByRole("button", { name: "启动 Agent" }).click();
+	await page.getByRole("button", { name: "确认启动" }).click();
 	await expect(page.getByRole("status")).toContainText("可用");
 	api.customAgent();
 	await page.goto("/agents/agent-pilot-1/configuration");
