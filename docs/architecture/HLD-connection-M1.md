@@ -68,6 +68,8 @@ Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` �
 
 作为 GitHub OAuth Client 时，Provider callback 使用独立的一次性、短期、高熵服务端 state，原子绑定发起 BrowserSession、Principal、Provider、原始事务和精确受控回跳地址；callback 不依赖 BrowserSession Cookie、CSRF token、Origin 或 Fetch Metadata。Callback 只能完成原 Provider OAuth 事务，不创建 Grant，不接受调用方提交的 Principal、Connection 归属或任意跳转地址；state 缺失、重复、过期或绑定不一致时 fail closed。
 
+首个 GitHub Pilot 的 Connection 必须在 Connection DB 中持久绑定建立它的 Principal，并以 `github.com + GitHub numeric user ID` 作为具有数据库唯一约束的稳定外部账号键；login/name 只用于展示。Provider OAuth callback 从一次性 state 解析发起 Principal，并原子查找或创建该账号的 Connection：尚未绑定时建立新 Connection；已绑定同一 Principal 时复用原 Connection 并追加 CredentialVersion，login/name 改变不得创建新 Connection；已绑定其他 Principal 时拒绝。不同 numeric user ID 不得覆盖旧 Connection，冲突拒绝响应不得泄露其他 Principal 的 Connection 是否存在。共享 Connection 必须经过独立的管理员授权流程，不能由 Provider OAuth callback 隐式建立，也不能因此自动创建 Grant。
+
 Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必须绑定唯一 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；定义 Actor 的 Consumer 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。PAT 仅以 hash 持久化，支持单独轮换和撤销，并执行与 OAuth access token 相同的 Principal/Consumer/Instance/Actor/Grant/Action 检查；PAT 不包含 Provider Credential。
 
 ## 6. Catalog 与授权
