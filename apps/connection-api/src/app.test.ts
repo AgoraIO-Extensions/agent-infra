@@ -294,6 +294,39 @@ describe("Direct MCP boundary", () => {
 		expect(audit.insert).not.toHaveBeenCalled();
 	});
 
+	it("uses the Connection-owned catalog schema before the executor", async () => {
+		const execute = vi.fn(async () => ({ ok: true }));
+		const audit = { insert: vi.fn(async () => {}) };
+		const app = createConnectionApp({
+			authenticate: async () => ({
+				principalId: "p",
+				consumerId: "c",
+				consumerInstanceId: "i",
+				actorId: null,
+				audience: "connection-api",
+				scopes: [],
+				recoveryGeneration: 1,
+				tokenId: "t",
+			}),
+			catalog: { list: async () => catalogEntries },
+			mcp: { execute },
+			audit,
+		});
+		const response = await app.request("/v1/mcp", {
+			method: "POST",
+			headers: { authorization: "Bearer token" },
+			body: JSON.stringify({
+				actionVersionId: "github.get_current_user@1",
+				idempotencyKey: "i",
+				arguments: { unexpected: true },
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "invalid_arguments" });
+		expect(execute).not.toHaveBeenCalled();
+		expect(audit.insert).not.toHaveBeenCalled();
+	});
+
 	it("generates trusted request and trace IDs for audit and execution", async () => {
 		let execution: { requestId: string; traceId: string } | undefined;
 		const audit = { insert: vi.fn(async () => {}) };

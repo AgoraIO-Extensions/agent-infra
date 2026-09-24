@@ -111,6 +111,23 @@ export interface ActionCallRequest {
 	arguments: unknown;
 }
 
+export interface EffectRecord {
+	id: string;
+	actionCallId: string;
+	status: EffectStatus;
+	providerRequestKey: string;
+	result: Record<string, unknown> | null;
+}
+
+export interface DispatchRecord {
+	id: string;
+	actionCallId: string;
+	status: DispatchStatus;
+	attemptCount: number;
+	leaseOwner: string | null;
+	leaseExpiresAt: number | null;
+}
+
 export const consumerActorSentinel = "__consumer_actor__";
 
 export function requireNonEmpty(value: string, field: string): string {

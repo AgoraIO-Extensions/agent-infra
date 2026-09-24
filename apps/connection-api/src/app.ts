@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
 	type AuditEventStore,
 	type AuthenticatedConnectionContext,
+	type CatalogEntry,
 	type CatalogReader,
 	type ConnectionInstallationService,
 	type ConnectionTokenService,
@@ -9,6 +10,7 @@ import {
 	type InstallationProofVerifier,
 	type InstallationStore,
 	type OAuthAuthorizationService,
+	validateActionArguments,
 } from "@agent-infra/connection-core";
 import {
 	type BrowserSessionPrincipal,
@@ -38,7 +40,7 @@ export interface ConnectionApiDependencies {
 		audience: string;
 	}) => Promise<AuthenticatedConnectionContext | undefined>;
 	readonly mcp?: {
-		readonly validateArguments: (input: {
+		readonly validateArguments?: (input: {
 			context: AuthenticatedConnectionContext;
 			actionVersionId: string;
 			arguments: unknown;
@@ -419,7 +421,12 @@ export function createConnectionApp(
 	});
 
 	app.post("/v1/mcp", async (context) => {
-		if (!dependencies.mcp || !dependencies.authenticate || !dependencies.audit)
+		if (
+			!dependencies.mcp ||
+			!dependencies.authenticate ||
+			!dependencies.audit ||
+			(!dependencies.catalog && !dependencies.mcp.validateArguments)
+		)
 			return context.json({ error: "mcp_unavailable" }, 503);
 		const token = bearerToken(context.req.raw);
 		const authentication = token
@@ -453,7 +460,27 @@ export function createConnectionApp(
 			input.idempotencyKey.length === 0
 		)
 			return context.json({ error: "invalid_request" }, 400);
+		if (dependencies.catalog) {
+			let entries: readonly CatalogEntry[];
+			try {
+				entries = await dependencies.catalog.list(authentication);
+			} catch {
+				return context.json({ error: "mcp_unavailable" }, 503);
+			}
+			const entry = entries.find(
+				(candidate) => candidate.actionVersion.id === input.actionVersionId,
+			);
+			if (
+				!entry ||
+				!validateActionArguments(
+					entry.actionVersion.inputSchema,
+					input.arguments,
+				)
+			)
+				return context.json({ error: "invalid_arguments" }, 400);
+		}
 		if (
+			dependencies.mcp.validateArguments &&
 			!(await dependencies.mcp.validateArguments({
 				context: authentication,
 				actionVersionId: input.actionVersionId,

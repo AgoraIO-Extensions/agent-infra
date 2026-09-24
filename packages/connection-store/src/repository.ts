@@ -2,10 +2,13 @@ import {
 	type AccessTokenRecord,
 	type ActionCallRecord,
 	type ActionCallStatus,
+	type ActionExecutionRepository,
 	type AuditEventStore,
 	type AuthorizationCodeRecord,
 	type AuthorizationCodeStore,
 	assertActionCallTransition,
+	assertDispatchTransition,
+	assertEffectTransition,
 	type CatalogEntry,
 	type CatalogReader,
 	type ConnectionAuditEvent,
@@ -30,7 +33,7 @@ import type {
 	BrowserSessionStore,
 	PrincipalIdentityStore,
 } from "@agent-infra/connection-identity";
-import { and, eq, isNull, lte } from "drizzle-orm";
+import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import type { ConnectionDatabase } from "./database.js";
 import {
 	accessTokens,
@@ -40,10 +43,13 @@ import {
 	auditEvents,
 	authorizationCodes,
 	browserSessions,
+	connections,
 	consumerInstances,
 	consumers,
 	credentialVersions,
+	dispatches,
 	dpopReplay,
+	effects,
 	grantActions,
 	grants,
 	principals,
@@ -119,13 +125,30 @@ export function createAuditEventStore(db: ConnectionDatabase): AuditEventStore {
 /** PostgreSQL adapter for the Connection authority boundary. */
 export function createConnectionAuthorityRepository(
 	db: ConnectionDatabase,
-): ConnectionAuthorityRepository {
+): ConnectionAuthorityRepository & ActionExecutionRepository {
 	return {
 		async findActiveGrant(context) {
 			const actorId = context.actorId ?? consumerActorSentinel;
 			const rows = await db
-				.select()
+				.select({ grant: grants })
 				.from(grants)
+				.innerJoin(principals, eq(grants.principalId, principals.id))
+				.innerJoin(consumers, eq(grants.consumerId, consumers.id))
+				.innerJoin(
+					consumerInstances,
+					eq(grants.consumerInstanceId, consumerInstances.id),
+				)
+				.innerJoin(connections, eq(grants.connectionId, connections.id))
+				.innerJoin(
+					credentialVersions,
+					eq(grants.credentialVersionId, credentialVersions.id),
+				)
+				.innerJoin(grantActions, eq(grantActions.grantId, grants.id))
+				.innerJoin(
+					actionVersions,
+					eq(grantActions.actionVersionId, actionVersions.id),
+				)
+				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
 				.where(
 					and(
 						eq(grants.principalId, context.principalId),
@@ -138,23 +161,39 @@ export function createConnectionAuthorityRepository(
 							context.principalRecoveryGeneration,
 						),
 						eq(grants.status, "active"),
+						eq(principals.status, "active"),
+						eq(consumers.status, "active"),
+						eq(consumerInstances.status, "active"),
+						eq(connections.status, "active"),
+						eq(
+							connections.currentCredentialVersionId,
+							grants.credentialVersionId,
+						),
+						eq(credentialVersions.connectionId, grants.connectionId),
+						eq(credentialVersions.status, "active"),
+						eq(actionVersions.id, context.actionVersionId),
+						eq(actionVersions.providerId, connections.providerId),
+						eq(actionVersions.status, "published"),
+						eq(providers.status, "active"),
 					),
 				)
 				.limit(2);
-			const row = rows[0];
+			const row = rows[0]?.grant;
 			if (rows.length !== 1 || !row) return undefined;
-			const [credential] = await db
-				.select({ id: credentialVersions.id })
-				.from(credentialVersions)
-				.where(
-					and(
-						eq(credentialVersions.id, row.credentialVersionId),
-						eq(credentialVersions.connectionId, context.connectionId),
-						eq(credentialVersions.status, "active"),
-					),
-				)
-				.limit(1);
-			if (!credential) return undefined;
+			if (actorId !== consumerActorSentinel) {
+				const [actor] = await db
+					.select({ id: actors.id })
+					.from(actors)
+					.where(
+						and(
+							eq(actors.id, actorId),
+							eq(actors.consumerInstanceId, context.consumerInstanceId),
+							eq(actors.status, "active"),
+						),
+					)
+					.limit(1);
+				if (!actor) return undefined;
+			}
 			const actions = await db
 				.select({ actionVersionId: grantActions.actionVersionId })
 				.from(grantActions)
@@ -205,6 +244,188 @@ export function createConnectionAuthorityRepository(
 				requestDigest: record.requestDigest,
 				status: record.status,
 			});
+		},
+
+		async reserveExecution({ actionCall, dispatch, effect }) {
+			await db.transaction(async (tx) => {
+				await tx.insert(actionCalls).values({
+					id: actionCall.id,
+					requestId: actionCall.requestId,
+					traceId: actionCall.traceId,
+					callId: actionCall.callId,
+					idempotencyKey: actionCall.idempotencyKey,
+					namespaceKey: actionCall.namespaceKey,
+					principalId: actionCall.principalId,
+					consumerId: actionCall.consumerId,
+					consumerInstanceId: actionCall.consumerInstanceId,
+					actorId: actionCall.actorId,
+					grantId: actionCall.grantId,
+					connectionId: actionCall.connectionId,
+					credentialVersionId: actionCall.credentialVersionId,
+					actionVersionId: actionCall.actionVersionId,
+					requestDigest: actionCall.requestDigest,
+					status: actionCall.status,
+				});
+				await tx.insert(dispatches).values({
+					id: dispatch.id,
+					actionCallId: dispatch.actionCallId,
+					status: dispatch.status,
+					attemptCount: dispatch.attemptCount,
+					leaseOwner: dispatch.leaseOwner,
+					leaseExpiresAt:
+						dispatch.leaseExpiresAt === null
+							? null
+							: new Date(dispatch.leaseExpiresAt),
+				});
+				if (effect)
+					await tx.insert(effects).values({
+						id: effect.id,
+						actionCallId: effect.actionCallId,
+						status: effect.status,
+						providerRequestKey: effect.providerRequestKey,
+						result: effect.result,
+					});
+			});
+		},
+
+		async claimDispatch(id, leaseOwner, leaseExpiresAt) {
+			const updated = await db
+				.update(dispatches)
+				.set({
+					status: "claimed",
+					attemptCount: sql`${dispatches.attemptCount} + 1`,
+					leaseOwner,
+					leaseExpiresAt: new Date(leaseExpiresAt),
+					updatedAt: new Date(),
+				})
+				.where(
+					and(
+						eq(dispatches.id, id),
+						eq(dispatches.status, "pending"),
+						isNull(dispatches.leaseOwner),
+						isNull(dispatches.leaseExpiresAt),
+					),
+				)
+				.returning({ id: dispatches.id });
+			return updated.length === 1;
+		},
+
+		async transitionDispatch(id, from, to) {
+			assertDispatchTransition(from, to);
+			const updated = await db
+				.update(dispatches)
+				.set({
+					status: to,
+					leaseOwner: null,
+					leaseExpiresAt: null,
+					updatedAt: new Date(),
+				})
+				.where(and(eq(dispatches.id, id), eq(dispatches.status, from)))
+				.returning({ id: dispatches.id });
+			return updated.length === 1;
+		},
+
+		async transitionEffect(id, from, to, result) {
+			assertEffectTransition(from, to);
+			const updated = await db
+				.update(effects)
+				.set({
+					status: to,
+					...(result === undefined ? {} : { result }),
+					updatedAt: new Date(),
+				})
+				.where(and(eq(effects.id, id), eq(effects.status, from)))
+				.returning({ id: effects.id });
+			return updated.length === 1;
+		},
+
+		async recordProviderOutcome({
+			actionCallId,
+			dispatchId,
+			effectId,
+			outcome,
+		}) {
+			const effectStatus =
+				outcome.kind === "succeeded"
+					? "succeeded"
+					: outcome.kind === "failed"
+						? "failed"
+						: "unknown";
+			const dispatchStatus =
+				outcome.kind === "succeeded"
+					? "completed"
+					: outcome.kind === "failed"
+						? "failed"
+						: "unknown";
+			const actionStatus =
+				outcome.kind === "succeeded"
+					? "provider_succeeded"
+					: outcome.kind === "failed"
+						? "provider_failed"
+						: "result_pending";
+			assertEffectTransition("submitted", effectStatus);
+			assertDispatchTransition("claimed", dispatchStatus);
+			assertActionCallTransition("submission_started", actionStatus);
+			await db.transaction(async (tx) => {
+				if (effectId) {
+					const updatedEffect = await tx
+						.update(effects)
+						.set({
+							status: effectStatus,
+							...(outcome.kind === "succeeded" || outcome.kind === "failed"
+								? { result: outcome.result ?? null }
+								: {}),
+							updatedAt: new Date(),
+						})
+						.where(
+							and(
+								eq(effects.id, effectId),
+								eq(effects.status, "submitted"),
+								eq(effects.actionCallId, actionCallId),
+							),
+						)
+						.returning({ id: effects.id });
+					if (updatedEffect.length !== 1)
+						throw new Error(
+							"Effect outcome transition lost its compare-and-set race",
+						);
+				}
+				const updatedDispatch = await tx
+					.update(dispatches)
+					.set({
+						status: dispatchStatus,
+						leaseOwner: null,
+						leaseExpiresAt: null,
+						updatedAt: new Date(),
+					})
+					.where(
+						and(
+							eq(dispatches.id, dispatchId),
+							eq(dispatches.status, "claimed"),
+							eq(dispatches.actionCallId, actionCallId),
+						),
+					)
+					.returning({ id: dispatches.id });
+				if (updatedDispatch.length !== 1)
+					throw new Error(
+						"Dispatch outcome transition lost its compare-and-set race",
+					);
+				const updatedCall = await tx
+					.update(actionCalls)
+					.set({ status: actionStatus, updatedAt: new Date() })
+					.where(
+						and(
+							eq(actionCalls.id, actionCallId),
+							eq(actionCalls.status, "submission_started"),
+						),
+					)
+					.returning({ id: actionCalls.id });
+				if (updatedCall.length !== 1)
+					throw new Error(
+						"ActionCall outcome transition lost its compare-and-set race",
+					);
+			});
+			return true;
 		},
 
 		async transition(id, from, to) {

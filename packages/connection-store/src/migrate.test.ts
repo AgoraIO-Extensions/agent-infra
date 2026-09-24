@@ -5,6 +5,8 @@ import {
 	actionRequestDigest,
 	authorizeActionCall,
 	consumerActorSentinel,
+	type DispatchRecord,
+	type EffectRecord,
 	reserveActionCall,
 } from "@agent-infra/connection-core";
 import postgres from "postgres";
@@ -268,6 +270,73 @@ describe("Connection PostgreSQL migration", () => {
 					)
 				).id,
 			).toBe(consumerRecord.id);
+
+			const executionCall: ActionCallRecord = {
+				...record,
+				id: "call-store-execution",
+				requestId: "request-store-execution",
+				traceId: "trace-store-execution",
+				callId: "call-ref-store-execution",
+				idempotencyKey: "store-key-execution",
+				namespaceKey: actionCallNamespaceKey(request),
+			};
+			const dispatch: DispatchRecord = {
+				id: "dispatch-store-execution",
+				actionCallId: executionCall.id,
+				status: "pending",
+				attemptCount: 0,
+				leaseOwner: null,
+				leaseExpiresAt: null,
+			};
+			const effect: EffectRecord = {
+				id: "effect-store-execution",
+				actionCallId: executionCall.id,
+				status: "planned",
+				providerRequestKey: "provider-request-store-execution",
+				result: null,
+			};
+			await repository.reserveExecution({
+				actionCall: executionCall,
+				dispatch,
+				effect,
+			});
+			expect(
+				(
+					await databaseClient`
+					select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+					from connection.action_calls a
+					join connection.dispatches d on d.action_call_id = a.id
+					join connection.effects e on e.action_call_id = a.id
+					where a.id = 'call-store-execution'
+				`
+				)[0],
+			).toMatchObject({
+				action_status: "created",
+				dispatch_status: "pending",
+				effect_status: "planned",
+			});
+			expect(
+				await repository.claimDispatch(
+					dispatch.id,
+					"lease-store-execution",
+					Date.now() + 60_000,
+				),
+			).toBe(true);
+			expect(
+				await repository.transitionEffect(effect.id, "planned", "submitted"),
+			).toBe(true);
+			expect(
+				await repository.transitionEffect(effect.id, "submitted", "succeeded", {
+					ok: true,
+				}),
+			).toBe(true);
+			expect(
+				await repository.transitionDispatch(
+					dispatch.id,
+					"claimed",
+					"completed",
+				),
+			).toBe(true);
 		} finally {
 			await handle.close();
 		}
