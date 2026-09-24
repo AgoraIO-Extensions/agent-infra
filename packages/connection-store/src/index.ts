@@ -7,5 +7,14 @@ export {
 	connectionDatabaseUrlFromEnvironment,
 	migrateConnectionDatabase,
 } from "./migrate.js";
-export { createConnectionAuthorityRepository } from "./repository.js";
+export {
+	createBrowserSessionPrincipalStore,
+	createBrowserSessionStore,
+	createCatalogReader,
+	createConnectionAuthorityRepository,
+	createConnectionTokenStore,
+	createConsumerTokenStore,
+	createInstallationStore,
+	createPrincipalTokenStore,
+} from "./repository.js";
 export * from "./schema.js";

@@ -1,0 +1,1 @@
+{ "extends": "@agent-infra/config/tsconfig.base.json" }

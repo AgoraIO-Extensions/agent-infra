@@ -51,6 +51,44 @@ export const principals = connectionSchema.table(
 	],
 );
 
+export const browserSessions = connectionSchema.table(
+	"browser_sessions",
+	{
+		id: text("id").primaryKey(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		principalId: text("principal_id").notNull(),
+		issuer: varchar("issuer", { length: 255 }).notNull(),
+		uid: varchar("uid", { length: 255 }).notNull(),
+		recoveryGeneration: bigint("recovery_generation", {
+			mode: "number",
+		}).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.principalId],
+			foreignColumns: [principals.id],
+			name: "browser_sessions_principal_fk",
+		}),
+		uniqueIndex("browser_sessions_token_hash_unique").on(table.tokenHash),
+		check(
+			"browser_sessions_token_hash_format",
+			sql`${table.tokenHash} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"browser_sessions_recovery_generation_positive",
+			sql`${table.recoveryGeneration} > 0`,
+		),
+		nonEmpty("browser_session_id", table.id),
+		nonEmpty("browser_session_issuer", table.issuer),
+		nonEmpty("browser_session_uid", table.uid),
+	],
+);
+
 export const consumers = connectionSchema.table(
 	"consumers",
 	{
@@ -144,6 +182,69 @@ export const actors = connectionSchema.table(
 			sql`${table.id} <> '__consumer_actor__'`,
 		),
 		nonEmpty("actor_id", table.id),
+	],
+);
+
+export const accessTokens = connectionSchema.table(
+	"access_tokens",
+	{
+		id: text("id").primaryKey(),
+		kind: varchar("kind", { length: 32 }).notNull(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		principalId: text("principal_id").notNull(),
+		consumerId: text("consumer_id").notNull(),
+		consumerInstanceId: text("consumer_instance_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		audience: varchar("audience", { length: 255 }).notNull(),
+		scopes: jsonb("scopes").$type<readonly string[]>().notNull(),
+		recoveryGeneration: bigint("recovery_generation", {
+			mode: "number",
+		}).notNull(),
+		issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		familyId: text("family_id").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.principalId],
+			foreignColumns: [principals.id],
+			name: "access_tokens_principal_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerId],
+			foreignColumns: [consumers.id],
+			name: "access_tokens_consumer_fk",
+		}),
+		foreignKey({
+			columns: [table.consumerInstanceId, table.consumerId, table.principalId],
+			foreignColumns: [
+				consumerInstances.id,
+				consumerInstances.consumerId,
+				consumerInstances.principalId,
+			],
+			name: "access_tokens_instance_binding_fk",
+		}),
+		uniqueIndex("access_tokens_token_hash_unique").on(table.tokenHash),
+		index("access_tokens_family_idx").on(table.familyId),
+		check(
+			"access_tokens_kind_check",
+			sql`${table.kind} IN ('pat', 'oauth_access')`,
+		),
+		check(
+			"access_tokens_token_hash_format",
+			sql`${table.tokenHash} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"access_tokens_recovery_generation_positive",
+			sql`${table.recoveryGeneration} > 0`,
+		),
+		nonEmpty("access_token_id", table.id),
+		nonEmpty("access_token_audience", table.audience),
+		nonEmpty("access_token_family_id", table.familyId),
 	],
 );
 
@@ -638,9 +739,11 @@ export const auditEvents = connectionSchema.table(
 
 export const connectionInfrastructureTables = [
 	principals,
+	browserSessions,
 	consumers,
 	consumerInstances,
 	actors,
+	accessTokens,
 	providers,
 	actionVersions,
 	connections,

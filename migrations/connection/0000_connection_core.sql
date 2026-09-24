@@ -15,6 +15,24 @@ CREATE TABLE "connection"."principals" (
   CONSTRAINT "principal_uid_non_empty" CHECK (char_length("uid") > 0)
 );
 
+CREATE TABLE "connection"."browser_sessions" (
+  "id" text PRIMARY KEY NOT NULL,
+  "token_hash" varchar(64) NOT NULL,
+  "principal_id" text NOT NULL,
+  "issuer" varchar(255) NOT NULL,
+  "uid" varchar(255) NOT NULL,
+  "recovery_generation" bigint NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "revoked_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "browser_sessions_principal_fk" FOREIGN KEY ("principal_id") REFERENCES "connection"."principals" ("id"),
+  CONSTRAINT "browser_sessions_token_hash_format" CHECK ("token_hash" ~ '^[a-f0-9]{64}$'),
+  CONSTRAINT "browser_sessions_recovery_generation_positive" CHECK ("recovery_generation" > 0),
+  CONSTRAINT "browser_session_id_non_empty" CHECK (char_length("id") > 0),
+  CONSTRAINT "browser_session_issuer_non_empty" CHECK (char_length("issuer") > 0),
+  CONSTRAINT "browser_session_uid_non_empty" CHECK (char_length("uid") > 0)
+);
+
 CREATE TABLE "connection"."consumers" (
   "id" text PRIMARY KEY NOT NULL,
   "name" varchar(200) NOT NULL,
@@ -52,6 +70,33 @@ CREATE TABLE "connection"."actors" (
   CONSTRAINT "actors_status_check" CHECK ("status" IN ('active', 'revoked')),
   CONSTRAINT "actors_id_not_consumer_sentinel" CHECK ("id" <> '__consumer_actor__'),
   CONSTRAINT "actor_id_non_empty" CHECK (char_length("id") > 0)
+);
+
+CREATE TABLE "connection"."access_tokens" (
+  "id" text PRIMARY KEY NOT NULL,
+  "kind" varchar(32) NOT NULL,
+  "token_hash" varchar(64) NOT NULL,
+  "principal_id" text NOT NULL,
+  "consumer_id" text NOT NULL,
+  "consumer_instance_id" text NOT NULL,
+  "actor_id" text NOT NULL,
+  "audience" varchar(255) NOT NULL,
+  "scopes" jsonb NOT NULL,
+  "recovery_generation" bigint NOT NULL,
+  "issued_at" timestamp with time zone NOT NULL,
+  "expires_at" timestamp with time zone NOT NULL,
+  "revoked_at" timestamp with time zone,
+  "family_id" text NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "access_tokens_principal_fk" FOREIGN KEY ("principal_id") REFERENCES "connection"."principals" ("id"),
+  CONSTRAINT "access_tokens_consumer_fk" FOREIGN KEY ("consumer_id") REFERENCES "connection"."consumers" ("id"),
+  CONSTRAINT "access_tokens_instance_binding_fk" FOREIGN KEY ("consumer_instance_id", "consumer_id", "principal_id") REFERENCES "connection"."consumer_instances" ("id", "consumer_id", "principal_id"),
+  CONSTRAINT "access_tokens_kind_check" CHECK ("kind" IN ('pat', 'oauth_access')),
+  CONSTRAINT "access_tokens_token_hash_format" CHECK ("token_hash" ~ '^[a-f0-9]{64}$'),
+  CONSTRAINT "access_tokens_recovery_generation_positive" CHECK ("recovery_generation" > 0),
+  CONSTRAINT "access_token_id_non_empty" CHECK (char_length("id") > 0),
+  CONSTRAINT "access_token_audience_non_empty" CHECK (char_length("audience") > 0),
+  CONSTRAINT "access_token_family_id_non_empty" CHECK (char_length("family_id") > 0)
 );
 
 CREATE TABLE "connection"."providers" (
@@ -281,6 +326,9 @@ ON "connection"."action_calls"
 FOR EACH ROW EXECUTE FUNCTION "connection"."enforce_actor_binding"();
 
 CREATE UNIQUE INDEX "principals_issuer_uid_unique" ON "connection"."principals" USING btree ("issuer", "uid");
+CREATE UNIQUE INDEX "browser_sessions_token_hash_unique" ON "connection"."browser_sessions" USING btree ("token_hash");
+CREATE UNIQUE INDEX "access_tokens_token_hash_unique" ON "connection"."access_tokens" USING btree ("token_hash");
+CREATE INDEX "access_tokens_family_idx" ON "connection"."access_tokens" USING btree ("family_id");
 CREATE UNIQUE INDEX "consumer_instances_installation_unique" ON "connection"."consumer_instances" USING btree ("installation_key");
 CREATE UNIQUE INDEX "action_versions_provider_action_version_unique" ON "connection"."action_versions" USING btree ("provider_id", "action_id", "version");
 CREATE UNIQUE INDEX "connections_provider_external_account_unique" ON "connection"."connections" USING btree ("provider_id", "external_account_id");

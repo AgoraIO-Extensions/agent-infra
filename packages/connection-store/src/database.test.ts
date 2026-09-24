@@ -27,9 +27,11 @@ describe("Connection store boundary", () => {
 			),
 		).toEqual([
 			"principals",
+			"browser_sessions",
 			"consumers",
 			"consumer_instances",
 			"actors",
+			"access_tokens",
 			"providers",
 			"action_versions",
 			"connections",

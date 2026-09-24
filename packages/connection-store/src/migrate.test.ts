@@ -46,10 +46,12 @@ describe("Connection PostgreSQL migration", () => {
 			order by table_name
 		`;
 		expect(tables.map((row) => row.table_name)).toEqual([
+			"access_tokens",
 			"action_calls",
 			"action_versions",
 			"actors",
 			"audit_events",
+			"browser_sessions",
 			"connections",
 			"consumer_instances",
 			"consumers",
