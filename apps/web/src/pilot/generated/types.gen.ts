@@ -330,6 +330,10 @@ export type ApiApplicationCreateRequestV1 = {
     schemaVersion: 1;
 };
 
+export type ApiApplicationCredentialIssueProjectionV1 = ApiCredentialIssueProjectionV1 | {
+    metadata: ApiCredentialMetadataProjectionV1;
+};
+
 export type ApiApplicationProjectionV1 = {
     applicationId: string;
     authorizationRevision: string;
@@ -2627,7 +2631,7 @@ export type IssueApplicationCredentialResponses = {
     /**
      * Issued application credential
      */
-    201: ApiCredentialIssueProjectionV1;
+    201: ApiApplicationCredentialIssueProjectionV1;
 };
 
 export type IssueApplicationCredentialResponse = IssueApplicationCredentialResponses[keyof IssueApplicationCredentialResponses];

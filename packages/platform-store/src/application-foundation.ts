@@ -413,7 +413,10 @@ export class PostgresApplicationFoundationTransactionV1
 					status: plan.application.status,
 					...(plan.application.status === "creating"
 						? {
-								approvalRevision: null,
+								managementRevision: 1,
+								// API creation bypasses Web approval, so it is immediately
+								// eligible for the Workload reconciliation candidate query.
+								approvalRevision: 1,
 								desiredState: "running" as const,
 								workloadRevision: 1,
 								fence: 1,

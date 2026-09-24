@@ -1870,6 +1870,25 @@
         ],
         "type": "object"
       },
+      "ApiApplicationCredentialIssueProjectionV1": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ApiCredentialIssueProjectionV1"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "metadata": {
+                "$ref": "#/components/schemas/ApiCredentialMetadataProjectionV1"
+              }
+            },
+            "required": [
+              "metadata"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ApiApplicationProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -7904,7 +7923,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiCredentialIssueProjectionV1"
+                  "$ref": "#/components/schemas/ApiApplicationCredentialIssueProjectionV1"
                 }
               }
             },

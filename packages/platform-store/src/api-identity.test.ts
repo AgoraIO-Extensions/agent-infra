@@ -178,4 +178,50 @@ describe("PostgreSQL API identity store", () => {
 		]);
 		expect(userCredential.metadata).not.toHaveProperty("credential");
 	});
+
+	it("advances the Agent authorization revision with a new grant", async () => {
+		await adminClient`truncate platform.audit_events, platform.agent_principal_grants,
+			platform.agents cascade`;
+		await adminClient`
+			insert into platform.agents (id, authorization_revision)
+			values ('agent_grant_revision', 'authorization_revision_1')
+		`;
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_grant_revision', 'application', 'existing-app', 'use',
+				'authorization_revision_1')
+		`;
+		await store.grantAgent({
+			agentId: "agent_grant_revision",
+			principal: { kind: "application", id: "new-app" },
+			grantType: "manage",
+			authorizationRevision: "authorization_revision_2",
+			audit: {
+				...userAudit,
+				action: "api.agent.grant.granted",
+			},
+		});
+		const [agent] = await adminClient`
+			select authorization_revision
+			from platform.agents where id = 'agent_grant_revision'
+		`;
+		const grants = await adminClient`
+			select principal_id, authorization_revision
+			from platform.agent_principal_grants
+			where agent_id = 'agent_grant_revision'
+			order by principal_id
+		`;
+		expect(agent?.authorization_revision).toBe("authorization_revision_2");
+		expect(grants).toEqual([
+			{
+				principal_id: "existing-app",
+				authorization_revision: "authorization_revision_2",
+			},
+			{
+				principal_id: "new-app",
+				authorization_revision: "authorization_revision_2",
+			},
+		]);
+	});
 });

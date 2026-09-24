@@ -5,7 +5,7 @@ import type {
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 
 import {
@@ -13,6 +13,7 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	auditEvents,
 	outboxItems,
@@ -53,7 +54,17 @@ export async function advanceAgentConfigurationRevision(
 			),
 		)
 		.returning({ id: agents.id });
-	return advanced.length === 1;
+	if (advanced.length !== 1) return false;
+	await transaction
+		.update(agentPrincipalGrants)
+		.set({ authorizationRevision: plan.nextAuthorizationRevision })
+		.where(
+			and(
+				eq(agentPrincipalGrants.agentId, plan.agentId),
+				isNull(agentPrincipalGrants.revokedAt),
+			),
+		);
+	return true;
 }
 
 export async function replaceAgentAccess(

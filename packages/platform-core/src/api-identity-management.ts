@@ -69,6 +69,15 @@ export interface ApiIdentityStorePortV1 {
 		readonly authorizationRevision: string;
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void>;
+	/**
+	 * Re-checks the currently active delivery grant immediately before a
+	 * credential value is persisted. Implementations must apply the same
+	 * application revision and active-status rules as issueCredential.
+	 */
+	hasCredentialDelivery(input: {
+		readonly applicationId: string;
+		readonly principal: ApiPrincipalV1;
+	}): Promise<boolean>;
 	revokeCredentialDelivery(input: {
 		readonly applicationId: string;
 		readonly principal: ApiPrincipalV1;
@@ -227,10 +236,13 @@ export function createApiIdentityManagementV1(input: {
 	readonly agentAccess: ApiIdentityAgentAccessPortV1;
 	readonly idFactory: () => string;
 }): ApiIdentityManagementInterfaceV1 {
-	const requireUserActor = (actor: ApiIdentityActorV1): string => {
-		if (actor.accountStatus === "disabled")
+	const requireActiveActor = (actor: ApiIdentityActorV1): ApiPrincipalV1 => {
+		if (actor.accountStatus !== "active")
 			throw new ApiIdentityError("not_authorized");
-		const principal = actorPrincipal(actor);
+		return actorPrincipal(actor);
+	};
+	const requireUserActor = (actor: ApiIdentityActorV1): string => {
+		const principal = requireActiveActor(actor);
 		if (principal.kind !== "user") throw new ApiIdentityError("not_authorized");
 		return principal.id;
 	};
@@ -282,6 +294,7 @@ export function createApiIdentityManagementV1(input: {
 		actor: ApiIdentityActorV1,
 		agentId: string,
 	): Promise<void> => {
+		requireActiveActor(actor);
 		if (!(await input.agentAccess.canManage({ actor, agentId })))
 			throw new ApiIdentityError("resource_unavailable");
 	};
@@ -344,25 +357,38 @@ export function createApiIdentityManagementV1(input: {
 			if (application.status !== "active")
 				throw new ApiIdentityError("resource_unavailable");
 			if (!value.recipient) throw new ApiIdentityError("not_authorized");
-			await requireActiveRecipient(
-				value.recipient,
-				checkedAudit(actor, value.audit),
-			);
 			const audit = checkedAudit(actor, value.audit);
+			await requireActiveRecipient(value.recipient, audit);
 			try {
+				if (
+					!(await input.store.hasCredentialDelivery({
+						applicationId: application.id,
+						principal: value.recipient,
+					}))
+				) {
+					if (input.store.writeAudit)
+						await input.store.writeAudit({
+							...audit,
+							recipient: value.recipient,
+							outcome: "rejected",
+							targetId: application.id,
+						});
+					throw new ApiIdentityError("resource_unavailable");
+				}
 				return await input.store.issueCredential({
 					...value,
 					principal: { kind: "application", id: application.id },
 					audit,
 				});
-			} catch {
+			} catch (error) {
+				if (error instanceof ApiIdentityError) throw error;
 				if (input.store.writeAudit)
 					await input.store.writeAudit({
 						...audit,
 						outcome: "failed",
 						targetId: application.id,
 					});
-				throw new ApiIdentityError("resource_unavailable");
+				throw new ApiIdentityError("dependency_unavailable");
 			}
 		},
 		async revokeApplicationCredential(

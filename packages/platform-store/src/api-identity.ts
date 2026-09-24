@@ -15,6 +15,7 @@ import postgres from "postgres";
 
 import {
 	agentPrincipalGrants,
+	agents,
 	apiCredentialDeliveryGrants,
 	auditEvents,
 	platformApiCredentials,
@@ -486,6 +487,21 @@ export class PostgresApiIdentityStoreV1 {
 		readonly audit?: ApiIdentityAuditInputV1;
 	}): Promise<void> {
 		await this.#database.transaction(async (transaction) => {
+			const [agent] = await transaction
+				.update(agents)
+				.set({ authorizationRevision: input.authorizationRevision })
+				.where(eq(agents.id, input.agentId))
+				.returning({ id: agents.id });
+			if (!agent) throw new Error("Agent not found");
+			await transaction
+				.update(agentPrincipalGrants)
+				.set({ authorizationRevision: input.authorizationRevision })
+				.where(
+					and(
+						eq(agentPrincipalGrants.agentId, input.agentId),
+						isNull(agentPrincipalGrants.revokedAt),
+					),
+				);
 			await transaction
 				.insert(agentPrincipalGrants)
 				.values({

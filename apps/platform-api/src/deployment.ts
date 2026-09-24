@@ -13,6 +13,7 @@ import { createDeploymentAuthorizationAdmission } from "./deployment-authorizati
 import {
 	allocateDeploymentApplicationIds,
 	createDeploymentIdentityScope,
+	withApiIdentityResolverV1,
 } from "./deployment-identity.js";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
@@ -61,19 +62,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const apiIdentity = new PostgresApiIdentityStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
-	const identity: IdentityAdapter = input.identity.resolveApiCredential
-		? input.identity
-		: {
-				...input.identity,
-				resolveApiCredential: (credential) =>
-					apiIdentity.resolveApiCredential(
-						credential,
-						input.identity.resolveUser
-							? async (userId) =>
-									(await input.identity.resolveUser?.(userId)) ?? null
-							: undefined,
-					),
-			};
+	const identity: IdentityAdapter = withApiIdentityResolverV1(
+		input.identity,
+		apiIdentity,
+	);
 	const identityScope = createDeploymentIdentityScope(identity);
 	const admissions = createDeploymentAdmissionsV1({
 		...input,

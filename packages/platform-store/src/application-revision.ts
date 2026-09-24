@@ -10,7 +10,7 @@ import type {
 	PendingSecretRecordAttachmentsV1,
 } from "@agent-infra/platform-core";
 import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -30,6 +30,7 @@ import {
 	agentConfigurationRevisions,
 	agentManagementHistory,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	idempotencyRecords,
 	outboxItems,
@@ -535,6 +536,15 @@ export class PostgresApplicationRevisionTransactionV1
 						)
 						.returning({ id: agents.id });
 					if (advancedAgent.length !== 1) unavailable();
+					await transaction
+						.update(agentPrincipalGrants)
+						.set({ authorizationRevision: plan.nextAuthorizationRevision })
+						.where(
+							and(
+								eq(agentPrincipalGrants.agentId, plan.application.agentId),
+								isNull(agentPrincipalGrants.revokedAt),
+							),
+						);
 				}
 				if (
 					attachments !== undefined &&

@@ -297,6 +297,12 @@ export const ApiCredentialIssueProjectionV1Schema = z.strictObject({
 	credential: nonEmptyString(),
 });
 
+/** Application credential values are only present when the recipient is the caller. */
+export const ApiApplicationCredentialIssueProjectionV1Schema = z.union([
+	ApiCredentialIssueProjectionV1Schema,
+	z.strictObject({ metadata: ApiCredentialMetadataProjectionV1Schema }),
+]);
+
 export const ApiApplicationCreateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	name: nonEmptyString().max(200),
@@ -743,7 +749,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			responses: {
 				"201": jsonResponse(
 					"Issued application credential",
-					ApiCredentialIssueProjectionV1Schema,
+					ApiApplicationCredentialIssueProjectionV1Schema,
 				),
 				...errorResponses,
 			},
@@ -1369,6 +1375,8 @@ export const pilotBrowserSchemasV1 = {
 	ApiAgentGrantProjectionV1: ApiAgentGrantProjectionV1Schema,
 	ApiAgentGrantRequestV1: ApiAgentGrantRequestV1Schema,
 	ApiApplicationCreateRequestV1: ApiApplicationCreateRequestV1Schema,
+	ApiApplicationCredentialIssueProjectionV1:
+		ApiApplicationCredentialIssueProjectionV1Schema,
 	ApiApplicationProjectionV1: ApiApplicationProjectionV1Schema,
 	ApiCredentialIssueProjectionV1: ApiCredentialIssueProjectionV1Schema,
 	ApiCredentialIssueRequestV1: ApiCredentialIssueRequestV1Schema,

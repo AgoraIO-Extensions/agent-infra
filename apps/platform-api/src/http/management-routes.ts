@@ -10,6 +10,7 @@ import {
 	ApiAgentGrantProjectionV1Schema,
 	ApiAgentGrantRequestV1Schema,
 	ApiApplicationCreateRequestV1Schema,
+	ApiApplicationCredentialIssueProjectionV1Schema,
 	ApiApplicationProjectionV1Schema,
 	ApiCredentialIssueProjectionV1Schema,
 	ApiCredentialIssueRequestV1Schema,
@@ -63,32 +64,6 @@ import {
 type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV1Schema.parse
 >;
-type LegacyApiIdentityStore = {
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly createApplication: (input: any) => Promise<void>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly getApplication: (id: string) => Promise<any>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly listApplications: (userId: string) => Promise<any>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly issueCredential: (input: any) => Promise<any>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly listCredentials: (input: any) => Promise<any>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly grantCredentialDelivery: (input: any) => Promise<void>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly revokeCredentialDelivery: (input: any) => Promise<boolean>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly grantAgent: (input: any) => Promise<void>;
-	// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-	readonly revokeAgentGrant: (input: any) => Promise<boolean>;
-	readonly revokeCredential: (
-		id: string,
-		at: Date,
-		// biome-ignore lint/suspicious/noExplicitAny: compatibility boundary for pre-Core test fixtures
-		audit: any,
-	) => Promise<boolean>;
-};
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
 type ApplicationCreateInput = ReturnType<
 	typeof AgentApplicationCreateRequestV1Schema.parse
@@ -158,9 +133,7 @@ export interface ManagementRouteDependencies {
 		AgentManagementInterfaceV1,
 		"executeManagementCommand"
 	>;
-	readonly apiIdentity?:
-		| ApiIdentityManagementInterfaceV1
-		| LegacyApiIdentityStore;
+	readonly apiIdentity?: ApiIdentityManagementInterfaceV1;
 	readonly configuration: Pick<
 		AgentConfigurationUseCaseV1,
 		"upgradeCustomImage"
@@ -537,62 +510,11 @@ async function requireManagementAccepted(
 }
 
 function apiIdentityOrUnavailable(
-	store: ApiIdentityManagementInterfaceV1 | LegacyApiIdentityStore | undefined,
+	store: ApiIdentityManagementInterfaceV1 | undefined,
 	traceId: string,
 ): ApiIdentityManagementInterfaceV1 {
 	if (!store) fail("DEPENDENCY_UNAVAILABLE", traceId);
-	if ("listUserCredentials" in store) return store;
-	const legacy = store as LegacyApiIdentityStore;
-	return {
-		listUserCredentials: (a) =>
-			legacy.listCredentials({
-				principal: a.principal ?? { kind: "user", id: a.userId },
-			}),
-		issueUserCredential: (a, value) =>
-			legacy.issueCredential({
-				...value,
-				principal: { kind: "user", id: a.userId },
-			}),
-		revokeUserCredential: async (_a, id, at, audit) => {
-			if (!(await legacy.revokeCredential(id, at, audit)))
-				throw new Error("missing");
-		},
-		listApplications: (a) => legacy.listApplications(a.userId),
-		createApplication: async (v) => {
-			await legacy.createApplication({
-				...v,
-				responsibleUserId: v.actor.userId,
-			});
-			const app = await legacy.getApplication(v.applicationId);
-			if (!app) throw new Error("missing");
-			return app;
-		},
-		listApplicationCredentials: (_a, id) =>
-			legacy.listCredentials({ principal: { kind: "application", id } }),
-		issueApplicationCredential: (_a, id, value) =>
-			legacy.issueCredential({
-				...value,
-				principal: { kind: "application", id },
-			}),
-		revokeApplicationCredential: async (_a, _app, id, at, audit) => {
-			if (!(await legacy.revokeCredential(id, at, audit)))
-				throw new Error("missing");
-		},
-		grantCredentialDelivery: (v) =>
-			legacy.grantCredentialDelivery({ ...v, authorizationRevision: "legacy" }),
-		revokeCredentialDelivery: async (v) => {
-			if (!(await legacy.revokeCredentialDelivery(v)))
-				throw new Error("missing");
-		},
-		grantAgent: async (v) => {
-			const revision = randomUUID();
-			await legacy.grantAgent({ ...v, authorizationRevision: revision });
-			return revision;
-		},
-		revokeAgentGrant: async (v) => {
-			if (!(await legacy.revokeAgentGrant(v))) throw new Error("missing");
-		},
-	};
+	return store;
 }
 
 function apiCredentialProjection(
@@ -684,11 +606,12 @@ export function registerManagementRoutes(
 					}),
 				metadata.traceId,
 			);
+			const projection = {
+				metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
+				credential,
+			};
 			return context.json(
-				ApiCredentialIssueProjectionV1Schema.parse({
-					metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
-					credential,
-				}),
+				ApiCredentialIssueProjectionV1Schema.parse(projection),
 				201,
 			);
 		}),
@@ -926,11 +849,23 @@ export function registerManagementRoutes(
 					),
 				metadata.traceId,
 			);
+			const projection =
+				body.recipient.kind === "user" && body.recipient.id === identity.userId
+					? {
+							metadata: apiCredentialProjection(
+								issued.metadata,
+								metadata.traceId,
+							),
+							credential,
+						}
+					: {
+							metadata: apiCredentialProjection(
+								issued.metadata,
+								metadata.traceId,
+							),
+						};
 			return context.json(
-				ApiCredentialIssueProjectionV1Schema.parse({
-					metadata: apiCredentialProjection(issued.metadata, metadata.traceId),
-					credential,
-				}),
+				ApiApplicationCredentialIssueProjectionV1Schema.parse(projection),
 				201,
 			);
 		}),
@@ -1100,21 +1035,6 @@ export function registerManagementRoutes(
 				metadata,
 				ids,
 			);
-			const availability =
-				apiIdentity.principal.kind === "application" &&
-				!body.availability.some(
-					(target) =>
-						target.kind === "application" &&
-						target.applicationId === apiIdentity.principal.id,
-				)
-					? [
-							...body.availability,
-							{
-								kind: "application" as const,
-								applicationId: apiIdentity.principal.id,
-							},
-						]
-					: body.availability;
 			await dependencies.foundation.submit(
 				{
 					schemaVersion: 2,
@@ -1122,11 +1042,7 @@ export function registerManagementRoutes(
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
-					...applicationCommandFields(
-						{ ...body, availability },
-						prepared,
-						metadata.traceId,
-					),
+					...applicationCommandFields(body, prepared, metadata.traceId),
 					secrets: prepared.secrets,
 					channels: [],
 				},
@@ -1137,7 +1053,7 @@ export function registerManagementRoutes(
 					principal: apiIdentity.principal,
 					creationMode: "api",
 				},
-				undefined,
+				prepared.attachment,
 			);
 			return context.json(
 				{

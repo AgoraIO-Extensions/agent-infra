@@ -11,7 +11,7 @@ import {
 	type AgentManagementTransactionRequestV1,
 	snapshotAgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -174,8 +174,10 @@ export async function readAgentManagementState(
 			workloadRevision: agentApplications.workloadRevision,
 			fence: agentApplications.fence,
 			failureCode: agentApplications.failureCode,
+			authorizationRevision: agents.authorizationRevision,
 		})
 		.from(agentApplications)
+		.innerJoin(agents, eq(agents.id, agentApplications.agentId))
 		.where(eq(agentApplications.agentId, agentId))
 		.limit(1);
 	if (!application) return undefined;
@@ -205,7 +207,17 @@ export async function readAgentManagementState(
 				revokedAt: agentPrincipalGrants.revokedAt,
 			})
 			.from(agentPrincipalGrants)
-			.where(eq(agentPrincipalGrants.agentId, agentId))
+			.where(
+				and(
+					eq(agentPrincipalGrants.agentId, agentId),
+					application.authorizationRevision === null
+						? undefined
+						: eq(
+								agentPrincipalGrants.authorizationRevision,
+								application.authorizationRevision,
+							),
+				),
+			)
 			.orderBy(
 				asc(agentPrincipalGrants.principalType),
 				asc(agentPrincipalGrants.principalId),
@@ -224,7 +236,18 @@ export async function readAgentManagementState(
 		throw new AgentManagementError("unavailable");
 	return {
 		schemaVersion: 1,
-		...application,
+		applicationId: application.applicationId,
+		agentId: application.agentId,
+		applicantId: application.applicantId,
+		status: application.status,
+		revision: application.revision,
+		approvalRevision: application.approvalRevision,
+		decisionReason: application.decisionReason,
+		serviceAvailability: application.serviceAvailability,
+		desiredState: application.desiredState,
+		workloadRevision: application.workloadRevision,
+		fence: application.fence,
+		failureCode: application.failureCode,
 		ownerIds: owners.map(({ ownerId }) => ownerId),
 		availability: availability.map(({ targetType, targetId }) =>
 			targetType === "user"
@@ -680,6 +703,10 @@ function agentScopeCondition(scope: AgentManagementAgentScopeV1) {
 						? inArray(agentPrincipalGrants.grantType, ["manage", "use"])
 						: eq(agentPrincipalGrants.grantType, scope.grantType)
 				}
+				and (
+					${isNull(agents.authorizationRevision)}
+					or ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
+				)
 				and ${agentPrincipalGrants.revokedAt} is null
 		)`;
 	}
@@ -739,6 +766,34 @@ const projectionAccessSelection = {
 		)
 		from ${agentAvailability}
 		where ${agentAvailability.agentId} = ${agentApplications.agentId}
+	), '[]'::jsonb)`,
+	principalGrants: sql<
+		Array<{
+			principal: { kind: "user" | "application"; id: string };
+			grantType: "manage" | "use";
+			authorizationRevision: string;
+			revokedAt: string | null;
+		}>
+	>`coalesce((
+		select jsonb_agg(
+			jsonb_build_object(
+				'principal', jsonb_build_object(
+					'kind', ${agentPrincipalGrants.principalType},
+					'id', ${agentPrincipalGrants.principalId}
+				),
+				'grantType', ${agentPrincipalGrants.grantType},
+				'authorizationRevision', ${agentPrincipalGrants.authorizationRevision},
+				'revokedAt', ${agentPrincipalGrants.revokedAt}
+			)
+			order by ${agentPrincipalGrants.principalType},
+				${agentPrincipalGrants.principalId}, ${agentPrincipalGrants.grantType}
+		)
+		from ${agentPrincipalGrants}
+		where ${agentPrincipalGrants.agentId} = ${agentApplications.agentId}
+			and (
+				${isNull(agents.authorizationRevision)}
+				or ${agentPrincipalGrants.authorizationRevision} = ${agents.authorizationRevision}
+			)
 	), '[]'::jsonb)`,
 };
 
@@ -809,6 +864,15 @@ interface ManagementProjectionRow {
 	readonly failureCode: AgentManagementStateV1["failureCode"];
 	readonly ownerIds: readonly string[];
 	readonly availability: AgentManagementStateV1["availability"];
+	readonly principalGrants: readonly {
+		readonly principal: {
+			readonly kind: "user" | "application";
+			readonly id: string;
+		};
+		readonly grantType: "manage" | "use";
+		readonly authorizationRevision: string;
+		readonly revokedAt: string | null;
+	}[];
 }
 
 interface ApplicationProjectionRow extends ManagementProjectionRow {
@@ -823,6 +887,24 @@ function managementState(row: ManagementProjectionRow): AgentManagementStateV1 {
 	if (row.ownerIds.length === 0) {
 		throw new AgentManagementError("unavailable");
 	}
+	const principalGrants = row.principalGrants.map((grant) => {
+		if (
+			(grant.principal.kind !== "user" &&
+				grant.principal.kind !== "application") ||
+			!validText(grant.principal.id) ||
+			(grant.grantType !== "manage" && grant.grantType !== "use") ||
+			!validText(grant.authorizationRevision) ||
+			(grant.revokedAt !== null &&
+				!Number.isFinite(Date.parse(grant.revokedAt)))
+		)
+			throw new AgentManagementError("unavailable");
+		return {
+			principal: { ...grant.principal },
+			grantType: grant.grantType,
+			authorizationRevision: grant.authorizationRevision,
+			revokedAt: grant.revokedAt === null ? null : new Date(grant.revokedAt),
+		};
+	});
 	return {
 		schemaVersion: 1,
 		applicationId: row.applicationId,
@@ -838,6 +920,7 @@ function managementState(row: ManagementProjectionRow): AgentManagementStateV1 {
 		fence: row.fence,
 		ownerIds: row.ownerIds,
 		availability: row.availability,
+		principalGrants,
 		failureCode: row.failureCode,
 	};
 }

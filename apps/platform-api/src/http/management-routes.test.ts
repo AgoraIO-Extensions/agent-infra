@@ -336,6 +336,10 @@ describe("management routes", () => {
 		};
 		// Re-register the route with the API identity boundary for this request.
 		const apiApp = new Hono();
+		const prepareSecretReplacements = vi.fn().mockResolvedValue({
+			secrets: [],
+			modelConfiguration: undefined,
+		});
 		registerManagementRoutes(apiApp, {
 			identity: {
 				resolve: vi.fn(),
@@ -353,10 +357,7 @@ describe("management routes", () => {
 				getAgent: vi.fn(),
 			},
 			allocateApplicationIds: vi.fn(),
-			prepareSecretReplacements: vi.fn().mockResolvedValue({
-				secrets: [],
-				modelConfiguration: undefined,
-			}),
+			prepareSecretReplacements,
 			readApplicationProjection: vi.fn(),
 			readAgentProjection: vi.fn(),
 		});
@@ -388,6 +389,39 @@ describe("management routes", () => {
 				creationMode: "api",
 			}),
 			undefined,
+		);
+
+		const attachment = { resolve: vi.fn() };
+		prepareSecretReplacements.mockResolvedValue({
+			secrets: [{ name: "BOT_TOKEN", replace: true }],
+			modelConfiguration: undefined,
+			attachment,
+		});
+		const withSecret = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				...headers,
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-02",
+			},
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Direct agent with secret",
+				description: "Created through the API",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [{ name: "BOT_TOKEN", value: "secret-value" }],
+			}),
+		});
+		expect(withSecret.status).toBe(201);
+		expect(direct.submit).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				secrets: [{ name: "BOT_TOKEN", replace: true }],
+			}),
+			expect.objectContaining({ creationMode: "api" }),
+			attachment,
 		);
 	});
 
@@ -433,24 +467,30 @@ describe("management routes", () => {
 				resolveUser,
 			},
 			apiIdentity: {
-				createApplication: vi.fn(),
-				getApplication: vi.fn().mockResolvedValue({
-					id: "application-1",
-					name: "Application",
-					responsibleUserId: identity.userId,
-					status: "active",
-					authorizationRevision: "application-revision-1",
-				}),
+				listUserCredentials: vi.fn(),
+				issueUserCredential: vi.fn(),
+				revokeUserCredential: vi.fn(),
 				listApplications: vi.fn(),
-				issueCredential,
-				listCredentials,
-				getCredentialMetadata: vi.fn(),
-				grantCredentialDelivery,
-				revokeCredentialDelivery,
-				hasCredentialDelivery: vi.fn().mockResolvedValue(true),
+				createApplication: vi.fn(),
+				listApplicationCredentials: vi.fn().mockImplementation(() =>
+					listCredentials({
+						principal: { kind: "application", id: "application-1" },
+					}),
+				),
+				issueApplicationCredential: vi
+					.fn()
+					.mockImplementation((_actor, _applicationId, value) =>
+						issueCredential(value),
+					),
+				revokeApplicationCredential: vi.fn(),
+				grantCredentialDelivery: vi
+					.fn()
+					.mockImplementation((value) => grantCredentialDelivery(value)),
+				revokeCredentialDelivery: vi
+					.fn()
+					.mockImplementation((value) => revokeCredentialDelivery(value)),
 				grantAgent: vi.fn(),
 				revokeAgentGrant: vi.fn(),
-				revokeCredential: vi.fn(),
 			},
 			foundation: { submit: vi.fn() },
 			revision: { revise: vi.fn() },
@@ -536,39 +576,33 @@ describe("management routes", () => {
 		);
 
 		expect(response.status).toBe(201);
+		expect(await response.json()).not.toHaveProperty("credential");
 		expect(issueCredential).toHaveBeenCalled();
 	});
 
 	it("grants and revokes an application principal through the owner boundary", async () => {
 		const app = new Hono();
-		const grantAgent = vi.fn().mockResolvedValue(undefined);
+		const grantAgent = vi.fn().mockResolvedValue("authorization-revision-2");
 		const revokeAgentGrant = vi.fn().mockResolvedValue(true);
 		const getAgent = vi.fn().mockResolvedValue(agentRecord);
-		const getApplication = vi.fn().mockResolvedValue({
-			id: "application-caller",
-			name: "Caller",
-			responsibleUserId: "user-1",
-			status: "active",
-			authorizationRevision: "application-revision-1",
-		});
 		registerManagementRoutes(app, {
 			identity: {
 				resolve: vi.fn().mockResolvedValue(identity),
 				hydrateUsers: vi.fn().mockResolvedValue([]),
 			},
 			apiIdentity: {
-				createApplication: vi.fn(),
-				getApplication,
+				listUserCredentials: vi.fn(),
+				issueUserCredential: vi.fn(),
+				revokeUserCredential: vi.fn(),
 				listApplications: vi.fn(),
-				issueCredential: vi.fn(),
-				listCredentials: vi.fn(),
-				getCredentialMetadata: vi.fn(),
+				createApplication: vi.fn(),
+				listApplicationCredentials: vi.fn(),
+				issueApplicationCredential: vi.fn(),
+				revokeApplicationCredential: vi.fn(),
 				grantCredentialDelivery: vi.fn(),
 				revokeCredentialDelivery: vi.fn(),
-				hasCredentialDelivery: vi.fn(),
 				grantAgent,
 				revokeAgentGrant,
-				revokeCredential: vi.fn(),
 			},
 			foundation: { submit: vi.fn() },
 			revision: { revise: vi.fn() },

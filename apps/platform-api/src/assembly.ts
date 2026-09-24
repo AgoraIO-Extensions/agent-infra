@@ -22,6 +22,7 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
+import { withApiIdentityResolverV1 } from "./deployment-identity.js";
 import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
@@ -81,19 +82,10 @@ export function assemblePlatformApi(
 	const apiIdentity =
 		input.apiIdentity ??
 		new PostgresApiIdentityStoreV1({ databaseUrl: input.databaseUrl });
-	const identity: IdentityAdapter = input.identity.resolveApiCredential
-		? input.identity
-		: {
-				...input.identity,
-				resolveApiCredential: (credential) =>
-					apiIdentity.resolveApiCredential(
-						credential,
-						input.identity.resolveUser
-							? async (userId) =>
-									(await input.identity.resolveUser?.(userId)) ?? null
-							: undefined,
-					),
-			};
+	const identity: IdentityAdapter = withApiIdentityResolverV1(
+		input.identity,
+		apiIdentity,
+	);
 	const identityAdapter = identity;
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,

@@ -108,6 +108,34 @@ describe("Application foundation use case", () => {
 		);
 	});
 
+	it("gives an API application principal its own initial availability", async () => {
+		let captured: ApplicationFoundationWritePlanV1 | undefined;
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: readyTransaction({
+					async commit(plan) {
+						captured = plan;
+						return { outcome: "committed", result: plan.result };
+					},
+				}),
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		await useCase.submit(
+			{ ...applicationFoundationCommandV1, availability: [] },
+			{
+				...applicationFoundationActorContextV1,
+				principal: { kind: "application", id: "application-caller" },
+				creationMode: "api",
+			},
+			pendingSecretRecordAttachmentFixtureV1(),
+		);
+		expect(captured?.access.availability).toEqual([
+			{ kind: "application", applicationId: "application-caller" },
+		]);
+	});
+
 	it("rejects a staged actor getter without reading it", async () => {
 		let getterReads = 0;
 		const context = Object.defineProperty(

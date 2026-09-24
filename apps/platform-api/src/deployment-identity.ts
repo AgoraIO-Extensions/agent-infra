@@ -7,6 +7,35 @@ import {
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 
+interface ApiIdentityResolverV1 {
+	resolveApiCredential(
+		credential: string,
+		resolveUser?: (userId: string) => Promise<unknown | null>,
+	): Promise<unknown | null>;
+}
+
+/** Attach the platform Store credential resolver once at the assembly boundary. */
+export function withApiIdentityResolverV1<T extends IdentityAdapter>(
+	identity: T,
+	apiIdentity: ApiIdentityResolverV1,
+): T {
+	if (identity.resolveApiCredential) return identity;
+	// Keep the deployment adapter as the live prototype so revocation and
+	// directory changes made by the host are observed on every request.
+	const resolved = Object.create(identity) as T;
+	Object.defineProperty(resolved, "resolveApiCredential", {
+		enumerable: true,
+		value: (credential: string) =>
+			apiIdentity.resolveApiCredential(
+				credential,
+				identity.resolveUser
+					? async (userId) => (await identity.resolveUser?.(userId)) ?? null
+					: undefined,
+			),
+	});
+	return resolved;
+}
+
 /** Bind admission to the authenticated HTTP request across concurrent awaits. */
 export function createDeploymentIdentityScope(identity: IdentityAdapter) {
 	const requests = new AsyncLocalStorage<Request>();
