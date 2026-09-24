@@ -344,6 +344,7 @@ export function ActiveConversation({
 							<div className="min-w-0 space-y-1">
 								<Label htmlFor={`${composerId}-model`}>模型</Label>
 								<Select
+									disabled={blocked || commandLocked}
 									value={currentModelId || null}
 									onValueChange={(value) => {
 										if (!value) return;
@@ -377,6 +378,7 @@ export function ActiveConversation({
 							<div className="min-w-0 space-y-1">
 								<Label htmlFor={`${composerId}-reasoning`}>推理强度</Label>
 								<Select
+									disabled={blocked || commandLocked}
 									value={currentReasoning || null}
 									onValueChange={(value) => setReasoning(value ?? undefined)}
 								>
