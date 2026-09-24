@@ -63,7 +63,7 @@ async function fixture(mode = "normal") {
 it.each([false, true])(
 	"keeps ACK separate from completion and resumes the exact session (native exit: %s)",
 	async (exit) => {
-		const f = await fixture();
+		const f = await fixture("tool");
 		try {
 			const result = await f.driver.execute(command);
 			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
@@ -82,6 +82,20 @@ it.each([false, true])(
 				result.nativeSessionRef,
 				command.executionId,
 			);
+			expect(
+				events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual(["intent", "started", "completed"]);
+			expect(
+				events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "tool"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual(["intent", "started", "completed"]);
 			expect(
 				events
 					.filter((event) => event.type === "text")

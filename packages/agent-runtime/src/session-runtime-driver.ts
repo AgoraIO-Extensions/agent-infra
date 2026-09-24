@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
@@ -6,8 +6,12 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	type RuntimeEvent,
+	RuntimeEventSchema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	RuntimeEventV2Schema,
+	type RuntimeOperationFactV2,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	type RuntimeStatusV1,
@@ -30,6 +34,8 @@ import { RuntimeHostError } from "./errors.js";
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
 	readonly nativeModelId: string;
+	/** The effective provider model identifier, when the native adapter prefixes it. */
+	readonly modelFactId?: string;
 	readonly reasoningLevels: readonly string[];
 }
 export interface SessionRuntimeDriverOptions {
@@ -52,7 +58,8 @@ export interface NativeSessionOptions {
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
-	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
+	modelRequestStarted?: () => Promise<void>;
+	update: (event?: RuntimeEventInput) => Promise<void>;
 }
 export interface NativeSession {
 	nativeId: string;
@@ -96,7 +103,11 @@ interface Turn {
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
-	events: RuntimeEventV1[];
+	events: RuntimeEvent[];
+	toolOperations?: Record<
+		string,
+		{ operationRef: string; attemptRef: string; startedAt?: string }
+	>;
 }
 interface Session {
 	schemaVersion: 1;
@@ -113,6 +124,12 @@ interface Handle {
 	pump: Promise<void>;
 }
 type Submit = Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
+type RuntimeEventInput = {
+	[K in RuntimeEventV1["type"]]: Pick<
+		Extract<RuntimeEventV1, { type: K }>,
+		"type" | "payload"
+	>;
+}[RuntimeEventV1["type"]];
 const terminal = (status: RuntimeStatusV1) =>
 	["completed", "cancelled", "failed"].includes(status);
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -137,6 +154,32 @@ const unknownResult = {
 	code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 	message: "Runtime command acceptance could not be confirmed",
 } as const;
+
+const metadataId = (value: string, prefix: string) => {
+	if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) return value;
+	return `${prefix}:${createHash("sha256").update(value).digest("hex")}`;
+};
+
+function latestFact(
+	turn: Turn,
+	kind: RuntimeOperationFactV2["kind"],
+): RuntimeOperationFactV2 | undefined {
+	for (let index = turn.events.length - 1; index >= 0; index--) {
+		const event = turn.events[index];
+		if (event?.type === "operation" && event.payload.kind === kind)
+			return event.payload;
+	}
+}
+
+const nextLegacyCursor = (turns: Turn[], prefix: string) =>
+	`${prefix}-${
+		turns.reduce(
+			(count, turn) =>
+				count +
+				turn.events.filter((event) => event.type !== "operation").length,
+			0,
+		) + 1
+	}`;
 
 export class SessionRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
@@ -361,6 +404,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				const turns = new Set<string>();
 				const eventKeys = new Set<string>();
 				let sequence = 0;
+				let legacySequence = 0;
 				for (const turn of state.turns) {
 					if (
 						!turn.executionId ||
@@ -377,18 +421,47 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						unavailable();
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
+					if (
+						turn.toolOperations !== undefined &&
+						(typeof turn.toolOperations !== "object" ||
+							turn.toolOperations === null ||
+							Array.isArray(turn.toolOperations) ||
+							Object.entries(turn.toolOperations).some(
+								([toolCallId, operation]) =>
+									!toolCallId ||
+									typeof operation !== "object" ||
+									operation === null ||
+									Array.isArray(operation) ||
+									typeof operation.operationRef !== "string" ||
+									!operation.operationRef ||
+									typeof operation.attemptRef !== "string" ||
+									!operation.attemptRef ||
+									(operation.startedAt !== undefined &&
+										typeof operation.startedAt !== "string"),
+							))
+					)
+						unavailable();
 					let completed = false;
+					const cursorKeys = new Set<string>();
 					for (const event of turn.events) {
 						sequence++;
+						if (event.type !== "operation") legacySequence++;
 						if (
 							completed ||
-							!RuntimeEventV1Schema.safeParse(event).success ||
+							!RuntimeEventSchema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
-							event.cursor !== `${this.options.cursorPrefix}-${sequence}` ||
-							eventKeys.has(event.adapterEventKey)
+							(event.type === "operation"
+								? !event.cursor.startsWith(
+										`${this.options.cursorPrefix}-operation-`,
+									)
+								: event.cursor !==
+									`${this.options.cursorPrefix}-${legacySequence}`) ||
+							eventKeys.has(event.adapterEventKey) ||
+							cursorKeys.has(event.cursor)
 						)
 							unavailable();
 						eventKeys.add(event.adapterEventKey);
+						cursorKeys.add(event.cursor);
 						if (event.type === "completed") {
 							completed = true;
 							if (event.payload.status !== turn.status) unavailable();
@@ -417,6 +490,20 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					for (const turn of state.turns)
 						if (turn.status === "running") turn.status = "unknown";
 				});
+				for (const turn of file.read().turns) {
+					const fact = latestFact(turn, "model");
+					if (
+						turn.status === "unknown" &&
+						fact &&
+						(fact.phase === "intent" || fact.phase === "started")
+					)
+						await this.modelPhase(
+							file,
+							turn.executionId,
+							"unknown",
+							"recovery_unconfirmed",
+						);
+				}
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				const latest = active ?? state.turns.at(-1);
 				if (
@@ -452,6 +539,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								}
 							: undefined,
 						selection,
+						modelRequestStarted: async () => {},
 						admit: async () => unavailable(),
 						update: async () => {},
 					});
@@ -747,9 +835,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						outcome: "accepted",
 						status: "running",
 					});
-					await this.status(file, command.executionId, "running");
+					await this.status(
+						file,
+						command.executionId,
+						"running",
+						undefined,
+						undefined,
+						false,
+					);
 					admitted();
 				},
+				modelRequestStarted: () =>
+					this.modelRequestStarted(file, command.executionId),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -824,7 +921,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					selection,
 					status: "unknown",
 					events: [],
+					toolOperations: {},
 				});
+			});
+			await this.appendOperationFact(file, command.executionId, {
+				kind: "model",
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent",
+				model: {
+					configVersion: metadataId(this.options.configVersion, "config"),
+					modelOptionId: metadataId(selection.modelOptionId, "model-option"),
+					modelId: metadataId(
+						option.modelFactId ?? option.nativeModelId,
+						"model",
+					),
+					reasoningLevel: metadataId(selection.reasoningLevel, "reasoning"),
+				},
 			});
 		} catch {
 			await native.close();
@@ -872,21 +985,164 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				?.record ?? result(command, ref, unknownResult)
 		);
 	}
+	private async appendOperationFact(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		fact: RuntimeOperationFactV2,
+	) {
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status)) return;
+			const previous = latestFact(turn, fact.kind);
+			if (
+				previous &&
+				previous.operationRef === fact.operationRef &&
+				previous.attemptRef === fact.attemptRef &&
+				previous.phase === fact.phase
+			)
+				return;
+			state.sequence++;
+			const adapterEventKey = randomUUID();
+			turn.events.push(
+				RuntimeEventV2Schema.parse({
+					schemaVersion: 2,
+					executionId,
+					adapterEventKey,
+					cursor: `${this.options.cursorPrefix}-operation-${adapterEventKey}`,
+					occurredAt: new Date().toISOString(),
+					type: "operation",
+					payload: fact,
+				}),
+			);
+		});
+		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
+	}
+	private async modelPhase(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		phase: "started" | "completed" | "failed" | "unknown",
+		failureCode?: RuntimeOperationFactV2["failureCode"],
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		const previous = turn && latestFact(turn, "model");
+		if (
+			!previous ||
+			previous.phase === phase ||
+			["completed", "failed"].includes(previous.phase) ||
+			(previous.phase === "unknown" && phase === "started")
+		)
+			return;
+		const now = new Date().toISOString();
+		const startedAt =
+			previous.startedAt ?? (phase === "started" ? now : undefined);
+		const finishedAt = phase === "started" ? undefined : now;
+		const durationMs =
+			startedAt && finishedAt
+				? Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt))
+				: undefined;
+		const {
+			phase: _phase,
+			startedAt: _startedAt,
+			finishedAt: _finishedAt,
+			durationMs: _durationMs,
+			failureCode: _failureCode,
+			...base
+		} = previous;
+		await this.appendOperationFact(file, executionId, {
+			...base,
+			phase,
+			...(startedAt ? { startedAt } : {}),
+			...(finishedAt ? { finishedAt } : {}),
+			...(durationMs === undefined ? {} : { durationMs }),
+			...(phase === "completed"
+				? {}
+				: {
+						failureCode:
+							failureCode ??
+							(phase === "unknown"
+								? "recovery_unconfirmed"
+								: "operation_failed"),
+					}),
+		});
+	}
+	private async modelRequestStarted(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		const previous = turn && latestFact(turn, "model");
+		if (!previous) return;
+		if (previous.phase === "intent") {
+			await this.modelPhase(file, executionId, "started");
+			return;
+		}
+		if (previous.phase === "started") {
+			await this.modelPhase(file, executionId, "completed");
+			const latest = file
+				.read()
+				.turns.find((entry) => entry.executionId === executionId);
+			const completed = latest && latestFact(latest, "model");
+			if (completed?.kind !== "model") return;
+			const {
+				phase: _phase,
+				startedAt: _startedAt,
+				finishedAt: _finishedAt,
+				durationMs: _durationMs,
+				failureCode: _failureCode,
+				...base
+			} = completed;
+			await this.appendOperationFact(file, executionId, {
+				...base,
+				attemptRef: randomUUID(),
+				phase: "intent",
+			});
+			await this.modelPhase(file, executionId, "started");
+			return;
+		}
+		if (["completed", "failed", "unknown"].includes(previous.phase)) {
+			const {
+				phase: _phase,
+				startedAt: _startedAt,
+				finishedAt: _finishedAt,
+				durationMs: _durationMs,
+				failureCode: _failureCode,
+				...base
+			} = previous;
+			await this.appendOperationFact(file, executionId, {
+				...base,
+				attemptRef: randomUUID(),
+				phase: "intent",
+			});
+			await this.modelPhase(file, executionId, "started");
+		}
+	}
 	private async event(
 		file: DurableJsonFile<Session>,
 		executionId: string,
-		value: Pick<RuntimeEventV1, "type" | "payload">,
+		value: RuntimeEventInput,
 	) {
+		if (value.type === "tool")
+			await this.toolPhase(file, executionId, value.payload);
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
 			state.sequence++;
+			const legacyCursor = nextLegacyCursor(
+				state.turns,
+				this.options.cursorPrefix,
+			);
 			turn.events.push(
 				RuntimeEventV1Schema.parse({
 					schemaVersion: 1,
 					executionId,
 					adapterEventKey: randomUUID(),
-					cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+					cursor: legacyCursor,
 					occurredAt: new Date().toISOString(),
 					...value,
 				}),
@@ -894,13 +1150,125 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
+	private async toolPhase(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		value: Extract<RuntimeEventV1, { type: "tool" }>["payload"],
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (!turn || terminal(turn.status)) return;
+		const identity = turn.toolOperations?.[value.toolCallId];
+		const previousEvent = identity
+			? [...turn.events]
+					.reverse()
+					.find(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "tool" &&
+							event.payload.operationRef === identity.operationRef &&
+							event.payload.attemptRef === identity.attemptRef,
+					)
+			: undefined;
+		const previous =
+			previousEvent?.type === "operation" &&
+			previousEvent.payload.kind === "tool"
+				? previousEvent.payload
+				: undefined;
+		if (previous && ["completed", "failed", "unknown"].includes(previous.phase))
+			return;
+		if (value.phase === "started") {
+			if (previous) return;
+			const model = latestFact(turn, "model");
+			const created = {
+				kind: "tool" as const,
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent" as const,
+				toolId: metadataId(value.name, "tool"),
+				...(model ? { parentOperationRef: model.operationRef } : {}),
+			};
+			await file.update((state) => {
+				const current = state.turns.find(
+					(entry) => entry.executionId === executionId,
+				);
+				if (!current) return;
+				if (!current.toolOperations) current.toolOperations = {};
+				current.toolOperations[value.toolCallId] = {
+					operationRef: created.operationRef,
+					attemptRef: created.attemptRef,
+				};
+			});
+			await this.appendOperationFact(file, executionId, created);
+			const startedAt = new Date().toISOString();
+			await this.appendOperationFact(file, executionId, {
+				...created,
+				phase: "started",
+				startedAt,
+			});
+			return;
+		}
+		if (!previous) {
+			const model = latestFact(turn, "model");
+			const created = {
+				kind: "tool" as const,
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "unknown" as const,
+				failureCode: "recovery_unconfirmed" as const,
+				toolId: metadataId(value.name, "tool"),
+				...(model ? { parentOperationRef: model.operationRef } : {}),
+			};
+			await file.update((state) => {
+				const current = state.turns.find(
+					(entry) => entry.executionId === executionId,
+				);
+				if (!current) return;
+				current.toolOperations ??= {};
+				current.toolOperations[value.toolCallId] = {
+					operationRef: created.operationRef,
+					attemptRef: created.attemptRef,
+				};
+			});
+			await this.appendOperationFact(file, executionId, created);
+			return;
+		}
+		const now = new Date().toISOString();
+		const startedAt = previous.startedAt ?? now;
+		await this.appendOperationFact(file, executionId, {
+			...previous,
+			phase: value.phase,
+			finishedAt: now,
+			durationMs: Math.max(0, Date.parse(now) - Date.parse(startedAt)),
+			...(value.phase === "failed"
+				? { failureCode: "operation_failed" as const }
+				: {}),
+		});
+	}
 	private async status(
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		status: RuntimeStatusV1,
 		nativeStopReason?: string,
 		nativeTerminalCheckpoint?: string,
+		markModel = true,
 	) {
+		if (markModel && status === "running")
+			await this.modelPhase(file, executionId, "started");
+		else if (status === "completed")
+			await this.modelPhase(file, executionId, "completed");
+		else if (status === "failed")
+			await this.modelPhase(file, executionId, "failed", "operation_failed");
+		else if (status === "cancelled")
+			await this.modelPhase(file, executionId, "failed", "interrupted");
+		else if (status === "unknown")
+			await this.modelPhase(
+				file,
+				executionId,
+				"unknown",
+				"recovery_unconfirmed",
+			);
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
@@ -917,12 +1285,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			}
 			if (status === "failed") {
 				state.sequence++;
+				const legacyCursor = nextLegacyCursor(
+					state.turns,
+					this.options.cursorPrefix,
+				);
 				turn.events.push(
 					RuntimeEventV1Schema.parse({
 						schemaVersion: 1,
 						executionId,
 						adapterEventKey: randomUUID(),
-						cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+						cursor: legacyCursor,
 						occurredAt: new Date().toISOString(),
 						type: "error",
 						payload: {
@@ -935,12 +1307,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			}
 
 			state.sequence++;
+			const legacyCursor = nextLegacyCursor(
+				state.turns,
+				this.options.cursorPrefix,
+			);
 			turn.events.push(
 				RuntimeEventV1Schema.parse({
 					schemaVersion: 1,
 					executionId,
 					adapterEventKey: randomUUID(),
-					cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+					cursor: legacyCursor,
 					occurredAt: new Date().toISOString(),
 					...(terminal(status)
 						? { type: "completed", payload: { status } }
@@ -1091,7 +1467,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 		signal?: AbortSignal,
-	): Promise<AsyncIterable<RuntimeEventV1>> {
+	): Promise<AsyncIterable<RuntimeEvent>> {
 		await this.replayEvents(ref, executionId, afterCursor);
 		const self = this;
 		return (async function* () {

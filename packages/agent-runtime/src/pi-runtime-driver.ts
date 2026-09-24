@@ -22,6 +22,7 @@ export interface PiRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		modelRequestStarted?: () => Promise<void>,
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -42,7 +43,11 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
-				const callbacks = { admit: session.admit, update: session.update };
+				const callbacks = {
+					admit: session.admit,
+					modelRequestStarted: session.modelRequestStarted,
+					update: session.update,
+				};
 				const native = await openPiSession({
 					...session,
 					update: (event) => callbacks.update(event),
@@ -50,12 +55,16 @@ export const PiRuntimeDriver = {
 						session.directory,
 						session.selection,
 						() => callbacks.admit(),
+						async () => {
+							await callbacks.modelRequestStarted?.();
+						},
 					),
 				});
 				return {
 					...native,
 					startTurn: (next) => {
 						callbacks.admit = next.admit;
+						callbacks.modelRequestStarted = next.modelRequestStarted;
 						callbacks.update = next.update;
 					},
 				};

@@ -29,6 +29,7 @@ export async function openAcpSession(options: {
 	cwd: string;
 	nativeId?: string;
 	update: (notification: SessionNotification) => Promise<void>;
+	modelRequestStarted?: () => Promise<void>;
 }) {
 	const native = await spawnAcpProcess(
 		options.directory,
@@ -200,6 +201,7 @@ export async function openAcpSession(options: {
 			},
 			async prompt(text: string) {
 				tools.clear();
+				await options.modelRequestStarted?.();
 				const response = await connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],

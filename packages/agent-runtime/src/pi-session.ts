@@ -181,11 +181,9 @@ export async function openPiSession(
 										.update(frame.toolCallId)
 										.digest("hex"),
 									name:
-										frame.toolName === "read"
-											? "Read"
-											: ["write", "edit"].includes(frame.toolName as string)
-												? "Edit"
-												: "unavailable",
+										typeof frame.toolName === "string" && frame.toolName
+											? frame.toolName
+											: "unknown",
 									phase,
 								},
 							});

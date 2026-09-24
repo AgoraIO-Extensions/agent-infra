@@ -48,9 +48,10 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,
+			modelFactId: option.model,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit) => {
+		launch: async (directory, selection, admit, modelRequestStarted) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
@@ -60,6 +61,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
+				started: modelRequestStarted,
 			});
 			try {
 				for (const name of [

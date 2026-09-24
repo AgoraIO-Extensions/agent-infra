@@ -104,17 +104,31 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				).toBe("completed"),
 			{ timeout: 10000 },
 		);
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
 		expect(
-			(
-				await driver.replayEvents(
-					accepted.nativeSessionRef,
-					command.executionId,
-				)
-			)
+			events
 				.filter((event) => event.type === "text")
 				.map((event) => event.payload.delta)
 				.join(""),
 		).toBe("OK-1");
+		const modelFacts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(modelFacts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(modelFacts.at(-1)?.usage).toEqual({
+			inputTokens: 10,
+			outputTokens: 2,
+			cachedInputTokens: 0,
+		});
 		await driver.close();
 		driver = await ClaudeRuntimeDriver.open(options);
 		expect(await driver.execute(command)).toEqual(accepted);

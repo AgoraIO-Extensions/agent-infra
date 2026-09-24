@@ -546,6 +546,38 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 				(event) => event.type === "tool" && event.payload.phase === "failed",
 			),
 		).toHaveLength(4);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.phase === "intent",
+			),
+		).toHaveLength(6);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.phase === "started",
+			),
+		).toHaveLength(6);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.phase === "completed",
+			),
+		).toHaveLength(2);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.phase === "failed",
+			),
+		).toHaveLength(4);
 	}
 }, 30000);
 

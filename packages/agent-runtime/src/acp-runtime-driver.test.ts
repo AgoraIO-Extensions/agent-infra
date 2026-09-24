@@ -24,7 +24,7 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 			args: [
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
-			env: {},
+			env: { ACP_TEST_MODE: "tool" },
 		}),
 	};
 	let driver = await GenericAcpRuntimeDriver.open(options);
@@ -57,11 +57,25 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 			command.executionId,
 		);
 		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "model"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "started", "completed"]);
+		expect(
 			events
 				.filter((event) => event.type === "text")
 				.map((event) => event.payload.delta)
 				.join(""),
 		).toBe("synthetic result 1");
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "started", "completed"]);
 		await driver.close();
 		driver = await GenericAcpRuntimeDriver.open(options);
 		expect(await driver.execute(command)).toEqual(result);

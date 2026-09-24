@@ -22,6 +22,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		modelRequestStarted?: () => Promise<void>,
 	) => Promise<AcpLaunch>;
 }
 
@@ -41,11 +42,23 @@ export const GenericAcpRuntimeDriver = {
 						: ["max_tokens", "max_turn_requests", "refusal"].includes(reason)
 							? "failed"
 							: "unknown",
-			openSession: async ({ selection, admit, update, ...session }) => {
+			openSession: async ({
+				selection,
+				admit,
+				modelRequestStarted,
+				update,
+				...session
+			}) => {
 				const phases = new Map<string, string>();
 				return openAcpSession({
 					...session,
-					launch: await options.launch(session.directory, selection, admit),
+					modelRequestStarted,
+					launch: await options.launch(
+						session.directory,
+						selection,
+						admit,
+						modelRequestStarted,
+					),
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
@@ -75,11 +88,9 @@ export const GenericAcpRuntimeDriver = {
 											.update(event.toolCallId)
 											.digest("hex"),
 										name:
-											event.kind === "read"
-												? "Read"
-												: event.kind === "edit"
-													? "Edit"
-													: "unavailable",
+											typeof event.kind === "string" && event.kind
+												? event.kind
+												: "unknown",
 										phase,
 									},
 								});

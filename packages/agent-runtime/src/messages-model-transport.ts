@@ -11,6 +11,7 @@ export interface RuntimeMessagesTransportOptions {
 	readonly model: string;
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
+	readonly started?: () => Promise<void>;
 	readonly fetch?: typeof fetch;
 	readonly receipt?: (
 		state: "sent" | "completed" | "failed" | "unknown",
@@ -145,9 +146,11 @@ export async function openRuntimeMessagesTransport(
 				if (options.authentication === "api-key")
 					headers["x-api-key"] = access.credential;
 				else headers.authorization = `Bearer ${access.credential}`;
-				if (!counting) await options.receipt?.("sent");
-				sent = true;
-				const upstream = await (options.fetch ?? fetch)(
+				if (!counting) {
+					sent = true;
+					await options.receipt?.("sent");
+				}
+				const upstreamPromise = (options.fetch ?? fetch)(
 					`${access.endpoint.replace(/\/$/, "")}${request.url}`,
 					{
 						method: "POST",
@@ -157,6 +160,9 @@ export async function openRuntimeMessagesTransport(
 						signal: controller.signal,
 					},
 				);
+				if (counting) sent = true;
+				if (!counting) await options.started?.();
+				const upstream = await upstreamPromise;
 
 				if (!upstream.ok) {
 					void upstream.body?.cancel().catch(() => {});

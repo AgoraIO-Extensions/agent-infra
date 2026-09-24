@@ -115,6 +115,26 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
+			if (process.env.ACP_TEST_MODE === "tool") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "completed",
+					},
+				});
+			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(
 					process.env.ACP_TEST_MODE,
