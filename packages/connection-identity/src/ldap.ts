@@ -164,55 +164,68 @@ export class LdapAuthenticator {
 		this.#profile = Object.freeze({ ...profile });
 	}
 
+	private withServiceConnection<T>(
+		work: (transport: LdapTransport, signal: AbortSignal) => Promise<T>,
+	): Promise<T> {
+		return withDeadline(this.options.timeoutMs, async (signal) => {
+			let transport: LdapTransport;
+			try {
+				transport = this.transportFactory();
+			} catch {
+				throw new LdapUnavailableError();
+			}
+			try {
+				try {
+					await transport.bind({
+						dn: this.#profile.serviceDn,
+						password: this.#profile.servicePassword,
+						signal,
+					});
+				} catch {
+					throw new LdapUnavailableError();
+				}
+				return await work(transport, signal);
+			} finally {
+				await transport.close().catch(() => {});
+			}
+		});
+	}
+
 	async authenticate(
 		username: string,
 		password: string,
 	): Promise<LdapPrincipal> {
 		if (!username.trim() || !password) throw new LdapAuthenticationError();
 		try {
-			return await withDeadline(this.options.timeoutMs, async (signal) => {
-				const transport = this.transportFactory();
+			return await this.withServiceConnection(async (transport, signal) => {
+				let entries: readonly LdapEntry[];
 				try {
-					try {
-						await transport.bind({
-							dn: this.#profile.serviceDn,
-							password: this.#profile.servicePassword,
-							signal,
-						});
-					} catch {
-						throw new LdapUnavailableError();
-					}
-					let entries: readonly LdapEntry[];
-					try {
-						entries = await transport.search({
-							baseDn: this.#profile.baseDn,
-							filter: `(${this.options.userFilterAttribute}=${escapeLdapFilterValue(username)})`,
-							attributes: ["uid", "displayName", "mail", "cn"],
-							signal,
-						});
-					} catch {
-						throw new LdapUnavailableError();
-					}
-					if (entries.length !== 1) throw new LdapAuthenticationError();
-					const entry = entries[0];
-					if (!entry) throw new LdapAuthenticationError();
-					const uid = singleAttribute(entry, "uid");
-					const userDn = entry.dn.trim();
-					if (!uid || !userDn) throw new LdapAuthenticationError();
-					try {
-						await transport.bind({ dn: userDn, password, signal });
-					} catch {
-						throw new LdapAuthenticationError();
-					}
-					return {
-						issuer: this.#profile.issuer,
-						uid,
-						dn: userDn,
-						attributes: entry.attributes,
-					};
-				} finally {
-					await transport.close().catch(() => {});
+					entries = await transport.search({
+						baseDn: this.#profile.baseDn,
+						filter: `(${this.options.userFilterAttribute}=${escapeLdapFilterValue(username)})`,
+						attributes: ["uid", "displayName", "mail", "cn"],
+						signal,
+					});
+				} catch {
+					throw new LdapUnavailableError();
 				}
+				if (entries.length !== 1) throw new LdapAuthenticationError();
+				const entry = entries[0];
+				if (!entry) throw new LdapAuthenticationError();
+				const uid = singleAttribute(entry, "uid");
+				const userDn = entry.dn.trim();
+				if (!uid || !userDn) throw new LdapAuthenticationError();
+				try {
+					await transport.bind({ dn: userDn, password, signal });
+				} catch {
+					throw new LdapAuthenticationError();
+				}
+				return {
+					issuer: this.#profile.issuer,
+					uid,
+					dn: userDn,
+					attributes: entry.attributes,
+				};
 			});
 		} catch (error) {
 			if (error instanceof LdapAuthenticationError) throw error;
@@ -225,26 +238,16 @@ export class LdapAuthenticator {
 	async entryExists(uid: string): Promise<boolean> {
 		if (!uid.trim()) throw new LdapAuthenticationError();
 		try {
-			return await withDeadline(this.options.timeoutMs, async (signal) => {
-				const transport = this.transportFactory();
-				try {
-					await transport.bind({
-						dn: this.#profile.serviceDn,
-						password: this.#profile.servicePassword,
-						signal,
-					});
-					const entries = await transport.search({
-						baseDn: this.#profile.baseDn,
-						filter: `(uid=${escapeLdapFilterValue(uid)})`,
-						attributes: ["uid"],
-						signal,
-					});
-					if (entries.length > 1) throw new LdapAuthenticationError();
-					const entry = entries[0];
-					return entry !== undefined && singleAttribute(entry, "uid") === uid;
-				} finally {
-					await transport.close().catch(() => {});
-				}
+			return await this.withServiceConnection(async (transport, signal) => {
+				const entries = await transport.search({
+					baseDn: this.#profile.baseDn,
+					filter: `(uid=${escapeLdapFilterValue(uid)})`,
+					attributes: ["uid"],
+					signal,
+				});
+				if (entries.length > 1) throw new LdapAuthenticationError();
+				const entry = entries[0];
+				return entry !== undefined && singleAttribute(entry, "uid") === uid;
 			});
 		} catch (error) {
 			if (error instanceof LdapAuthenticationError) throw error;

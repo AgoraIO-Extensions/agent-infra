@@ -21,7 +21,6 @@
 	},
 	"dependencies": {
 		"@agent-infra/connection-core": "workspace:*",
-		"@agent-infra/connection-identity": "workspace:*",
 		"drizzle-orm": "catalog:",
 		"postgres": "catalog:"
 	},

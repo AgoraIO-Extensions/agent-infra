@@ -1,5 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
-import { LdapAuthenticationError } from "./ldap.js";
+
+export class PrincipalInactiveError extends Error {
+	constructor() {
+		super("Principal unavailable");
+		this.name = "PrincipalInactiveError";
+	}
+}
 
 export interface BrowserSessionPrincipal {
 	id: string;
@@ -83,7 +89,7 @@ export class BrowserSessionService {
 		cookie: string;
 		record: BrowserSessionRecord;
 	}> {
-		if (principal.status !== "active") throw new LdapAuthenticationError();
+		if (principal.status !== "active") throw new PrincipalInactiveError();
 		const token = randomBytes(32).toString("base64url");
 		const expiresAt = this.now() + this.lifetimeMs;
 		const record: BrowserSessionRecord = {

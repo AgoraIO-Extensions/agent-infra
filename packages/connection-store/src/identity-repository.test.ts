@@ -2,7 +2,7 @@ import {
 	BrowserSessionService,
 	PrincipalIdentityResolver,
 	stablePrincipalId,
-} from "@agent-infra/connection-identity";
+} from "@agent-infra/connection-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createConnectionDatabase } from "./database.js";
@@ -167,7 +167,7 @@ it("persists only session hashes and enforces Principal, revocation and recovery
 			recoveryGeneration: 2,
 		});
 		await expect(service.create(alice)).rejects.toThrow(
-			"LDAP authentication failed",
+			"Principal unavailable",
 		);
 		await expect(
 			sessions.insert({
@@ -175,7 +175,7 @@ it("persists only session hashes and enforces Principal, revocation and recovery
 				id: "stale-session",
 				tokenHash: "a".repeat(64),
 			}),
-		).rejects.toThrow("LDAP authentication failed");
+		).rejects.toThrow("Principal unavailable");
 		await expect(
 			sessions.insert({
 				...second.record,
@@ -183,7 +183,7 @@ it("persists only session hashes and enforces Principal, revocation and recovery
 				tokenHash: "b".repeat(64),
 				principalId: bob.id,
 			}),
-		).rejects.toThrow("LDAP authentication failed");
+		).rejects.toThrow("Principal unavailable");
 
 		now += 8 * 60 * 60 * 1000;
 		expect(await service.resolve(second.token)).toBeUndefined();

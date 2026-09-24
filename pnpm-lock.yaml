@@ -446,9 +446,6 @@ importers:
       '@agent-infra/connection-core':
         specifier: workspace:*
         version: link:../connection-core
-      '@agent-infra/connection-identity':
-        specifier: workspace:*
-        version: link:../connection-identity
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.2(postgres@3.4.9)

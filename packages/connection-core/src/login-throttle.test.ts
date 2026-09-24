@@ -23,3 +23,19 @@ it("bounds concurrent login and recovers automatically from short account backof
 	const last = throttle.begin(input);
 	last(true);
 });
+
+it("keeps admitting legitimate logins when arbitrary account names fill the window", () => {
+	const throttle = new LoginThrottle(() => 1_000);
+	for (let index = 0; index < 10_010; index += 1)
+		throttle.begin({
+			environment: "pilot",
+			source: "127.0.0.1",
+			username: `attempt-${index}`,
+		})(true);
+	const finish = throttle.begin({
+		environment: "pilot",
+		source: "127.0.0.1",
+		username: "alice",
+	});
+	finish(true);
+});

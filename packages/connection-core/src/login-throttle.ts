@@ -12,6 +12,10 @@ export class LoginRateLimitedError extends Error {
 	}
 }
 
+export function normalizeLoginAccount(username: string): string {
+	return username.normalize("NFKC").trim().toLowerCase();
+}
+
 /** Bounded process-local admission for the Connection login entrypoint. */
 export class LoginThrottle {
 	private readonly buckets = new Map<string, LoginBucket>();
@@ -23,7 +27,7 @@ export class LoginThrottle {
 		source: string;
 		username: string;
 	}): (succeeded: boolean) => void {
-		const account = input.username.normalize("NFKC").trim().toLowerCase();
+		const account = normalizeLoginAccount(input.username);
 		if (!input.environment || !input.source || !account)
 			throw new LoginRateLimitedError();
 		const now = this.now();
@@ -36,8 +40,22 @@ export class LoginThrottle {
 			`${input.environment}\u0000account\u0000${account}`,
 			`${input.environment}\u0000all`,
 		];
-		if (this.buckets.size + keys.length > 10_000)
-			throw new LoginRateLimitedError();
+		const missing = keys.filter((key) => !this.buckets.has(key)).length;
+		while (this.buckets.size + missing > 10_000) {
+			let victim: string | undefined;
+			for (const [key, bucket] of this.buckets) {
+				if (
+					!keys.includes(key) &&
+					!key.endsWith("\u0000all") &&
+					bucket.inFlight === 0
+				) {
+					victim = key;
+					break;
+				}
+			}
+			if (!victim) throw new LoginRateLimitedError();
+			this.buckets.delete(victim);
+		}
 		const buckets = keys.map((key) => {
 			let bucket = this.buckets.get(key);
 			if (!bucket) {

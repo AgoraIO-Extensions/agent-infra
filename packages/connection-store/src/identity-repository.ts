@@ -1,12 +1,12 @@
-import type {
-	BrowserSessionDirectory,
-	BrowserSessionPrincipal,
-	BrowserSessionPrincipalStore,
-	BrowserSessionRecord,
-	BrowserSessionStore,
-	PrincipalIdentityStore,
-} from "@agent-infra/connection-identity";
-import { LdapAuthenticationError } from "@agent-infra/connection-identity";
+import {
+	type BrowserSessionDirectory,
+	type BrowserSessionPrincipal,
+	type BrowserSessionPrincipalStore,
+	type BrowserSessionRecord,
+	type BrowserSessionStore,
+	type PrincipalIdentityStore,
+	PrincipalInactiveError,
+} from "@agent-infra/connection-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { ConnectionDatabase } from "./database.js";
 import { browserSessions, principals } from "./schema.js";
@@ -89,7 +89,7 @@ export function createBrowserSessionStore(
 					principal.uid !== record.uid ||
 					principal.recoveryGeneration !== record.recoveryGeneration
 				)
-					throw new LdapAuthenticationError();
+					throw new PrincipalInactiveError();
 				await tx.insert(browserSessions).values({
 					id: record.id,
 					tokenHash: record.tokenHash,
@@ -132,7 +132,7 @@ export function createPostgresPrincipalDirectory(
 	return {
 		async check(requestIssuer, uid) {
 			if (requestIssuer !== issuer || !uid.trim())
-				throw new LdapAuthenticationError();
+				throw new PrincipalInactiveError();
 			return db.transaction(async (tx) => {
 				const [principal] = await tx
 					.select()

@@ -2,13 +2,15 @@ import {
 	type BrowserSessionPrincipal,
 	type BrowserSessionRecord,
 	BrowserSessionService,
-	LdapAuthenticationError,
+	ConnectionLoginService,
+	LoginRejectedError,
 	LoginThrottle,
 	PrincipalIdentityResolver,
 	stablePrincipalId,
-} from "@agent-infra/connection-identity";
+} from "@agent-infra/connection-core";
 import { expect, it, vi } from "vitest";
 import { createConnectionApp } from "./app";
+import { redactedLoginMarker } from "./audit-marker";
 import type { ConnectionAuthDependencies } from "./auth";
 
 function setup() {
@@ -49,10 +51,10 @@ function setup() {
 		{ check: async () => ({ exists: true }) },
 	);
 	const audit = vi.fn(async () => {});
-	const ldap: ConnectionAuthDependencies["ldap"] = {
-		async authenticate(username, password) {
+	const authenticator = {
+		async authenticate(username: string, password: string) {
 			if (password !== "correct" || !["alice", "bob"].includes(username))
-				throw new LdapAuthenticationError();
+				throw new LoginRejectedError();
 			return {
 				issuer: "corp-ldap",
 				uid: username,
@@ -61,18 +63,24 @@ function setup() {
 			};
 		},
 	};
-	const auth: ConnectionAuthDependencies = {
-		ldap,
+	const service = new ConnectionLoginService({
+		authenticator,
 		principals: new PrincipalIdentityResolver(principalStore),
 		sessions,
 		throttle: new LoginThrottle(),
-		publicOrigin: "https://connection.example.test",
 		environment: "test",
+		failureFloorMs: 0,
+		marker: (kind, value) =>
+			redactedLoginMarker(Buffer.alloc(32, 7), "test", kind, value),
+		audit,
+	});
+	const auth: ConnectionAuthDependencies = {
+		service,
+		publicOrigin: "https://connection.example.test",
 		csrfKey: Buffer.alloc(32, 7),
 		source: () => "127.0.0.1",
-		audit,
 	};
-	return { app: createConnectionApp(auth), audit, principals, ldap };
+	return { app: createConnectionApp(auth), audit, principals };
 }
 
 async function login(
@@ -149,11 +157,13 @@ it("logs in with an opaque cookie and requires the matching Origin, session and 
 			})
 		).status,
 	).toBe(200);
-	expect(audit).toHaveBeenCalledWith({
-		principalId: stablePrincipalId("corp-ldap", "alice"),
-		action: "auth.logout",
-		outcome: "succeeded",
-	});
+	expect(audit).toHaveBeenCalledWith(
+		expect.objectContaining({
+			principalId: stablePrincipalId("corp-ldap", "alice"),
+			action: "auth.logout",
+			outcome: "succeeded",
+		}),
+	);
 });
 
 it("returns a single redacted credential failure for unknown user, wrong password and disabled Principal", async () => {
@@ -172,9 +182,13 @@ it("returns a single redacted credential failure for unknown user, wrong passwor
 		expect(response.status).toBe(401);
 		expect(await response.json()).toEqual({ error: "Login failed" });
 	}
-	expect(audit).toHaveBeenCalledWith({
-		action: "auth.login",
-		outcome: "failed",
-	});
+	expect(audit).toHaveBeenCalledWith(
+		expect.objectContaining({
+			action: "auth.login",
+			outcome: "failed",
+		}),
+	);
 	expect(JSON.stringify(audit.mock.calls)).not.toContain("wrong-password");
+	expect(JSON.stringify(audit.mock.calls)).not.toContain("127.0.0.1");
+	expect(JSON.stringify(audit.mock.calls)).not.toContain("alice");
 });

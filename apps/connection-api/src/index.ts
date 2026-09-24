@@ -2,9 +2,15 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
 	BrowserSessionService,
-	createLdaptsAuthenticator,
+	ConnectionLoginService,
+	LoginRejectedError,
 	LoginThrottle,
+	LoginUnavailableError,
 	PrincipalIdentityResolver,
+} from "@agent-infra/connection-core";
+import {
+	createLdaptsAuthenticator,
+	LdapAuthenticationError,
 } from "@agent-infra/connection-identity";
 import {
 	connectionDatabaseUrlFromEnvironment,
@@ -18,6 +24,7 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 
 import { connectionApiService, createConnectionApp } from "./app";
+import { redactedLoginMarker } from "./audit-marker";
 import type { ConnectionAuthDependencies } from "./auth";
 
 interface StartOptions {
@@ -91,32 +98,54 @@ function authFromEnvironment():
 	const principalStore = createPrincipalIdentityStore(database.db);
 	const sessionStore = createBrowserSessionStore(database.db);
 	const auditStore = createAuditEventStore(database.db);
+	const environment = process.env.CONNECTION_ENVIRONMENT ?? "";
+	const marker = (kind: "account" | "source", value: string) =>
+		redactedLoginMarker(csrfKey, environment, kind, value);
+	const service = new ConnectionLoginService({
+		authenticator: {
+			async authenticate(username, password) {
+				try {
+					return await ldap.authenticate(username, password);
+				} catch (error) {
+					if (error instanceof LdapAuthenticationError)
+						throw new LoginRejectedError();
+					throw new LoginUnavailableError();
+				}
+			},
+		},
+		principals: new PrincipalIdentityResolver(principalStore),
+		sessions: new BrowserSessionService(
+			sessionStore,
+			principalStore,
+			createPostgresPrincipalDirectory(database.db, profile.issuer, ldap),
+		),
+		throttle: new LoginThrottle(),
+		environment,
+		failureFloorMs: 5_250,
+		marker,
+		audit: async (input) => {
+			await auditStore.insert({
+				id: randomUUID(),
+				traceId: randomUUID(),
+				principalId: input.principalId,
+				action: input.action,
+				targetType: "principal",
+				targetId: input.principalId ?? "unknown",
+				outcome: input.outcome,
+				metadata: {
+					environment: input.environment,
+					accountMarker: input.accountMarker,
+					sourceMarker: input.sourceMarker,
+				},
+			});
+		},
+	});
 	return {
 		dependencies: {
-			ldap,
-			principals: new PrincipalIdentityResolver(principalStore),
-			sessions: new BrowserSessionService(
-				sessionStore,
-				principalStore,
-				createPostgresPrincipalDirectory(database.db, profile.issuer, ldap),
-			),
-			throttle: new LoginThrottle(),
+			service,
 			publicOrigin: origin,
-			environment: process.env.CONNECTION_ENVIRONMENT ?? "",
 			csrfKey,
 			source: (context) => getConnInfo(context).remote.address ?? "",
-			audit: async (input) => {
-				await auditStore.insert({
-					id: randomUUID(),
-					traceId: randomUUID(),
-					principalId: input.principalId,
-					action: input.action,
-					targetType: "principal",
-					targetId: input.principalId ?? "unknown",
-					outcome: input.outcome,
-					metadata: {},
-				});
-			},
 		},
 		close: database.close,
 	};

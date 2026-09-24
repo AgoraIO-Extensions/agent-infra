@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
-import type { LdapPrincipal } from "./ldap.js";
 import type { BrowserSessionPrincipal } from "./session.js";
+
+export interface PrincipalIdentityInput {
+	issuer: string;
+	uid: string;
+	dn: string;
+	attributes?: Readonly<Record<string, unknown>>;
+}
 
 export interface PrincipalIdentityStore {
 	findByIssuerUid(input: {
@@ -22,7 +28,9 @@ export function stablePrincipalId(issuer: string, uid: string): string {
 export class PrincipalIdentityResolver {
 	constructor(private readonly store: PrincipalIdentityStore) {}
 
-	async resolve(input: LdapPrincipal): Promise<BrowserSessionPrincipal> {
+	async resolve(
+		input: PrincipalIdentityInput,
+	): Promise<BrowserSessionPrincipal> {
 		if (!input.issuer.trim() || !input.uid.trim() || !input.dn.trim())
 			throw new Error("LDAP principal identity is invalid");
 		const existing = await this.store.findByIssuerUid({
