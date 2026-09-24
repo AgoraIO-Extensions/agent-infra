@@ -321,7 +321,7 @@ export function createApiIdentityManagementV1(input: {
 		agentId: string,
 	): Promise<void> => {
 		requireActiveActor(actor);
-		if (actor.credential !== undefined)
+		if (actor.principal !== undefined)
 			requireCredentialScope(actor, ["agent:manage"]);
 		if (!(await input.agentAccess.canManage({ actor, agentId })))
 			throw new ApiIdentityError("resource_unavailable");

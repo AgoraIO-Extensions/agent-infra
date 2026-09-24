@@ -113,6 +113,12 @@ describe("API identity management authorization", () => {
 				["agent:manage"],
 			),
 		).toThrow();
+		expect(() =>
+			useCase.resolveAgentQueryGrantType({
+				...apiActor,
+				credential: undefined,
+			}),
+		).toThrow();
 	});
 
 	it("rejects disabled or missing recipients before granting delivery", async () => {
