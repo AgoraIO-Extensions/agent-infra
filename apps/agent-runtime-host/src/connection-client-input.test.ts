@@ -217,6 +217,7 @@ describe("independent Connection input", () => {
 		await writeFile(env.file, " ".repeat(32_769));
 		await expect(env.read()).resolves.toBeUndefined();
 		await env.write(delivered);
+		env.resolveOriginalBinding.mockClear();
 		env.resolveOriginalBinding
 			.mockResolvedValueOnce(binding)
 			.mockRejectedValueOnce(new Error("authorization revoked"));
