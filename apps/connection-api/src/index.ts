@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
 	BrowserSessionService,
-	ClientAuthorizationDenied,
 	ConnectionLoginService,
 	LoginRejectedError,
 	LoginThrottle,
 	LoginUnavailableError,
 	PrincipalIdentityResolver,
+	recheckDirectClientPrincipal,
 } from "@agent-infra/connection-core";
 import {
 	createLdaptsAuthenticator,
@@ -156,19 +156,13 @@ function authFromEnvironment():
 			repository: createConnectionClientRepository(database.db),
 			auth: dependencies,
 			audience: new URL("/mcp", origin).href,
-			recheckPrincipal: async (principalId) => {
-				const principal = await principalStore.findById(principalId);
-				if (
-					principal?.status !== "active" ||
-					principal.issuer !== profile.issuer
-				)
-					throw new ClientAuthorizationDenied();
-				const exists = await ldap.entryExists(principal.uid);
-				if (!exists) {
-					await principalStore.disable(principalId);
-					throw new ClientAuthorizationDenied();
-				}
-			},
+			recheckPrincipal: (principalId) =>
+				recheckDirectClientPrincipal(
+					principalId,
+					profile.issuer,
+					principalStore,
+					ldap,
+				),
 		},
 		close: database.close,
 	};

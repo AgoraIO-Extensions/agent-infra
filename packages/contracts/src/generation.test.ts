@@ -196,6 +196,19 @@ describe("standard contract artifacts", () => {
 		expect(validateInstall({ ...installation, principalId: "other" })).toBe(
 			false,
 		);
+		for (const path of [
+			"/oauth/instances/{id}/revoke",
+			"/oauth/pats/{id}/revoke",
+		]) {
+			const revoke = artifacts.pilotDirectOpenapi.paths[path].post;
+			expect(revoke.security).toEqual([{ ConnectionBrowserSession: [] }]);
+			expect(revoke.parameters).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ in: "header", name: "Origin" }),
+					expect.objectContaining({ in: "header", name: "X-CSRF-Token" }),
+				]),
+			);
+		}
 		expect(artifacts.pilotDirectOpenapi.security).toEqual([
 			{ PrincipalBearer: [] },
 		]);

@@ -127,6 +127,25 @@ function oauthError(context: Context, error: unknown) {
 	return context.json({ error: "temporarily_unavailable" }, 503, noStore);
 }
 
+function tokenResponse(
+	context: Context,
+	accessToken: string,
+	refreshToken: string,
+	scopes: readonly string[],
+) {
+	return context.json(
+		{
+			access_token: accessToken,
+			refresh_token: refreshToken,
+			token_type: "DPoP",
+			expires_in: 900,
+			scope: scopes.join(" "),
+		},
+		200,
+		noStore,
+	);
+}
+
 export async function authenticateDirectClient(
 	context: Context,
 	client: ConnectionClientDependencies,
@@ -273,17 +292,7 @@ export function addConnectionClientRoutes(
 					accessToken,
 					refreshToken,
 				});
-				return context.json(
-					{
-						access_token: accessToken,
-						refresh_token: refreshToken,
-						token_type: "DPoP",
-						expires_in: 900,
-						scope: result.scopes.join(" "),
-					},
-					200,
-					noStore,
-				);
+				return tokenResponse(context, accessToken, refreshToken, result.scopes);
 			}
 			if (grantType === "refresh_token") {
 				const refreshToken = form.refresh_token;
@@ -306,16 +315,11 @@ export function addConnectionClientRoutes(
 					nextRefreshToken,
 				});
 				if (!result) throw new ClientAuthorizationDenied();
-				return context.json(
-					{
-						access_token: accessToken,
-						refresh_token: nextRefreshToken,
-						token_type: "DPoP",
-						expires_in: 900,
-						scope: result.scopes.join(" "),
-					},
-					200,
-					noStore,
+				return tokenResponse(
+					context,
+					accessToken,
+					nextRefreshToken,
+					result.scopes,
 				);
 			}
 			return context.json({ error: "unsupported_grant_type" }, 400, noStore);

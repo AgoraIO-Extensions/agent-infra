@@ -1112,17 +1112,23 @@ export const pilotDirectOAuthOpenApiPathsV1 = {
 	},
 	"/oauth/instances/{id}/revoke": {
 		post: {
-			security: [],
+			security: [{ ConnectionBrowserSession: [] }],
 			operationId: "revokeDirectInstallation",
-			requestParams: { path: z.strictObject({ id: boundedOpaqueId }) },
+			requestParams: {
+				path: z.strictObject({ id: boundedOpaqueId }),
+				header: z.strictObject({ Origin: z.url(), "X-CSRF-Token": z.string() }),
+			},
 			responses: { "204": oauthNoContent, ...oauthErrorResponses },
 		},
 	},
 	"/oauth/pats/{id}/revoke": {
 		post: {
-			security: [],
+			security: [{ ConnectionBrowserSession: [] }],
 			operationId: "revokeDirectPat",
-			requestParams: { path: z.strictObject({ id: boundedOpaqueId }) },
+			requestParams: {
+				path: z.strictObject({ id: boundedOpaqueId }),
+				header: z.strictObject({ Origin: z.url(), "X-CSRF-Token": z.string() }),
+			},
 			responses: { "204": oauthNoContent, ...oauthErrorResponses },
 		},
 	},

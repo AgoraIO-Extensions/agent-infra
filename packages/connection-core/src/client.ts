@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { BrowserSessionPrincipalStore } from "./session.js";
 
 export class ClientAuthorizationDenied extends Error {
 	constructor() {
@@ -73,6 +74,23 @@ export function opaqueClientSecret(): string {
 
 export function hashClientSecret(secret: string): string {
 	return createHash("sha256").update(secret).digest("hex");
+}
+
+/** Recheck LDAP before each Direct credential operation; the Store transaction
+ * still checks current Principal status and generation after this read. */
+export async function recheckDirectClientPrincipal(
+	principalId: string,
+	issuer: string,
+	principals: BrowserSessionPrincipalStore,
+	directory: { entryExists(uid: string): Promise<boolean> },
+): Promise<void> {
+	const principal = await principals.findById(principalId);
+	if (principal?.status !== "active" || principal.issuer !== issuer)
+		throw new ClientAuthorizationDenied();
+	if (!(await directory.entryExists(principal.uid))) {
+		await principals.disable(principalId);
+		throw new ClientAuthorizationDenied();
+	}
 }
 
 export interface CurrentClientCredentialState {

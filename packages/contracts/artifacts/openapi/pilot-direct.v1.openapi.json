@@ -4579,6 +4579,23 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4626,7 +4643,11 @@
             "description": "OAuth temporarily unavailable"
           }
         },
-        "security": []
+        "security": [
+          {
+            "ConnectionBrowserSession": []
+          }
+        ]
       }
     },
     "/oauth/pat": {
@@ -4794,6 +4815,23 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4841,7 +4879,11 @@
             "description": "OAuth temporarily unavailable"
           }
         },
-        "security": []
+        "security": [
+          {
+            "ConnectionBrowserSession": []
+          }
+        ]
       }
     },
     "/oauth/revoke": {
