@@ -139,6 +139,10 @@ export const actors = connectionSchema.table(
 			table.consumerInstanceId,
 		),
 		check("actors_status_check", sql`${table.status} IN ('active', 'revoked')`),
+		check(
+			"actors_id_not_consumer_sentinel",
+			sql`${table.id} <> '__consumer_actor__'`,
+		),
 		nonEmpty("actor_id", table.id),
 	],
 );
@@ -287,6 +291,9 @@ export const credentialVersions = connectionSchema.table(
 	],
 );
 
+// `actor_id` is deliberately not a direct foreign key: the reserved
+// consumer-level sentinel has no row in `actors`. The migration installs one
+// trigger that validates every non-sentinel actor binding for grants and calls.
 export const grants = connectionSchema.table(
 	"grants",
 	{
@@ -331,16 +338,6 @@ export const grants = connectionSchema.table(
 				consumerInstances.principalId,
 			],
 			name: "grants_instance_binding_fk",
-		}),
-		foreignKey({
-			columns: [table.actorId],
-			foreignColumns: [actors.id],
-			name: "grants_actor_fk",
-		}),
-		foreignKey({
-			columns: [table.actorId, table.consumerInstanceId],
-			foreignColumns: [actors.id, actors.consumerInstanceId],
-			name: "grants_actor_instance_fk",
 		}),
 		foreignKey({
 			columns: [table.connectionId],
@@ -503,11 +500,6 @@ export const actionCalls = connectionSchema.table(
 			columns: [table.actionVersionId],
 			foreignColumns: [actionVersions.id],
 			name: "action_calls_action_version_fk",
-		}),
-		foreignKey({
-			columns: [table.actorId, table.consumerInstanceId],
-			foreignColumns: [actors.id, actors.consumerInstanceId],
-			name: "action_calls_actor_instance_fk",
 		}),
 		uniqueIndex("action_calls_namespace_key_unique").on(
 			table.namespaceKey,
