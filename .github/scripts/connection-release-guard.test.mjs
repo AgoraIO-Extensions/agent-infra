@@ -6,6 +6,7 @@ import {
 	compareCatalogs,
 	parseCatalogSource,
 	providerSources,
+	readCatalog,
 } from "./connection-release-guard.mjs";
 
 test("tracks the Rehoboam provider catalog", () => {
@@ -71,6 +72,13 @@ test("reports a newly added provider from a zero baseline", () => {
 				},
 			},
 		],
+	);
+});
+
+test("fails closed when the baseline ref is invalid", () => {
+	assert.throws(
+		() => readCatalog("definitely-not-a-valid-ref"),
+		/Not a valid object name|unknown revision|bad object/i,
 	);
 });
 

@@ -83,12 +83,8 @@ export function compareCatalogs(baseline, candidate) {
 export function readCatalog(ref) {
 	const catalog = {};
 	for (const [provider, file] of Object.entries(providerSources)) {
-		try {
-			catalog[provider] = parseCatalogSource(git("show", `${ref}:${file}`), provider);
-		} catch (error) {
-			if (error?.status === 128) continue;
-			throw error;
-		}
+		if (!git("ls-tree", "--name-only", ref, "--", file)) continue;
+		catalog[provider] = parseCatalogSource(git("show", `${ref}:${file}`), provider);
 	}
 	return catalog;
 }
