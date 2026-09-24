@@ -8,6 +8,7 @@ import type {
 } from "./task-authorization.js";
 import {
 	createTaskRuntimeAuthorizationUseCaseV1,
+	isPlatformConversationChannelCurrentV1,
 	type LegacyTaskControlRecoveryV1,
 	type TaskRuntimeAuthorizationContextV1,
 	type TaskRuntimeRecoveryStateV1,
@@ -87,6 +88,7 @@ function harness() {
 		schemaVersion: 2,
 		agentId: "agent",
 		revision: 1,
+		source: { kind: "standard" },
 	} as AgentConfigurationRecordV2;
 	const workload: WorkloadReconciliationStateV1 = {
 		schemaVersion: 1,
@@ -418,4 +420,83 @@ it("channel revocation persists shared system control instead of dropping a runn
 		}),
 		expect.any(AbortSignal),
 	);
+});
+
+it.each([
+	["standard", 1, "business"],
+	["standard", null, "unavailable"],
+	["standard", 2, "unavailable"],
+	["custom", null, "business"],
+	["custom", 1, "unavailable"],
+	["unknown", null, "unavailable"],
+] as const)(
+	"requires %s task model revision %s",
+	async (kind, revision, expected) => {
+		const h = harness();
+		Object.assign(h.workload.candidate.configuration, { source: { kind } });
+		Object.assign(h.claim, { modelConfigurationRevision: revision });
+		if (expected === "business")
+			expect(
+				(await h.useCase.current(h.context, h.state, "turn.submit", signal()))
+					.authority.purpose,
+			).toBe("business");
+		else
+			await expect(
+				h.useCase.current(h.context, h.state, "turn.submit", signal()),
+			).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	},
+);
+
+it("keeps original custom execution controls during an unverified platform adapter upgrade", async () => {
+	const h = harness();
+	Object.assign(h.claim, { modelConfigurationRevision: null });
+	const configuration = {
+		...h.workload.candidate.configuration,
+		source: {
+			kind: "custom",
+			interactionMode: "platform-adapter",
+			imageDigest: "previous",
+		},
+	} as AgentConfigurationRecordV2;
+	const workload = {
+		...h.workload,
+		phase: "observing" as const,
+		sourceConfigurationRevision: 2,
+		candidate: {
+			...h.workload.candidate,
+			configuration: {
+				...configuration,
+				revision: 2,
+				source: { ...configuration.source, imageDigest: "candidate" },
+			},
+		},
+		verified: { ...h.workload.candidate, configuration },
+		capabilities: { supplementaryInstruction: true },
+	};
+	if (!h.record) throw Error();
+	h.setRecord({ ...h.record, configurationRevision: 2, workload });
+	const useCase = createTaskRuntimeAuthorizationUseCaseV1({
+		...h.ports,
+		channelAuthorizationCurrent: async (record) =>
+			isPlatformConversationChannelCurrentV1(record),
+	});
+	for (const command of [
+		"turn.stop",
+		"session.status",
+		"events.persist",
+	] as const) {
+		const result = await useCase.current(h.context, h.state, command, signal());
+		expect(result.authority).toMatchObject({
+			purpose: "control",
+			reason: command === "turn.stop" ? "stop" : "recovery",
+		});
+	}
+	await expect(
+		useCase.current(h.context, h.state, "turn.submit", signal()),
+	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	expect(
+		h.ports.recordControl.mock.calls.every(
+			([call]) => call.reason !== "authorization_revoked",
+		),
+	).toBe(true);
 });

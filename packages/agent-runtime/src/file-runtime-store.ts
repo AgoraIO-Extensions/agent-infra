@@ -923,6 +923,7 @@ export class FileRuntimeStore {
 			);
 			// Recovery is the durable absence-fence path. Persist its query
 			// authority explicitly after the verified session/migration checks.
+			authority.executionDeliveryFence = fence;
 			session.executionAuthorities[claims.executionId] = authority;
 			session.highestFences[scope] = fence;
 			if (operation) operation.deliveryFence = fence;

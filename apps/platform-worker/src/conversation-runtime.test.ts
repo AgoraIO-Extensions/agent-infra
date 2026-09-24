@@ -101,6 +101,7 @@ function harness(
 		schemaVersion: 2,
 		agentId: "agent",
 		revision: 1,
+		source: { kind: "standard" },
 	} as AgentConfigurationRecordV2;
 	const workload: WorkloadReconciliationStateV1 = {
 		schemaVersion: 1,
