@@ -126,4 +126,28 @@ describe("AgentApplicationSubmissionScreen", () => {
 				.hasAttribute("disabled"),
 		).toBe(true);
 	});
+
+	it("offers a refresh when only the model catalog is empty", async () => {
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreenView
+				mode="create"
+				onRefreshDeploymentConfiguration={vi.fn()}
+				onSubmit={vi.fn()}
+				refreshingDeploymentConfiguration={false}
+				result={undefined}
+				submitting={false}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "empty",
+					},
+				}}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "重新加载部署选项" }),
+		).toBeTruthy();
+	});
 });

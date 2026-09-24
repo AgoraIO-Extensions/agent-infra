@@ -117,6 +117,32 @@ describe("deployment configuration projection", () => {
 		expect(text).not.toContain(digest);
 	});
 
+	it("marks a catalog empty when available endpoints have no selectable models", async () => {
+		const empty = snapshot(Date.now() + 60_000);
+		const endpoint = empty.endpoints[0];
+		if (!endpoint) throw new Error("fixture endpoint missing");
+		const read = createDeploymentConfigurationProjectionV2({
+			templates: [template],
+			modelCatalog: {
+				revision: "catalog-a",
+				load: async () => ({
+					...empty,
+					endpoints: [{ ...endpoint, allowedModels: null }],
+				}),
+			},
+		});
+
+		const response = await createApp(read).request(
+			"/api/v2/deployment/configuration",
+		);
+		const body = DeploymentConfigurationProjectionV2Schema.parse(
+			await response.json(),
+		);
+
+		expect(body.status).toBe("populated");
+		expect(body.modelCatalog.status).toBe("empty");
+	});
+
 	it.each([
 		["empty", snapshot(Date.now() + 60_000, false)],
 		["stale", snapshot(Date.now() - 1)],

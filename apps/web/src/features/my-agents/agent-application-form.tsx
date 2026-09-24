@@ -402,15 +402,21 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [configureModels, setConfigureModels] = useState(false);
 	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
 		if (props.mode === "create") return [blankModel()];
-		return (
-			configuration?.modelOptions.map((option) => ({
+		const endpoints = props.deploymentConfiguration.modelCatalog.endpoints;
+		return (configuration?.modelOptions ?? []).map((option) => {
+			const endpointIds = endpoints
+				.filter((endpoint) =>
+					endpoint.models.some((model) => model.modelId === option.modelId),
+				)
+				.map((endpoint) => endpoint.endpointId);
+			return {
 				credentialValue: "",
-				endpointId: "",
+				endpointId: endpointIds.length === 1 ? (endpointIds[0] ?? "") : "",
 				modelId: option.modelId,
 				optionId: option.optionId,
 				reasoningLevels: option.reasoningLevels.join("\n"),
-			})) ?? []
-		);
+			};
+		});
 	});
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
 		configuration?.defaultModelOptionId ?? "",
