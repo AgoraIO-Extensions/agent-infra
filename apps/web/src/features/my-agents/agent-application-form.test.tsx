@@ -189,9 +189,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(await screen.findByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
-		fireEvent.click(
-			screen.getByRole("combobox", { name: "入口身份校验" }),
-		);
+		fireEvent.click(screen.getByRole("combobox", { name: "入口身份校验" }));
 		const identityOption = await screen.findByRole("option", {
 			name: "由自有入口校验",
 		});
