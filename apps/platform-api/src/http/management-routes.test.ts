@@ -596,6 +596,29 @@ describe("management routes", () => {
 		expect(response.status).toBe(201);
 		expect(await response.json()).not.toHaveProperty("credential");
 		expect(issueCredential).toHaveBeenCalled();
+
+		resolve.mockResolvedValue({
+			...identity,
+			userId: "user-2",
+			displayName: "Recipient",
+		});
+		const recipientResponse = await app.request(
+			"/api/v1/applications/application-1/credentials",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					scopes: ["agent:read"],
+					expiresAt: null,
+				}),
+			},
+		);
+		expect(recipientResponse.status).toBe(201);
+		expect(await recipientResponse.json()).toMatchObject({
+			metadata: { principal: { kind: "application", id: "application-1" } },
+			credential: expect.any(String),
+		});
 	});
 
 	it("grants and revokes an application principal through the owner boundary", async () => {

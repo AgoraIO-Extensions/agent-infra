@@ -364,6 +364,55 @@ describe("PostgreSQL Platform audit query", () => {
 		}
 	});
 
+	it("preserves an application actor for API-created applications", async () => {
+		await seedAudit({
+			auditId: "audit_application_actor",
+			occurredAt: new Date("2026-09-03T00:00:00.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+		});
+		const adapter = openAdapter();
+		const page = await adapter.listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toMatchObject({
+			action: "agent.application.submitted",
+			actor: { kind: "application", actorId: "application_api" },
+		});
+	});
+
+	it("decodes API identity audit metadata without exposing extra details", async () => {
+		await seedAudit({
+			auditId: "audit_api_identity",
+			occurredAt: new Date("2026-09-03T00:00:01.000Z"),
+			actorType: "application",
+			actorId: "application_api",
+			action: "api.agent.grant.granted",
+			targetType: "grant",
+			targetId: "agent_api",
+			details: {
+				recipient: { kind: "user", id: "user_recipient" },
+				grantType: "use",
+			},
+		});
+		const page = await openAdapter().listAudit(administrator, {
+			schemaVersion: 1,
+			limit: 10,
+		});
+		expect(page.items[0]).toEqual({
+			schemaVersion: 1,
+			auditId: "audit_api_identity",
+			actor: { kind: "application", actorId: "application_api" },
+			action: "api.agent.grant.granted",
+			subject: { kind: "grant", subjectId: "agent_api" },
+			result: "succeeded",
+			summary: "api.agent.grant.granted",
+			occurredAt: new Date("2026-09-03T00:00:01.000Z"),
+			traceId: "trace_audit_api_identity",
+		});
+	});
+
 	it("returns only whitelisted metadata and normalizes rejected outcomes", async () => {
 		await seedAudit({
 			auditId: "audit_configuration",

@@ -854,11 +854,12 @@ export function registerManagementRoutes(
 				ApiCredentialIssueRequestV1Schema,
 				metadata.traceId,
 			);
-			if (!body.recipient) fail("FORBIDDEN", metadata.traceId);
 			const management = apiIdentityOrUnavailable(
 				dependencies.apiIdentity,
 				metadata.traceId,
 			);
+			const recipient =
+				body.recipient ?? ({ kind: "user", id: identity.userId } as const);
 			const credential = generateApiCredentialV1(randomBytes);
 			const issued = await queryOrUnavailable(
 				() =>
@@ -867,7 +868,7 @@ export function registerManagementRoutes(
 						context.req.param("applicationId"),
 						{
 							credential,
-							recipient: body.recipient,
+							recipient,
 							scopes: body.scopes as ApiCredentialScopeV1[],
 							expiresAt:
 								body.expiresAt === null ? null : new Date(body.expiresAt),
@@ -877,7 +878,7 @@ export function registerManagementRoutes(
 				metadata.traceId,
 			);
 			const projection =
-				body.recipient.kind === "user" && body.recipient.id === identity.userId
+				recipient.kind === "user" && recipient.id === identity.userId
 					? {
 							metadata: apiCredentialProjection(
 								issued.metadata,

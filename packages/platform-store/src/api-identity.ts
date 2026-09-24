@@ -195,7 +195,8 @@ export class PostgresApiIdentityStoreV1 {
 					})
 					.from(platformApplications)
 					.where(eq(platformApplications.id, input.principal.id))
-					.limit(1);
+					.limit(1)
+					.for("update");
 				if (application?.status !== "active")
 					throw new Error("Application is not active");
 				const [delivery] = await transaction
@@ -367,6 +368,20 @@ export class PostgresApiIdentityStoreV1 {
 		readonly audit: ApiIdentityAuditInputV1;
 	}): Promise<void> {
 		await this.#database.transaction(async (transaction) => {
+			const [application] = await transaction
+				.select({
+					status: platformApplications.status,
+					authorizationRevision: platformApplications.authorizationRevision,
+				})
+				.from(platformApplications)
+				.where(eq(platformApplications.id, input.applicationId))
+				.limit(1)
+				.for("update");
+			if (
+				application?.status !== "active" ||
+				application?.authorizationRevision !== input.authorizationRevision
+			)
+				throw new Error("Application delivery authorization is stale");
 			await transaction
 				.insert(apiCredentialDeliveryGrants)
 				.values({

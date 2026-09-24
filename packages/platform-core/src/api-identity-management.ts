@@ -24,7 +24,7 @@ export interface ApiIdentityActorV1 {
 	/** Present when this actor was authenticated with an API credential. */
 	readonly credential?: Pick<
 		ApiCredentialMetadataV1,
-		"scopes" | "expiresAt" | "revokedAt"
+		"principal" | "scopes" | "expiresAt" | "revokedAt"
 	>;
 }
 
@@ -254,16 +254,22 @@ export function createApiIdentityManagementV1(input: {
 			throw new ApiIdentityError("not_authorized");
 		return actorPrincipal(actor);
 	};
+	const requireCredential = (actor: ApiIdentityActorV1) => {
+		const principal = requireActiveActor(actor);
+		const credential = actor.credential;
+		if (
+			credential === undefined ||
+			!sameApiPrincipalV1(principal, credential.principal)
+		)
+			throw new ApiIdentityError("not_authorized");
+		return credential;
+	};
 	const requireCredentialScope = (
 		actor: ApiIdentityActorV1,
 		required: readonly ApiCredentialScopeV1[],
 	): void => {
-		requireActiveActor(actor);
-		const credential = actor.credential;
-		if (
-			credential === undefined ||
-			!required.some((scope) => hasApiCredentialScopeV1(credential, scope))
-		) {
+		const credential = requireCredential(actor);
+		if (!required.some((scope) => hasApiCredentialScopeV1(credential, scope))) {
 			throw new ApiIdentityError("not_authorized");
 		}
 	};
@@ -316,6 +322,23 @@ export function createApiIdentityManagementV1(input: {
 			throw new ApiIdentityError("resource_unavailable");
 		}
 	};
+	const requireCredentialDelivery = async (
+		applicationId: string,
+		principal: ApiPrincipalV1,
+		audit: ApiIdentityAuditInputV1,
+	): Promise<void> => {
+		await requireActiveRecipient(principal, audit);
+		if (await input.store.hasCredentialDelivery({ applicationId, principal }))
+			return;
+		if (input.store.writeAudit)
+			await input.store.writeAudit({
+				...audit,
+				recipient: principal,
+				outcome: "rejected",
+				targetId: applicationId,
+			});
+		throw new ApiIdentityError("resource_unavailable");
+	};
 	const requireAgentAccess = async (
 		actor: ApiIdentityActorV1,
 		agentId: string,
@@ -331,10 +354,7 @@ export function createApiIdentityManagementV1(input: {
 			requireCredentialScope(actor, required);
 		},
 		resolveAgentQueryGrantType(actor) {
-			requireActiveActor(actor);
-			const credential = actor.credential;
-			if (credential === undefined)
-				throw new ApiIdentityError("not_authorized");
+			const credential = requireCredential(actor);
 			if (
 				hasApiCredentialScopeV1(credential, "agent:manage") &&
 				hasApiCredentialScopeV1(credential, "agent:use")
@@ -402,30 +422,23 @@ export function createApiIdentityManagementV1(input: {
 			});
 		},
 		async issueApplicationCredential(actor, applicationId, value) {
-			const application = await applicationForActor(actor, applicationId);
+			const principal = requireActiveActor(actor);
+			const application = await input.store.getApplication(applicationId);
+			if (!application) throw new ApiIdentityError("resource_unavailable");
 			if (application.status !== "active")
 				throw new ApiIdentityError("resource_unavailable");
-			if (!value.recipient) throw new ApiIdentityError("not_authorized");
 			const audit = checkedAudit(actor, value.audit);
-			await requireActiveRecipient(value.recipient, audit);
+			const recipient = value.recipient ?? principal;
+			const isResponsibleUser =
+				principal.kind === "user" &&
+				application.responsibleUserId === principal.id;
+			if (!isResponsibleUser && !sameApiPrincipalV1(principal, recipient))
+				throw new ApiIdentityError("resource_unavailable");
 			try {
-				if (
-					!(await input.store.hasCredentialDelivery({
-						applicationId: application.id,
-						principal: value.recipient,
-					}))
-				) {
-					if (input.store.writeAudit)
-						await input.store.writeAudit({
-							...audit,
-							recipient: value.recipient,
-							outcome: "rejected",
-							targetId: application.id,
-						});
-					throw new ApiIdentityError("resource_unavailable");
-				}
+				await requireCredentialDelivery(application.id, recipient, audit);
 				return await input.store.issueCredential({
 					...value,
+					recipient,
 					principal: { kind: "application", id: application.id },
 					audit,
 				});
@@ -470,6 +483,9 @@ export function createApiIdentityManagementV1(input: {
 			);
 			if (application.status !== "active")
 				throw new ApiIdentityError("resource_unavailable");
+			const actor = actorPrincipal(value.actor);
+			if (sameApiPrincipalV1(actor, value.principal))
+				throw new ApiIdentityError("not_authorized");
 			await requireActiveRecipient(
 				value.principal,
 				checkedAudit(value.actor, value.audit),

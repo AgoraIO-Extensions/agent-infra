@@ -66,6 +66,7 @@ function actor(
 		principal,
 		isAdministrator: false,
 		credential: {
+			principal,
 			scopes: [
 				"agent:create",
 				"agent:manage",
@@ -105,9 +106,22 @@ describe("API identity management authorization", () => {
 				{
 					...apiActor,
 					credential: {
+						principal: apiActor.principal,
 						scopes: ["agent:read"],
 						expiresAt: null,
 						revokedAt: null,
+					},
+				},
+				["agent:manage"],
+			),
+		).toThrow();
+		expect(() =>
+			useCase.authorizeCredentialScope(
+				{
+					...apiActor,
+					credential: {
+						...apiActor.credential,
+						principal: { kind: "application", id: "another-application" },
 					},
 				},
 				["agent:manage"],
@@ -159,6 +173,20 @@ describe("API identity management authorization", () => {
 		);
 	});
 
+	it("does not let the responsible user self-authorize credential delivery", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		await expect(
+			useCase.grantCredentialDelivery({
+				actor: actor(),
+				applicationId: application.id,
+				principal: { kind: "user", id: "owner-1" },
+				audit,
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(store.grantCredentialDelivery).not.toHaveBeenCalled();
+	});
+
 	it("rechecks delivery authorization and audits a rejected issue", async () => {
 		const store = storeFixture({
 			hasCredentialDelivery: vi.fn().mockResolvedValue(false),
@@ -180,6 +208,36 @@ describe("API identity management authorization", () => {
 				recipient: { kind: "user", id: "recipient-1" },
 				outcome: "rejected",
 				targetId: application.id,
+			}),
+		);
+	});
+
+	it("lets an authorized recipient issue and receive its own application credential", async () => {
+		const store = storeFixture({
+			hasCredentialDelivery: vi.fn().mockResolvedValue(true),
+		});
+		const useCase = management(store);
+		const recipient = actor({ kind: "user", id: "recipient-1" });
+		const result = await useCase.issueApplicationCredential(
+			recipient,
+			application.id,
+			{
+				credential: "recipient-secret",
+				recipient: { kind: "user", id: "recipient-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: {
+					...audit,
+					actor: { kind: "user", id: "recipient-1" },
+					action: "api.credential.issued",
+				},
+			},
+		);
+		expect(result.credentialId).toBe("credential-1");
+		expect(store.issueCredential).toHaveBeenCalledWith(
+			expect.objectContaining({
+				principal: { kind: "application", id: application.id },
+				recipient: { kind: "user", id: "recipient-1" },
 			}),
 		);
 	});

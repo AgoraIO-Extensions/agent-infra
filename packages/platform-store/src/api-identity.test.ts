@@ -91,6 +91,17 @@ describe("PostgreSQL API identity store", () => {
 			}),
 		).toBe(false);
 		await expect(
+			store.grantCredentialDelivery({
+				applicationId: "application_identity",
+				principal: { kind: "user", id: "user_recipient" },
+				authorizationRevision: "application_revision_1",
+				audit: {
+					...userAudit,
+					action: "api.credential.delivery.granted",
+				},
+			}),
+		).rejects.toThrow("Application delivery authorization is stale");
+		await expect(
 			store.issueCredential({
 				principal: { kind: "application", id: "application_identity" },
 				credential: "stale-delivery-secret",
