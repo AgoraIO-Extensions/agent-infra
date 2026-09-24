@@ -371,17 +371,20 @@ describe("functional conversation screen", () => {
 		});
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Use chosen model" } });
-		fireEvent.change(screen.getByRole("combobox", { name: "模型" }), {
-			target: { value: "option-b" },
-		});
+		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+		const modelOption = await screen.findByRole("option", { name: "Model B" });
+		fireEvent.pointerDown(modelOption, { pointerType: "mouse" });
+		fireEvent.click(modelOption, { detail: 1 });
 		expect(screen.getByRole("button", { name: "保存模型选择" })).toHaveProperty(
 			"type",
 			"button",
 		);
-		expect(
-			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(true),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "保存模型选择" }));
 		await screen.findByText("模型选择已保存，从下一条消息开始生效。");
 		await waitFor(() =>
