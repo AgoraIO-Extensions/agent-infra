@@ -98,6 +98,74 @@ export const browserSessions = connectionSchema.table(
 	],
 );
 
+export const loginThrottleAttempts = connectionSchema.table(
+	"login_throttle_attempts",
+	{
+		id: text("id").primaryKey(),
+		environment: varchar("environment", { length: 100 }).notNull(),
+		sourceMarker: varchar("source_marker", { length: 64 }).notNull(),
+		accountMarker: varchar("account_marker", { length: 64 }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		nonEmpty("login_throttle_attempts_environment", table.environment),
+		check(
+			"login_throttle_attempts_source_marker_check",
+			sql`${table.sourceMarker} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"login_throttle_attempts_account_marker_check",
+			sql`${table.accountMarker} ~ '^[0-9a-f]{64}$'`,
+		),
+		index("login_throttle_attempts_environment_expiry_idx").on(
+			table.environment,
+			table.expiresAt,
+		),
+		index("login_throttle_attempts_source_idx").on(
+			table.environment,
+			table.sourceMarker,
+			table.expiresAt,
+		),
+		index("login_throttle_attempts_account_idx").on(
+			table.environment,
+			table.accountMarker,
+			table.expiresAt,
+		),
+	],
+);
+
+export const loginThrottleFailures = connectionSchema.table(
+	"login_throttle_failures",
+	{
+		environment: varchar("environment", { length: 100 }).notNull(),
+		kind: varchar("kind", { length: 16 }).notNull(),
+		marker: varchar("marker", { length: 64 }).notNull(),
+		failures: integer("failures").notNull(),
+		windowUntil: timestamp("window_until", { withTimezone: true }).notNull(),
+		nextAllowedAt: timestamp("next_allowed_at", { withTimezone: true }),
+	},
+	(table) => [
+		nonEmpty("login_throttle_failures_environment", table.environment),
+		check(
+			"login_throttle_failures_marker_check",
+			sql`${table.marker} ~ '^[0-9a-f]{64}$'`,
+		),
+		primaryKey({
+			name: "login_throttle_failures_pk",
+			columns: [table.environment, table.kind, table.marker],
+		}),
+		check(
+			"login_throttle_failures_kind_check",
+			sql`${table.kind} IN ('source', 'account', 'environment')`,
+		),
+		check("login_throttle_failures_count_positive", sql`${table.failures} > 0`),
+		index("login_throttle_failures_expiry_idx").on(
+			table.environment,
+			table.windowUntil,
+		),
+	],
+);
+
 export const consumers = connectionSchema.table(
 	"consumers",
 	{
@@ -776,6 +844,8 @@ export const auditEvents = connectionSchema.table(
 export const connectionInfrastructureTables = [
 	principals,
 	browserSessions,
+	loginThrottleAttempts,
+	loginThrottleFailures,
 	consumers,
 	consumerInstances,
 	actors,

@@ -1,41 +1,52 @@
 import { expect, it } from "vitest";
-import { LoginRateLimitedError, LoginThrottle } from "./login-throttle.js";
+import {
+	assertLoginAdmission,
+	LoginRateLimitedError,
+	loginBackoffMs,
+	loginThrottlePolicy,
+	nextLoginFailure,
+} from "./login-throttle.js";
 
-it("bounds concurrent login and recovers automatically from short account backoff", () => {
-	let now = 1_000;
-	const throttle = new LoginThrottle(() => now);
-	const input = {
-		environment: "pilot",
-		source: "127.0.0.1",
-		username: " Alice ",
-	};
-	const first = throttle.begin(input);
-	const second = throttle.begin({ ...input, username: "alice" });
-	expect(() => throttle.begin(input)).toThrow(LoginRateLimitedError);
-	first(false);
-	second(false);
-	const third = throttle.begin(input);
-	third(false);
-	expect(() => throttle.begin(input)).toThrow(LoginRateLimitedError);
-	now += 251;
-	throttle.begin(input)(true);
-	throttle.begin(input)(true);
-	const last = throttle.begin(input);
-	last(true);
+it("bounds login backoff", () => {
+	expect(
+		[0, 1, 2, 3, 4, 10, 100].map((failures) => loginBackoffMs(failures)),
+	).toEqual([0, 0, 0, 250, 500, 30_000, 30_000]);
 });
 
-it("keeps admitting legitimate logins when arbitrary account names fill the window", () => {
-	const throttle = new LoginThrottle(() => 1_000);
-	for (let index = 0; index < 10_010; index += 1)
-		throttle.begin({
-			environment: "pilot",
-			source: "127.0.0.1",
-			username: `attempt-${index}`,
-		})(true);
-	const finish = throttle.begin({
-		environment: "pilot",
-		source: "127.0.0.1",
-		username: "alice",
+it("applies shared admission limits and resets expired failure windows", () => {
+	const admitted = {
+		sourceInFlight: 0,
+		accountInFlight: 0,
+		environmentInFlight: 0,
+	};
+	expect(() => assertLoginAdmission(admitted, 1_000)).not.toThrow();
+	for (const blocked of [
+		{ sourceInFlight: loginThrottlePolicy.sourceConcurrency },
+		{ accountInFlight: loginThrottlePolicy.accountConcurrency },
+		{ environmentInFlight: loginThrottlePolicy.environmentConcurrency },
+		{ sourceNextAllowedAt: 1_001 },
+		{ accountNextAllowedAt: 1_001 },
+		{ environmentNextAllowedAt: 1_001 },
+	])
+		expect(() =>
+			assertLoginAdmission({ ...admitted, ...blocked }, 1_000),
+		).toThrow(LoginRateLimitedError);
+	const first = nextLoginFailure(undefined, 1_000);
+	expect(first).toEqual({
+		failures: 1,
+		windowUntil: 1_000 + loginThrottlePolicy.windowMs,
+		nextAllowedAt: null,
 	});
-	finish(true);
+	expect(nextLoginFailure(first, first.windowUntil)).toEqual({
+		failures: 1,
+		windowUntil: first.windowUntil + loginThrottlePolicy.windowMs,
+		nextAllowedAt: null,
+	});
+	expect(
+		nextLoginFailure(
+			{ failures: 999, windowUntil: first.windowUntil },
+			1_000,
+			loginThrottlePolicy.environmentBackoffThreshold,
+		).nextAllowedAt,
+	).toBe(1_250);
 });

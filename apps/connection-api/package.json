@@ -15,10 +15,10 @@
 	},
 	"dependencies": {
 		"@agent-infra/connection-core": "workspace:*",
-		"@agent-infra/connection-identity": "workspace:*",
 		"@agent-infra/connection-store": "workspace:*",
 		"@hono/node-server": "^2.0.12",
-		"hono": "^4.12.32"
+		"hono": "^4.12.32",
+		"ldapts": "9.2.0"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

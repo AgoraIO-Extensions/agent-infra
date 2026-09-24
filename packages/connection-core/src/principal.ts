@@ -16,6 +16,27 @@ export interface PrincipalIdentityStore {
 	insert(input: BrowserSessionPrincipal): Promise<void>;
 }
 
+export function principalDirectoryCheckState(
+	status: BrowserSessionPrincipal["status"] | undefined,
+	checkedAt: number | undefined,
+	now: number,
+): "inactive" | "cached" | "recheck" {
+	if (status !== "active") return "inactive";
+	if (
+		checkedAt !== undefined &&
+		now >= checkedAt &&
+		now - checkedAt < 15 * 60_000
+	)
+		return "cached";
+	return "recheck";
+}
+
+export function principalStateFromDirectoryEntry(
+	exists: boolean,
+): BrowserSessionPrincipal["status"] {
+	return exists ? "active" : "disabled";
+}
+
 /** Stable opaque identifier; display attributes never participate in the key. */
 export function stablePrincipalId(issuer: string, uid: string): string {
 	if (!issuer.trim() || !uid.trim())

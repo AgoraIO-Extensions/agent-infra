@@ -4,7 +4,6 @@ import {
 	BrowserSessionService,
 	ConnectionLoginService,
 	LoginRejectedError,
-	LoginThrottle,
 	PrincipalIdentityResolver,
 	stablePrincipalId,
 } from "@agent-infra/connection-core";
@@ -67,7 +66,7 @@ function setup() {
 		authenticator,
 		principals: new PrincipalIdentityResolver(principalStore),
 		sessions,
-		throttle: new LoginThrottle(),
+		throttle: { begin: async () => async () => {} },
 		environment: "test",
 		failureFloorMs: 0,
 		marker: (kind, value) =>

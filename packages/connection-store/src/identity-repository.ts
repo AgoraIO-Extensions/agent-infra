@@ -6,6 +6,8 @@ import {
 	type BrowserSessionStore,
 	type PrincipalIdentityStore,
 	PrincipalInactiveError,
+	principalDirectoryCheckState,
+	principalStateFromDirectoryEntry,
 } from "@agent-infra/connection-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { ConnectionDatabase } from "./database.js";
@@ -139,14 +141,16 @@ export function createPostgresPrincipalDirectory(
 					.from(principals)
 					.where(and(eq(principals.issuer, issuer), eq(principals.uid, uid)))
 					.for("update");
-				if (principal?.status !== "active") return { exists: false };
-				const age = principal.directoryCheckedAt
-					? now() - principal.directoryCheckedAt.getTime()
-					: undefined;
-				if (age !== undefined && age >= 0 && age < 15 * 60_000)
-					return { exists: true };
+				if (!principal) return { exists: false };
+				const state = principalDirectoryCheckState(
+					principal.status as BrowserSessionPrincipal["status"],
+					principal.directoryCheckedAt?.getTime(),
+					now(),
+				);
+				if (state === "inactive") return { exists: false };
+				if (state === "cached") return { exists: true };
 				const exists = await checker.entryExists(uid);
-				if (exists) {
+				if (principalStateFromDirectoryEntry(exists) === "active") {
 					await tx
 						.update(principals)
 						.set({ directoryCheckedAt: new Date(now()) })
