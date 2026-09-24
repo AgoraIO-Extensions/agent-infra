@@ -29,6 +29,9 @@ export const principals = connectionSchema.table(
 		recoveryGeneration: bigint("recovery_generation", { mode: "number" })
 			.default(1)
 			.notNull(),
+		directoryCheckedAt: timestamp("directory_checked_at", {
+			withTimezone: true,
+		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -49,6 +52,49 @@ export const principals = connectionSchema.table(
 		nonEmpty("principal_id", table.id),
 		nonEmpty("principal_issuer", table.issuer),
 		nonEmpty("principal_uid", table.uid),
+	],
+);
+
+export const browserSessions = connectionSchema.table(
+	"browser_sessions",
+	{
+		id: text("id").primaryKey(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		principalId: text("principal_id").notNull(),
+		issuer: varchar("issuer", { length: 255 }).notNull(),
+		uid: varchar("uid", { length: 255 }).notNull(),
+		recoveryGeneration: bigint("recovery_generation", {
+			mode: "number",
+		}).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.principalId],
+			foreignColumns: [principals.id],
+			name: "browser_sessions_principal_fk",
+		}),
+		uniqueIndex("browser_sessions_token_hash_unique").on(table.tokenHash),
+		index("browser_sessions_principal_idx").on(table.principalId),
+		check(
+			"browser_sessions_token_hash_check",
+			sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"browser_sessions_generation_positive",
+			sql`${table.recoveryGeneration} > 0`,
+		),
+		check(
+			"browser_sessions_expiry_after_creation",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
+		nonEmpty("browser_session_id", table.id),
+		nonEmpty("browser_session_issuer", table.issuer),
+		nonEmpty("browser_session_uid", table.uid),
 	],
 );
 
@@ -729,6 +775,7 @@ export const auditEvents = connectionSchema.table(
 
 export const connectionInfrastructureTables = [
 	principals,
+	browserSessions,
 	consumers,
 	consumerInstances,
 	actors,

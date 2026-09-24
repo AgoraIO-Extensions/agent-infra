@@ -1,5 +1,5 @@
 {
-	"name": "@agent-infra/connection-store",
+	"name": "@agent-infra/connection-identity",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -19,17 +19,14 @@
 		"check-types": "tsc --noEmit",
 		"test": "pnpm build && vitest run src"
 	},
-	"dependencies": {
-		"@agent-infra/connection-core": "workspace:*",
-		"@agent-infra/connection-identity": "workspace:*",
-		"drizzle-orm": "catalog:",
-		"postgres": "catalog:"
-	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"tsdown": "0.22.14",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
+	},
+	"dependencies": {
+		"ldapts": "9.2.0"
 	}
 }
