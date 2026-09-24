@@ -287,13 +287,14 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByLabel("用途说明", { exact: true })
 		.fill("Helps the release team");
-	await page.getByLabel("Agent 来源").focus();
-	await page.getByLabel("Agent 来源").selectOption("custom-platform-adapter");
+	const source = page.getByRole("combobox", { name: "Agent 来源" });
+	await source.click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
 	await page.keyboard.press("Tab");
 	await expect(page.getByLabel("镜像地址")).toBeFocused();
-	await expect(page.getByLabel("Agent 来源")).toHaveValue(
-		"custom-platform-adapter",
-	);
+	await expect(source).toContainText("自定义 Agent · 平台交互入口");
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
 	await capture(page, info, "create-application");
 	api.holdNextCommand();
