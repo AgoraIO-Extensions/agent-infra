@@ -7,51 +7,8 @@ import postgres from "postgres";
 import { auditEvents } from "./schema.js";
 
 const platformAuditActionMetadata = {
-	"api.application.created": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.credential.issued": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.credential.revoked": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.credential.delivery.granted": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.credential.delivery.revoked": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.agent.grant.granted": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
-	"api.agent.grant.revoked": {
-		actorKind: "user",
-		actorKinds: ["user", "application"],
-		subjectKind: "grant",
-		details: "api_identity",
-	},
 	"agent.application.submitted": {
 		actorKind: "user",
-		actorKinds: ["user", "application"],
 		subjectKind: "agent_application",
 		details: false,
 	},
@@ -193,17 +150,12 @@ export interface PlatformAuditProjectionV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly actor: {
-		readonly kind: "user" | "application" | "system";
+		readonly kind: "user" | "system";
 		readonly actorId: string;
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind:
-			| "agent_application"
-			| "agent"
-			| "secret"
-			| "secret_key"
-			| "grant";
+		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -343,39 +295,6 @@ function changedFields(
 		}
 		return [];
 	}
-	if (detailKind === "api_identity") {
-		if (
-			!exactObject(details, ["recipient", "grantType"]) &&
-			!exactObject(details, ["recipient"])
-		)
-			throw new PlatformAuditQueryError("unavailable");
-		const value = details as {
-			readonly recipient: unknown;
-			readonly grantType?: unknown;
-		};
-		const recipient = value.recipient;
-		if (
-			value.grantType !== undefined &&
-			value.grantType !== null &&
-			value.grantType !== "manage" &&
-			value.grantType !== "use"
-		)
-			throw new PlatformAuditQueryError("unavailable");
-		if (recipient !== null) {
-			if (!exactObject(recipient, ["kind", "id"]))
-				throw new PlatformAuditQueryError("unavailable");
-			const value = recipient as {
-				readonly kind: unknown;
-				readonly id: unknown;
-			};
-			if (
-				(value.kind !== "user" && value.kind !== "application") ||
-				!validText(value.id)
-			)
-				throw new PlatformAuditQueryError("unavailable");
-		}
-		return [];
-	}
 	if (!exactObject(details, ["changedFields"])) {
 		throw new PlatformAuditQueryError("unavailable");
 	}
@@ -424,11 +343,9 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	const action = row.action as PlatformAuditActionV1;
 	const metadata = platformAuditActionMetadata[action];
 	const expectedActorType = metadata.actorKind;
-	const allowedActorTypes =
-		"actorKinds" in metadata ? metadata.actorKinds : [expectedActorType];
 	const expectedTargetType = metadata.subjectKind;
 	if (
-		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
+		row.actorType !== expectedActorType ||
 		row.targetType !== expectedTargetType ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
@@ -440,10 +357,7 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	return {
 		schemaVersion: 1,
 		auditId: row.auditId,
-		actor: {
-			kind: row.actorType as "user" | "application" | "system",
-			actorId: row.actorId,
-		},
+		actor: { kind: expectedActorType, actorId: row.actorId },
 		action,
 		subject: {
 			kind: expectedTargetType,

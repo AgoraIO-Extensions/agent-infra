@@ -4,7 +4,6 @@ import {
 	type ApiIdentityAuditInputV1,
 	PostgresApiIdentityStoreV1,
 } from "./api-identity.ts";
-import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -25,7 +24,6 @@ describe("PostgreSQL API identity store", () => {
 	let adminClient: ReturnType<typeof postgres>;
 	let testDatabase: PostgresTestDatabase | undefined;
 	let store: PostgresApiIdentityStoreV1;
-	let audit: PostgresPlatformAuditQueryV1;
 
 	beforeAll(async () => {
 		testDatabase = await startPostgresTestDatabase("platform-api-identity");
@@ -33,11 +31,9 @@ describe("PostgreSQL API identity store", () => {
 		await migratePlatformDatabase({ databaseUrl });
 		adminClient = postgres(databaseUrl, { max: 1 });
 		store = new PostgresApiIdentityStoreV1({ databaseUrl });
-		audit = new PostgresPlatformAuditQueryV1({ databaseUrl });
 	});
 
 	afterAll(async () => {
-		await audit?.close();
 		await store?.close();
 		await adminClient?.end();
 		await testDatabase?.stop();
@@ -159,15 +155,13 @@ describe("PostgreSQL API identity store", () => {
 			),
 		).toBe(true);
 
-		const audits = await audit.listAudit(
-			{
-				schemaVersion: 1,
-				kind: "administrator",
-				administratorId: "user_admin",
-			},
-			{ schemaVersion: 1, limit: 20 },
-		);
-		expect(audits.items.map(({ action }) => action)).toEqual([
+		const audits = await adminClient`
+			select action
+			from platform.audit_events
+			order by occurred_at desc, id desc
+			limit 20
+		`;
+		expect(audits.map(({ action }) => action)).toEqual([
 			"api.credential.revoked",
 			"api.credential.delivery.revoked",
 			"api.credential.issued",
