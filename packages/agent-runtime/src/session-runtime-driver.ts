@@ -491,6 +491,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						if (turn.status === "running") turn.status = "unknown";
 				});
 				for (const turn of file.read().turns) {
+					if (turn.status === "unknown")
+						await this.recoverUnknownToolFacts(file, turn.executionId);
 					const fact = latestFact(turn, "model");
 					if (
 						turn.status === "unknown" &&
@@ -1058,7 +1060,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			...(startedAt ? { startedAt } : {}),
 			...(finishedAt ? { finishedAt } : {}),
 			...(durationMs === undefined ? {} : { durationMs }),
-			...(phase === "completed"
+			...(phase === "completed" || phase === "started"
 				? {}
 				: {
 						failureCode:
@@ -1068,6 +1070,42 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								: "operation_failed"),
 					}),
 		});
+	}
+	private async recoverUnknownToolFacts(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (!turn) return;
+		const pending: Extract<RuntimeOperationFactV2, { kind: "tool" }>[] = [];
+		const seen = new Set<string>();
+		for (let index = turn.events.length - 1; index >= 0; index--) {
+			const event = turn.events[index];
+			if (
+				event?.type !== "operation" ||
+				event.payload.kind !== "tool" ||
+				!["intent", "started"].includes(event.payload.phase)
+			)
+				continue;
+			const key = `${event.payload.operationRef}:${event.payload.attemptRef}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			pending.push(event.payload);
+		}
+		for (const fact of pending) {
+			const finishedAt = new Date().toISOString();
+			const durationMs = fact.startedAt
+				? Math.max(0, Date.parse(finishedAt) - Date.parse(fact.startedAt))
+				: undefined;
+			await this.appendOperationFact(file, executionId, {
+				...fact,
+				phase: "unknown",
+				failureCode: "recovery_unconfirmed",
+				...(fact.startedAt ? { finishedAt, durationMs } : {}),
+			});
+		}
 	}
 	private async modelRequestStarted(
 		file: DurableJsonFile<Session>,
