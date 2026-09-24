@@ -63,7 +63,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...input,
 		currentIdentity: identityScope.currentIdentity,
 	});
-	const deploymentConfiguration = createDeploymentConfigurationProjectionV2(input);
+	const deploymentConfiguration =
+		createDeploymentConfigurationProjectionV2(input);
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
 	);
