@@ -65,6 +65,7 @@ test("migration chart runs the real offline CLI with ordinary trust files and re
 	assert.ok(job.metadata.name.length <= 63);
 	assert.equal(job.metadata.annotations?.["helm.sh/hook"], undefined);
 	assert.equal(job.spec.backoffLimit, 0);
+	assert.equal(job.spec.activeDeadlineSeconds, 1800);
 	assert.equal(job.spec.ttlSecondsAfterFinished, undefined);
 	const pod = job.spec.template.spec;
 	assert.equal(pod.restartPolicy, "Never");
