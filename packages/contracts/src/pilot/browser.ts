@@ -1206,7 +1206,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
 	AgentProjectionV2: AgentProjectionV2Schema,
 	DeploymentConfigurationStatusV2: DeploymentConfigurationStatusV2Schema,
-	DeploymentConfigurationProjectionV2: DeploymentConfigurationProjectionV2Schema,
+	DeploymentConfigurationProjectionV2:
+		DeploymentConfigurationProjectionV2Schema,
 	DeploymentModelCatalogProjectionV2: DeploymentModelCatalogProjectionV2Schema,
 	DeploymentModelEndpointProjectionV2:
 		DeploymentModelEndpointProjectionV2Schema,

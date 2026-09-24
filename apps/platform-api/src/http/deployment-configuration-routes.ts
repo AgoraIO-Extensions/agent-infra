@@ -1,12 +1,7 @@
-import {
-	DeploymentConfigurationProjectionV2Schema,
-} from "@agent-infra/contracts/pilot";
+import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import type { Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./common.js";
-import {
-	type IdentityAdapter,
-	resolveIdentity,
-} from "./identity.js";
+import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface DeploymentConfigurationRoutesDependencies {
 	readonly identity: IdentityAdapter;

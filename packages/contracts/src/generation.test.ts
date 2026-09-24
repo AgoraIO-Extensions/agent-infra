@@ -134,6 +134,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}",
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
+			"/api/v2/deployment/configuration",
 		]);
 		expect(artifacts.pilotBrowserOpenapiV2.components.schemas).toHaveProperty(
 			"PlatformAuditProjectionV2",
