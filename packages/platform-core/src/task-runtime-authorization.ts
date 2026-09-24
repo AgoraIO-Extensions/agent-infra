@@ -122,6 +122,40 @@ function denied(code = "AUTHORIZATION_REVOKED"): never {
 	throw new ConversationRuntimeHostError(code, true);
 }
 
+/** Platform Web channel policy over the Store's current, execution-bound configuration. */
+export function isPlatformConversationChannelCurrentV1(
+	record: TaskRuntimeAuthorizationRecordV1,
+): boolean {
+	if (record.boundary.channelId !== "web")
+		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
+	const workload = record.workload;
+	const configuration = workload?.candidate.configuration;
+	if (
+		!workload ||
+		!configuration ||
+		workload.agentId !== record.boundary.agentId ||
+		configuration.agentId !== record.boundary.agentId ||
+		configuration.revision !== record.configurationRevision ||
+		workload.sourceConfigurationRevision !== record.configurationRevision
+	)
+		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
+	// Standard templates always expose the platform channel, including during reconciliation.
+	if (configuration.source.kind === "standard") return true;
+	if (configuration.source.interactionMode === "self-managed") return false;
+	// A previously verified platform adapter keeps its channel during an upgrade.
+	// Current business readiness remains enforced by current() and the Runtime resolver.
+	if (
+		workload.verified?.configuration.agentId !== record.boundary.agentId ||
+		workload.verified.configuration.revision > configuration.revision ||
+		workload.verified.configuration.source.kind !== "custom" ||
+		workload.verified.configuration.source.interactionMode !==
+			"platform-adapter" ||
+		!workload.capabilities
+	)
+		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
+	return true;
+}
+
 /** Current user authority and durable system control share the original task boundary. */
 export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 	if (!options.workerId) throw new TypeError("Task Worker identity is invalid");
@@ -368,8 +402,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			workload.sourceConfigurationRevision !== latest.configurationRevision ||
 			workload.verified.configuration.revision !==
 				latest.configurationRevision ||
-			context.claim.modelConfigurationRevision !==
-				latest.configurationRevision ||
+			(workload.verified.configuration.source.kind === "standard"
+				? context.claim.modelConfigurationRevision !==
+					latest.configurationRevision
+				: workload.verified.configuration.source.kind !== "custom" ||
+					context.claim.modelConfigurationRevision !== null) ||
 			workload.sourceLifecycleRevision !== latest.agent.workloadRevision ||
 			!Number.isSafeInteger(latest.agent.fence) ||
 			latest.agent.fence < 1 ||

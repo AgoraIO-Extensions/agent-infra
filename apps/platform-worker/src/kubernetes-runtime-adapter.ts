@@ -283,8 +283,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		identity: { uid: string; generation: number },
 		routeMode: RouteSelectorMode = "closed",
 		secretBindingMode: "activation" | "required" = "required",
+		closedRouteFence?: {
+			readonly workloadRevision: number;
+			readonly fence: number;
+		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
+		if (
+			closedRouteFence &&
+			(routeMode !== "closed" ||
+				closedRouteFence.workloadRevision < value.workloadRevision ||
+				closedRouteFence.fence < value.fence)
+		)
+			return "drifted";
+		// Closing an upgrade fences the business Service before replacing the old Pod.
+		// Control observation still binds all serving resources to the verified deployment.
+		const routeValue = closedRouteFence
+			? desired({ ...value, ...closedRouteFence })
+			: value;
 		const current = await statefulSet(value);
 		const injection = modelBindings(value);
 		if (
@@ -361,13 +377,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return "drifted";
 		}
 		for (const resource of [serviceAccount, network, probe, service]) {
-			own(resource, value.agentId, value.workloadRevision, value.fence);
-			if (!hasCurrentMetadata(resource, value)) return "drifted";
+			const binding = resource === service ? routeValue : value;
+			own(resource, binding.agentId, binding.workloadRevision, binding.fence);
+			if (!hasCurrentMetadata(resource, binding)) return "drifted";
 		}
 		if (
-			[network, probe, service].some(
+			[network, probe].some(
 				(resource) => !hasSafeRoutingMetadata(value, resource),
-			)
+			) ||
+			!hasSafeRoutingMetadata(routeValue, service) ||
+			(closedRouteFence &&
+				service.metadata?.annotations?.[fingerprintAnnotation] !== "")
 		)
 			return "drifted";
 		if (

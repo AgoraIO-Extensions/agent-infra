@@ -1153,6 +1153,113 @@ describe("Runtime V3 durable authorization", () => {
 		}
 	});
 
+	it("replays and acknowledges uncommitted events after business recovery without renewing authority", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const original = base(accepted.hostSessionRef);
+			const higher = {
+				...original,
+				operation: {
+					...original.operation,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			};
+			const query = signV3Fixture(
+				{
+					...original,
+					consumer: "platform_worker_persistence" as const,
+					afterCursor: null,
+				},
+				"events.persist",
+			);
+			const firstStream = await env.host.streamEventsV3(
+				query,
+				verifyRuntimeV2Fixture(query.grant),
+			);
+			const firstIterator = firstStream[Symbol.asyncIterator]();
+			const first = await firstIterator.next();
+			await firstIterator.return?.(undefined);
+			if (first.done) throw new Error("missing synthetic status");
+			// A fresh status request may take over the fence, but cannot renew the
+			// original execution lease or acknowledge an event not yet committed.
+			env.clock.now += 1_000;
+			vi.setSystemTime(env.clock.now);
+			const recovery = signV3Fixture(
+				{ ...higher, originalOperationDigest: originalDigest() },
+				"session.status",
+				{ now: env.clock.now },
+			);
+			await env.host.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			);
+			await expect(
+				env.host.streamEventsV3(query, verifyRuntimeV2Fixture(query.grant)),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const replay = signV3Fixture(
+				{ ...query, operation: higher.operation },
+				"events.persist",
+				{ now: env.clock.now },
+			);
+			const replayStream = await env.host.streamEventsV3(
+				replay,
+				verifyRuntimeV2Fixture(replay.grant),
+			);
+			const replayIterator = replayStream[Symbol.asyncIterator]();
+			try {
+				expect(await replayIterator.next()).toEqual(first);
+			} finally {
+				await replayIterator.return?.(undefined);
+			}
+			const ack = signV3Fixture(
+				{
+					...higher,
+					consumer: "platform_worker_persistence" as const,
+					confirmedCursor: first.value.cursor,
+				},
+				"events.ack",
+				{ now: env.clock.now },
+			);
+			await expect(
+				env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+			).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
+			env.clock.now = fixtureNow + 30_000;
+			vi.setSystemTime(env.clock.now);
+			const expiredRecovery = signV3Fixture(recovery, "session.status", {
+				now: env.clock.now,
+			});
+			await env.host.recoverStatusV3(
+				expiredRecovery,
+				verifyRuntimeV2Fixture(expiredRecovery.grant),
+			);
+			const freshQuery = signV3Fixture(replay, "events.persist", {
+				now: env.clock.now,
+			});
+			await expect(
+				env.store.recordDeliveredCursor(
+					verifyRuntimeV2Fixture(freshQuery.grant).claims,
+					first.value.cursor,
+					env.clock.now,
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const saved = JSON.parse(await readFile(env.storePath, "utf8"));
+			expect(
+				saved.sessions[accepted.hostSessionRef].executionAuthorities[
+					"execution-fixture"
+				],
+			).toMatchObject({
+				executionDeliveryFence: 2,
+				issuedAt: fixtureNow,
+				expiresAt: fixtureNow + 30_000,
+			});
+			expect(await env.driver.sideEffectCount()).toBe(1);
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("does not let event queries or renewal adopt a higher Execution fence", async () => {
 		const env = await setup();
 		try {

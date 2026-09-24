@@ -72,6 +72,7 @@ describe("platform-core package surface", () => {
 			"isAgentRuntimePresentationVisibleV1",
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
+			"isPlatformConversationChannelCurrentV1",
 			"isTaskAuthorizationCurrentV1",
 			"parseAgentConfigurationChangesV1",
 			"parseConversationMetadataRecoveryV1",
