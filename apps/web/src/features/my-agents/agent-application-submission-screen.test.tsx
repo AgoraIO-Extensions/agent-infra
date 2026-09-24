@@ -69,7 +69,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(screen.queryByText("private transport detail")).toBeNull();
 		first.unmount();
 
-		await renderWithMyAgentsRouter(
+		const second = await renderWithMyAgentsRouter(
 			<AgentApplicationSubmissionScreen
 				error={Object.assign(new Error("private authorization detail"), {
 					retryable: false,
@@ -81,6 +81,22 @@ describe("AgentApplicationSubmissionScreen", () => {
 		);
 		expect(screen.getByRole("alert").textContent).toBe(
 			"申请已变更或当前不可用，请刷新页面后核对。",
+		);
+		second.unmount();
+
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				error={Object.assign(new Error("invalid request"), {
+					code: "INVALID_REQUEST",
+					retryable: false,
+				})}
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"申请内容未通过校验，请修正标记字段后重试。",
 		);
 	});
 

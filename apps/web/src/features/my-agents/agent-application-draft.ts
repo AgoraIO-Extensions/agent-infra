@@ -41,7 +41,7 @@ export type AgentApplicationFormDraft = {
 	userAvailabilityIds: string;
 };
 
-function splitValues(value: string) {
+export function splitValues(value: string) {
 	return value
 		.split(/[\n,]/)
 		.map((item) => item.trim())
@@ -63,6 +63,102 @@ export function showsModelConfiguration(
 	configureModels: boolean,
 ) {
 	return sourceKind === "standard" && (mode === "create" || configureModels);
+}
+
+export type AgentApplicationFieldErrors = Record<string, string>;
+
+export type AgentApplicationValidationContext = {
+	configurationMessage?: string;
+	defaultModelReasoningLevels?: readonly string[];
+	modelConfigurationVisible: boolean;
+	requiresReplacementCredential: boolean;
+	staleModel: boolean;
+	staleTemplate: boolean;
+	standardChoicesBlocked: boolean;
+};
+
+export function validateAgentApplicationDraft(
+	draft: AgentApplicationFormDraft,
+	context: AgentApplicationValidationContext,
+): AgentApplicationFieldErrors {
+	const errors: AgentApplicationFieldErrors = {};
+	if (!draft.name.trim()) errors.name = "请输入 Agent 名称。";
+	if (!draft.description.trim()) errors.description = "请输入用途说明。";
+	if (draft.sourceKind === "standard") {
+		if (!draft.templateId) errors.templateId = "请选择标准模板。";
+		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
+		if (context.standardChoicesBlocked)
+			errors.templateId = context.configurationMessage ?? "部署选项暂不可用。";
+	} else if (!draft.imageReference.trim()) {
+		errors.imageReference = "请输入镜像地址。";
+	}
+	const validateIdentifierList = (
+		value: string,
+		label: string,
+		key: string,
+	) => {
+		const values = splitValues(value);
+		if (values.some((item) => /\s/.test(item)))
+			errors[key] = `${label}格式不正确，请每行填写一个 ID。`;
+		if (new Set(values).size !== values.length)
+			errors[key] = `${label}不能重复。`;
+	};
+	validateIdentifierList(draft.coOwnerIds, "共同 Owner 用户 ID", "coOwnerIds");
+	validateIdentifierList(
+		draft.userAvailabilityIds,
+		"可使用的用户 ID",
+		"userAvailabilityIds",
+	);
+	validateIdentifierList(
+		draft.organizationAvailabilityIds,
+		"可使用的组织 ID",
+		"organizationAvailabilityIds",
+	);
+	const validateRows = (
+		rows: readonly AgentApplicationEnvironmentDraft[],
+		prefix: "environment" | "secret",
+	) => {
+		const names = rows.map((row) => row.name.trim()).filter(Boolean);
+		if (new Set(names).size !== names.length) {
+			rows.forEach((row, index) => {
+				if (row.name.trim())
+					errors[`${prefix}.${index}.name`] = "名称不能重复。";
+			});
+		}
+		rows.forEach((row, index) => {
+			if (!row.name.trim())
+				errors[`${prefix}.${index}.name`] = "请选择或填写名称。";
+			if (!row.value) errors[`${prefix}.${index}.value`] = "请输入值。";
+		});
+	};
+	validateRows(draft.environment, "environment");
+	validateRows(draft.secrets, "secret");
+	if (context.modelConfigurationVisible) {
+		if (draft.models.length === 0)
+			errors.defaultModelOptionId = "至少添加一个模型选项。";
+		draft.models.forEach((model, index) => {
+			if (!model.endpointId)
+				errors[`model.${index}.endpointId`] = "请选择模型端点。";
+			if (!model.modelId) errors[`model.${index}.modelId`] = "请选择模型。";
+			if (!model.reasoningLevels.trim())
+				errors[`model.${index}.reasoningLevels`] = "至少选择一个推理档位。";
+			if (context.requiresReplacementCredential && !model.credentialValue)
+				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
+			if (context.staleModel)
+				errors[`model.${index}.modelId`] = "模型选项已移除，请重新选择。";
+		});
+		if (!draft.defaultModelOptionId)
+			errors.defaultModelOptionId = "请选择默认模型。";
+		if (!draft.defaultReasoningLevel)
+			errors.defaultReasoningLevel = "请选择默认推理档位。";
+		else if (
+			!context.defaultModelReasoningLevels?.includes(
+				draft.defaultReasoningLevel,
+			)
+		)
+			errors.defaultReasoningLevel = "默认推理档位不属于所选模型。";
+	}
+	return errors;
 }
 
 function requestBody(

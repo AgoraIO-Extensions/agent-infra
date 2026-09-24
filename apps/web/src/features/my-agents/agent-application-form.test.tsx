@@ -360,6 +360,41 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("shows duplicate owner IDs and focuses the first invalid field", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		fireEvent.change(screen.getByLabelText("共同 Owner 用户 ID"), {
+			target: { value: "owner-1\nowner-1" },
+		});
+		const form = screen
+			.getByRole("button", { name: "提交申请" })
+			.closest("form");
+		if (!form) throw new Error("application form missing");
+		fireEvent.submit(form);
+
+		expect(screen.getByText("共同 Owner 用户 ID不能重复。")).toBeTruthy();
+		expect(
+			screen.getByLabelText("共同 Owner 用户 ID").getAttribute("aria-invalid"),
+		).toBe("true");
+		expect(document.activeElement).toBe(
+			screen.getByLabelText("共同 Owner 用户 ID"),
+		);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("marks a removed existing template instead of submitting it", () => {
 		const onSubmit = vi.fn();
 		const application = AgentApplicationProjectionV2Schema.parse({

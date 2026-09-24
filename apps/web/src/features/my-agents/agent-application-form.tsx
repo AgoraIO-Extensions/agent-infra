@@ -1,5 +1,5 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -22,11 +22,13 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type AgentApplicationEnvironmentDraft,
+	type AgentApplicationFieldErrors,
 	type AgentApplicationModelDraft,
 	type AgentApplicationSourceKind,
 	buildAgentApplicationRequest,
 	showsModelConfiguration,
 	sourceKindFor,
+	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
 import {
 	type AgentApplicationEditAction,
@@ -66,8 +68,33 @@ type DraftRowsProps<T extends string> = {
 	minimumRows?: number;
 	onChange: (index: number, key: T, value: string) => void;
 	onRemove: (index: number) => void;
+	errorFor?: (index: number, key: T) => string | undefined;
 	rows: readonly Record<T, string>[];
 };
+
+function fieldId(key: string) {
+	if (key === "defaultModelOptionId") return "application-default-model-option";
+	return `application-${key
+		.replaceAll(".", "-")
+		.replace(/[A-Z]/g, (character) => `-${character.toLowerCase()}`)}`;
+}
+
+function errorId(key: string) {
+	return `${fieldId(key)}-error`;
+}
+
+function firstFieldError(errors: AgentApplicationFieldErrors) {
+	const first = Object.keys(errors)[0];
+	return first ? document.getElementById(fieldId(first)) : undefined;
+}
+
+function FieldError({ id, message }: { id: string; message?: string }) {
+	return message ? (
+		<p aria-live="assertive" className="text-destructive text-sm" id={id}>
+			{message}
+		</p>
+	) : null;
+}
 
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
 	return { name: "", value: "" };
@@ -107,12 +134,14 @@ function ModelRows({
 	models,
 	endpoints,
 	requiresReplacementCredential,
+	errors,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
 	requiresReplacementCredential: boolean;
+	errors: AgentApplicationFieldErrors;
 	onChange: (
 		index: number,
 		key: keyof AgentApplicationModelDraft,
@@ -153,6 +182,14 @@ function ModelRows({
 							>
 								<SelectTrigger
 									id={`application-model-option-endpoint-${index}`}
+									aria-describedby={
+										errors[`model.${index}.endpointId`]
+											? errorId(`model.${index}.endpointId`)
+											: undefined
+									}
+									aria-invalid={
+										errors[`model.${index}.endpointId`] ? true : undefined
+									}
 									className="h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="选择模型端点" />
@@ -165,6 +202,10 @@ function ModelRows({
 									))}
 								</SelectContent>
 							</Select>
+							<FieldError
+								id={errorId(`model.${index}.endpointId`)}
+								message={errors[`model.${index}.endpointId`]}
+							/>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor={`application-model-option-model-${index}`}>
@@ -179,6 +220,14 @@ function ModelRows({
 							>
 								<SelectTrigger
 									id={`application-model-option-model-${index}`}
+									aria-describedby={
+										errors[`model.${index}.modelId`]
+											? errorId(`model.${index}.modelId`)
+											: undefined
+									}
+									aria-invalid={
+										errors[`model.${index}.modelId`] ? true : undefined
+									}
 									className="h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="选择模型" />
@@ -191,6 +240,10 @@ function ModelRows({
 									))}
 								</SelectContent>
 							</Select>
+							<FieldError
+								id={errorId(`model.${index}.modelId`)}
+								message={errors[`model.${index}.modelId`]}
+							/>
 						</div>
 						<div className="space-y-2">
 							<Label>允许的推理档位</Label>
@@ -221,6 +274,10 @@ function ModelRows({
 									);
 								})}
 							</div>
+							<FieldError
+								id={errorId(`model.${index}.reasoningLevels`)}
+								message={errors[`model.${index}.reasoningLevels`]}
+							/>
 						</div>
 						<div className="space-y-2">
 							<Label htmlFor={`application-model-option-credential-${index}`}>
@@ -228,6 +285,14 @@ function ModelRows({
 							</Label>
 							<Input
 								autoComplete="new-password"
+								aria-describedby={
+									errors[`model.${index}.credentialValue`]
+										? errorId(`model.${index}.credentialValue`)
+										: undefined
+								}
+								aria-invalid={
+									errors[`model.${index}.credentialValue`] ? true : undefined
+								}
 								id={`application-model-option-credential-${index}`}
 								onChange={(event) =>
 									onChange(index, "credentialValue", event.target.value)
@@ -235,6 +300,10 @@ function ModelRows({
 								required={requiresReplacementCredential}
 								type="password"
 								value={model.credentialValue}
+							/>
+							<FieldError
+								id={errorId(`model.${index}.credentialValue`)}
+								message={errors[`model.${index}.credentialValue`]}
 							/>
 						</div>
 						{models.length > 1 ? (
@@ -262,6 +331,7 @@ function DraftRows<T extends string>({
 	minimumRows = 0,
 	onChange,
 	onRemove,
+	errorFor,
 	rows,
 }: DraftRowsProps<T>) {
 	return (
@@ -276,59 +346,73 @@ function DraftRows<T extends string>({
 					</legend>
 					{fields.map((field) => (
 						<div className="space-y-2" key={field.key}>
-							<Label htmlFor={`application-${idPrefix}-${field.key}-${index}`}>
-								{field.label}
-							</Label>
-							{field.options ? (
-								<Select
-									disabled={field.options.length === 0}
-									value={row[field.key]}
-									onValueChange={(value) =>
-										value && onChange(index, field.key, value)
-									}
-								>
-									<SelectTrigger
-										id={`application-${idPrefix}-${field.key}-${index}`}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="选择一项" />
-									</SelectTrigger>
-									<SelectContent>
-										{field.options.map((option) => (
-											<SelectItem
-												key={option.value}
-												value={option.value}
-												disabled={option.disabled}
+							{(() => {
+								const key = `${idPrefix}.${index}.${field.key}`;
+								const id = fieldId(key);
+								const message = errorFor?.(index, field.key);
+								return (
+									<>
+										<Label htmlFor={id}>{field.label}</Label>
+										{field.options ? (
+											<Select
+												disabled={field.options.length === 0}
+												value={row[field.key]}
+												onValueChange={(value) =>
+													value && onChange(index, field.key, value)
+												}
 											>
-												{option.label}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							) : field.multiline ? (
-								<Textarea
-									className="min-h-20"
-									id={`application-${idPrefix}-${field.key}-${index}`}
-									onChange={(event) =>
-										onChange(index, field.key, event.target.value)
-									}
-									required={field.required}
-									value={row[field.key]}
-								/>
-							) : (
-								<Input
-									autoComplete={
-										field.type === "password" ? "new-password" : undefined
-									}
-									id={`application-${idPrefix}-${field.key}-${index}`}
-									onChange={(event) =>
-										onChange(index, field.key, event.target.value)
-									}
-									required={field.required}
-									type={field.type ?? "text"}
-									value={row[field.key]}
-								/>
-							)}
+												<SelectTrigger
+													id={id}
+													aria-describedby={message ? errorId(key) : undefined}
+													aria-invalid={message ? true : undefined}
+													className="h-11 w-full text-base md:text-sm"
+												>
+													<SelectValue placeholder="选择一项" />
+												</SelectTrigger>
+												<SelectContent>
+													{field.options.map((option) => (
+														<SelectItem
+															key={option.value}
+															value={option.value}
+															disabled={option.disabled}
+														>
+															{option.label}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										) : field.multiline ? (
+											<Textarea
+												aria-describedby={message ? errorId(key) : undefined}
+												aria-invalid={message ? true : undefined}
+												className="min-h-20"
+												id={id}
+												onChange={(event) =>
+													onChange(index, field.key, event.target.value)
+												}
+												required={field.required}
+												value={row[field.key]}
+											/>
+										) : (
+											<Input
+												aria-describedby={message ? errorId(key) : undefined}
+												aria-invalid={message ? true : undefined}
+												autoComplete={
+													field.type === "password" ? "new-password" : undefined
+												}
+												id={id}
+												onChange={(event) =>
+													onChange(index, field.key, event.target.value)
+												}
+												required={field.required}
+												type={field.type ?? "text"}
+												value={row[field.key]}
+											/>
+										)}
+										<FieldError id={errorId(key)} message={message} />
+									</>
+								);
+							})()}
 						</div>
 					))}
 					{rows.length > minimumRows ? (
@@ -424,6 +508,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
 	);
+	const [fieldErrors, setFieldErrors] = useState<AgentApplicationFieldErrors>(
+		{},
+	);
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
 		sourceKind,
@@ -493,8 +580,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
 						: undefined;
 
+	useEffect(() => {
+		const first = firstFieldError(fieldErrors);
+		if (first instanceof HTMLElement) first.focus();
+	}, [fieldErrors]);
+
 	const submit = () => {
-		if (standardChoicesBlocked || staleTemplate || staleModel) return;
 		const draft = {
 			name,
 			description,
@@ -513,6 +604,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			defaultModelOptionId,
 			defaultReasoningLevel,
 		};
+		const errors = validateAgentApplicationDraft(draft, {
+			configurationMessage,
+			defaultModelReasoningLevels: defaultModelDefinition?.reasoningLevels,
+			modelConfigurationVisible,
+			requiresReplacementCredential,
+			staleModel,
+			staleTemplate,
+			standardChoicesBlocked,
+		});
+		setFieldErrors(errors);
+		if (Object.keys(errors).length > 0) return;
 		setSecrets([]);
 		setModels((current) =>
 			current.map((model) => ({ ...model, credentialValue: "" })),
@@ -547,20 +649,33 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						<div className="space-y-2">
 							<Label htmlFor="application-name">Agent 名称</Label>
 							<Input
+								aria-describedby={
+									fieldErrors.name ? errorId("name") : undefined
+								}
+								aria-invalid={fieldErrors.name ? true : undefined}
 								id="application-name"
 								onChange={(event) => setName(event.target.value)}
 								required
 								value={name}
 							/>
+							<FieldError id={errorId("name")} message={fieldErrors.name} />
 						</div>
 						<div className="space-y-2 sm:col-span-2">
 							<Label htmlFor="application-description">用途说明</Label>
 							<Textarea
+								aria-describedby={
+									fieldErrors.description ? errorId("description") : undefined
+								}
+								aria-invalid={fieldErrors.description ? true : undefined}
 								className="min-h-28"
 								id="application-description"
 								onChange={(event) => setDescription(event.target.value)}
 								required
 								value={description}
+							/>
+							<FieldError
+								id={errorId("description")}
+								message={fieldErrors.description}
 							/>
 						</div>
 					</div>
@@ -628,6 +743,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									<SelectTrigger
 										id="application-template-id"
 										aria-describedby="application-source-help"
+										aria-invalid={fieldErrors.templateId ? true : undefined}
 										className="h-11 w-full text-base md:text-sm"
 									>
 										<SelectValue placeholder="选择标准模板" />
@@ -648,6 +764,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										) : null}
 									</SelectContent>
 								</Select>
+								<FieldError
+									id={errorId("templateId")}
+									message={fieldErrors.templateId}
+								/>
 								{selectedTemplate ? (
 									<p className="text-muted-foreground text-sm">
 										{selectedTemplate.connectionEnabled
@@ -661,10 +781,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<Label htmlFor="application-image-reference">镜像地址</Label>
 								<Input
 									disabled={props.mode === "update"}
+									aria-describedby={
+										fieldErrors.imageReference
+											? errorId("imageReference")
+											: undefined
+									}
+									aria-invalid={fieldErrors.imageReference ? true : undefined}
 									id="application-image-reference"
 									onChange={(event) => setImageReference(event.target.value)}
 									required
 									value={imageReference}
+								/>
+								<FieldError
+									id={errorId("imageReference")}
+									message={fieldErrors.imageReference}
 								/>
 							</div>
 						)}
@@ -719,8 +849,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								className="min-h-24"
 								id="application-co-owner-ids"
 								aria-describedby="application-access-help"
+								aria-invalid={fieldErrors.coOwnerIds ? true : undefined}
 								onChange={(event) => setCoOwnerIds(event.target.value)}
 								value={coOwnerIds}
+							/>
+							<FieldError
+								id={errorId("coOwnerIds")}
+								message={fieldErrors.coOwnerIds}
 							/>
 						</div>
 						<div className="space-y-2">
@@ -731,8 +866,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								className="min-h-24"
 								id="application-user-availability-ids"
 								aria-describedby="application-access-help"
+								aria-invalid={
+									fieldErrors.userAvailabilityIds ? true : undefined
+								}
 								onChange={(event) => setUserAvailabilityIds(event.target.value)}
 								value={userAvailabilityIds}
+							/>
+							<FieldError
+								id={errorId("userAvailabilityIds")}
+								message={fieldErrors.userAvailabilityIds}
 							/>
 						</div>
 						<div className="space-y-2 sm:col-span-2">
@@ -743,10 +885,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								className="min-h-24"
 								id="application-organization-availability-ids"
 								aria-describedby="application-access-help"
+								aria-invalid={
+									fieldErrors.organizationAvailabilityIds ? true : undefined
+								}
 								onChange={(event) =>
 									setOrganizationAvailabilityIds(event.target.value)
 								}
 								value={organizationAvailabilityIds}
+							/>
+							<FieldError
+								id={errorId("organizationAvailabilityIds")}
+								message={fieldErrors.organizationAvailabilityIds}
 							/>
 						</div>
 					</div>
@@ -771,6 +920,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						]}
 						idPrefix="environment"
 						label="环境变量"
+						errorFor={(index, key) =>
+							fieldErrors[`environment.${index}.${key}`]
+						}
 						onChange={(index, key, value) =>
 							setEnvironment((current) =>
 								current.map((item, itemIndex) =>
@@ -821,6 +973,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						]}
 						idPrefix="secret"
 						label="Secret"
+						errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
 						onChange={(index, key, value) =>
 							setSecrets((current) =>
 								current.map((item, itemIndex) =>
@@ -874,6 +1027,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<>
 								<ModelRows
 									endpoints={modelEndpoints}
+									errors={fieldErrors}
 									models={models}
 									requiresReplacementCredential={requiresReplacementCredential}
 									onChange={(index, key, value) =>
@@ -922,6 +1076,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										>
 											<SelectTrigger
 												id="application-default-model-option"
+												aria-describedby={
+													fieldErrors.defaultModelOptionId
+														? errorId("defaultModelOptionId")
+														: undefined
+												}
+												aria-invalid={
+													fieldErrors.defaultModelOptionId ? true : undefined
+												}
 												className="h-11 w-full text-base md:text-sm"
 											>
 												<SelectValue placeholder="选择默认模型" />
@@ -944,6 +1106,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												})}
 											</SelectContent>
 										</Select>
+										<FieldError
+											id={errorId("defaultModelOptionId")}
+											message={fieldErrors.defaultModelOptionId}
+										/>
 									</div>
 									<div className="space-y-2">
 										<Label htmlFor="application-default-reasoning-level">
@@ -958,6 +1124,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										>
 											<SelectTrigger
 												id="application-default-reasoning-level"
+												aria-describedby={
+													fieldErrors.defaultReasoningLevel
+														? errorId("defaultReasoningLevel")
+														: undefined
+												}
+												aria-invalid={
+													fieldErrors.defaultReasoningLevel ? true : undefined
+												}
 												className="h-11 w-full text-base md:text-sm"
 											>
 												<SelectValue placeholder="选择默认推理档位" />
@@ -972,6 +1146,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												)}
 											</SelectContent>
 										</Select>
+										<FieldError
+											id={errorId("defaultReasoningLevel")}
+											message={fieldErrors.defaultReasoningLevel}
+										/>
 									</div>
 								</div>
 								<Button
