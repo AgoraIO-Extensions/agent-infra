@@ -15,6 +15,13 @@ test("tracks the Rehoboam provider catalog", () => {
 	);
 });
 
+test("tracks the Manhattan provider catalog", () => {
+	assert.equal(
+		providerSources.manhattan,
+		"packages/openconnector-adapter/src/manhattan.ts",
+	);
+});
+
 test("parses action and provider release versions", () => {
 	assert.deepEqual(
 		parseCatalogSource('const id = "bitbucket.get@v6"; const release = "connection-v6";'),
@@ -37,6 +44,33 @@ test("accepts monotonic catalog versions", () => {
 	assert.equal(
 		compareCatalogs({ jira: { actions: { "jira.get": 8 }, actionVersion: 8, providerReleaseVersion: 8 } }, { jira: { actions: { "jira.get": 9 }, actionVersion: 9, providerReleaseVersion: 9 } }).length,
 		1,
+	);
+});
+
+test("reports a newly added provider from a zero baseline", () => {
+	assert.deepEqual(
+		compareCatalogs({}, {
+			manhattan: {
+				actions: { "manhattan.get_current_user": 1 },
+				actionVersion: 1,
+				providerReleaseVersion: 1,
+			},
+		}),
+		[
+			{
+				provider: "manhattan",
+				before: {
+					actions: {},
+					actionVersion: 0,
+					providerReleaseVersion: null,
+				},
+				after: {
+					actions: { "manhattan.get_current_user": 1 },
+					actionVersion: 1,
+					providerReleaseVersion: 1,
+				},
+			},
+		],
 	);
 });
 
