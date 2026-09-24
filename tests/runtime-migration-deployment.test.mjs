@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 
@@ -27,11 +26,15 @@ const values = {
 };
 
 function render(...args) {
+	return renderRelease("migration-fixture", ...args);
+}
+
+function renderRelease(releaseName, ...args) {
 	return spawnSync(
 		"helm",
 		[
 			"template",
-			"migration-fixture",
+			releaseName,
 			chart,
 			"--namespace",
 			"migration-fixture",
@@ -41,14 +44,6 @@ function render(...args) {
 		],
 		{ encoding: "utf8", input: JSON.stringify(values) },
 	);
-}
-
-function migrationJobName({ dataClaim, candidateClaim, mode }) {
-	const suffix = createHash("sha256")
-		.update(`${dataClaim}|${candidateClaim}|${mode}`)
-		.digest("hex")
-		.slice(0, 12);
-	return `migration-fixture-${suffix}`;
 }
 
 function renderedJob(result) {
@@ -66,7 +61,7 @@ test("migration chart runs the real offline CLI with ordinary trust files and re
 	const policy = resources.find((item) => item.kind === "NetworkPolicy");
 	assert.ok(job);
 	assert.ok(policy);
-	assert.equal(job.metadata.name, migrationJobName(values));
+	assert.match(job.metadata.name, /^migration-fixture-[a-f0-9]{12}$/);
 	assert.ok(job.metadata.name.length <= 63);
 	assert.equal(job.metadata.annotations?.["helm.sh/hook"], undefined);
 	assert.equal(job.spec.backoffLimit, 0);
@@ -129,34 +124,57 @@ test("migration chart runs the real offline CLI with ordinary trust files and re
 		policy.spec.podSelector.matchLabels,
 		job.spec.template.metadata.labels,
 	);
+	assert.equal(policy.metadata.name, "migration-fixture");
+	assert.equal(
+		policy.spec.podSelector.matchLabels["app.kubernetes.io/instance"],
+		"migration-fixture",
+	);
 	assert.deepEqual(policy.spec.policyTypes, ["Ingress", "Egress"]);
 	assert.deepEqual(policy.spec.ingress, []);
 	assert.deepEqual(policy.spec.egress, []);
 });
 
 test("migration input changes create a distinct Job instead of reusing a completed one", () => {
-	const candidate = render("--set", "candidateClaim=another-migration-output");
-	assert.equal(candidate.status, 0, candidate.stderr);
-	const candidateJob = renderedJob(candidate);
-	assert.ok(candidateJob);
-	assert.equal(
-		candidateJob.metadata.name,
-		migrationJobName({
-			...values,
-			candidateClaim: "another-migration-output",
-		}),
-	);
-	assert.notEqual(candidateJob.metadata.name, migrationJobName(values));
+	const baseline = renderedJob(render());
+	assert.ok(baseline);
+	assert.equal(baseline.metadata.name, renderedJob(render()).metadata.name);
+	for (const option of [
+		"candidateClaim=another-migration-output",
+		"mode=offline-commit",
+		`image.digest=sha256:${"c".repeat(64)}`,
+		"binding.fence=4",
+		"issuer=other-platform-fixture",
+		"trust.keyId=other-migration-key",
+	]) {
+		const result = render("--set", option);
+		assert.equal(result.status, 0, result.stderr);
+		const job = renderedJob(result);
+		assert.ok(job);
+		assert.match(job.metadata.name, /^migration-fixture-[a-f0-9]{12}$/);
+		assert.notEqual(job.metadata.name, baseline.metadata.name, option);
+	}
+});
 
-	const offlineCommit = render("--set", "mode=offline-commit");
-	assert.equal(offlineCommit.status, 0, offlineCommit.stderr);
-	const offlineJob = renderedJob(offlineCommit);
-	assert.ok(offlineJob);
-	assert.equal(
-		offlineJob.metadata.name,
-		migrationJobName({ ...values, mode: "offline-commit" }),
-	);
-	assert.notEqual(offlineJob.metadata.name, candidateJob.metadata.name);
+test("release names that look like YAML scalars remain strings in metadata and labels", () => {
+	for (const releaseName of ["true", "false", "null"]) {
+		const result = renderRelease(releaseName);
+		assert.equal(result.status, 0, result.stderr);
+		const resources = parseAllDocuments(result.stdout).map((doc) =>
+			doc.toJSON(),
+		);
+		const job = resources.find((item) => item.kind === "Job");
+		const policy = resources.find((item) => item.kind === "NetworkPolicy");
+		assert.equal(typeof job.metadata.name, "string");
+		assert.equal(policy.metadata.name, releaseName);
+		assert.equal(
+			job.spec.template.metadata.labels["app.kubernetes.io/instance"],
+			releaseName,
+		);
+		assert.equal(
+			policy.spec.podSelector.matchLabels["app.kubernetes.io/instance"],
+			releaseName,
+		);
+	}
 });
 
 test("offline commit is explicit and cannot add process input or weaken trust mounts", () => {
