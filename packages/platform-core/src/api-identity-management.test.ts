@@ -135,6 +135,40 @@ describe("API identity management authorization", () => {
 		).rejects.toMatchObject({ code: "not_authorized" });
 	});
 
+	it("classifies inactive credentials before missing scopes", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const apiActor = actor({ kind: "application", id: "application-caller" });
+		const applicationAudit = {
+			...audit,
+			actor: { kind: "application" as const, id: "application-caller" },
+		};
+		await expect(
+			useCase.authorizeCredentialScope(
+				{
+					...apiActor,
+					credential: {
+						...apiActor.credential,
+						scopes: ["agent:read"],
+						expiresAt: new Date("2020-01-01T00:00:00Z"),
+					},
+				},
+				["agent:create"],
+				{
+					audit: applicationAudit,
+					targetId: "agents",
+					reason: "missing_scope",
+				},
+			),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(store.writeAudit).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				action: "api.access.rejected",
+				reason: "invalid_credential",
+			}),
+		);
+	});
+
 	it("audits rejected scope and query authorization in the same API audit port", async () => {
 		const store = storeFixture();
 		const useCase = management(store);

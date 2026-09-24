@@ -348,12 +348,16 @@ async function agentOrUnavailable(
 	scope: AgentManagementAgentScopeV1,
 	agentId: string,
 	traceId: string,
+	onMissing?: () => Promise<void>,
 ): Promise<AgentManagementAgentProjectionV1> {
 	const agent = await queryOrUnavailable(
 		() => dependencies.query.getAgent(scope, agentId),
 		traceId,
 	);
-	if (!agent) fail("RESOURCE_UNAVAILABLE", traceId);
+	if (!agent) {
+		await onMissing?.();
+		fail("RESOURCE_UNAVAILABLE", traceId);
+	}
 	return agent;
 }
 
@@ -1507,6 +1511,21 @@ export function registerManagementRoutes(
 				scope,
 				context.req.param("agentId"),
 				metadata.traceId,
+				api
+					? async () =>
+							await apiIdentityOrUnavailable(
+								dependencies.apiIdentity,
+								metadata.traceId,
+							).recordAccessRejection(
+								apiActor(api),
+								apiAccessAudit(
+									apiIdentityContext(api),
+									metadata,
+									context.req.param("agentId"),
+									"resource_unavailable",
+								),
+							)
+					: undefined,
 			);
 			return context.json(
 				await projectAgent(dependencies, agent, identity, metadata),
@@ -1618,6 +1637,21 @@ export function registerManagementRoutes(
 				scope,
 				agentId,
 				metadata.traceId,
+				api
+					? async () =>
+							await apiIdentityOrUnavailable(
+								dependencies.apiIdentity,
+								metadata.traceId,
+							).recordAccessRejection(
+								apiActor(api),
+								apiAccessAudit(
+									apiIdentityContext(api),
+									metadata,
+									agentId,
+									"resource_unavailable",
+								),
+							)
+					: undefined,
 			);
 			if (api && body.command === "disable") {
 				const management = apiIdentityOrUnavailable(

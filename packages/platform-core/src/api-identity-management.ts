@@ -385,14 +385,23 @@ export function createApiIdentityManagementV1(input: {
 	const accessRejectionReason = (
 		actor: ApiIdentityActorV1,
 		required: readonly ApiCredentialScopeV1[],
-	): ApiIdentityAuditReasonV1 =>
-		actor.accountStatus !== "active"
-			? "account_inactive"
-			: actor.credential === undefined
-				? "invalid_credential"
-				: required.length > 0
-					? "missing_scope"
-					: "invalid_credential";
+	): ApiIdentityAuditReasonV1 => {
+		if (actor.accountStatus !== "active") return "account_inactive";
+		const principal = actor.principal ?? {
+			kind: "user" as const,
+			id: actor.userId,
+		};
+		const credential = actor.credential;
+		if (
+			credential === undefined ||
+			!sameApiPrincipalV1(principal, credential.principal) ||
+			credential.revokedAt !== null ||
+			(credential.expiresAt !== null &&
+				credential.expiresAt.getTime() <= Date.now())
+		)
+			return "invalid_credential";
+		return required.length > 0 ? "missing_scope" : "invalid_credential";
+	};
 	const requireAgentAccess = async (
 		actor: ApiIdentityActorV1,
 		agentId: string,
@@ -443,6 +452,7 @@ export function createApiIdentityManagementV1(input: {
 						accessAudit(actor, {
 							...audit,
 							reason: accessRejectionReason(actor, ["agent:read"]),
+							requiredScopes: ["agent:manage", "agent:use", "agent:read"],
 						}),
 						audit.targetId,
 					);

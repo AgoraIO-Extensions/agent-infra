@@ -112,7 +112,7 @@ const agentProjection = {
 };
 
 function createApp(
-	options: { administrator?: boolean; missing?: boolean } = {},
+	options: { administrator?: boolean; missing?: boolean; api?: boolean } = {},
 ) {
 	const app = new Hono();
 	const submit = vi.fn().mockResolvedValue({
@@ -184,6 +184,34 @@ function createApp(
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
+	const apiIdentity = options.api
+		? {
+				schemaVersion: 1 as const,
+				principal: { kind: "application" as const, id: "application-caller" },
+				accountStatus: "active" as const,
+				organizationIds: ["org-1"],
+				authorizationRevision: "authorization-api-1",
+				ownerId: "user-1",
+				credential: {
+					schemaVersion: 1 as const,
+					credentialId: "credential-1",
+					principal: {
+						kind: "application" as const,
+						id: "application-caller",
+					},
+					scopes: ["agent:read", "agent:manage"] as const,
+					expiresAt: null,
+					revokedAt: null,
+					createdAt: new Date("2026-09-01T00:00:00Z"),
+				},
+			}
+		: undefined;
+	const resolveApiCredential = options.api
+		? vi.fn().mockResolvedValue(apiIdentity)
+		: undefined;
+	const resolveAgentQueryGrantType = vi.fn().mockResolvedValue("any");
+	const authorizeCredentialScope = vi.fn().mockResolvedValue(undefined);
+	const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
 
 	registerManagementRoutes(app, {
 		identity: {
@@ -194,7 +222,29 @@ function createApp(
 					: identity.roles,
 			}),
 			hydrateUsers: vi.fn().mockResolvedValue([]),
+			...(resolveApiCredential ? { resolveApiCredential } : {}),
 		},
+		...(apiIdentity
+			? {
+					apiIdentity: {
+						authorizeCredentialScope,
+						resolveAgentQueryGrantType,
+						listUserCredentials: vi.fn(),
+						issueUserCredential: vi.fn(),
+						revokeUserCredential: vi.fn(),
+						listApplications: vi.fn(),
+						createApplication: vi.fn(),
+						listApplicationCredentials: vi.fn(),
+						issueApplicationCredential: vi.fn(),
+						revokeApplicationCredential: vi.fn(),
+						grantCredentialDelivery: vi.fn(),
+						revokeCredentialDelivery: vi.fn(),
+						grantAgent: vi.fn(),
+						revokeAgentGrant: vi.fn(),
+						recordAccessRejection,
+					},
+				}
+			: {}),
 		foundation: { submit },
 		revision: { revise },
 		management: { executeManagementCommand },
@@ -220,6 +270,10 @@ function createApp(
 		readAgentProjection,
 		prepareSecretReplacements,
 		allocateApplicationIds,
+		apiIdentity,
+		resolveAgentQueryGrantType,
+		authorizeCredentialScope,
+		recordAccessRejection,
 	};
 }
 
@@ -871,6 +925,45 @@ describe("management routes", () => {
 		expect(missing.prepareSecretReplacements).not.toHaveBeenCalled();
 		expect((await missing.app.request("/api/v1/agents/unknown")).status).toBe(
 			(await missing.app.request("/api/v1/agents/not-owned")).status,
+		);
+	});
+
+	it("audits API agent resource refusals", async () => {
+		const missing = createApp({ missing: true, api: true });
+		const apiHeaders = { Authorization: "Bearer secret" };
+
+		const detail = await missing.app.request("/api/v1/agents/unknown", {
+			headers: apiHeaders,
+		});
+		expect(detail.status).toBe(404);
+		expect(missing.recordAccessRejection).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				targetId: "unknown",
+				reason: "resource_unavailable",
+			}),
+		);
+
+		missing.recordAccessRejection.mockClear();
+		const lifecycle = await missing.app.request(
+			"/api/v1/agents/unknown/lifecycle",
+			{
+				method: "POST",
+				headers: {
+					...apiHeaders,
+					"content-type": "application/json",
+					"Idempotency-Key": "api-missing-agent",
+				},
+				body: JSON.stringify({ schemaVersion: 1, command: "restart" }),
+			},
+		);
+		expect(lifecycle.status).toBe(404);
+		expect(missing.recordAccessRejection).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				targetId: "unknown",
+				reason: "resource_unavailable",
+			}),
 		);
 	});
 
