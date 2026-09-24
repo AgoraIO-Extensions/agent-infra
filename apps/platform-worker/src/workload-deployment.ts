@@ -124,6 +124,18 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			const source = input.kubernetes;
 			if (!isAbsolute(source.path) || !source.context || !source.expectedServer)
 				throw new Error();
+			const expectedServer = new URL(source.expectedServer);
+			const loopback =
+				expectedServer.hostname === "127.0.0.1" ||
+				expectedServer.hostname === "[::1]" ||
+				expectedServer.hostname === "::1";
+			if (
+				(expectedServer.protocol !== "https:" &&
+					!(expectedServer.protocol === "http:" && loopback)) ||
+				expectedServer.username ||
+				expectedServer.password
+			)
+				throw new Error();
 			config.loadFromString(
 				await readFile(source.path, { encoding: "utf8", signal }),
 			);

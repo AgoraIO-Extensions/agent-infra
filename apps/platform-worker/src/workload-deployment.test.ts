@@ -332,6 +332,14 @@ describe("production Worker deployment", () => {
 			),
 		).rejects.toThrow(/^WORKER_[A-Z_]+$/);
 	});
+	it.each([
+		"http://kubernetes.example",
+		"https://worker:secret@kubernetes.example",
+	])("rejects unsafe kubeconfig server URL %s", async (server) => {
+		await expect(
+			createProductionWorkloadWorkerOptionsV1(await input(server)),
+		).rejects.toThrow("WORKER_KUBERNETES_CONFIGURATION_INVALID");
+	});
 });
 
 describe("authenticated Workload Runtime probe", () => {

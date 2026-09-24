@@ -186,18 +186,17 @@ export function createPlatformConversationWorkerV2(
 			controller.abort();
 			const runtimeClose = Promise.resolve().then(() => runtime.close());
 			closing = (async () => {
-				const closeResultsPromise = Promise.allSettled([
-					Promise.resolve().then(() => transaction.close()),
-					Promise.resolve().then(() => store.close()),
-					Promise.resolve().then(() => taskAuthorizationStore.close()),
-					Promise.resolve().then(() => legacyControlStore.close()),
-				]);
 				const runningResults = await Promise.allSettled([
 					runtimeClose,
 					polling,
 					...[...running.values()].map((entry) => entry.promise),
 				]);
-				const closeResults = await closeResultsPromise;
+				const closeResults = await Promise.allSettled([
+					Promise.resolve().then(() => transaction.close()),
+					Promise.resolve().then(() => store.close()),
+					Promise.resolve().then(() => taskAuthorizationStore.close()),
+					Promise.resolve().then(() => legacyControlStore.close()),
+				]);
 				const failure = [...runningResults, ...closeResults].find(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected",
