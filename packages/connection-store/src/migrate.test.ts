@@ -63,6 +63,7 @@ describe("Connection PostgreSQL migration", () => {
 			"consumer_instances",
 			"consumers",
 			"credential_versions",
+			"current_grant_actions",
 			"dispatches",
 			"dpop_replay",
 			"effects",
@@ -86,7 +87,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(1);
+		expect(history?.count).toBe(2);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {
@@ -107,18 +108,31 @@ describe("Connection PostgreSQL migration", () => {
 		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-a', 'provider-a', 'account-a')`;
 		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-a-v1', 'connection-a', 1, 'ciphertext')`;
 		await databaseClient`update connection.connections set current_credential_version_id = 'credential-a-v1' where id = 'connection-a'`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
-			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', 1)`;
-		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-a', 'action-a-v1'), ('grant-a', 'action-write-v1')`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, principal_recovery_generation)
-			values ('grant-consumer', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', 1)`;
-		await databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-a-v1')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1', 'action-write-v1'], 1)`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+			values ('grant-consumer', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1)`;
 
 		const handle = createConnectionDatabase(database.databaseUrl);
 		try {
 			const repository = createConnectionAuthorityRepository(handle.db);
 			const catalog = createCatalogReader(handle.db);
 			const audit = createAuditEventStore(handle.db);
+			await expect(
+				databaseClient`update connection.grants set approved_action_version_ids = ARRAY['action-a-v1', 'action-write-v1'] where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.grants set revision = revision + 1 where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`insert into connection.grant_actions (grant_id, action_version_id) values ('grant-consumer', 'action-write-v1')`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`delete from connection.grant_actions where grant_id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`delete from connection.current_grant_actions where grant_id = 'grant-consumer'`,
+			).rejects.toThrow();
 			await audit.insert({
 				id: "audit-store-1",
 				traceId: "trace-store-1",
@@ -177,8 +191,6 @@ describe("Connection PostgreSQL migration", () => {
 				consumerId: "consumer-a",
 				consumerInstanceId: "instance-a",
 				actorId: "actor-a",
-				grantId: "grant-a",
-				connectionId: "connection-a",
 				actionVersionId: "action-a-v1",
 				arguments: { repositoryId: 7 },
 			};
@@ -203,6 +215,14 @@ describe("Connection PostgreSQL migration", () => {
 					1,
 				),
 			).rejects.toThrow("Connection authorization denied");
+			for (const crossBinding of [
+				{ consumerId: "consumer-b" },
+				{ actorId: "actor-b" },
+			]) {
+				await expect(
+					authorizeActionCall(repository, { ...request, ...crossBinding }, 1),
+				).rejects.toThrow("Connection authorization denied");
+			}
 
 			const namespaceKey = actionCallNamespaceKey(request);
 			const record: ActionCallRecord = {
@@ -216,11 +236,14 @@ describe("Connection PostgreSQL migration", () => {
 				consumerId: request.consumerId,
 				consumerInstanceId: request.consumerInstanceId,
 				actorId: "actor-a",
-				grantId: request.grantId,
-				connectionId: request.connectionId,
+				grantId: resolved.id,
+				connectionId: resolved.connectionId,
 				credentialVersionId: "credential-a-v1",
 				actionVersionId: request.actionVersionId,
-				requestDigest: actionRequestDigest(request),
+				requestDigest: actionRequestDigest({
+					...request,
+					connectionId: resolved.connectionId,
+				}),
 				status: "created",
 			};
 			expect(
@@ -242,7 +265,6 @@ describe("Connection PostgreSQL migration", () => {
 				requestId: "request-store-consumer",
 				idempotencyKey: "store-key-consumer",
 				actorId: null,
-				grantId: "grant-consumer",
 			};
 			const consumerGrant = await authorizeActionCall(
 				repository,
@@ -259,8 +281,11 @@ describe("Connection PostgreSQL migration", () => {
 				idempotencyKey: consumerRequest.idempotencyKey,
 				namespaceKey: actionCallNamespaceKey(consumerRequest),
 				actorId: consumerActorSentinel,
-				grantId: consumerRequest.grantId,
-				requestDigest: actionRequestDigest(consumerRequest),
+				grantId: consumerGrant.id,
+				requestDigest: actionRequestDigest({
+					...consumerRequest,
+					connectionId: consumerGrant.connectionId,
+				}),
 			};
 			expect(
 				(
@@ -284,6 +309,7 @@ describe("Connection PostgreSQL migration", () => {
 				actionVersionId: "action-write-v1",
 				requestDigest: actionRequestDigest({
 					...request,
+					connectionId: resolved.connectionId,
 					actionVersionId: "action-write-v1",
 				}),
 			};
@@ -426,6 +452,55 @@ describe("Connection PostgreSQL migration", () => {
 				dispatch_status: "failed",
 				effect_status: "planned",
 			});
+
+			await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-b', 'provider-a', 'account-b')`;
+			await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-b-v1', 'connection-b', 1, 'ciphertext-b')`;
+			await databaseClient`update connection.connections set current_credential_version_id = 'credential-b-v1' where id = 'connection-b'`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+				values ('grant-a2', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1)`;
+			await expect(
+				databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1)`,
+			).rejects.toThrow();
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-a2",
+			);
+			await databaseClient`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a2'`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1)`;
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-b",
+			);
+			const callerSelectedRequest = {
+				...request,
+				connectionId: "connection-a",
+			};
+			await expect(
+				authorizeActionCall(repository, callerSelectedRequest, 1),
+			).rejects.toThrow("Connection authorization denied");
+			const { nextGrant } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-b'`;
+				const nextGrant = databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation)
+					values ('grant-c', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1)`;
+				expect(
+					await Promise.race([
+						nextGrant.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { nextGrant };
+			});
+			await nextGrant;
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-c",
+			);
+			await databaseClient`update connection.principals set recovery_generation = 2 where id = 'principal-a'`;
+			await databaseClient`update connection.consumer_instances set recovery_generation = 2 where id = 'instance-a'`;
+			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
+				"Connection authorization denied",
+			);
 		} finally {
 			await handle.close();
 		}

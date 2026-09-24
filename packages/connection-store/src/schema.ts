@@ -541,6 +541,9 @@ export const grants = connectionSchema.table(
 		actorId: text("actor_id").notNull(),
 		connectionId: text("connection_id").notNull(),
 		credentialVersionId: text("credential_version_id").notNull(),
+		approvedActionVersionIds: text("approved_action_version_ids")
+			.array()
+			.notNull(),
 		revision: bigint("revision", { mode: "number" }).default(1).notNull(),
 		principalRecoveryGeneration: bigint("principal_recovery_generation", {
 			mode: "number",
@@ -610,6 +613,10 @@ export const grants = connectionSchema.table(
 			)
 			.where(sql`${table.status} = 'active'`),
 		check("grants_status_check", sql`${table.status} IN ('active', 'revoked')`),
+		check(
+			"grants_approved_actions_nonempty",
+			sql`cardinality(${table.approvedActionVersionIds}) > 0`,
+		),
 		check("grants_revision_positive", sql`${table.revision} > 0`),
 		check(
 			"grants_principal_generation_positive",
@@ -644,6 +651,41 @@ export const grantActions = connectionSchema.table(
 			foreignColumns: [actionVersions.id],
 			name: "grant_actions_action_version_fk",
 		}),
+	],
+);
+
+export const currentGrantActions = connectionSchema.table(
+	"current_grant_actions",
+	{
+		grantId: text("grant_id").notNull(),
+		principalId: text("principal_id").notNull(),
+		consumerId: text("consumer_id").notNull(),
+		consumerInstanceId: text("consumer_instance_id").notNull(),
+		actorId: text("actor_id").notNull(),
+		actionVersionId: text("action_version_id").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.grantId, table.actionVersionId],
+			name: "current_grant_actions_pk",
+		}),
+		foreignKey({
+			columns: [table.grantId],
+			foreignColumns: [grants.id],
+			name: "current_grant_actions_grant_fk",
+		}),
+		foreignKey({
+			columns: [table.actionVersionId],
+			foreignColumns: [actionVersions.id],
+			name: "current_grant_actions_action_fk",
+		}),
+		uniqueIndex("current_grant_actions_subject_action_unique").on(
+			table.principalId,
+			table.consumerId,
+			table.consumerInstanceId,
+			table.actorId,
+			table.actionVersionId,
+		),
 	],
 );
 
@@ -891,6 +933,7 @@ export const connectionInfrastructureTables = [
 	credentialVersions,
 	grants,
 	grantActions,
+	currentGrantActions,
 	actionCalls,
 	effects,
 	dispatches,

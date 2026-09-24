@@ -98,10 +98,13 @@ function recordFor(
 		consumerInstanceId: request.consumerInstanceId,
 		actorId: request.actorId ?? consumerActorSentinel,
 		grantId: grant.id,
-		connectionId: request.connectionId,
+		connectionId: grant.connectionId,
 		credentialVersionId: grant.credentialVersionId,
 		actionVersionId: request.actionVersionId,
-		requestDigest: actionRequestDigest(request),
+		requestDigest: actionRequestDigest({
+			...request,
+			connectionId: grant.connectionId,
+		}),
 		status: "created",
 	};
 }
@@ -124,13 +127,18 @@ export async function executeActionCall(
 		input.request,
 		input.principalRecoveryGeneration,
 	);
+	const resolved = {
+		...input.request,
+		grantId: grant.id,
+		connectionId: grant.connectionId,
+	};
 	const namespaceKey = actionCallNamespaceKey(input.request);
 	const existing = await repository.findByIdempotency(
 		namespaceKey,
 		input.request.idempotencyKey,
 	);
 	if (existing) {
-		const replay = decideActionCallReplay(existing, input.request);
+		const replay = decideActionCallReplay(existing, resolved);
 		if (replay.kind === "reuse")
 			return { kind: "reused", actionCall: replay.record };
 		throw new Error("Connection authorization denied");
@@ -166,7 +174,7 @@ export async function executeActionCall(
 			input.request.idempotencyKey,
 		);
 		if (!raced) throw error;
-		const replay = decideActionCallReplay(raced, input.request);
+		const replay = decideActionCallReplay(raced, resolved);
 		if (replay.kind === "reuse")
 			return { kind: "reused", actionCall: replay.record };
 		throw new Error("Connection authorization denied");

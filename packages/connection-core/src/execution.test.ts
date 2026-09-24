@@ -16,8 +16,6 @@ const request: ActionCallRequest = {
 	consumerId: "consumer",
 	consumerInstanceId: "instance",
 	actorId: null,
-	grantId: "grant",
-	connectionId: "connection",
 	actionVersionId: "action@v1",
 	arguments: { owner: "agora" },
 };

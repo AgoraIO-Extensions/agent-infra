@@ -17,18 +17,16 @@ const request: ActionCallRequest = {
 	consumerId: "consumer-a",
 	consumerInstanceId: "instance-a",
 	actorId: null,
-	grantId: "grant-a",
-	connectionId: "connection-a",
 	actionVersionId: "action-a@1",
 	arguments: { repositoryId: 7 },
 };
 
 const grant = createGrant({
-	id: request.grantId,
+	id: "grant-a",
 	principalId: request.principalId,
 	consumerId: request.consumerId,
 	consumerInstanceId: request.consumerInstanceId,
-	connectionId: request.connectionId,
+	connectionId: "connection-a",
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: [request.actionVersionId],
 	principalRecoveryGeneration: 3,
@@ -46,11 +44,14 @@ function callRecord(): ActionCallRecord {
 		consumerId: request.consumerId,
 		consumerInstanceId: request.consumerInstanceId,
 		actorId: "__consumer_actor__",
-		grantId: request.grantId,
-		connectionId: request.connectionId,
+		grantId: grant.id,
+		connectionId: grant.connectionId,
 		credentialVersionId: "credential-a-v1",
 		actionVersionId: request.actionVersionId,
-		requestDigest: actionRequestDigest(request),
+		requestDigest: actionRequestDigest({
+			...request,
+			connectionId: grant.connectionId,
+		}),
 		status: "created",
 	};
 }
@@ -88,6 +89,10 @@ describe("Connection repository ports", () => {
 		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
 		await expect(
 			authorizeActionCall(repository, request, 4),
+		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
+		const callerSelectedRequest = { ...request, connectionId: "connection-b" };
+		await expect(
+			authorizeActionCall(repository, callerSelectedRequest, 3),
 		).rejects.toBeInstanceOf(ConnectionAuthorizationDenied);
 	});
 

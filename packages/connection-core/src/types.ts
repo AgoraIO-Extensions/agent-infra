@@ -105,10 +105,14 @@ export interface ActionCallRequest {
 	consumerId: string;
 	consumerInstanceId: string;
 	actorId: string | null;
-	grantId: string;
-	connectionId: string;
 	actionVersionId: string;
 	arguments: unknown;
+}
+
+/** Bound only after Connection resolves one current Grant. */
+export interface ResolvedActionCallRequest extends ActionCallRequest {
+	grantId: string;
+	connectionId: string;
 }
 
 export interface EffectRecord {

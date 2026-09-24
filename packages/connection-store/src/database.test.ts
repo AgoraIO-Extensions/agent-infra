@@ -41,6 +41,7 @@ describe("Connection store boundary", () => {
 			"credential_versions",
 			"grants",
 			"grant_actions",
+			"current_grant_actions",
 			"action_calls",
 			"effects",
 			"dispatches",

@@ -42,7 +42,6 @@ export interface ActiveGrantRepository {
 		consumerId: string;
 		consumerInstanceId: string;
 		actorId: string | null;
-		connectionId: string;
 		actionVersionId: string;
 		principalRecoveryGeneration: number;
 	}): Promise<GrantRecord | undefined>;
@@ -72,18 +71,28 @@ export class ConnectionAuthorizationDenied extends Error {
 	}
 }
 
+function rejectAuthoritySelectors(request: ActionCallRequest): void {
+	if (
+		"grantId" in request ||
+		"connectionId" in request ||
+		"credentialVersionId" in request ||
+		"revision" in request
+	)
+		throw new ConnectionAuthorizationDenied();
+}
+
 /** Resolve authorization without exposing whether another subject's record exists. */
 export async function authorizeActionCall(
 	repository: ActiveGrantRepository,
 	request: ActionCallRequest,
 	principalRecoveryGeneration: number,
 ): Promise<GrantRecord> {
+	rejectAuthoritySelectors(request);
 	const grant = await repository.findActiveGrant({
 		principalId: request.principalId,
 		consumerId: request.consumerId,
 		consumerInstanceId: request.consumerInstanceId,
 		actorId: request.actorId,
-		connectionId: request.connectionId,
 		actionVersionId: request.actionVersionId,
 		principalRecoveryGeneration,
 	});
@@ -94,7 +103,7 @@ export async function authorizeActionCall(
 			consumerId: request.consumerId,
 			consumerInstanceId: request.consumerInstanceId,
 			actorId: request.actorId,
-			connectionId: request.connectionId,
+			connectionId: grant.connectionId,
 			actionVersionId: request.actionVersionId,
 			principalRecoveryGeneration,
 			credentialVersionId: grant.credentialVersionId,
@@ -112,20 +121,25 @@ export async function reserveActionCall(
 	request: ActionCallRequest,
 	grant: GrantRecord,
 ): Promise<ActionCallRecord> {
+	rejectAuthoritySelectors(request);
 	const expectedActorId = actorNamespaceId(request.actorId);
+	const resolved = {
+		...request,
+		grantId: grant.id,
+		connectionId: grant.connectionId,
+	};
 	if (
 		record.namespaceKey !== actionCallNamespaceKey(request) ||
 		record.idempotencyKey !== request.idempotencyKey ||
-		record.requestDigest !== actionRequestDigest(request) ||
+		record.requestDigest !== actionRequestDigest(resolved) ||
 		record.principalId !== request.principalId ||
 		record.consumerId !== request.consumerId ||
 		record.consumerInstanceId !== request.consumerInstanceId ||
 		record.actorId !== expectedActorId ||
 		record.grantId !== grant.id ||
-		record.connectionId !== request.connectionId ||
+		record.connectionId !== grant.connectionId ||
 		record.actionVersionId !== request.actionVersionId ||
 		record.credentialVersionId !== grant.credentialVersionId ||
-		request.grantId !== grant.id ||
 		!grant.actionVersionIds.includes(request.actionVersionId)
 	) {
 		throw new ConnectionAuthorizationDenied();
@@ -135,7 +149,7 @@ export async function reserveActionCall(
 		request.idempotencyKey,
 	);
 	if (existing) {
-		const replay = decideActionCallReplay(existing, request);
+		const replay = decideActionCallReplay(existing, resolved);
 		if (replay.kind === "reuse") return replay.record;
 		throw new ConnectionAuthorizationDenied();
 	}

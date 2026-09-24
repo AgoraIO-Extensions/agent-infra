@@ -47,20 +47,17 @@ import {
 	consumerInstances,
 	consumers,
 	credentialVersions,
+	currentGrantActions,
 	dispatches,
 	dpopReplay,
 	effects,
-	grantActions,
 	grants,
 	principals,
 	providers,
 	refreshTokens,
 } from "./schema.js";
 
-function grantRecord(
-	row: typeof grants.$inferSelect,
-	actionVersionIds: readonly string[],
-): GrantRecord {
+function grantRecord(row: typeof grants.$inferSelect): GrantRecord {
 	return {
 		id: row.id,
 		principalId: row.principalId,
@@ -69,7 +66,7 @@ function grantRecord(
 		actorId: row.actorId,
 		connectionId: row.connectionId,
 		credentialVersionId: row.credentialVersionId,
-		actionVersionIds,
+		actionVersionIds: row.approvedActionVersionIds,
 		revision: row.revision,
 		status: row.status as GrantRecord["status"],
 		principalRecoveryGeneration: row.principalRecoveryGeneration,
@@ -143,10 +140,13 @@ export function createConnectionAuthorityRepository(
 					credentialVersions,
 					eq(grants.credentialVersionId, credentialVersions.id),
 				)
-				.innerJoin(grantActions, eq(grantActions.grantId, grants.id))
+				.innerJoin(
+					currentGrantActions,
+					eq(currentGrantActions.grantId, grants.id),
+				)
 				.innerJoin(
 					actionVersions,
-					eq(grantActions.actionVersionId, actionVersions.id),
+					eq(currentGrantActions.actionVersionId, actionVersions.id),
 				)
 				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
 				.where(
@@ -155,7 +155,6 @@ export function createConnectionAuthorityRepository(
 						eq(grants.consumerId, context.consumerId),
 						eq(grants.consumerInstanceId, context.consumerInstanceId),
 						eq(grants.actorId, actorId),
-						eq(grants.connectionId, context.connectionId),
 						eq(
 							grants.principalRecoveryGeneration,
 							context.principalRecoveryGeneration,
@@ -202,20 +201,7 @@ export function createConnectionAuthorityRepository(
 					.limit(1);
 				if (!actor) return undefined;
 			}
-			const actions = await db
-				.select({ actionVersionId: grantActions.actionVersionId })
-				.from(grantActions)
-				.where(eq(grantActions.grantId, row.id));
-			if (
-				!actions.some(
-					(action) => action.actionVersionId === context.actionVersionId,
-				)
-			)
-				return undefined;
-			return grantRecord(
-				row,
-				actions.map((action) => action.actionVersionId),
-			);
+			return grantRecord(row);
 		},
 
 		async findByIdempotency(namespaceKey, idempotencyKey) {
@@ -327,10 +313,13 @@ export function createConnectionAuthorityRepository(
 							credentialVersions,
 							eq(grants.credentialVersionId, credentialVersions.id),
 						)
-						.innerJoin(grantActions, eq(grantActions.grantId, grants.id))
+						.innerJoin(
+							currentGrantActions,
+							eq(currentGrantActions.grantId, grants.id),
+						)
 						.innerJoin(
 							actionVersions,
-							eq(grantActions.actionVersionId, actionVersions.id),
+							eq(currentGrantActions.actionVersionId, actionVersions.id),
 						)
 						.innerJoin(providers, eq(actionVersions.providerId, providers.id))
 						.where(
@@ -1042,13 +1031,13 @@ export function createCatalogReader(db: ConnectionDatabase): CatalogReader {
 					requiredScopes: actionVersions.requiredScopes,
 					actionStatus: actionVersions.status,
 				})
-				.from(grantActions)
+				.from(currentGrantActions)
 				.innerJoin(
 					actionVersions,
-					eq(grantActions.actionVersionId, actionVersions.id),
+					eq(currentGrantActions.actionVersionId, actionVersions.id),
 				)
 				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
-				.innerJoin(grants, eq(grantActions.grantId, grants.id))
+				.innerJoin(grants, eq(currentGrantActions.grantId, grants.id))
 				.where(
 					and(
 						eq(grants.principalId, context.principalId),
