@@ -242,6 +242,29 @@ describe("API identity management authorization", () => {
 		);
 	});
 
+	it("allows an administrator to manage application metadata without receiving plaintext", async () => {
+		const store = storeFixture();
+		const useCase = management(store);
+		const administrator = { ...actor(), isAdministrator: true };
+		const result = await useCase.issueApplicationCredential(
+			administrator,
+			application.id,
+			{
+				credential: "admin-issued-secret",
+				recipient: { kind: "user", id: "recipient-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				audit: { ...audit, action: "api.credential.issued" },
+			},
+		);
+		expect(result.credentialId).toBe("credential-1");
+		expect(store.issueCredential).toHaveBeenCalledWith(
+			expect.objectContaining({
+				recipient: { kind: "user", id: "recipient-1" },
+			}),
+		);
+	});
+
 	it("rejects application recipients until a trusted transport exists", async () => {
 		const store = storeFixture();
 		const useCase = management(store);

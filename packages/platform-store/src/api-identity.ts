@@ -150,12 +150,16 @@ export class PostgresApiIdentityStoreV1 {
 		};
 	}
 
-	async listApplications(responsibleUserId: string) {
-		const rows = await this.#database
+	async listApplications(responsibleUserId?: string) {
+		const query = this.#database
 			.select()
 			.from(platformApplications)
-			.where(eq(platformApplications.responsibleUserId, responsibleUserId))
 			.orderBy(platformApplications.id);
+		const rows = responsibleUserId
+			? await query.where(
+					eq(platformApplications.responsibleUserId, responsibleUserId),
+				)
+			: await query;
 		return rows.map((row) => ({
 			id: row.id,
 			name: row.name,

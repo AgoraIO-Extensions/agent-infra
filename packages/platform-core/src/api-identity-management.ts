@@ -57,7 +57,7 @@ export interface ApiIdentityStorePortV1 {
 		applicationId: string,
 	): Promise<ApiIdentityApplicationV1 | null>;
 	listApplications(
-		responsibleUserId: string,
+		responsibleUserId?: string,
 	): Promise<readonly ApiIdentityApplicationV1[]>;
 	issueCredential(
 		input: ApiIdentityCredentialIssueInputV1,
@@ -284,7 +284,10 @@ export function createApiIdentityManagementV1(input: {
 	): Promise<ApiIdentityApplicationV1> => {
 		const userId = requireUserActor(actor);
 		const application = await input.store.getApplication(applicationId);
-		if (!application || application.responsibleUserId !== userId)
+		if (
+			!application ||
+			(!actor.isAdministrator && application.responsibleUserId !== userId)
+		)
 			throw new ApiIdentityError("resource_unavailable");
 		return application;
 	};
@@ -413,7 +416,10 @@ export function createApiIdentityManagementV1(input: {
 				throw new ApiIdentityError("resource_unavailable");
 		},
 		async listApplications(actor) {
-			return input.store.listApplications(requireUserActor(actor));
+			const userId = requireUserActor(actor);
+			return input.store.listApplications(
+				actor.isAdministrator ? undefined : userId,
+			);
 		},
 		async createApplication(value) {
 			const userId = requireUserActor(value.actor);
