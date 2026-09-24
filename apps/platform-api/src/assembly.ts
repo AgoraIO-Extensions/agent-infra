@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
@@ -16,6 +17,7 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
+	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
 import {
@@ -24,7 +26,10 @@ import {
 } from "./file-assembly.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
-import type { IdentityAdapter } from "./http/identity.js";
+import {
+	type IdentityAdapter,
+	resolveCurrentTaskUser,
+} from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 import {
 	createPlatformProjectionReaders,
@@ -82,6 +87,9 @@ export function assemblePlatformApi(
 	const auditQuery = new PostgresPlatformAuditQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
+		databaseUrl: input.databaseUrl,
+	});
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
@@ -124,6 +132,13 @@ export function assemblePlatformApi(
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
+			const currentUser = await resolveCurrentTaskUser(
+				input.identity,
+				identity.userId,
+				randomUUID(),
+			);
+			if (currentUser === null) return { outcome: "unavailable" };
+			if (currentUser.accountStatus !== "active") return { outcome: "revoked" };
 			let agentId = request.agentId;
 			if (request.conversationId !== undefined) {
 				const target = await conversationQuery.getAuthorizationTarget(
@@ -140,7 +155,7 @@ export function assemblePlatformApi(
 				{
 					kind: "user",
 					userId: identity.userId,
-					organizationIds: identity.organizationIds,
+					organizationIds: currentUser.organizationIds,
 				},
 				agentId,
 			);
@@ -162,19 +177,33 @@ export function assemblePlatformApi(
 				const configuration = await configurationQuery.read({
 					agentId,
 					actorId: identity.userId,
-					organizationIds: identity.organizationIds,
+					organizationIds: currentUser.organizationIds,
 					isAdministrator: identity.roles.includes("system_admin"),
 					intent: "discover",
 				});
 				if (configuration.outcome !== "found") return { outcome: "denied" };
-				supportsSupplementaryInstruction = (
-					await presentAgent({
-						agentId,
-						configuration: configuration.configuration,
+				const runtime = await configurationQuery.readRuntimePresentation({
+					agentId,
+					actorId: currentUser.userId,
+					organizationIds: currentUser.organizationIds,
+					accountStatus: currentUser.accountStatus,
+					isAdministrator: identity.roles.includes("system_admin"),
+					expected: {
+						configurationRevision: configuration.configuration.revision,
 						management: agent.management,
-					})
-				).capabilities.supplementaryInstruction;
+					},
+				});
+				if (runtime.outcome !== "found")
+					throw new Error("Current Runtime capability is unavailable");
+				supportsSupplementaryInstruction =
+					runtime.capabilities?.supplementaryInstruction === true;
 			}
+			const taskBoundary = await taskAuthorization.captureUserBoundary({
+				user: currentUser,
+				agentId,
+				channelId: "web",
+			});
+			if (!taskBoundary) return { outcome: "denied" };
 			return {
 				outcome: "allowed",
 				authority: {
@@ -182,7 +211,8 @@ export function assemblePlatformApi(
 					actorId: identity.userId,
 					agentId,
 					channelId: "web",
-					authorizationRevision: identity.authorizationRevision,
+					authorizationRevision: taskBoundary.agentAuthorizationRevision,
+					taskBoundary,
 					supportsSupplementaryInstruction,
 				},
 			};
@@ -270,7 +300,8 @@ export function assemblePlatformApi(
 								identity,
 								request,
 							);
-							return decision.outcome === "unavailable"
+							return decision.outcome === "unavailable" ||
+								decision.outcome === "revoked"
 								? { outcome: "denied" }
 								: decision;
 						},
@@ -291,6 +322,7 @@ export function assemblePlatformApi(
 		conversationTransaction,
 		conversationQuery,
 		auditQuery,
+		taskAuthorization,
 	];
 	return {
 		dependencies,

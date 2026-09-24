@@ -2,6 +2,11 @@ import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
 import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
+import type {
+	CurrentTaskUserV1,
+	TaskUserDirectoryV1,
+} from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common";
 
@@ -18,6 +23,26 @@ export interface IdentityContext {
 export interface IdentityAdapter {
 	resolve(request: Request): Promise<unknown | null>;
 	hydrateUsers(userIds: readonly string[]): Promise<unknown>;
+	/** Current task facts must come from the directory, never a saved browser Request. */
+	resolveUser?: TaskUserDirectoryV1["resolveUser"];
+}
+
+export async function resolveCurrentTaskUser(
+	adapter: IdentityAdapter | undefined,
+	userId: string,
+	traceId: string,
+): Promise<CurrentTaskUserV1 | null> {
+	try {
+		const resolveUser = adapter?.resolveUser;
+		return await resolveCurrentTaskUserV1(
+			resolveUser
+				? { resolveUser: (id) => resolveUser.call(adapter, id) }
+				: undefined,
+			userId,
+		);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
 }
 
 export type BrowserUserProjection = ReturnType<
