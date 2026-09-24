@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { RehoboamAdapter, rehoboamConnectionCatalog } from "./rehoboam.ts";
+import {
+	RehoboamAdapter,
+	rehoboamConnectionCatalog,
+	rehoboamLegacyProviderReleaseId,
+} from "./rehoboam.ts";
 import { rehoboamExecutorDigest } from "./rehoboam-integrity.ts";
 
 test("Rehoboam executor digest pins its reviewed source", () => {
@@ -14,6 +18,7 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 });
 
 test("Rehoboam catalog exposes bounded release workflow actions", () => {
+	assert.equal(rehoboamLegacyProviderReleaseId, "rehoboam-connection-v4");
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
@@ -204,5 +209,38 @@ test("Rehoboam preserves the bounded MCP error contract", async () => {
 			error.submissionUncertain !== true &&
 			JSON.stringify(error.providerDetails) ===
 				JSON.stringify({ ref: "missing", workflow: "build.yml" }),
+	);
+});
+
+test("Rehoboam preserves structured permission failures", async () => {
+	const adapter = new RehoboamAdapter(
+		async () =>
+			Response.json(
+				{
+					data: null,
+					error: {
+						code: "authorization_failed",
+						details: { operation: "run_pipeline" },
+						message: "Pipeline permission denied",
+						retryable: false,
+						submission_outcome: "rejected",
+					},
+					success: false,
+				},
+				{ status: 403 },
+			),
+		"machine-key",
+	);
+
+	await assert.rejects(
+		adapter.execute({
+			action: "rehoboam.execute_release_pipeline",
+			credential: { accessToken: "stored-token" },
+			input: { cardId: "card-1", releaseId: "rel-1" },
+		}),
+		(error: Error & Record<string, unknown>) =>
+			error.providerCode === "authorization_failed" &&
+			error.providerStatus === 403 &&
+			error.submissionUncertain === undefined,
 	);
 });

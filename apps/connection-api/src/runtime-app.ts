@@ -41,6 +41,7 @@ import {
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
+	rehoboamLegacyProviderReleaseId,
 } from "@agent-infra/openconnector-adapter/rehoboam";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
@@ -191,6 +192,7 @@ export async function createConnectionRuntime(
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
+		[rehoboamLegacyProviderReleaseId]: rehoboam,
 	});
 	const service = new ConnectionApplicationService(
 		repository,

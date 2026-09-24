@@ -12,6 +12,7 @@ const releaseWriteScope = "rehoboam.release.write";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
 const providerReleaseId = "rehoboam-connection-v5";
+export const rehoboamLegacyProviderReleaseId = "rehoboam-connection-v4";
 
 const releaseIdSchema = { minLength: 1, type: "string" } as const;
 const cardIdSchema = { minLength: 1, type: "string" } as const;
@@ -415,9 +416,6 @@ export class RehoboamAdapter
 			},
 			redirect: "manual",
 		});
-		if (response.status === 401 || response.status === 403) {
-			throw invalidCredential("Rehoboam credential was rejected");
-		}
 		if (response.status >= 300 && response.status < 400) {
 			throw invalidCredential("Rehoboam gateway credential was rejected");
 		}
@@ -428,8 +426,14 @@ export class RehoboamAdapter
 			});
 		}
 		const envelope = parseEnvelope(text);
+		const provider = envelopeError(envelope);
+		if (
+			response.status === 401 ||
+			(response.status === 403 && provider.code !== "authorization_failed")
+		) {
+			throw invalidCredential("Rehoboam credential was rejected");
+		}
 		if (!response.ok) {
-			const provider = envelopeError(envelope);
 			throw providerError(
 				provider.message ??
 					`Rehoboam request failed with HTTP ${response.status}`,
@@ -440,7 +444,10 @@ export class RehoboamAdapter
 					providerRetryable: provider.retryable,
 					providerStatus: response.status,
 					providerSubmissionOutcome: provider.submissionOutcome,
-					submissionUncertain: provider.submissionOutcome === "uncertain",
+					...(provider.submissionOutcome === "accepted" ||
+					provider.submissionOutcome === "uncertain"
+						? { submissionUncertain: true }
+						: {}),
 				},
 			);
 		}
