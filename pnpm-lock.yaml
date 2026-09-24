@@ -141,6 +141,9 @@ importers:
       '@agent-infra/connection-store':
         specifier: workspace:*
         version: link:../../packages/connection-store
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.0)

@@ -178,6 +178,24 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotDirectOpenapi.paths).toHaveProperty(
 			"/api/v1/actions.post",
 		);
+		const oauthInstall =
+			artifacts.pilotDirectOpenapi.paths["/oauth/install"].post;
+		expect(oauthInstall.security).toEqual([]);
+		const validateInstall = new Ajv2020({ validateFormats: false }).compile(
+			artifacts.pilotDirectOpenapi.components.schemas.DirectInstallRequestV1,
+		);
+		const installation = {
+			client_id: "client",
+			redirect_uri: "https://client.example.test/callback",
+			state: "client-state-123456",
+			code_challenge: "a".repeat(43),
+			code_challenge_method: "S256",
+			scope: "action:read",
+		};
+		expect(validateInstall(installation)).toBe(true);
+		expect(validateInstall({ ...installation, principalId: "other" })).toBe(
+			false,
+		);
 		expect(artifacts.pilotDirectOpenapi.security).toEqual([
 			{ PrincipalBearer: [] },
 		]);

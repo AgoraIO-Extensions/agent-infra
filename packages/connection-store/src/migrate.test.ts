@@ -76,15 +76,20 @@ describe("Connection PostgreSQL migration", () => {
 			"actors",
 			"audit_events",
 			"browser_sessions",
+			"client_credentials",
+			"client_token_families",
 			"connections",
 			"consumer_instances",
 			"consumers",
 			"credential_versions",
 			"current_grant_actions",
 			"dispatches",
+			"dpop_proofs",
 			"effects",
 			"grant_actions",
 			"grants",
+			"oauth_authorization_codes",
+			"oauth_installation_requests",
 			"principals",
 			"provider_releases",
 			"providers",
@@ -103,7 +108,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(6);
+		expect(history?.count).toBe(7);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {

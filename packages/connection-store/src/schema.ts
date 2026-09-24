@@ -105,6 +105,9 @@ export const consumers = connectionSchema.table(
 		name: varchar("name", { length: 200 }).notNull(),
 		actorRequired: boolean("actor_required").notNull(),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
+		redirectUris: text("redirect_uris").array().default([]).notNull(),
+		allowedScopes: text("allowed_scopes").array().default([]).notNull(),
+		patApproved: boolean("pat_approved").default(false).notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -126,6 +129,9 @@ export const consumerInstances = connectionSchema.table(
 		consumerId: text("consumer_id").notNull(),
 		principalId: text("principal_id").notNull(),
 		installationKey: text("installation_key").notNull(),
+		installationKeyThumbprint: varchar("installation_key_thumbprint", {
+			length: 64,
+		}),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
 		recoveryGeneration: bigint("recovery_generation", { mode: "number" })
 			.default(1)
@@ -153,6 +159,9 @@ export const consumerInstances = connectionSchema.table(
 		uniqueIndex("consumer_instances_installation_unique").on(
 			table.installationKey,
 		),
+		uniqueIndex("consumer_instances_key_thumbprint_unique")
+			.on(table.installationKeyThumbprint)
+			.where(sql`${table.installationKeyThumbprint} IS NOT NULL`),
 		check(
 			"consumer_instances_status_check",
 			sql`${table.status} IN ('active', 'revoked')`,
@@ -192,6 +201,165 @@ export const actors = connectionSchema.table(
 			sql`${table.id} <> '__consumer_actor__'`,
 		),
 		nonEmpty("actor_id", table.id),
+	],
+);
+
+export const dpopProofs = connectionSchema.table(
+	"dpop_proofs",
+	{
+		keyThumbprint: varchar("key_thumbprint", { length: 64 }).notNull(),
+		jti: varchar("jti", { length: 128 }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({
+			name: "dpop_proofs_pk",
+			columns: [table.keyThumbprint, table.jti],
+		}),
+		index("dpop_proofs_expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const oauthInstallationRequests = connectionSchema.table(
+	"oauth_installation_requests",
+	{
+		id: text("id").primaryKey(),
+		consumerId: text("consumer_id")
+			.notNull()
+			.references(() => consumers.id),
+		redirectUri: text("redirect_uri").notNull(),
+		clientState: text("client_state").notNull(),
+		codeChallenge: varchar("code_challenge", { length: 128 }).notNull(),
+		audience: text("audience").notNull(),
+		scopes: text("scopes").array().notNull(),
+		installationKey: jsonb("installation_key")
+			.$type<{ kty: "EC"; crv: "P-256"; x: string; y: string }>()
+			.notNull(),
+		keyThumbprint: varchar("key_thumbprint", { length: 64 }).notNull(),
+		browserSessionHash: varchar("browser_session_hash", { length: 64 }),
+		principalId: text("principal_id").references(() => principals.id),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		consumedAt: timestamp("consumed_at", { withTimezone: true }),
+	},
+	(table) => [
+		index("oauth_installation_requests_expires_at_idx").on(table.expiresAt),
+		check(
+			"oauth_installation_requests_lifetime",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
+	],
+);
+
+export const oauthAuthorizationCodes = connectionSchema.table(
+	"oauth_authorization_codes",
+	{
+		codeHash: varchar("code_hash", { length: 64 }).primaryKey(),
+		principalId: text("principal_id")
+			.notNull()
+			.references(() => principals.id),
+		consumerId: text("consumer_id")
+			.notNull()
+			.references(() => consumers.id),
+		consumerInstanceId: text("consumer_instance_id")
+			.notNull()
+			.references(() => consumerInstances.id),
+		actorId: text("actor_id").notNull(),
+		redirectUri: text("redirect_uri").notNull(),
+		codeChallenge: varchar("code_challenge", { length: 128 }).notNull(),
+		audience: text("audience").notNull(),
+		scopes: text("scopes").array().notNull(),
+		keyThumbprint: varchar("key_thumbprint", { length: 64 }).notNull(),
+		principalGeneration: bigint("principal_generation", {
+			mode: "number",
+		}).notNull(),
+		instanceGeneration: bigint("instance_generation", {
+			mode: "number",
+		}).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		consumedAt: timestamp("consumed_at", { withTimezone: true }),
+	},
+	(table) => [
+		index("oauth_authorization_codes_expires_at_idx").on(table.expiresAt),
+		check(
+			"oauth_authorization_codes_lifetime",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
+	],
+);
+
+export const clientTokenFamilies = connectionSchema.table(
+	"client_token_families",
+	{
+		id: text("id").primaryKey(),
+		status: varchar("status", { length: 32 }).default("active").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		check(
+			"client_token_families_status",
+			sql`${table.status} IN ('active', 'revoked')`,
+		),
+	],
+);
+
+export const clientCredentials = connectionSchema.table(
+	"client_credentials",
+	{
+		id: text("id").primaryKey(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		kind: varchar("kind", { length: 16 }).notNull(),
+		familyId: text("family_id").references(() => clientTokenFamilies.id),
+		principalId: text("principal_id")
+			.notNull()
+			.references(() => principals.id),
+		consumerId: text("consumer_id")
+			.notNull()
+			.references(() => consumers.id),
+		consumerInstanceId: text("consumer_instance_id")
+			.notNull()
+			.references(() => consumerInstances.id),
+		actorId: text("actor_id").notNull(),
+		audience: text("audience").notNull(),
+		scopes: text("scopes").array().notNull(),
+		keyThumbprint: varchar("key_thumbprint", { length: 64 }).notNull(),
+		principalGeneration: bigint("principal_generation", {
+			mode: "number",
+		}).notNull(),
+		instanceGeneration: bigint("instance_generation", {
+			mode: "number",
+		}).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		consumedAt: timestamp("consumed_at", { withTimezone: true }),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+	},
+	(table) => [
+		uniqueIndex("client_credentials_token_hash_unique").on(table.tokenHash),
+		index("client_credentials_family_idx").on(table.familyId),
+		index("client_credentials_instance_idx").on(table.consumerInstanceId),
+		check(
+			"client_credentials_kind",
+			sql`${table.kind} IN ('access', 'refresh', 'pat')`,
+		),
+		check(
+			"client_credentials_family",
+			sql`(${table.kind} = 'pat') = (${table.familyId} IS NULL)`,
+		),
+		check(
+			"client_credentials_lifetime",
+			sql`${table.expiresAt} > ${table.createdAt}`,
+		),
 	],
 );
 
@@ -779,6 +947,11 @@ export const connectionInfrastructureTables = [
 	consumers,
 	consumerInstances,
 	actors,
+	dpopProofs,
+	oauthInstallationRequests,
+	oauthAuthorizationCodes,
+	clientTokenFamilies,
+	clientCredentials,
 	providers,
 	providerReleases,
 	actionVersions,

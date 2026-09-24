@@ -17,6 +17,7 @@
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/connection-identity": "workspace:*",
 		"@agent-infra/connection-store": "workspace:*",
+		"@agent-infra/contracts": "workspace:*",
 		"@hono/node-server": "^2.0.12",
 		"hono": "^4.12.32"
 	},

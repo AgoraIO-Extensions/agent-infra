@@ -3,10 +3,17 @@ import {
 	addConnectionAuthRoutes,
 	type ConnectionAuthDependencies,
 } from "./auth.js";
+import {
+	addConnectionClientRoutes,
+	type ConnectionClientDependencies,
+} from "./client.js";
 
 export const connectionApiService = "connection-api";
 
-export function createConnectionApp(auth?: ConnectionAuthDependencies) {
+export function createConnectionApp(
+	auth?: ConnectionAuthDependencies,
+	client?: ConnectionClientDependencies,
+) {
 	const app = new Hono();
 
 	app.get("/healthz", (context) =>
@@ -16,6 +23,7 @@ export function createConnectionApp(auth?: ConnectionAuthDependencies) {
 		}),
 	);
 	if (auth) addConnectionAuthRoutes(app, auth);
+	if (client) addConnectionClientRoutes(app, client);
 
 	return app;
 }

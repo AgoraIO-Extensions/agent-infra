@@ -29,6 +29,7 @@ import {
 	pilotBrowserSseOpenApiPathsV1,
 	pilotDelegatedOpenApiPathsV1,
 	pilotDelegatedSchemasV1,
+	pilotDirectOAuthOpenApiPathsV1,
 	pilotDirectOpenApiPathsV1,
 	pilotDirectSchemasV1,
 	pilotOperationOpenApiPathsV2,
@@ -586,10 +587,15 @@ function buildArtifacts() {
 			version: "1.0.0",
 		},
 		security: [{ PrincipalBearer: [] }],
-		paths: pilotDirectOpenApiPathsV1,
+		paths: { ...pilotDirectOpenApiPathsV1, ...pilotDirectOAuthOpenApiPathsV1 },
 		components: {
 			securitySchemes: {
 				PrincipalBearer: { type: "http", scheme: "bearer" },
+				ConnectionBrowserSession: {
+					type: "apiKey",
+					in: "cookie",
+					name: "__Host-connection_session",
+				},
 			},
 			schemas: pilotDirectSchemasV1,
 		},

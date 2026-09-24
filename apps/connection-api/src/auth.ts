@@ -15,7 +15,7 @@ export interface ConnectionAuthDependencies {
 	source: (context: Context) => string;
 }
 
-function sameOriginRequest(
+export function sameOriginRequest(
 	origin: string | undefined,
 	fetchSite: string | undefined,
 	publicOrigin: string,
@@ -26,11 +26,14 @@ function sameOriginRequest(
 	);
 }
 
-function csrfToken(token: string, key: Buffer): string {
+export function csrfToken(token: string, key: Buffer): string {
 	return createHmac("sha256", key).update(token).digest("base64url");
 }
 
-function validCsrf(actual: string | undefined, expected: string): boolean {
+export function validCsrf(
+	actual: string | undefined,
+	expected: string,
+): boolean {
 	if (!actual || actual.length !== expected.length) return false;
 	return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }

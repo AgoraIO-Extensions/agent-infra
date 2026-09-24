@@ -915,6 +915,219 @@ const directJsonResponse = (description: string, schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
 
+// The Direct installation wire shapes live beside the Action contract so the
+// OAuth adapter and generated OpenAPI/JSON Schema share one source of truth.
+export const DirectInstallRequestV1Schema = z.strictObject({
+	client_id: boundedOpaqueId,
+	redirect_uri: z.url().max(2048),
+	state: z.string().min(16).max(512),
+	code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+	code_challenge_method: z.literal("S256"),
+	scope: z.string().min(1).max(4096),
+});
+export const DirectInstallResponseV1Schema = z.strictObject({
+	authorization_uri: z.url(),
+});
+export const DirectConsentResponseV1Schema = z.strictObject({
+	consumerId: boundedOpaqueId,
+	consumerName: nonEmptyString(),
+	redirectUri: z.url(),
+	scopes: z.array(nonEmptyString()),
+});
+export const DirectConsentRequestV1Schema = z.strictObject({
+	approve: z.literal(true),
+});
+export const DirectCodeTokenRequestV1Schema = z.strictObject({
+	grant_type: z.literal("authorization_code"),
+	client_id: boundedOpaqueId,
+	code: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+	code_verifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/),
+	redirect_uri: z.url().max(2048),
+});
+export const DirectRefreshTokenRequestV1Schema = z.strictObject({
+	grant_type: z.literal("refresh_token"),
+	client_id: boundedOpaqueId,
+	refresh_token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+export const DirectTokenRequestV1Schema = z.discriminatedUnion("grant_type", [
+	DirectCodeTokenRequestV1Schema,
+	DirectRefreshTokenRequestV1Schema,
+]);
+export const DirectTokenResponseV1Schema = z.strictObject({
+	access_token: z.string(),
+	refresh_token: z.string(),
+	token_type: z.literal("DPoP"),
+	expires_in: z.number().int().positive(),
+	scope: z.string(),
+});
+export const DirectPatResponseV1Schema = z.strictObject({
+	token: z.string(),
+	token_type: z.literal("DPoP"),
+	id: boundedOpaqueId,
+});
+export const DirectOAuthErrorV1Schema = z.strictObject({
+	error: z.enum([
+		"invalid_request",
+		"invalid_grant",
+		"forbidden",
+		"unsupported_grant_type",
+		"temporarily_unavailable",
+	]),
+});
+
+const oauthErrorResponses = {
+	"400": directJsonResponse("Invalid OAuth request", DirectOAuthErrorV1Schema),
+	"401": directJsonResponse(
+		"OAuth authorization denied",
+		DirectOAuthErrorV1Schema,
+	),
+	"403": directJsonResponse(
+		"OAuth request forbidden",
+		DirectOAuthErrorV1Schema,
+	),
+	"503": directJsonResponse(
+		"OAuth temporarily unavailable",
+		DirectOAuthErrorV1Schema,
+	),
+};
+const oauthDpopHeader = {
+	header: z.strictObject({ DPoP: z.string() }),
+};
+const oauthBearerProofHeaders = {
+	header: z.strictObject({ DPoP: z.string(), Authorization: z.string() }),
+};
+const oauthNoContent = { description: "Request completed" };
+export const pilotDirectOAuthOpenApiPathsV1 = {
+	"/oauth/install": {
+		post: {
+			security: [],
+			operationId: "beginDirectInstallation",
+			requestParams: oauthDpopHeader,
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: DirectInstallRequestV1Schema },
+				},
+			},
+			responses: {
+				"201": directJsonResponse(
+					"Authorization location",
+					DirectInstallResponseV1Schema,
+				),
+				...oauthErrorResponses,
+			},
+		},
+	},
+	"/oauth/authorize/{id}": {
+		get: {
+			security: [{ ConnectionBrowserSession: [] }],
+			operationId: "readDirectInstallationConsent",
+			requestParams: { path: z.strictObject({ id: boundedOpaqueId }) },
+			responses: {
+				"200": directJsonResponse(
+					"Pending consent",
+					DirectConsentResponseV1Schema,
+				),
+				...oauthErrorResponses,
+			},
+		},
+		post: {
+			security: [{ ConnectionBrowserSession: [] }],
+			operationId: "approveDirectInstallation",
+			requestParams: {
+				path: z.strictObject({ id: boundedOpaqueId }),
+				header: z.strictObject({ Origin: z.url(), "X-CSRF-Token": z.string() }),
+			},
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: DirectConsentRequestV1Schema },
+				},
+			},
+			responses: {
+				"303": {
+					description: "Exact registered redirect URI with code and state",
+				},
+				...oauthErrorResponses,
+			},
+		},
+	},
+	"/oauth/token": {
+		post: {
+			security: [],
+			operationId: "exchangeDirectInstallationToken",
+			requestParams: oauthDpopHeader,
+			requestBody: {
+				required: true,
+				content: {
+					"application/x-www-form-urlencoded": {
+						schema: DirectTokenRequestV1Schema,
+					},
+				},
+			},
+			responses: {
+				"200": directJsonResponse(
+					"Installation tokens",
+					DirectTokenResponseV1Schema,
+				),
+				...oauthErrorResponses,
+			},
+		},
+	},
+	"/oauth/pat": {
+		post: {
+			security: [],
+			operationId: "issueDirectPat",
+			requestParams: oauthBearerProofHeaders,
+			responses: {
+				"201": directJsonResponse(
+					"Installation PAT",
+					DirectPatResponseV1Schema,
+				),
+				...oauthErrorResponses,
+			},
+		},
+	},
+	"/oauth/pat/rotate": {
+		post: {
+			security: [],
+			operationId: "rotateDirectPat",
+			requestParams: oauthBearerProofHeaders,
+			responses: {
+				"200": directJsonResponse(
+					"Rotated installation PAT",
+					DirectPatResponseV1Schema,
+				),
+				...oauthErrorResponses,
+			},
+		},
+	},
+	"/oauth/revoke": {
+		post: {
+			security: [],
+			operationId: "revokeDirectTokenFamily",
+			requestParams: oauthBearerProofHeaders,
+			responses: { "204": oauthNoContent, ...oauthErrorResponses },
+		},
+	},
+	"/oauth/instances/{id}/revoke": {
+		post: {
+			security: [],
+			operationId: "revokeDirectInstallation",
+			requestParams: { path: z.strictObject({ id: boundedOpaqueId }) },
+			responses: { "204": oauthNoContent, ...oauthErrorResponses },
+		},
+	},
+	"/oauth/pats/{id}/revoke": {
+		post: {
+			security: [],
+			operationId: "revokeDirectPat",
+			requestParams: { path: z.strictObject({ id: boundedOpaqueId }) },
+			responses: { "204": oauthNoContent, ...oauthErrorResponses },
+		},
+	},
+} as const;
+
 export const pilotDirectOpenApiPathsV1 = {
 	"/api/v1/catalog": {
 		get: {
@@ -1013,6 +1226,16 @@ export const pilotDirectOpenApiPathsV1 = {
 } as const;
 
 export const pilotDirectSchemasV1 = {
+	DirectInstallRequestV1: DirectInstallRequestV1Schema,
+	DirectInstallResponseV1: DirectInstallResponseV1Schema,
+	DirectConsentRequestV1: DirectConsentRequestV1Schema,
+	DirectConsentResponseV1: DirectConsentResponseV1Schema,
+	DirectCodeTokenRequestV1: DirectCodeTokenRequestV1Schema,
+	DirectRefreshTokenRequestV1: DirectRefreshTokenRequestV1Schema,
+	DirectTokenRequestV1: DirectTokenRequestV1Schema,
+	DirectTokenResponseV1: DirectTokenResponseV1Schema,
+	DirectPatResponseV1: DirectPatResponseV1Schema,
+	DirectOAuthErrorV1: DirectOAuthErrorV1Schema,
 	DirectActionCatalogEntryV1: DirectActionCatalogEntryV1Schema,
 	DirectActionErrorV1: DirectActionErrorV1Schema,
 	DirectActionFailedV1: DirectActionFailedV1Schema,

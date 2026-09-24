@@ -1,3 +1,4 @@
+export { createConnectionClientRepository } from "./client-repository.js";
 export type {
 	ConnectionDatabase,
 	ConnectionDatabaseHandle,

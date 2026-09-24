@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
 	BrowserSessionService,
+	ClientAuthorizationDenied,
 	ConnectionLoginService,
 	LoginRejectedError,
 	LoginThrottle,
@@ -16,6 +17,7 @@ import {
 	connectionDatabaseUrlFromEnvironment,
 	createAuditEventStore,
 	createBrowserSessionStore,
+	createConnectionClientRepository,
 	createConnectionDatabase,
 	createPostgresPrincipalDirectory,
 	createPrincipalIdentityStore,
@@ -26,6 +28,7 @@ import { getConnInfo } from "@hono/node-server/conninfo";
 import { connectionApiService, createConnectionApp } from "./app";
 import { redactedLoginMarker } from "./audit-marker";
 import type { ConnectionAuthDependencies } from "./auth";
+import type { ConnectionClientDependencies } from "./client";
 
 interface StartOptions {
 	log?: (message: string) => void;
@@ -43,6 +46,7 @@ function runtimePort(value: string | undefined, fallback: number) {
 function authFromEnvironment():
 	| {
 			dependencies: ConnectionAuthDependencies;
+			client: ConnectionClientDependencies;
 			close: () => Promise<void>;
 	  }
 	| undefined {
@@ -140,12 +144,31 @@ function authFromEnvironment():
 			});
 		},
 	});
+	const dependencies: ConnectionAuthDependencies = {
+		service,
+		publicOrigin: origin,
+		csrfKey,
+		source: (context) => getConnInfo(context).remote.address ?? "",
+	};
 	return {
-		dependencies: {
-			service,
-			publicOrigin: origin,
-			csrfKey,
-			source: (context) => getConnInfo(context).remote.address ?? "",
+		dependencies,
+		client: {
+			repository: createConnectionClientRepository(database.db),
+			auth: dependencies,
+			audience: new URL("/mcp", origin).href,
+			recheckPrincipal: async (principalId) => {
+				const principal = await principalStore.findById(principalId);
+				if (
+					principal?.status !== "active" ||
+					principal.issuer !== profile.issuer
+				)
+					throw new ClientAuthorizationDenied();
+				const exists = await ldap.entryExists(principal.uid);
+				if (!exists) {
+					await principalStore.disable(principalId);
+					throw new ClientAuthorizationDenied();
+				}
+			},
 		},
 		close: database.close,
 	};
@@ -157,7 +180,7 @@ export function startConnectionApi(options: StartOptions = {}) {
 	const auth = authFromEnvironment();
 	const server = serve(
 		{
-			fetch: createConnectionApp(auth?.dependencies).fetch,
+			fetch: createConnectionApp(auth?.dependencies, auth?.client).fetch,
 			port,
 		},
 		(info) =>
