@@ -404,11 +404,46 @@ export const providers = connectionSchema.table(
 	],
 );
 
+export const providerReleases = connectionSchema.table(
+	"provider_releases",
+	{
+		id: text("id").primaryKey(),
+		providerId: text("provider_id").notNull(),
+		version: varchar("version", { length: 64 }).notNull(),
+		status: varchar("status", { length: 32 }).default("disabled").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.providerId],
+			foreignColumns: [providers.id],
+			name: "provider_releases_provider_fk",
+		}),
+		uniqueIndex("provider_releases_provider_version_unique").on(
+			table.providerId,
+			table.version,
+		),
+		uniqueIndex("provider_releases_binding_unique").on(
+			table.id,
+			table.providerId,
+		),
+		check(
+			"provider_releases_status_check",
+			sql`${table.status} IN ('active', 'disabled')`,
+		),
+		nonEmpty("provider_release_id", table.id),
+		nonEmpty("provider_release_version", table.version),
+	],
+);
+
 export const actionVersions = connectionSchema.table(
 	"action_versions",
 	{
 		id: text("id").primaryKey(),
 		providerId: text("provider_id").notNull(),
+		providerReleaseId: text("provider_release_id").notNull(),
 		actionId: text("action_id").notNull(),
 		version: varchar("version", { length: 64 }).notNull(),
 		effect: varchar("effect", { length: 16 }).notNull(),
@@ -421,7 +456,7 @@ export const actionVersions = connectionSchema.table(
 		requiredScopes: jsonb("required_scopes")
 			.$type<readonly string[]>()
 			.notNull(),
-		status: varchar("status", { length: 32 }).default("published").notNull(),
+		status: varchar("status", { length: 32 }).default("disabled").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -431,6 +466,11 @@ export const actionVersions = connectionSchema.table(
 			columns: [table.providerId],
 			foreignColumns: [providers.id],
 			name: "action_versions_provider_fk",
+		}),
+		foreignKey({
+			columns: [table.providerReleaseId, table.providerId],
+			foreignColumns: [providerReleases.id, providerReleases.providerId],
+			name: "action_versions_release_binding_fk",
 		}),
 		uniqueIndex("action_versions_provider_action_version_unique").on(
 			table.providerId,
@@ -928,6 +968,7 @@ export const connectionInfrastructureTables = [
 	refreshTokens,
 	dpopReplay,
 	providers,
+	providerReleases,
 	actionVersions,
 	connections,
 	credentialVersions,

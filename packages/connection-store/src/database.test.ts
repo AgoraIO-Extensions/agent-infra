@@ -36,6 +36,7 @@ describe("Connection store boundary", () => {
 			"refresh_tokens",
 			"dpop_replay",
 			"providers",
+			"provider_releases",
 			"action_versions",
 			"connections",
 			"credential_versions",

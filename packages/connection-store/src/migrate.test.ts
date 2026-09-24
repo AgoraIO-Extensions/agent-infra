@@ -70,6 +70,7 @@ describe("Connection PostgreSQL migration", () => {
 			"grant_actions",
 			"grants",
 			"principals",
+			"provider_releases",
 			"providers",
 			"refresh_tokens",
 		]);
@@ -87,7 +88,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(2);
+		expect(history?.count).toBe(3);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {
@@ -101,10 +102,12 @@ describe("Connection PostgreSQL migration", () => {
 			('instance-a', 'consumer-a', 'principal-a', 'install-a'), ('instance-b', 'consumer-a', 'principal-b', 'install-b')`;
 		await databaseClient`insert into connection.actors (id, consumer_instance_id) values ('actor-a', 'instance-a'), ('actor-b', 'instance-b')`;
 		await databaseClient`insert into connection.providers (id, name) values ('provider-a', 'Provider A')`;
-		await databaseClient`insert into connection.action_versions (id, provider_id, action_id, version, effect, input_schema, output_schema, required_scopes)
-			values ('action-a-v1', 'provider-a', 'action-a', 'v1', 'read', '{}', '{}', '["action:read"]')`;
-		await databaseClient`insert into connection.action_versions (id, provider_id, action_id, version, effect, input_schema, output_schema, required_scopes)
-			values ('action-write-v1', 'provider-a', 'action-write', 'v1', 'write', '{}', '{}', '["action:write"]')`;
+		await databaseClient`insert into connection.provider_releases (id, provider_id, version)
+			values ('release-a-v1', 'provider-a', 'v1')`;
+		await databaseClient`insert into connection.action_versions (id, provider_id, provider_release_id, action_id, version, effect, input_schema, output_schema, required_scopes, status)
+			values ('action-a-v1', 'provider-a', 'release-a-v1', 'action-a', 'v1', 'read', '{}', '{}', '["action:read"]', 'published')`;
+		await databaseClient`insert into connection.action_versions (id, provider_id, provider_release_id, action_id, version, effect, input_schema, output_schema, required_scopes, status)
+			values ('action-write-v1', 'provider-a', 'release-a-v1', 'action-write', 'v1', 'write', '{}', '{}', '["action:write"]', 'published')`;
 		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-a', 'provider-a', 'account-a')`;
 		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-a-v1', 'connection-a', 1, 'ciphertext')`;
 		await databaseClient`update connection.connections set current_credential_version_id = 'credential-a-v1' where id = 'connection-a'`;
@@ -118,6 +121,19 @@ describe("Connection PostgreSQL migration", () => {
 			const repository = createConnectionAuthorityRepository(handle.db);
 			const catalog = createCatalogReader(handle.db);
 			const audit = createAuditEventStore(handle.db);
+			const [release] =
+				await databaseClient`select status from connection.provider_releases where id = 'release-a-v1'`;
+			expect(release?.status).toBe("disabled");
+			await expect(
+				databaseClient`update connection.provider_releases set version = 'v2' where id = 'release-a-v1'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.action_versions set effect = 'write' where id = 'action-a-v1'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.action_versions set input_schema = '{"type":"object"}' where id = 'action-a-v1'`,
+			).rejects.toThrow();
+			await databaseClient`update connection.provider_releases set status = 'active' where id = 'release-a-v1'`;
 			await expect(
 				databaseClient`update connection.grants set approved_action_version_ids = ARRAY['action-a-v1', 'action-write-v1'] where id = 'grant-consumer'`,
 			).rejects.toThrow();
@@ -348,6 +364,44 @@ describe("Connection PostgreSQL migration", () => {
 				dispatch_status: "pending",
 				effect_status: "planned",
 			});
+			const { disabledClaim } = await databaseClient.begin(async (tx) => {
+				await tx`update connection.provider_releases set status = 'disabled' where id = 'release-a-v1'`;
+				const disabledClaim = repository.claimAuthorizedDispatch({
+					actionCallId: executionCall.id,
+					dispatchId: dispatch.id,
+					effectId: effect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-disabled-release",
+					leaseExpiresAt: Date.now() + 60_000,
+				});
+				expect(
+					await Promise.race([
+						disabledClaim.then(() => "finished"),
+						new Promise<string>((resolve) =>
+							setTimeout(() => resolve("waiting"), 50),
+						),
+					]),
+				).toBe("waiting");
+				return { disabledClaim };
+			});
+			expect(await disabledClaim).toBe(false);
+			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
+				"Connection authorization denied",
+			);
+			expect(
+				await catalog.list({
+					principalId: "principal-a",
+					consumerId: "consumer-a",
+					consumerInstanceId: "instance-a",
+					actorId: "actor-a",
+					audience: "connection-mcp",
+					scopes: ["action:read"],
+					recoveryGeneration: 1,
+					tokenId: "token-a",
+				}),
+			).toEqual([]);
+			await databaseClient`update connection.provider_releases set status = 'active' where id = 'release-a-v1'`;
 			expect(
 				await repository.claimAuthorizedDispatch({
 					actionCallId: executionCall.id,

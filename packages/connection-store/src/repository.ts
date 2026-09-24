@@ -53,6 +53,7 @@ import {
 	effects,
 	grants,
 	principals,
+	providerReleases,
 	providers,
 	refreshTokens,
 } from "./schema.js";
@@ -149,6 +150,10 @@ export function createConnectionAuthorityRepository(
 					eq(currentGrantActions.actionVersionId, actionVersions.id),
 				)
 				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+				.innerJoin(
+					providerReleases,
+					eq(actionVersions.providerReleaseId, providerReleases.id),
+				)
 				.where(
 					and(
 						eq(grants.principalId, context.principalId),
@@ -181,6 +186,7 @@ export function createConnectionAuthorityRepository(
 						eq(actionVersions.id, context.actionVersionId),
 						eq(actionVersions.providerId, connections.providerId),
 						eq(actionVersions.status, "published"),
+						eq(providerReleases.status, "active"),
 						eq(providers.status, "active"),
 					),
 				)
@@ -322,6 +328,10 @@ export function createConnectionAuthorityRepository(
 							eq(currentGrantActions.actionVersionId, actionVersions.id),
 						)
 						.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+						.innerJoin(
+							providerReleases,
+							eq(actionVersions.providerReleaseId, providerReleases.id),
+						)
 						.where(
 							and(
 								eq(actionCalls.id, actionCallId),
@@ -356,6 +366,7 @@ export function createConnectionAuthorityRepository(
 								eq(actionVersions.id, actionCalls.actionVersionId),
 								eq(actionVersions.providerId, connections.providerId),
 								eq(actionVersions.status, "published"),
+								eq(providerReleases.status, "active"),
 								eq(providers.status, "active"),
 							),
 						)
@@ -1037,6 +1048,10 @@ export function createCatalogReader(db: ConnectionDatabase): CatalogReader {
 					eq(currentGrantActions.actionVersionId, actionVersions.id),
 				)
 				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+				.innerJoin(
+					providerReleases,
+					eq(actionVersions.providerReleaseId, providerReleases.id),
+				)
 				.innerJoin(grants, eq(currentGrantActions.grantId, grants.id))
 				.where(
 					and(
@@ -1046,6 +1061,7 @@ export function createCatalogReader(db: ConnectionDatabase): CatalogReader {
 						eq(grants.actorId, actorId),
 						eq(grants.status, "active"),
 						eq(actionVersions.status, "published"),
+						eq(providerReleases.status, "active"),
 						eq(providers.status, "active"),
 					),
 				);
