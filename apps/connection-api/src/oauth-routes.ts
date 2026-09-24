@@ -965,33 +965,47 @@ export function createConnectionOAuthApp(
 						subject: session.account.principalId,
 					},
 					() => {
-						const datalegoSession =
-							body.providerId === "datalego"
+						const hciSession =
+							body.providerId === "datalego" || body.providerId === "manhattan"
 								? getCookie(context, "HCIAuthToken")
 								: undefined;
-						if (body.providerId === "datalego" && !datalegoSession) {
+						if (
+							(body.providerId === "datalego" ||
+								body.providerId === "manhattan") &&
+							!hciSession
+						) {
 							throw new ConnectionError(
 								"AUTHENTICATION_FAILED",
-								"DataLego company login is required",
+								"Company HCI login is required",
 							);
 						}
-						const credential =
-							body.providerId === "datalego"
-								? JSON.stringify({
-										email: session.account.email,
-										sessionToken: datalegoSession,
-									})
-								: "accessToken" in body
-									? body.accessToken
-									: "apiToken" in body
-										? JSON.stringify({
-												apiToken: body.apiToken,
-												username: body.username,
-											})
-										: JSON.stringify({
-												password: body.password,
-												username: body.username,
-											});
+						let credential: string;
+						if (
+							body.providerId === "datalego" ||
+							body.providerId === "manhattan"
+						) {
+							credential = JSON.stringify({
+								email: session.account.email,
+								sessionToken: hciSession,
+							});
+						} else if ("accessToken" in body) {
+							credential = body.accessToken;
+						} else if ("apiToken" in body) {
+							credential = JSON.stringify({
+								apiToken: body.apiToken,
+								username: body.username,
+							});
+						} else if ("password" in body) {
+							credential = JSON.stringify({
+								password: body.password,
+								username: body.username,
+							});
+						} else {
+							throw new ConnectionError(
+								"INVALID_REQUEST",
+								"Provider credential is invalid",
+							);
+						}
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,

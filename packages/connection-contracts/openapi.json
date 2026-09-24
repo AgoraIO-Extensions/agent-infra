@@ -843,7 +843,10 @@
 						"additionalProperties": false,
 						"required": ["providerId"],
 						"properties": {
-							"providerId": { "type": "string", "const": "datalego" }
+							"providerId": {
+								"type": "string",
+								"enum": ["datalego", "manhattan"]
+							}
 						}
 					},
 					{
@@ -853,7 +856,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"enum": ["bitbucket", "manhattan", "rehoboam"]
+								"enum": ["bitbucket", "rehoboam"]
 							},
 							"accessToken": {
 								"type": "string",

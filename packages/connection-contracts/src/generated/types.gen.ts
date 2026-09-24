@@ -142,9 +142,9 @@ export type OAuthTransactionRequest = {
 };
 
 export type ProviderCredentialRequest = {
-    providerId: 'datalego';
+    providerId: 'datalego' | 'manhattan';
 } | {
-    providerId: 'bitbucket' | 'manhattan' | 'rehoboam';
+    providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {
     providerId: 'confluence' | 'jira';
