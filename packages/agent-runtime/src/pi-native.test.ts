@@ -41,6 +41,22 @@ it("runs the pinned Pi CLI against Messages and persists the confirmed result", 
 			record.nativeSessionRef,
 			command.executionId,
 		);
+		const modelFacts = before.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(modelFacts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(modelFacts.at(-1)).toMatchObject({
+			startedAt: expect.any(String),
+			finishedAt: expect.any(String),
+			usage: { inputTokens: 10, outputTokens: 2 },
+		});
+		expect(modelFacts.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
 		await fixture.driver.close();
 		// Crash after native persistence but before the Driver commits the terminal event.
 		const file = join(path, record.nativeSessionRef, "state.json");

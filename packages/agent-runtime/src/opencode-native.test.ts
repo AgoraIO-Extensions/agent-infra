@@ -120,6 +120,22 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					accepted.nativeSessionRef,
 					"execution-a",
 				);
+				const modelFacts = events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload]
+						: [],
+				);
+				expect(modelFacts.map((fact) => fact.phase)).toEqual([
+					"intent",
+					"started",
+					"completed",
+				]);
+				expect(modelFacts.at(-1)).toMatchObject({
+					startedAt: expect.any(String),
+					finishedAt: expect.any(String),
+					usage: { inputTokens: 10, outputTokens: 5 },
+				});
+				expect(modelFacts.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
 				expect(
 					events
 						.filter((e) => e.type === "text")

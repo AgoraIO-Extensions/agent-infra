@@ -884,7 +884,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							.turns.find((turn) => turn.executionId === command.executionId)
 							?.status !== "running"
 					)
-						await this.status(file, command.executionId, "running");
+						await this.status(
+							file,
+							command.executionId,
+							"running",
+							undefined,
+							undefined,
+							false,
+						);
 					if (event) await this.event(file, command.executionId, event);
 					admitted();
 				},

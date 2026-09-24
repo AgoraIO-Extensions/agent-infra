@@ -1,10 +1,24 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { workspacePathAllowed } from "./workspace-path.js";
 
+export type ClaudeToolRequestObserver = (request: {
+	name: string;
+	input: unknown;
+	toolUseID: string;
+	permitted: boolean;
+}) => Promise<void>;
+
+export type ClaudeToolExecutionObserver = (request: {
+	name: string;
+	toolUseID: string;
+}) => Promise<void>;
+
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
+	observer?: ClaudeToolRequestObserver,
+	executionObserver?: ClaudeToolExecutionObserver,
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const permits = async (name: string, input: unknown) => {
 		if (
@@ -34,17 +48,74 @@ export function claudeWorkspaceTools(
 			PreToolUse: [
 				{
 					hooks: [
-						async (input) => ({
-							hookSpecificOutput: {
-								hookEventName: "PreToolUse",
-								permissionDecision:
-									input.hook_event_name === "PreToolUse" &&
-									(await permits(input.tool_name, input.tool_input))
-										? "allow"
-										: "deny",
-								permissionDecisionReason: "Conversation workspace policy",
-							},
-						}),
+						async (input) => {
+							if (input.hook_event_name !== "PreToolUse") return {};
+							const permitted = await permits(
+								input.tool_name,
+								input.tool_input,
+							);
+							try {
+								await observer?.({
+									name: input.tool_name,
+									input: input.tool_input,
+									toolUseID: input.tool_use_id,
+									permitted,
+								});
+							} catch {
+								return {
+									hookSpecificOutput: {
+										hookEventName: "PreToolUse" as const,
+										permissionDecision: "deny" as const,
+										permissionDecisionReason:
+											"Conversation workspace policy unavailable",
+									},
+								};
+							}
+							if (permitted) return {};
+							return {
+								hookSpecificOutput: {
+									hookEventName: "PreToolUse" as const,
+									permissionDecision: "deny" as const,
+									permissionDecisionReason: "Conversation workspace policy",
+								},
+							};
+						},
+					],
+				},
+			],
+			PostToolUse: [
+				{
+					hooks: [
+						async (input) => {
+							if (input.hook_event_name === "PostToolUse")
+								try {
+									await executionObserver?.({
+										name: input.tool_name,
+										toolUseID: input.tool_use_id,
+									});
+								} catch {
+									// The tool has already run; its result remains authoritative.
+								}
+							return {};
+						},
+					],
+				},
+			],
+			PostToolUseFailure: [
+				{
+					hooks: [
+						async (input) => {
+							if (input.hook_event_name === "PostToolUseFailure")
+								try {
+									await executionObserver?.({
+										name: input.tool_name,
+										toolUseID: input.tool_use_id,
+									});
+								} catch {
+									// The tool has already run; its result remains authoritative.
+								}
+							return {};
+						},
 					],
 				},
 			],

@@ -88,7 +88,7 @@ it.each([false, true])(
 						? [event.payload.phase]
 						: [],
 				),
-			).toEqual(["intent", "started", "completed"]);
+			).toEqual(["intent", "completed"]);
 			expect(
 				events.flatMap((event) =>
 					event.type === "operation" && event.payload.kind === "tool"

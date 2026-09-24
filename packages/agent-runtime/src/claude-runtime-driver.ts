@@ -849,9 +849,39 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
+			const observeToolRequest = async (
+				name: string,
+				toolUseID: string,
+				permitted: boolean,
+			) => {
+				const toolCallId = createHash("sha256").update(toolUseID).digest("hex");
+				await this.toolRequestStarted(file, command.executionId, {
+					toolCallId,
+					name,
+				});
+				if (!permitted)
+					await this.toolPhase(file, command.executionId, {
+						toolCallId,
+						name,
+						phase: "failed",
+						failureCode: "authorization_denied",
+					});
+			};
 			const workspaceTools = claudeWorkspaceTools(
 				join(directory, "workspace"),
 				join(directory, "memory"),
+				async ({ name, toolUseID, permitted }) =>
+					observeToolRequest(name, toolUseID, permitted),
+				async ({ name, toolUseID }) => {
+					const toolCallId = createHash("sha256")
+						.update(toolUseID)
+						.digest("hex");
+					await this.toolPhase(file, command.executionId, {
+						toolCallId,
+						name,
+						phase: "started",
+					});
+				},
 			);
 			native = claudeQuery(
 				{
@@ -876,13 +906,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							behavior: "deny" as const,
 							message: "Tool access is unavailable",
 						};
-						if (permission?.behavior !== "allow") return permission;
-						await this.toolRequestStarted(file, command.executionId, {
-							toolCallId: createHash("sha256")
-								.update(toolOptions.toolUseID)
-								.digest("hex"),
+						await observeToolRequest(
 							name,
-						});
+							toolOptions.toolUseID,
+							permission.behavior === "allow",
+						);
 						return permission;
 					},
 					strictMcpConfig: true,
@@ -995,17 +1023,20 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								? message.event.content_block.name
 								: "unavailable",
 						);
+					}
+					if (
+						message.type === "tool_progress" &&
+						message.parent_tool_use_id === null
+					) {
+						const name = tools.get(message.tool_use_id);
+						if (!name) unavailable();
 						await this.event(file, command.executionId, {
 							type: "tool",
 							payload: {
 								toolCallId: createHash("sha256")
-									.update(message.event.content_block.id)
+									.update(message.tool_use_id)
 									.digest("hex"),
-								name: ["Read", "Write", "Edit"].includes(
-									message.event.content_block.name,
-								)
-									? message.event.content_block.name
-									: "unavailable",
+								name,
 								phase: "started",
 							},
 						});
@@ -1065,7 +1096,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					);
 			} finally {
 				await transport.close();
-				await native.close();
+				await native.close().catch(() => {});
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1321,6 +1352,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			toolCallId: string;
 			name: string;
 			phase: "started" | "completed" | "failed";
+			failureCode?: RuntimeOperationFactV2["failureCode"];
 		},
 	): Promise<void> {
 		const turn = file
@@ -1348,13 +1380,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (
 				!previous ||
 				["completed", "failed", "unknown"].includes(previous.phase)
-			) {
-				await this.toolRequestStarted(file, executionId, {
-					toolCallId: value.toolCallId,
-					name: value.name,
-				});
-				return this.toolPhase(file, executionId, value);
-			}
+			)
+				return;
 			if (previous.phase !== "intent") return;
 			const startedAt = new Date().toISOString();
 			await this.appendOperationFact(file, executionId, {
@@ -1382,7 +1409,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 			...(value.phase === "failed"
-				? { failureCode: "operation_failed" as const }
+				? { failureCode: value.failureCode ?? ("operation_failed" as const) }
 				: {}),
 		});
 	}

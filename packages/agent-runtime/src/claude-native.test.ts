@@ -561,7 +561,7 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 					event.payload.kind === "tool" &&
 					event.payload.phase === "started",
 			),
-		).toHaveLength(6);
+		).toHaveLength(2);
 		expect(
 			events.filter(
 				(event) =>
@@ -578,6 +578,25 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 					event.payload.phase === "failed",
 			),
 		).toHaveLength(4);
+		expect(
+			events
+				.filter(
+					(event) =>
+						event.type === "operation" &&
+						event.payload.kind === "tool" &&
+						event.payload.phase === "failed",
+				)
+				.map((event) =>
+					"failureCode" in event.payload
+						? event.payload.failureCode
+						: undefined,
+				),
+		).toEqual([
+			"authorization_denied",
+			"authorization_denied",
+			"authorization_denied",
+			"authorization_denied",
+		]);
 		const modelFacts = events.flatMap((event) =>
 			event.type === "operation" && event.payload.kind === "model"
 				? [event.payload]
