@@ -172,15 +172,34 @@ export class ManhattanAdapter
 			throw providerError(
 				`Manhattan request failed with HTTP ${response.status}`,
 			);
-		const text = await response.text();
-		if (Buffer.byteLength(text) > maxResponseBytes)
-			throw providerError("Manhattan response is too large");
+		const text = await boundedResponseText(response);
 		try {
 			return JSON.parse(text) as Record<string, unknown>;
 		} catch {
 			throw providerError("Manhattan returned invalid JSON");
 		}
 	}
+}
+
+async function boundedResponseText(response: Response) {
+	const declaredLength = Number(response.headers.get("content-length") ?? 0);
+	if (declaredLength > maxResponseBytes)
+		throw providerError("Manhattan response is too large");
+	if (!response.body) return "";
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > maxResponseBytes) {
+			await reader.cancel();
+			throw providerError("Manhattan response is too large");
+		}
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks).toString("utf8");
 }
 
 function invalidCredential(message: string) {

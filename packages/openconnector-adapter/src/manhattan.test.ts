@@ -60,3 +60,18 @@ test("Manhattan maps actions only to fixed endpoints", async () => {
 		"https://manhattan-api.agoralab.co/api/connection/sdk/symbols?pageSize=20",
 	);
 });
+
+test("Manhattan stops reading responses above 64 KiB", async () => {
+	const adapter = new ManhattanAdapter(
+		async () => new Response("x".repeat(64 * 1024 + 1)),
+		"machine-key",
+	);
+	await assert.rejects(
+		adapter.execute({
+			action: "manhattan.get_current_user",
+			credential: { accessToken: "token" },
+			input: {},
+		}),
+		/response is too large/,
+	);
+});
