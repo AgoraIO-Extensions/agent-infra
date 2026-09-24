@@ -5,6 +5,8 @@ import {
 	ClientAuthorizationDenied,
 	clientCredentialLifetimeMs,
 	consumerActorSentinel,
+	decideInstallationApproval,
+	decideRefreshTokenUse,
 	hashClientSecret,
 	type InstallationAuthorizationInput,
 	opaqueClientSecret,
@@ -285,14 +287,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					.from(oauthInstallationRequests)
 					.where(eq(oauthInstallationRequests.id, id))
 					.for("update");
-				if (
-					!request ||
-					request.consumedAt ||
-					request.expiresAt.getTime() <= Date.now() ||
-					request.principalId !== null ||
-					request.browserSessionHash !== null
-				)
-					throw new ClientAuthorizationDenied();
+				if (!request) throw new ClientAuthorizationDenied();
 				const [principal] = await tx
 					.select()
 					.from(principals)
@@ -303,19 +298,13 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					.from(consumers)
 					.where(eq(consumers.id, request.consumerId))
 					.for("update");
-				if (
-					principal?.status !== "active" ||
-					consumer?.status !== "active" ||
-					!consumer.redirectUris.includes(request.redirectUri) ||
-					request.scopes.some(
-						(scope) => !consumer.allowedScopes.includes(scope),
-					)
-				)
-					throw new ClientAuthorizationDenied();
+				if (!principal || !consumer) throw new ClientAuthorizationDenied();
+				const actorId = decideInstallationApproval(
+					request,
+					principal,
+					consumer,
+				);
 				const instanceId = randomUUID();
-				const actorId = consumer.actorRequired
-					? randomUUID()
-					: consumerActorSentinel;
 				await tx.insert(consumerInstances).values({
 					id: instanceId,
 					consumerId: consumer.id,
@@ -324,7 +313,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					installationKeyThumbprint: request.keyThumbprint,
 					recoveryGeneration: principal.recoveryGeneration,
 				});
-				if (consumer.actorRequired)
+				if (actorId !== consumerActorSentinel)
 					await tx
 						.insert(actors)
 						.values({ id: actorId, consumerInstanceId: instanceId });
@@ -496,20 +485,18 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 						),
 					)
 					.for("update");
-				if (
-					row?.kind !== "refresh" ||
-					!row.familyId ||
-					row.consumerId !== input.consumerId ||
-					row.keyThumbprint !== input.proof.thumbprint
-				)
-					throw new ClientAuthorizationDenied();
-				if (row.consumedAt) {
+				if (!row) throw new ClientAuthorizationDenied();
+				const decision = decideRefreshTokenUse(row, {
+					consumerId: input.consumerId,
+					keyThumbprint: input.proof.thumbprint,
+				});
+				if (decision.replayed) {
 					await tx
 						.update(clientTokenFamilies)
 						.set({ status: "revoked", revokedAt: new Date() })
 						.where(
 							and(
-								eq(clientTokenFamilies.id, row.familyId),
+								eq(clientTokenFamilies.id, decision.familyId),
 								eq(clientTokenFamilies.status, "active"),
 							),
 						);
@@ -517,7 +504,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 						tx,
 						"oauth.refresh_replayed",
 						"token_family",
-						row.familyId,
+						decision.familyId,
 						row.principalId,
 						row.consumerInstanceId,
 						row.actorId,
@@ -537,7 +524,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 				await insertOAuthPair(
 					tx,
 					oauthBinding(row),
-					row.familyId,
+					decision.familyId,
 					input.accessToken,
 					input.nextRefreshToken,
 				);
@@ -545,7 +532,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					tx,
 					"oauth.refresh_rotated",
 					"token_family",
-					row.familyId,
+					decision.familyId,
 					row.principalId,
 					row.consumerInstanceId,
 					row.actorId,

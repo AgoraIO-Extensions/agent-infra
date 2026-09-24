@@ -1,5 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { BrowserSessionPrincipalStore } from "./session.js";
+import { consumerActorSentinel } from "./types.js";
 
 export class ClientAuthorizationDenied extends Error {
 	constructor() {
@@ -58,6 +59,56 @@ export function validateInstallationAuthorization(
 	)
 		throw new ClientAuthorizationDenied();
 	return scopes.sort();
+}
+
+export function decideInstallationApproval(
+	request: {
+		consumedAt: Date | null;
+		expiresAt: Date;
+		principalId: string | null;
+		browserSessionHash: string | null;
+		redirectUri: string;
+		scopes: readonly string[];
+	},
+	principal: { status: string },
+	consumer: RegisteredConsumer,
+	now = Date.now(),
+): string {
+	if (
+		request.consumedAt !== null ||
+		request.expiresAt.getTime() <= now ||
+		request.principalId !== null ||
+		request.browserSessionHash !== null ||
+		principal.status !== "active" ||
+		consumer.status !== "active" ||
+		!consumer.redirectUris.includes(request.redirectUri) ||
+		request.scopes.some((scope) => !consumer.allowedScopes.includes(scope))
+	)
+		throw new ClientAuthorizationDenied();
+	return consumer.actorRequired ? randomUUID() : consumerActorSentinel;
+}
+
+export function decideRefreshTokenUse(
+	credential: {
+		kind: string;
+		familyId: string | null;
+		consumerId: string;
+		keyThumbprint: string;
+		consumedAt: Date | null;
+	},
+	expected: { consumerId: string; keyThumbprint: string },
+): { familyId: string; replayed: boolean } {
+	if (
+		credential.kind !== "refresh" ||
+		!credential.familyId ||
+		credential.consumerId !== expected.consumerId ||
+		credential.keyThumbprint !== expected.keyThumbprint
+	)
+		throw new ClientAuthorizationDenied();
+	return {
+		familyId: credential.familyId,
+		replayed: credential.consumedAt !== null,
+	};
 }
 
 export function verifyPkceChallenge(verifier: string, challenge: string): void {
