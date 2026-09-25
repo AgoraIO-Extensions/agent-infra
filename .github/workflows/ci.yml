@@ -48,9 +48,6 @@ jobs:
       - name: Check TypeScript
         run: pnpm check-types
 
-      - name: Run tests
-        run: pnpm test
-
       - name: Build pinned Codex native test environment
         run: >-
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
@@ -87,6 +84,9 @@ jobs:
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/platform-worker exec vitest run \
             src/conversation-worker.integration.test.ts --cache=false
+
+      - name: Run tests
+        run: pnpm test
 
       - name: Verify native Codex recovery
         run: |
