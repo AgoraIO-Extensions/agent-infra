@@ -303,7 +303,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(secondName, { target: { value: "C" } });
 		expect(screen.queryByText("名称不能重复。")).toBeNull();
 		fireEvent.change(secondName, { target: { value: "D" } });
-		expect((values[1] as HTMLInputElement).value).toBe("");
+		expect((values[1] as HTMLInputElement).value).toBe("value");
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 

@@ -1401,7 +1401,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									? {
 											...item,
 											[key]: value,
-											...(key === "name" ? { value: "" } : {}),
 										}
 									: item,
 							);
