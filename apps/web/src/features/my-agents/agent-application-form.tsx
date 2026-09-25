@@ -654,11 +654,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		setModels((current) => {
 			let changed = false;
 			const next = current.map((model) => {
-				if (model.endpointId) return model;
-				const endpointId = endpointIdForModelOption(model, modelEndpoints);
+				const endpointId =
+					model.endpointId || endpointIdForModelOption(model, modelEndpoints);
 				if (!endpointId) return model;
+				const definition = modelEndpoints
+					.find((endpoint) => endpoint.endpointId === endpointId)
+					?.models.find((entry) => entry.modelId === model.modelId);
+				const reasoningLevels = definition
+					? model.reasoningLevels
+							.split("\n")
+							.filter((level) => definition.reasoningLevels.includes(level))
+							.join("\n")
+					: model.reasoningLevels;
+				if (
+					endpointId === model.endpointId &&
+					reasoningLevels === model.reasoningLevels
+				)
+					return model;
 				changed = true;
-				return { ...model, endpointId };
+				return { ...model, endpointId, reasoningLevels };
 			});
 			return changed ? next : current;
 		});

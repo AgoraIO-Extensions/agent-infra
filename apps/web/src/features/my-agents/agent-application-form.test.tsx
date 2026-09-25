@@ -528,6 +528,38 @@ describe("AgentApplicationForm", () => {
 		).toContain("Primary endpoint");
 	});
 
+	it("drops reasoning levels removed from the loaded catalog", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint-primary:gpt-5",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "removed"],
+					},
+				],
+				defaultModelOptionId: "endpoint-primary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalled();
+	});
+
 	it("dismisses a server model error after the selection changes", () => {
 		const onSubmit = vi.fn();
 		render(
