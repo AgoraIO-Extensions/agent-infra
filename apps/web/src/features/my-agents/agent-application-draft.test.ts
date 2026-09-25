@@ -162,6 +162,33 @@ describe("Agent application draft", () => {
 		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
 	});
 
+	it("keeps a missing model error when only the endpoint is selected", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				models: [
+					{
+						...standardCreateDraft.models[0],
+						optionId: "",
+						modelId: "",
+						reasoningLevels: "",
+						credentialValue: "",
+					},
+				],
+			},
+			{
+				modelConfigurationVisible: true,
+				requiresReplacementCredential: true,
+				staleModel: true,
+				staleModelIndexes: [0],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+
+		expect(errors["model.0.modelId"]).toBe("请选择模型。");
+	});
+
 	it("requires credentials for model options not persisted on update", () => {
 		const draft = {
 			...standardCreateDraft,

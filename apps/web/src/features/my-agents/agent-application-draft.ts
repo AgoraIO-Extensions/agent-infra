@@ -171,8 +171,9 @@ export function validateAgentApplicationDraft(
 			if (needsReplacementCredential && !model.credentialValue.trim())
 				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
 			if (
-				context.staleModelIndexes?.includes(index) ||
-				(context.staleModelIndexes === undefined && context.staleModel)
+				model.modelId &&
+				(context.staleModelIndexes?.includes(index) ||
+					(context.staleModelIndexes === undefined && context.staleModel))
 			)
 				errors[`model.${index}.modelId`] = "模型选项已移除，请重新选择。";
 		});

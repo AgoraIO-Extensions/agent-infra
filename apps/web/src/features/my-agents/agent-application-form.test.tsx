@@ -1362,6 +1362,35 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).toHaveBeenCalled();
 	});
 
+	it("retries a server invalid request after removing an environment row", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				environment: [{ name: "LOG_LEVEL", value: "debug" }],
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={onSubmit}
+				serverError={{ code: "INVALID_REQUEST" }}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "移除环境变量" }));
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ environment: [] }),
+		);
+	});
+
 	it("marks a removed existing template instead of submitting it", () => {
 		const onSubmit = vi.fn();
 		const application = AgentApplicationProjectionV2Schema.parse({
