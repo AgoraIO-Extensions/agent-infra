@@ -458,8 +458,11 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 								credential: "worker-controlled-model-credential",
 							},
 						],
-						authorizeExternalAction: async () => {
-							throw new Error("controlled test lane forbids external actions");
+						authorizeExternalAction: async (action) => {
+							if (action.kind === "tool" || !host) {
+								throw new Error("controlled test lane forbids external actions");
+							}
+							await host.authorizeExternalAction(action);
 						},
 					});
 				})()
