@@ -91,9 +91,11 @@ function fieldId(key: string) {
 		const control =
 			field === "endpointId"
 				? "endpoint"
-				: field === "modelId" || field === "reasoningLevels"
+				: field === "modelId"
 					? "model"
-					: "credential";
+					: field === "reasoningLevels"
+						? "reasoning"
+						: "credential";
 		return `application-model-option-${control}-${index}`;
 	}
 	return `application-${key
@@ -111,7 +113,10 @@ function describedBy(...ids: (string | undefined)[]) {
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
 	const first = Object.keys(errors)[0];
-	return first ? document.getElementById(fieldId(first)) : undefined;
+	const element = first ? document.getElementById(fieldId(first)) : undefined;
+	if (element instanceof HTMLElement && !element.hasAttribute("disabled"))
+		return element;
+	return document.getElementById("application-deployment-status") ?? element;
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {
@@ -295,8 +300,27 @@ function ModelRows({
 							/>
 						</div>
 						<div className="space-y-2">
-							<Label>允许的推理档位</Label>
-							<div className="flex min-h-11 flex-wrap items-center gap-4">
+							<fieldset
+								aria-describedby={
+									errors[`model.${index}.reasoningLevels`]
+										? errorId(`model.${index}.reasoningLevels`)
+										: undefined
+								}
+								aria-invalid={
+									errors[`model.${index}.reasoningLevels`] ? true : undefined
+								}
+								aria-labelledby={`application-model-option-reasoning-label-${index}`}
+								className="flex min-h-11 flex-wrap items-center gap-4"
+								id={`application-model-option-reasoning-${index}`}
+								tabIndex={
+									errors[`model.${index}.reasoningLevels`] ? -1 : undefined
+								}
+							>
+								<legend
+									id={`application-model-option-reasoning-label-${index}`}
+								>
+									允许的推理档位
+								</legend>
 								{(selectedModel?.reasoningLevels ?? []).map((level) => {
 									const selected = model.reasoningLevels
 										.split("\n")
@@ -322,7 +346,7 @@ function ModelRows({
 										</Label>
 									);
 								})}
-							</div>
+							</fieldset>
 							<FieldError
 								id={errorId(`model.${index}.reasoningLevels`)}
 								message={errors[`model.${index}.reasoningLevels`]}
@@ -560,6 +584,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const [localFieldErrors, setFieldErrors] =
 		useState<AgentApplicationFieldErrors>({});
+	const [serverValidationDismissed, setServerValidationDismissed] =
+		useState(false);
+	useEffect(() => {
+		if (
+			props.submitting ||
+			props.serverError?.code !== "MODEL_SELECTION_INVALID"
+		)
+			setServerValidationDismissed(false);
+	}, [props.serverError?.code, props.submitting]);
 	const clearFieldErrors = (...keys: string[]) => {
 		setFieldErrors((current) => {
 			const next = { ...current };
@@ -572,6 +605,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			}
 			return changed ? next : current;
 		});
+	};
+	const dismissServerValidation = () => {
+		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
+			setServerValidationDismissed(true);
 	};
 	const clearNameErrors = (prefix: "environment" | "secret") => {
 		setFieldErrors((current) => {
@@ -598,6 +635,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
 	const standardChoicesBlocked =
 		sourceKind === "standard" &&
+		modelConfigurationVisible &&
 		(deployment.templates.length === 0 || !modelCatalogReady);
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
@@ -663,9 +701,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const serverFieldErrors = useMemo(() => {
 		const errors: AgentApplicationFieldErrors = {};
-		for (const index of modelServerErrorIndexes)
-			errors[`model.${index}.modelId`] = "服务端拒绝了该模型选项，请重新选择。";
+		if (!serverValidationDismissed)
+			for (const index of modelServerErrorIndexes)
+				errors[`model.${index}.modelId`] =
+					"服务端拒绝了该模型选项，请重新选择。";
 		if (
+			!serverValidationDismissed &&
 			props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 			modelServerErrorIndexes.length === 0 &&
 			modelConfigurationVisible
@@ -676,6 +717,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		modelConfigurationVisible,
 		modelServerErrorIndexes,
 		props.serverError?.code,
+		serverValidationDismissed,
 	]);
 	const serverFormError =
 		props.serverError?.code === "INVALID_REQUEST"
@@ -840,7 +882,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						从部署提供的标准模板中选择，或填写自定义镜像地址。已有申请的来源不能更改。
 					</p>
 					{configurationMessage ? (
-						<p className="alert text-destructive" role="status">
+						<p
+							className="alert text-destructive"
+							id="application-deployment-status"
+							role="status"
+							tabIndex={-1}
+						>
 							{configurationMessage}
 						</p>
 					) : null}
@@ -1286,6 +1333,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													]
 												: [`model.${index}.${key}`]),
 										);
+										dismissServerValidation();
 									}}
 									onRemove={(index) => {
 										setModels((current) =>
@@ -1298,6 +1346,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											"defaultModelOptionId",
 											"defaultReasoningLevel",
 										);
+										dismissServerValidation();
 									}}
 								/>
 								<div className="form-grid">
@@ -1328,6 +1377,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													"defaultModelOptionId",
 													"defaultReasoningLevel",
 												);
+												dismissServerValidation();
 											}}
 										>
 											<SelectTrigger
@@ -1378,6 +1428,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												if (!value) return;
 												setDefaultReasoningLevel(value);
 												clearFieldErrors("defaultReasoningLevel");
+												dismissServerValidation();
 											}}
 										>
 											<SelectTrigger

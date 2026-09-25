@@ -416,9 +416,9 @@ describe("AgentApplicationForm", () => {
 		if (!form) throw new Error("application form missing");
 		expect(form).toHaveProperty("noValidate", true);
 		fireEvent.submit(form);
-		expect(screen.getByLabelText("Agent 名称").getAttribute("aria-invalid")).toBe(
-			"true",
-		);
+		expect(
+			screen.getByLabelText("Agent 名称").getAttribute("aria-invalid"),
+		).toBe("true");
 
 		fireEvent.change(screen.getByLabelText("Agent 名称"), {
 			target: { value: "Release assistant" },
@@ -490,6 +490,82 @@ describe("AgentApplicationForm", () => {
 				screen.getByRole("combobox", { name: "模型端点" }).textContent,
 			).toContain("Secondary endpoint"),
 		);
+	});
+
+	it("dismisses a server model error after the selection changes", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+		expect(screen.getByLabelText("默认模型").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+		choose("模型端点", "Primary endpoint");
+		expect(
+			screen.getByLabelText("默认模型").getAttribute("aria-invalid"),
+		).toBeNull();
+	});
+
+	it("associates missing reasoning levels with the checkbox group", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		const group = screen.getByRole("group", { name: "允许的推理档位" });
+		expect(group.getAttribute("aria-invalid")).toBe("true");
+		expect(document.activeElement).toBe(group);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("focuses deployment status when the template control is disabled", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: [],
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "empty",
+						endpoints: [],
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		const status = screen.getByRole("status");
+		expect(document.activeElement).toBe(status);
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("focuses the default model field after a server model-selection rejection", () => {
