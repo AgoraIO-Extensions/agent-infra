@@ -1,4 +1,33 @@
-import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApplicationProjectionV2Schema,
+	DeploymentConfigurationProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
+
+export const deploymentConfiguration =
+	DeploymentConfigurationProjectionV2Schema.parse({
+		schemaVersion: 2,
+		status: "populated",
+		templates: [
+			{
+				templateId: "codex",
+				displayName: "Codex",
+				connectionEnabled: false,
+				allowedEnvironmentKeys: ["LOG_LEVEL"],
+				allowedSecretKeys: ["MODEL_API_KEY"],
+			},
+		],
+		modelCatalog: {
+			status: "populated",
+			revision: "revision-primary",
+			endpoints: [
+				{
+					endpointId: "endpoint-primary",
+					displayName: "Primary endpoint",
+					models: [{ modelId: "gpt-5", reasoningLevels: ["medium", "high"] }],
+				},
+			],
+		},
+	});
 
 export const pendingApplication = AgentApplicationProjectionV2Schema.parse({
 	schemaVersion: 2,

@@ -1,9 +1,36 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentApplicationSubmissionScreen } from "./agent-application-submission-screen.js";
-import { pendingApplication } from "./test-fixtures.js";
+import { AgentApplicationSubmissionScreen as AgentApplicationSubmissionScreenView } from "./agent-application-submission-screen.js";
+import {
+	deploymentConfiguration,
+	pendingApplication,
+} from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
+
+type ScreenProps<T> = T extends unknown
+	? Omit<
+			T,
+			| "deploymentConfiguration"
+			| "onRefreshDeploymentConfiguration"
+			| "refreshingDeploymentConfiguration"
+		>
+	: never;
+
+function AgentApplicationSubmissionScreen(
+	props: ScreenProps<
+		Parameters<typeof AgentApplicationSubmissionScreenView>[0]
+	>,
+) {
+	return (
+		<AgentApplicationSubmissionScreenView
+			{...props}
+			deploymentConfiguration={deploymentConfiguration}
+			onRefreshDeploymentConfiguration={vi.fn()}
+			refreshingDeploymentConfiguration={false}
+		/>
+	);
+}
 
 describe("AgentApplicationSubmissionScreen", () => {
 	it("renders a server-projected create result without exposing request values", async () => {
@@ -98,5 +125,29 @@ describe("AgentApplicationSubmissionScreen", () => {
 				.getByRole("button", { name: "正在提交…" })
 				.hasAttribute("disabled"),
 		).toBe(true);
+	});
+
+	it("offers a refresh when only the model catalog is empty", async () => {
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreenView
+				mode="create"
+				onRefreshDeploymentConfiguration={vi.fn()}
+				onSubmit={vi.fn()}
+				refreshingDeploymentConfiguration={false}
+				result={undefined}
+				submitting={false}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "empty",
+					},
+				}}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("button", { name: "重新加载部署选项" }),
+		).toBeTruthy();
 	});
 });
