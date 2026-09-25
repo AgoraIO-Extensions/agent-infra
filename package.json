@@ -14,7 +14,7 @@
 		"build": "turbo run build",
 		"check": "biome check . && node tests/support/web-ui-policy.mjs",
 		"check-types": "turbo run check-types",
-		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test --concurrency=1 && vitest run tests/file-authority.test.ts",
+		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test --concurrency=1 && vitest run tests/file-authority.test.ts tests/gen-goal-with-roadmap.test.ts",
 		"test:file-authority": "vitest run tests/file-authority.test.ts",
 		"smoke": "node tests/smoke.mjs",
 		"local-topology": "pnpm build && docker compose --project-name agent-infra-local-topology up -d --wait postgres object-storage && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra pnpm --filter @agent-infra/platform-store migrate && PLATFORM_DATABASE_URL=postgresql://agent_infra:agent_infra_local@127.0.0.1:54329/agent_infra node tests/local-topology.mjs",
