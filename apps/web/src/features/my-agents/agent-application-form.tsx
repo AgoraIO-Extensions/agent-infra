@@ -1,5 +1,5 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -83,7 +83,7 @@ function blankModel(): AgentApplicationModelDraft {
 }
 
 function optionIdFor(endpointId: string, modelId: string) {
-	return `${endpointId}:${modelId}`;
+	return `${encodeURIComponent(endpointId)}:${encodeURIComponent(modelId)}`;
 }
 
 function modelLabel(
@@ -435,6 +435,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		sourceKind === "standard" &&
 		(deployment.templates.length === 0 || !modelCatalogReady);
 	const modelEndpoints = deployment.modelCatalog.endpoints;
+	useEffect(() => {
+		if (props.mode !== "update" || modelEndpoints.length === 0) return;
+		setModels((current) => {
+			let changed = false;
+			const next = current.map((model) => {
+				if (model.endpointId || !model.modelId) return model;
+				const endpointIds = modelEndpoints
+					.filter((endpoint) =>
+						endpoint.models.some((entry) => entry.modelId === model.modelId),
+					)
+					.map((endpoint) => endpoint.endpointId);
+				if (endpointIds.length !== 1) return model;
+				changed = true;
+				return { ...model, endpointId: endpointIds[0] ?? "" };
+			});
+			return changed ? next : current;
+		});
+	}, [modelEndpoints, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
@@ -449,25 +467,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(value) => ({ value, label: value }),
 	);
 	const staleTemplate = templateId.length > 0 && selectedTemplate === undefined;
-	const staleModel = models.some(
-		(model) =>
-			model.endpointId.length > 0 &&
-			(!model.modelId ||
-				!model.reasoningLevels.trim() ||
-				!modelEndpoints.some(
-					(endpoint) =>
-						endpoint.endpointId === model.endpointId &&
-						endpoint.models.some((entry) => entry.modelId === model.modelId),
-				) ||
-				!model.reasoningLevels
-					.split("\n")
-					.filter(Boolean)
-					.every((level) =>
-						modelEndpoints
-							.find((endpoint) => endpoint.endpointId === model.endpointId)
-							?.models.find((entry) => entry.modelId === model.modelId)
-							?.reasoningLevels.includes(level),
-					)),
+	const staleModel =
+		modelConfigurationVisible &&
+		models.some((model) => {
+			const levels = model.reasoningLevels.split("\n").filter(Boolean);
+			const definition = modelEndpoints
+				.find((endpoint) => endpoint.endpointId === model.endpointId)
+				?.models.find((entry) => entry.modelId === model.modelId);
+			return (
+				!model.optionId ||
+				!model.endpointId ||
+				!model.modelId ||
+				levels.length === 0 ||
+				!definition ||
+				!levels.every((level) => definition.reasoningLevels.includes(level))
+			);
+		});
+	const defaultModelOptions = models.filter(
+		(model) => model.optionId && model.endpointId && model.modelId,
 	);
 	const defaultModel = models.find(
 		(model) => model.optionId === defaultModelOptionId,
@@ -914,6 +931,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 														? {
 																...item,
 																[key]: value,
+																credentialValue: "",
 																...(key === "endpointId"
 																	? {
 																			modelId: "",
@@ -945,7 +963,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										</Label>
 										<Select
 											value={defaultModelOptionId}
-											disabled={models.length === 0}
+											disabled={defaultModelOptions.length === 0}
 											itemToStringLabel={(value) => {
 												const model = models.find(
 													(item) => item.optionId === value,
@@ -970,7 +988,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectValue placeholder="选择默认模型" />
 											</SelectTrigger>
 											<SelectContent>
-												{models.map((model) => {
+												{defaultModelOptions.map((model) => {
 													const endpoint = modelEndpoints.find(
 														(item) => item.endpointId === model.endpointId,
 													);

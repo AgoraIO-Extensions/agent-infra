@@ -51,9 +51,10 @@ const deploymentConfigurationWithMultipleModels = {
 			endpoint.endpointId === "endpoint-primary"
 				? {
 						...endpoint,
+						endpointId: "endpoint:primary",
 						models: [
 							...endpoint.models,
-							{ modelId: "gpt-5-mini", reasoningLevels: ["low"] },
+							{ modelId: "gpt:5-mini", reasoningLevels: ["low"] },
 						],
 					}
 				: endpoint,
@@ -115,6 +116,36 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("blocks submission while a model row is incomplete", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "never-echo-model" },
+		});
+
+		expect(
+			(screen.getByRole("combobox", { name: "默认模型" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("clears reasoning levels and regenerates the option when changing models", () => {
 		const onSubmit = vi.fn();
 		render(
@@ -137,18 +168,24 @@ describe("AgentApplicationForm", () => {
 		choose("模型", "gpt-5");
 		check("medium");
 		check("high");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "old-model-credential" },
+		});
 		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
-		const alternateModel = screen.getByRole("option", { name: "gpt-5-mini" });
+		const alternateModel = screen.getByRole("option", { name: "gpt:5-mini" });
 		fireEvent.pointerDown(alternateModel, { pointerType: "mouse" });
 		fireEvent.click(alternateModel, { detail: 1 });
 
 		expect(screen.queryByRole("checkbox", { name: "medium" })).toBeNull();
 		expect(screen.queryByRole("checkbox", { name: "high" })).toBeNull();
+		expect((screen.getByLabelText("模型凭证") as HTMLInputElement).value).toBe(
+			"",
+		);
 		check("low");
 		fireEvent.change(screen.getByLabelText("模型凭证"), {
 			target: { value: "never-echo-model" },
 		});
-		choose("默认模型", "Primary endpoint · gpt-5-mini");
+		choose("默认模型", "Primary endpoint · gpt:5-mini");
 		choose("默认推理档位", "low");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
@@ -157,11 +194,11 @@ describe("AgentApplicationForm", () => {
 				modelConfiguration: expect.objectContaining({
 					options: [
 						expect.objectContaining({
-							optionId: "endpoint-primary:gpt-5-mini",
+							optionId: "endpoint%3Aprimary:gpt%3A5-mini",
 							reasoningLevels: ["low"],
 						}),
 					],
-					defaultOptionId: "endpoint-primary:gpt-5-mini",
+					defaultOptionId: "endpoint%3Aprimary:gpt%3A5-mini",
 					defaultReasoningLevel: "low",
 				}),
 			}),
@@ -213,6 +250,69 @@ describe("AgentApplicationForm", () => {
 					defaultReasoningLevel: "",
 				}),
 			}),
+		);
+	});
+
+	it("hydrates an unresolved edit model after deployment choices load", async () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			status: "rejected",
+			decision: {
+				decidedAt: "2026-09-04T00:00:00Z",
+				reason: "Capacity is unavailable.",
+			},
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						displayName: "gpt-5",
+						modelId: "gpt-5",
+						optionId: "persisted-option",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "persisted-option",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const unavailableDeploymentConfiguration = {
+			...deploymentConfiguration,
+			status: "unavailable" as const,
+			templates: [],
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				status: "unavailable" as const,
+				endpoints: [],
+			},
+		};
+		const { rerender } = render(
+			<AgentApplicationFormView
+				action="resubmit"
+				application={application}
+				deploymentConfiguration={unavailableDeploymentConfiguration}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		rerender(
+			<AgentApplicationFormView
+				action="resubmit"
+				application={application}
+				deploymentConfiguration={deploymentConfiguration}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.getByRole("combobox", { name: "模型端点" }).textContent,
+			).toContain("Primary endpoint"),
 		);
 	});
 
