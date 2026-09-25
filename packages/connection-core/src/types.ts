@@ -99,6 +99,19 @@ export interface ActionCallRecord {
 	actionVersionId: string;
 	requestDigest: string;
 	status: ActionCallStatus;
+	mcpBinding?: McpCallBinding;
+}
+
+export interface McpCallBinding {
+	operationNonce: string;
+	requestDigestVersion: "connection-request-v1";
+	requestDigest: string;
+	attemptNonces: readonly string[];
+}
+
+export interface McpCallAttemptBinding
+	extends Omit<McpCallBinding, "attemptNonces"> {
+	attemptNonce: string;
 }
 
 export interface ActionCallRequest {

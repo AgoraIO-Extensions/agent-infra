@@ -20,6 +20,7 @@ import {
 	createConnectionDatabase,
 	credentialVersions,
 	grants,
+	mcpCallBindings,
 	migrateConnectionDatabase,
 	principals,
 	providerReleases,
@@ -29,9 +30,14 @@ import {
 	DirectActionReferenceV1Schema,
 	DirectActionReservationV1Schema,
 	DirectCatalogResponseV1Schema,
+	DirectClientCallRecordV1Schema,
+	DirectClientIdentityV1Schema,
+	DirectMcpExecuteActionResponseV1Schema,
 	DirectOAuthErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
@@ -121,7 +127,7 @@ beforeAll(async () => {
 		name: "Direct Client",
 		actorRequired: true,
 		redirectUris: [redirectUri],
-		allowedScopes: ["action:read", "pat:issue"],
+		allowedScopes: ["action:read", "calls:read", "pat:issue"],
 		patApproved: true,
 	});
 }, 120_000);
@@ -266,7 +272,7 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		state: "state-from-client-123",
 		code_challenge: challenge,
 		code_challenge_method: "S256",
-		scope: "action:read pat:issue",
+		scope: "action:read calls:read pat:issue",
 	};
 	const install = await app.request("/oauth/install", {
 		method: "POST",
@@ -409,8 +415,10 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		access_token: string;
 		refresh_token: string;
 		token_type: string;
+		scope: string;
 	};
 	expect(tokens.token_type).toBe("DPoP");
+	expect(tokens.scope).toBe(installationBody.scope);
 	expect((await tokenRequest(dpop("/oauth/token"))).status).toBe(401);
 	const probe = (
 		token: string,
@@ -536,23 +544,42 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		.from(consumerInstances);
 	if (!installedActor || !installedInstance)
 		throw new Error("Installation binding was not persisted");
-	await database.db.insert(actionVersions).values({
-		id: "action-v1",
-		providerId: "github",
-		providerReleaseId: "github-v1",
-		actionId: "read-issue",
-		version: "v1",
-		effect: "read",
-		inputSchema: {
-			type: "object",
-			properties: { repositoryId: { type: "integer" } },
-			required: ["repositoryId"],
-			additionalProperties: false,
+	await database.db.insert(actionVersions).values([
+		{
+			id: "action-v1",
+			providerId: "github",
+			providerReleaseId: "github-v1",
+			actionId: "read-issue",
+			version: "v1",
+			effect: "read",
+			inputSchema: {
+				type: "object",
+				properties: { repositoryId: { type: "integer" } },
+				required: ["repositoryId"],
+				additionalProperties: false,
+			},
+			outputSchema: { type: "object" },
+			requiredScopes: ["repo"],
+			status: "published",
 		},
-		outputSchema: { type: "object" },
-		requiredScopes: ["repo"],
-		status: "published",
-	});
+		{
+			id: "action-v2",
+			providerId: "github",
+			providerReleaseId: "github-v1",
+			actionId: "read-issue",
+			version: "v2",
+			effect: "read",
+			inputSchema: {
+				type: "object",
+				properties: { issueNumber: { type: "integer" } },
+				required: ["issueNumber"],
+				additionalProperties: false,
+			},
+			outputSchema: { type: "object" },
+			requiredScopes: ["provider:read"],
+			status: "published",
+		},
+	]);
 	await database.db.insert(connections).values({
 		id: "connection",
 		providerId: "github",
@@ -575,7 +602,7 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		actorId: installedActor.id,
 		connectionId: "connection",
 		credentialVersionId: "provider-credential-v1",
-		approvedActionVersionIds: ["action-v1"],
+		approvedActionVersionIds: ["action-v1", "action-v2"],
 		principalRecoveryGeneration: 1,
 		expiresAt: new Date(Date.now() + 60_000),
 	});
@@ -692,6 +719,234 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 	expect(
 		DirectActionReferenceV1Schema.parse(await actionReference.json()).status,
 	).toBe("created");
+	const operationNonce = randomUUID();
+	const attemptNonce = randomUUID();
+	const mcpRequest = {
+		jsonrpc: "2.0",
+		id: 7,
+		method: "tools/call",
+		params: {
+			name: "execute_action",
+			arguments: {
+				providerId: "github",
+				actionId: "read-issue",
+				actionVersion: "v1",
+				input: { repositoryId: 7 },
+			},
+			_meta: {
+				"connection.clientRequest/v1": {
+					operationNonce,
+					attemptNonce,
+					idempotencyKey: operationNonce,
+				},
+			},
+		},
+	};
+	const mcp = (body: unknown, token = tokens.access_token, proof = true) =>
+		app.request("/mcp", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json, text/event-stream",
+				authorization: `DPoP ${token}`,
+				...(proof ? { dpop: dpop("/mcp", { token }) } : {}),
+			},
+			body: JSON.stringify(body),
+		});
+	expect((await mcp(mcpRequest, tokens.access_token, false)).status).toBe(401);
+	expect(
+		(
+			await mcp(
+				{
+					jsonrpc: "2.0",
+					id: 1,
+					method: "initialize",
+					params: {
+						protocolVersion: "2025-11-25",
+						capabilities: {},
+						clientInfo: { name: "unauthenticated", version: "1.0.0" },
+					},
+				},
+				tokens.access_token,
+				false,
+			)
+		).status,
+	).toBe(401);
+	expect(
+		(
+			await mcp(
+				{ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+				tokens.access_token,
+				false,
+			)
+		).status,
+	).toBe(401);
+	const mcpResponse = await mcp(mcpRequest);
+	expect(mcpResponse.status).toBe(200);
+	const mcpResult = DirectMcpExecuteActionResponseV1Schema.parse(
+		await mcpResponse.json(),
+	);
+	const mcpReceipt = mcpResult.result._meta["connection.receipt/v1"];
+	expect(mcpReceipt.callRef).toMatch(/^[0-9a-f-]{36}$/);
+	expect(mcpReceipt.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+	expect((await mcp(mcpRequest)).status).toBe(200);
+	const secondAttemptNonce = randomUUID();
+	const replayWithAnotherAttempt = await mcp({
+		...mcpRequest,
+		id: 8,
+		params: {
+			...mcpRequest.params,
+			_meta: {
+				"connection.clientRequest/v1": {
+					operationNonce,
+					attemptNonce: secondAttemptNonce,
+					idempotencyKey: operationNonce,
+				},
+			},
+		},
+	});
+	expect(replayWithAnotherAttempt.status).toBe(200);
+	expect(
+		DirectMcpExecuteActionResponseV1Schema.parse(
+			await replayWithAnotherAttempt.json(),
+		).result.structuredContent.callId,
+	).toBe(mcpReceipt.callRef);
+	const conflictingCall = await mcp({
+		...mcpRequest,
+		id: 9,
+		params: {
+			...mcpRequest.params,
+			arguments: { ...mcpRequest.params.arguments, input: { repositoryId: 8 } },
+		},
+	});
+	expect(conflictingCall.status).toBe(200);
+	expect(await conflictingCall.json()).toMatchObject({
+		result: {
+			isError: true,
+			content: [{ type: "text", text: "ACTION_CONFLICT" }],
+		},
+	});
+	const wrongProvider = await mcp({
+		...mcpRequest,
+		id: 10,
+		params: {
+			...mcpRequest.params,
+			arguments: {
+				...mcpRequest.params.arguments,
+				providerId: "other-provider",
+			},
+		},
+	});
+	expect(await wrongProvider.json()).toMatchObject({
+		result: { isError: true },
+	});
+	expect((await mcp({ ...mcpRequest, principalId: "bob" })).status).toBe(400);
+	expect(await database.db.select().from(mcpCallBindings)).toMatchObject([
+		{
+			operationNonce,
+			attemptNonces: [attemptNonce, secondAttemptNonce],
+			requestDigestVersion: "connection-request-v1",
+			requestDigest: mcpReceipt.requestDigest,
+		},
+	]);
+	const sdkClient = new McpClient({
+		name: "direct-installation-test",
+		version: "1.0.0",
+	});
+	const sdkTransport = new StreamableHTTPClientTransport(new URL(audience), {
+		fetch: async (input, init) => {
+			const method = init?.method ?? "GET";
+			const headers = new Headers(init?.headers);
+			headers.set("authorization", `DPoP ${tokens.access_token}`);
+			headers.set("dpop", dpop("/mcp", { method, token: tokens.access_token }));
+			return app.fetch(new Request(input, { ...init, headers }));
+		},
+	});
+	await sdkClient.connect(sdkTransport);
+	expect(
+		(await sdkClient.listTools()).tools.map((tool) => tool.name),
+	).toContain("execute_action");
+	const sdkOperationNonce = randomUUID();
+	const sdkAttemptNonce = randomUUID();
+	const sdkResult = await sdkClient.callTool({
+		name: "execute_action",
+		arguments: {
+			providerId: "github",
+			actionId: "read-issue",
+			actionVersion: "v2",
+			input: { issueNumber: 42 },
+		},
+		_meta: {
+			"connection.clientRequest/v1": {
+				operationNonce: sdkOperationNonce,
+				attemptNonce: sdkAttemptNonce,
+				idempotencyKey: sdkOperationNonce,
+			},
+		},
+	});
+	expect(sdkResult.isError).not.toBe(true);
+	expect(sdkResult.structuredContent).toMatchObject({ status: "RESERVED" });
+	expect(sdkResult._meta?.["connection.receipt/v1"]).toMatchObject({
+		operationNonce: sdkOperationNonce,
+		attemptNonce: sdkAttemptNonce,
+		actionVersionId: "action-v2",
+	});
+	await sdkClient.close();
+	const identityPath = "/api/client/identity";
+	const identity = await app.request(identityPath, {
+		headers: {
+			authorization: `DPoP ${tokens.access_token}`,
+			dpop: dpop(identityPath, {
+				method: "GET",
+				token: tokens.access_token,
+			}),
+		},
+	});
+	expect(identity.status).toBe(200);
+	expect(
+		DirectClientIdentityV1Schema.parse(await identity.json()),
+	).toMatchObject({
+		principal: { type: "user", key: "alice" },
+		actorId: installedActor.id,
+		consumerId: "client",
+		clientId: installedInstance.id,
+		issuer: origin,
+		resource: audience,
+	});
+	const callPath = `/api/client/calls/${mcpReceipt.callRef}`;
+	const readCall = (token = tokens.access_token, key = privateKey) =>
+		app.request(callPath, {
+			headers: {
+				authorization: `DPoP ${token}`,
+				dpop: dpop(callPath, {
+					method: "GET",
+					token,
+					key,
+					publicJwk:
+						key === privateKey
+							? jwk
+							: otherKey.publicKey.export({ format: "jwk" }),
+				}),
+			},
+		});
+	const callReadback = await readCall();
+	expect(callReadback.status).toBe(200);
+	expect(
+		DirectClientCallRecordV1Schema.parse(await callReadback.json()),
+	).toMatchObject({
+		callRef: mcpReceipt.callRef,
+		requestDigest: mcpReceipt.requestDigest,
+		operationNonce,
+		attemptNonces: [attemptNonce, secondAttemptNonce],
+		principal: { type: "user", key: "alice" },
+		actorId: installedActor.id,
+		actionVersionId: "action-v1",
+		consumerId: "client",
+		clientId: installedInstance.id,
+	});
+	expect(
+		(await readCall(tokens.access_token, otherKey.privateKey)).status,
+	).toBe(401);
 	const bobInstall = await app.request("/oauth/install", {
 		method: "POST",
 		headers: {
@@ -796,6 +1051,9 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			})
 		).status,
 	).toBe(404);
+	expect(
+		(await readCall(bobToken.access_token, otherKey.privateKey)).status,
+	).toBe(404);
 	const revocationRaceRequest = {
 		...actionRequest,
 		requestId: "request-action-revocation-race",
@@ -816,7 +1074,7 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		).status,
 	).toBe(403);
 	expect(await database.db.select().from(actionCalls)).toHaveLength(
-		racedReservation.status === 202 ? 5 : 4,
+		racedReservation.status === 202 ? 7 : 6,
 	);
 	const reusedProof = dpop("/probe", {
 		method: "GET",

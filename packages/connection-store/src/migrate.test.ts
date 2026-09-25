@@ -90,6 +90,7 @@ describe("Connection PostgreSQL migration", () => {
 			"grants",
 			"login_throttle_attempts",
 			"login_throttle_failures",
+			"mcp_call_bindings",
 			"oauth_authorization_codes",
 			"oauth_installation_requests",
 			"principals",
@@ -110,7 +111,7 @@ describe("Connection PostgreSQL migration", () => {
 			select count(*)::int as count
 			from connection_migrations.history
 		`;
-		expect(history?.count).toBe(8);
+		expect(history?.count).toBe(9);
 	});
 
 	it("resolves only the server-side grant binding and keeps calls idempotent", async () => {

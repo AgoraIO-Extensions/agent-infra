@@ -526,6 +526,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					actorId: row.actorId === consumerActorSentinel ? null : row.actorId,
 					scopes: row.scopes,
 					credentialId: row.id,
+					credentialExpiresAt: row.expiresAt.getTime(),
 					principalRecoveryGeneration: row.principalGeneration,
 				};
 			});

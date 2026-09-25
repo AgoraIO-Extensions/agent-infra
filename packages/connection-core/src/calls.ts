@@ -70,6 +70,19 @@ export function actionRequestDigest(
 		.digest("hex");
 }
 
+export function mcpRequestDigest(argumentsValue: unknown): string {
+	return createHash("sha256")
+		.update(
+			canonicalJson({
+				version: "connection-request-v1",
+				method: "tools/call",
+				toolName: "execute_action",
+				arguments: argumentsValue,
+			}),
+		)
+		.digest("hex");
+}
+
 export type ActionCallReplay =
 	| { kind: "new" }
 	| { kind: "reuse"; record: ActionCallRecord }

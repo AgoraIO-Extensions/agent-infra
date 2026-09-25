@@ -57,6 +57,13 @@
       "when": 1790240700000,
       "tag": "0007_direct_client_installation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790240800000,
+      "tag": "0008_mcp_call_binding",
+      "breakpoints": true
     }
   ]
 }

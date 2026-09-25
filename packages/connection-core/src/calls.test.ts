@@ -5,6 +5,7 @@ import {
 	actionRequestDigest,
 	assertActionCallTransition,
 	decideActionCallReplay,
+	mcpRequestDigest,
 } from "./calls.js";
 
 const request = {
@@ -35,6 +36,23 @@ describe("Connection ActionCall invariants", () => {
 		expect(actionRequestDigest({ ...request, arguments: { z: 1, ä: 2 } })).toBe(
 			actionRequestDigest({ ...request, arguments: { ä: 2, z: 1 } }),
 		);
+	});
+
+	it("binds the MCP request digest to the exact Action selector", () => {
+		const argumentsValue = {
+			providerId: "github",
+			actionId: "github.get_issue",
+			actionVersion: "v1",
+			input: { number: 1, repository: "fixture/private" },
+		};
+		const digest = mcpRequestDigest(argumentsValue);
+		expect(digest).toMatch(/^[a-f0-9]{64}$/);
+		expect(
+			mcpRequestDigest({ ...argumentsValue, actionVersion: "v2" }),
+		).not.toBe(digest);
+		expect(
+			mcpRequestDigest({ ...argumentsValue, providerId: "other" }),
+		).not.toBe(digest);
 	});
 
 	it("rejects non-JSON argument values instead of hashing them ambiguously", () => {

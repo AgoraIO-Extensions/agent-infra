@@ -4,6 +4,7 @@ import {
 	actionRequestDigest,
 	actorNamespaceId,
 	decideActionCallReplay,
+	mcpRequestDigest,
 } from "./calls.js";
 import {
 	type ActiveGrantRepository,
@@ -15,6 +16,7 @@ import type {
 	ActionCallRecord,
 	ActionCallRequest,
 	GrantRecord,
+	McpCallAttemptBinding,
 } from "./types.js";
 
 export interface DirectAuthenticatedCaller {
@@ -54,6 +56,93 @@ export interface DirectActionCallRepository extends ActiveGrantRepository {
 		grant: GrantRecord,
 		credential: DirectCredentialContext,
 	): Promise<void>;
+	appendMcpAttemptForDirectClient(
+		record: ActionCallRecord,
+		binding: McpCallAttemptBinding,
+		grant: GrantRecord,
+		credential: DirectCredentialContext,
+	): Promise<ActionCallRecord>;
+}
+
+export interface PublishedDirectActionRepository
+	extends DirectActionCallRepository {
+	findPublishedActionVersion(selector: {
+		providerId: string;
+		actionId: string;
+		version: string;
+	}): Promise<
+		| { id: string; effect: string; inputSchema: Record<string, unknown> }
+		| undefined
+	>;
+}
+
+export class InvalidDirectActionArguments extends Error {}
+
+export async function reservePublishedDirectActionCall(
+	repository: PublishedDirectActionRepository,
+	input: Omit<
+		Parameters<typeof reserveDirectActionCall>[1],
+		"actionVersionId" | "effect"
+	> & {
+		selector: { providerId: string; actionId: string; version: string };
+		validateArguments: (
+			schema: Record<string, unknown>,
+			argumentsValue: unknown,
+		) => boolean;
+	},
+): Promise<ActionCallRecord> {
+	const version = await repository.findPublishedActionVersion(input.selector);
+	if (!version) throw new ConnectionAuthorizationDenied();
+	if (!input.validateArguments(version.inputSchema, input.arguments))
+		throw new InvalidDirectActionArguments();
+	return reserveDirectActionCall(repository, {
+		...input,
+		actionVersionId: version.id,
+		effect: version.effect,
+	});
+}
+
+export function reservePublishedDirectMcpActionCall(
+	repository: PublishedDirectActionRepository,
+	input: {
+		caller: DirectAuthenticatedCaller;
+		audience: string;
+		selector: { providerId: string; actionId: string; version: string };
+		arguments: unknown;
+		meta: {
+			operationNonce: string;
+			attemptNonce: string;
+			idempotencyKey: string;
+		};
+		validateArguments: (
+			schema: Record<string, unknown>,
+			argumentsValue: unknown,
+		) => boolean;
+	},
+): Promise<ActionCallRecord> {
+	if (input.meta.operationNonce !== input.meta.idempotencyKey)
+		throw new InvalidDirectActionArguments();
+	return reservePublishedDirectActionCall(repository, {
+		caller: input.caller,
+		audience: input.audience,
+		selector: input.selector,
+		arguments: input.arguments,
+		requestId: input.meta.operationNonce,
+		idempotencyKey: input.meta.idempotencyKey,
+		traceId: input.meta.operationNonce,
+		mcpBinding: {
+			operationNonce: input.meta.operationNonce,
+			attemptNonce: input.meta.attemptNonce,
+			requestDigestVersion: "connection-request-v1",
+			requestDigest: mcpRequestDigest({
+				providerId: input.selector.providerId,
+				actionId: input.selector.actionId,
+				actionVersion: input.selector.version,
+				input: input.arguments,
+			}),
+		},
+		validateArguments: input.validateArguments,
+	});
 }
 
 export class DirectActionConflict extends Error {
@@ -90,6 +179,7 @@ export async function reserveDirectActionCall(
 		actionVersionId: string;
 		effect: string;
 		arguments: unknown;
+		mcpBinding?: McpCallAttemptBinding;
 	},
 ): Promise<ActionCallRecord> {
 	const { caller } = input;
@@ -118,10 +208,18 @@ export async function reserveDirectActionCall(
 	);
 	const namespaceKey = actionCallNamespaceKey(request);
 	const credential = credentialContext(caller, input.audience, requiredScope);
-	const replay = (existing: ActionCallRecord) => {
+	const replay = async (existing: ActionCallRecord) => {
 		if (
 			existing.requestId !== request.requestId ||
 			existing.traceId !== input.traceId ||
+			Boolean(existing.mcpBinding) !== Boolean(input.mcpBinding) ||
+			(input.mcpBinding &&
+				(existing.mcpBinding?.operationNonce !==
+					input.mcpBinding.operationNonce ||
+					existing.mcpBinding.requestDigestVersion !==
+						input.mcpBinding.requestDigestVersion ||
+					existing.mcpBinding.requestDigest !==
+						input.mcpBinding.requestDigest)) ||
 			decideActionCallReplay(existing, {
 				...request,
 				grantId: grant.id,
@@ -129,7 +227,14 @@ export async function reserveDirectActionCall(
 			}).kind !== "reuse"
 		)
 			throw new DirectActionConflict();
-		return existing;
+		return input.mcpBinding
+			? repository.appendMcpAttemptForDirectClient(
+					existing,
+					input.mcpBinding,
+					grant,
+					credential,
+				)
+			: existing;
 	};
 	const existing = await repository.findByIdempotencyForDirectClient(
 		namespaceKey,
@@ -159,6 +264,16 @@ export async function reserveDirectActionCall(
 			arguments: request.arguments,
 		}),
 		status: "created",
+		...(input.mcpBinding
+			? {
+					mcpBinding: {
+						operationNonce: input.mcpBinding.operationNonce,
+						requestDigestVersion: input.mcpBinding.requestDigestVersion,
+						requestDigest: input.mcpBinding.requestDigest,
+						attemptNonces: [input.mcpBinding.attemptNonce],
+					},
+				}
+			: {}),
 	};
 	try {
 		await repository.insertForDirectClient(
@@ -195,10 +310,11 @@ export function findDirectActionCall(
 	caller: DirectAuthenticatedCaller,
 	audience: string,
 	callId: string,
+	requiredScope?: string,
 ): Promise<ActionCallRecord | undefined> {
 	return repository.findByCallIdForDirectClient(
 		actionCallNamespaceKey(caller),
 		callId,
-		credentialContext(caller, audience),
+		credentialContext(caller, audience, requiredScope),
 	);
 }

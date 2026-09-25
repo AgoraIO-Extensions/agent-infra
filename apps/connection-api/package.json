@@ -19,6 +19,7 @@
 		"@agent-infra/connection-store": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
 		"@hono/node-server": "^2.0.12",
+		"@modelcontextprotocol/sdk": "1.30.0",
 		"ajv": "catalog:",
 		"hono": "^4.12.32",
 		"ldapts": "9.2.0",

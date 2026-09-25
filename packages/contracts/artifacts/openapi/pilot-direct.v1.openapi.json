@@ -2743,6 +2743,165 @@
         ],
         "type": "object"
       },
+      "DirectClientCallRecordV1": {
+        "additionalProperties": false,
+        "properties": {
+          "actionVersionId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "actorId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "attemptNonces": {
+            "items": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "callRef": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "clientId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumerId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "operationNonce": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "key"
+            ],
+            "type": "object"
+          },
+          "requestDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "requestDigestVersion": {
+            "const": "connection-request-v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "callRef",
+          "operationNonce",
+          "requestDigestVersion",
+          "requestDigest",
+          "principal",
+          "actorId",
+          "actionVersionId",
+          "attemptNonces",
+          "consumerId",
+          "clientId"
+        ],
+        "type": "object"
+      },
+      "DirectClientIdentityV1": {
+        "additionalProperties": false,
+        "properties": {
+          "actorId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "clientId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumerId": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expiresAt": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "issuer": {
+            "format": "uri",
+            "type": "string"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "maxLength": 65536,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "key"
+            ],
+            "type": "object"
+          },
+          "resource": {
+            "format": "uri",
+            "type": "string"
+          },
+          "revision": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "actorId",
+          "consumerId",
+          "clientId",
+          "issuer",
+          "resource",
+          "revision",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "DirectCodeTokenRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -3010,6 +3169,764 @@
         },
         "required": [
           "authorization_uri"
+        ],
+        "type": "object"
+      },
+      "DirectMcpExecuteActionRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          },
+          "jsonrpc": {
+            "const": "2.0",
+            "type": "string"
+          },
+          "method": {
+            "const": "tools/call",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": false,
+            "properties": {
+              "_meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "connection.clientRequest/v1": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attemptNonce": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      "idempotencyKey": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      "operationNonce": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "operationNonce",
+                      "attemptNonce",
+                      "idempotencyKey"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "connection.clientRequest/v1"
+                ],
+                "type": "object"
+              },
+              "arguments": {
+                "additionalProperties": false,
+                "properties": {
+                  "actionId": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "actionVersion": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "input": {
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "maxLength": 65536,
+                              "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "null"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "maxLength": 65536,
+                                    "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "maxLength": 65536,
+                                          "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxItems": 1000,
+                                      "type": "array"
+                                    },
+                                    {
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxProperties": 1000,
+                                      "propertyNames": {
+                                        "allOf": [
+                                          {
+                                            "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                          }
+                                        ],
+                                        "maxLength": 65536,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 1000,
+                                "type": "array"
+                              },
+                              {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "maxLength": 65536,
+                                          "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxItems": 1000,
+                                      "type": "array"
+                                    },
+                                    {
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxProperties": 1000,
+                                      "propertyNames": {
+                                        "allOf": [
+                                          {
+                                            "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                          }
+                                        ],
+                                        "maxLength": 65536,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "maxProperties": 1000,
+                                "propertyNames": {
+                                  "allOf": [
+                                    {
+                                      "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                    },
+                                    {
+                                      "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                    },
+                                    {
+                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                    }
+                                  ],
+                                  "maxLength": 65536,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "null"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "maxLength": 65536,
+                                    "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "maxLength": 65536,
+                                          "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxItems": 1000,
+                                      "type": "array"
+                                    },
+                                    {
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxProperties": 1000,
+                                      "propertyNames": {
+                                        "allOf": [
+                                          {
+                                            "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                          }
+                                        ],
+                                        "maxLength": 65536,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 1000,
+                                "type": "array"
+                              },
+                              {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "maxLength": 65536,
+                                          "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxItems": 1000,
+                                      "type": "array"
+                                    },
+                                    {
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "null"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "maxLength": 65536,
+                                            "pattern": "^(?![\\s\\S]*(?:\\b(?:[bB][eE][aA][rR][eE][rR]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]?|[oO][aA][uU][tT][hH](?:[cC][oO][dD][eE]|[tT][oO][kK][eE][nN])?)\\b|(?:^|[^A-Za-z0-9_-])(?:[tT][oO][kK][eE][nN]|[aA][pP][iI][-_]?[kK][eE][yY]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[cC][oO][oO][kK][iI][eE]|[jJ][wW][tT])\\s*[:=]|(?:^|[^A-Za-z0-9_-])[bB][aA][sS][iI][cC]\\s+[A-Za-z0-9+/]{8,}={0,2}(?=$|[^A-Za-z0-9+/=])|(?:^|[^A-Za-z0-9_-])(?:[sS][kK]|[pP][kK]|[Gg][Hh][PpOoUuSsRr]|[Xx][Oo][Xx][BbAaPpRrSs]|[gG][lL][pP][aA][tT])[-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[aA][kK][iI][aA]|[aA][sS][iI][aA]|[aA][iI][dD][aA]|[aA][rR][oO][aA]|[aA][gG][pP][aA]|[aA][nN][pP][aA]|[aA][nN][vV][aA]|[aA][bB][iI][aA]|[aA][cC][cC][aA])[A-Za-z0-9]{16}(?=$|[\\s,;])|(?:^|[^A-Za-z0-9_-])[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][-_][A-Za-z0-9_-]{8,}|(?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_-]{10,}\\.){2,}[A-Za-z0-9_-]{10,}(?=$|[\\s,;])|[cC][aA][lL][lL][eE][rR][-_ ][sS][eE][lL][eE][cC][tT][eE][dD][-_ ](?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[gG][rR][aA][nN][tT]|[aA][gG][eE][nN][tT]|[aA][cC][cC][oO][uU][nN][tT]|[sS][eE][sS][sS][iI][oO][nN])))[\\s\\S]*$",
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      "maxProperties": 1000,
+                                      "propertyNames": {
+                                        "allOf": [
+                                          {
+                                            "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                          },
+                                          {
+                                            "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                          }
+                                        ],
+                                        "maxLength": 65536,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "maxProperties": 1000,
+                                "propertyNames": {
+                                  "allOf": [
+                                    {
+                                      "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                                    },
+                                    {
+                                      "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                                    },
+                                    {
+                                      "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                                    }
+                                  ],
+                                  "maxLength": 65536,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "maxProperties": 1000,
+                          "propertyNames": {
+                            "allOf": [
+                              {
+                                "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                              },
+                              {
+                                "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                              },
+                              {
+                                "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                              }
+                            ],
+                            "maxLength": 65536,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ],
+                      "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes."
+                    },
+                    "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
+                    "maxProperties": 1000,
+                    "propertyNames": {
+                      "allOf": [
+                        {
+                          "pattern": "^(?![Aa][Uu][Tt][Hh]$)(?!.*[Tt][Oo][Kk][Ee][Nn])(?!.*(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Oo][Aa][Uu][Tt][Hh]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]|[Jj][Ww][Tt]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].*[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss].*[Kk][Ee][Yy]|[Aa][Pp][Ii].*[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].*[Kk][Ee][Yy])).+$"
+                        },
+                        {
+                          "pattern": "^(?!.*(?:[Aa][Uu][Tt][Hh](?:[_. /-]?(?:[Hh][Ee][Aa][Dd][Ee][Rr]|[Vv][Aa][Ll][Uu][Ee]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Oo][Dd][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)|[Bb][Aa][Ss][Ii][Cc][_. /-]?[Aa][Uu][Tt][Hh]))).+$"
+                        },
+                        {
+                          "pattern": "^(?!(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN][iI][dD]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[pP][rR][iI][nN][cC][iI][pP][aA][lL][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][dD]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE][iI][dD]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT][iI][dD]|[aA][cC][tT][oO][rR]|[aA][cC][tT][oO][rR][iI][dD]|[aA][gG][eE][nN][tT][iI][dD]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN][iI][dD]|[tT][uU][rR][nN][iI][dD]|[eE][xX][eE][cC][uU][tT][iI][oO][nN][iI][dD]|[gG][rR][aA][nN][tT]|[gG][rR][aA][nN][tT][iI][dD]|[sS][eE][sS][sS][iI][oO][nN]|[sS][eE][sS][sS][iI][oO][nN][iI][dD]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[pP][lL][aA][tT][fF][oO][rR][mM]|[pP][lL][aA][tT][fF][oO][rR][mM][iI][dD]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT][iI][dD]|[uU][sS][eE][rR][iI][dD]|[uU][sS][eE][rR]_[iI][dD]|[tT][eE][nN][aA][nN][tT][iI][dD]|[aA][cC][cC][oO][uU][nN][tT][iI][dD]|[iI][dD][eE][nN][tT][iI][tT][yY][iI][dD]|[sS][uU][bB][jJ][eE][cC][tT][iI][dD]|[cC][aA][lL][lL][eE][rR]|[oO][wW][nN][eE][rR][iI][dD]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][sS][oO][uU][rR][cC][eE][iI][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][iI][dD])$)(?!.*(?:[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]|[pP][rR][iI][nN][cC][iI][pP][aA][lL]|[cC][oO][nN][sS][uU][mM][eE][rR]|[cC][oO][nN][sS][uU][mM][eE][rR][iI][nN][sS][tT][aA][nN][cC][eE]|[iI][nN][sS][tT][aA][nN][cC][eE]|[eE][xX][tT][eE][rR][nN][aA][lL][_-]?[aA][cC][cC][oO][uU][nN][tT]|[eE][xX][tT][eE][rR][nN][aA][lL][aA][cC][cC][oO][uU][nN][tT]|[aA][cC][tT][oO][rR]|[oO][rR][gG][aA][nN][iI][zZ][aA][tT][iI][oO][nN]|[aA][gG][eE][nN][tT]|[cC][oO][nN][vV][eE][rR][sS][aA][tT][iI][oO][nN]|[tT][uU][rR][nN]|[eE][xX][eE][cC][uU][tT][iI][oO][nN]|[gG][rR][aA][nN][tT]|[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][_-]?[sS][eE][sS][sS][iI][oO][nN]|[hH][oO][sS][tT][sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][_-]?[sS][eE][sS][sS][iI][oO][nN]|[nN][aA][tT][iI][vV][eE][sS][eE][sS][sS][iI][oO][nN]|[iI][dD][eE][nN][tT][iI][tT][yY]|[pP][lL][aA][tT][fF][oO][rR][mM]|[aA][tT][tT][aA][cC][hH][mM][eE][nN][tT])(?:[_. /-]?(?:[iI][dD]|[sS][eE][lL][eE][cC][tT][oO][rR]|[cC][oO][nN][tT][eE][xX][tT]|[rR][eE][fF]|[kK][eE][yY]|[vV][aA][lL][uU][eE]|[iI][dD][eE][nN][tT][iI][fF][iI][eE][rR]))?$).+$"
+                        }
+                      ],
+                      "maxLength": 65536,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "providerId": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "providerId",
+                  "actionId",
+                  "actionVersion",
+                  "input"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "const": "execute_action",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "arguments",
+              "_meta"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "jsonrpc",
+          "id",
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      "DirectMcpExecuteActionResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          },
+          "jsonrpc": {
+            "const": "2.0",
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": false,
+            "properties": {
+              "_meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "connection.receipt/v1": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "actionVersionId": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "actorId": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "attemptNonce": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      "callRef": {
+                        "maxLength": 65536,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "operationNonce": {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      "principal": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "key": {
+                            "maxLength": 65536,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": {
+                            "enum": [
+                              "user",
+                              "application"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "key"
+                        ],
+                        "type": "object"
+                      },
+                      "requestDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "requestDigestVersion": {
+                        "const": "connection-request-v1",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "callRef",
+                      "operationNonce",
+                      "attemptNonce",
+                      "requestDigestVersion",
+                      "requestDigest",
+                      "principal",
+                      "actorId",
+                      "actionVersionId"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "connection.receipt/v1"
+                ],
+                "type": "object"
+              },
+              "content": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "structuredContent": {
+                "additionalProperties": false,
+                "properties": {
+                  "callId": {
+                    "maxLength": 65536,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "RESERVED",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "callId",
+                  "status"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "content",
+              "structuredContent",
+              "_meta"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "jsonrpc",
+          "id",
+          "result"
         ],
         "type": "object"
       },
@@ -3336,6 +4253,570 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/client/calls/{callRef}": {
+      "get": {
+        "operationId": "readDirectClientCall",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "callRef",
+            "required": true,
+            "schema": {
+              "maxLength": 65536,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "DPoP",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectClientCallRecordV1"
+                }
+              }
+            },
+            "description": "Authenticated ActionCall readback"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "ActionCall unavailable"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Connection unavailable"
+          }
+        }
+      }
+    },
+    "/api/client/identity": {
+      "get": {
+        "operationId": "getDirectClientIdentity",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "DPoP",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectClientIdentityV1"
+                }
+              }
+            },
+            "description": "Current Direct credential identity"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Connection unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/actions": {
       "post": {
         "operationId": "reserveConnectionAction",
@@ -4793,6 +6274,543 @@
               }
             },
             "description": "Grant is unavailable to the authenticated Principal"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "operationId": "reserveDirectMcpExecuteAction",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "DPoP",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectMcpExecuteActionRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectMcpExecuteActionResponseV1"
+                }
+              }
+            },
+            "description": "ActionCall reservation with same-response receipt"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Action is not authorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Action conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Connection unavailable"
           }
         }
       }

@@ -898,6 +898,36 @@ export const actionCalls = connectionSchema.table(
 	],
 );
 
+export const mcpCallBindings = connectionSchema.table(
+	"mcp_call_bindings",
+	{
+		actionCallId: text("action_call_id").primaryKey(),
+		operationNonce: text("operation_nonce").notNull(),
+		attemptNonces: jsonb("attempt_nonces").$type<string[]>().notNull(),
+		requestDigestVersion: text("request_digest_version").notNull(),
+		requestDigest: varchar("request_digest", { length: 64 }).notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.actionCallId],
+			foreignColumns: [actionCalls.id],
+			name: "mcp_call_bindings_action_call_fk",
+		}),
+		check(
+			"mcp_call_bindings_digest_format",
+			sql`${table.requestDigest} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"mcp_call_bindings_digest_version",
+			sql`${table.requestDigestVersion} = 'connection-request-v1'`,
+		),
+		check(
+			"mcp_call_bindings_attempts",
+			sql`jsonb_typeof(${table.attemptNonces}) = 'array' AND jsonb_array_length(${table.attemptNonces}) BETWEEN 1 AND 256`,
+		),
+	],
+);
+
 export const effects = connectionSchema.table(
 	"effects",
 	{
