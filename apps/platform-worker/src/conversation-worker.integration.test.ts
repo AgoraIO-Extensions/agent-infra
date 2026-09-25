@@ -126,7 +126,14 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 // neither mode is identity-provider, Connection, or browser acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-766-"));
-	const database = await startPostgresTestDatabase("766-worker-dispatch");
+	const externalDatabaseUrl = process.env.PLATFORM_TEST_DATABASE_URL;
+	const database =
+		realCodexE2e && externalDatabaseUrl
+			? {
+					databaseUrl: externalDatabaseUrl,
+					stop: async () => undefined,
+				}
+			: await startPostgresTestDatabase("766-worker-dispatch");
 	const sql = postgres(database.databaseUrl, { max: 2 });
 	const children: ChildProcess[] = [];
 	const output: string[] = [];
