@@ -313,7 +313,7 @@ describe("AgentApplicationForm", () => {
 		).toContain("Primary endpoint · gpt-5");
 		expect(
 			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
@@ -728,6 +728,51 @@ describe("AgentApplicationForm", () => {
 				},
 			}),
 		);
+	});
+
+	it("removes environment and Secret drafts disallowed by a new template", async () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: [
+						...deploymentConfiguration.templates,
+						{
+							templateId: "minimal",
+							displayName: "Minimal",
+							connectionEnabled: false,
+							allowedEnvironmentKeys: [],
+							allowedSecretKeys: [],
+						},
+					],
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		choose("标准模板 ID", "Codex");
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		choose("变量名称", "LOG_LEVEL");
+		fireEvent.change(screen.getByLabelText("变量值"), {
+			target: { value: "debug" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		choose("Secret 名称", "MODEL_API_KEY");
+		fireEvent.change(screen.getByLabelText("替换值"), {
+			target: { value: "secret" },
+		});
+		fireEvent.click(screen.getByRole("combobox", { name: "标准模板 ID" }));
+		const minimalTemplate = screen.getByRole("option", { name: "Minimal" });
+		fireEvent.pointerDown(minimalTemplate, { pointerType: "mouse" });
+		fireEvent.click(minimalTemplate, { detail: 1 });
+
+		await waitFor(() => {
+			expect(screen.queryByLabelText("变量值")).toBeNull();
+			expect(screen.queryByLabelText("替换值")).toBeNull();
+		});
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("marks a stale deployment projection before submission", () => {

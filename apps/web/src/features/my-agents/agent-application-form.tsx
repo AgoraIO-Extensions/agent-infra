@@ -425,10 +425,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						credentialValue: "",
 						endpointId,
 						modelId: option.modelId,
-						optionId:
-							endpointId.length > 0
-								? optionIdFor(endpointId, option.modelId)
-								: option.optionId,
+						optionId: option.optionId,
 						reasoningLevels: option.reasoningLevels.join("\n"),
 					};
 				})
@@ -441,15 +438,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		return initialModelOptions;
 	});
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
-		(() => {
-			const persistedId = configuration?.defaultModelOptionId ?? "";
-			const index = (configuration?.modelOptions ?? []).findIndex(
-				(option) => option.optionId === persistedId,
-			);
-			return index >= 0
-				? (initialModelOptions[index]?.optionId ?? persistedId)
-				: persistedId;
-		})(),
+		configuration?.defaultModelOptionId ?? "",
 	);
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
@@ -472,28 +461,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
-		const currentDefaultIndex = models.findIndex(
-			(model) => model.optionId === defaultModelOptionId,
-		);
 		let changed = false;
 		const next = models.map((model) => {
 			const endpointId =
 				model.endpointId || uniqueEndpointIdFor(modelEndpoints, model.modelId);
 			if (!endpointId || !model.modelId) return model;
-			const optionId = optionIdFor(endpointId, model.modelId);
-			if (model.endpointId === endpointId && model.optionId === optionId)
-				return model;
+			if (model.endpointId === endpointId) return model;
 			changed = true;
-			return { ...model, endpointId, optionId };
+			return { ...model, endpointId };
 		});
 		if (!changed) return;
-		const hydratedDefaultModel =
-			currentDefaultIndex >= 0 ? next[currentDefaultIndex] : undefined;
-		if (hydratedDefaultModel) {
-			setDefaultModelOptionId(hydratedDefaultModel.optionId);
-		}
 		setModels(next);
-	}, [defaultModelOptionId, modelEndpoints, models, props.mode]);
+	}, [modelEndpoints, models, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
@@ -719,7 +698,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										)?.displayName ??
 										(staleTemplate ? "已移除模板（请重新加载）" : String(value))
 									}
-									onValueChange={(value) => value && setTemplateId(value)}
+									onValueChange={(value) => {
+										if (!value) return;
+										const nextTemplate = deployment.templates.find(
+											(template) => template.templateId === value,
+										);
+										setTemplateId(value);
+										setEnvironment((current) =>
+											current.filter((item) =>
+												nextTemplate?.allowedEnvironmentKeys.includes(
+													item.name,
+												),
+											),
+										);
+										setSecrets((current) =>
+											current.filter((item) =>
+												nextTemplate?.allowedSecretKeys.includes(item.name),
+											),
+										);
+									}}
 								>
 									<SelectTrigger
 										id="application-template-id"
