@@ -1011,7 +1011,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		setFocusRequest((current) => current + 1);
 		if (
 			Object.keys(errors).length > 0 ||
-			Object.keys(serverFieldErrors).length > 0
+			Object.keys(serverFieldErrors).length > 0 ||
+			serverFormError
 		)
 			return;
 		setSecrets([]);

@@ -1305,6 +1305,23 @@ describe("AgentApplicationForm", () => {
 		expect(document.activeElement).toBe(form);
 	});
 
+	it("blocks an unchanged server invalid-request retry", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				mode="update"
+				onSubmit={onSubmit}
+				serverError={{ code: "INVALID_REQUEST" }}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("marks a removed existing template instead of submitting it", () => {
 		const onSubmit = vi.fn();
 		const application = AgentApplicationProjectionV2Schema.parse({
