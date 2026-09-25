@@ -30,6 +30,7 @@ import {
 	DirectActionReservationV1Schema,
 	DirectCatalogResponseV1Schema,
 	DirectOAuthErrorV1Schema,
+	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
@@ -479,7 +480,30 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			)
 		).status,
 	).toBe(401);
-	expect((await app.request("/api/v1/catalog")).status).toBe(401);
+	const unauthorizedCatalog = await app.request("/api/v1/catalog");
+	expect(unauthorizedCatalog.status).toBe(401);
+	expect(
+		PilotProtocolErrorV1Schema.parse(await unauthorizedCatalog.json()),
+	).toMatchObject({ code: "AUTHENTICATION_REQUIRED", retryable: false });
+	const unavailableApp = createConnectionApp(auth, client, {
+		...createConnectionCatalogRepository(database.db),
+		async list() {
+			throw new Error("Catalog unavailable");
+		},
+	});
+	const unavailableCatalog = await unavailableApp.request("/api/v1/catalog", {
+		headers: {
+			authorization: `DPoP ${tokens.access_token}`,
+			dpop: dpop("/api/v1/catalog", {
+				method: "GET",
+				token: tokens.access_token,
+			}),
+		},
+	});
+	expect(unavailableCatalog.status).toBe(503);
+	expect(
+		PilotProtocolErrorV1Schema.parse(await unavailableCatalog.json()),
+	).toMatchObject({ code: "CONNECTION_UNAVAILABLE", retryable: true });
 	await database.db.update(actionVersions).set({ status: "disabled" });
 	const changedCatalog = await catalogRequest(tokens.access_token, {
 		"if-none-match": etag,

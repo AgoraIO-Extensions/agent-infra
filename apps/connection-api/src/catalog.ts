@@ -16,7 +16,8 @@ function catalogError(context: Context, status: 401 | 503) {
 	return context.json(
 		{
 			schemaVersion: 1,
-			code: status === 401 ? "unauthorized" : "unavailable",
+			code:
+				status === 401 ? "AUTHENTICATION_REQUIRED" : "CONNECTION_UNAVAILABLE",
 			message: status === 401 ? "Unauthorized" : "Connection unavailable",
 			retryable: status === 503,
 			traceId: randomUUID(),
