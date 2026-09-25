@@ -140,7 +140,7 @@ function createPilotAgentMockServer(
 	const getCurrentSessionOperation = operation("/api/v1/session", "get");
 	const getDeploymentConfigurationOperation =
 		version === 2
-			? operation("/api/v1/deployment/configuration", "get")
+			? operation("/api/v2/deployment/configuration", "get")
 			: undefined;
 	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
 	const updateAgentConfigurationOperation = operation(
@@ -255,7 +255,7 @@ function createPilotAgentMockServer(
 
 		if (
 			request.method === "GET" &&
-			routingPath === "/api/v1/deployment/configuration" &&
+			routingPath === "/api/v2/deployment/configuration" &&
 			getDeploymentConfigurationOperation &&
 			scenario.getDeploymentConfiguration !== undefined
 		) {
