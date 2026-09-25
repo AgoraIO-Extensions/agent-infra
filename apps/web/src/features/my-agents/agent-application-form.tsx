@@ -636,19 +636,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
 			setServerValidationDismissed(true);
 	};
-	const clearNameErrors = (prefix: "environment" | "secret") => {
-		setFieldErrors((current) => {
-			const next = { ...current };
-			let changed = false;
-			for (const key of Object.keys(next)) {
-				if (key.startsWith(`${prefix}.`) && key.endsWith(".name")) {
-					delete next[key];
-					changed = true;
-				}
-			}
-			return changed ? next : current;
-		});
-	};
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
 		sourceKind,
@@ -1241,7 +1228,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									itemIndex === index ? { ...item, [key]: value } : item,
 								),
 							);
-							if (key === "name") clearNameErrors("environment");
 							clearFieldErrors(`environment.${index}.${key}`);
 						}}
 						onRemove={(index) => {
@@ -1299,7 +1285,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									itemIndex === index ? { ...item, [key]: value } : item,
 								),
 							);
-							if (key === "name") clearNameErrors("secret");
 							clearFieldErrors(`secret.${index}.${key}`);
 						}}
 						onRemove={(index) => {

@@ -226,6 +226,52 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
+	it("keeps remaining duplicate environment errors after one name changes", async () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 平台交互入口",
+		});
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		fireEvent.change(await screen.findByLabelText("镜像地址"), {
+			target: { value: "registry.example/agents/release:v1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		const names = screen.getAllByLabelText("变量名称");
+		const values = screen.getAllByLabelText("变量值");
+		names.forEach((input) => {
+			fireEvent.change(input, { target: { value: "A" } });
+		});
+		values.forEach((input) => {
+			fireEvent.change(input, { target: { value: "value" } });
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(screen.getAllByText("名称不能重复。")).toHaveLength(3);
+
+		const firstName = names[0];
+		if (!firstName) throw new Error("environment name input missing");
+		fireEvent.change(firstName, { target: { value: "B" } });
+		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("submits the writable application configuration entered by the employee", () => {
 		const onSubmit = vi.fn();
 		render(
