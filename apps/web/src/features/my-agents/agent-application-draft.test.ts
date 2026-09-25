@@ -162,6 +162,36 @@ describe("Agent application draft", () => {
 		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
 	});
 
+	it("requires credentials for model options not persisted on update", () => {
+		const draft = {
+			...standardCreateDraft,
+			models: [{ ...standardCreateDraft.models[0], credentialValue: "" }],
+		};
+		const context = {
+			modelConfigurationVisible: true,
+			persistedModelOptionIds: ["persisted-option"],
+			requiresReplacementCredential: false,
+			staleModel: false,
+			staleModelIndexes: [],
+			staleTemplate: false,
+			standardChoicesBlocked: false,
+			defaultModelReasoningLevels: ["medium", "high"],
+		};
+
+		expect(
+			validateAgentApplicationDraft(draft, context)["model.0.credentialValue"],
+		).toBe("请输入模型凭证。");
+		expect(
+			validateAgentApplicationDraft(
+				{
+					...draft,
+					models: [{ ...draft.models[0], optionId: "persisted-option" }],
+				},
+				context,
+			)["model.0.credentialValue"],
+		).toBeUndefined();
+	});
+
 	it("marks only repeated environment and Secret names", () => {
 		const errors = validateAgentApplicationDraft(
 			{

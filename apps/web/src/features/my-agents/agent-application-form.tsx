@@ -195,12 +195,14 @@ function ModelRows({
 	models,
 	endpoints,
 	requiresReplacementCredential,
+	persistedModelOptionIds,
 	errors,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
+	persistedModelOptionIds?: readonly string[];
 	requiresReplacementCredential: boolean;
 	errors: AgentApplicationFieldErrors;
 	onChange: (
@@ -224,6 +226,10 @@ function ModelRows({
 						value: item.modelId,
 						label: item.modelId,
 					})) ?? [];
+				const needsReplacementCredential =
+					requiresReplacementCredential ||
+					(persistedModelOptionIds !== undefined &&
+						!persistedModelOptionIds.includes(model.optionId));
 				return (
 					<fieldset
 						className="grid min-w-0 gap-3 sm:grid-cols-2"
@@ -385,7 +391,7 @@ function ModelRows({
 								onChange={(event) =>
 									onChange(index, "credentialValue", event.target.value)
 								}
-								required={requiresReplacementCredential}
+								required={needsReplacementCredential}
 								type="password"
 								value={model.credentialValue}
 							/>
@@ -651,6 +657,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const requiresReplacementCredential =
 		props.mode === "create" ||
 		(application?.source.kind !== "standard" && sourceKind === "standard");
+	const persistedModelOptionIds =
+		props.mode === "update"
+			? (configuration?.modelOptions.map((option) => option.optionId) ?? [])
+			: undefined;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
 	const standardChoicesBlocked =
@@ -828,6 +838,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				?.split("\n")
 				.filter(Boolean),
 			modelConfigurationVisible,
+			persistedModelOptionIds,
 			requiresReplacementCredential,
 			staleModel,
 			staleModelIndexes,
@@ -1344,6 +1355,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									endpoints={modelEndpoints}
 									errors={fieldErrors}
 									models={models}
+									persistedModelOptionIds={persistedModelOptionIds}
 									requiresReplacementCredential={requiresReplacementCredential}
 									onChange={(index, key, value) => {
 										setModels((current) =>

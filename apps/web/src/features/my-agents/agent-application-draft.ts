@@ -73,6 +73,7 @@ export type AgentApplicationValidationContext = {
 	allowedEnvironmentKeys?: readonly string[];
 	allowedSecretKeys?: readonly string[];
 	modelConfigurationVisible: boolean;
+	persistedModelOptionIds?: readonly string[];
 	requiresReplacementCredential: boolean;
 	staleModel: boolean;
 	staleModelIndexes?: readonly number[];
@@ -163,7 +164,11 @@ export function validateAgentApplicationDraft(
 			if (!model.modelId) errors[`model.${index}.modelId`] = "请选择模型。";
 			if (!model.reasoningLevels.trim())
 				errors[`model.${index}.reasoningLevels`] = "至少选择一个推理档位。";
-			if (context.requiresReplacementCredential && !model.credentialValue)
+			const needsReplacementCredential =
+				context.requiresReplacementCredential ||
+				(context.persistedModelOptionIds !== undefined &&
+					!context.persistedModelOptionIds.includes(model.optionId));
+			if (needsReplacementCredential && !model.credentialValue)
 				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
 			if (
 				context.staleModelIndexes?.includes(index) ||

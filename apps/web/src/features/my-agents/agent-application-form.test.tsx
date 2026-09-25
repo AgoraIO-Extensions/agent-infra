@@ -713,6 +713,9 @@ describe("AgentApplicationForm", () => {
 		);
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		expect(
+			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
+		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 
 		expect(document.activeElement).toBe(
