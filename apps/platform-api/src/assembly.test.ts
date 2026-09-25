@@ -1,7 +1,10 @@
 import { once } from "node:events";
 import { createServer } from "node:net";
 
-import { PostgresAgentManagementQueryV1 } from "@agent-infra/platform-store";
+import {
+	PostgresAgentManagementQueryV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,18 +61,28 @@ describe("Platform API production assembly", () => {
 			PostgresAgentManagementQueryV1.prototype,
 			"getAgent",
 		);
+		const closeTaskAuthorization = vi.spyOn(
+			PostgresTaskAuthorizationStoreV1.prototype,
+			"close",
+		);
 		const assembly = assemblePlatformApi({
 			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
 			identity: {
 				resolve: vi.fn().mockResolvedValue(identity),
 				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: identity.organizationIds,
+					authorizationRevision: "directory-1",
+				}),
 			},
 			admissions: {
 				authorizationAdmission: { authorize: unavailable },
 				imageAdmission: { admitImage: unavailable },
 				modelAdmission: { admitModels: unavailable },
 				secretAdmission: { admitSecrets: unavailable },
-				actionAdmission: { admitActions: unavailable },
 				channelAdmission: { admitChannels: unavailable },
 			},
 			allocateApplicationIds: unavailable,
@@ -140,6 +153,7 @@ describe("Platform API production assembly", () => {
 			});
 		} finally {
 			await assembly.close();
+			expect(closeTaskAuthorization).toHaveBeenCalledOnce();
 		}
 	});
 

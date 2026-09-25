@@ -1,8 +1,14 @@
 import { pathToFileURL } from "node:url";
+import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
+export * from "./conversation-deployment.js";
+export * from "./conversation-runtime.js";
+export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./runtime-grant-signer.js";
+export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
 
@@ -34,6 +40,7 @@ import {
 
 export {
 	createWorkerRuntimeHostClientV1,
+	createWorkerRuntimeHostClientV3,
 	type WorkerRuntimeHostClientOptionsV1,
 } from "./runtime-host-client.js";
 export {
@@ -207,13 +214,69 @@ export async function startPlatformWorkerFromDeploymentV1(
 	}
 }
 
+export async function startPlatformWorkerFromDeploymentV2(
+	options: {
+		readonly startPrimary?: () => { stop(): void | Promise<void> };
+		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startConversation?: () => Promise<{ stop(): Promise<void> }>;
+	} = {},
+) {
+	const primary = (options.startPrimary ?? startPlatformWorker)();
+	let workload: { stop(): Promise<void> } | undefined;
+	let conversation: { stop(): Promise<void> } | undefined;
+	try {
+		workload = await (
+			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
+		)();
+		conversation = await (
+			options.startConversation ??
+			startPlatformConversationWorkerFromDeploymentV2
+		)();
+		let stopping: Promise<void> | undefined;
+		return {
+			stop() {
+				stopping ??= (async () => {
+					const results: PromiseSettledResult<void>[] = [];
+					for (const stop of [
+						() => conversation?.stop(),
+						() => workload?.stop(),
+						() => primary.stop(),
+					]) {
+						results.push(
+							...(await Promise.allSettled([Promise.resolve().then(stop)])),
+						);
+					}
+					const failure = results.find(
+						(result): result is PromiseRejectedResult =>
+							result.status === "rejected",
+					);
+					if (failure) throw failure.reason;
+				})();
+				return stopping;
+			},
+		};
+	} catch (error) {
+		await Promise.allSettled([
+			Promise.resolve().then(() => primary.stop()),
+			Promise.resolve().then(() => workload?.stop()),
+			Promise.resolve().then(() => conversation?.stop()),
+		]);
+		throw error;
+	}
+}
+
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const shutdownDeadlineMs = 10_000;
 	const termination = new AbortController();
 	const primary = startPlatformWorker();
-	const workerPromise = startPlatformWorkerFromDeploymentV1({
+	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => primary,
+		startConversation: () =>
+			startPlatformConversationWorkerFromDeploymentV2(
+				undefined,
+				termination.signal,
+			),
 		startWorkload: () =>
 			startPlatformWorkloadWorkerFromDeploymentV1(
 				undefined,

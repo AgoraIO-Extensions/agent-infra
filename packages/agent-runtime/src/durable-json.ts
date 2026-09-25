@@ -4,6 +4,9 @@ import { dirname } from "node:path";
 
 export class DurableJsonFile<T> {
 	private queue: Promise<void> = Promise.resolve();
+	private closed = false;
+	private closePromise: Promise<void> | undefined;
+	private persistenceFailed = false;
 
 	private constructor(
 		private readonly path: string,
@@ -25,14 +28,34 @@ export class DurableJsonFile<T> {
 	}
 
 	read() {
+		if (this.persistenceFailed)
+			throw new Error("Durable state requires recovery");
 		return structuredClone(this.state);
 	}
 
+	async readCommitted() {
+		// Observe all mutations already queued by this caller's read boundary.
+		// This joins persistence without taking a lock across a Driver callback.
+		await this.queue;
+		return this.read();
+	}
+
 	update<R>(change: (draft: T) => R | Promise<R>): Promise<R> {
+		if (this.closed)
+			return Promise.reject(new Error("Durable state is closed"));
 		const run = this.queue.then(async () => {
+			if (this.persistenceFailed)
+				throw new Error("Durable state requires recovery");
 			const draft = structuredClone(this.state);
 			const result = await change(draft);
-			await this.persist(draft);
+			try {
+				await this.persist(draft);
+			} catch (error) {
+				// Rename may have succeeded before a directory fsync/close failed. The
+				// disk can be ahead of memory; only a fresh open may recover that state.
+				this.persistenceFailed = true;
+				throw error;
+			}
 			this.state = draft;
 			return result;
 		});
@@ -41,6 +64,14 @@ export class DurableJsonFile<T> {
 			() => undefined,
 		);
 		return run;
+	}
+
+	close(): Promise<void> {
+		if (!this.closePromise) {
+			this.closed = true;
+			this.closePromise = this.queue;
+		}
+		return this.closePromise;
 	}
 
 	private async exists() {

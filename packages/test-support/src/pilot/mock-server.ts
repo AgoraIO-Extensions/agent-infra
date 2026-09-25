@@ -14,6 +14,7 @@ type PilotAgentMockResponderV1<TArgs extends readonly unknown[]> =
 
 export type PilotAgentMockServerScenarioV1 = {
 	readonly getCurrentSession?: PilotAgentMockResponderV1<[Request]>;
+	readonly getDeploymentConfiguration?: PilotAgentMockResponderV1<[Request]>;
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
@@ -137,6 +138,10 @@ function createPilotAgentMockServer(
 	}
 	const listAgentsOperation = operation("/api/v1/agents", "get");
 	const getCurrentSessionOperation = operation("/api/v1/session", "get");
+	const getDeploymentConfigurationOperation =
+		version === 2
+			? operation("/api/v2/deployment/configuration", "get")
+			: undefined;
 	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
 	const updateAgentConfigurationOperation = operation(
 		"/api/v1/agents/{agentId}/configuration",
@@ -179,6 +184,12 @@ function createPilotAgentMockServer(
 		scenario.getCurrentSession,
 		getCurrentSessionOperation,
 	);
+	if (getDeploymentConfigurationOperation) {
+		validateStaticResponse(
+			scenario.getDeploymentConfiguration,
+			getDeploymentConfigurationOperation,
+		);
+	}
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
 	validateStaticResponse(
@@ -239,6 +250,22 @@ function createPilotAgentMockServer(
 			const response =
 				typeof responder === "function" ? responder(request) : responder;
 			validateResponse(getCurrentSessionOperation, response);
+			return jsonResponse(response);
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname ===
+				(version === 2
+					? "/api/v2/deployment/configuration"
+					: "/api/v1/deployment/configuration") &&
+			getDeploymentConfigurationOperation &&
+			scenario.getDeploymentConfiguration !== undefined
+		) {
+			const responder = scenario.getDeploymentConfiguration;
+			const response =
+				typeof responder === "function" ? responder(request) : responder;
+			validateResponse(getDeploymentConfigurationOperation, response);
 			return jsonResponse(response);
 		}
 

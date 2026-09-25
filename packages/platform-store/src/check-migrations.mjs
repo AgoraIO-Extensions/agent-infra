@@ -37,21 +37,25 @@ const generatedRoot = resolve(temporaryRoot, "platform");
 try {
 	await cp(migrationsRoot, generatedRoot, { recursive: true });
 	const before = await snapshot(generatedRoot);
-	execFileSync(
+	const output = execFileSync(
 		process.execPath,
 		[
 			drizzleKit,
 			"generate",
 			"--dialect=postgresql",
 			"--schema=src/schema.ts",
-			`--out=${generatedRoot}`,
+			`--out=${relative(packageRoot, generatedRoot)}`,
 			"--name=drift_check",
 		],
-		{ cwd: packageRoot, stdio: "ignore" },
+		{ cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 	);
 	const after = await snapshot(generatedRoot);
 	if (JSON.stringify(after) !== JSON.stringify(before)) {
 		throw new Error("Platform migrations are stale; regenerate from schema.ts");
+	}
+	// The pinned CLI can print a generation error and still exit zero.
+	if (!output.includes("No schema changes, nothing to migrate")) {
+		throw new Error("Platform migration generation did not complete");
 	}
 } finally {
 	await rm(temporaryRoot, { recursive: true, force: true });

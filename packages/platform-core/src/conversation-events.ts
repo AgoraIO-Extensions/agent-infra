@@ -1,7 +1,13 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-
+import {
+	type ConversationOperationEventV2,
+	type ConversationOperationFactV2,
+	parseConversationOperationEventV2,
+	parseConversationOperationHistoryV2,
+	requireConversationOperationSuccessorV2,
+} from "./conversation-operation-facts.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
 export type ConversationEventStatusV1 =
@@ -18,6 +24,7 @@ export interface ConversationEventStateTransitionV1 {
 }
 
 export type ConversationNormalizedEventV1 =
+	| ConversationOperationEventV2
 	| { readonly type: "text.delta"; readonly text: string }
 	| {
 			readonly type: "execution.status";
@@ -65,6 +72,8 @@ export interface ConversationEventCommandV1 {
 	readonly occurredAt: string;
 	readonly event: ConversationNormalizedEventV1;
 	readonly transition?: ConversationEventStateTransitionV1;
+	/** After terminal delivery, only evidence on the original tool outcome may change. */
+	readonly operationMetadataOnly?: true;
 	readonly dispatchLease?: {
 		readonly schemaVersion: 1;
 		readonly itemId: string;
@@ -90,6 +99,8 @@ export type PersistedRuntimeConversationEventV1 = Omit<
 > & { readonly event: ConversationNormalizedEventV1 };
 
 export interface ConversationEventStateV1 {
+	/** Trusted persisted facts from this Execution; required for new operation events. */
+	readonly operationHistory?: readonly ConversationOperationFactV2[];
 	readonly conversation:
 		| {
 				readonly conversationId: string;
@@ -293,6 +304,13 @@ function eventType(input: unknown): unknown {
 
 function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 	const type = eventType(input);
+	if (type === "execution.operation") {
+		try {
+			return parseConversationOperationEventV2(input);
+		} catch {
+			return invalidInput();
+		}
+	}
 	if (type === "text.delta") {
 		const values = snapshotObject(input, ["type", "text"]);
 		if (!isText(values.text, 65_536)) invalidInput();
@@ -413,7 +431,7 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 			"occurredAt",
 			"event",
 		],
-		["transition", "dispatchLease"],
+		["transition", "dispatchLease", "operationMetadataOnly"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -427,6 +445,12 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 		invalidInput();
 	}
 	const event = parseEvent(values.event);
+	if (
+		values.operationMetadataOnly !== undefined &&
+		(values.operationMetadataOnly !== true ||
+			event.type !== "execution.operation")
+	)
+		invalidInput();
 	const transition: ConversationEventStateTransitionV1 | undefined = (() => {
 		if (values.transition === undefined) return undefined;
 		const value = snapshotObject(values.transition, [
@@ -461,6 +485,9 @@ function parseCommand(input: unknown): ConversationEventCommandV1 {
 		runtimeCursor: values.runtimeCursor,
 		occurredAt: validOccurredAt(values.occurredAt),
 		event,
+		...(values.operationMetadataOnly === true
+			? { operationMetadataOnly: true as const }
+			: {}),
 		...(transition ? { transition } : {}),
 		...(values.dispatchLease === undefined
 			? {}
@@ -534,11 +561,11 @@ function parsePersistedRuntimeEvent(
 
 function parseState(input: ConversationEventStateV1): ConversationEventStateV1 {
 	try {
-		const values = snapshotObject(input, [
-			"conversation",
-			"execution",
-			"existingEvent",
-		]);
+		const values = snapshotObject(
+			input,
+			["conversation", "execution", "existingEvent"],
+			["operationHistory"],
+		);
 		const conversation = (() => {
 			if (values.conversation === undefined) return undefined;
 			const state = snapshotObject(values.conversation, [
@@ -610,7 +637,18 @@ function parseState(input: ConversationEventStateV1): ConversationEventStateV1 {
 		) {
 			unavailable();
 		}
-		return { conversation, execution, existingEvent };
+		return {
+			conversation,
+			execution,
+			existingEvent,
+			...(values.operationHistory === undefined
+				? {}
+				: {
+						operationHistory: parseConversationOperationHistoryV2(
+							values.operationHistory,
+						),
+					}),
+		};
 	} catch {
 		return unavailable();
 	}
@@ -744,6 +782,14 @@ export function createConversationEventUseCaseV1(
 								execution.deliveryFence !== command.deliveryFence
 							) {
 								return { outcome: "stale" as const };
+							}
+							if (command.event.type === "execution.operation") {
+								if (state.operationHistory === undefined) return unavailable();
+								requireConversationOperationSuccessorV2(
+									state.operationHistory,
+									command.event.fact,
+									command.operationMetadataOnly,
+								);
 							}
 							const event: PersistedRuntimeConversationEventV1 = {
 								schemaVersion: 1,

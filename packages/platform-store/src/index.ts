@@ -1,9 +1,13 @@
 export {
+	type AgentConfigurationAuthorityQueryInputV1,
+	type AgentConfigurationAuthorityQueryResultV1,
 	type AgentConfigurationProjectionV1,
 	type AgentConfigurationQueryInputV1,
 	type AgentConfigurationQueryIntentV1,
 	type AgentConfigurationQueryResultV1,
 	AgentConfigurationStoreError,
+	type AgentRuntimePresentationQueryInputV1,
+	type AgentRuntimePresentationQueryResultV1,
 	type PostgresAgentConfigurationOptionsV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
@@ -103,4 +107,16 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export {
+	PostgresTaskAuthorizationStoreV1,
+	TaskAuthorizationStoreError,
+} from "./task-authorization.js";
+export {
+	type LegacyTaskMetadataV1,
+	LegacyTaskMigrationError,
+	type LegacyTaskProducerEvidenceV1,
+	type LegacyTaskProducerVerifierV1,
+	PostgresLegacyTaskAuthorizationMigrationV1,
+	PostgresLegacyTaskRecoveryReaderV1,
+} from "./task-authorization-migration.js";
 export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";

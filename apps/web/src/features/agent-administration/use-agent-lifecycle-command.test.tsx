@@ -1,4 +1,4 @@
-import { AgentProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -12,8 +12,8 @@ vi.mock("./agent-administration.js", () => ({
 	commandAgentLifecycle: vi.fn(),
 }));
 
-const lifecycleResult = AgentProjectionV1Schema.parse({
-	schemaVersion: 1,
+const lifecycleResult = AgentProjectionV2Schema.parse({
+	schemaVersion: 2,
 	agentId: "agent-pilot-1",
 	name: "Release assistant",
 	description: "Helps the release team",

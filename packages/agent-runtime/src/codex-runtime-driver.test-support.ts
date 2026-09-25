@@ -326,12 +326,21 @@ class CodexRuntimeDriverTestAccess extends CodexRuntimeDriver {
 		return true;
 	}
 
+	protected override modelConversationKey(_conversationKey: string) {
+		return admissionConversationKey;
+	}
+
 	static async openForTest(
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenTestCodexBridge,
 	) {
 		const driver = (await CodexRuntimeDriverTestAccess.openWithBridge(
-			options,
+			{
+				nativeLane: "private-callback",
+				...options,
+				authorizeExternalAction:
+					options.authorizeExternalAction ?? (async () => {}),
+			},
 			openBridge,
 		)) as CodexRuntimeDriverTestAccess;
 		try {

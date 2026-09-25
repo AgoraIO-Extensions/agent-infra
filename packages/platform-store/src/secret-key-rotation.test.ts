@@ -3,7 +3,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import type {
-	AgentConfigurationRecordV1,
+	AgentConfigurationRecordV2,
 	RetireSecretKeyCommandV1,
 	RotateSecretKeyCommandV1,
 	SecretKeyRotationAuditIntentV1,
@@ -236,7 +236,7 @@ async function admitPendingRecord(secretRecord: PlatformSecretRecordV1) {
 			},
 		],
 		modelConfiguration: null,
-	} as unknown as AgentConfigurationRecordV1;
+	} as unknown as AgentConfigurationRecordV2;
 	const attachments = {
 		schemaVersion: 1 as const,
 		expected: [

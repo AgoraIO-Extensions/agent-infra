@@ -92,7 +92,6 @@ function configurationChanges(
 						),
 					},
 				}),
-		...(input.actions === undefined ? {} : { actions: input.actions }),
 		...(input.environment === undefined
 			? {}
 			: { environment: input.environment }),
@@ -266,7 +265,7 @@ export function registerConfigurationRoutes(
 		try {
 			await dependencies.configuration.update(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					agentId: context.req.param("agentId"),
 					idempotencyKey,
 					requestId: metadata.requestId,

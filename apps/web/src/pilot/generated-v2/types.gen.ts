@@ -308,6 +308,40 @@ export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatS
 
 export type ConversationSseMessageV2 = PersistedConversationEventV2 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
+export type DeploymentConfigurationProjectionV2 = {
+    modelCatalog: DeploymentModelCatalogProjectionV2;
+    schemaVersion: 2;
+    status: DeploymentConfigurationStatusV2;
+    templates: Array<DeploymentTemplateProjectionV2>;
+};
+
+export type DeploymentConfigurationStatusV2 = 'populated' | 'empty' | 'unavailable' | 'stale';
+
+export type DeploymentModelCatalogProjectionV2 = {
+    endpoints: Array<DeploymentModelEndpointProjectionV2>;
+    revision: string | null;
+    status: DeploymentConfigurationStatusV2;
+};
+
+export type DeploymentModelEndpointProjectionV2 = {
+    displayName: string;
+    endpointId: string;
+    models: Array<DeploymentModelProjectionV2>;
+};
+
+export type DeploymentModelProjectionV2 = {
+    modelId: string;
+    reasoningLevels: Array<string>;
+};
+
+export type DeploymentTemplateProjectionV2 = {
+    allowedEnvironmentKeys: Array<string>;
+    allowedSecretKeys: Array<string>;
+    connectionEnabled: boolean;
+    displayName: string;
+    templateId: string;
+};
+
 export type ExecutionDetailProjectionV2 = {
     conversationId: string;
     error: null;
@@ -1524,3 +1558,52 @@ export type GetExecutionDetailV2Responses = {
 };
 
 export type GetExecutionDetailV2Response = GetExecutionDetailV2Responses[keyof GetExecutionDetailV2Responses];
+
+export type GetDeploymentConfigurationV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/deployment/configuration';
+};
+
+export type GetDeploymentConfigurationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetDeploymentConfigurationV2Error = GetDeploymentConfigurationV2Errors[keyof GetDeploymentConfigurationV2Errors];
+
+export type GetDeploymentConfigurationV2Responses = {
+    /**
+     * Deployment-owned application choices
+     */
+    200: DeploymentConfigurationProjectionV2;
+};
+
+export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];

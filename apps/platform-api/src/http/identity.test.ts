@@ -5,6 +5,7 @@ import { HttpProtocolError } from "./common";
 import {
 	hydrateBrowserUsers,
 	type IdentityAdapter,
+	resolveCurrentTaskUser,
 	resolveIdentity,
 } from "./identity";
 
@@ -196,4 +197,92 @@ describe("trusted identity boundary", () => {
 			expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
 		}
 	});
+});
+
+describe("current task user directory", () => {
+	const current = {
+		schemaVersion: 1,
+		userId: activeIdentity.userId,
+		accountStatus: "active",
+		organizationIds: ["current_org"],
+		authorizationRevision: "directory_current",
+	};
+	it("uses the server-resolved user ID and preserves the directory receiver", async () => {
+		const identityAdapter = {
+			...adapter(activeIdentity),
+			current,
+			async resolveUser(userId: string) {
+				expect(userId).toBe(this.current.userId);
+				return this.current;
+			},
+		};
+		expect(
+			await resolveCurrentTaskUser(
+				identityAdapter,
+				activeIdentity.userId,
+				traceId,
+			),
+		).toEqual(current);
+		identityAdapter.current = { ...current, accountStatus: "disabled" };
+		expect(
+			await resolveCurrentTaskUser(
+				identityAdapter,
+				activeIdentity.userId,
+				traceId,
+			),
+		).toMatchObject({ accountStatus: "disabled" });
+		expect(
+			await resolveCurrentTaskUser(
+				{ ...adapter(activeIdentity), resolveUser: async () => null },
+				activeIdentity.userId,
+				traceId,
+			),
+		).toBeNull();
+	});
+	it.each([
+		"absent",
+		"method_absent",
+		"throw",
+		"wrong_user",
+		"extra_data",
+	] as const)(
+		"normalizes %s to a sanitized dependency failure",
+		async (mode) => {
+			const identityAdapter = {
+				...adapter(activeIdentity),
+				resolveUser: vi.fn().mockResolvedValue(current),
+			};
+			if (mode === "throw")
+				identityAdapter.resolveUser.mockRejectedValue(
+					new Error("private directory response"),
+				);
+			if (mode === "wrong_user")
+				identityAdapter.resolveUser.mockResolvedValue({
+					...current,
+					userId: "other_user",
+				});
+			if (mode === "extra_data")
+				identityAdapter.resolveUser.mockResolvedValue({
+					...current,
+					secret: "private directory response",
+				});
+			const error = await caught(
+				resolveCurrentTaskUser(
+					mode === "absent"
+						? undefined
+						: mode === "method_absent"
+							? adapter(activeIdentity)
+							: identityAdapter,
+					activeIdentity.userId,
+					traceId,
+				),
+			);
+			expect(error.status).toBe(503);
+			expect(error.body).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+				traceId,
+			});
+			expect(JSON.stringify(error)).not.toContain("private directory response");
+		},
+	);
 });

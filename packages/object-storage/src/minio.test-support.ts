@@ -28,7 +28,7 @@ export async function startMinioFileFixtureV1() {
 		`MINIO_ROOT_USER=${credentials.accessKeyId}`,
 		"--env",
 		`MINIO_ROOT_PASSWORD=${credentials.secretAccessKey}`,
-		"quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+		"cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c",
 		"server",
 		"/data",
 	]);
@@ -38,7 +38,7 @@ export async function startMinioFileFixtureV1() {
 		const endpoint = `http://127.0.0.1:${stdout.trim().split(":").at(-1)}`;
 		for (let attempt = 0; attempt < 60; attempt++) {
 			if (
-				await fetch(`${endpoint}/minio/health/live`)
+				await fetch(`${endpoint}/minio/health/ready`)
 					.then((r) => r.ok)
 					.catch(() => false)
 			)
@@ -50,7 +50,9 @@ export async function startMinioFileFixtureV1() {
 			region: "us-east-1",
 			forcePathStyle: true,
 			credentials,
-			maxAttempts: 1,
+			// Startup may still return XMinioServerNotInitialized (503). Use the
+			// SDK's bounded transient-error retries only for fixture provisioning.
+			maxAttempts: 5,
 		});
 		await client.send(new CreateBucketCommand({ Bucket: "file-contract" }));
 		await client.send(

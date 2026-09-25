@@ -1604,17 +1604,11 @@ export function validateWorkflowDocuments(workflows) {
     "litellm.force_streaming_api_base_substrings": '["https://"]',
     "github_action_config.auto_describe": "false",
     "github_action_config.pr_actions":
-      '["opened", "reopened", "synchronize", "ready_for_review", "review_requested"]',
+      '["opened", "reopened", "ready_for_review", "review_requested"]',
   };
   if (
     JSON.stringify(prAgent?.on?.pull_request_target?.types) !==
-      JSON.stringify([
-        "opened",
-        "reopened",
-        "synchronize",
-        "ready_for_review",
-        "review_requested",
-      ]) ||
+      JSON.stringify(["opened", "reopened", "ready_for_review", "review_requested"]) ||
     !sameObject(prAgent?.permissions, {}) ||
     !sameObject(prAgent?.concurrency, {
       group: "pr-agent-review-${{ github.event.pull_request.number }}",
@@ -1710,7 +1704,7 @@ export function validateWorkflowDocuments(workflows) {
       "github_action_config.enable_output": "true",
       "pr_reviewer.persistent_comment": "false",
       "pr_reviewer.persistent_finding_state": "false",
-      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level.",
+      "pr_reviewer.extra_instructions": "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings.",
       "pr_code_suggestions.commitable_code_suggestions": "true",
       "pr_reviewer.enable_review_labels_effort": "false",
       "pr_reviewer.enable_review_labels_security": "false",

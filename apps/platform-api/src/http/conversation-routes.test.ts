@@ -762,3 +762,65 @@ describe("Conversation persisted SSE", () => {
 		).toBeDefined();
 	});
 });
+
+describe("task boundary HTTP authorization", () => {
+	const taskBoundary = {
+		schemaVersion: 1 as const,
+		principal: { kind: "user" as const, id: identity.userId },
+		agentId: authority.agentId,
+		channelId: "web",
+		identityRevision: "current_directory",
+		agentAuthorizationRevision: "agent_revision",
+		accessSources: [{ kind: "user" as const, userId: identity.userId }],
+	};
+	it.each([
+		{
+			...taskBoundary,
+			principal: { kind: "user", id: "other_user" },
+			accessSources: [{ kind: "user", userId: "other_user" }],
+		},
+		{ ...taskBoundary, agentId: "other_agent" },
+		{ ...taskBoundary, channelId: "other_channel" },
+		{ ...taskBoundary, agentAuthorizationRevision: "other_revision" },
+		{ ...taskBoundary, identityRevision: "" },
+	])(
+		"rejects a malformed or mismatched authority boundary",
+		async (boundary) => {
+			const deps = dependencies({
+				authorization: {
+					authorize: vi.fn().mockResolvedValue({
+						outcome: "allowed",
+						authority: {
+							...authority,
+							authorizationRevision: "agent_revision",
+							taskBoundary: boundary,
+						},
+					}),
+				},
+			});
+			const app = new Hono();
+			registerConversationRoutes(app, deps);
+			const response = await app.request(
+				"/api/v1/agents/agent-1/conversations",
+			);
+			expect(response.status).toBe(503);
+			expect(deps.query.list).not.toHaveBeenCalled();
+		},
+	);
+
+	it("fails closed when authorization returns a null authority", async () => {
+		const deps = dependencies({
+			authorization: {
+				authorize: vi.fn().mockResolvedValue({
+					outcome: "allowed",
+					authority: null as never,
+				}),
+			},
+		});
+		const app = new Hono();
+		registerConversationRoutes(app, deps);
+		const response = await app.request("/api/v1/agents/agent-1/conversations");
+		expect(response.status).toBe(503);
+		expect(deps.query.list).not.toHaveBeenCalled();
+	});
+});

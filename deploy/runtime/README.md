@@ -11,7 +11,19 @@
 `linux/amd64` 与 `linux/arm64`。固定资产、SHA-256 与 LICENSE/NOTICE 的来源记录在
 [`codex-release.json`](../../packages/agent-runtime/src/codex-release.json)。安装程序验证压缩包、
 解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
-正式入口在启动原生进程前复验文件，Bridge 再验证版本与协议 Schema。启动不下载依赖。
+安装仅接受该官方 release，不接受派生二进制。新文件先在同级临时目录完整校验，再替换原安装；
+替换失败时恢复原目录；替换成功后清理旧目录失败只输出警告，不撤销已生效的新安装。
+目录和二进制固定为 `0555`，元数据为 `0444`，镜像内统一归 root 所有。
+正式入口在启动原生进程前复验摘要、ELF 架构、精确文件清单及从根目录开始的不可写目录链，
+拒绝软链接、可写文件或 root Runtime。Bridge 再验证版本与协议 Schema。启动不下载依赖。
+
+正式启动使用 `sh ./start-runtime-host.sh`（镜像内为 `/app/start-runtime-host.sh`）。launcher
+在启动 Node 前拒绝 `LD_*`、`DYLD_*` 及 Node preload/诊断环境变量，将 core dump 的软、硬上限
+均设为零，并传入 `--disable-sigusr1`。所有 Driver 装配在读取私有配置前复验实际进程保护；直接运行
+`node dist/index.mjs` 不能替代正式入口。生产入口固定使用 `/usr/local/bin/node` 和可信 `PATH`，
+不消费 Workload 提供的可执行路径。本地开发先构建，再用 `pnpm dev` 显式传入当前 pnpm 的
+Node 绝对路径（`--dev <path>`）；需要自动构建时另开
+`pnpm build --watch`。Worker 同样在创建 Workload 前拒绝上述 loader 环境或 Secret 名称。
 
 ## 部署输入
 
@@ -24,6 +36,8 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 | `AGENT_INFRA_RUNTIME_DATA_DIR` | 当前 Agent PVC 的绝对挂载路径，镜像默认为 `/var/lib/agent-runtime` |
 | `AGENT_INFRA_RUNTIME_MODEL_CONFIG` | 下述 schemaVersion 2 的 active 模型配置 JSON |
 | `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*` | 每个 active 选项的运行凭证，由配置中的保留环境变量名精确引用 |
+| `AGENT_INFRA_RUNTIME_WORKER_ID` | 受信 Worker 身份；Codex 必填，或由下述 readiness binding 提供 |
+| `AGENT_INFRA_RUNTIME_READINESS_BINDING` | 可选的 `WorkloadReadinessBindingV1` JSON，精确绑定 Worker、Agent、revision、fence 与镜像 Digest |
 | `AGENT_INFRA_RUNTIME_SERVICE_TOKEN` | Worker 到 RuntimeHost 的服务认证凭证 |
 | `AGENT_INFRA_RUNTIME_GRANT_KEY_ID` | 已批准的 Grant 签名公钥标识 |
 | `AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY` | Ed25519 PEM 公钥 |
@@ -56,6 +70,38 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 `host.json` 与 `codex-driver.json` 位于该 Agent 数据目录；Driver 使用 #403 的
 `codex-driver.json.native` 持久目录装配。关闭进程不删除这些业务数据，损坏或丢失状态仍按
 [HLD §7.3](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复) 拒绝替代恢复。
+
+## 就绪证明与历史 Session 迁移
+
+设置 readiness binding 后，`POST /internal/runtime/v1/readiness` 同时验证服务认证与独立的
+`readiness.read` 签名证明；两处 Worker ID 若同时配置必须一致。该入口遵循
+[工程 Spec §9.3](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，
+只返回就绪状态，不创建业务 Session，也不授予执行权限。
+
+旧 Session 只有在部署方核实历史来源和 Platform 已提交的迁移审计后，才能使用独立 Ed25519
+信任根签发的映射建立原主体关联。Host 校验完整旧执行集合及当前 Workload 绑定，保留原
+native Session、操作摘要与已知结果；没有证明时继续拒绝恢复。启动时先在隔离副本中验证迁移，
+通过后才打开原 journal 并应用；无效执行集合不会触发原文件的启动恢复写入。
+签名映射不是业务或控制 Grant，后续操作仍须单独授权。
+
+| 环境变量 | 内容 |
+| --- | --- |
+| `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_FILE` | 签名 envelope 文件的绝对路径 |
+| `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_PUBLIC_KEY_FILE` | 独立 Ed25519 PEM 公钥文件的绝对路径 |
+| `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_KEY_ID` | 映射签名 key ID |
+| `AGENT_INFRA_RUNTIME_LEGACY_MIGRATION_TRUST_ROOT_UID` | 必须为 `0` |
+
+映射与公钥须由部署方挂载在 Agent 可写数据目录外，使用 root 所有、Runtime 不可改写的普通
+文件及目录链；Kubernetes 挂载使用普通文件 `subPath`，不用软链接。签名私钥不进入 Host。
+
+需要离线预检时，在构建后的 Host 目录执行 `node dist/legacy-migration-cli.mjs`，消费上述输入、
+Agent 数据目录、Grant issuer 和 readiness binding，并设置
+`AGENT_INFRA_RUNTIME_LEGACY_CANDIDATE_FILE` 为原数据目录之外尚不存在的绝对文件路径。
+默认 `AGENT_INFRA_RUNTIME_LEGACY_BOOTSTRAP_MODE=candidate` 仅生成可审查候选及摘要，
+不改写原 journal，也不启动 Driver 或监听器。运行前通过正常生命周期停止 Agent，并清退所有
+使用原 PVC 的 Pod。显式选择 `offline-commit` 时，该隔离部署的全部 Platform API 与 Worker
+入口必须持续停机，直到 Job 完成且移除；本地锁不能替代这个停机窗口。提交只允许原子补充
+主体关联，重放不得改变原 Session 和执行记录。
 
 ## 镜像验证
 

@@ -135,6 +135,31 @@ export interface AgentManagementStateV1 {
 	readonly failureCode: AgentFailureCodeV1 | null;
 }
 
+/** Owner authority is independent of administrative visibility. */
+export function isAgentOwnerV1(
+	state: Pick<AgentManagementStateV1, "ownerIds">,
+	userId: string,
+): boolean {
+	return state.ownerIds.includes(userId);
+}
+
+export function isAgentAccessAllowedV1(
+	state: AgentManagementStateV1,
+	actor: AgentManagementActorContextV1,
+	intent: AgentAccessQueryV1["intent"],
+): boolean {
+	if (actor.accountStatus !== "active") return false;
+	if (isAgentOwnerV1(state, actor.userId)) return true;
+	return (
+		intent !== "manage" &&
+		state.availability.some((target) =>
+			target.kind === "user"
+				? target.userId === actor.userId
+				: actor.organizationIds.includes(target.organizationId),
+		)
+	);
+}
+
 export interface AgentManagementWritePlanV1 {
 	readonly schemaVersion: 1;
 	readonly operation: AgentManagementOperationV1;
@@ -1163,21 +1188,8 @@ export function createAgentManagementV1(
 			const state = stateInput && parseAgentManagementPortState(stateInput);
 			if (state) requireAggregateIdentity(state.agentId, query.agentId);
 			if (!state) return { outcome: "denied" };
-			const owner = state.ownerIds.includes(actorContext.userId);
-			const directlyAvailable = state.availability.some(
-				(target) =>
-					target.kind === "user" && target.userId === actorContext.userId,
-			);
-			const organizationAvailable = state.availability.some(
-				(target) =>
-					target.kind === "organization" &&
-					actorContext.organizationIds.includes(target.organizationId),
-			);
-			const allowed =
-				query.intent === "manage"
-					? owner
-					: owner || directlyAvailable || organizationAvailable;
-			if (!allowed) return { outcome: "denied" };
+			if (!isAgentAccessAllowedV1(state, actorContext, query.intent))
+				return { outcome: "denied" };
 			return {
 				outcome: "allowed",
 				managementStatus: state.status,

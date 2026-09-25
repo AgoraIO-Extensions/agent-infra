@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
 	AgentConfigurationAccessTargetV1,
@@ -10,6 +11,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -271,47 +273,52 @@ export class PostgresApplicationRevisionTransactionV1
 					return replay;
 				}
 
+				const revisionAgent = alias(agents, "revision_agent");
+				const revisionApplication = alias(
+					agentApplications,
+					"revision_application",
+				);
 				const [row] = await transaction
 					.select({
-						applicationId: agentApplications.id,
-						agentId: agents.id,
-						applicantId: agentApplications.applicantId,
-						name: agentApplications.name,
-						description: agentApplications.description,
-						status: agentApplications.status,
-						managementRevision: agentApplications.managementRevision,
-						approvalRevision: agentApplications.approvalRevision,
-						decisionReason: agentApplications.decisionReason,
-						serviceAvailability: agentApplications.serviceAvailability,
-						desiredState: agentApplications.desiredState,
-						workloadRevision: agentApplications.workloadRevision,
-						fence: agentApplications.fence,
-						failureCode: agentApplications.failureCode,
-						configurationRevision: agents.currentConfigurationRevision,
-						authorizationRevision: agents.authorizationRevision,
+						applicationId: revisionApplication.id,
+						agentId: revisionAgent.id,
+						applicantId: revisionApplication.applicantId,
+						name: revisionApplication.name,
+						description: revisionApplication.description,
+						status: revisionApplication.status,
+						managementRevision: revisionApplication.managementRevision,
+						approvalRevision: revisionApplication.approvalRevision,
+						decisionReason: revisionApplication.decisionReason,
+						serviceAvailability: revisionApplication.serviceAvailability,
+						desiredState: revisionApplication.desiredState,
+						workloadRevision: revisionApplication.workloadRevision,
+						fence: revisionApplication.fence,
+						failureCode: revisionApplication.failureCode,
+						configurationRevision: revisionAgent.currentConfigurationRevision,
+						authorizationRevision: revisionAgent.authorizationRevision,
 						configuration: agentConfigurationRevisions.configuration,
 						sourceReference: agentConfigurationRevisions.sourceReference,
 					})
-					.from(agents)
+					.from(revisionAgent)
 					.innerJoin(
-						agentApplications,
+						revisionApplication,
 						and(
-							eq(agentApplications.agentId, agents.id),
-							eq(agentApplications.id, input.applicationId),
-							eq(agentApplications.applicantId, input.actorId),
+							eq(revisionApplication.agentId, revisionAgent.id),
+							eq(revisionApplication.id, input.applicationId),
+							eq(revisionApplication.applicantId, input.actorId),
 						),
 					)
 					.innerJoin(
 						agentConfigurationRevisions,
 						and(
-							eq(agentConfigurationRevisions.agentId, agents.id),
+							eq(agentConfigurationRevisions.agentId, revisionAgent.id),
 							eq(
 								agentConfigurationRevisions.revision,
-								agents.currentConfigurationRevision,
+								revisionAgent.currentConfigurationRevision,
 							),
 						),
 					)
-					.for("update")
+					.for("update", { of: [revisionAgent, revisionApplication] })
 					.limit(1);
 				if (!row?.configuration || !validText(row.authorizationRevision)) {
 					return { outcome: "unavailable" as const };
@@ -726,6 +733,8 @@ export class PostgresApplicationRevisionTransactionV1
 		if (
 			current.agentId !== plan.application.agentId ||
 			current.revision !== plan.expected.configurationRevision ||
+			(plan.configuration?.nextRevision === current.revision &&
+				!isDeepStrictEqual(plan.configuration.configuration, current)) ||
 			sourceReference(current) !== configurationRow.sourceReference ||
 			(!plan.configuration?.accessUpdate &&
 				(!sameValue(ownerIds, plan.management.state.ownerIds) ||

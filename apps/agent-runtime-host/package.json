@@ -4,13 +4,14 @@
 	"type": "module",
 	"main": "dist/index.mjs",
 	"files": [
-		"dist"
+		"dist",
+		"start-runtime-host.sh"
 	],
 	"scripts": {
 		"build": "tsdown",
 		"check-types": "tsc --noEmit",
-		"dev": "tsx watch src/index.ts",
-		"start": "node dist/index.mjs",
+		"dev": "sh ./start-runtime-host.sh --dev \"$npm_node_execpath\"",
+		"start": "sh ./start-runtime-host.sh",
 		"test": "vitest run src"
 	},
 	"dependencies": {

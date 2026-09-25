@@ -164,8 +164,6 @@ beforeAll(async () => {
 		images: [{ selection: applicationBody.source, source }],
 		models: [],
 		modelCredentials: [],
-		actions: [],
-		actionSetRevision: "actions-1",
 		channelBindings: [],
 		channelRevision: "channels-1",
 	});
@@ -174,8 +172,6 @@ beforeAll(async () => {
 		images: [{ selection: applicationBody.source, source }],
 		models: [],
 		modelCredentials: [],
-		actions: [],
-		actionSetRevision: "actions-1",
 		channelBindings: [],
 		channelRevision: "channels-1",
 	});
@@ -238,7 +234,6 @@ beforeAll(async () => {
 		imageAdmission: configurationAdmissions,
 		modelAdmission: configurationAdmissions,
 		secretAdmission: configurationAdmissions,
-		actionAdmission: configurationAdmissions,
 		channelAdmission: configurationAdmissions,
 	};
 	const foundation = createApplicationFoundationUseCaseV1({
@@ -247,7 +242,6 @@ beforeAll(async () => {
 		imageAdmission: foundationAdmissions,
 		modelAdmission: foundationAdmissions,
 		secretAdmission: foundationAdmissions,
-		actionAdmission: foundationAdmissions,
 		channelAdmission: foundationAdmissions,
 	});
 	const revision = createApplicationRevisionUseCaseV1({

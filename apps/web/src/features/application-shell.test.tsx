@@ -13,12 +13,12 @@ import {
 } from "@testing-library/react";
 import { type ReactNode, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useBrowserSession } from "./agent-administration/use-browser-session";
 import {
 	ApplicationShell,
 	safeDeploymentUrl,
 	useApplicationSession,
 } from "./application-shell";
+import { useBrowserSession } from "./use-browser-session";
 
 vi.mock("@tanstack/react-router", () => ({
 	useLocation: () => "/agents",

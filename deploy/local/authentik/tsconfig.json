@@ -1,0 +1,4 @@
+{
+	"extends": "../../../apps/platform-api/tsconfig.json",
+	"include": ["./*.ts", "../../../tests/local-real-e2e/authentik-*.test.ts"]
+}

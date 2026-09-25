@@ -9,6 +9,10 @@ import {
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
 import {
+	type DeploymentConfigurationRoutesDependencies,
+	registerDeploymentConfigurationRoutes,
+} from "./http/deployment-configuration-routes.js";
+import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
@@ -24,8 +28,13 @@ import {
 export const platformApiService = "platform-api";
 
 export interface PlatformAppDependencies {
+	readonly requestScope?: (
+		request: Request,
+		work: () => Promise<void>,
+	) => Promise<void>;
 	readonly files?: FileRoutesDependenciesV1;
 	readonly configuration: ConfigurationRoutesDependencies;
+	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
@@ -55,8 +64,16 @@ export function createPlatformHealthApp() {
 
 export function createPlatformApp(dependencies: PlatformAppDependencies) {
 	const app = createPlatformHealthApp();
+	const requestScope = dependencies.requestScope;
+	if (requestScope)
+		app.use("*", (context, next) => requestScope(context.req.raw, next));
 	registerManagementRoutes(app, dependencies.management);
 	registerConfigurationRoutes(app, dependencies.configuration);
+	if (dependencies.deploymentConfiguration)
+		registerDeploymentConfigurationRoutes(
+			app,
+			dependencies.deploymentConfiguration,
+		);
 	registerConversationRoutes(app, {
 		...dependencies.conversation,
 		files: dependencies.files,
