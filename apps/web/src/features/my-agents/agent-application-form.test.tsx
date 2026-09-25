@@ -168,7 +168,7 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
-	it("limits the default reasoning choices to the selected levels", () => {
+	it("limits the default reasoning choices to the selected levels", async () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -188,12 +188,20 @@ describe("AgentApplicationForm", () => {
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
 		check("medium");
+		check("high");
 		choose("默认模型", "Primary endpoint · gpt-5");
 
 		fireEvent.click(screen.getByRole("combobox", { name: "默认推理档位" }));
-		expect(screen.getByRole("option", { name: "medium" })).toBeTruthy();
+		expect(await screen.findByRole("option", { name: "medium" })).toBeTruthy();
+		expect(await screen.findByRole("option", { name: "high" })).toBeTruthy();
+		fireEvent.click(await screen.findByRole("option", { name: "high" }));
+		check("high");
+		await waitFor(() =>
+			expect(screen.queryByRole("option", { name: "high" })).toBeNull(),
+		);
+		fireEvent.click(screen.getByRole("combobox", { name: "默认推理档位" }));
+		expect(await screen.findByRole("option", { name: "medium" })).toBeTruthy();
 		expect(screen.queryByRole("option", { name: "high" })).toBeNull();
-		fireEvent.click(screen.getByRole("option", { name: "medium" }));
 		fireEvent.change(screen.getByLabelText("模型凭证"), {
 			target: { value: "never-echo-model" },
 		});
@@ -202,7 +210,7 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				modelConfiguration: expect.objectContaining({
-					defaultReasoningLevel: "medium",
+					defaultReasoningLevel: "",
 				}),
 			}),
 		);

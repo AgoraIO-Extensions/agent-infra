@@ -517,7 +517,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			configureModels,
 			models,
 			defaultModelOptionId,
-			defaultReasoningLevel,
+			defaultReasoningLevel: selectedDefaultReasoningLevel,
 		};
 		setSecrets([]);
 		setModels((current) =>
