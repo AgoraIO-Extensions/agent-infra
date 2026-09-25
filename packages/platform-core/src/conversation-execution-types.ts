@@ -170,6 +170,7 @@ export interface ConversationModelSelectionFallbackV1 {
 }
 
 export interface ConversationExecutionStateV1 {
+	readonly hasWaitingTask?: boolean;
 	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly sourceMessage:

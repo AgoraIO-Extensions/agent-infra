@@ -254,9 +254,16 @@ export async function readMessageState(
 		for update
 	`;
 	if (activeRows.length > 1) unavailable();
+	const [waiting] = await transaction<{ present: boolean }[]>`
+		select exists(select 1 from platform.conversation_executions
+			where conversation_id = ${conversation.conversationId}
+				and status = 'waiting') as present
+	`;
+	const hasWaitingTask = waiting?.present === true;
 	const active = activeRows[0];
 	if (!active) {
 		return {
+			hasWaitingTask,
 			conversation,
 			modelConfiguration: agent?.modelConfiguration,
 			sourceMessage: undefined,
@@ -277,6 +284,7 @@ export async function readMessageState(
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
 	return {
+		hasWaitingTask,
 		conversation,
 		modelConfiguration: agent?.modelConfiguration,
 		sourceMessage: undefined,

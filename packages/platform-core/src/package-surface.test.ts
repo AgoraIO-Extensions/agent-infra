@@ -57,6 +57,7 @@ describe("platform-core package surface", () => {
 			"createConversationDispatchUseCaseV1",
 			"createConversationEventUseCaseV1",
 			"createConversationExecutionUseCaseV1",
+			"createConversationTaskAdmissionUseCaseV1",
 			"createFileAuthorityV1",
 			"createFileReconciliationV1",
 			"createSecretActivationUseCaseV1",

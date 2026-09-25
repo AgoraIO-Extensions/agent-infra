@@ -151,9 +151,13 @@ async function snapshotHistory() {
 		"idempotency_records",
 		"outbox_items",
 	]) {
+		const record =
+			table === "conversation_executions"
+				? "to_jsonb(record) - 'task_wait_order' - 'task_wait_deadline'"
+				: "to_jsonb(record)";
 		snapshots.push(
 			await sql.unsafe(
-				`select row_to_json(record)::text as value from platform.${table} record order by row_to_json(record)::text`,
+				`select ${record}::text as value from platform.${table} record order by ${record}::text`,
 			),
 		);
 	}
@@ -206,6 +210,10 @@ beforeAll(async () => {
 		await sql`insert into platform_migrations.history (hash, created_at) values (${entry.hash}, ${entry.folderMillis})`;
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	expect(await snapshotHistory()).toEqual(before);
+	expect(
+		await sql`select count(*)::int as count from platform.conversation_executions
+			where task_wait_order is not null or task_wait_deadline is not null`,
+	).toEqual([{ count: 0 }]);
 	const history =
 		await sql`select * from platform_migrations.history order by id`;
 	expect(history).toHaveLength(migrations.length);

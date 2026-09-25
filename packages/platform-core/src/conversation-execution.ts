@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+
+export * from "./conversation-execution-task.js";
+
 import {
 	authorize,
 	parseConversationStateQuery,
@@ -370,6 +373,7 @@ export function createConversationExecutionUseCaseV1(
 									},
 								};
 							}
+							if (state.hasWaitingTask) return { outcome: "busy" };
 							const occurredAt = safeNow(now);
 							const messageId = nextOpaqueId(newId);
 							const executionId = nextOpaqueId(newId);
@@ -597,7 +601,8 @@ export function createConversationExecutionUseCaseV1(
 								conversation.isolationPending
 							)
 								return { outcome: "denied" };
-							if (state.activeExecution) return { outcome: "busy" };
+							if (state.activeExecution || state.hasWaitingTask)
+								return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
 								state.modelConfiguration,

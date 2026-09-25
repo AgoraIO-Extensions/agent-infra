@@ -1,0 +1,6 @@
+ALTER TYPE "platform"."conversation_execution_status" ADD VALUE 'waiting' BEFORE 'submitted';--> statement-breakpoint
+ALTER TABLE "platform"."conversation_executions" ADD COLUMN "task_wait_order" bigint;--> statement-breakpoint
+ALTER TABLE "platform"."conversation_executions" ADD COLUMN "task_wait_deadline" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "conversation_execution_task_wait_order_unique" ON "platform"."conversation_executions" USING btree ("agent_id","task_wait_order") WHERE "platform"."conversation_executions"."task_wait_order" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "conversation_execution_agent_wait_idx" ON "platform"."conversation_executions" USING btree ("agent_id","task_wait_order");--> statement-breakpoint
+ALTER TABLE "platform"."conversation_executions" ADD CONSTRAINT "conversation_execution_task_wait_binding" CHECK (("platform"."conversation_executions"."task_wait_order" IS NULL AND "platform"."conversation_executions"."task_wait_deadline" IS NULL AND "platform"."conversation_executions"."status"::text <> 'waiting') OR ("platform"."conversation_executions"."task_wait_order" between 1 and 9007199254740991 AND "platform"."conversation_executions"."task_wait_deadline" IS NOT NULL));

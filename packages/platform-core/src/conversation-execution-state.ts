@@ -29,25 +29,36 @@ export function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
 	try {
-		const values = snapshotObject(input, [
-			"conversation",
-			"modelConfiguration",
-			"sourceMessage",
-			"targetExecution",
-			"existingStop",
-			"activeExecution",
-		]);
+		const values = snapshotObject(
+			input,
+			[
+				"conversation",
+				"modelConfiguration",
+				"sourceMessage",
+				"targetExecution",
+				"existingStop",
+				"activeExecution",
+			],
+			["hasWaitingTask"],
+		);
+		if (
+			values.hasWaitingTask !== undefined &&
+			typeof values.hasWaitingTask !== "boolean"
+		)
+			unavailable();
 		if (values.conversation === undefined) {
 			if (
 				values.modelConfiguration !== undefined ||
 				values.sourceMessage !== undefined ||
 				values.targetExecution !== undefined ||
 				values.existingStop !== undefined ||
-				values.activeExecution !== undefined
+				values.activeExecution !== undefined ||
+				values.hasWaitingTask === true
 			) {
 				unavailable();
 			}
 			return {
+				hasWaitingTask: false,
 				conversation: undefined,
 				modelConfiguration: undefined,
 				sourceMessage: undefined,
@@ -336,6 +347,7 @@ export function parseState(
 		const status =
 			conversation.status as ConversationExecutionConversationStateV1["status"];
 		return {
+			hasWaitingTask: values.hasWaitingTask === true,
 			conversation: {
 				schemaVersion: 1,
 				conversationId: conversation.conversationId,

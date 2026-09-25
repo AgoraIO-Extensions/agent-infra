@@ -121,6 +121,10 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		foreignKey({
@@ -147,6 +151,10 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_turn_id_non_empty",
 			sql`char_length(${table.turnId}) > 0`,
+		),
+		check(
+			"conversation_execution_task_wait_binding",
+			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
@@ -198,6 +206,13 @@ export const conversationExecutions = platformSchema.table(
 		index("conversation_execution_conversation_idx").on(
 			table.conversationId,
 			table.createdAt,
+		),
+		uniqueIndex("conversation_execution_task_wait_order_unique")
+			.on(table.agentId, table.taskWaitOrder)
+			.where(sql`${table.taskWaitOrder} IS NOT NULL`),
+		index("conversation_execution_agent_wait_idx").on(
+			table.agentId,
+			table.taskWaitOrder,
 		),
 	],
 );

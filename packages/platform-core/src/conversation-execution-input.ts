@@ -213,7 +213,9 @@ export function parseConversationStateQuery(
 	return { schemaVersion: 1, conversationId: values.conversationId };
 }
 
-function parseAuthority(input: unknown): ConversationExecutionAuthorityV1 {
+export function parseAuthority(
+	input: unknown,
+): ConversationExecutionAuthorityV1 {
 	const values = snapshotObject(input, [
 		"schemaVersion",
 		"actorId",

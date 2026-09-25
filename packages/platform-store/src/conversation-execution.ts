@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ConversationTaskAdmissionTransactionPortV1 } from "@agent-infra/platform-core";
 import {
 	bindInputFileV1,
 	type ConversationCommandDecisionV1,
@@ -71,6 +72,7 @@ import {
 	requireStopReplay,
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
+import { submitConversationTask } from "./conversation-execution-task.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 
@@ -79,7 +81,9 @@ export interface PostgresConversationExecutionOptionsV1 {
 }
 
 export class PostgresConversationExecutionTransactionV1
-	implements ConversationExecutionTransactionPortV1
+	implements
+		ConversationExecutionTransactionPortV1,
+		ConversationTaskAdmissionTransactionPortV1
 {
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
@@ -103,6 +107,19 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async submitTask(
+		request: Parameters<
+			ConversationTaskAdmissionTransactionPortV1["submitTask"]
+		>[0],
+		decide: Parameters<
+			ConversationTaskAdmissionTransactionPortV1["submitTask"]
+		>[1],
+	) {
+		return this.#transaction((transaction) =>
+			submitConversationTask(transaction, request, decide),
+		);
 	}
 
 	async requestMetadataRecovery(
