@@ -112,28 +112,29 @@ function describedBy(...ids: (string | undefined)[]) {
 }
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
-	const entries = Object.keys(errors).map((key) => ({
-		key,
-		element: document.getElementById(fieldId(key)),
-	}));
-	const firstElement = entries[0]?.element;
-	if (firstElement?.hasAttribute("disabled"))
-		return (
-			document.getElementById("application-deployment-status") ??
-			document.getElementById("application-add-model-option")
-		);
-	const elements = entries
-		.map(({ element }) => element)
-		.filter(
-			(element): element is HTMLElement =>
-				element instanceof HTMLElement && !element.hasAttribute("disabled"),
-		)
+	if (Object.keys(errors).length === 0) return undefined;
+	const first = Object.keys(errors)
+		.map((key) => document.getElementById(fieldId(key)))
+		.filter((element): element is HTMLElement => element instanceof HTMLElement)
 		.sort((left, right) =>
 			left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING
 				? -1
 				: 1,
-		);
-	if (elements[0]) return elements[0];
+		)[0];
+	if (
+		first &&
+		!first.closest("[disabled]") &&
+		(!(first instanceof HTMLFieldSetElement) ||
+			Array.from(
+				first.querySelectorAll(
+					"input, button, select, textarea, [role='checkbox']",
+				),
+			).some(
+				(control) =>
+					control instanceof HTMLElement && !control.closest("[disabled]"),
+			))
+	)
+		return first;
 	return (
 		document.getElementById("application-deployment-status") ??
 		document.getElementById("application-add-model-option")
@@ -899,12 +900,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			(Object.keys(fieldErrors).length === 0 && !serverFormError)
 		)
 			return;
-		if (serverFormError) {
-			formRef.current?.focus();
-			return;
-		}
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
+		else if (serverFormError) formRef.current?.focus();
 	}, [fieldErrors, focusRequest, props.serverError?.code, serverFormError]);
 
 	const submit = () => {
