@@ -185,6 +185,15 @@ describe("Agent application draft", () => {
 			validateAgentApplicationDraft(
 				{
 					...draft,
+					models: [{ ...draft.models[0], credentialValue: " \t" }],
+				},
+				context,
+			)["model.0.credentialValue"],
+		).toBe("请输入模型凭证。");
+		expect(
+			validateAgentApplicationDraft(
+				{
+					...draft,
 					models: [{ ...draft.models[0], optionId: "persisted-option" }],
 				},
 				context,

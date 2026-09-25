@@ -168,7 +168,7 @@ export function validateAgentApplicationDraft(
 				context.requiresReplacementCredential ||
 				(context.persistedModelOptionIds !== undefined &&
 					!context.persistedModelOptionIds.includes(model.optionId));
-			if (needsReplacementCredential && !model.credentialValue)
+			if (needsReplacementCredential && !model.credentialValue.trim())
 				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
 			if (
 				context.staleModelIndexes?.includes(index) ||
