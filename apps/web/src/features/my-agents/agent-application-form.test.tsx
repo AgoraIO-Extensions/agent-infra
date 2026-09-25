@@ -294,6 +294,8 @@ describe("AgentApplicationForm", () => {
 		if (!secondName) throw new Error("second environment name input missing");
 		fireEvent.change(secondName, { target: { value: "C" } });
 		expect(screen.queryByText("名称不能重复。")).toBeNull();
+		fireEvent.change(secondName, { target: { value: "D" } });
+		expect((values[1] as HTMLInputElement).value).toBe("");
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -1056,6 +1058,26 @@ describe("AgentApplicationForm", () => {
 			"true",
 		);
 		expect(document.activeElement).toBe(screen.getByLabelText("默认模型"));
+	});
+
+	it("focuses the model configuration toggle when an update rejects its model", () => {
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+
+		const toggle = screen.getByRole("checkbox", { name: "修改模型配置" });
+		expect(toggle.getAttribute("aria-invalid")).toBe("true");
+		expect(
+			screen.getByText("服务端拒绝了模型配置，请开启修改模型配置。"),
+		).toBeTruthy();
+		expect(document.activeElement).toBe(toggle);
 	});
 
 	it("focuses the form for a server invalid-request error", () => {

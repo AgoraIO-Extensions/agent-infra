@@ -816,10 +816,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			modelConfigurationVisible
 		)
 			errors.defaultModelOptionId = "服务端拒绝了默认模型，请重新选择。";
+		if (
+			!serverValidationDismissed &&
+			props.mode === "update" &&
+			props.serverError?.code === "MODEL_SELECTION_INVALID" &&
+			!modelConfigurationVisible
+		)
+			errors.configureModels = "服务端拒绝了模型配置，请开启修改模型配置。";
 		return errors;
 	}, [
 		modelConfigurationVisible,
 		modelServerErrorIndexes,
+		props.mode,
 		props.serverError?.code,
 		serverValidationDismissed,
 	]);
@@ -1309,7 +1317,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						}
 						onChange={(index, key, value) => {
 							const next = environment.map((item, itemIndex) =>
-								itemIndex === index ? { ...item, [key]: value } : item,
+								itemIndex === index
+									? {
+											...item,
+											[key]: value,
+											...(key === "name" ? { value: "" } : {}),
+										}
+									: item,
 							);
 							setEnvironment(next);
 							updateNameField("environment", next, index, key);
@@ -1409,19 +1423,34 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							ID，允许的推理档位每行一项；默认项须属于本次配置。
 						</p>
 						{props.mode === "update" ? (
-							<Label className="min-h-11 gap-3">
-								<Checkbox
-									disabled={props.submitting}
-									checked={configureModels}
-									onCheckedChange={(checked) => {
-										setConfigureModels(checked);
-										if (checked && models.length === 0) {
-											setModels([blankModel()]);
+							<div className="space-y-2">
+								<Label className="min-h-11 gap-3">
+									<Checkbox
+										id="application-configure-models"
+										aria-describedby={
+											fieldErrors.configureModels
+												? errorId("configureModels")
+												: undefined
 										}
-									}}
+										aria-invalid={
+											fieldErrors.configureModels ? true : undefined
+										}
+										disabled={props.submitting}
+										checked={configureModels}
+										onCheckedChange={(checked) => {
+											setConfigureModels(checked);
+											if (checked && models.length === 0) {
+												setModels([blankModel()]);
+											}
+										}}
+									/>
+									修改模型配置
+								</Label>
+								<FieldError
+									id={errorId("configureModels")}
+									message={fieldErrors.configureModels}
 								/>
-								修改模型配置
-							</Label>
+							</div>
 						) : null}
 						{modelConfigurationVisible ? (
 							<>
