@@ -527,7 +527,7 @@ export type PersistedConversationEventV1 = {
     schemaVersion: 1;
     sequence: number;
     type: 'conversation.error';
-} | ModelSelectionFallbackEventV1;
+} | ModelSelectionFallbackEventV1 | TaskStatusEventV1;
 
 export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
 
@@ -623,6 +623,21 @@ export type RuntimeOperationFactV2 = {
 export type RuntimeOperationFailureV2 = 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
 
 export type SseEventIdV1 = string;
+
+export type TaskStatusEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'task.status';
+};
 
 export type TimelineReloadSignalV1 = {
     kind: 'control';

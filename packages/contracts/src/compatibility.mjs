@@ -680,6 +680,41 @@ function isModelSelectionFallbackOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #482 adds Platform task states to the existing persisted Conversation timeline.
+function isTaskStatusOpenApiAddition(previous, current) {
+	const name = "TaskStatusEventV1";
+	const persisted = "PersistedConversationEventV1";
+	const ref = { $ref: `#/components/schemas/${name}` };
+	const previousSchemas = previous.components?.schemas ?? {};
+	const currentSchemas = current.components?.schemas ?? {};
+	if (previousSchemas[name] !== undefined || currentSchemas[name] === undefined)
+		return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(currentSchemas[name]))
+			.digest("hex") !==
+		"1908af0e06eaba9b8b3ddb7f13b03cfbf8be91dc2524ad777a03975faba380e1"
+	)
+		return false;
+	const before = previousSchemas[persisted]?.oneOf;
+	const after = currentSchemas[persisted]?.oneOf;
+	if (
+		!Array.isArray(before) ||
+		!Array.isArray(after) ||
+		unmatchedOptions(before, after).length !== 0 ||
+		!sameValue(unmatchedOptions(after, before), [ref])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name];
+	const options = normalized.components.schemas[persisted].oneOf;
+	options.splice(
+		options.findIndex((option) => sameValue(option, ref)),
+		1,
+	);
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isAgentSummaryOpenApiAddition(previous, current) {
 	const componentName = "ExecutionProcessSummaryV1";
 	const previousOptions = previous.components?.schemas?.[componentName]?.oneOf;
@@ -996,7 +1031,7 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"cd5b8fc76501e7f9e3dafaa0e1d6b4282d5222c86b8a4d5269a0c11d0fa4af1e"
+		"ad28e6695e311d41ec6556f032a87786cedb816a81b5c18b6ddb5e72586f544f"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1040,6 +1075,7 @@ function findBreakingChanges(previous, current) {
 		if (
 			!sameValue(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
+			!isTaskStatusOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&

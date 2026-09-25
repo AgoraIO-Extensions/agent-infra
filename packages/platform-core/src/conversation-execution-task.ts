@@ -1,14 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { parseAuthority } from "./conversation-execution-input.js";
+import {
+	effectiveModelSelection,
+	modelSelectionFallbackWrite,
+} from "./conversation-execution-state.js";
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
 	ConversationModelConfigurationV1,
+	ConversationModelSelectionFallbackWriteV1,
 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
 	isText,
+	nextCounter,
 	nextOpaqueId,
 	safeNow,
 	snapshotObject,
@@ -32,6 +38,7 @@ export interface ConversationTaskAdmissionStateV1 {
 		readonly serviceAvailability: string | null;
 	} | null;
 	readonly waitingCount: number;
+	readonly sourceKind: "standard" | "custom" | null;
 	readonly conversation: ConversationExecutionConversationStateV1 | null;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | null;
 }
@@ -47,6 +54,18 @@ export interface ConversationTaskAdmissionPlanV1 {
 	readonly reasoningLevel: string;
 	readonly acceptedAt: Date;
 	readonly waitDeadline: Date;
+	readonly outboxOperation: "conversation.turn.submit.v1";
+	readonly auditAction: "conversation.task.accepted";
+	readonly statusEvent: {
+		readonly eventId: string;
+		readonly sequence: 1;
+		readonly conversationCursor: number;
+		readonly event: {
+			readonly type: "task.status";
+			readonly status: "waiting";
+		};
+	};
+	readonly modelSelectionFallback: ConversationModelSelectionFallbackWriteV1 | null;
 }
 
 export interface ConversationTaskSubmitResultV1 {
@@ -221,14 +240,20 @@ export function createConversationTaskAdmissionUseCaseV1(
 						if (state.waitingCount >= policy.maximumWaitingTasksPerAgent)
 							return { outcome: "capacity_full" };
 						const model = state.modelConfiguration;
-						if (!model)
+						if (state.sourceKind !== "standard" || !model)
 							return { outcome: "denied", reason: "model_unavailable" };
-						const modelOptionId =
-							conversation?.selectedModelOptionId ?? model.defaultOptionId;
-						const reasoningLevel =
-							conversation?.selectedReasoningLevel ??
-							model.defaultReasoningLevel;
+						const selection = conversation
+							? effectiveModelSelection(conversation, model)
+							: {
+									modelOptionId: model.defaultOptionId,
+									reasoningLevel: model.defaultReasoningLevel,
+									fallback: null,
+								};
+						const modelOptionId = selection.modelOptionId;
+						const reasoningLevel = selection.reasoningLevel;
 						if (
+							modelOptionId === null ||
+							reasoningLevel === null ||
 							!model.options.some(
 								(option) =>
 									option.optionId === modelOptionId &&
@@ -243,11 +268,38 @@ export function createConversationTaskAdmissionUseCaseV1(
 							deadlineMs > 8_640_000_000_000_000
 						)
 							unavailable();
+						const conversationId =
+							conversation?.conversationId ?? nextOpaqueId(newId);
+						const executionId = nextOpaqueId(newId);
+						const statusEvent = {
+							eventId: nextOpaqueId(newId),
+							sequence: 1 as const,
+							conversationCursor: nextCounter(
+								conversation?.lastConversationCursor ?? 0,
+							),
+							event: {
+								type: "task.status" as const,
+								status: "waiting" as const,
+							},
+						};
+						const modelSelectionFallback = conversation
+							? modelSelectionFallbackWrite(
+									selection.fallback,
+									authority,
+									conversationId,
+									executionId,
+									statusEvent.sequence,
+									statusEvent.conversationCursor,
+									command.requestId,
+									command.traceId,
+									acceptedAt,
+									newId,
+								)
+							: null;
 						return {
-							conversationId:
-								conversation?.conversationId ?? nextOpaqueId(newId),
+							conversationId,
 							createConversation: !conversation,
-							executionId: nextOpaqueId(newId),
+							executionId,
 							turnId: nextOpaqueId(newId),
 							messageId: nextOpaqueId(newId),
 							modelConfigurationRevision: model.configurationRevision,
@@ -255,6 +307,10 @@ export function createConversationTaskAdmissionUseCaseV1(
 							reasoningLevel,
 							acceptedAt,
 							waitDeadline: new Date(deadlineMs),
+							outboxOperation: "conversation.turn.submit.v1",
+							auditAction: "conversation.task.accepted",
+							statusEvent,
+							modelSelectionFallback,
 						};
 					},
 				);

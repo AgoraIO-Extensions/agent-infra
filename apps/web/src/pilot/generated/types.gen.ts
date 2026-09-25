@@ -587,7 +587,7 @@ export type PersistedConversationEventV1 = {
     schemaVersion: 1;
     sequence: number;
     type: 'conversation.error';
-} | ModelSelectionFallbackEventV1;
+} | ModelSelectionFallbackEventV1 | TaskStatusEventV1;
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
@@ -638,6 +638,21 @@ export type SseEventIdV1 = string;
 export type StopCommandRequestV1 = {
     schemaVersion: 1;
     targetExecutionId: string;
+};
+
+export type TaskStatusEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'task.status';
 };
 
 export type TimelineReloadSignalV1 = {

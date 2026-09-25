@@ -1256,7 +1256,7 @@
         },
         "conversation_event_source_binding": {
           "name": "conversation_event_source_binding",
-          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" <> 'model.selection.fell_back'\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" = 'model.selection.fell_back'\n\t\t\t\t)"
+          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" NOT IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" IN ('model.selection.fell_back', 'task.status')\n\t\t\t\t)"
         }
       },
       "isRLSEnabled": false
@@ -1556,7 +1556,7 @@
         },
         "conversation_execution_task_wait_binding": {
           "name": "conversation_execution_task_wait_binding",
-          "value": "(\"platform\".\"conversation_executions\".\"task_wait_order\" IS NULL AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NULL AND \"platform\".\"conversation_executions\".\"status\"::text <> 'waiting') OR (\"platform\".\"conversation_executions\".\"task_wait_order\" between 1 and 9007199254740991 AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NOT NULL)"
+          "value": "(\"platform\".\"conversation_executions\".\"task_wait_order\" IS NULL AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NULL AND \"platform\".\"conversation_executions\".\"status\"::text <> 'waiting') OR (\"platform\".\"conversation_executions\".\"task_wait_order\" IS NOT NULL AND \"platform\".\"conversation_executions\".\"task_wait_order\" between 1 and 9007199254740991 AND \"platform\".\"conversation_executions\".\"task_wait_deadline\" IS NOT NULL)"
         },
         "conversation_execution_session_generation_safe": {
           "name": "conversation_execution_session_generation_safe",

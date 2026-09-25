@@ -85,6 +85,22 @@ export const ModelSelectionFallbackEventV1Schema = z.strictObject({
 	}),
 });
 
+export const TaskStatusEventV1Schema = z.strictObject({
+	...eventShape,
+	type: z.literal("task.status"),
+	payload: z.strictObject({
+		status: z.enum([
+			"waiting",
+			"submitted",
+			"processing",
+			"completed",
+			"failed",
+			"cancelled",
+			"unknown",
+		]),
+	}),
+});
+
 export const PersistedConversationEventV1Schema = z.discriminatedUnion("type", [
 	TextDeltaEventV1Schema,
 	ExecutionStatusEventV1Schema,
@@ -92,6 +108,7 @@ export const PersistedConversationEventV1Schema = z.discriminatedUnion("type", [
 	ResultFileEventV1Schema,
 	ConversationErrorEventV1Schema,
 	ModelSelectionFallbackEventV1Schema,
+	TaskStatusEventV1Schema,
 ]);
 
 export const TimelineReloadSignalV1Schema = z.strictObject({
@@ -212,6 +229,7 @@ export const pilotSseSchemasV1 = {
 	ConversationSseMessageV1: ConversationSseMessageV1Schema,
 	HeartbeatSignalV1: HeartbeatSignalV1Schema,
 	ModelSelectionFallbackEventV1: ModelSelectionFallbackEventV1Schema,
+	TaskStatusEventV1: TaskStatusEventV1Schema,
 	PersistedConversationEventV1: PersistedConversationEventV1Schema,
 	SseEventIdV1: SseEventIdV1Schema,
 	TimelineReloadSignalV1: TimelineReloadSignalV1Schema,

@@ -566,6 +566,35 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	it("projects a Platform waiting status from the persisted timeline", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventType: "task.status",
+						eventPayload: { type: "task.status", status: "waiting" },
+					},
+				],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+		expect(response.status).toBe(200);
+		expect(body).toContain('"type":"task.status"');
+		expect(body).toContain('"payload":{"status":"waiting"}');
+	});
+
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi

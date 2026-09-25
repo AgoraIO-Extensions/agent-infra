@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
 	ConversationModelConfigurationV1,
 	ConversationTaskAdmissionStateV1,
@@ -19,6 +19,7 @@ import {
 } from "./conversation-execution-records.js";
 import {
 	completeIdempotency,
+	insertModelSelectionFallback,
 	lockConversation,
 	readIdempotency,
 	reserveIdempotency,
@@ -55,7 +56,10 @@ async function readAgent(
 	transaction: Transaction,
 	agentId: string,
 ): Promise<
-	Pick<ConversationTaskAdmissionStateV1, "agent" | "modelConfiguration"> & {
+	Pick<
+		ConversationTaskAdmissionStateV1,
+		"agent" | "modelConfiguration" | "sourceKind"
+	> & {
 		readonly authorizationRevision: string | null;
 	}
 > {
@@ -72,6 +76,7 @@ async function readAgent(
 		return {
 			agent: null,
 			modelConfiguration: null,
+			sourceKind: null,
 			authorizationRevision: null,
 		};
 	const [application] = await transaction<
@@ -91,16 +96,17 @@ async function readAgent(
 		for share
 	`;
 	let modelConfiguration: ConversationModelConfigurationV1 | null = null;
+	let sourceKind: "standard" | "custom" | null = null;
 	if (configuration) {
 		const record = decodeAgentConfigurationRecord(configuration.configuration);
+		sourceKind = record.source.kind;
 		const model = record.modelConfiguration;
 		if (
 			record.agentId !== agentId ||
 			record.revision !== safeInteger(agent.current_configuration_revision, 1)
 		)
 			unavailable();
-		// Custom images need an explicit task-capability verification seam.
-		if (record.source.kind === "standard" && model) {
+		if (model) {
 			modelConfiguration = {
 				configurationRevision: record.revision,
 				options: model.options.map(({ optionId, reasoningLevels }) => ({
@@ -122,6 +128,7 @@ async function readAgent(
 				}
 			: null,
 		modelConfiguration,
+		sourceKind,
 	};
 }
 
@@ -223,10 +230,19 @@ export async function submitConversationTask(
 	const decision = decide(state);
 	if ("outcome" in decision) return decision;
 	const plan = decision;
+	const statusEvent = plan.statusEvent;
+	const finalCursor =
+		plan.modelSelectionFallback?.timelineEvent.conversationCursor ??
+		statusEvent.conversationCursor;
 	if (
 		(conversation && plan.conversationId !== conversation.conversationId) ||
 		plan.createConversation !== !conversation ||
-		plan.acceptedAt.getTime() >= plan.waitDeadline.getTime()
+		plan.acceptedAt.getTime() >= plan.waitDeadline.getTime() ||
+		statusEvent.conversationCursor !==
+			(conversation?.lastConversationCursor ?? 0) + 1 ||
+		(plan.modelSelectionFallback !== null &&
+			plan.modelSelectionFallback.timelineEvent.conversationCursor !==
+				statusEvent.conversationCursor + 1)
 	)
 		unavailable();
 	const order = safeInteger(queue.last_order ?? "0", 0) + 1;
@@ -252,7 +268,17 @@ export async function submitConversationTask(
 				 selected_model_option_id, selected_reasoning_level, created_at, updated_at)
 			values (${plan.conversationId}, ${authority.agentId}, ${authority.actorId},
 				${authority.channelId}, 'ready', 1, null, ${authority.authorizationRevision},
-				0, null, null, ${plan.acceptedAt}, ${plan.acceptedAt})
+				${finalCursor}, ${plan.modelOptionId}, ${plan.reasoningLevel},
+				${plan.acceptedAt}, ${plan.acceptedAt})
+		`;
+	} else {
+		await transaction`
+			update platform.conversations
+			set last_conversation_cursor = ${finalCursor},
+				selected_model_option_id = ${plan.modelOptionId},
+				selected_reasoning_level = ${plan.reasoningLevel},
+				updated_at = ${plan.acceptedAt}
+			where id = ${plan.conversationId}
 		`;
 	}
 	await transaction`
@@ -260,13 +286,27 @@ export async function submitConversationTask(
 			(execution_id, conversation_id, agent_id, actor_id, channel_id,
 			 turn_id, status, task_wait_order, task_wait_deadline, session_generation,
 			 delivery_fence, authorization_revision, model_configuration_revision,
-			 model_option_id, reasoning_level, created_at, updated_at)
+			 model_option_id, reasoning_level, last_event_sequence, created_at, updated_at)
 		values (${plan.executionId}, ${plan.conversationId}, ${authority.agentId},
 			${authority.actorId}, ${authority.channelId}, ${plan.turnId}, 'waiting',
 			${order}, ${plan.waitDeadline}, ${conversation?.sessionGeneration ?? 1}, 0,
 			${authority.authorizationRevision}, ${plan.modelConfigurationRevision},
-			${plan.modelOptionId}, ${plan.reasoningLevel}, ${plan.acceptedAt}, ${plan.acceptedAt})
+			${plan.modelOptionId}, ${plan.reasoningLevel}, ${statusEvent.sequence},
+			${plan.acceptedAt}, ${plan.acceptedAt})
 	`;
+	await transaction`
+		insert into platform.conversation_events
+			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+			 conversation_cursor, event_type, event_payload, event_digest, source,
+			 runtime_cursor, occurred_at)
+		values (${statusEvent.eventId}, ${plan.conversationId}, ${plan.executionId},
+			${`platform:${statusEvent.eventId}`}, ${statusEvent.sequence},
+			${statusEvent.conversationCursor}, ${statusEvent.event.type},
+			${transaction.json(statusEvent.event)},
+			${createHash("sha256").update(JSON.stringify(statusEvent.event)).digest("hex")},
+			'platform', null, ${plan.acceptedAt})
+	`;
+	await insertModelSelectionFallback(transaction, plan.modelSelectionFallback);
 	await insertTaskAuthorization(transaction, {
 		executionId: plan.executionId,
 		boundary: authority.taskBoundary,
@@ -286,7 +326,7 @@ export async function submitConversationTask(
 			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
 			 available_at, created_at, updated_at)
 		values (${`conversation:turn:${plan.executionId}`}, 'conversation',
-			${plan.conversationId}, 'conversation.turn.submit.v1',
+			${plan.conversationId}, ${plan.outboxOperation},
 			${transaction.json({
 				schemaVersion: 1,
 				conversationId: plan.conversationId,
@@ -306,7 +346,7 @@ export async function submitConversationTask(
 			(id, conversation_id, execution_id, agent_id, actor_id, action,
 			 trace_id, request_id, occurred_at)
 		values (${randomUUID()}, ${plan.conversationId}, ${plan.executionId},
-			${authority.agentId}, ${authority.actorId}, 'conversation.task.accepted',
+			${authority.agentId}, ${authority.actorId}, ${plan.auditAction},
 			${request.command.traceId}, ${request.command.requestId}, ${plan.acceptedAt})
 	`;
 	await completeIdempotency(

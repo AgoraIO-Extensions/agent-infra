@@ -375,6 +375,12 @@ function eventProjection(input: ConversationQueryEventV1): SseMessage {
 				reason: persisted.reason,
 			},
 		};
+	} else if (persisted.type === "task.status") {
+		projected = {
+			...base,
+			type: "task.status",
+			payload: { status: persisted.status },
+		};
 	} else {
 		throw new Error("Unsupported persisted event type");
 	}

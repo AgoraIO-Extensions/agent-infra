@@ -154,7 +154,7 @@ export const conversationExecutions = platformSchema.table(
 		),
 		check(
 			"conversation_execution_task_wait_binding",
-			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
+			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
@@ -432,11 +432,11 @@ export const conversationEvents = platformSchema.table(
 					${table.source} = 'runtime'
 					AND ${table.runtimeCursor} IS NOT NULL
 					AND char_length(${table.runtimeCursor}) > 0
-					AND ${table.eventType} <> 'model.selection.fell_back'
+					AND ${table.eventType} NOT IN ('model.selection.fell_back', 'task.status')
 				) OR (
 					${table.source} = 'platform'
 					AND ${table.runtimeCursor} IS NULL
-					AND ${table.eventType} = 'model.selection.fell_back'
+					AND ${table.eventType} IN ('model.selection.fell_back', 'task.status')
 				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique")

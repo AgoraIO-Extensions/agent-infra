@@ -218,6 +218,32 @@ describe("durable task admission", () => {
 			{ available_at: string }[]
 		>`select available_at::text from platform.outbox_items`;
 		expect(outbox?.available_at).toBe("infinity");
+		const [timeline] = await sql<
+			{
+				event_type: string;
+				source: string;
+				runtime_cursor: string | null;
+				sequence: string;
+				conversation_cursor: string;
+			}[]
+		>`select event_type, source, runtime_cursor, sequence::text, conversation_cursor::text
+			from platform.conversation_events where execution_id = ${first.result.executionId}`;
+		expect(timeline).toEqual({
+			event_type: "task.status",
+			source: "platform",
+			runtime_cursor: null,
+			sequence: "1",
+			conversation_cursor: "1",
+		});
+		const [cursor] = await sql<
+			{ last_conversation_cursor: string; last_event_sequence: string }[]
+		>`select c.last_conversation_cursor::text, e.last_event_sequence::text
+			from platform.conversations c join platform.conversation_executions e
+				on e.conversation_id = c.id where e.execution_id = ${first.result.executionId}`;
+		expect(cursor).toEqual({
+			last_conversation_cursor: "1",
+			last_event_sequence: "1",
+		});
 		const dispatch = new PostgresConversationDispatchStoreV1({
 			databaseUrl: database.databaseUrl,
 		});
@@ -255,9 +281,56 @@ describe("durable task admission", () => {
 			values ('foreign_at_capacity', 'agent_task', 'other_user', 'api', 'ready', 1, 'grant_1')`;
 		expect(
 			await task.submitTask(
-				command("foreign_at_capacity", { conversationId: "foreign_at_capacity" }),
+				command("foreign_at_capacity", {
+					conversationId: "foreign_at_capacity",
+				}),
 			),
 		).toEqual({ outcome: "denied", reason: "conversation_unavailable" });
+	});
+
+	it("rejects a waiting Execution without a persisted queue order", async () => {
+		const result = await taskUseCase().submitTask(command("order_required"));
+		if (result.outcome !== "accepted")
+			throw new Error("Expected accepted task");
+		await expect(
+			sql`update platform.conversation_executions set task_wait_order = null
+				where execution_id = ${result.result.executionId}`,
+		).rejects.toMatchObject({ code: "23514" });
+	});
+
+	it("falls back to the current default when a continued task's selection disappeared", async () => {
+		await sql`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, status, session_generation,
+			 authorization_revision, selected_model_option_id, selected_reasoning_level)
+			values ('task_model_fallback', 'agent_task', 'user_task', 'api', 'ready', 1,
+			 'grant_1', 'removed_model', 'high')`;
+		const decision = await taskUseCase().submitTask(
+			command("fallback", { conversationId: "task_model_fallback" }),
+		);
+		expect(decision.outcome).toBe("accepted");
+		if (decision.outcome !== "accepted") return;
+		const events = await sql<
+			{ event_type: string; sequence: string; conversation_cursor: string }[]
+		>`select event_type, sequence::text, conversation_cursor::text
+			from platform.conversation_events where execution_id = ${decision.result.executionId}
+			order by sequence`;
+		expect(events).toEqual([
+			{ event_type: "task.status", sequence: "1", conversation_cursor: "1" },
+			{
+				event_type: "model.selection.fell_back",
+				sequence: "2",
+				conversation_cursor: "2",
+			},
+		]);
+		const [selection] = await sql<
+			{ model_option_id: string; selected_model_option_id: string }[]
+		>`select e.model_option_id, c.selected_model_option_id
+			from platform.conversation_executions e join platform.conversations c
+				on c.id = e.conversation_id where e.execution_id = ${decision.result.executionId}`;
+		expect(selection).toEqual({
+			model_option_id: "model_primary",
+			selected_model_option_id: "model_primary",
+		});
 	});
 
 	it("queues explicit same-principal continuation and blocks a new message on that API channel", async () => {

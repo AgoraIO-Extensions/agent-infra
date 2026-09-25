@@ -57,9 +57,22 @@ export interface ConversationModelSelectionFallbackEventV1 {
 	readonly reason: "selection_unavailable";
 }
 
+export interface ConversationTaskStatusEventV1 {
+	readonly type: "task.status";
+	readonly status:
+		| "waiting"
+		| "submitted"
+		| "processing"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "unknown";
+}
+
 export type ConversationPersistedEventPayloadV1 =
 	| ConversationNormalizedEventV1
-	| ConversationModelSelectionFallbackEventV1;
+	| ConversationModelSelectionFallbackEventV1
+	| ConversationTaskStatusEventV1;
 
 export interface ConversationEventCommandV1 {
 	readonly schemaVersion: 1;
@@ -394,6 +407,25 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 export function parseConversationPersistedEventPayloadV1(
 	input: unknown,
 ): ConversationPersistedEventPayloadV1 {
+	if (eventType(input) === "task.status") {
+		const values = snapshotObject(input, ["type", "status"]);
+		if (
+			![
+				"waiting",
+				"submitted",
+				"processing",
+				"completed",
+				"failed",
+				"cancelled",
+				"unknown",
+			].includes(values.status as string)
+		)
+			invalidInput();
+		return {
+			type: "task.status",
+			status: values.status as ConversationTaskStatusEventV1["status"],
+		};
+	}
 	if (eventType(input) !== "model.selection.fell_back")
 		return parseEvent(input);
 	const values = snapshotObject(input, [
@@ -555,7 +587,11 @@ function parsePersistedRuntimeEvent(
 	input: unknown,
 ): PersistedRuntimeConversationEventV1 {
 	const persisted = parsePersistedEvent(input);
-	if (persisted.event.type === "model.selection.fell_back") invalidInput();
+	if (
+		persisted.event.type === "model.selection.fell_back" ||
+		persisted.event.type === "task.status"
+	)
+		invalidInput();
 	return { ...persisted, event: persisted.event };
 }
 

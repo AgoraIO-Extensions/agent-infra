@@ -65,6 +65,33 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("accepts the reviewed task-status event without widening its payload", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV1;
+		previous.components.schemas.PersistedConversationEventV1.oneOf =
+			previous.components.schemas.PersistedConversationEventV1.oneOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV1",
+			);
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-task-sse-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV1.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(
