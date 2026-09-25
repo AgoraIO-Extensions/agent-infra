@@ -680,7 +680,9 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
-export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
+const workerDatabaseUrl = new URL(${JSON.stringify(database.databaseUrl)});
+workerDatabaseUrl.searchParams.set('application_name', 'conversation-worker-' + process.pid);
+export const workloadInput = { databaseUrl: workerDatabaseUrl.toString(), policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
@@ -773,7 +775,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.result.conversationId,
 			};
 		};
-		const first = await (async () => {
+		const admitFirst = async () => {
 			const publicKey = wrapping.publicKey.export({
 				format: "der",
 				type: "spki",
@@ -912,7 +914,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.conversationId,
 				executionId: accepted.executionId,
 			};
-		})();
+		};
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
@@ -924,6 +926,24 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		if (realCodexE2e) {
 			start();
 			start();
+			await waitUntil(async () => {
+				const sessions = await sql<{ application_name: string }[]>`
+					select distinct application_name from pg_stat_activity
+					where application_name like 'conversation-worker-%'
+					  and query like '%select id, operation from platform.outbox_items%'
+				`;
+				return children
+					.slice(0, 2)
+					.every((child) =>
+						sessions.some(
+							(session) =>
+								session.application_name === `conversation-worker-${child.pid}`,
+						),
+					);
+			}, "both packaged Workers polling before first admission");
+		}
+		const first = await admitFirst();
+		if (realCodexE2e) {
 			await waitUntil(
 				async () => (await dispatchCount()) === 1,
 				"first HTTP dispatch",
