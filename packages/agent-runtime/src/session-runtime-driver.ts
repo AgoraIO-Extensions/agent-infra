@@ -194,6 +194,7 @@ const nextLegacyCursor = (turns: Turn[], prefix: string) =>
 export class SessionRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
 	private readonly locks = new Map<string, Promise<unknown>>();
+	private readonly toolLocks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 	private closed = false;
@@ -658,6 +659,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.catch(() => {})
 			.then(action);
 		this.locks.set(ref, task);
+		return task;
+	}
+	private toolExclusive<T>(ref: string, action: () => Promise<T>): Promise<T> {
+		const task = (this.toolLocks.get(ref) ?? Promise.resolve())
+			.catch(() => {})
+			.then(action);
+		this.toolLocks.set(ref, task);
 		return task;
 	}
 	execute(value: RuntimeDriverCommand): Promise<RuntimeDriverOperationRecord> {
@@ -1224,9 +1232,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			readonly permitted?: boolean;
 		},
 	) {
-		let recorded = false;
 		const ref = file.read().binding.ref;
-		await this.exclusive(ref, async () => {
+		await this.toolExclusive(ref, async () => {
 			const turn = file
 				.read()
 				.turns.find((entry) => entry.executionId === executionId);
@@ -1270,15 +1277,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				};
 			});
 			await this.appendOperationFact(file, executionId, created);
-			recorded = true;
+			if (value.permitted === false)
+				await this.toolPhase(file, executionId, {
+					toolCallId: value.toolCallId,
+					name: value.name,
+					phase: "failed",
+					failureCode: "authorization_denied",
+				});
 		});
-		if (recorded && value.permitted === false)
-			await this.toolPhase(file, executionId, {
-				toolCallId: value.toolCallId,
-				name: value.name,
-				phase: "failed",
-				failureCode: "authorization_denied",
-			});
 	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,

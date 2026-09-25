@@ -104,50 +104,6 @@ const connection = new AgentSideConnection(
 				])
 					process.stdout.write(`${JSON.stringify(frame)}\n`);
 			}
-			await writeFile(
-				join(process.cwd(), "session.json"),
-				JSON.stringify({ sessionId, count }),
-			);
-			await connection.sessionUpdate({
-				sessionId,
-				update: {
-					sessionUpdate: "agent_message_chunk",
-					content: { type: "text", text: `synthetic result ${count}` },
-				},
-			});
-			if (["tool", "tool-hold"].includes(process.env.ACP_TEST_MODE)) {
-				await connection.sessionUpdate({
-					sessionId,
-					update: {
-						sessionUpdate: "tool_call",
-						toolCallId: "tool-1",
-						kind: "read",
-						status: "pending",
-					},
-				});
-				await connection.sessionUpdate({
-					sessionId,
-					update: {
-						sessionUpdate: "tool_call_update",
-						toolCallId: "tool-1",
-						kind: "read",
-						status: "in_progress",
-					},
-				});
-				if (process.env.ACP_TEST_MODE === "tool-hold")
-					await new Promise((resolve) => {
-						finishPrompt = resolve;
-					});
-				await connection.sessionUpdate({
-					sessionId,
-					update: {
-						sessionUpdate: "tool_call_update",
-						toolCallId: "tool-1",
-						kind: "read",
-						status: "completed",
-					},
-				});
-			}
 			if (process.env.ACP_TEST_MODE === "tool-permission") {
 				await connection.sessionUpdate({
 					sessionId,
@@ -191,6 +147,50 @@ const connection = new AgentSideConnection(
 						toolCallId: "tool-permission",
 						kind: "read",
 						status: allowed ? "completed" : "failed",
+					},
+				});
+			}
+			await writeFile(
+				join(process.cwd(), "session.json"),
+				JSON.stringify({ sessionId, count }),
+			);
+			await connection.sessionUpdate({
+				sessionId,
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					content: { type: "text", text: `synthetic result ${count}` },
+				},
+			});
+			if (["tool", "tool-hold"].includes(process.env.ACP_TEST_MODE)) {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "in_progress",
+					},
+				});
+				if (process.env.ACP_TEST_MODE === "tool-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "completed",
 					},
 				});
 			}
