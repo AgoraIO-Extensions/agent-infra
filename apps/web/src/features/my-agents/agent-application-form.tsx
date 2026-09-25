@@ -425,7 +425,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						credentialValue: "",
 						endpointId,
 						modelId: option.modelId,
-						optionId: option.optionId,
+						optionId:
+							endpointId.length > 0
+								? optionIdFor(endpointId, option.modelId)
+								: option.optionId,
 						reasoningLevels: option.reasoningLevels.join("\n"),
 					};
 				})
@@ -438,7 +441,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		return initialModelOptions;
 	});
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
-		configuration?.defaultModelOptionId ?? "",
+		(() => {
+			const persistedId = configuration?.defaultModelOptionId ?? "";
+			const index = (configuration?.modelOptions ?? []).findIndex(
+				(option) => option.optionId === persistedId,
+			);
+			return index >= 0
+				? (initialModelOptions[index]?.optionId ?? persistedId)
+				: persistedId;
+		})(),
 	);
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
@@ -461,18 +472,28 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
+		const currentDefaultIndex = models.findIndex(
+			(model) => model.optionId === defaultModelOptionId,
+		);
 		let changed = false;
 		const next = models.map((model) => {
 			const endpointId =
 				model.endpointId || uniqueEndpointIdFor(modelEndpoints, model.modelId);
 			if (!endpointId || !model.modelId) return model;
-			if (model.endpointId === endpointId) return model;
+			const optionId = optionIdFor(endpointId, model.modelId);
+			if (model.endpointId === endpointId && model.optionId === optionId)
+				return model;
 			changed = true;
-			return { ...model, endpointId };
+			return { ...model, endpointId, optionId };
 		});
 		if (!changed) return;
+		const hydratedDefaultModel =
+			currentDefaultIndex >= 0 ? next[currentDefaultIndex] : undefined;
+		if (hydratedDefaultModel) {
+			setDefaultModelOptionId(hydratedDefaultModel.optionId);
+		}
 		setModels(next);
-	}, [modelEndpoints, models, props.mode]);
+	}, [defaultModelOptionId, modelEndpoints, models, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),

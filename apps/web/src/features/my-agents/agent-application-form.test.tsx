@@ -313,7 +313,23 @@ describe("AgentApplicationForm", () => {
 		).toContain("Primary endpoint · gpt-5");
 		expect(
 			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
-		).toBe(false);
+		).toBe(true);
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "replacement-credential" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelConfiguration: expect.objectContaining({
+					options: [
+						expect.objectContaining({
+							optionId: "endpoint-primary:gpt-5",
+						}),
+					],
+					defaultOptionId: "endpoint-primary:gpt-5",
+				}),
+			}),
+		);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
