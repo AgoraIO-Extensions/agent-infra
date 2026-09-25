@@ -34,6 +34,12 @@ function AgentApplicationForm(
 	);
 }
 
+function at<T>(items: readonly T[], index: number) {
+	const item = items[index];
+	if (item === undefined) throw new Error(`missing item at index ${index}`);
+	return item;
+}
+
 function choose(label: string, option: string) {
 	fireEvent.click(screen.getByRole("combobox", { name: label }));
 	const item = screen.getByRole("option", { name: option });
@@ -43,7 +49,7 @@ function choose(label: string, option: string) {
 }
 
 function chooseAt(label: string, option: string, index: number) {
-	fireEvent.click(screen.getAllByRole("combobox", { name: label })[index]!);
+	fireEvent.click(at(screen.getAllByRole("combobox", { name: label }), index));
 	const item = screen.getByRole("option", { name: option });
 	fireEvent.pointerDown(item);
 	fireEvent.pointerUp(item);
@@ -55,7 +61,7 @@ function check(label: string) {
 }
 
 function checkAt(label: string, index: number) {
-	fireEvent.click(screen.getAllByRole("checkbox", { name: label })[index]!);
+	fireEvent.click(at(screen.getAllByRole("checkbox", { name: label }), index));
 }
 
 describe("AgentApplicationForm", () => {
@@ -369,14 +375,14 @@ describe("AgentApplicationForm", () => {
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
 		checkAt("medium", 0);
-		fireEvent.change(screen.getAllByLabelText("模型凭证")[0]!, {
+		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 0), {
 			target: { value: "credential-one" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
 		chooseAt("模型端点", "Primary endpoint", 1);
 		chooseAt("模型", "gpt-5", 1);
 		checkAt("medium", 1);
-		fireEvent.change(screen.getAllByLabelText("模型凭证")[1]!, {
+		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 1), {
 			target: { value: "credential-two" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
@@ -879,8 +885,43 @@ describe("AgentApplicationForm", () => {
 			target: { value: "replacement-secret" },
 		});
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
+		choose("默认推理档位", "high");
+		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 		check("high");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
+	});
+
+	it("limits default reasoning choices to the selected model levels", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint-primary:gpt-5",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "endpoint-primary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.click(screen.getByRole("combobox", { name: "默认推理档位" }));
+		expect(screen.getByRole("option", { name: "medium" })).toBeTruthy();
+		expect(screen.queryByRole("option", { name: "high" })).toBeNull();
 	});
 
 	it("associates missing reasoning levels with the checkbox group", () => {

@@ -836,6 +836,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const defaultModelDefinition = modelEndpoints
 		.find((endpoint) => endpoint.endpointId === defaultModel?.endpointId)
 		?.models.find((model) => model.modelId === defaultModel?.modelId);
+	const defaultReasoningLevels = defaultModelDefinition
+		? defaultModelDefinition.reasoningLevels.filter((level) =>
+				defaultModel?.reasoningLevels.split("\n").includes(level),
+			)
+		: [];
 	const configurationMessage =
 		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
 			? "部署选项已过期，请重新加载后再提交。"
@@ -1563,7 +1568,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												if (!value) return;
 												setDefaultReasoningLevel(value);
 												clearFieldErrors("defaultReasoningLevel");
-												dismissServerValidation();
 											}}
 										>
 											<SelectTrigger
@@ -1581,13 +1585,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectValue placeholder="选择默认推理档位" />
 											</SelectTrigger>
 											<SelectContent>
-												{defaultModelDefinition?.reasoningLevels.map(
-													(value) => (
-														<SelectItem key={value} value={value}>
-															{value}
-														</SelectItem>
-													),
-												)}
+												{defaultReasoningLevels.map((value) => (
+													<SelectItem key={value} value={value}>
+														{value}
+													</SelectItem>
+												))}
 											</SelectContent>
 										</Select>
 										<FieldError
