@@ -4,6 +4,7 @@ import {
 	assertCurrentClientBinding,
 	assertCurrentClientCredential,
 	assertInstallationConsentAvailable,
+	assertInstallationConsentBinding,
 	assertInstanceRevocable,
 	assertPatRevocable,
 	ClientAuthorizationDenied,
@@ -259,24 +260,43 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 			});
 		},
 
-		async installationForConsent(id: string) {
-			const [row] = await db
-				.select()
-				.from(oauthInstallationRequests)
-				.where(eq(oauthInstallationRequests.id, id));
-			if (!row) throw new ClientAuthorizationDenied();
-			const [consumer] = await db
-				.select()
-				.from(consumers)
-				.where(eq(consumers.id, row.consumerId));
-			if (!consumer) throw new ClientAuthorizationDenied();
-			assertInstallationConsentAvailable(row, consumer);
-			return {
-				consumerId: consumer.id,
-				consumerName: consumer.name,
-				redirectUri: row.redirectUri,
-				scopes: row.scopes,
-			};
+		async installationForConsent(
+			id: string,
+			principalId: string,
+			browserSessionHash: string,
+		) {
+			return db.transaction(async (tx) => {
+				const [row] = await tx
+					.select()
+					.from(oauthInstallationRequests)
+					.where(eq(oauthInstallationRequests.id, id))
+					.for("update");
+				if (!row) throw new ClientAuthorizationDenied();
+				const [consumer] = await tx
+					.select()
+					.from(consumers)
+					.where(eq(consumers.id, row.consumerId))
+					.for("update");
+				if (!consumer) throw new ClientAuthorizationDenied();
+				assertInstallationConsentAvailable(row, consumer);
+				if (row.principalId === null && row.browserSessionHash === null) {
+					await tx
+						.update(oauthInstallationRequests)
+						.set({ principalId, browserSessionHash })
+						.where(eq(oauthInstallationRequests.id, id));
+				} else {
+					assertInstallationConsentBinding(row, {
+						principalId,
+						browserSessionHash,
+					});
+				}
+				return {
+					consumerId: consumer.id,
+					consumerName: consumer.name,
+					redirectUri: row.redirectUri,
+					scopes: row.scopes,
+				};
+			});
 		},
 
 		async approveInstallation(
@@ -307,6 +327,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					request,
 					principal,
 					consumer,
+					{ principalId, browserSessionHash },
 				);
 				const instanceId = randomUUID();
 				await tx.insert(consumerInstances).values({
@@ -338,7 +359,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 				});
 				await tx
 					.update(oauthInstallationRequests)
-					.set({ consumedAt: new Date(), principalId, browserSessionHash })
+					.set({ consumedAt: new Date() })
 					.where(eq(oauthInstallationRequests.id, id));
 				await audit(
 					tx,

@@ -973,6 +973,9 @@ export const DirectOAuthErrorV1Schema = z.strictObject({
 		"unsupported_grant_type",
 		"temporarily_unavailable",
 	]),
+	message: nonEmptyString(),
+	traceId: TraceIdV1Schema,
+	retryable: z.boolean(),
 });
 
 const oauthErrorResponses = {

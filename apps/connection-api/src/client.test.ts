@@ -19,7 +19,10 @@ import {
 	providerReleases,
 	providers,
 } from "@agent-infra/connection-store";
-import { DirectCatalogResponseV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	DirectCatalogResponseV1Schema,
+	DirectOAuthErrorV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
@@ -34,6 +37,7 @@ const redirectUri = "https://client.example.test/callback";
 const audience = `${origin}/mcp`;
 const csrfKey = Buffer.alloc(32, 19);
 const aliceCookie = "a".repeat(43);
+const aliceOtherCookie = "c".repeat(43);
 const bobCookie = "b".repeat(43);
 const { privateKey, publicKey } = generateKeyPairSync("ec", {
 	namedCurve: "P-256",
@@ -128,7 +132,11 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			},
 			async currentSession(token) {
 				const id =
-					token === aliceCookie ? "alice" : token === bobCookie ? "bob" : null;
+					token === aliceCookie || token === aliceOtherCookie
+						? "alice"
+						: token === bobCookie
+							? "bob"
+							: null;
 				return id
 					? {
 							id,
@@ -269,12 +277,55 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 	expect(requested?.targetId).toBe(
 		createHash("sha256").update(installationId).digest("hex"),
 	);
+	expect(
+		(
+			await app.request(path, {
+				headers: { cookie: `__Host-connection_session=${aliceCookie}` },
+			})
+		).status,
+	).toBe(403);
+	expect(
+		(
+			await app.request(path, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					...browserHeaders(bobCookie),
+				},
+				body: JSON.stringify({ approve: true }),
+			})
+		).status,
+	).toBe(401);
 	expect((await app.request(path, { headers: browserHeaders() })).status).toBe(
 		200,
 	);
+	const wrongPrincipal = await app.request(path, {
+		headers: browserHeaders(bobCookie),
+	});
+	expect(wrongPrincipal.status).toBe(401);
+	expect(DirectOAuthErrorV1Schema.parse(await wrongPrincipal.json())).toEqual(
+		expect.objectContaining({
+			error: "invalid_grant",
+			message: "Authorization denied",
+			retryable: false,
+		}),
+	);
 	expect(
-		(await app.request(path, { headers: browserHeaders(bobCookie) })).status,
-	).toBe(200);
+		(await app.request(path, { headers: browserHeaders(aliceOtherCookie) }))
+			.status,
+	).toBe(401);
+	expect(
+		(
+			await app.request(path, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					...browserHeaders(bobCookie),
+				},
+				body: JSON.stringify({ approve: true }),
+			})
+		).status,
+	).toBe(401);
 	expect(
 		(
 			await app.request(path, {
