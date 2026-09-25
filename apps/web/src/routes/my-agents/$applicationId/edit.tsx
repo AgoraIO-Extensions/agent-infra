@@ -3,8 +3,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
+import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
+import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
@@ -15,6 +17,7 @@ function EditAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
+	const deployment = useDeploymentConfiguration();
 	if (query.isPending) {
 		return <p aria-live="polite">正在读取申请…</p>;
 	}
@@ -68,6 +71,10 @@ function EditAgentApplicationRoute() {
 		submission.isError && submission.error instanceof Error
 			? submission.error
 			: null;
+	const deploymentConfiguration =
+		deployment.data?.kind === "ready"
+			? deployment.data.configuration
+			: unavailableDeploymentConfiguration;
 
 	return (
 		<main className="platform-content management-content">
@@ -79,6 +86,9 @@ function EditAgentApplicationRoute() {
 				onSubmit={(body) => submission.update(applicationId, body)}
 				result={submission.data}
 				submitting={submission.isPending}
+				deploymentConfiguration={deploymentConfiguration}
+				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
+				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>
 		</main>
 	);
