@@ -168,11 +168,15 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	let modelServer: ReturnType<typeof createServer> | undefined;
 	let modelPort: number | undefined;
 	let releaseModelResponse: (() => void) | undefined;
+	let releaseSecondModelResponse: (() => void) | undefined;
 	const modelResponseGate = realCodexE2e
 		? new Promise<void>((resolve) => {
 				releaseModelResponse = resolve;
 			})
 		: Promise.resolve();
+	const secondModelResponseGate = new Promise<void>((resolve) => {
+		releaseSecondModelResponse = resolve;
+	});
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const signing = {
@@ -325,7 +329,12 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				// synthetic model can complete before the takeover assertions read
 				// the processing state that this test is exercising.
 				if (!response.destroyed)
-					await writeSyntheticModelResponse(response, modelResponseGate);
+					await writeSyntheticModelResponse(
+						response,
+						modelRequests.length === 2
+							? secondModelResponseGate
+							: modelResponseGate,
+					);
 			});
 			modelServer.listen(0, "127.0.0.1");
 			await once(modelServer, "listening");
@@ -510,6 +519,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
+		await sql`insert into platform.agent_availability (agent_id, target_type, target_id) values (${desired.agentId}, 'user', 'user-second')`;
 		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, ${configuration.source.kind === "standard" ? configuration.source.templateId : configuration.source.imageDigest}, now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
 		const fakeDriver = realCodexE2e
@@ -679,7 +689,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
-export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
+export const directory = { async resolveUser(userId) { if (!['user-cli', 'user-second'].includes(userId)) return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
 const workerDatabaseUrl = new URL(${JSON.stringify(database.databaseUrl)});
 workerDatabaseUrl.searchParams.set('application_name', 'conversation-worker-' + process.pid);
 export const workloadInput = { databaseUrl: workerDatabaseUrl.toString(), policy: ${JSON.stringify(policy)},
@@ -775,6 +785,39 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.result.conversationId,
 			};
 		};
+		const admitHttp = async (userId: string, key: string) => {
+			const command = (path: string, key: string, body: unknown) =>
+				fetch(`${apiOrigin}${path}`, {
+					method: "POST",
+					headers: {
+						authorization: `controlled-${userId}`,
+						"content-type": "application/json",
+						"Idempotency-Key": key,
+					},
+					body: JSON.stringify(body),
+				});
+			const createdResponse = await command(
+				`/api/v1/agents/${desired.agentId}/conversations`,
+				`${key}-create`,
+				{ schemaVersion: 1 },
+			);
+			const createdBody = await createdResponse.json();
+			expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
+			const created = ConversationProjectionV1Schema.parse(createdBody);
+			const acceptedResponse = await command(
+				`/api/v1/conversations/${created.conversationId}/messages`,
+				`${key}-message`,
+				{ schemaVersion: 1, text: "controlled dispatch" },
+			);
+			const acceptedBody = await acceptedResponse.json();
+			expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
+			const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
+			if (!accepted.executionId) throw Error("HTTP command had no execution");
+			return {
+				conversationId: created.conversationId,
+				executionId: accepted.executionId,
+			};
+		};
 		const admitFirst = async () => {
 			const publicKey = wrapping.publicKey.export({
 				format: "der",
@@ -784,18 +827,23 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				databaseUrl: database.databaseUrl,
 				imageRepository: "registry.example.test/agents/codex",
 				identity: {
-					resolve: async (request) =>
-						request.headers.get("authorization") === "controlled-user-cli"
-							? {
-									schemaVersion: 1,
-									userId: "user-cli",
-									displayName: "Controlled user",
-									accountStatus: "active",
-									organizationIds: [],
-									roles: ["employee"],
-									authorizationRevision: "identity-1",
-								}
-							: null,
+					resolve: async (request) => {
+						const token = request.headers.get("authorization");
+						if (
+							!token ||
+							!["controlled-user-cli", "controlled-user-second"].includes(token)
+						)
+							return null;
+						return {
+							schemaVersion: 1,
+							userId: token.slice("controlled-".length),
+							displayName: "Controlled user",
+							accountStatus: "active",
+							organizationIds: [],
+							roles: ["employee"],
+							authorizationRevision: "identity-1",
+						};
+					},
 					hydrateUsers: async (ids) =>
 						ids.map((userId) => ({
 							userId,
@@ -803,7 +851,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 							roles: ["employee"],
 						})),
 					resolveUser: async (userId) =>
-						userId === "user-cli"
+						["user-cli", "user-second"].includes(userId)
 							? {
 									schemaVersion: 1,
 									userId,
@@ -815,7 +863,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				},
 				loadAuthorityContext: async () => ({
 					schemaVersion: 1,
-					users: [{ userId: "user-cli", accountStatus: "active" }],
+					users: ["user-cli", "user-second"].map((userId) => ({
+						userId,
+						accountStatus: "active" as const,
+					})),
 					organizationIds: [],
 				}),
 				registry: {
@@ -883,37 +934,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				log: () => {},
 			});
 			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
-			const command = (path: string, key: string, body: unknown) =>
-				fetch(`${apiOrigin}${path}`, {
-					method: "POST",
-					headers: {
-						authorization: "controlled-user-cli",
-						"content-type": "application/json",
-						"Idempotency-Key": key,
-					},
-					body: JSON.stringify(body),
-				});
-			const createdResponse = await command(
-				`/api/v1/agents/${desired.agentId}/conversations`,
-				"worker-http-create",
-				{ schemaVersion: 1 },
-			);
-			const createdBody = await createdResponse.json();
-			expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
-			const created = ConversationProjectionV1Schema.parse(createdBody);
-			const acceptedResponse = await command(
-				`/api/v1/conversations/${created.conversationId}/messages`,
-				"worker-http-message",
-				{ schemaVersion: 1, text: "controlled dispatch" },
-			);
-			const acceptedBody = await acceptedResponse.json();
-			expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
-			const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
-			if (!accepted.executionId) throw Error("HTTP command had no execution");
-			return {
-				conversationId: created.conversationId,
-				executionId: accepted.executionId,
-			};
+			return admitHttp("user-cli", "worker-http");
 		};
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
@@ -949,7 +970,26 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				"first HTTP dispatch",
 			);
 		}
-		const second = await admit("second");
+		const second = realCodexE2e
+			? await admitHttp("user-second", "worker-second")
+			: await admit("second");
+		if (realCodexE2e) {
+			const [admission] = await sql<
+				{ actorId: string; principalId: string; accessKind: string }[]
+			>`
+				select e.actor_id as "actorId",
+				       r.boundary->'principal'->>'id' as "principalId",
+				       r.boundary->'accessSources'->0->>'kind' as "accessKind"
+				from platform.conversation_executions e
+				join platform.task_authorization_records r on r.execution_id=e.execution_id
+				where e.execution_id=${second.executionId}
+			`;
+			expect(admission).toEqual({
+				actorId: "user-second",
+				principalId: "user-second",
+				accessKind: "user",
+			});
+		}
 		if (!realCodexE2e) {
 			start();
 			start();
@@ -1131,11 +1171,12 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				});
 			});
 		} finally {
-			await sql`
-				update platform.outbox_items
-				set available_at=${queued.availableAt}, lease_expires_at=${queued.leaseExpiresAt}
-				where id=${queued.id}
-			`;
+			if (!realCodexE2e)
+				await sql`
+					update platform.outbox_items
+					set available_at=${queued.availableAt}, lease_expires_at=${queued.leaseExpiresAt}
+					where id=${queued.id}
+				`;
 		}
 		await waitUntil(
 			async () =>
@@ -1361,6 +1402,147 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				controller.abort();
 			}
 			expect(await dispatchCount()).toBe(1);
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp(), lease_expires_at=clock_timestamp()
+				where id=${queued.id}
+			`;
+			await waitUntil(
+				async () => modelRequests.length === 2,
+				"second principal reaches controlled native model endpoint",
+			);
+			expect(modelRequests[1]?.authenticated).toBe(true);
+			expect(modelRequests[1]?.body).toContain("controlled dispatch");
+			await waitUntil(
+				async () =>
+					modelJournalAtArrival.some(
+						(intent) => intent.executionId === second.executionId,
+					),
+				"second principal model intent preceded provider request",
+			);
+			const secondIntent = modelJournalAtArrival.find(
+				(intent) => intent.executionId === second.executionId,
+			);
+			if (!secondIntent) throw Error("Second principal model intent missing");
+			const third = await admitHttp("user-second", "worker-third");
+			await waitUntil(async () => {
+				const [queuedThird] = await sql<{ status: string }[]>`
+					select status from platform.outbox_items
+					where payload->>'executionId'=${third.executionId}
+				`;
+				return ["pending", "retry_scheduled"].includes(
+					queuedThird?.status ?? "",
+				);
+			}, "third task remains queued behind second principal");
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp()+interval '1 hour'
+				where payload->>'executionId'=${third.executionId}
+			`;
+			releaseSecondModelResponse?.();
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.conversation_executions
+							where execution_id=${second.executionId} and status='completed'
+						`
+					).length === 1,
+				"second principal native Codex execution completes",
+			);
+			const secondFacts = await sql<
+				{
+					phase: string;
+					operationRef: string;
+					attemptRef: string;
+					auditEventId: string | null;
+					eventId: string;
+				}[]
+			>`
+				select e.event_id as "eventId",
+				       e.event_payload->'fact'->>'phase' as phase,
+				       e.event_payload->'fact'->>'operationRef' as "operationRef",
+				       e.event_payload->'fact'->>'attemptRef' as "attemptRef",
+				       a.details->>'eventId' as "auditEventId"
+				from platform.conversation_events e
+				left join platform.audit_events a
+				  on a.id='operation-observed:' || e.event_id
+				 and a.target_id=e.execution_id
+				 and a.action='execution.operation.observed'
+				where e.execution_id=${second.executionId}
+				  and e.event_type='execution.operation'
+			`;
+			expect(secondFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(
+				secondFacts.every(
+					(fact) =>
+						fact.operationRef === secondIntent.operationRef &&
+						fact.attemptRef === secondIntent.attemptRef &&
+						fact.auditEventId === fact.eventId,
+				),
+			).toBe(true);
+			await sql.begin(async (transaction) => {
+				await transaction`
+					delete from platform.agent_availability
+					where agent_id=${desired.agentId}
+					  and target_type='user' and target_id='user-second'
+				`;
+				await transaction`
+					update platform.agents set authorization_revision='authority-2'
+					where id=${desired.agentId}
+				`;
+			});
+			const [revoked] = await sql`
+				select authorization_revision from platform.agents
+				where id=${desired.agentId}
+				  and not exists (
+				    select 1 from platform.agent_availability
+				    where agent_id=${desired.agentId}
+				      and target_type='user' and target_id='user-second'
+				  )
+			`;
+			expect(revoked?.authorization_revision).toBe("authority-2");
+			await sql`
+				update platform.outbox_items set available_at=clock_timestamp()
+				where payload->>'executionId'=${third.executionId}
+			`;
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.conversation_executions
+							where execution_id=${third.executionId} and status='cancelled'
+						`
+					).length === 1,
+				"revoked queued principal is cancelled before Runtime dispatch",
+			);
+			expect(
+				requests.filter(
+					(request) =>
+						request.path.endsWith("/turns") &&
+						request.executionId === third.executionId,
+				),
+			).toHaveLength(0);
+			const [control] = await sql<
+				{ revokedAt: Date | null; reason: string; auditReason: string | null }[]
+			>`
+				select r.revoked_at as "revokedAt", c.reason,
+				       a.details->>'reason' as "auditReason"
+				from platform.task_authorization_records r
+				join platform.task_control_records c
+				  on c.authorization_record_id=r.id
+				join platform.audit_events a
+				  on a.target_id=r.execution_id
+				 and a.action='task.control.created'
+				 and a.details->>'controlRecordId'=c.id
+				where r.execution_id=${third.executionId}
+			`;
+			expect(control?.revokedAt).not.toBeNull();
+			expect(control?.reason).toBe("authorization_revoked");
+			expect(control?.auditReason).toBe("authorization_revoked");
+			expect(await dispatchCount()).toBe(2);
 		}
 		if (!realCodexE2e) {
 			// The same Conversation cannot start another concurrent reply.
