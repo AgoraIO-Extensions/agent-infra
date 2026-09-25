@@ -144,6 +144,9 @@ importers:
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.0)
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
       hono:
         specifier: ^4.12.32
         version: 4.13.0

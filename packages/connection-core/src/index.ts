@@ -2,6 +2,7 @@ export * from "./authority.js";
 export * from "./calls.js";
 export * from "./catalog.js";
 export * from "./client.js";
+export * from "./direct-calls.js";
 export * from "./dpop.js";
 export * from "./effects.js";
 export * from "./execution.js";

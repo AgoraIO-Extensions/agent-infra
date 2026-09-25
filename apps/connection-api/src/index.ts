@@ -12,6 +12,7 @@ import {
 	connectionDatabaseUrlFromEnvironment,
 	createAuditEventStore,
 	createBrowserSessionStore,
+	createConnectionAuthorityRepository,
 	createConnectionCatalogRepository,
 	createConnectionClientRepository,
 	createConnectionDatabase,
@@ -40,6 +41,21 @@ function runtimePort(value: string | undefined, fallback: number) {
 		throw new Error(`Invalid PORT: ${value}`);
 	}
 	return port;
+}
+
+export function ldapTransportSecurityFromEnvironment(
+	url: string,
+	environment: Record<string, string | undefined>,
+): "tls" | "la3-pilot-plaintext" {
+	const mode = environment.CONNECTION_LDAP_LA3_PLAINTEXT;
+	if (!mode) return "tls";
+	if (mode !== "enabled") throw new Error("LA3 plaintext LDAP mode is invalid");
+	if (
+		environment.CONNECTION_ENVIRONMENT !== "la3-connection-pilot" ||
+		environment.CONNECTION_LDAP_LA3_ENDPOINT !== url
+	)
+		throw new Error("LA3 plaintext LDAP environment or endpoint is invalid");
+	return "la3-pilot-plaintext";
 }
 
 function authFromEnvironment():
@@ -91,6 +107,10 @@ function authFromEnvironment():
 		baseDn: process.env.CONNECTION_LDAP_BASE_DN ?? "",
 		serviceDn: process.env.CONNECTION_LDAP_SERVICE_DN ?? "",
 		servicePassword: process.env.CONNECTION_LDAP_SERVICE_PASSWORD ?? "",
+		transportSecurity: ldapTransportSecurityFromEnvironment(
+			process.env.CONNECTION_LDAP_URL ?? "",
+			process.env,
+		),
 	};
 	const ldap = createLdaptsAuthenticator(
 		profile,
@@ -154,6 +174,7 @@ function authFromEnvironment():
 		dependencies,
 		client: {
 			repository: createConnectionClientRepository(database.db),
+			authority: createConnectionAuthorityRepository(database.db),
 			auth: dependencies,
 			audience: new URL("/mcp", origin).href,
 			recheckPrincipal: (principalId) =>

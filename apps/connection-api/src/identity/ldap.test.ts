@@ -80,10 +80,41 @@ describe("LDAP identity", () => {
 		expect(
 			() =>
 				new LdapAuthenticator(
+					profile({
+						url: "ldap://198.51.100.2:389",
+						transportSecurity: "la3-pilot-plaintext",
+					}),
+					() => ldap,
+				),
+		).not.toThrow();
+		expect(
+			() =>
+				new LdapAuthenticator(
 					profile({ url: "http://ldap.example.test" }),
 					() => ldap,
 				),
 		).toThrow("LDAP TLS is required");
+		expect(
+			() =>
+				new LdapAuthenticator(
+					profile({
+						url: "ldap://ldap.example.test",
+						transportSecurity: "la3-pilot-plaintext",
+					}),
+					() => ldap,
+				),
+		).not.toThrow();
+		for (const url of [
+			"ldap://ldap.example.test:1389",
+			"ldaps://ldap.example.test:636",
+		])
+			expect(
+				() =>
+					new LdapAuthenticator(
+						profile({ url, transportSecurity: "la3-pilot-plaintext" }),
+						() => ldap,
+					),
+			).toThrow("standard LDAP endpoint");
 		const ambiguous = {
 			...ldap,
 			search: vi.fn(async () => [

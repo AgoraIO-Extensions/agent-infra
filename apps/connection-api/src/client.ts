@@ -7,7 +7,10 @@ import {
 	readBrowserSessionCookie,
 	verifyDpopProof,
 } from "@agent-infra/connection-core";
-import type { createConnectionClientRepository } from "@agent-infra/connection-store";
+import type {
+	createConnectionAuthorityRepository,
+	createConnectionClientRepository,
+} from "@agent-infra/connection-store";
 import {
 	DirectConsentRequestV1Schema,
 	DirectInstallRequestV1Schema,
@@ -23,6 +26,7 @@ import {
 
 export interface ConnectionClientDependencies {
 	repository: ReturnType<typeof createConnectionClientRepository>;
+	authority?: ReturnType<typeof createConnectionAuthorityRepository>;
 	auth: ConnectionAuthDependencies;
 	audience: string;
 	recheckPrincipal: (principalId: string) => Promise<void>;

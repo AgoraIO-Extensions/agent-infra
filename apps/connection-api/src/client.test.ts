@@ -6,20 +6,28 @@ import {
 	sign,
 } from "node:crypto";
 import {
+	actionCalls,
 	actionVersions,
+	actors,
 	auditEvents,
 	clientCredentials,
+	connections,
 	consumerInstances,
 	consumers,
+	createConnectionAuthorityRepository,
 	createConnectionCatalogRepository,
 	createConnectionClientRepository,
 	createConnectionDatabase,
+	credentialVersions,
+	grants,
 	migrateConnectionDatabase,
 	principals,
 	providerReleases,
 	providers,
 } from "@agent-infra/connection-store";
 import {
+	DirectActionReferenceV1Schema,
+	DirectActionReservationV1Schema,
 	DirectCatalogResponseV1Schema,
 	DirectOAuthErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -157,10 +165,12 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 	};
 	const client = {
 		repository,
+		authority: createConnectionAuthorityRepository(database.db),
 		auth,
 		audience,
 		recheckPrincipal: async (principalId: string) => {
-			if (principalId !== "alice") throw new Error("Unexpected Principal");
+			if (principalId !== "alice" && principalId !== "bob")
+				throw new Error("Unexpected Principal");
 		},
 	};
 	await database.db.insert(providers).values([
@@ -496,6 +506,294 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		),
 	).toBe(true);
 	expect(JSON.stringify(catalogAudits)).not.toContain(tokens.access_token);
+	const [installedActor] = await database.db.select().from(actors);
+	const [installedInstance] = await database.db
+		.select()
+		.from(consumerInstances);
+	if (!installedActor || !installedInstance)
+		throw new Error("Installation binding was not persisted");
+	await database.db.insert(actionVersions).values({
+		id: "action-v1",
+		providerId: "github",
+		providerReleaseId: "github-v1",
+		actionId: "read-issue",
+		version: "v1",
+		effect: "read",
+		inputSchema: {
+			type: "object",
+			properties: { repositoryId: { type: "integer" } },
+			required: ["repositoryId"],
+			additionalProperties: false,
+		},
+		outputSchema: { type: "object" },
+		requiredScopes: ["repo"],
+		status: "published",
+	});
+	await database.db.insert(connections).values({
+		id: "connection",
+		providerId: "github",
+		externalAccountId: "test-account",
+	});
+	await database.db.insert(credentialVersions).values({
+		id: "provider-credential-v1",
+		connectionId: "connection",
+		version: 1,
+		ciphertext: "test-fixture-ciphertext",
+	});
+	await database.db
+		.update(connections)
+		.set({ currentCredentialVersionId: "provider-credential-v1" });
+	await database.db.insert(grants).values({
+		id: "grant",
+		principalId: "alice",
+		consumerId: "client",
+		consumerInstanceId: installedInstance.id,
+		actorId: installedActor.id,
+		connectionId: "connection",
+		credentialVersionId: "provider-credential-v1",
+		approvedActionVersionIds: ["action-v1"],
+		principalRecoveryGeneration: 1,
+		expiresAt: new Date(Date.now() + 60_000),
+	});
+	const actionRequest = {
+		schemaVersion: 1,
+		requestId: "request-action-1",
+		idempotencyKey: "action-key-1",
+		traceId: "trace-action-1",
+		action: {
+			providerId: "github",
+			actionId: "read-issue",
+			actionVersion: "v1",
+			arguments: { repositoryId: 7 },
+		},
+	};
+	const reserve = (body: unknown, key = privateKey) =>
+		app.request("/api/v1/actions", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `DPoP ${tokens.access_token}`,
+				dpop: dpop("/api/v1/actions", {
+					token: tokens.access_token,
+					key,
+					publicJwk:
+						key === privateKey
+							? jwk
+							: otherKey.publicKey.export({ format: "jwk" }),
+				}),
+			},
+			body: JSON.stringify(body),
+		});
+	const firstReservation = await reserve(actionRequest);
+	expect(firstReservation.status).toBe(202);
+	const receipt = DirectActionReservationV1Schema.parse(
+		await firstReservation.json(),
+	);
+	expect((await reserve(actionRequest)).status).toBe(202);
+	expect(
+		DirectActionReservationV1Schema.parse(
+			await (await reserve(actionRequest)).json(),
+		).callId,
+	).toBe(receipt.callId);
+	expect(
+		(
+			await reserve({
+				...actionRequest,
+				action: {
+					...actionRequest.action,
+					arguments: { repositoryId: 8 },
+				},
+			})
+		).status,
+	).toBe(409);
+	expect(
+		(
+			await reserve({
+				...actionRequest,
+				action: {
+					...actionRequest.action,
+					arguments: { repositoryId: "invalid" },
+				},
+			})
+		).status,
+	).toBe(400);
+	const parallelRequest = {
+		...actionRequest,
+		requestId: "request-action-parallel",
+		idempotencyKey: "action-key-parallel",
+	};
+	const parallel = await Promise.all([
+		reserve(parallelRequest),
+		reserve(parallelRequest),
+	]);
+	expect(parallel.map((response) => response.status)).toEqual([202, 202]);
+	expect(
+		DirectActionReservationV1Schema.parse(await parallel[0]?.json()).callId,
+	).toBe(
+		DirectActionReservationV1Schema.parse(await parallel[1]?.json()).callId,
+	);
+	const competingRequest = {
+		...actionRequest,
+		requestId: "request-action-competing",
+		idempotencyKey: "action-key-competing",
+	};
+	const competing = await Promise.all([
+		reserve(competingRequest),
+		reserve({
+			...competingRequest,
+			action: {
+				...competingRequest.action,
+				arguments: { repositoryId: 8 },
+			},
+		}),
+	]);
+	expect(competing.map((response) => response.status).sort()).toEqual([
+		202, 409,
+	]);
+	expect((await reserve({ ...actionRequest, principalId: "bob" })).status).toBe(
+		400,
+	);
+	expect((await reserve(actionRequest, otherKey.privateKey)).status).toBe(401);
+	const actionPath = `/api/v1/actions/${receipt.callId}`;
+	const actionReference = await app.request(actionPath, {
+		headers: {
+			authorization: `DPoP ${tokens.access_token}`,
+			dpop: dpop(actionPath, {
+				method: "GET",
+				token: tokens.access_token,
+			}),
+		},
+	});
+	expect(actionReference.status).toBe(200);
+	expect(
+		DirectActionReferenceV1Schema.parse(await actionReference.json()).status,
+	).toBe("created");
+	const bobInstall = await app.request("/oauth/install", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			dpop: dpop("/oauth/install", {
+				key: otherKey.privateKey,
+				publicJwk: otherKey.publicKey.export({ format: "jwk" }),
+			}),
+		},
+		body: JSON.stringify(installationBody),
+	});
+	expect(bobInstall.status).toBe(201);
+	const bobInstallPath = new URL(
+		((await bobInstall.json()) as { authorization_uri: string })
+			.authorization_uri,
+	).pathname;
+	expect(
+		(await app.request(bobInstallPath, { headers: browserHeaders(bobCookie) }))
+			.status,
+	).toBe(200);
+	const bobApprove = await app.request(bobInstallPath, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			...browserHeaders(bobCookie),
+		},
+		body: JSON.stringify({ approve: true }),
+	});
+	expect(bobApprove.status).toBe(303);
+	const bobCode = new URL(
+		bobApprove.headers.get("location") ?? "",
+	).searchParams.get("code");
+	const bobTokenForm = new URLSearchParams({
+		grant_type: "authorization_code",
+		client_id: "client",
+		code: bobCode ?? "",
+		code_verifier: verifier,
+		redirect_uri: redirectUri,
+	});
+	const bobTokenResponse = await app.request("/oauth/token", {
+		method: "POST",
+		headers: {
+			"content-type": "application/x-www-form-urlencoded",
+			dpop: dpop("/oauth/token", {
+				key: otherKey.privateKey,
+				publicJwk: otherKey.publicKey.export({ format: "jwk" }),
+			}),
+		},
+		body: bobTokenForm.toString(),
+	});
+	expect(bobTokenResponse.status).toBe(200);
+	const bobToken = (await bobTokenResponse.json()) as { access_token: string };
+	const bobInstance = (await database.db.select().from(consumerInstances)).find(
+		(row) => row.principalId === "bob",
+	);
+	const bobActor = (await database.db.select().from(actors)).find(
+		(row) => row.consumerInstanceId === bobInstance?.id,
+	);
+	if (!bobInstance || !bobActor)
+		throw new Error("Second installation binding was not persisted");
+	await database.db.insert(grants).values({
+		id: "grant-bob",
+		principalId: "bob",
+		consumerId: "client",
+		consumerInstanceId: bobInstance.id,
+		actorId: bobActor.id,
+		connectionId: "connection",
+		credentialVersionId: "provider-credential-v1",
+		approvedActionVersionIds: ["action-v1"],
+		principalRecoveryGeneration: 1,
+		expiresAt: new Date(Date.now() + 60_000),
+	});
+	const bobReservation = await app.request("/api/v1/actions", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			authorization: `DPoP ${bobToken.access_token}`,
+			dpop: dpop("/api/v1/actions", {
+				token: bobToken.access_token,
+				key: otherKey.privateKey,
+				publicJwk: otherKey.publicKey.export({ format: "jwk" }),
+			}),
+		},
+		body: JSON.stringify(actionRequest),
+	});
+	expect(bobReservation.status).toBe(202);
+	expect(
+		DirectActionReservationV1Schema.parse(await bobReservation.json()).callId,
+	).not.toBe(receipt.callId);
+	expect(
+		(
+			await app.request(actionPath, {
+				headers: {
+					authorization: `DPoP ${bobToken.access_token}`,
+					dpop: dpop(actionPath, {
+						method: "GET",
+						token: bobToken.access_token,
+						key: otherKey.privateKey,
+						publicJwk: otherKey.publicKey.export({ format: "jwk" }),
+					}),
+				},
+			})
+		).status,
+	).toBe(404);
+	const revocationRaceRequest = {
+		...actionRequest,
+		requestId: "request-action-revocation-race",
+		idempotencyKey: "action-key-revocation-race",
+	};
+	const [racedReservation] = await Promise.all([
+		reserve(revocationRaceRequest),
+		database.db.update(grants).set({ status: "revoked", revision: 2 }),
+	]);
+	expect([202, 403]).toContain(racedReservation.status);
+	expect(
+		(
+			await reserve({
+				...actionRequest,
+				requestId: "request-action-2",
+				idempotencyKey: "action-key-2",
+			})
+		).status,
+	).toBe(403);
+	expect(await database.db.select().from(actionCalls)).toHaveLength(
+		racedReservation.status === 202 ? 5 : 4,
+	);
 	const reusedProof = dpop("/probe", {
 		method: "GET",
 		token: tokens.access_token,

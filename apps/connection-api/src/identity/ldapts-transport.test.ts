@@ -6,10 +6,14 @@ const state = vi.hoisted(() => ({
 	events: [] as string[],
 	failStartTls: false,
 	startTlsOptions: undefined as Record<string, unknown> | undefined,
+	clientOptions: undefined as Record<string, unknown> | undefined,
 }));
 
 vi.mock("ldapts", () => ({
 	Client: class {
+		constructor(options: Record<string, unknown>) {
+			state.clientOptions = options;
+		}
 		async startTLS(options: Record<string, unknown>) {
 			state.events.push("startTLS");
 			state.startTlsOptions = options;
@@ -35,6 +39,7 @@ beforeEach(() => {
 	state.events = [];
 	state.failStartTls = false;
 	state.startTlsOptions = undefined;
+	state.clientOptions = undefined;
 });
 
 const profile = (url: string) => ({
@@ -57,6 +62,7 @@ it("upgrades and verifies ldap:// before the first bind", async () => {
 		rejectUnauthorized: true,
 		servername: "ldap.example.test",
 	});
+	expect(state.clientOptions?.tlsOptions).toBeUndefined();
 });
 
 it("never binds if STARTTLS or certificate verification fails", async () => {
@@ -78,4 +84,17 @@ it("uses direct TLS without a STARTTLS operation for ldaps://", async () => {
 	const ldap = createLdaptsAuthenticator(profile("ldaps://ldap.example.test"));
 	expect(await ldap.entryExists("alice")).toBe(true);
 	expect(state.events).toEqual(["bind", "search", "unbind"]);
+	expect(state.clientOptions?.tlsOptions).toMatchObject({
+		rejectUnauthorized: true,
+	});
+});
+
+it("uses the explicitly selected LA3 pilot plaintext transport without TLS fallback", async () => {
+	const ldap = createLdaptsAuthenticator({
+		...profile("ldap://ldap.example.test"),
+		transportSecurity: "la3-pilot-plaintext",
+	});
+	expect(await ldap.entryExists("alice")).toBe(true);
+	expect(state.events).toEqual(["bind", "search", "unbind"]);
+	expect(state.clientOptions?.tlsOptions).toBeUndefined();
 });

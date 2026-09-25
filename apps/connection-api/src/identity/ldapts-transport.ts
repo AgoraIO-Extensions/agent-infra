@@ -87,16 +87,20 @@ export function createLdaptsAuthenticator(
 			rejectUnauthorized: true,
 			servername: new URL(profile.url).hostname,
 		};
+		const protocol = new URL(profile.url).protocol;
 		return new LdaptsTransport(
 			new Client({
 				url: profile.url,
 				timeout: timeoutMs,
 				connectTimeout: timeoutMs,
 				autoRebind: false,
-				tlsOptions,
+				...(protocol === "ldaps:" ? { tlsOptions } : {}),
 			}),
 			timeoutMs,
-			new URL(profile.url).protocol === "ldap:" ? tlsOptions : undefined,
+			protocol === "ldap:" &&
+				profile.transportSecurity !== "la3-pilot-plaintext"
+				? tlsOptions
+				: undefined,
 		);
 	});
 }

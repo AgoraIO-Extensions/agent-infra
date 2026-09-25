@@ -15,6 +15,7 @@ import {
 	outcomeStatuses,
 } from "@agent-infra/connection-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { assertDirectCredentialCurrent } from "./client-repository.js";
 import type { ConnectionDatabase } from "./database.js";
 import {
 	actionCalls,
@@ -146,6 +147,41 @@ function requireCallAudit(
 type ConnectionTransaction = Parameters<
 	Parameters<ConnectionDatabase["transaction"]>[0]
 >[0];
+type DirectCredentialContext = Parameters<
+	typeof assertDirectCredentialCurrent
+>[1];
+
+interface DirectActionAuthorityRepository {
+	findPublishedActionVersion(selector: {
+		providerId: string;
+		actionId: string;
+		version: string;
+	}): Promise<
+		| {
+				id: string;
+				effect: string;
+				inputSchema: Record<string, unknown>;
+				requiredScopes: readonly string[];
+		  }
+		| undefined
+	>;
+	findByIdempotencyForDirectClient(
+		namespaceKey: string,
+		idempotencyKey: string,
+		credential: DirectCredentialContext,
+	): Promise<ActionCallRecord | undefined>;
+	findByCallIdForDirectClient(
+		namespaceKey: string,
+		callId: string,
+		credential: DirectCredentialContext,
+	): Promise<ActionCallRecord | undefined>;
+	insertForDirectClient(
+		record: ActionCallRecord,
+		audit: ConnectionAuditEvent,
+		grant: GrantRecord,
+		credential: DirectCredentialContext,
+	): Promise<void>;
+}
 
 async function requireCurrentCallAuthority(
 	tx: ConnectionTransaction,
@@ -236,8 +272,37 @@ export function createAuditEventStore(db: ConnectionDatabase): AuditEventStore {
 /** PostgreSQL adapter for the Connection authority boundary. */
 export function createConnectionAuthorityRepository(
 	db: ConnectionDatabase,
-): ConnectionAuthorityRepository & ActionExecutionRepository {
+): ConnectionAuthorityRepository &
+	ActionExecutionRepository &
+	DirectActionAuthorityRepository {
 	return {
+		async findPublishedActionVersion(selector) {
+			const rows = await db
+				.select({
+					id: actionVersions.id,
+					effect: actionVersions.effect,
+					inputSchema: actionVersions.inputSchema,
+					requiredScopes: actionVersions.requiredScopes,
+				})
+				.from(actionVersions)
+				.innerJoin(providers, eq(actionVersions.providerId, providers.id))
+				.innerJoin(
+					providerReleases,
+					eq(actionVersions.providerReleaseId, providerReleases.id),
+				)
+				.where(
+					and(
+						eq(actionVersions.providerId, selector.providerId),
+						eq(actionVersions.actionId, selector.actionId),
+						eq(actionVersions.version, selector.version),
+						eq(actionVersions.status, "published"),
+						eq(providers.status, "active"),
+						eq(providerReleases.status, "active"),
+					),
+				)
+				.limit(2);
+			return rows.length === 1 ? rows[0] : undefined;
+		},
 		async findActiveGrant(context) {
 			const actorId = context.actorId ?? consumerActorSentinel;
 			const rows = await db
@@ -319,9 +384,61 @@ export function createConnectionAuthorityRepository(
 			return rows.length === 1 && row ? actionCallRecord(row) : undefined;
 		},
 
+		async findByIdempotencyForDirectClient(
+			namespaceKey,
+			idempotencyKey,
+			credential,
+		) {
+			return db.transaction(async (tx) => {
+				await assertDirectCredentialCurrent(tx, credential);
+				const rows = await tx
+					.select()
+					.from(actionCalls)
+					.where(
+						and(
+							eq(actionCalls.namespaceKey, namespaceKey),
+							eq(actionCalls.idempotencyKey, idempotencyKey),
+						),
+					)
+					.limit(2);
+				return rows.length === 1 && rows[0]
+					? actionCallRecord(rows[0])
+					: undefined;
+			});
+		},
+
+		async findByCallIdForDirectClient(namespaceKey, callId, credential) {
+			return db.transaction(async (tx) => {
+				await assertDirectCredentialCurrent(tx, credential);
+				const rows = await tx
+					.select()
+					.from(actionCalls)
+					.where(
+						and(
+							eq(actionCalls.namespaceKey, namespaceKey),
+							eq(actionCalls.callId, callId),
+						),
+					)
+					.limit(2);
+				return rows.length === 1 && rows[0]
+					? actionCallRecord(rows[0])
+					: undefined;
+			});
+		},
+
 		async insert(record, audit, grant) {
 			requireCallAudit(audit, record.id);
 			await db.transaction(async (tx) => {
+				await requireCurrentCallAuthority(tx, record, grant, false);
+				await tx.insert(actionCalls).values(actionCallValues(record));
+				await tx.insert(auditEvents).values(auditValues(audit));
+			});
+		},
+
+		async insertForDirectClient(record, audit, grant, credential) {
+			requireCallAudit(audit, record.id);
+			await db.transaction(async (tx) => {
+				await assertDirectCredentialCurrent(tx, credential);
 				await requireCurrentCallAuthority(tx, record, grant, false);
 				await tx.insert(actionCalls).values(actionCallValues(record));
 				await tx.insert(auditEvents).values(auditValues(audit));

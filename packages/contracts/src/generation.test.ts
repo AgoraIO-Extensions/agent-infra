@@ -209,11 +209,9 @@ describe("standard contract artifacts", () => {
 				]),
 			);
 		}
-		expect(artifacts.pilotDirectOpenapi.security).toEqual([
-			{ DirectDpopToken: [] },
-		]);
+		expect(artifacts.pilotDirectOpenapi.security).toEqual([{ DirectDpop: [] }]);
 		expect(
-			artifacts.pilotDirectOpenapi.components.securitySchemes.DirectDpopToken,
+			artifacts.pilotDirectOpenapi.components.securitySchemes.DirectDpop,
 		).toEqual({ type: "http", scheme: "DPoP" });
 		expect(artifacts.kubernetesWorkloadJsonSchema.$schema).toBe(
 			"https://json-schema.org/draft/2020-12/schema",

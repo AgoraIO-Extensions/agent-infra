@@ -28,6 +28,7 @@ export interface LdapProfile {
 	servicePassword: string;
 	userFilterAttribute?: string;
 	timeoutMs?: number;
+	transportSecurity?: "tls" | "la3-pilot-plaintext";
 }
 
 export interface LdapPrincipal {
@@ -115,6 +116,12 @@ function validateProfile(
 		url.hash
 	)
 		throw new Error("LDAP TLS is required");
+	if (profile.transportSecurity === "la3-pilot-plaintext") {
+		if (url.protocol !== "ldap:" || (url.port && url.port !== "389"))
+			throw new Error("LA3 plaintext LDAP requires the standard LDAP endpoint");
+	} else if (profile.transportSecurity && profile.transportSecurity !== "tls") {
+		throw new Error("LDAP transport security mode is invalid");
+	}
 	const timeoutMs = profile.timeoutMs ?? 5_000;
 	if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000)
 		throw new Error("LDAP timeout is out of range");

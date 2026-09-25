@@ -1294,6 +1294,55 @@
       ],
       "type": "object"
     },
+    "DirectActionReferenceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "callId": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "created",
+            "submission_started",
+            "provider_succeeded",
+            "provider_failed",
+            "result_pending",
+            "needs_manual_review",
+            "unresolved"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "idempotencyKey",
+        "traceId",
+        "callId",
+        "status"
+      ],
+      "type": "object"
+    },
     "DirectActionRequestV1": {
       "additionalProperties": false,
       "description": "Direct payloads are limited to 10000 total JSON nodes and 1048576 UTF-8 bytes.",
@@ -1838,6 +1887,47 @@
         "idempotencyKey",
         "action",
         "traceId"
+      ],
+      "type": "object"
+    },
+    "DirectActionReservationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "callId": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._~-]+$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "const": "reserved",
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "idempotencyKey",
+        "traceId",
+        "callId",
+        "status"
       ],
       "type": "object"
     },
