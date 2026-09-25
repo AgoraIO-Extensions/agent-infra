@@ -302,6 +302,7 @@ function DraftRows<T extends string>({
 							{field.options ? (
 								<Select
 									disabled={field.options.length === 0}
+									required={field.required}
 									value={row[field.key]}
 									itemToStringLabel={(value) =>
 										field.options?.find((option) => option.value === value)
@@ -314,6 +315,7 @@ function DraftRows<T extends string>({
 									<SelectTrigger
 										id={`application-${idPrefix}-${field.key}-${index}`}
 										className="h-11 w-full text-base md:text-sm"
+										aria-required={field.required}
 									>
 										<SelectValue placeholder="选择一项" />
 									</SelectTrigger>
@@ -550,6 +552,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(!defaultModelOptionId ||
 			!defaultModelDefinition ||
 			!selectedDefaultReasoningLevel);
+	const incompleteDraftRows =
+		environment.some((item) => !item.name.trim() || !item.value.trim()) ||
+		secrets.some((item) => !item.name.trim() || !item.value.trim());
 	const configurationMessage =
 		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
 			? "部署选项已过期，请重新加载后再提交。"
@@ -573,7 +578,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			(sourceKind === "standard" && !selectedTemplate) ||
 			staleTemplate ||
 			staleModel ||
-			invalidDefaultModel
+			invalidDefaultModel ||
+			incompleteDraftRows
 		)
 			return;
 		const draft = {

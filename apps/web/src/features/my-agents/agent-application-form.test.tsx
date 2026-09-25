@@ -565,6 +565,29 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("requires a name when an environment row already has a value", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.change(screen.getByLabelText("变量值"), {
+			target: { value: "debug" },
+		});
+		expect(
+			screen
+				.getByRole("combobox", { name: "变量名称" })
+				.getAttribute("aria-required"),
+		).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("blocks an empty deployment catalog with a recoverable message", () => {
 		const onSubmit = vi.fn();
 		render(
