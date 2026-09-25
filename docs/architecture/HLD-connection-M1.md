@@ -162,11 +162,27 @@ Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员�
 `auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
 exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
 
-Rehoboam 统一错误契约发布为 immutable `rehoboam-connection-v5` 与对应的新 ActionVersion。错误码、
-用户可见消息、有界脱敏详情、可重试性和提交结果由 Rehoboam MCP API 定义；Connection Adapter 仅解析并
-透传该标准 envelope，Connection Core 仅按 HTTP 与提交结果执行通用的 `FAILED` / `UNCERTAIN` 分类，禁止
-加入 Release、Pipeline、GitHub、Jenkins 或分支相关业务判断。v4 保持不可变，既有 Connection/Grant 不得
-静默切换到 v5。
+后续 `rehoboam-connection-v5` 不改写 v4：`get_release@v2` 改为固定的有界摘要入口，
+`list_release_pipeline_runs@v2` 增加服务端分页（单页最多 20 条）并返回可查询的 Job ID；
+其余 Actions 仅为 immutable ProviderRelease 绑定发布新版本，语义与权限保持不变。
+
+后续 `rehoboam-connection-v6` 保留 v5：`get_release@v3` 在有界摘要中返回 Rehoboam 已存储的
+最新 `release_infos` 发布结果，优先最终 HTML、回退描述，内容最多 8000 字符并显式标记截断；
+不暴露完整历史或任意正文查询。其他 Actions 只随 immutable ProviderRelease 更新版本，不改变语义与权限。
+
+后续 `rehoboam-connection-v7` 保留 v6：`get_release@v4` 和 Card 查询不再为未记录的进度节点或
+未计算的 PipelineHistory 状态伪造空值；已保存的进度和状态原样保留。实际运行状态继续通过
+Release-scoped Job READ 查询；其余 Actions 只更新 immutable 绑定版本，不改变权限或写入语义。
+
+Manhattan 的首个 **[设计决策]** Provider profile 固定为
+`https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
+`apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
+v3 连接表单接收公司 HCI 用户名与密码，并只发送到固定 `/api/connection/login`；Manhattan 服务端完成
+password grant 后返回短期个人 Token，Connection 只加密保存该 Token，不保存账号密码。随后 Manhattan
+调用固定 user-info endpoint 验证 Token 并执行现有 RBAC 校验。机器 key 只由 Secret Manager 注入，不得
+进入 credential envelope。手工 Bearer v1 和 HCI Cookie v2 保持不可变；`manhattan-connection-v3` 发布当前用户、SDK dump 列表/详情和 Symbol
+列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
+为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
 
 DataLego 的首个 **[设计决策]** Provider profile 固定为
 `https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。

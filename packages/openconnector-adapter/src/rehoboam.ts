@@ -11,8 +11,7 @@ const releaseReadScope = "rehoboam.release.read";
 const releaseWriteScope = "rehoboam.release.write";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
-const providerReleaseId = "rehoboam-connection-v5";
-export const rehoboamLegacyProviderReleaseId = "rehoboam-connection-v4";
+const providerReleaseId = "rehoboam-connection-v7";
 
 const releaseIdSchema = { minLength: 1, type: "string" } as const;
 const cardIdSchema = { minLength: 1, type: "string" } as const;
@@ -23,7 +22,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取当前通过 Rehoboam 个人 Token 鉴权的用户。",
 			effect: "READ" as const,
-			id: "rehoboam.get_current_user@v5",
+			id: "rehoboam.get_current_user@v7",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
@@ -36,7 +35,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "分页查询 Rehoboam 版本列表。",
 			effect: "READ" as const,
-			id: "rehoboam.list_releases@v2",
+			id: "rehoboam.list_releases@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -56,7 +55,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取一个 Rehoboam 版本的受限详情。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release@v2",
+			id: "rehoboam.get_release@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema },
@@ -69,7 +68,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "列出指定版本拥有的流水线。",
 			effect: "READ" as const,
-			id: "rehoboam.list_release_pipelines@v2",
+			id: "rehoboam.list_release_pipelines@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema },
@@ -82,7 +81,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取指定版本中的一条流水线。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release_pipeline@v2",
+			id: "rehoboam.get_release_pipeline@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, cardId: cardIdSchema },
@@ -95,7 +94,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "预检版本流水线运行；服务端决定直跑或审批申请。",
 			effect: "READ" as const,
-			id: "rehoboam.prepare_release_pipeline_run@v2",
+			id: "rehoboam.prepare_release_pipeline_run@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -112,7 +111,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "运行版本流水线；管理员直跑，其他用户创建审批申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.execute_release_pipeline@v2",
+			id: "rehoboam.execute_release_pipeline@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -129,7 +128,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "分页列出指定版本的流水线执行申请。",
 			effect: "READ" as const,
-			id: "rehoboam.list_execution_requests@v2",
+			id: "rehoboam.list_execution_requests@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -147,7 +146,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取一个流水线执行申请及当前用户能力。",
 			effect: "READ" as const,
-			id: "rehoboam.get_execution_request@v2",
+			id: "rehoboam.get_execution_request@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { requestId: requestIdSchema },
@@ -160,7 +159,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "批准流水线执行申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.approve_execution_request@v2",
+			id: "rehoboam.approve_execution_request@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
@@ -173,7 +172,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "撤回自己的流水线执行申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.withdraw_execution_request@v2",
+			id: "rehoboam.withdraw_execution_request@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
@@ -186,7 +185,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "拒绝流水线执行申请，必须提供原因。",
 			effect: "WRITE" as const,
-			id: "rehoboam.reject_execution_request@v2",
+			id: "rehoboam.reject_execution_request@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -203,10 +202,15 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "列出指定版本流水线的运行记录。",
 			effect: "READ" as const,
-			id: "rehoboam.list_release_pipeline_runs@v2",
+			id: "rehoboam.list_release_pipeline_runs@v4",
 			inputSchema: {
 				additionalProperties: false,
-				properties: { releaseId: releaseIdSchema, cardId: cardIdSchema },
+				properties: {
+					releaseId: releaseIdSchema,
+					cardId: cardIdSchema,
+					page: { minimum: 1, type: "integer" },
+					pageSize: { maximum: 20, minimum: 1, type: "integer" },
+				},
 				required: ["releaseId"],
 				type: "object",
 			},
@@ -216,7 +220,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取指定版本中的一次流水线运行结果。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release_pipeline_run@v2",
+			id: "rehoboam.get_release_pipeline_run@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -328,9 +332,12 @@ export class RehoboamAdapter
 			method: "POST",
 		});
 		if (action === "rehoboam.get_release")
-			return this.requestJson(`/mcp/v1/releases/${encodedRelease}`, {
-				headers: authHeaders,
-			});
+			return this.requestJson(
+				`/mcp/v1/releases/${encodedRelease}/connection-summary`,
+				{
+					headers: authHeaders,
+				},
+			);
 		if (action === "rehoboam.list_release_pipelines")
 			return this.requestJson(`/mcp/v1/releases/${encodedRelease}/pipelines`, {
 				headers: authHeaders,
@@ -364,6 +371,8 @@ export class RehoboamAdapter
 			return this.requestJson(
 				withQuery(`/mcp/v1/releases/${encodedRelease}/pipeline-runs`, {
 					card_id: input.cardId,
+					page: input.page,
+					page_size: input.pageSize,
 				}),
 				{ headers: authHeaders },
 			);

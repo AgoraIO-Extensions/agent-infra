@@ -39,6 +39,10 @@ import {
 	jiraServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/jira-server";
 import {
+	ManhattanAdapter,
+	manhattanConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/manhattan";
+import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
 	rehoboamLegacyProviderReleaseId,
@@ -81,6 +85,7 @@ export async function createConnectionRuntime(
 		datalegoConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
+		manhattanConnectionCatalog,
 		rehoboamConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog, {
@@ -101,6 +106,7 @@ export async function createConnectionRuntime(
 			datalegoConnectionCatalog,
 			jenkinsCiConnectionCatalog,
 			jenkinsReleaseConnectionCatalog,
+			manhattanConnectionCatalog,
 			rehoboamConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
@@ -180,6 +186,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 		config.rehoboamApiKey,
 	);
+	const manhattan = new ManhattanAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		config.manhattanApiKey,
+	);
 	const datalego = new DataLegoAdapter(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 	);
@@ -191,6 +201,7 @@ export async function createConnectionRuntime(
 		[datalegoConnectionCatalog.providerReleaseId]: datalego,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
+		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
 		[rehoboamLegacyProviderReleaseId]: rehoboam,
 	});
@@ -207,6 +218,7 @@ export async function createConnectionRuntime(
 			datalego,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
+			[manhattan.providerId]: manhattan,
 			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
@@ -248,6 +260,7 @@ export async function createConnectionRuntime(
 			"jenkins-ci.agoralab.co": "jenkins-ci",
 			"rehoboam.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 			"justinia.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
+			"manhattan-api.agoralab.co": manhattanConnectionCatalog.provider,
 		},
 		service,
 		supportedProviders: [
@@ -259,6 +272,7 @@ export async function createConnectionRuntime(
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,
+			manhattanConnectionCatalog.provider,
 		],
 	});
 	return {

@@ -22,20 +22,20 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v5",
-			"rehoboam.list_releases@v2",
-			"rehoboam.get_release@v2",
-			"rehoboam.list_release_pipelines@v2",
-			"rehoboam.get_release_pipeline@v2",
-			"rehoboam.prepare_release_pipeline_run@v2",
-			"rehoboam.execute_release_pipeline@v2",
-			"rehoboam.list_execution_requests@v2",
-			"rehoboam.get_execution_request@v2",
-			"rehoboam.approve_execution_request@v2",
-			"rehoboam.withdraw_execution_request@v2",
-			"rehoboam.reject_execution_request@v2",
-			"rehoboam.list_release_pipeline_runs@v2",
-			"rehoboam.get_release_pipeline_run@v2",
+			"rehoboam.get_current_user@v7",
+			"rehoboam.list_releases@v4",
+			"rehoboam.get_release@v4",
+			"rehoboam.list_release_pipelines@v4",
+			"rehoboam.get_release_pipeline@v4",
+			"rehoboam.prepare_release_pipeline_run@v4",
+			"rehoboam.execute_release_pipeline@v4",
+			"rehoboam.list_execution_requests@v4",
+			"rehoboam.get_execution_request@v4",
+			"rehoboam.approve_execution_request@v4",
+			"rehoboam.withdraw_execution_request@v4",
+			"rehoboam.reject_execution_request@v4",
+			"rehoboam.list_release_pipeline_runs@v4",
+			"rehoboam.get_release_pipeline_run@v4",
 		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
@@ -110,6 +110,34 @@ test("Rehoboam execution sends the stored personal token", async () => {
 	});
 });
 
+test("Rehoboam release read preserves the bounded stored publication result", async () => {
+	const latestReleaseInfo = {
+		content: "<p>Release 4.7.0</p>",
+		content_source: "final_content.html",
+		operator: "publisher",
+		time: 42,
+		truncated: false,
+	};
+	const adapter = new RehoboamAdapter(
+		async () =>
+			Response.json({
+				data: { _id: "release-1", latest_release_info: latestReleaseInfo },
+				success: true,
+			}),
+		"machine-key",
+	);
+
+	const result = await adapter.execute({
+		action: "rehoboam.get_release",
+		credential: { accessToken: "stored-token" },
+		input: { releaseId: "release-1" },
+	});
+	assert.deepEqual(result, {
+		_id: "release-1",
+		latest_release_info: latestReleaseInfo,
+	});
+});
+
 test("Rehoboam maps release reads and writes to fixed endpoints", async () => {
 	const requests: Array<{ body?: string; method?: string; url: string }> = [];
 	const adapter = new RehoboamAdapter(async (input, init) => {
@@ -128,6 +156,16 @@ test("Rehoboam maps release reads and writes to fixed endpoints", async () => {
 		input: { releaseId: "rel/1" },
 	});
 	await adapter.execute({
+		action: "rehoboam.get_release",
+		credential,
+		input: { releaseId: "rel/1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.list_release_pipeline_runs",
+		credential,
+		input: { releaseId: "rel/1", page: 2, pageSize: 1 },
+	});
+	await adapter.execute({
 		action: "rehoboam.execute_release_pipeline",
 		credential,
 		input: { cardId: "card-1", params: { env: "prod" }, releaseId: "rel-1" },
@@ -144,14 +182,22 @@ test("Rehoboam maps release reads and writes to fixed endpoints", async () => {
 	);
 	assert.equal(
 		requests[1]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/connection-summary",
+	);
+	assert.equal(
+		requests[2]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/pipeline-runs?page=2&page_size=1",
+	);
+	assert.equal(
+		requests[3]?.url,
 		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel-1/pipeline-runs",
 	);
-	assert.equal(requests[1]?.method, "POST");
-	assert.deepEqual(JSON.parse(requests[1]?.body ?? "{}"), {
+	assert.equal(requests[3]?.method, "POST");
+	assert.deepEqual(JSON.parse(requests[3]?.body ?? "{}"), {
 		card_id: "card-1",
 		params: { env: "prod" },
 	});
-	assert.deepEqual(JSON.parse(requests[2]?.body ?? "{}"), {
+	assert.deepEqual(JSON.parse(requests[4]?.body ?? "{}"), {
 		reject_reason: "not ready",
 		release_id: "rel-1",
 	});

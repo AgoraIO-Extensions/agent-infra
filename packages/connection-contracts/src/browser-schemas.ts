@@ -32,7 +32,7 @@ export const providerCredentialRequestSchema = z.union([
 	}),
 	z.strictObject({
 		password: z.string().min(1).max(1_024),
-		providerId: z.enum(["confluence", "jira"]),
+		providerId: z.enum(["confluence", "jira", "manhattan"]),
 		username: z.string().trim().min(1).max(256),
 	}),
 	z.strictObject({

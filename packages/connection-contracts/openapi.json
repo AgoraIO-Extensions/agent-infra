@@ -843,7 +843,10 @@
 						"additionalProperties": false,
 						"required": ["providerId"],
 						"properties": {
-							"providerId": { "type": "string", "const": "datalego" }
+							"providerId": {
+								"type": "string",
+								"const": "datalego"
+							}
 						}
 					},
 					{
@@ -869,7 +872,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"enum": ["confluence", "jira"]
+								"enum": ["confluence", "jira", "manhattan"]
 							},
 							"username": {
 								"type": "string",
