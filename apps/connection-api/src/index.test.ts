@@ -1,14 +1,11 @@
 import { expect, it } from "vitest";
 import { ldapTransportSecurityFromEnvironment } from "./index.js";
 
-const url = "ldap://10.20.30.40:389";
+const url = "ldap://ldap.example.test";
 const approved = {
 	CONNECTION_LDAP_LA3_PLAINTEXT: "enabled",
 	CONNECTION_ENVIRONMENT: "la3-connection-pilot",
-	CONNECTION_LDAP_LA3_PRIVATE_ENDPOINT: url,
-	CONNECTION_LDAP_LA3_APPROVED_NETWORK_PATH: "approved-private-egress",
-	CONNECTION_LDAP_LA3_RISK_OWNER: "security-owner",
-	CONNECTION_LDAP_LA3_RISK_RECORD: "internal-risk-record",
+	CONNECTION_LDAP_LA3_ENDPOINT: url,
 };
 
 it("keeps TLS as the default LDAP mode", () => {
@@ -17,7 +14,7 @@ it("keeps TLS as the default LDAP mode", () => {
 
 it("requires every LA3 plaintext deployment gate at startup", () => {
 	expect(ldapTransportSecurityFromEnvironment(url, approved)).toBe(
-		"la3-private-plaintext",
+		"la3-pilot-plaintext",
 	);
 	for (const key of Object.keys(approved).filter(
 		(name) => name !== "CONNECTION_LDAP_LA3_PLAINTEXT",
@@ -33,7 +30,7 @@ it("requires every LA3 plaintext deployment gate at startup", () => {
 		}),
 	).toThrow();
 	expect(() =>
-		ldapTransportSecurityFromEnvironment("ldap://10.20.30.41:389", approved),
+		ldapTransportSecurityFromEnvironment("ldap://other.example.test", approved),
 	).toThrow();
 	expect(() =>
 		ldapTransportSecurityFromEnvironment(url, {

@@ -28,7 +28,7 @@ export interface LdapProfile {
 	servicePassword: string;
 	userFilterAttribute?: string;
 	timeoutMs?: number;
-	transportSecurity?: "tls" | "la3-private-plaintext";
+	transportSecurity?: "tls" | "la3-pilot-plaintext";
 }
 
 export interface LdapPrincipal {
@@ -116,21 +116,9 @@ function validateProfile(
 		url.hash
 	)
 		throw new Error("LDAP TLS is required");
-	if (profile.transportSecurity === "la3-private-plaintext") {
-		const octets = url.hostname.split(".").map(Number);
-		const secondOctet = octets[1] ?? -1;
-		const privateIpv4 =
-			octets.length === 4 &&
-			octets.every(
-				(part) => Number.isInteger(part) && part >= 0 && part <= 255,
-			) &&
-			(octets[0] === 10 ||
-				(octets[0] === 172 && secondOctet >= 16 && secondOctet <= 31) ||
-				(octets[0] === 192 && octets[1] === 168));
-		if (url.protocol !== "ldap:" || url.port !== "389" || !privateIpv4)
-			throw new Error(
-				"LA3 plaintext LDAP requires a fixed private IPv4 endpoint",
-			);
+	if (profile.transportSecurity === "la3-pilot-plaintext") {
+		if (url.protocol !== "ldap:" || (url.port && url.port !== "389"))
+			throw new Error("LA3 plaintext LDAP requires the standard LDAP endpoint");
 	} else if (profile.transportSecurity && profile.transportSecurity !== "tls") {
 		throw new Error("LDAP transport security mode is invalid");
 	}

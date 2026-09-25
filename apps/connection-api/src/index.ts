@@ -44,19 +44,16 @@ function runtimePort(value: string | undefined, fallback: number) {
 export function ldapTransportSecurityFromEnvironment(
 	url: string,
 	environment: Record<string, string | undefined>,
-): "tls" | "la3-private-plaintext" {
+): "tls" | "la3-pilot-plaintext" {
 	const mode = environment.CONNECTION_LDAP_LA3_PLAINTEXT;
 	if (!mode) return "tls";
 	if (mode !== "enabled") throw new Error("LA3 plaintext LDAP mode is invalid");
 	if (
 		environment.CONNECTION_ENVIRONMENT !== "la3-connection-pilot" ||
-		environment.CONNECTION_LDAP_LA3_PRIVATE_ENDPOINT !== url ||
-		!environment.CONNECTION_LDAP_LA3_APPROVED_NETWORK_PATH?.trim() ||
-		!environment.CONNECTION_LDAP_LA3_RISK_OWNER?.trim() ||
-		!environment.CONNECTION_LDAP_LA3_RISK_RECORD?.trim()
+		environment.CONNECTION_LDAP_LA3_ENDPOINT !== url
 	)
-		throw new Error("LA3 plaintext LDAP approval or environment is incomplete");
-	return "la3-private-plaintext";
+		throw new Error("LA3 plaintext LDAP environment or endpoint is invalid");
+	return "la3-pilot-plaintext";
 }
 
 function authFromEnvironment():
