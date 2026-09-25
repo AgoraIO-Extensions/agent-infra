@@ -41,6 +41,10 @@ RUN apk add --no-cache --upgrade 'libcrypto3=3.5.8-r0' 'libssl3=3.5.8-r0' 'setpr
 	&& npm install --global npm@11.19.1
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
+# The official Runtime image is the Codex standard template.  The platform
+# injects model credentials and grants at deployment time, while the driver
+# binding is immutable image metadata and must not be owner-controlled input.
+ENV AGENT_INFRA_RUNTIME_DRIVER=codex
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
