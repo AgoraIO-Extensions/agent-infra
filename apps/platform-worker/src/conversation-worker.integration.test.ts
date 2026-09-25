@@ -1404,7 +1404,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			expect(await dispatchCount()).toBe(1);
 			await sql`
 				update platform.outbox_items
-				set available_at=clock_timestamp(), lease_expires_at=clock_timestamp()
+				set available_at=clock_timestamp(),
+				    lease_expires_at=case when status='processing'
+				      then clock_timestamp() else lease_expires_at end
 				where id=${queued.id}
 			`;
 			await waitUntil(
