@@ -269,6 +269,10 @@ describe("AgentApplicationForm", () => {
 		if (!firstName) throw new Error("environment name input missing");
 		fireEvent.change(firstName, { target: { value: "B" } });
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
+		const secondName = names[1];
+		if (!secondName) throw new Error("second environment name input missing");
+		fireEvent.change(secondName, { target: { value: "C" } });
+		expect(screen.queryByText("名称不能重复。")).toBeNull();
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -678,6 +682,44 @@ describe("AgentApplicationForm", () => {
 		expect(
 			screen.getByLabelText("默认模型").getAttribute("aria-invalid"),
 		).toBeNull();
+	});
+
+	it("keeps a server model error after credential or reasoning changes", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint-primary:gpt-5",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+				defaultModelOptionId: "endpoint-primary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		const defaultModel = screen.getByLabelText("默认模型");
+		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "replacement-secret" },
+		});
+		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
+		check("high");
+		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 	});
 
 	it("associates missing reasoning levels with the checkbox group", () => {

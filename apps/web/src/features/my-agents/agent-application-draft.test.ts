@@ -250,6 +250,27 @@ describe("Agent application draft", () => {
 		expect(errors["secret.0.name"]).toBe("该名称已不再允许使用，请重新选择。");
 	});
 
+	it("rejects whitespace-only environment and Secret values", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				environment: [{ name: "LOG_LEVEL", value: "  \n" }],
+				secrets: [{ name: "MODEL_API_KEY", value: " \t" }],
+			},
+			{
+				modelConfigurationVisible: false,
+				requiresReplacementCredential: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+
+		expect(errors["environment.0.value"]).toBe("请输入值。");
+		expect(errors["secret.0.value"]).toBe("请输入值。");
+	});
+
 	it("keeps a valid model row clear when another row is stale", () => {
 		const errors = validateAgentApplicationDraft(
 			{

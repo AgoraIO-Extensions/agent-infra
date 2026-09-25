@@ -632,6 +632,38 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return changed ? next : current;
 		});
 	};
+	const updateNameField = (
+		prefix: "environment" | "secret",
+		rows: readonly AgentApplicationEnvironmentDraft[],
+		index: number,
+		key: "name" | "value",
+	) => {
+		setFieldErrors((current) => {
+			const next = { ...current };
+			delete next[`${prefix}.${index}.${key}`];
+			if (key === "name") {
+				const duplicateMessage = "名称不能重复。";
+				for (const errorKey of Object.keys(next)) {
+					if (
+						errorKey.startsWith(`${prefix}.`) &&
+						errorKey.endsWith(".name") &&
+						next[errorKey] === duplicateMessage
+					)
+						delete next[errorKey];
+				}
+				const nameCounts = new Map<string, number>();
+				for (const row of rows) {
+					const name = row.name.trim();
+					if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+				}
+				rows.forEach((row, rowIndex) => {
+					if (row.name.trim() && nameCounts.get(row.name.trim()) !== 1)
+						next[`${prefix}.${rowIndex}.name`] = duplicateMessage;
+				});
+			}
+			return next;
+		});
+	};
 	const dismissServerValidation = () => {
 		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
 			setServerValidationDismissed(true);
@@ -1223,12 +1255,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							fieldErrors[`environment.${index}.${key}`]
 						}
 						onChange={(index, key, value) => {
-							setEnvironment((current) =>
-								current.map((item, itemIndex) =>
-									itemIndex === index ? { ...item, [key]: value } : item,
-								),
+							const next = environment.map((item, itemIndex) =>
+								itemIndex === index ? { ...item, [key]: value } : item,
 							);
-							clearFieldErrors(`environment.${index}.${key}`);
+							setEnvironment(next);
+							updateNameField("environment", next, index, key);
 						}}
 						onRemove={(index) => {
 							setEnvironment((current) =>
@@ -1280,12 +1311,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						label="Secret"
 						errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
 						onChange={(index, key, value) => {
-							setSecrets((current) =>
-								current.map((item, itemIndex) =>
-									itemIndex === index ? { ...item, [key]: value } : item,
-								),
+							const next = secrets.map((item, itemIndex) =>
+								itemIndex === index ? { ...item, [key]: value } : item,
 							);
-							clearFieldErrors(`secret.${index}.${key}`);
+							setSecrets(next);
+							updateNameField("secret", next, index, key);
 						}}
 						onRemove={(index) => {
 							setSecrets((current) =>
@@ -1385,7 +1415,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													]
 												: [`model.${index}.${key}`]),
 										);
-										dismissServerValidation();
+										if (key === "endpointId" || key === "modelId")
+											dismissServerValidation();
 									}}
 									onRemove={(index) => {
 										setModels((current) =>

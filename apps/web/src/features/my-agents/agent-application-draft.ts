@@ -140,7 +140,7 @@ export function validateAgentApplicationDraft(
 		rows.forEach((row, index) => {
 			if (!row.name.trim())
 				errors[`${prefix}.${index}.name`] = "请选择或填写名称。";
-			if (!row.value) errors[`${prefix}.${index}.value`] = "请输入值。";
+			if (!row.value.trim()) errors[`${prefix}.${index}.value`] = "请输入值。";
 		});
 	};
 	validateRows(
