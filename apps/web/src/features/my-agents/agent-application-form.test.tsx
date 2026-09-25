@@ -247,7 +247,7 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
-	it("keeps remaining duplicate environment errors after one name changes", async () => {
+	it("recomputes duplicate environment errors after row removal and edits", async () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -283,13 +283,21 @@ describe("AgentApplicationForm", () => {
 		values.forEach((input) => {
 			fireEvent.change(input, { target: { value: "value" } });
 		});
+		const thirdName = names[2];
+		if (!thirdName) throw new Error("third environment name input missing");
+		fireEvent.change(thirdName, { target: { value: "B" } });
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
-		expect(screen.getAllByText("名称不能重复。")).toHaveLength(3);
+		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
+
+		fireEvent.click(
+			at(screen.getAllByRole("button", { name: "移除环境变量" }), 2),
+		);
+		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		const firstName = names[0];
 		if (!firstName) throw new Error("environment name input missing");
 		fireEvent.change(firstName, { target: { value: "B" } });
-		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
+		expect(screen.queryByText("名称不能重复。")).toBeNull();
 		const secondName = names[1];
 		if (!secondName) throw new Error("second environment name input missing");
 		fireEvent.change(secondName, { target: { value: "C" } });

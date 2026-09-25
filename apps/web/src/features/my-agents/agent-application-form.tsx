@@ -1347,14 +1347,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							updateNameField("environment", next, index, key);
 						}}
 						onRemove={(index) => {
-							setEnvironment((current) =>
-								current.filter((_, itemIndex) => itemIndex !== index),
+							const next = environment.filter(
+								(_, itemIndex) => itemIndex !== index,
 							);
+							setEnvironment(next);
 							clearFieldErrors(
 								...Object.keys(fieldErrors).filter((key) =>
 									key.startsWith("environment."),
 								),
 							);
+							if (next.length > 0)
+								updateNameField("environment", next, 0, "name");
 						}}
 						rows={environment}
 					/>
@@ -1409,14 +1412,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							updateNameField("secret", next, index, key);
 						}}
 						onRemove={(index) => {
-							setSecrets((current) =>
-								current.filter((_, itemIndex) => itemIndex !== index),
+							const next = secrets.filter(
+								(_, itemIndex) => itemIndex !== index,
 							);
+							setSecrets(next);
 							clearFieldErrors(
 								...Object.keys(fieldErrors).filter((key) =>
 									key.startsWith("secret."),
 								),
 							);
+							if (next.length > 0) updateNameField("secret", next, 0, "name");
 						}}
 						rows={secrets}
 					/>
@@ -1526,9 +1531,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											dismissServerValidation();
 									}}
 									onRemove={(index) => {
-										setModels((current) =>
-											current.filter((_, itemIndex) => itemIndex !== index),
+										const next = models.filter(
+											(_, itemIndex) => itemIndex !== index,
 										);
+										setModels(next);
 										clearFieldErrors(
 											...Object.keys(fieldErrors).filter((key) =>
 												key.startsWith("model."),
@@ -1536,6 +1542,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											"defaultModelOptionId",
 											"defaultReasoningLevel",
 										);
+										updateModelSelectionErrors(next);
 										dismissServerValidation();
 									}}
 								/>
