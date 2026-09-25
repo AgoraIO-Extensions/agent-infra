@@ -151,7 +151,12 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 					? [event.payload.phase]
 					: [],
 			),
-		).toEqual(["intent", "started", "completed"]);
+		).toEqual([]);
+		expect(
+			events.flatMap((event) =>
+				event.type === "tool" ? [event.payload.phase] : [],
+			),
+		).toEqual(["started", "completed"]);
 		await driver.close();
 		driver = await GenericAcpRuntimeDriver.open(options);
 		expect(await driver.execute(command)).toEqual(result);
@@ -185,9 +190,13 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 	}
 });
 
-it.each([true, false])(
-	"records ACP permission %s as a durable tool fact",
-	async (permitted) => {
+it.each([
+	{ permitted: true, mode: "tool-permission" },
+	{ permitted: false, mode: "tool-permission" },
+	{ permitted: true, mode: "tool-late-permission" },
+])(
+	"records ACP $mode permission $permitted only before the tool starts",
+	async ({ permitted, mode }) => {
 		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
 		const driver = await GenericAcpRuntimeDriver.open({
 			path,
@@ -208,7 +217,7 @@ it.each([true, false])(
 						new URL("./acp-peer.test-support.mjs", import.meta.url),
 					),
 				],
-				env: { ACP_TEST_MODE: "tool-permission" },
+				env: { ACP_TEST_MODE: mode },
 				authorize: async () => permitted,
 			}),
 		});
@@ -249,10 +258,25 @@ it.each([true, false])(
 					: [],
 			);
 			expect(tools.map((fact) => fact.phase)).toEqual(
-				permitted ? ["intent", "started", "completed"] : ["intent", "failed"],
+				mode === "tool-late-permission"
+					? []
+					: permitted
+						? ["intent", "started", "completed"]
+						: ["intent", "failed"],
 			);
 			if (!permitted)
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
+			if (mode === "tool-late-permission") {
+				const events = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				);
+				expect(
+					events.flatMap((event) =>
+						event.type === "tool" ? [event.payload.phase] : [],
+					),
+				).toEqual(["started", "failed"]);
+			}
 		} finally {
 			await driver.close();
 			await rm(path, { recursive: true, force: true });
@@ -262,12 +286,12 @@ it.each([true, false])(
 
 it.each([
 	{
-		mode: "tool-hold",
+		mode: "tool-permission-hold",
 		phase: "started",
 		expected: ["intent", "started", "unknown"],
 	},
 	{
-		mode: "tool-completed-hold",
+		mode: "tool-permission-completed-hold",
 		phase: "completed",
 		expected: ["intent", "started", "completed"],
 	},
@@ -295,6 +319,7 @@ it.each([
 					),
 				],
 				env: { ACP_TEST_MODE: mode },
+				authorize: async () => true,
 			}),
 		};
 		let driver = await GenericAcpRuntimeDriver.open(options);
@@ -358,9 +383,9 @@ it.each([
 			);
 			expect(toolFacts.map((fact) => fact.phase)).toEqual(expected);
 			expect(toolFacts.at(-1)?.failureCode).toBe(
-				mode === "tool-hold" ? "recovery_unconfirmed" : undefined,
+				mode === "tool-permission-hold" ? "recovery_unconfirmed" : undefined,
 			);
-			if (mode === "tool-hold") {
+			if (mode === "tool-permission-hold") {
 				expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
 				expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
 			}

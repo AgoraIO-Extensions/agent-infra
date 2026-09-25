@@ -1318,16 +1318,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				? previousEvent.payload
 				: undefined;
 		if (value.phase === "started") {
-			if (
-				!previous ||
-				["completed", "failed", "unknown"].includes(previous.phase)
-			) {
-				await this.toolRequestStarted(file, executionId, {
-					toolCallId: value.toolCallId,
-					name: value.name,
-				});
-				return this.toolPhase(file, executionId, value);
-			}
+			if (!previous) return;
 			if (previous.phase !== "intent") return;
 			const startedAt = new Date().toISOString();
 			await this.appendOperationFact(file, executionId, {
@@ -1337,9 +1328,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			});
 			return;
 		}
-		if (!previous) {
-			unavailable();
-		}
+		if (!previous) return;
 		if (["completed", "failed", "unknown"].includes(previous.phase)) return;
 		const now = new Date().toISOString();
 		await this.appendOperationFact(file, executionId, {

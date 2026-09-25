@@ -413,9 +413,10 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					);
 					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual([
 						"intent",
-						"started",
 						"completed",
 					]);
+					expect(ownerToolFacts.at(-1)?.startedAt).toBeUndefined();
+					expect(ownerToolFacts.at(-1)?.durationMs).toBeUndefined();
 					expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe(
 						toolName === "write"
 							? "synthetic replacement"

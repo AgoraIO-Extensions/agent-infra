@@ -65,7 +65,7 @@ export async function openAcpSession(options: {
 	let loading = true;
 	const tools = new Map<
 		string,
-		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
+		Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "status">
 	>();
 	let activeSessionId: string | undefined;
 	let currentToolRequestStarted = options.toolRequestStarted;
@@ -85,6 +85,7 @@ export async function openAcpSession(options: {
 						toolCallId: update.toolCallId,
 						kind: update.kind ?? previous?.kind,
 						rawInput: update.rawInput ?? previous?.rawInput,
+						status: update.status ?? previous?.status,
 					});
 			}
 
@@ -97,22 +98,26 @@ export async function openAcpSession(options: {
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
-			const allowed =
+			const pending = () =>
 				!loading &&
 				params.sessionId === activeSessionId &&
+				tools.get(params.toolCall.toolCallId)?.status === "pending";
+			const allowed =
+				pending() &&
 				tool &&
 				once &&
 				(await options.launch.authorize?.(tool).catch(() => false));
-			const admitted = currentToolRequestStarted
-				? await currentToolRequestStarted({
-						toolCallId: params.toolCall.toolCallId,
-						name: tool?.kind ?? params.toolCall.kind ?? "unknown",
-						permitted: Boolean(allowed),
-					}).then(
-						() => Boolean(allowed),
-						() => false,
-					)
-				: false;
+			const admitted =
+				pending() && currentToolRequestStarted
+					? await currentToolRequestStarted({
+							toolCallId: params.toolCall.toolCallId,
+							name: tool?.kind ?? params.toolCall.kind ?? "unknown",
+							permitted: Boolean(allowed),
+						}).then(
+							() => Boolean(allowed),
+							() => false,
+						)
+					: false;
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);

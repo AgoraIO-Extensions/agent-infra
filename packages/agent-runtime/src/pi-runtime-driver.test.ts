@@ -97,7 +97,12 @@ it.each([false, true])(
 						? [event.payload.phase]
 						: [],
 				),
-			).toEqual(["intent", "started", "completed"]);
+			).toEqual([]);
+			expect(
+				events.flatMap((event) =>
+					event.type === "tool" ? [event.payload.phase] : [],
+				),
+			).toEqual(["started", "completed"]);
 			expect(
 				events
 					.filter((event) => event.type === "text")

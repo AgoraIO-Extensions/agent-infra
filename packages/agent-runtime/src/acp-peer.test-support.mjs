@@ -94,6 +94,35 @@ const connection = new AgentSideConnection(
 						update,
 					});
 			}
+			if (process.env.ACP_TEST_MODE === "foreign-permission") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "active-tool",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				const permission = await connection.requestPermission({
+					sessionId: "foreign-session",
+					toolCall: {
+						toolCallId: "active-tool",
+						kind: "read",
+						status: "pending",
+						title: "Foreign request",
+					},
+					options: [
+						{ optionId: "allow", name: "Allow", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+					],
+				});
+				if (
+					permission.outcome?.outcome === "selected" &&
+					permission.outcome.optionId === "allow"
+				)
+					throw new Error("foreign permission unexpectedly allowed");
+			}
 			if (process.env.ACP_TEST_MODE === "malformed") {
 				for (const frame of [
 					{ private: "synthetic-secret-marker" },
@@ -106,17 +135,30 @@ const connection = new AgentSideConnection(
 				])
 					process.stdout.write(`${JSON.stringify(frame)}\n`);
 			}
-			if (process.env.ACP_TEST_MODE === "tool-permission") {
-				await connection.sessionUpdate({
-					sessionId,
-					update: {
-						sessionUpdate: "tool_call",
-						toolCallId: "tool-permission",
-						kind: "read",
-						status: "pending",
-					},
-				});
-				const permission = await connection.requestPermission({
+			if (
+				[
+					"tool-permission",
+					"tool-late-permission",
+					"tool-authorize-race",
+					"tool-permission-hold",
+					"tool-permission-completed-hold",
+				].includes(process.env.ACP_TEST_MODE)
+			) {
+				const updateTool = (status) =>
+					connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate:
+								status === "pending" ? "tool_call" : "tool_call_update",
+							toolCallId: "tool-permission",
+							kind: "read",
+							status,
+						},
+					});
+				await updateTool("pending");
+				if (process.env.ACP_TEST_MODE === "tool-late-permission")
+					await updateTool("in_progress");
+				const permissionRequest = connection.requestPermission({
 					sessionId,
 					toolCall: {
 						toolCallId: "tool-permission",
@@ -129,28 +171,35 @@ const connection = new AgentSideConnection(
 						{ optionId: "reject", name: "Reject", kind: "reject_once" },
 					],
 				});
+				if (process.env.ACP_TEST_MODE === "tool-authorize-race") {
+					const marker = join(process.cwd(), "authorize-started");
+					const deadline = Date.now() + 3000;
+					while (
+						!(await readFile(marker).then(
+							() => true,
+							() => false,
+						))
+					) {
+						if (Date.now() > deadline)
+							throw new Error("authorization callback did not start");
+						await new Promise((resolve) => setTimeout(resolve, 10));
+					}
+					await updateTool("in_progress");
+				}
+				const permission = await permissionRequest;
 				const allowed =
 					permission.outcome?.outcome === "selected" &&
 					permission.outcome.optionId === "allow";
-				if (allowed)
-					await connection.sessionUpdate({
-						sessionId,
-						update: {
-							sessionUpdate: "tool_call_update",
-							toolCallId: "tool-permission",
-							kind: "read",
-							status: "in_progress",
-						},
+				if (allowed) await updateTool("in_progress");
+				if (process.env.ACP_TEST_MODE === "tool-permission-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
 					});
-				await connection.sessionUpdate({
-					sessionId,
-					update: {
-						sessionUpdate: "tool_call_update",
-						toolCallId: "tool-permission",
-						kind: "read",
-						status: allowed ? "completed" : "failed",
-					},
-				});
+				await updateTool(allowed ? "completed" : "failed");
+				if (process.env.ACP_TEST_MODE === "tool-permission-completed-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
 			}
 			await writeFile(
 				join(process.cwd(), "session.json"),
@@ -163,11 +212,7 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
-			if (
-				["tool", "tool-hold", "tool-completed-hold"].includes(
-					process.env.ACP_TEST_MODE,
-				)
-			) {
+			if (process.env.ACP_TEST_MODE === "tool") {
 				await connection.sessionUpdate({
 					sessionId,
 					update: {
@@ -186,10 +231,6 @@ const connection = new AgentSideConnection(
 						status: "in_progress",
 					},
 				});
-				if (process.env.ACP_TEST_MODE === "tool-hold")
-					await new Promise((resolve) => {
-						finishPrompt = resolve;
-					});
 				await connection.sessionUpdate({
 					sessionId,
 					update: {
@@ -199,10 +240,6 @@ const connection = new AgentSideConnection(
 						status: "completed",
 					},
 				});
-				if (process.env.ACP_TEST_MODE === "tool-completed-hold")
-					await new Promise((resolve) => {
-						finishPrompt = resolve;
-					});
 			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(
