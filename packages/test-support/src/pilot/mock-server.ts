@@ -255,7 +255,7 @@ function createPilotAgentMockServer(
 
 		if (
 			request.method === "GET" &&
-			routingPath === "/api/v2/deployment/configuration" &&
+			routingPath === "/api/v1/deployment/configuration" &&
 			getDeploymentConfigurationOperation &&
 			scenario.getDeploymentConfiguration !== undefined
 		) {

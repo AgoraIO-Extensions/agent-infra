@@ -691,6 +691,34 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("focuses the add-model action when no persisted model is available", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						endpoints: [],
+					},
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+
+		expect(document.activeElement).toBe(
+			screen.getByRole("button", { name: "添加模型选项" }),
+		);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("focuses the default model field after a server model-selection rejection", () => {
 		const onSubmit = vi.fn();
 		render(
