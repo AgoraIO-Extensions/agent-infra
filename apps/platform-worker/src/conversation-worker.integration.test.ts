@@ -1027,9 +1027,116 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
-		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
-		start();
-		start();
+		const [target] = await sql<
+			{ id: string; attemptCount: number; fence: number }[]
+		>`
+			update platform.outbox_items
+			set lease_expires_at=clock_timestamp()+interval '1 hour'
+			where payload->>'executionId'=${active.execution_id} and status='processing'
+			returning id, attempt_count::int as "attemptCount", delivery_fence::int as fence
+		`;
+		if (!target) throw Error("No expired outbox lease for takeover");
+		const [queued] = await sql<
+			{
+				id: string;
+				status: string;
+				availableAt: Date;
+				leaseExpiresAt: Date | null;
+			}[]
+		>`
+			select id, status, available_at as "availableAt",
+				lease_expires_at as "leaseExpiresAt" from platform.outbox_items
+			where payload->>'executionId'=${second.executionId}
+		`;
+		if (
+			!queued ||
+			!["pending", "retry_scheduled", "processing"].includes(queued.status)
+		)
+			throw Error("No deferred outbox item for second execution");
+		await sql`
+			update platform.outbox_items
+			set available_at=clock_timestamp()+interval '1 hour',
+				lease_expires_at=case when status='processing'
+					then clock_timestamp()+interval '1 hour' else lease_expires_at end
+			where id=${queued.id}
+		`;
+		try {
+			start();
+			start();
+			const ready = new Set<number>();
+			await waitUntil(async () => {
+				const sessions = await sql<{ application_name: string }[]>`
+					select distinct application_name from pg_stat_activity
+					where datname=current_database()
+						and query like '%select id, operation from platform.outbox_items%'
+				`;
+				for (const child of children.slice(2))
+					if (
+						child.pid &&
+						sessions.some(
+							(session) =>
+								session.application_name === `conversation-worker-${child.pid}`,
+						)
+					)
+						ready.add(child.pid);
+				return ready.size === 2;
+			}, "both replacement Workers polling before lease expiry");
+			await sql`
+				update platform.outbox_items
+				set lease_expires_at=clock_timestamp()+interval '3 seconds'
+				where id=${target.id}
+			`;
+			await sql.begin(async (transaction) => {
+				const [locked] = await transaction<{ notExpired: boolean }[]>`
+					select lease_expires_at > clock_timestamp() as "notExpired"
+					from platform.outbox_items where id=${target.id} for update
+				`;
+				expect(locked?.notExpired).toBe(true);
+				let observedSessions: {
+					applicationName: string;
+					waitEventType: string | null;
+					claimQuery: boolean;
+				}[] = [];
+				try {
+					await waitUntil(async () => {
+						observedSessions = await sql<typeof observedSessions>`
+							select application_name as "applicationName",
+								wait_event_type as "waitEventType",
+								query like '%from platform.outbox_items where id =%' as "claimQuery"
+							from pg_stat_activity where datname=current_database()
+								and application_name like 'conversation-worker-%'
+						`;
+						return children
+							.slice(2)
+							.every((child) =>
+								observedSessions.some(
+									(session) =>
+										session.applicationName ===
+											`conversation-worker-${child.pid}` &&
+										session.waitEventType === "Lock" &&
+										session.claimQuery,
+								),
+							);
+					}, "both replacement Workers blocked on the same outbox claim");
+				} catch (error) {
+					throw new Error(JSON.stringify(observedSessions), { cause: error });
+				}
+				const [held] = await sql<{ attemptCount: number; fence: number }[]>`
+					select attempt_count::int as "attemptCount", delivery_fence::int as fence
+					from platform.outbox_items where id=${target.id}
+				`;
+				expect(held).toEqual({
+					attemptCount: target.attemptCount,
+					fence: target.fence,
+				});
+			});
+		} finally {
+			await sql`
+				update platform.outbox_items
+				set available_at=${queued.availableAt}, lease_expires_at=${queued.leaseExpiresAt}
+				where id=${queued.id}
+			`;
+		}
 		await waitUntil(
 			async () =>
 				requests
@@ -1053,6 +1160,14 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					),
 			"takeover acknowledges existing committed cursor",
 		);
+		const [claimed] = await sql<{ attemptCount: number; fence: number }[]>`
+			select attempt_count::int as "attemptCount", delivery_fence::int as fence
+			from platform.outbox_items where id=${target.id}
+		`;
+		expect(claimed).toEqual({
+			attemptCount: target.attemptCount + 1,
+			fence: target.fence + 1,
+		});
 		expect(await dispatchCount()).toBe(1);
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
