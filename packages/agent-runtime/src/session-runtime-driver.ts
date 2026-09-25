@@ -1255,7 +1255,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				previousEvent.payload.kind === "tool"
 					? previousEvent.payload
 					: undefined;
-			if (previous && ["intent", "started"].includes(previous.phase)) return;
+			if (previous && ["intent", "started"].includes(previous.phase)) {
+				if (value.permitted === false)
+					await this.toolPhase(file, executionId, {
+						toolCallId: value.toolCallId,
+						name: value.name,
+						phase: "failed",
+						failureCode: "authorization_denied",
+					});
+				return;
+			}
 			const model = latestFact(turn, "model");
 			const created = {
 				kind: "tool" as const,

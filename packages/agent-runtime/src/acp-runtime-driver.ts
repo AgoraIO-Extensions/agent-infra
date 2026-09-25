@@ -33,6 +33,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		toolRequestStarted?: (tool: {
 			readonly toolCallId: string;
 			readonly name: string;
+			readonly permitted?: boolean;
 		}) => Promise<void>,
 	) => Promise<AcpLaunch>;
 }
@@ -63,19 +64,24 @@ export const GenericAcpRuntimeDriver = {
 				...session
 			}) => {
 				const phases = new Map<string, string>();
-				const normalizedToolRequestStarted = toolRequestStarted
-					? async (tool: {
-							readonly toolCallId: string;
-							readonly name: string;
-							readonly permitted?: boolean;
-						}) =>
-							toolRequestStarted({
-								...tool,
-								toolCallId: createHash("sha256")
-									.update(tool.toolCallId)
-									.digest("hex"),
-							})
-					: undefined;
+				const normalizeToolRequestStarted = (
+					callback: typeof toolRequestStarted | undefined,
+				) =>
+					callback
+						? async (tool: {
+								readonly toolCallId: string;
+								readonly name: string;
+								readonly permitted?: boolean;
+							}) =>
+								callback({
+									...tool,
+									toolCallId: createHash("sha256")
+										.update(tool.toolCallId)
+										.digest("hex"),
+								})
+						: undefined;
+				const normalizedToolRequestStarted =
+					normalizeToolRequestStarted(toolRequestStarted);
 				const launch = await options.launch(
 					session.directory,
 					selection,
@@ -134,7 +140,13 @@ export const GenericAcpRuntimeDriver = {
 					...native,
 					startTurn: (next: NativeSessionOptions) => {
 						native.startTurn?.(next);
-						launch.onTurn?.({ modelUsage: next.modelUsage });
+						launch.onTurn?.({
+							modelRequestStarted: next.modelRequestStarted,
+							modelUsage: next.modelUsage,
+							toolRequestStarted: normalizeToolRequestStarted(
+								next.toolRequestStarted,
+							),
+						});
 					},
 				};
 			},

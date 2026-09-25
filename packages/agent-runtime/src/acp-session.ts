@@ -23,9 +23,15 @@ export interface AcpLaunch {
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
 	onTurn?: (callbacks: {
+		modelRequestStarted?: () => Promise<void>;
 		modelUsage?: (
 			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 		) => Promise<void>;
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+			readonly permitted?: boolean;
+		}) => Promise<void>;
 	}) => void;
 }
 
@@ -94,17 +100,16 @@ export async function openAcpSession(options: {
 				tool &&
 				once &&
 				(await options.launch.authorize?.(tool).catch(() => false));
-			const admitted =
-				tool && currentToolRequestStarted
-					? await currentToolRequestStarted({
-							toolCallId: params.toolCall.toolCallId,
-							name: tool?.kind ?? "unknown",
-							permitted: Boolean(allowed),
-						}).then(
-							() => Boolean(allowed),
-							() => false,
-						)
-					: false;
+			const admitted = currentToolRequestStarted
+				? await currentToolRequestStarted({
+						toolCallId: params.toolCall.toolCallId,
+						name: tool?.kind ?? params.toolCall.kind ?? "unknown",
+						permitted: Boolean(allowed),
+					}).then(
+						() => Boolean(allowed),
+						() => false,
+					)
+				: false;
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);

@@ -63,13 +63,21 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			let currentModelRequestStarted = modelRequestStarted;
+			let suppressTransportStart = true;
 			let currentModelUsage = _modelUsage;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
-				started: modelRequestStarted,
+				started: async () => {
+					if (suppressTransportStart) {
+						suppressTransportStart = false;
+						return;
+					}
+					await currentModelRequestStarted?.();
+				},
 				receipt: async (state, _endTurn, usage) => {
 					if (state === "completed" && usage) await currentModelUsage?.(usage);
 				},
@@ -166,6 +174,8 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					},
 					close: () => transport.close(),
 					onTurn: (callbacks) => {
+						currentModelRequestStarted = callbacks.modelRequestStarted;
+						suppressTransportStart = true;
 						currentModelUsage = callbacks.modelUsage;
 					},
 				};
