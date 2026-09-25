@@ -40,6 +40,7 @@ import {
 } from "@agent-infra/openconnector-adapter/jira-server";
 import {
 	ManhattanAdapter,
+	ManhattanOAuthAdapter,
 	manhattanConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/manhattan";
 import {
@@ -189,6 +190,12 @@ export async function createConnectionRuntime(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 		config.manhattanApiKey,
 	);
+	const manhattanOAuth = new ManhattanOAuthAdapter(
+		manhattan,
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		config.manhattanOAuth.clientId,
+		config.manhattanOAuth.clientSecret,
+	);
 	const datalego = new DataLegoAdapter(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 	);
@@ -220,6 +227,7 @@ export async function createConnectionRuntime(
 			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
+		{ manhattan: manhattanOAuth },
 	);
 	const app = createConnectionApp({
 		accessTokens: oauth,
@@ -244,6 +252,9 @@ export async function createConnectionRuntime(
 					rehoboamConnectionCatalog,
 				],
 				githubRedirectUri: config.github.redirectUri,
+				providerRedirectUris: {
+					manhattan: config.manhattanOAuth.redirectUri,
+				},
 				service,
 			},
 			resource: config.resourceUrl,

@@ -138,6 +138,7 @@ export type ConnectionsResponse = {
 };
 
 export type OAuthTransactionRequest = {
+    providerId?: 'github' | 'manhattan';
     sharedScopeId?: string;
 };
 
@@ -147,7 +148,7 @@ export type ProviderCredentialRequest = {
     providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {
-    providerId: 'confluence' | 'jira' | 'manhattan';
+    providerId: 'confluence' | 'jira';
     username: string;
     password: string;
 } | {

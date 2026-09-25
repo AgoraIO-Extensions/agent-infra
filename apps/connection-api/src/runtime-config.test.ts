@@ -41,6 +41,8 @@ const accountBase = {
 	JENKINS_CI_TOKEN_PASSWORD: "jenkins-ci-token-password",
 	JENKINS_CI_TOKEN_USERNAME: "jenkins-ci-token-user",
 	MANHATTAN_KONG_API_KEY: "manhattan-machine-key",
+	MANHATTAN_OAUTH_CLIENT_ID: "manhattan-oauth-client",
+	MANHATTAN_OAUTH_CLIENT_SECRET: "manhattan-oauth-secret",
 	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 
@@ -132,6 +134,16 @@ describe("Connection runtime configuration", () => {
 		});
 		expect(config.rehoboamApiKey).toBe("rehoboam-machine-key");
 		expect(config.manhattanApiKey).toBe("manhattan-machine-key");
+		expect(config.manhattanOAuth).toEqual({
+			clientId: "manhattan-oauth-client",
+			clientSecret: "manhattan-oauth-secret",
+			redirectUri:
+				"https://connection.example/oauth/callback?provider=manhattan",
+		});
+		const { MANHATTAN_OAUTH_CLIENT_SECRET: _, ...withoutSecret } = accountBase;
+		expect(() => fullConnectionRuntimeConfig(withoutSecret)).toThrow(
+			"MANHATTAN_OAUTH_CLIENT_SECRET is required",
+		);
 	});
 
 	it("requires a primary GitHub egress before configuring READ fallback", () => {

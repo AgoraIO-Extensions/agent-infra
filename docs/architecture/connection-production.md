@@ -83,6 +83,14 @@ Rehoboam Ingress 的 Kong `key-auth`。用户从 Rehoboam Security 创建隐含 
 Connection；Connection 不接收 Rehoboam 密码，只加密保存该 PAT。
 机器 `apiKey` 不进入浏览器、用户 credential envelope、MCP 参数或调用结果。
 
+Manhattan v4 连接使用公司 OAuth confidential client 的 authorization-code 回调，不再收集公司密码。
+先登记精确回调 `https://agent-connector.gz3.agoralab.co/oauth/callback?provider=manhattan`，
+再由 Secret Manager 注入 `MANHATTAN_OAUTH_CLIENT_ID`、`MANHATTAN_OAUTH_CLIENT_SECRET` 和现有
+`MANHATTAN_KONG_API_KEY`。Connection 用服务端 client secret 交换并刷新个人 Token，经 Manhattan
+`/api/connection/whoami` 验证身份及 RBAC 后才加密存储；旧 v3 Connection 不自动升级，需要重新授权。
+此发布包含 `0032_provider_oauth_transactions.sql`，必须先执行经评审的生产 migration 路径；
+普通 GZ3 `--no-hooks` 发布脚本会按设计阻止直接部署。
+
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收

@@ -241,8 +241,21 @@ export const connectionApi = {
 			startGithubOAuth({
 				body: parseClientInput(
 					oauthTransactionRequestSchema,
-					sharedScopeId ? { sharedScopeId } : {},
+					sharedScopeId
+						? { providerId: "github", sharedScopeId }
+						: { providerId: "github" },
 					"共享组信息无效，请刷新后重试",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	startManhattanOAuth: () =>
+		unwrap<OAuthTransaction>(
+			startGithubOAuth({
+				body: parseClientInput(
+					oauthTransactionRequestSchema,
+					{ providerId: "manhattan" },
+					"Manhattan 授权请求无效",
 				),
 				headers: commandHeaders(),
 			}),

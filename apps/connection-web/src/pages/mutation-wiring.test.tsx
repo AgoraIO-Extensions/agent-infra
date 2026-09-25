@@ -242,6 +242,9 @@ const api = vi.hoisted(() => ({
 	startGithubOAuth: vi.fn(async () => ({
 		authorizationUrl: "https://github.example/authorize",
 	})),
+	startManhattanOAuth: vi.fn(async () => ({
+		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
+	})),
 }));
 
 vi.mock("../api", () => ({ connectionApi: api }));
@@ -566,6 +569,19 @@ describe("Connection 管理 mutation wiring", () => {
 			idempotencyKey: "confirmation-idempotency-key",
 			previewId: "preview-id",
 		});
+	});
+
+	it("Manhattan 从浏览器授权，不再收集公司密码", async () => {
+		api.startManhattanOAuth.mockRejectedValueOnce(
+			new Error("OAuth not configured"),
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Manhattan 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() => expect(api.startManhattanOAuth).toHaveBeenCalledOnce());
+		expect(screen.queryByLabelText("公司密码")).toBeNull();
 	});
 
 	it("连接页调用 Jira Server credential API", async () => {

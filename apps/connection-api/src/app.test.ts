@@ -74,7 +74,12 @@ class TestRepository implements ConnectionRepository {
 	private sequence = 0;
 	private oauthTransactions = new Map<
 		string,
-		{ codeVerifier: string; principalId: string; redirectUri: string }
+		{
+			codeVerifier: string;
+			principalId: string;
+			providerId: string;
+			redirectUri: string;
+		}
 	>();
 
 	constructor(actionSet: ActionDefinition[] = actions) {
@@ -164,6 +169,7 @@ class TestRepository implements ConnectionRepository {
 	async createOAuthTransaction(input: {
 		codeVerifier: string;
 		principalId: string;
+		providerId: string;
 		redirectUri: string;
 		state: string;
 	}) {
@@ -949,6 +955,17 @@ describe("Connection API", () => {
 				calls.push({ name: "callback", value: { code, state } });
 				return { connectionId: "connection-github" };
 			},
+			completeProviderOAuth: async (
+				providerId: string,
+				code: string,
+				state: string,
+			) => {
+				calls.push({
+					name: "provider-callback",
+					value: { providerId, code, state },
+				});
+				return { connectionId: "connection-manhattan" };
+			},
 			disconnectConnection: async (
 				principalId: string,
 				connectionId: string,
@@ -1012,6 +1029,20 @@ describe("Connection API", () => {
 					authorizationUrl: "https://github.test/login/oauth/authorize",
 				};
 			},
+			startProviderOAuth: async (
+				principalId: string,
+				providerId: string,
+				redirectUri: string,
+			) => {
+				calls.push({
+					name: "provider-connect",
+					value: { principalId, providerId, redirectUri },
+				});
+				return {
+					authorizationUrl:
+						"https://oauth.agoralab.co/oauth/authorize?state=opaque-state",
+				};
+			},
 			connectProviderCredential: async (
 				principalId: string,
 				providerId: string,
@@ -1073,6 +1104,10 @@ describe("Connection API", () => {
 			issuer: "https://connection.example/",
 			management: {
 				githubRedirectUri: "https://connection.example/oauth/callback",
+				providerRedirectUris: {
+					manhattan:
+						"https://connection.example/oauth/callback?provider=manhattan",
+				},
 				service: management,
 			},
 			resource: "https://connection.example/mcp",
@@ -1349,6 +1384,58 @@ describe("Connection API", () => {
 				},
 			},
 		]);
+		const manhattanStart = await app.request(
+			"/api/v1/connection/oauth-transactions",
+			{
+				body: JSON.stringify({ providerId: "manhattan" }),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "test-manhattan-oauth-start",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(manhattanStart.status).toBe(200);
+		expect(await manhattanStart.json()).toEqual({
+			authorizationUrl:
+				"https://oauth.agoralab.co/oauth/authorize?state=opaque-state",
+		});
+		const oauthCookie =
+			(manhattanStart.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+		expect(oauthCookie).toBe("connection_manhattan_oauth_state=opaque-state");
+		expect(calls.at(-1)).toEqual({
+			name: "provider-connect",
+			value: {
+				principalId: "principal-user",
+				providerId: "manhattan",
+				redirectUri:
+					"https://connection.example/oauth/callback?provider=manhattan",
+			},
+		});
+		const deniedCallback = await app.request(
+			"/oauth/callback?provider=manhattan&code=one-time-code&state=opaque-state",
+			{ redirect: "manual" },
+		);
+		expect(deniedCallback.headers.get("location")).toContain("callback_failed");
+		expect(calls.at(-1)?.name).toBe("provider-connect");
+		const callback = await app.request(
+			"/oauth/callback?provider=manhattan&code=one-time-code&state=opaque-state",
+			{ headers: { cookie: oauthCookie }, redirect: "manual" },
+		);
+		expect(callback.status).toBe(303);
+		expect(callback.headers.get("location")).toBe("/connection/connections");
+		expect(callback.headers.get("cache-control")).toBe("no-store");
+		expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+		expect(calls.at(-1)).toEqual({
+			name: "provider-callback",
+			value: {
+				providerId: "manhattan",
+				code: "one-time-code",
+				state: "opaque-state",
+			},
+		});
 	});
 
 	it("allows only Connection administrators to open the administrator console", async () => {
@@ -2216,6 +2303,35 @@ describe("Connection API", () => {
 		expect(response.headers.get("location")).toBe(
 			"/connection/connections?oauth=callback_failed",
 		);
+	});
+
+	it("reports Manhattan RBAC denial without exposing the OAuth code", async () => {
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					completeProviderOAuth: async () => {
+						throw Object.assign(new Error("denied"), {
+							providerAuthorizationDenied: true,
+						});
+					},
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {} as ConnectionOAuthService,
+		});
+		const response = await app.request(
+			"/oauth/callback?provider=manhattan&code=secret-code&state=matching-state",
+			{
+				headers: { cookie: "connection_manhattan_oauth_state=matching-state" },
+				redirect: "manual",
+			},
+		);
+		expect(response.headers.get("location")).toBe(
+			"/connection/connections?oauth=permission_denied&provider=manhattan",
+		);
+		expect(response.headers.get("location")).not.toContain("secret-code");
 	});
 
 	it("serves direct GitHub actions through the MCP JSON-RPC contract", async () => {

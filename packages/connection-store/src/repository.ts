@@ -3112,12 +3112,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			await sql`
 				INSERT INTO connection_oauth_transactions (
 					state_hash, principal_id, verifier_ciphertext, verifier_nonce,
-					verifier_tag, redirect_uri, shared_scope_id, expires_at
+					verifier_tag, redirect_uri, provider_id, shared_scope_id, expires_at
 				)
 				VALUES (
 					${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
 					${protectedVerifier.nonce}, ${protectedVerifier.tag},
-					${input.redirectUri}, ${input.sharedScopeId ?? null},
+					${input.redirectUri}, ${input.providerId}, ${input.sharedScopeId ?? null},
 					now() + interval '10 minutes'
 				)
 			`;
@@ -3130,6 +3130,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			const [row] = await sql<
 				{
 					principal_id: string;
+					provider_id: string;
 					redirect_uri: string;
 					shared_scope_id: string | null;
 					verifier_ciphertext: string;
@@ -3142,7 +3143,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				WHERE state_hash = ${stateHash}
 					AND consumed_at IS NULL
 					AND expires_at > now()
-				RETURNING principal_id, redirect_uri, shared_scope_id, verifier_ciphertext,
+				RETURNING principal_id, provider_id, redirect_uri, shared_scope_id, verifier_ciphertext,
 					verifier_nonce, verifier_tag
 			`;
 			if (!row) {
@@ -3161,6 +3162,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					`oauth:${stateHash}:${row.principal_id}`,
 				),
 				principalId: row.principal_id,
+				providerId: row.provider_id,
 				redirectUri: row.redirect_uri,
 				...(row.shared_scope_id ? { sharedScopeId: row.shared_scope_id } : {}),
 			};
