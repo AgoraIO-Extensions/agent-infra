@@ -255,7 +255,10 @@ function createPilotAgentMockServer(
 
 		if (
 			request.method === "GET" &&
-			url.pathname === "/api/v2/deployment/configuration" &&
+			url.pathname ===
+				(version === 2
+					? "/api/v2/deployment/configuration"
+					: "/api/v1/deployment/configuration") &&
 			getDeploymentConfigurationOperation &&
 			scenario.getDeploymentConfiguration !== undefined
 		) {

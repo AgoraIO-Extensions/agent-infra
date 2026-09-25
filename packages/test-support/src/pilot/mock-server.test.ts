@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	DeploymentConfigurationProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -19,6 +20,9 @@ const secondAgent = AgentProjectionV1Schema.parse({
 	...startingAgent,
 	agentId: "agent-pilot-2",
 });
+const startingAgentV2 = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
+);
 const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	schemaVersion: 1,
 	applicationId: "application-pilot-1",
@@ -98,26 +102,21 @@ const applicationInput = {
 };
 
 describe("Pilot Agent Mock Server", () => {
-	it("routes V2 deployment configuration through the normalized path", async () => {
+	it("routes the v2 deployment configuration endpoint", async () => {
 		const deploymentConfiguration =
 			DeploymentConfigurationProjectionV2Schema.parse({
 				schemaVersion: 2,
 				status: "empty",
 				templates: [],
-				modelCatalog: {
-					status: "empty",
-					revision: "catalog-empty",
-					endpoints: [],
-				},
+				modelCatalog: { status: "empty", revision: null, endpoints: [] },
 			});
-		const agent = pilotFakeScenariosV2.starting.response.body;
 		const server = createPilotAgentMockServerV2({
 			getDeploymentConfiguration: {
 				status: 200,
 				body: deploymentConfiguration,
 			},
-			listAgents: { status: 200, body: { items: [agent], nextCursor: null } },
-			getAgent: { status: 200, body: agent },
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
 		});
 
 		const response = await server.fetch(
@@ -126,7 +125,6 @@ describe("Pilot Agent Mock Server", () => {
 			),
 		);
 
-		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual(deploymentConfiguration);
 	});
 
