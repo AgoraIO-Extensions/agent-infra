@@ -676,6 +676,60 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
+	it("does not let a removed template block a custom-image submission", async () => {
+		const onSubmit = vi.fn();
+		const { rerender } = render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Custom assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs a custom image" },
+		});
+		choose("标准模板 ID", "Codex");
+		rerender(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "stale",
+					templates: [],
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "populated",
+					},
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 平台交互入口",
+		});
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		fireEvent.change(await screen.findByLabelText("镜像地址"), {
+			target: { value: "registry.example/agents/custom:v1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/custom:v1",
+					interactionMode: "platform-adapter",
+				},
+			}),
+		);
+	});
+
 	it("marks a stale deployment projection before submission", () => {
 		const onSubmit = vi.fn();
 		render(
@@ -685,7 +739,7 @@ describe("AgentApplicationForm", () => {
 					status: "stale",
 					modelCatalog: {
 						...deploymentConfiguration.modelCatalog,
-						status: "stale",
+						status: "populated",
 					},
 				}}
 				mode="create"
@@ -695,6 +749,7 @@ describe("AgentApplicationForm", () => {
 		);
 
 		expect(screen.getByRole("status").textContent).toContain("过期");
+		choose("标准模板 ID", "Codex");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});

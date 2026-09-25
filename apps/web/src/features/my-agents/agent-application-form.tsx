@@ -466,7 +466,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
 	const standardChoicesBlocked =
 		sourceKind === "standard" &&
-		(deployment.templates.length === 0 || !modelCatalogReady);
+		(deployment.status !== "populated" ||
+			deployment.templates.length === 0 ||
+			!modelCatalogReady);
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
@@ -505,7 +507,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const secretOptions = (selectedTemplate?.allowedSecretKeys ?? []).map(
 		(value) => ({ value, label: value }),
 	);
-	const staleTemplate = templateId.length > 0 && selectedTemplate === undefined;
+	const staleTemplate =
+		sourceKind === "standard" &&
+		templateId.length > 0 &&
+		selectedTemplate === undefined;
 	const staleModel =
 		modelConfigurationVisible &&
 		models.some((model) => {
