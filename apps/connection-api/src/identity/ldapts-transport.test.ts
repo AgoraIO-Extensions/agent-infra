@@ -79,3 +79,12 @@ it("uses direct TLS without a STARTTLS operation for ldaps://", async () => {
 	expect(await ldap.entryExists("alice")).toBe(true);
 	expect(state.events).toEqual(["bind", "search", "unbind"]);
 });
+
+it("uses the explicitly selected LA3 private plaintext transport without TLS fallback", async () => {
+	const ldap = createLdaptsAuthenticator({
+		...profile("ldap://10.20.30.40:389"),
+		transportSecurity: "la3-private-plaintext",
+	});
+	expect(await ldap.entryExists("alice")).toBe(true);
+	expect(state.events).toEqual(["bind", "search", "unbind"]);
+});
