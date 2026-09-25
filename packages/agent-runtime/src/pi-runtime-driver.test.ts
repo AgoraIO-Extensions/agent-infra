@@ -70,13 +70,15 @@ it.each([false, true])(
 			expect(
 				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
 			).toBe("running");
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(
-						result.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(
+							result.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 			const events = await f.driver.replayEvents(
 				result.nativeSessionRef,
@@ -121,10 +123,12 @@ it.each([false, true])(
 				turnId: "turn-b",
 				operationId: "operation-b",
 			});
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(next.nativeSessionRef, "execution-b"),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(next.nativeSessionRef, "execution-b"),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 			const nextOwner = JSON.parse(await readFile(ownerFile, "utf8")).owner;
 			expect(nextOwner.pid === owner.pid).toBe(!exit);

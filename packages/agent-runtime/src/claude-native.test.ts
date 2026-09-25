@@ -142,6 +142,28 @@ it("canonicalizes command field order during durable lookup and preserves unknow
 	const command = claudeCommand();
 	const accepted = await f.driver.execute(command);
 	await vi.waitFor(() => expect(f.calls).toHaveLength(1));
+	await f.driver.close();
+	const file = join(f.path, accepted.nativeSessionRef, "state.json");
+	const state = JSON.parse(await readFile(file, "utf8"));
+	const tool = {
+		kind: "tool",
+		operationRef: randomUUID(),
+		attemptRef: randomUUID(),
+		phase: "started",
+		startedAt: new Date().toISOString(),
+		toolId: "Read",
+	};
+	state.turns[0].events.push({
+		schemaVersion: 2,
+		adapterEventKey: randomUUID(),
+		executionId: command.executionId,
+		cursor: `claude-operation-${randomUUID()}`,
+		occurredAt: new Date().toISOString(),
+		type: "operation",
+		payload: tool,
+	});
+	state.sequence++;
+	await writeFile(file, JSON.stringify(state));
 	await f.restart();
 	const { input, selection, ...rest } = command;
 	const reordered = { input, selection, ...rest };
@@ -152,6 +174,18 @@ it("canonicalizes command field order during durable lookup and preserves unknow
 	expect(
 		await f.driver.getStatus(accepted.nativeSessionRef, command.executionId),
 	).toBe("unknown");
+	const recovered = await f.driver.replayEvents(
+		accepted.nativeSessionRef,
+		command.executionId,
+	);
+	const toolFacts = recovered.flatMap((event) =>
+		event.type === "operation" && event.payload.kind === "tool"
+			? [event.payload]
+			: [],
+	);
+	expect(toolFacts.map((fact) => fact.phase)).toEqual(["started", "unknown"]);
+	expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
+	expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
 	expect(
 		(
 			await f.driver.execute({

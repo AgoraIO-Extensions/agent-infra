@@ -1237,15 +1237,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				pending.push(event.payload);
 		}
 		for (const fact of pending) {
-			const finishedAt = new Date().toISOString();
-			const durationMs = fact.startedAt
-				? Math.max(0, Date.parse(finishedAt) - Date.parse(fact.startedAt))
-				: undefined;
 			await this.appendOperationFact(file, executionId, {
 				...fact,
 				phase: "unknown",
 				failureCode: "recovery_unconfirmed",
-				...(fact.startedAt ? { finishedAt, durationMs } : {}),
 			});
 		}
 	}

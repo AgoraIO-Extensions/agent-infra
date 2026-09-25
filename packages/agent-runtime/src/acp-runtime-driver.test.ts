@@ -360,6 +360,10 @@ it.each([
 			expect(toolFacts.at(-1)?.failureCode).toBe(
 				mode === "tool-hold" ? "recovery_unconfirmed" : undefined,
 			);
+			if (mode === "tool-hold") {
+				expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
+				expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
+			}
 			expect(await driver.execute(command)).toEqual(accepted);
 			expect(await driver.lookupOperation(command)).toEqual({
 				state: "found",
