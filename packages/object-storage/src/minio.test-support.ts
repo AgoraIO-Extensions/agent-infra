@@ -28,7 +28,7 @@ export async function startMinioFileFixtureV1() {
 		`MINIO_ROOT_USER=${credentials.accessKeyId}`,
 		"--env",
 		`MINIO_ROOT_PASSWORD=${credentials.secretAccessKey}`,
-		"quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+		"cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c",
 		"server",
 		"/data",
 	]);
