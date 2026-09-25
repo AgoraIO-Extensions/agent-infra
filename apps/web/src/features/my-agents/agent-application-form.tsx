@@ -119,8 +119,7 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 		return element;
 	return (
 		document.getElementById("application-deployment-status") ??
-		document.getElementById("application-add-model-option") ??
-		element
+		document.getElementById("application-add-model-option")
 	);
 }
 
@@ -147,7 +146,9 @@ function blankModel(): AgentApplicationModelDraft {
 }
 
 function optionIdFor(endpointId: string, modelId: string) {
-	return `${endpointId}:${modelId}`;
+	const encodeComponent = (value: string) =>
+		value.includes(":") ? encodeURIComponent(value) : value;
+	return `${encodeComponent(endpointId)}:${encodeComponent(modelId)}`;
 }
 
 function endpointIdForModelOption(

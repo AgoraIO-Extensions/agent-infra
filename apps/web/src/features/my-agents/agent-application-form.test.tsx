@@ -303,6 +303,61 @@ describe("AgentApplicationForm", () => {
 		});
 	});
 
+	it("keeps model option IDs unique when IDs contain the separator", () => {
+		const onSubmit = vi.fn();
+		const colonConfiguration = {
+			...deploymentConfiguration,
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				endpoints: [
+					{
+						endpointId: "endpoint:primary",
+						displayName: "Colon endpoint",
+						models: [{ modelId: "model:primary", reasoningLevels: ["medium"] }],
+					},
+				],
+			},
+		};
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={colonConfiguration}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Colon endpoint");
+		choose("模型", "model:primary");
+		check("medium");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "never-echo-model" },
+		});
+		choose("默认模型", "Colon endpoint · model:primary");
+		choose("默认推理档位", "medium");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelConfiguration: expect.objectContaining({
+					options: [
+						expect.objectContaining({
+							optionId: "endpoint%3Aprimary:model%3Aprimary",
+						}),
+					],
+					defaultOptionId: "endpoint%3Aprimary:model%3Aprimary",
+				}),
+			}),
+		);
+	});
+
 	it("does not submit a partially completed configuration row", () => {
 		const onSubmit = vi.fn();
 		render(
