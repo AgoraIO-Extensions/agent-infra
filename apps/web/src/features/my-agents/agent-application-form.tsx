@@ -707,27 +707,22 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		selectedTemplate === undefined;
 	const staleModelIndexes = useMemo(
 		() =>
-			models.flatMap((model, index) =>
-				model.endpointId.length > 0 &&
-				(!model.modelId ||
-					!model.reasoningLevels.trim() ||
-					!modelEndpoints.some(
-						(endpoint) =>
-							endpoint.endpointId === model.endpointId &&
-							endpoint.models.some((entry) => entry.modelId === model.modelId),
-					) ||
-					!model.reasoningLevels
-						.split("\n")
-						.filter(Boolean)
-						.every((level) =>
-							modelEndpoints
-								.find((endpoint) => endpoint.endpointId === model.endpointId)
-								?.models.find((entry) => entry.modelId === model.modelId)
-								?.reasoningLevels.includes(level),
+			models.flatMap((model, index) => {
+				const selectedModel = modelEndpoints
+					.find((endpoint) => endpoint.endpointId === model.endpointId)
+					?.models.find((entry) => entry.modelId === model.modelId);
+				const reasoningLevels = model.reasoningLevels
+					.split("\n")
+					.filter(Boolean);
+				return model.endpointId.length > 0 &&
+					model.modelId.length > 0 &&
+					(!selectedModel ||
+						!reasoningLevels.every((level) =>
+							selectedModel.reasoningLevels.includes(level),
 						))
 					? [index]
-					: [],
-			),
+					: [];
+			}),
 		[modelEndpoints, models],
 	);
 	const staleModel = staleModelIndexes.length > 0;

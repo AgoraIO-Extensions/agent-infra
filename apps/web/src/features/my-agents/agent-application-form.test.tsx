@@ -656,6 +656,8 @@ describe("AgentApplicationForm", () => {
 
 		const group = screen.getByRole("group", { name: "允许的推理档位" });
 		expect(group.getAttribute("aria-invalid")).toBe("true");
+		expect(screen.getByText("至少选择一个推理档位。")).toBeTruthy();
+		expect(screen.queryByText("模型选项已移除，请重新选择。")).toBeNull();
 		expect(document.activeElement).toBe(group);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
