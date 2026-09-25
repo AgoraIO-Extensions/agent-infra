@@ -17,20 +17,20 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v5",
-			"rehoboam.list_releases@v2",
-			"rehoboam.get_release@v2",
-			"rehoboam.list_release_pipelines@v2",
-			"rehoboam.get_release_pipeline@v2",
-			"rehoboam.prepare_release_pipeline_run@v2",
-			"rehoboam.execute_release_pipeline@v2",
-			"rehoboam.list_execution_requests@v2",
-			"rehoboam.get_execution_request@v2",
-			"rehoboam.approve_execution_request@v2",
-			"rehoboam.withdraw_execution_request@v2",
-			"rehoboam.reject_execution_request@v2",
-			"rehoboam.list_release_pipeline_runs@v2",
-			"rehoboam.get_release_pipeline_run@v2",
+			"rehoboam.get_current_user@v6",
+			"rehoboam.list_releases@v3",
+			"rehoboam.get_release@v3",
+			"rehoboam.list_release_pipelines@v3",
+			"rehoboam.get_release_pipeline@v3",
+			"rehoboam.prepare_release_pipeline_run@v3",
+			"rehoboam.execute_release_pipeline@v3",
+			"rehoboam.list_execution_requests@v3",
+			"rehoboam.get_execution_request@v3",
+			"rehoboam.approve_execution_request@v3",
+			"rehoboam.withdraw_execution_request@v3",
+			"rehoboam.reject_execution_request@v3",
+			"rehoboam.list_release_pipeline_runs@v3",
+			"rehoboam.get_release_pipeline_run@v3",
 		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
@@ -102,6 +102,34 @@ test("Rehoboam execution sends the stored personal token", async () => {
 		scopes: [],
 		user_id: "user-1",
 		username: "user@example.com",
+	});
+});
+
+test("Rehoboam release read preserves the bounded stored publication result", async () => {
+	const latestReleaseInfo = {
+		content: "<p>Release 4.7.0</p>",
+		content_source: "final_content.html",
+		operator: "publisher",
+		time: 42,
+		truncated: false,
+	};
+	const adapter = new RehoboamAdapter(
+		async () =>
+			Response.json({
+				data: { _id: "release-1", latest_release_info: latestReleaseInfo },
+				success: true,
+			}),
+		"machine-key",
+	);
+
+	const result = await adapter.execute({
+		action: "rehoboam.get_release",
+		credential: { accessToken: "stored-token" },
+		input: { releaseId: "release-1" },
+	});
+	assert.deepEqual(result, {
+		_id: "release-1",
+		latest_release_info: latestReleaseInfo,
 	});
 });
 
