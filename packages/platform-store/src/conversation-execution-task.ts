@@ -7,7 +7,6 @@ import type {
 } from "@agent-infra/platform-core";
 import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
-	type JsonValue,
 	safeInteger,
 	type Transaction,
 	text,
@@ -226,6 +225,7 @@ export async function submitConversationTask(
 		...agent,
 		conversation: conversation ?? null,
 		waitingCount: safeInteger(queue.waiting_count, 0),
+		lastWaitOrder: safeInteger(queue.last_order ?? "0", 0),
 	};
 	const decision = decide(state);
 	if ("outcome" in decision) return decision;
@@ -238,6 +238,15 @@ export async function submitConversationTask(
 		(conversation && plan.conversationId !== conversation.conversationId) ||
 		plan.createConversation !== !conversation ||
 		plan.acceptedAt.getTime() >= plan.waitDeadline.getTime() ||
+		plan.waitOrder !== state.lastWaitOrder + 1 ||
+		plan.outbox.availability !== "after_dispatch" ||
+		plan.outbox.id !== `conversation:turn:${plan.executionId}` ||
+		plan.outbox.payload.conversationId !== plan.conversationId ||
+		plan.outbox.payload.executionId !== plan.executionId ||
+		plan.outbox.payload.messageId !== plan.messageId ||
+		plan.outbox.payload.turnId !== plan.turnId ||
+		plan.outbox.payload.sessionGeneration !==
+			(conversation?.sessionGeneration ?? 1) ||
 		statusEvent.conversationCursor !==
 			(conversation?.lastConversationCursor ?? 0) + 1 ||
 		(plan.modelSelectionFallback !== null &&
@@ -245,8 +254,6 @@ export async function submitConversationTask(
 				statusEvent.conversationCursor + 1)
 	)
 		unavailable();
-	const order = safeInteger(queue.last_order ?? "0", 0) + 1;
-	if (!Number.isSafeInteger(order)) unavailable();
 	const result: ConversationTaskSubmitResultV1 = {
 		schemaVersion: 1,
 		status: "accepted",
@@ -267,7 +274,7 @@ export async function submitConversationTask(
 				 host_session_ref, authorization_revision, last_conversation_cursor,
 				 selected_model_option_id, selected_reasoning_level, created_at, updated_at)
 			values (${plan.conversationId}, ${authority.agentId}, ${authority.actorId},
-				${authority.channelId}, 'ready', 1, null, ${authority.authorizationRevision},
+				${authority.channelId}, ${plan.conversationStatus}, 1, null, ${authority.authorizationRevision},
 				${finalCursor}, ${plan.modelOptionId}, ${plan.reasoningLevel},
 				${plan.acceptedAt}, ${plan.acceptedAt})
 		`;
@@ -288,8 +295,8 @@ export async function submitConversationTask(
 			 delivery_fence, authorization_revision, model_configuration_revision,
 			 model_option_id, reasoning_level, last_event_sequence, created_at, updated_at)
 		values (${plan.executionId}, ${plan.conversationId}, ${authority.agentId},
-			${authority.actorId}, ${authority.channelId}, ${plan.turnId}, 'waiting',
-			${order}, ${plan.waitDeadline}, ${conversation?.sessionGeneration ?? 1}, 0,
+			${authority.actorId}, ${authority.channelId}, ${plan.turnId}, ${plan.executionStatus},
+			${plan.waitOrder}, ${plan.waitDeadline}, ${plan.outbox.payload.sessionGeneration}, 0,
 			${authority.authorizationRevision}, ${plan.modelConfigurationRevision},
 			${plan.modelOptionId}, ${plan.reasoningLevel}, ${statusEvent.sequence},
 			${plan.acceptedAt}, ${plan.acceptedAt})
@@ -318,26 +325,16 @@ export async function submitConversationTask(
 			(message_id, conversation_id, actor_id, role, text, execution_id,
 			 status, created_at, updated_at)
 		values (${plan.messageId}, ${plan.conversationId}, ${authority.actorId},
-			'user', ${request.command.text}, ${plan.executionId}, 'submitted',
+			'user', ${request.command.text}, ${plan.executionId}, ${plan.messageStatus},
 			${plan.acceptedAt}, ${plan.acceptedAt})
 	`;
 	await transaction`
 		insert into platform.outbox_items
 			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
 			 available_at, created_at, updated_at)
-		values (${`conversation:turn:${plan.executionId}`}, 'conversation',
-			${plan.conversationId}, ${plan.outboxOperation},
-			${transaction.json({
-				schemaVersion: 1,
-				conversationId: plan.conversationId,
-				executionId: plan.executionId,
-				messageId: plan.messageId,
-				turnId: plan.turnId,
-				sessionGeneration: conversation?.sessionGeneration ?? 1,
-				modelConfigurationRevision: plan.modelConfigurationRevision,
-				modelOptionId: plan.modelOptionId,
-				reasoningLevel: plan.reasoningLevel,
-			} as JsonValue)},
+		values (${plan.outbox.id}, 'conversation',
+			${plan.conversationId}, ${plan.outbox.operation},
+			${transaction.json(plan.outbox.payload)},
 			${request.command.traceId}, ${request.command.requestId},
 			'infinity'::timestamptz, ${plan.acceptedAt}, ${plan.acceptedAt})
 	`;

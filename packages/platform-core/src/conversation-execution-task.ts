@@ -38,6 +38,7 @@ export interface ConversationTaskAdmissionStateV1 {
 		readonly serviceAvailability: string | null;
 	} | null;
 	readonly waitingCount: number;
+	readonly lastWaitOrder: number;
 	readonly sourceKind: "standard" | "custom" | null;
 	readonly conversation: ConversationExecutionConversationStateV1 | null;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | null;
@@ -54,7 +55,26 @@ export interface ConversationTaskAdmissionPlanV1 {
 	readonly reasoningLevel: string;
 	readonly acceptedAt: Date;
 	readonly waitDeadline: Date;
-	readonly outboxOperation: "conversation.turn.submit.v1";
+	readonly waitOrder: number;
+	readonly conversationStatus: "ready";
+	readonly executionStatus: "waiting";
+	readonly messageStatus: "submitted";
+	readonly outbox: {
+		readonly id: string;
+		readonly operation: "conversation.turn.submit.v1";
+		readonly availability: "after_dispatch";
+		readonly payload: {
+			readonly schemaVersion: 1;
+			readonly conversationId: string;
+			readonly executionId: string;
+			readonly messageId: string;
+			readonly turnId: string;
+			readonly sessionGeneration: number;
+			readonly modelConfigurationRevision: number;
+			readonly modelOptionId: string;
+			readonly reasoningLevel: string;
+		};
+	};
 	readonly auditAction: "conversation.task.accepted";
 	readonly statusEvent: {
 		readonly eventId: string;
@@ -271,6 +291,9 @@ export function createConversationTaskAdmissionUseCaseV1(
 						const conversationId =
 							conversation?.conversationId ?? nextOpaqueId(newId);
 						const executionId = nextOpaqueId(newId);
+						const turnId = nextOpaqueId(newId);
+						const messageId = nextOpaqueId(newId);
+						const waitOrder = nextCounter(state.lastWaitOrder);
 						const statusEvent = {
 							eventId: nextOpaqueId(newId),
 							sequence: 1 as const,
@@ -300,14 +323,33 @@ export function createConversationTaskAdmissionUseCaseV1(
 							conversationId,
 							createConversation: !conversation,
 							executionId,
-							turnId: nextOpaqueId(newId),
-							messageId: nextOpaqueId(newId),
+							turnId,
+							messageId,
 							modelConfigurationRevision: model.configurationRevision,
 							modelOptionId,
 							reasoningLevel,
 							acceptedAt,
 							waitDeadline: new Date(deadlineMs),
-							outboxOperation: "conversation.turn.submit.v1",
+							waitOrder,
+							conversationStatus: "ready",
+							executionStatus: "waiting",
+							messageStatus: "submitted",
+							outbox: {
+								id: `conversation:turn:${executionId}`,
+								operation: "conversation.turn.submit.v1",
+								availability: "after_dispatch",
+								payload: {
+									schemaVersion: 1,
+									conversationId,
+									executionId,
+									messageId,
+									turnId,
+									sessionGeneration: conversation?.sessionGeneration ?? 1,
+									modelConfigurationRevision: model.configurationRevision,
+									modelOptionId,
+									reasoningLevel,
+								},
+							},
 							auditAction: "conversation.task.accepted",
 							statusEvent,
 							modelSelectionFallback,
