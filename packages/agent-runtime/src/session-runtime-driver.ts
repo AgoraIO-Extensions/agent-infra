@@ -50,6 +50,7 @@ export interface SessionRuntimeDriverOptions {
 	) => Promise<NativeSession>;
 	readonly retireSession: (directory: string) => Promise<void>;
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
+	readonly modelLifecycleAtTransport?: boolean;
 }
 export interface NativeSessionOptions {
 	directory: string;
@@ -61,6 +62,10 @@ export interface NativeSessionOptions {
 	modelRequestStarted?: () => Promise<void>;
 	modelUsage?: (
 		usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+	) => Promise<void>;
+	modelRequestFinished?: (
+		state: "completed" | "failed" | "unknown",
+		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) => Promise<void>;
 	/** Persist a tool intent before the native adapter is allowed to execute it. */
 	toolRequestStarted?: (tool: {
@@ -868,6 +873,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				modelRequestStarted: () =>
 					this.modelRequestStarted(file, command.executionId),
+				modelRequestFinished: (state, usage) =>
+					this.modelPhase(file, command.executionId, state, undefined, usage),
 				modelUsage: async (usage) => {
 					modelUsage = usage;
 				},
@@ -1075,7 +1082,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const now = new Date().toISOString();
 		const startedAt =
 			previous.startedAt ?? (phase === "started" ? now : undefined);
-		const finishedAt = phase === "started" ? undefined : now;
+		const finishedAt =
+			phase === "completed" || phase === "failed" ? now : undefined;
 		const durationMs =
 			startedAt && finishedAt
 				? Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt))
@@ -1118,16 +1126,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const seen = new Set<string>();
 		for (let index = turn.events.length - 1; index >= 0; index--) {
 			const event = turn.events[index];
-			if (
-				event?.type !== "operation" ||
-				event.payload.kind !== "tool" ||
-				!["intent", "started"].includes(event.payload.phase)
-			)
+			if (event?.type !== "operation" || event.payload.kind !== "tool")
 				continue;
 			const key = `${event.payload.operationRef}:${event.payload.attemptRef}`;
 			if (seen.has(key)) continue;
 			seen.add(key);
-			pending.push(event.payload);
+			if (["intent", "started"].includes(event.payload.phase))
+				pending.push(event.payload);
 		}
 		for (const fact of pending) {
 			const finishedAt = new Date().toISOString();
@@ -1150,13 +1155,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && latestFact(turn, "model");
-		if (!previous) return;
+		if (previous?.kind !== "model") return;
 		if (previous.phase === "intent") {
 			await this.modelPhase(file, executionId, "started");
 			return;
 		}
 		if (previous.phase === "started") {
-			await this.modelPhase(file, executionId, "completed");
+			await this.modelPhase(
+				file,
+				executionId,
+				"unknown",
+				"recovery_unconfirmed",
+			);
 			const latest = file
 				.read()
 				.turns.find((entry) => entry.executionId === executionId);
@@ -1168,6 +1178,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				finishedAt: _finishedAt,
 				durationMs: _durationMs,
 				failureCode: _failureCode,
+				usage: _usage,
 				...base
 			} = completed;
 			await this.appendOperationFact(file, executionId, {
@@ -1185,6 +1196,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				finishedAt: _finishedAt,
 				durationMs: _durationMs,
 				failureCode: _failureCode,
+				usage: _usage,
 				...base
 			} = previous;
 			await this.appendOperationFact(file, executionId, {
@@ -1380,7 +1392,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (markModel && status === "running")
 			await this.modelPhase(file, executionId, "started");
 		else if (status === "completed")
-			await this.modelPhase(file, executionId, "completed", undefined, usage);
+			await this.modelPhase(
+				file,
+				executionId,
+				this.options.modelLifecycleAtTransport ? "unknown" : "completed",
+				this.options.modelLifecycleAtTransport
+					? "recovery_unconfirmed"
+					: undefined,
+				usage,
+			);
 		else if (status === "failed")
 			await this.modelPhase(file, executionId, "failed", "operation_failed");
 		else if (status === "cancelled")

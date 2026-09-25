@@ -58,13 +58,14 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			modelRequestStarted,
 			_modelUsage,
 			_toolRequestStarted,
+			modelRequestFinished,
 		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
 			let currentModelRequestStarted = modelRequestStarted;
-			let suppressTransportStart = true;
+			let currentModelRequestFinished = modelRequestFinished;
 			let currentModelUsage = _modelUsage;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
@@ -72,13 +73,11 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				admit,
 				client: "opencode",
 				started: async () => {
-					if (suppressTransportStart) {
-						suppressTransportStart = false;
-						return;
-					}
 					await currentModelRequestStarted?.();
 				},
 				receipt: async (state, _endTurn, usage) => {
+					if (state !== "sent")
+						await currentModelRequestFinished?.(state, usage);
 					if (state === "completed" && usage) await currentModelUsage?.(usage);
 				},
 			});
@@ -175,7 +174,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					close: () => transport.close(),
 					onTurn: (callbacks) => {
 						currentModelRequestStarted = callbacks.modelRequestStarted;
-						suppressTransportStart = true;
+						currentModelRequestFinished = callbacks.modelRequestFinished;
 						currentModelUsage = callbacks.modelUsage;
 					},
 				};

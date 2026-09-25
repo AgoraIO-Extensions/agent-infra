@@ -53,6 +53,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 	const installed = await verifyPiInstallation();
 	return PiRuntimeDriver.open({
 		...options,
+		modelLifecycleAtTransport: true,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `configured/${option.model}`,
@@ -66,6 +67,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			modelRequestStarted,
 			modelUsage,
 			toolRequestStarted,
+			modelRequestFinished,
 		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
@@ -80,6 +82,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				client: "pi",
 				started: modelRequestStarted,
 				receipt: async (state, _endTurn, usage) => {
+					if (state !== "sent") await modelRequestFinished?.(state, usage);
 					if (state === "completed" && usage) await currentModelUsage?.(usage);
 				},
 				toolRequestStarted: async (tool) =>

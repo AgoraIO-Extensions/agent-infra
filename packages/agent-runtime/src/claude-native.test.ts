@@ -610,6 +610,19 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 			"started",
 			"completed",
 		]);
+		const firstModelCompleted = events.findIndex(
+			(event) =>
+				event.type === "operation" &&
+				event.payload.kind === "model" &&
+				event.payload.phase === "completed",
+		);
+		const firstToolIntent = events.findIndex(
+			(event) =>
+				event.type === "operation" &&
+				event.payload.kind === "tool" &&
+				event.payload.phase === "intent",
+		);
+		expect(firstModelCompleted).toBeLessThan(firstToolIntent);
 		expect(modelFacts[0]?.operationRef).toBe(modelFacts[3]?.operationRef);
 		expect(modelFacts[0]?.attemptRef).not.toBe(modelFacts[3]?.attemptRef);
 	}

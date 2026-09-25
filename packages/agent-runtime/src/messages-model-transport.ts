@@ -135,6 +135,7 @@ export async function openRuntimeMessagesTransport(
 				return;
 			}
 			active = true;
+			const counting = request.url?.includes("/count_tokens");
 			const controller = new AbortController();
 			controllers.add(controller);
 			response.once("close", () => {
@@ -154,7 +155,6 @@ export async function openRuntimeMessagesTransport(
 						Buffer.concat(chunks),
 					),
 				);
-				const counting = request.url?.includes("/count_tokens");
 				if (
 					closed ||
 					controller.signal.aborted ||
@@ -219,7 +219,7 @@ export async function openRuntimeMessagesTransport(
 				if (!upstream.ok) {
 					void upstream.body?.cancel().catch(() => {});
 					failure = upstream.status >= 500 ? "unknown" : "failed";
-					await options.receipt?.(failure);
+					if (!counting) await options.receipt?.(failure);
 					reject(response);
 					return;
 				}
@@ -271,7 +271,7 @@ export async function openRuntimeMessagesTransport(
 			} catch {
 				controller.abort();
 				if (!closed && !failure) failure = sent ? "unknown" : "failed";
-				if (failure) {
+				if (failure && !counting) {
 					try {
 						await options.receipt?.(failure);
 					} catch {

@@ -343,6 +343,39 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						accepted.nativeSessionRef,
 						"execution-a",
 					);
+					const firstModelCompleted = ownerEvents.findIndex(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "model" &&
+							event.payload.phase === "completed",
+					);
+					const firstToolIntent = ownerEvents.findIndex(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "tool" &&
+							event.payload.phase === "intent",
+					);
+					expect(firstModelCompleted).toBeGreaterThanOrEqual(0);
+					expect(firstModelCompleted).toBeLessThan(firstToolIntent);
+					const modelFacts = ownerEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "model"
+							? [event.payload]
+							: [],
+					);
+					expect(modelFacts.map((fact) => fact.phase)).toEqual([
+						"intent",
+						"started",
+						"completed",
+						"intent",
+						"started",
+						"completed",
+					]);
+					expect(modelFacts[2]?.usage).toMatchObject({
+						inputTokens: 10,
+						outputTokens: 10,
+					});
+					expect(modelFacts[3]?.usage).toBeUndefined();
+					expect(modelFacts[4]?.usage).toBeUndefined();
 					const ownerToolFacts = ownerEvents.flatMap((event) =>
 						event.type === "operation" && event.payload.kind === "tool"
 							? [event.payload]

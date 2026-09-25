@@ -19,6 +19,7 @@ export interface PiRuntimeDriverOptions {
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
 	modelOptions: readonly SessionRuntimeModelOption[];
+	modelLifecycleAtTransport?: boolean;
 	launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
@@ -29,6 +30,7 @@ export interface PiRuntimeDriverOptions {
 			readonly toolCallId: string;
 			readonly name: string;
 		}) => Promise<void>,
+		modelRequestFinished?: NativeSessionOptions["modelRequestFinished"],
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -52,6 +54,7 @@ export const PiRuntimeDriver = {
 				const callbacks = {
 					admit: session.admit,
 					modelRequestStarted: session.modelRequestStarted,
+					modelRequestFinished: session.modelRequestFinished,
 					modelUsage: session.modelUsage,
 					toolRequestStarted: session.toolRequestStarted,
 					update: session.update,
@@ -69,6 +72,9 @@ export const PiRuntimeDriver = {
 					async (tool) => {
 						await callbacks.toolRequestStarted?.(tool);
 					},
+					async (state, usage) => {
+						await callbacks.modelRequestFinished?.(state, usage);
+					},
 				);
 				const native = await openPiSession({
 					...session,
@@ -80,6 +86,7 @@ export const PiRuntimeDriver = {
 					startTurn: (next) => {
 						callbacks.admit = next.admit;
 						callbacks.modelRequestStarted = next.modelRequestStarted;
+						callbacks.modelRequestFinished = next.modelRequestFinished;
 						callbacks.modelUsage = next.modelUsage;
 						callbacks.toolRequestStarted = next.toolRequestStarted;
 						callbacks.update = next.update;

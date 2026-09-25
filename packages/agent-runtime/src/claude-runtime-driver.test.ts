@@ -127,7 +127,6 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		expect(modelFacts.at(-1)?.usage).toEqual({
 			inputTokens: 10,
 			outputTokens: 2,
-			cachedInputTokens: 0,
 		});
 		await driver.close();
 		driver = await ClaudeRuntimeDriver.open(options);

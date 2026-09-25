@@ -35,6 +35,7 @@ export interface GenericAcpRuntimeDriverOptions {
 			readonly name: string;
 			readonly permitted?: boolean;
 		}) => Promise<void>,
+		modelRequestFinished?: NativeSessionOptions["modelRequestFinished"],
 	) => Promise<AcpLaunch>;
 }
 
@@ -44,6 +45,7 @@ export const GenericAcpRuntimeDriver = {
 	open(options: GenericAcpRuntimeDriverOptions) {
 		return SessionRuntimeDriver.open({
 			...options,
+			modelLifecycleAtTransport: true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
@@ -59,6 +61,7 @@ export const GenericAcpRuntimeDriver = {
 				admit,
 				modelRequestStarted,
 				modelUsage,
+				modelRequestFinished,
 				toolRequestStarted,
 				update,
 				...session
@@ -89,10 +92,10 @@ export const GenericAcpRuntimeDriver = {
 					modelRequestStarted,
 					modelUsage,
 					normalizedToolRequestStarted,
+					modelRequestFinished,
 				);
 				const native = await openAcpSession({
 					...session,
-					modelRequestStarted,
 					toolRequestStarted: normalizedToolRequestStarted,
 					launch,
 					update: async ({ update: event }) => {
@@ -143,6 +146,7 @@ export const GenericAcpRuntimeDriver = {
 						launch.onTurn?.({
 							modelRequestStarted: next.modelRequestStarted,
 							modelUsage: next.modelUsage,
+							modelRequestFinished: next.modelRequestFinished,
 							toolRequestStarted: normalizeToolRequestStarted(
 								next.toolRequestStarted,
 							),

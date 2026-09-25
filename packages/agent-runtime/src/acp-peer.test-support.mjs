@@ -73,6 +73,8 @@ const connection = new AgentSideConnection(
 		},
 		prompt: async () => {
 			count++;
+			if (process.env.ACP_TEST_MODE === "prompt-reject")
+				throw new Error("synthetic prompt rejected before model send");
 			if (process.env.ACP_TEST_MODE === "foreign-notifications") {
 				for (const update of [
 					{
@@ -161,7 +163,11 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
-			if (["tool", "tool-hold"].includes(process.env.ACP_TEST_MODE)) {
+			if (
+				["tool", "tool-hold", "tool-completed-hold"].includes(
+					process.env.ACP_TEST_MODE,
+				)
+			) {
 				await connection.sessionUpdate({
 					sessionId,
 					update: {
@@ -193,6 +199,10 @@ const connection = new AgentSideConnection(
 						status: "completed",
 					},
 				});
+				if (process.env.ACP_TEST_MODE === "tool-completed-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
 			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(

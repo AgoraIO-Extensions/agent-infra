@@ -321,6 +321,7 @@ it.each([200, 404, 501, 401])(
 	"contains token-count responses with status %s",
 	async (status) => {
 		let admitted = false;
+		const receipts: string[] = [];
 		const transport = await openRuntimeMessagesTransport({
 			endpoint: "https://model.example.test",
 			credential: "synthetic-provider-credential",
@@ -329,6 +330,9 @@ it.each([200, 404, 501, 401])(
 			effort: "high",
 			admit: async () => {
 				admitted = true;
+			},
+			receipt: async (state) => {
+				receipts.push(state);
 			},
 			fetch: async () =>
 				new Response(
@@ -352,6 +356,7 @@ it.each([200, 404, 501, 401])(
 			expect(admitted).toBe(true);
 			expect(await response.text()).not.toContain("synthetic-provider");
 			expect(transport.failure()).toBeDefined();
+			expect(receipts).toEqual([]);
 		} finally {
 			await transport.close();
 		}

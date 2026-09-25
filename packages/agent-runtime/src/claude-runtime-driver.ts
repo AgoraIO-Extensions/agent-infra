@@ -815,13 +815,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			...option,
 			effort: selection.reasoningLevel,
 			started: () => this.modelRequestStarted(file, command.executionId),
-			receipt: async (response, endTurn = false) => {
+			receipt: async (response, endTurn, usage) => {
+				if (response === "completed")
+					await this.modelPhase(
+						file,
+						command.executionId,
+						"completed",
+						undefined,
+						usage,
+					);
+				else if (response === "failed" || response === "unknown")
+					await this.modelPhase(file, command.executionId, response);
 				await file.update((state) => {
 					const turn =
 						state.turns.find(
 							(turn) => turn.executionId === command.executionId,
 						) ?? unavailable();
-					turn.modelResponse = { state: response, endTurn };
+					turn.modelResponse = { state: response, endTurn: endTurn ?? false };
 				});
 			},
 			admit: async () => {
@@ -1173,7 +1183,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const now = new Date().toISOString();
 		const startedAt =
 			previous.startedAt ?? (phase === "started" ? now : undefined);
-		const finishedAt = phase === "started" ? undefined : now;
+		const finishedAt =
+			phase === "completed" || phase === "failed" ? now : undefined;
 		const durationMs =
 			startedAt && finishedAt
 				? Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt))
@@ -1217,16 +1228,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const seen = new Set<string>();
 		for (let index = turn.events.length - 1; index >= 0; index--) {
 			const event = turn.events[index];
-			if (
-				event?.type !== "operation" ||
-				event.payload.kind !== "tool" ||
-				!["intent", "started"].includes(event.payload.phase)
-			)
+			if (event?.type !== "operation" || event.payload.kind !== "tool")
 				continue;
 			const key = `${event.payload.operationRef}:${event.payload.attemptRef}`;
 			if (seen.has(key)) continue;
 			seen.add(key);
-			pending.push(event.payload);
+			if (["intent", "started"].includes(event.payload.phase))
+				pending.push(event.payload);
 		}
 		for (const fact of pending) {
 			const finishedAt = new Date().toISOString();
@@ -1255,7 +1263,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			return;
 		}
 		if (previous.phase === "started") {
-			await this.modelPhase(file, executionId, "completed");
+			await this.modelPhase(
+				file,
+				executionId,
+				"unknown",
+				"recovery_unconfirmed",
+			);
 			const latest = file
 				.read()
 				.turns.find((entry) => entry.executionId === executionId);
@@ -1448,7 +1461,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		if (markModel && status === "running")
 			await this.modelPhase(file, executionId, "started");
 		else if (status === "completed")
-			await this.modelPhase(file, executionId, "completed", undefined, usage);
+			await this.modelPhase(
+				file,
+				executionId,
+				"unknown",
+				"recovery_unconfirmed",
+				usage,
+			);
 		else if (status === "failed")
 			await this.modelPhase(file, executionId, "failed", "operation_failed");
 		else if (status === "cancelled")

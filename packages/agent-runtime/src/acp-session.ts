@@ -24,6 +24,10 @@ export interface AcpLaunch {
 	) => Promise<boolean>;
 	onTurn?: (callbacks: {
 		modelRequestStarted?: () => Promise<void>;
+		modelRequestFinished?: (
+			state: "completed" | "failed" | "unknown",
+			usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
 		modelUsage?: (
 			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 		) => Promise<void>;
@@ -41,7 +45,6 @@ export async function openAcpSession(options: {
 	cwd: string;
 	nativeId?: string;
 	update: (notification: SessionNotification) => Promise<void>;
-	modelRequestStarted?: () => Promise<void>;
 	toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
@@ -64,7 +67,6 @@ export async function openAcpSession(options: {
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
 	>();
 	let activeSessionId: string | undefined;
-	let currentModelRequestStarted = options.modelRequestStarted;
 	let currentToolRequestStarted = options.toolRequestStarted;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
@@ -174,14 +176,12 @@ export async function openAcpSession(options: {
 		return {
 			nativeId,
 			startTurn(next: {
-				modelRequestStarted?: () => Promise<void>;
 				toolRequestStarted?: (tool: {
 					readonly toolCallId: string;
 					readonly name: string;
 					readonly permitted?: boolean;
 				}) => Promise<void>;
 			}) {
-				currentModelRequestStarted = next.modelRequestStarted;
 				currentToolRequestStarted = next.toolRequestStarted;
 			},
 			modelSelection: () => {
@@ -246,9 +246,6 @@ export async function openAcpSession(options: {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],
 				});
-				// The request is dispatched before recording the model boundary, while
-				// still persisting the fact before the ACP response can complete.
-				await currentModelRequestStarted?.();
 				const response = await responsePromise;
 				await updates;
 				return response;
