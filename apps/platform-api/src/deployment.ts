@@ -6,6 +6,7 @@ import { createSecretEncryptorV1 } from "@agent-infra/secret-store";
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import {
 	createDeploymentAdmissionsV1,
+	createDeploymentConfigurationProjectionV2,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
 import { createDeploymentAuthorizationAdmission } from "./deployment-authorization.js";
@@ -62,6 +63,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...input,
 		currentIdentity: identityScope.currentIdentity,
 	});
+	const deploymentConfiguration =
+		createDeploymentConfigurationProjectionV2(input);
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
 	);
@@ -81,6 +84,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 				loadAuthorityContext: input.loadAuthorityContext,
 			}),
 		}),
+		deploymentConfiguration: {
+			identity: input.identity,
+			read: deploymentConfiguration,
+		},
 		presentAgent: {
 			create: ({ configurationQuery }) =>
 				createDeploymentPresentation({

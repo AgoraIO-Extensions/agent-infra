@@ -149,7 +149,11 @@ describe("AgentApplicationForm", () => {
 		);
 
 		expect(
-			(screen.getByLabelText("Agent 来源") as HTMLSelectElement).disabled,
+			(
+				screen.getByRole("combobox", {
+					name: "Agent 来源",
+				}) as HTMLButtonElement
+			).disabled,
 		).toBe(true);
 		expect(
 			(screen.getByLabelText("镜像地址") as HTMLInputElement).disabled,
@@ -160,7 +164,7 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
-	it("submits a custom self-managed source with its identity responsibility", () => {
+	it("submits a custom self-managed source with its identity responsibility", async () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -176,15 +180,21 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.change(screen.getByLabelText("Agent 来源"), {
-			target: { value: "custom-self-managed" },
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 自有交互入口",
 		});
-		fireEvent.change(screen.getByLabelText("镜像地址"), {
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		fireEvent.change(await screen.findByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
-		fireEvent.change(screen.getByLabelText("入口身份校验"), {
-			target: { value: "self-managed" },
+		fireEvent.click(screen.getByRole("combobox", { name: "入口身份校验" }));
+		const identityOption = await screen.findByRole("option", {
+			name: "由自有入口校验",
 		});
+		fireEvent.pointerDown(identityOption, { pointerType: "mouse" });
+		fireEvent.click(identityOption, { detail: 1 });
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
