@@ -7,6 +7,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -21,6 +22,13 @@ import {
 	RuntimeHost,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
+import {
+	CommandAcceptedProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
+	ConversationProjectionV1Schema,
+	ConversationSseMessageV2Schema,
+	ExecutionDetailProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	createFakeModelAccessValidatorV1,
@@ -41,7 +49,13 @@ import { expect, it } from "vitest";
 import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { setProductionDeploymentInput } from "../../../tests/fixtures/platform-api-production-deployment.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
+import type { ProductionPlatformApiInputV1 } from "../../platform-api/src/deployment.js";
+import {
+	createPlatformApiShutdown,
+	startPlatformApiFromDeployment,
+} from "../../platform-api/src/index.js";
 import {
 	fakeKubernetesApi,
 	workloadDesiredFixture,
@@ -238,6 +252,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	let execution: PostgresConversationExecutionTransactionV1 | undefined;
 	let authorization: PostgresTaskAuthorizationStoreV1 | undefined;
 	let moduleDirectory: string | undefined;
+	let apiRunning:
+		| Awaited<ReturnType<typeof startPlatformApiFromDeployment>>
+		| undefined;
+	let apiOrigin: string | undefined;
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		if (realCodexE2e) {
@@ -492,7 +510,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
-		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, ${configuration.source.kind === "standard" ? configuration.source.templateId : configuration.source.imageDigest}, now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
 		const fakeDriver = realCodexE2e
 			? undefined
@@ -755,7 +773,146 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.result.conversationId,
 			};
 		};
-		const first = await admit("first");
+		const first = await (async () => {
+			const publicKey = wrapping.publicKey.export({
+				format: "der",
+				type: "spki",
+			});
+			const input: ProductionPlatformApiInputV1 = {
+				databaseUrl: database.databaseUrl,
+				imageRepository: "registry.example.test/agents/codex",
+				identity: {
+					resolve: async (request) =>
+						request.headers.get("authorization") === "controlled-user-cli"
+							? {
+									schemaVersion: 1,
+									userId: "user-cli",
+									displayName: "Controlled user",
+									accountStatus: "active",
+									organizationIds: [],
+									roles: ["employee"],
+									authorizationRevision: "identity-1",
+								}
+							: null,
+					hydrateUsers: async (ids) =>
+						ids.map((userId) => ({
+							userId,
+							displayName: "Controlled user",
+							roles: ["employee"],
+						})),
+					resolveUser: async (userId) =>
+						userId === "user-cli"
+							? {
+									schemaVersion: 1,
+									userId,
+									accountStatus: "active",
+									organizationIds: [],
+									authorizationRevision: "identity-1",
+								}
+							: null,
+				},
+				loadAuthorityContext: async () => ({
+					schemaVersion: 1,
+					users: [{ userId: "user-cli", accountStatus: "active" }],
+					organizationIds: [],
+				}),
+				registry: {
+					endpoint: "https://registry.example.test",
+					imageReferencePrefix: "registry.example.test/agents",
+					admissionPolicyRef: "controlled-policy",
+					fetch: async () => new Response(null, { status: 404 }),
+					policy: { authorize: async () => ({ status: "rejected" }) },
+				},
+				templates: [
+					{
+						templateId: "worker-controlled-codex",
+						imageDigest: desired.imageDigest,
+						imageReference: `registry.example.test/agents/codex@${desired.imageDigest}`,
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: [],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					},
+				],
+				modelCatalog: {
+					revision: "worker-controlled-catalog",
+					load: async () => ({
+						schemaVersion: 1,
+						revision: "worker-controlled-catalog",
+						validUntil: Date.now() + 60_000,
+						endpoints: [],
+					}),
+				},
+				channelPolicy: { revision: "channels-1", bindings: [] },
+				encryptionKeys: {
+					schemaVersion: 1,
+					activeWrappingKeyVersion: "worker-key",
+					keys: [
+						{
+							schemaVersion: 1,
+							keyVersion: "worker-key",
+							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+							publicKeySpkiDerBase64: publicKey.toString("base64"),
+							publicKeyFingerprint: createHash("sha256")
+								.update(publicKey)
+								.digest("hex"),
+							rsaModulusBits: 3072,
+							status: "active",
+						},
+					],
+				},
+				resourceProfile: {
+					profileId: "standard-medium",
+					displayName: "Standard medium",
+					estimatedResources: {
+						cpuMillicores: 2000,
+						memoryMiB: 4096,
+						storageGiB: 20,
+					},
+				},
+			};
+			setProductionDeploymentInput(input);
+			apiRunning = await startPlatformApiFromDeployment({
+				moduleSpecifier: new URL(
+					"../../../tests/fixtures/platform-api-production-deployment.ts",
+					import.meta.url,
+				).href,
+				port: 0,
+				log: () => {},
+			});
+			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
+			const command = (path: string, key: string, body: unknown) =>
+				fetch(`${apiOrigin}${path}`, {
+					method: "POST",
+					headers: {
+						authorization: "controlled-user-cli",
+						"content-type": "application/json",
+						"Idempotency-Key": key,
+					},
+					body: JSON.stringify(body),
+				});
+			const createdResponse = await command(
+				`/api/v1/agents/${desired.agentId}/conversations`,
+				"worker-http-create",
+				{ schemaVersion: 1 },
+			);
+			const createdBody = await createdResponse.json();
+			expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
+			const created = ConversationProjectionV1Schema.parse(createdBody);
+			const acceptedResponse = await command(
+				`/api/v1/conversations/${created.conversationId}/messages`,
+				"worker-http-message",
+				{ schemaVersion: 1, text: "controlled dispatch" },
+			);
+			const acceptedBody = await acceptedResponse.json();
+			expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
+			const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
+			if (!accepted.executionId) throw Error("HTTP command had no execution");
+			return {
+				conversationId: created.conversationId,
+				executionId: accepted.executionId,
+			};
+		})();
 		const second = await admit("second");
 
 		// A database failure must not acknowledge a Runtime event that did not commit.
@@ -803,7 +960,19 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
 		if (!active) throw Error("No running execution");
 		expect(await dispatchCount()).toBe(1);
+		if (!realCodexE2e) {
+			const response = await fetch(
+				`${apiOrigin}/api/v2/conversations/${first.conversationId}/executions/${first.executionId}`,
+				{ headers: { authorization: "controlled-user-cli" } },
+			);
+			const body = await response.json();
+			expect(response.status, JSON.stringify(body)).toBe(200);
+			const detail = ExecutionDetailProjectionV2Schema.parse(body);
+			expect(detail.executionId).toBe(first.executionId);
+		}
 		if (realCodexE2e) {
+			expect(active.execution_id).toBe(first.executionId);
+			expect(active.conversation_id).toBe(first.conversationId);
 			const intent = modelJournalAtArrival[0];
 			if (!intent) throw Error("No model intent in durable journal at arrival");
 			expect(intent.executionId).toBe(active.execution_id);
@@ -947,6 +1116,107 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					).length === 1,
 				"recovered Codex execution completes",
 			);
+			if (!apiOrigin) throw Error("Production API did not start");
+			const read = async (path: string) => {
+				const response = await fetch(`${apiOrigin}${path}`, {
+					headers: { authorization: "controlled-user-cli" },
+				});
+				const body = await response.json();
+				expect(response.status, JSON.stringify(body)).toBe(200);
+				return body;
+			};
+			const path = `/api/v2/conversations/${first.conversationId}`;
+			const history = ConversationDetailProjectionV2Schema.parse(
+				await read(path),
+			);
+			const executionDetail = ExecutionDetailProjectionV2Schema.parse(
+				await read(`${path}/executions/${first.executionId}`),
+			);
+			const assertPersistedOperations = (events: typeof history.events) => {
+				const operations = events.filter(
+					(event) => event.type === "execution.operation",
+				);
+				for (const fact of operationFacts) {
+					const event = operations.find(
+						(item) => item.eventId === fact.eventId,
+					);
+					expect(event).toMatchObject({
+						eventId: fact.eventId,
+						conversationId: first.conversationId,
+						executionId: first.executionId,
+						payload: {
+							kind: "model",
+							phase: fact.phase,
+							operationRef: fact.operationRef,
+							attemptRef: fact.attemptRef,
+						},
+					});
+				}
+			};
+			assertPersistedOperations(history.events);
+			assertPersistedOperations(executionDetail.events);
+			const [cursorFact, ...replayedFacts] = operationFacts;
+			if (!cursorFact) throw Error("No persisted operation replay cursor");
+			expect(cursorFact.phase).toBe("intent");
+			expect(replayedFacts.length).toBeGreaterThan(0);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 10_000);
+			try {
+				const response = await fetch(`${apiOrigin}${path}/events`, {
+					headers: {
+						authorization: "controlled-user-cli",
+						"Last-Event-ID": cursorFact.eventId,
+					},
+					signal: controller.signal,
+				});
+				expect(response.status).toBe(200);
+				expect(response.headers.get("content-type")).toContain(
+					"text/event-stream",
+				);
+				if (!response.body) throw Error("V2 SSE body is missing");
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				const pending = new Set(replayedFacts.map((fact) => fact.eventId));
+				let buffer = "";
+				while (pending.size > 0) {
+					const next = await reader.read();
+					if (next.done) throw Error("V2 SSE ended before operation replay");
+					buffer += decoder.decode(next.value, { stream: true });
+					let end = buffer.indexOf("\n\n");
+					while (end >= 0) {
+						const frame = buffer.slice(0, end);
+						buffer = buffer.slice(end + 2);
+						const eventId = frame.match(/^id: (.+)$/m)?.[1];
+						const data = frame.match(/^data: (.+)$/m)?.[1];
+						expect(eventId).not.toBe(cursorFact.eventId);
+						if (eventId && data && pending.has(eventId)) {
+							const parsed = ConversationSseMessageV2Schema.parse(
+								JSON.parse(data),
+							);
+							const fact = operationFacts.find(
+								(item) => item.eventId === eventId,
+							);
+							expect(parsed).toMatchObject({
+								eventId,
+								type: "execution.operation",
+								conversationId: first.conversationId,
+								executionId: first.executionId,
+								payload: {
+									phase: fact?.phase,
+									operationRef: fact?.operationRef,
+									attemptRef: fact?.attemptRef,
+								},
+							});
+							pending.delete(eventId);
+						}
+						end = buffer.indexOf("\n\n");
+					}
+				}
+			} finally {
+				clearTimeout(timeout);
+				controller.abort();
+			}
+			expect(await dispatchCount()).toBe(1);
 		}
 		if (!realCodexE2e) {
 			// The same Conversation cannot start another concurrent reply.
@@ -1042,8 +1312,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await Promise.all([
 			execution?.close(),
 			authorization?.close(),
-			sql.end({ timeout: 0 }),
+			apiRunning ? createPlatformApiShutdown(apiRunning)() : undefined,
 		]);
+		await sql.end({ timeout: 0 });
 		await host?.close();
 		modelServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
