@@ -71,9 +71,8 @@ export function createDeploymentConfigurationProjectionV2(input: {
 	readonly templates: DeploymentAdmissionInputV1["templates"];
 	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
 }) {
-	const templates = structuredClone(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
-	const templateOptions = templates.map((template) => ({
+	const templateOptions = input.templates.map((template) => ({
 		templateId: template.templateId,
 		displayName: template.displayName ?? template.templateId,
 		connectionEnabled: template.connectionEnabled,
