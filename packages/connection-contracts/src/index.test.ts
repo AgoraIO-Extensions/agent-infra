@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionBrowserOpenApi } from "./index";
+import {
+	connectionBrowserOpenApi,
+	providerCredentialRequestSchema,
+} from "./index";
 
 describe("Connection Browser OpenAPI", () => {
 	it("keeps the versioned browser surface free of caller identity selectors", () => {
@@ -9,6 +12,13 @@ describe("Connection Browser OpenAPI", () => {
 		for (const forbidden of ['"actorPrincipalId"', '"credential"']) {
 			expect(serialized).not.toContain(forbidden);
 		}
+		expect(
+			providerCredentialRequestSchema.safeParse({
+				providerId: "manhattan",
+				username: "employee",
+				password: "company-password",
+			}).success,
+		).toBe(false);
 		// One schema property plus the same field in that schema's required list.
 		expect(serialized.match(/"accessToken"/g)).toHaveLength(2);
 		expect(
@@ -40,7 +50,7 @@ describe("Connection Browser OpenAPI", () => {
 					properties: {
 						password: { maxLength: 1024, minLength: 1, type: "string" },
 						providerId: {
-							enum: ["confluence", "jira", "manhattan"],
+							enum: ["confluence", "jira"],
 							type: "string",
 						},
 						username: { maxLength: 256, minLength: 1, type: "string" },

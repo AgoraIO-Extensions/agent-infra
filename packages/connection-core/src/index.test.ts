@@ -162,6 +162,7 @@ class MemoryRepository implements ConnectionRepository {
 		{
 			codeVerifier: string;
 			principalId: string;
+			providerId: string;
 			redirectUri: string;
 			sharedScopeId?: string;
 		}
@@ -290,6 +291,7 @@ class MemoryRepository implements ConnectionRepository {
 	async createOAuthTransaction(input: {
 		codeVerifier: string;
 		principalId: string;
+		providerId: string;
 		redirectUri: string;
 		sharedScopeId?: string;
 		state: string;
@@ -1181,6 +1183,71 @@ describe("Connection application service", () => {
 		});
 	});
 
+	it("binds Manhattan OAuth state to its provider and stores only the exchanged token", async () => {
+		const repository = new MemoryRepository();
+		const oauth: GitHubOAuthProvider = {
+			getAuthorizationUrl: ({ redirectUri, state }) =>
+				`https://oauth.agoralab.co/oauth/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
+			exchangeCode: async ({ code, redirectUri }) => {
+				expect(code).toBe("one-time-code");
+				expect(redirectUri).toBe(
+					"https://connection.example/oauth/callback?provider=manhattan",
+				);
+				return {
+					accessToken: "personal-token",
+					displayName: "User",
+					externalAccount: "user@example.com",
+					grantedScopes: ["manhattan.sdk.read"],
+				};
+			},
+			refresh: async () => {
+				throw new Error("not used");
+			},
+		};
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				manhattan: {
+					providerId: "manhattan",
+					providerReleaseId: "manhattan-connection-v4",
+					validateCredential: async () => {
+						throw new Error("not used");
+					},
+				},
+			},
+			{ manhattan: oauth },
+		);
+		const start = await service.startProviderOAuth(
+			"alice",
+			"manhattan",
+			"https://connection.example/oauth/callback?provider=manhattan",
+		);
+		const state =
+			new URL(start.authorizationUrl).searchParams.get("state") ?? "";
+		await expect(
+			service.completeGithubOAuth("one-time-code", state),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		await expect(
+			service.completeProviderOAuth("manhattan", "one-time-code", state),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		const next = await service.startProviderOAuth(
+			"alice",
+			"manhattan",
+			"https://connection.example/oauth/callback?provider=manhattan",
+		);
+		await service.completeProviderOAuth(
+			"manhattan",
+			"one-time-code",
+			new URL(next.authorizationUrl).searchParams.get("state") ?? "",
+		);
+		expect(repository.storedOAuthCredential).toMatchObject({
+			accessToken: "personal-token",
+			principalId: "alice",
+		});
+	});
+
 	it("reconciles an admitted write with missing terminal evidence", async () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
@@ -1414,6 +1481,79 @@ describe("Connection application service", () => {
 		expect(executedCredentials).toEqual(["new-access-token"]);
 	});
 
+	it("refreshes an expiring Manhattan token before a Provider READ", async () => {
+		const repository = new MemoryRepository();
+		repository.directInvocation = {
+			...direct,
+			providerId: "manhattan",
+			providerReleaseId: "manhattan-connection-v4",
+		};
+		repository.listAuthorizedActions = async () => [
+			{
+				description: "Current Manhattan user",
+				effect: "READ",
+				id: "manhattan.get_current_user@v4",
+				inputSchema: {
+					additionalProperties: false,
+					properties: {},
+					required: [],
+					type: "object",
+				},
+				name: "manhattan.get_current_user",
+				requiredScopes: ["manhattan.sdk.read"],
+			},
+		];
+		repository.refreshClaim = {
+			attemptId: "manhattan-refresh",
+			connectionId: direct.connectionId,
+			credentialRevision: "1",
+			credentialVersionId: direct.credentialVersionId,
+			externalAccount: "user@example.com",
+			providerId: "manhattan",
+			providerReleaseId: "manhattan-connection-v4",
+			refreshToken: "old-refresh-token",
+		};
+		const usedTokens: string[] = [];
+		const service = new ConnectionApplicationService(
+			repository,
+			{
+				execute: async ({ credential }) => {
+					usedTokens.push(credential.accessToken);
+					return { email: "user@example.com" };
+				},
+			},
+			undefined,
+			{},
+			{
+				manhattan: {
+					exchangeCode: async () => {
+						throw new Error("not used");
+					},
+					getAuthorizationUrl: () =>
+						"https://oauth.agoralab.co/oauth/authorize",
+					refresh: async (refreshToken) => {
+						expect(refreshToken).toBe("old-refresh-token");
+						return {
+							accessToken: "new-personal-token",
+							displayName: "User",
+							externalAccount: "user@example.com",
+							expiresAt: "2030-01-02T03:04:05.000Z",
+							grantedScopes: ["manhattan.sdk.read"],
+							refreshToken,
+						};
+					},
+				},
+			},
+		);
+		await service.executeDirectActionForIdentity(
+			direct,
+			"manhattan.get_current_user@v4",
+			{},
+		);
+		expect(repository.refreshStarted).toBe(true);
+		expect(usedTokens).toEqual(["new-personal-token"]);
+	});
+
 	it("requires reauthorization when GitHub rejects the refresh token", async () => {
 		const repository = new MemoryRepository();
 		repository.refreshClaim = {
@@ -1555,6 +1695,23 @@ describe("Connection application service", () => {
 			grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
 			providerReleaseId: "rehoboam-connection-v4",
 		});
+	});
+
+	it("requires SSO instead of upgrading an unrefreshable Manhattan token", async () => {
+		const repository = new MemoryRepository();
+		repository.getProviderCredentialForUpgrade = async () => ({
+			accessToken: "old-short-lived-token",
+			credentialVersionId: "credential-v3",
+			externalAccount: "user@example.com",
+			grantedScopes: ["manhattan.sdk.read"],
+			providerId: "manhattan",
+		});
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => ({}),
+		});
+		await expect(
+			service.upgradeProviderConnection("alice", "connection-manhattan"),
+		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
 	});
 
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {

@@ -834,7 +834,14 @@
 			"OAuthTransactionRequest": {
 				"type": "object",
 				"additionalProperties": false,
-				"properties": { "sharedScopeId": { "type": "string" } }
+				"properties": {
+					"providerId": {
+						"type": "string",
+						"enum": ["github", "manhattan"],
+						"default": "github"
+					},
+					"sharedScopeId": { "type": "string" }
+				}
 			},
 			"ProviderCredentialRequest": {
 				"oneOf": [
@@ -872,7 +879,7 @@
 						"properties": {
 							"providerId": {
 								"type": "string",
-								"enum": ["confluence", "jira", "manhattan"]
+								"enum": ["confluence", "jira"]
 							},
 							"username": {
 								"type": "string",

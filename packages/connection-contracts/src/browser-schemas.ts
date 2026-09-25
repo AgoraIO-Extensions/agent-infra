@@ -19,6 +19,7 @@ export const issueTokenRequestSchema = z.strictObject({
 });
 
 export const oauthTransactionRequestSchema = z.strictObject({
+	providerId: z.enum(["github", "manhattan"]).default("github"),
 	sharedScopeId: opaqueId.optional(),
 });
 
@@ -32,7 +33,7 @@ export const providerCredentialRequestSchema = z.union([
 	}),
 	z.strictObject({
 		password: z.string().min(1).max(1_024),
-		providerId: z.enum(["confluence", "jira", "manhattan"]),
+		providerId: z.enum(["confluence", "jira"]),
 		username: z.string().trim().min(1).max(256),
 	}),
 	z.strictObject({
