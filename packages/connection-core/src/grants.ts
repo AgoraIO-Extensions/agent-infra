@@ -120,6 +120,7 @@ export function assertGrantUsable(
 		grant.connectionId !== context.connectionId ||
 		grant.credentialVersionId !== context.credentialVersionId ||
 		grant.principalRecoveryGeneration !== context.principalRecoveryGeneration ||
+		grant.issuedAt > now ||
 		grant.expiresAt <= now ||
 		!grant.actionVersionIds.includes(context.actionVersionId)
 	) {

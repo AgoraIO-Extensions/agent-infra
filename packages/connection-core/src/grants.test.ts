@@ -48,6 +48,13 @@ describe("Connection Grant invariants", () => {
 			assertGrantUsable(grant, {
 				...input,
 				actionVersionId: input.actionVersionIds[0],
+				now: input.issuedAt - 1,
+			}),
+		).toThrow();
+		expect(() =>
+			assertGrantUsable(grant, {
+				...input,
+				actionVersionId: input.actionVersionIds[0],
 				now: input.expiresAt,
 			}),
 		).toThrow();
