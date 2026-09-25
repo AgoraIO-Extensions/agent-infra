@@ -633,6 +633,54 @@ describe("AgentApplicationForm", () => {
 		).toContain("Primary endpoint");
 	});
 
+	it("marks a persisted model with an unmapped endpoint as stale", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "legacy-model",
+						displayName: "Legacy model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "legacy-model",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						endpoints: [
+							...deploymentConfiguration.modelCatalog.endpoints,
+							{
+								endpointId: "endpoint-secondary",
+								displayName: "Secondary endpoint",
+								models: [{ modelId: "gpt-5", reasoningLevels: ["medium"] }],
+							},
+						],
+					},
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getByText("模型选项已移除，请重新选择。")).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("drops reasoning levels removed from the loaded catalog", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,

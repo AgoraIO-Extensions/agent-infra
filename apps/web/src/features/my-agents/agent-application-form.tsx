@@ -743,9 +743,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				const reasoningLevels = model.reasoningLevels
 					.split("\n")
 					.filter(Boolean);
-				return model.endpointId.length > 0 &&
-					model.modelId.length > 0 &&
-					(!selectedModel ||
+				const hasSelection =
+					model.optionId.length > 0 ||
+					(model.endpointId.length > 0 && model.modelId.length > 0);
+				return hasSelection &&
+					(!model.endpointId ||
+						!model.modelId ||
+						!selectedModel ||
 						!reasoningLevels.every((level) =>
 							selectedModel.reasoningLevels.includes(level),
 						))
