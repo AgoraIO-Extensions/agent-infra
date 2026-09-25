@@ -48,13 +48,51 @@ jobs:
       - name: Check TypeScript
         run: pnpm check-types
 
-      - name: Run tests
-        run: pnpm test
-
       - name: Build pinned Codex native test environment
         run: >-
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
           --tag agent-infra-codex-native-test .
+
+      - name: Verify packaged Worker with native Codex and PostgreSQL
+        env:
+          AGENT_INFRA_REAL_CODEX_E2E: "1"
+          PLATFORM_TEST_DATABASE_URL: postgres://platform_test:platform_test_password@127.0.0.1:54329/platform_test
+        run: |
+          docker run --detach --rm --name agent-infra-ci-codex-e2e-postgres \
+            --env POSTGRES_USER=platform_test \
+            --env POSTGRES_PASSWORD=platform_test_password \
+            --env POSTGRES_DB=platform_test \
+            --publish 127.0.0.1:54329:5432 \
+            postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+          cleanup() { docker rm --force --volumes agent-infra-ci-codex-e2e-postgres >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          attempt=0
+          ready=0
+          while [ "$attempt" -lt 80 ]; do
+            attempt=$((attempt + 1))
+            if docker exec agent-infra-ci-codex-e2e-postgres \
+              psql -U platform_test -d platform_test -c 'select 1' >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs agent-infra-ci-codex-e2e-postgres
+            exit 1
+          fi
+          docker run --init --rm --pull=never --network=host --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
+            --tmpfs /app/apps/platform-worker/dist:rw,exec,size=128m,mode=1777,uid=1000,gid=1000 \
+            --env AGENT_INFRA_REAL_CODEX_E2E \
+            --env PLATFORM_TEST_DATABASE_URL \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/platform-worker exec vitest run \
+            src/conversation-worker.integration.test.ts --cache=false
+
+      - name: Run tests
+        run: pnpm test
 
       - name: Verify native Codex recovery
         run: |

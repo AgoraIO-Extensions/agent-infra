@@ -19,6 +19,10 @@ export interface PostgresTestDatabase {
 export async function startPostgresTestDatabase(
 	name: string,
 ): Promise<PostgresTestDatabase> {
+	const externalDatabaseUrl = process.env.PLATFORM_TEST_DATABASE_URL;
+	if (externalDatabaseUrl) {
+		return { databaseUrl: externalDatabaseUrl, stop: async () => undefined };
+	}
 	const containerName = `agent-infra-${name}-${randomUUID()}`;
 	const stop = async () => {
 		await execFile("docker", [

@@ -3,7 +3,7 @@ import {
 	execFile as execFileCallback,
 	spawn,
 } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -13,13 +13,24 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
+	CodexRuntimeDriver,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
+	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
-import { createConversationExecutionUseCaseV1 } from "@agent-infra/platform-core";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import {
+	createFakeModelAccessValidatorV1,
+	createFakeModelCatalogAdapterV1,
+	projectRuntimeModelConfigurationV1,
+} from "@agent-infra/model-catalog";
+import {
+	type AgentConfigurationRecordV2,
+	createConversationExecutionUseCaseV1,
+} from "@agent-infra/platform-core";
 import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -27,6 +38,7 @@ import {
 import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
+import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
@@ -39,6 +51,68 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
+const realCodexE2e = process.env.AGENT_INFRA_REAL_CODEX_E2E === "1";
+
+function syntheticModelEvents() {
+	const item = {
+		type: "message",
+		id: "worker-codex-message",
+		role: "assistant",
+		status: "completed",
+		content: [
+			{ type: "output_text", text: "controlled dispatch", annotations: [] },
+		],
+	};
+	return [
+		{
+			type: "response.created",
+			response: {
+				id: "worker-codex-response",
+				status: "in_progress",
+				output: [],
+			},
+		},
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { ...item, status: "in_progress", content: [] },
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: item.id,
+			output_index: 0,
+			content_index: 0,
+			delta: "controlled dispatch",
+		},
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id: "worker-codex-response",
+				status: "completed",
+				output: [item],
+				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+			},
+		},
+	];
+}
+
+async function writeSyntheticModelResponse(
+	response: import("node:http").ServerResponse,
+	completionGate?: Promise<void>,
+) {
+	response.writeHead(200, { "content-type": "text/event-stream" });
+	const events = syntheticModelEvents();
+	const first = events[0];
+	if (!first) throw Error("Synthetic model response is empty");
+	response.write(`event: ${first.type}\ndata: ${JSON.stringify(first)}\n\n`);
+	if (completionGate) await completionGate;
+	for (const event of events.slice(1)) {
+		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	}
+	response.end();
+}
+
 async function waitUntil(check: () => Promise<boolean>, label: string) {
 	for (let attempt = 0; attempt < 150; attempt++) {
 		if (await check()) return;
@@ -48,7 +122,8 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 }
 
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
-// and Runtime HTTP. This is not real model, identity-provider or Connection acceptance.
+// and Runtime HTTP. AGENT_INFRA_REAL_CODEX_E2E adds the fixed Codex/provider lane;
+// neither mode is identity-provider, Connection, or browser acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-766-"));
 	const database = await startPostgresTestDatabase("766-worker-dispatch");
@@ -63,6 +138,15 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		confirmedCursor?: string;
 		responseStatus?: number;
 	}[] = [];
+	const modelRequests: { body: string; authenticated: boolean }[] = [];
+	let modelServer: ReturnType<typeof createServer> | undefined;
+	let modelPort: number | undefined;
+	let releaseModelResponse: (() => void) | undefined;
+	const modelResponseGate = realCodexE2e
+		? new Promise<void>((resolve) => {
+				releaseModelResponse = resolve;
+			})
+		: Promise.resolve();
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const signing = {
@@ -144,33 +228,172 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	let moduleDirectory: string | undefined;
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
-		const desired = workloadDesiredFixture(1, "agent-cli", "internal-only");
-		const adapter = createKubernetesRuntimeAdapterV1({
-			client: fake.client,
-			policy,
-			probe: async () => true,
-		});
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending")
-			throw Error("Expected controlled Workload identity");
-		await adapter.promote(desired, identity);
-		const configuration = {
+		if (realCodexE2e) {
+			modelServer = createServer(async (request, response) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of request) chunks.push(chunk);
+				const body = Buffer.concat(chunks).toString();
+				modelRequests.push({
+					body,
+					authenticated:
+						request.headers.authorization ===
+						"Bearer worker-controlled-model-credential",
+				});
+				if (!modelRequests.at(-1)?.authenticated) {
+					response.writeHead(401);
+					response.end();
+					return;
+				}
+				// Keep the controlled provider response open until the Worker has
+				// durably observed the accepted running Execution. Otherwise the
+				// synthetic model can complete before the takeover assertions read
+				// the processing state that this test is exercising.
+				if (!response.destroyed)
+					await writeSyntheticModelResponse(response, modelResponseGate);
+			});
+			modelServer.listen(0, "127.0.0.1");
+			await once(modelServer, "listening");
+			const modelAddress = modelServer.address();
+			if (!modelAddress || typeof modelAddress === "string")
+				throw Error("Controlled model server did not bind");
+			modelPort = modelAddress.port;
+		}
+		const baseDesired = workloadDesiredFixture(1, "agent-cli", "internal-only");
+		const configuration: AgentConfigurationRecordV2 = {
 			schemaVersion: 2,
-			agentId: desired.agentId,
+			agentId: baseDesired.agentId,
 			revision: 1,
-			source: {
-				kind: "custom",
-				imageDigest: desired.imageDigest,
-				admissionRevision: "admitted",
-				interactionMode: "platform-adapter",
-				connectionEnabled: false,
-			},
-			modelConfiguration: null,
+			source: realCodexE2e
+				? {
+						kind: "standard",
+						templateId: "worker-controlled-codex",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: [],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					}
+				: {
+						kind: "custom",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						interactionMode: "platform-adapter",
+						connectionEnabled: false,
+					},
+			modelConfiguration: realCodexE2e
+				? {
+						catalogRevision: "worker-controlled-catalog",
+						options: [
+							{
+								optionId: "worker-controlled-model",
+								endpointId: "worker-controlled-endpoint",
+								modelId: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								credential: {
+									secretId: "worker-controlled-secret",
+									version: 1,
+									isSet: true,
+								},
+							},
+						],
+						defaultOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+					}
+				: null,
 			environment: [],
 			secrets: [],
 			channels: [],
 			channelRevision: "channels-1",
 		};
+		const modelSecretRef = {
+			schemaVersion: 1 as const,
+			ownerType: "agent-owner" as const,
+			ownerId: "user-cli",
+			agentId: baseDesired.agentId,
+			secretId: "worker-controlled-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "worker-key",
+			name: "worker-controlled-model-secret",
+		};
+		const modelSecretKey = `MODEL_CREDENTIAL_${createHash("sha256")
+			.update("model:worker-controlled-model")
+			.digest("hex")
+			.toUpperCase()}`;
+		const catalog = catalogFixture();
+		const catalogEndpoint = catalog.endpoints[0];
+		if (!catalogEndpoint) throw Error("Controlled model endpoint is missing");
+		const modelProjection = realCodexE2e
+			? await projectRuntimeModelConfigurationV1({
+					configuration,
+					protocol: "openai-responses-v1",
+					catalog: createFakeModelCatalogAdapterV1({
+						...catalog,
+						revision: "worker-controlled-catalog",
+						endpoints: [
+							{
+								...catalogEndpoint,
+								endpointId: "worker-controlled-endpoint",
+							},
+						],
+					}),
+					access: createFakeModelAccessValidatorV1([
+						{
+							endpointId: "worker-controlled-endpoint",
+							modelId: "gpt-5.6-sol",
+							reasoningLevels: ["medium"],
+							credential: "worker-controlled-model-credential",
+						},
+					]),
+					signal: AbortSignal.timeout(1000),
+					credentialFor: async () => ({
+						reference: {
+							secretId: modelSecretRef.secretId,
+							secretVersion: 1,
+							configRevision: 1,
+							name: modelSecretRef.name,
+						},
+						key: modelSecretKey,
+						plaintext: new TextEncoder().encode(
+							"worker-controlled-model-credential",
+						),
+					}),
+				})
+			: undefined;
+		const desired = realCodexE2e
+			? validateAgentWorkloadDesiredV1({
+					...baseDesired,
+					secretRefs: [modelSecretRef],
+				})
+			: baseDesired;
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: fake.client,
+			policy,
+			...(modelProjection ? { modelProjection } : {}),
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending")
+			throw Error("Expected controlled Workload identity");
+		if (realCodexE2e) {
+			const secretUid = await adapter.applyImmutableSecret(
+				desired,
+				modelSecretRef.name,
+				modelSecretKey,
+				new TextEncoder().encode("worker-controlled-model-credential"),
+			);
+			await adapter.bindSecretFence(
+				desired,
+				identity,
+				modelSecretRef.name,
+				1,
+				secretUid,
+			);
+		}
+		await adapter.promote(desired, identity);
 		const capacity = {
 			schemaVersion: 1,
 			imageDigest: desired.imageDigest,
@@ -183,6 +406,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			configuration,
 			deployment: desired,
 			executionCapacity: capacity,
+			...(modelProjection ? { modelProjection } : {}),
 		};
 		const state = {
 			schemaVersion: 1,
@@ -210,9 +434,42 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
-		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(configuration)})`;
-		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(state)}, now() + interval '1 hour')`;
-		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
+		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
+		const fakeDriver = realCodexE2e
+			? undefined
+			: await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const driver = realCodexE2e
+			? await (async () => {
+					await verifyCodexPilotInstallation();
+					return CodexRuntimeDriver.open({
+						nativeLane: "official-model-only",
+						path: join(directory, "driver.json"),
+						launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
+						configVersion: "worker-controlled-codex-v1",
+						defaultModelOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+						modelOptions: [
+							{
+								modelOptionId: "worker-controlled-model",
+								model: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								endpoint: `http://127.0.0.1:${modelPort}/v1`,
+								credential: "worker-controlled-model-credential",
+							},
+						],
+						authorizeExternalAction: async () => {
+							throw new Error("controlled test lane forbids external actions");
+						},
+					});
+				})()
+			: fakeDriver;
+		if (!driver) throw Error("Runtime driver was not assembled");
+		const dispatchCount = async () => {
+			if (realCodexE2e) return modelRequests.length;
+			if (!fakeDriver) throw Error("Fake runtime driver was not assembled");
+			return fakeDriver.sideEffectCount();
+		};
 		host = await RuntimeHost.open({
 			driver: Object.assign(driver, {
 				probeReadiness: () => driver.getCapabilities(),
@@ -441,7 +698,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
-			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin perform nextval('platform.test_event_attempts'); raise exception 'injected event transaction failure'; end $$",
+			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin if nextval('platform.test_event_attempts') = 1 then raise exception 'injected event transaction failure'; end if; return new; end $$",
 		);
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
@@ -449,9 +706,13 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		start();
 		start();
 		await waitUntil(
-			async () => (await driver.sideEffectCount()) === 1,
+			async () => (await dispatchCount()) === 1,
 			"single effective first dispatch",
 		);
+		if (realCodexE2e) {
+			expect(modelRequests[0]?.authenticated).toBe(true);
+			expect(modelRequests[0]?.body).toContain("controlled dispatch");
+		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
 		await waitUntil(
 			async () =>
@@ -477,7 +738,19 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [active] =
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
 		if (!active) throw Error("No running execution");
-		expect(await driver.sideEffectCount()).toBe(1);
+		expect(await dispatchCount()).toBe(1);
+		if (realCodexE2e) {
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return phases.has("intent") && phases.has("started");
+			}, "persisted Codex model operation start facts");
+		}
 		// Kill both process owners, expire only this test's owned lease, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
 		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
@@ -512,7 +785,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					),
 			"takeover acknowledges existing committed cursor",
 		);
-		expect(await driver.sideEffectCount()).toBe(1);
+		expect(await dispatchCount()).toBe(1);
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
 		).toHaveLength(1);
@@ -526,54 +799,109 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				.filter((request) => request.executionId === active.execution_id)
 				.every((request) => request.deliveryFence === after?.fence),
 		).toBe(true);
-		// The same Conversation cannot start another concurrent reply.
-		const supplement = await api.accept({
-			schemaVersion: 1,
-			command: "message",
-			conversationId: active.conversation_id,
-			text: "supplement",
-			idempotencyKey: "supplement",
-			requestId: "supplement",
-			traceId: "supplement",
-		});
-		expect(supplement.outcome).toBe("accepted");
-		if (supplement.outcome !== "accepted")
-			throw Error("Expected supplementary instruction");
-		expect(supplement.result.executionId).toBe(active.execution_id);
-		await waitUntil(
-			async () =>
-				requests.some(
-					(request) =>
-						request.path.endsWith("/instructions") &&
-						request.executionId === active.execution_id &&
-						request.responseStatus === 200,
+		if (realCodexE2e) {
+			releaseModelResponse?.();
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return ["intent", "started", "completed"].every((phase) =>
+					phases.has(phase),
+				);
+			}, "persisted Codex model operation facts");
+			const operationFacts = await sql<
+				{
+					phase: string;
+					kind: string;
+					modelOptionId: string | null;
+				}[]
+			>`
+				select event_payload->'fact'->>'phase' as phase,
+				       event_payload->'fact'->>'kind' as kind,
+				       event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId"
+				from platform.conversation_events
+				where execution_id=${active.execution_id}
+				  and event_type='execution.operation'
+				order by sequence
+			`;
+			expect(operationFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
+			expect(
+				operationFacts.every(
+					(fact) => fact.modelOptionId === "worker-controlled-model",
 				),
-			"supplement preserves the active Execution",
-		);
-		const stop = await api.stop({
-			schemaVersion: 1,
-			command: "stop",
-			targetExecutionId: active.execution_id,
-			conversationId: active.conversation_id,
-			idempotencyKey: "stop",
-			requestId: "stop",
-			traceId: "stop",
-		});
-		expect(stop.outcome).toBe("accepted");
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
-				).length === 1,
-			"durable stop completion",
-		);
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
-				).length === 1,
-			"deferred conversation after capacity release",
-		);
+			).toBe(true);
+			const operationAudits = await sql`
+				select id
+				from platform.audit_events
+				where target_id=${active.execution_id}
+				  and action='execution.operation.observed'
+			`;
+			expect(operationAudits.length).toBeGreaterThanOrEqual(3);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='completed'`
+					).length === 1,
+				"recovered Codex execution completes",
+			);
+		}
+		if (!realCodexE2e) {
+			// The same Conversation cannot start another concurrent reply.
+			const supplement = await api.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: active.conversation_id,
+				text: "supplement",
+				idempotencyKey: "supplement",
+				requestId: "supplement",
+				traceId: "supplement",
+			});
+			expect(supplement.outcome).toBe("accepted");
+			if (supplement.outcome !== "accepted")
+				throw Error("Expected supplementary instruction");
+			expect(supplement.result.executionId).toBe(active.execution_id);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path.endsWith("/instructions") &&
+							request.executionId === active.execution_id &&
+							request.responseStatus === 200,
+					),
+				"supplement preserves the active Execution",
+			);
+			const stop = await api.stop({
+				schemaVersion: 1,
+				command: "stop",
+				targetExecutionId: active.execution_id,
+				conversationId: active.conversation_id,
+				idempotencyKey: "stop",
+				requestId: "stop",
+				traceId: "stop",
+			});
+			expect(stop.outcome).toBe("accepted");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
+					).length === 1,
+				"durable stop completion",
+			);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
+					).length === 1,
+				"deferred conversation after capacity release",
+			);
+		}
 		expect(ackCount).toBeGreaterThan(0);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
@@ -605,6 +933,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			{ cause: error },
 		);
 	} finally {
+		releaseModelResponse?.();
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(
@@ -620,6 +949,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			sql.end({ timeout: 0 }),
 		]);
 		await host?.close();
+		modelServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
 		kube.closeAllConnections();
 		await Promise.all([
@@ -627,6 +957,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				? new Promise<void>((done) => runtimeServer?.close(() => done()))
 				: undefined,
 			new Promise<void>((done) => kube.close(() => done())),
+			modelServer
+				? new Promise<void>((done) => modelServer?.close(() => done()))
+				: undefined,
 		]);
 		await database.stop();
 		if (moduleDirectory)
