@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受，用于 Connection M1 首个受监督 GitHub Pilot。
+历史决策。单一账号级权威的结论仍由 [M1 工程架构 Spec](../architecture/SPEC-agent-infra-M1-engineering-architecture.md) 定义；下文旧的 delegated assertion 和 LDAP 传输方案已由 [Connection M1 HLD](../architecture/HLD-connection-M1.md) 替代，不作为当前实现依据。
 
 ## 背景
 

@@ -54,7 +54,7 @@ Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer �
 
 ### 5.1 Principal
 
-Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。默认使用 LDAPS 或 STARTTLS，并校验证书链和服务端 hostname。具名 LA3 M1 受监督 Pilot 可按 Connection Owner 批准的固定部署配置使用 `ldap://` 直连；该例外不要求专用 private endpoint 或单独的 Security/SRE 风险接受记录，也不得自动扩展到其他环境。启动时固定 LDAP URL、Base DN、Bind DN 和 issuer，禁止请求动态选择 endpoint、TLS downgrade 或 fallback。明文链路可能暴露 bind 密码，Pilot 不得据此宣称广泛生产就绪。
+Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。默认使用 LDAPS 或 STARTTLS，并校验证书链和服务端 hostname。具名 LA3 M1 受监督 Pilot 可按 Connection Owner 批准的固定部署配置使用 `ldap://` 直连；该例外不要求专用 private endpoint 或单独的 Security/SRE 风险接受记录。启动时固定 LDAP URL、Base DN、Bind DN 和 issuer；仅该 LA3 Pilot 部署身份可启用明文 profile，其他环境配置 `ldap://` 必须拒绝启动。禁止请求动态选择 endpoint、TLS downgrade 或 fallback。明文链路可能暴露 bind 密码，Pilot 不得据此宣称广泛生产就绪。
 
 LDAP 拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。
 
