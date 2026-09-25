@@ -296,13 +296,12 @@ export function ConnectionsPage() {
 			!connection.requiresReconnect,
 	);
 	useEffect(() => {
-		if ((!callbackFailed && !permissionDenied) || !callbackConnectionHealthy)
-			return;
+		if (!callbackFailed || !callbackConnectionHealthy) return;
 		const url = new URL(window.location.href);
 		url.searchParams.delete("oauth");
 		url.searchParams.delete("provider");
 		window.history.replaceState(null, "", url);
-	}, [callbackFailed, permissionDenied, callbackConnectionHealthy]);
+	}, [callbackFailed, callbackConnectionHealthy]);
 	useEffect(() => {
 		if (!data || recoveryHandled.current) return;
 		const search = new URLSearchParams(window.location.search);
@@ -433,7 +432,7 @@ export function ConnectionsPage() {
 					授权回跳未确认，请以当前连接状态为准。
 				</p>
 			) : null}
-			{permissionDenied && overview.isSuccess && !callbackConnectionHealthy ? (
+			{permissionDenied && overview.isSuccess ? (
 				<p className="alert alert-warning" role="status">
 					当前账号缺少 Manhattan 访问权限。
 				</p>

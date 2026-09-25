@@ -584,6 +584,37 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.queryByLabelText("公司密码")).toBeNull();
 	});
 
+	it("已有 Manhattan 连接时仍显示新授权的 RBAC 拒绝", async () => {
+		const initial = await api.getConnections();
+		const sample = initial.overview.connections[0];
+		if (!sample) throw new Error("Connection fixture is empty");
+		api.getConnections.mockResolvedValueOnce({
+			...initial,
+			overview: {
+				...initial.overview,
+				connections: [
+					...initial.overview.connections,
+					{
+						...sample,
+						id: "connection-manhattan",
+						providerId: "manhattan" as const,
+						requiresReconnect: false,
+						status: "ACTIVE" as const,
+					},
+				],
+			},
+		});
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?oauth=permission_denied&provider=manhattan",
+		);
+		renderPage(<ConnectionsPage />);
+		expect(
+			await screen.findByText("当前账号缺少 Manhattan 访问权限。"),
+		).toBeTruthy();
+	});
+
 	it("连接页调用 Jira Server credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });

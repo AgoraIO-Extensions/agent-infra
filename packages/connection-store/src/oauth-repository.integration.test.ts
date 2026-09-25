@@ -796,11 +796,11 @@ describe("PostgreSQL Connection OAuth", () => {
 					await transaction`
 						INSERT INTO connection_oauth_transactions (
 							state_hash, principal_id, verifier_ciphertext, verifier_nonce,
-							verifier_tag, redirect_uri, provider_id, expires_at
+							verifier_tag, redirect_uri, expires_at
 						)
 						VALUES (
 							${ids.transaction}, ${oldPrincipalId}, 'cipher', 'nonce', 'tag',
-							'http://127.0.0.1/callback', 'github', now() + interval '1 hour'
+							'http://127.0.0.1/callback', now() + interval '1 hour'
 						)
 					`;
 					await transaction`
