@@ -475,6 +475,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const defaultModelDefinition = modelEndpoints
 		.find((endpoint) => endpoint.endpointId === defaultModel?.endpointId)
 		?.models.find((model) => model.modelId === defaultModel?.modelId);
+	const defaultReasoningLevels =
+		defaultModelDefinition?.reasoningLevels.filter((level) =>
+			defaultModel?.reasoningLevels.split("\n").includes(level),
+		) ?? [];
+	const selectedDefaultReasoningLevel = defaultReasoningLevels.includes(
+		defaultReasoningLevel,
+	)
+		? defaultReasoningLevel
+		: "";
 	const configurationMessage =
 		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
 			? "部署选项已过期，请重新加载后再提交。"
@@ -916,6 +925,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																				item.endpointId && value
 																					? optionIdFor(item.endpointId, value)
 																					: "",
+																			reasoningLevels: "",
 																		}),
 															}
 														: { ...item, [key]: value },
@@ -983,7 +993,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											默认推理档位
 										</Label>
 										<Select
-											value={defaultReasoningLevel}
+											value={selectedDefaultReasoningLevel}
 											disabled={!defaultModelDefinition}
 											onValueChange={(value) =>
 												value && setDefaultReasoningLevel(value)
@@ -996,13 +1006,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectValue placeholder="选择默认推理档位" />
 											</SelectTrigger>
 											<SelectContent>
-												{defaultModelDefinition?.reasoningLevels.map(
-													(value) => (
-														<SelectItem key={value} value={value}>
-															{value}
-														</SelectItem>
-													),
-												)}
+												{defaultReasoningLevels.map((value) => (
+													<SelectItem key={value} value={value}>
+														{value}
+													</SelectItem>
+												))}
 											</SelectContent>
 										</Select>
 									</div>

@@ -43,6 +43,24 @@ function check(label: string) {
 	fireEvent.click(screen.getByRole("checkbox", { name: label }));
 }
 
+const deploymentConfigurationWithMultipleModels = {
+	...deploymentConfiguration,
+	modelCatalog: {
+		...deploymentConfiguration.modelCatalog,
+		endpoints: deploymentConfiguration.modelCatalog.endpoints.map((endpoint) =>
+			endpoint.endpointId === "endpoint-primary"
+				? {
+						...endpoint,
+						models: [
+							...endpoint.models,
+							{ modelId: "gpt-5-mini", reasoningLevels: ["low"] },
+						],
+					}
+				: endpoint,
+		),
+	},
+};
+
 describe("AgentApplicationForm", () => {
 	it("shows required model fields for a standard-template application", () => {
 		const onSubmit = vi.fn();
@@ -95,6 +113,99 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("clears reasoning levels and regenerates the option when changing models", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={deploymentConfigurationWithMultipleModels}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		check("medium");
+		check("high");
+		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+		const alternateModel = screen.getByRole("option", { name: "gpt-5-mini" });
+		fireEvent.pointerDown(alternateModel, { pointerType: "mouse" });
+		fireEvent.click(alternateModel, { detail: 1 });
+
+		expect(screen.queryByRole("checkbox", { name: "medium" })).toBeNull();
+		expect(screen.queryByRole("checkbox", { name: "high" })).toBeNull();
+		check("low");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "never-echo-model" },
+		});
+		choose("默认模型", "Primary endpoint · gpt-5-mini");
+		choose("默认推理档位", "low");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelConfiguration: expect.objectContaining({
+					options: [
+						expect.objectContaining({
+							optionId: "endpoint-primary:gpt-5-mini",
+							reasoningLevels: ["low"],
+						}),
+					],
+					defaultOptionId: "endpoint-primary:gpt-5-mini",
+					defaultReasoningLevel: "low",
+				}),
+			}),
+		);
+	});
+
+	it("limits the default reasoning choices to the selected levels", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		check("medium");
+		choose("默认模型", "Primary endpoint · gpt-5");
+
+		fireEvent.click(screen.getByRole("combobox", { name: "默认推理档位" }));
+		expect(screen.getByRole("option", { name: "medium" })).toBeTruthy();
+		expect(screen.queryByRole("option", { name: "high" })).toBeNull();
+		fireEvent.click(screen.getByRole("option", { name: "medium" }));
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "never-echo-model" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelConfiguration: expect.objectContaining({
+					defaultReasoningLevel: "medium",
+				}),
+			}),
+		);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {
