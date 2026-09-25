@@ -980,6 +980,41 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("does not show a stale model status before model editing is enabled", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "removed-model",
+						displayName: "Removed model",
+						modelId: "removed-model",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "removed-model",
+				defaultReasoningLevel: "medium",
+			},
+		});
+
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		expect(
+			screen.queryByText(
+				"当前申请包含已移除的部署选项，请重新加载并重新选择。",
+			),
+		).toBeNull();
+	});
+
 	it("drops reasoning levels removed from the loaded catalog", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,

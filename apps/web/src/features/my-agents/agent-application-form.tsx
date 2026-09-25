@@ -960,7 +960,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						(deployment.modelCatalog.status === "empty" &&
 							sourceKind === "standard")
 					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
-					: staleTemplate || staleModel
+					: staleTemplate || (modelConfigurationVisible && staleModel)
 						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
 						: undefined;
 
@@ -1151,6 +1151,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								onValueChange={(value) => {
 									if (!value) return;
 									const kind = value as AgentApplicationSourceKind;
+									dismissServerFormError();
 									setSourceKind(kind);
 									if (kind === "standard") {
 										if (models.length === 0) setModels([blankModel()]);
@@ -1287,8 +1288,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										if (
 											value === "platform-managed" ||
 											value === "self-managed"
-										)
+										) {
+											dismissServerFormError();
 											setIdentityResponsibility(value);
+										}
 									}}
 								>
 									<SelectTrigger
@@ -1433,6 +1436,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							updateNameField("environment", next, index, key);
 						}}
 						onRemove={(index) => {
+							dismissServerFormError();
 							const next = environment.filter(
 								(_, itemIndex) => itemIndex !== index,
 							);
@@ -1451,9 +1455,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					/>
 					<Button
 						variant="outline"
-						onClick={() =>
-							setEnvironment((current) => [...current, blankEnvironment()])
-						}
+						onClick={() => {
+							dismissServerFormError();
+							setEnvironment((current) => [...current, blankEnvironment()]);
+						}}
 						type="button"
 					>
 						<PlusIcon aria-hidden="true" data-icon="inline-start" />
@@ -1500,6 +1505,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							updateNameField("secret", next, index, key);
 						}}
 						onRemove={(index) => {
+							dismissServerFormError();
 							const next = secrets.filter(
 								(_, itemIndex) => itemIndex !== index,
 							);
@@ -1514,9 +1520,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					/>
 					<Button
 						variant="outline"
-						onClick={() =>
-							setSecrets((current) => [...current, blankEnvironment()])
-						}
+						onClick={() => {
+							dismissServerFormError();
+							setSecrets((current) => [...current, blankEnvironment()]);
+						}}
 						type="button"
 					>
 						<PlusIcon aria-hidden="true" data-icon="inline-start" />
@@ -1548,6 +1555,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										disabled={props.submitting}
 										checked={configureModels}
 										onCheckedChange={(checked) => {
+											dismissServerFormError();
 											setConfigureModels(checked);
 											if (checked && models.length === 0) {
 												setModels([blankModel()]);
@@ -1618,6 +1626,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											dismissServerValidation();
 									}}
 									onRemove={(index) => {
+										dismissServerFormError();
 										const next = models.filter(
 											(_, itemIndex) => itemIndex !== index,
 										);
@@ -1752,9 +1761,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<Button
 									variant="outline"
 									id="application-add-model-option"
-									onClick={() =>
-										setModels((current) => [...current, blankModel()])
-									}
+									onClick={() => {
+										dismissServerFormError();
+										setModels((current) => [...current, blankModel()]);
+									}}
 									type="button"
 								>
 									<PlusIcon aria-hidden="true" data-icon="inline-start" />
