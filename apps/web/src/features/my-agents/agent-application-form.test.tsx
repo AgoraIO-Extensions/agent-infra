@@ -1391,6 +1391,47 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
+	it("retries a server invalid request after changing the source kind", async () => {
+		const onSubmit = vi.fn();
+		const formProps = { mode: "create", onSubmit, submitting: false } as const;
+		const view = render(<AgentApplicationForm {...formProps} />);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		view.rerender(
+			<AgentApplicationForm
+				{...formProps}
+				serverError={{ code: "INVALID_REQUEST" }}
+			/>,
+		);
+		expect(
+			screen.getByText("申请内容未通过服务端校验，请检查表单后重试。"),
+		).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 平台交互入口",
+		});
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		fireEvent.change(await screen.findByLabelText("镜像地址"), {
+			target: { value: "registry.example/agents/release:v1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/release:v1",
+					interactionMode: "platform-adapter",
+				},
+			}),
+		);
+	});
+
 	it("marks a removed existing template instead of submitting it", () => {
 		const onSubmit = vi.fn();
 		const application = AgentApplicationProjectionV2Schema.parse({
