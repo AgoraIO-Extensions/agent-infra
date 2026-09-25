@@ -776,7 +776,50 @@ describe("AgentApplicationForm", () => {
 
 		expect(screen.getByRole("status").textContent).toContain("已移除");
 		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(
+			screen
+				.getByRole("combobox", { name: "标准模板 ID" })
+				.getAttribute("aria-describedby"),
+		).toBe("application-source-help application-template-id-error");
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("does not mark an unavailable saved template as removed", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			status: "rejected",
+			decision: {
+				decidedAt: "2026-09-04T00:00:00Z",
+				reason: "Unavailable",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="resubmit"
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "unavailable",
+					templates: [],
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						status: "unavailable",
+						endpoints: [],
+					},
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByRole("status").textContent).toContain("暂不可用");
+		expect(screen.getByRole("status").textContent).not.toContain("已移除");
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({ source: application.source }),
+		);
 	});
 
 	it("blocks an unavailable model catalog without duplicate submission", () => {

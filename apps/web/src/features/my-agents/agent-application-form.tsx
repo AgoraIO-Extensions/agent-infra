@@ -701,7 +701,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const secretOptions = (selectedTemplate?.allowedSecretKeys ?? []).map(
 		(value) => ({ value, label: value }),
 	);
-	const staleTemplate = templateId.length > 0 && selectedTemplate === undefined;
+	const staleTemplate =
+		deployment.status === "populated" &&
+		templateId.length > 0 &&
+		selectedTemplate === undefined;
 	const staleModelIndexes = useMemo(
 		() =>
 			models.flatMap((model, index) =>
@@ -1009,7 +1012,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								>
 									<SelectTrigger
 										id="application-template-id"
-										aria-describedby="application-source-help"
+										aria-describedby={describedBy(
+											"application-source-help",
+											fieldErrors.templateId
+												? errorId("templateId")
+												: undefined,
+										)}
 										aria-invalid={fieldErrors.templateId ? true : undefined}
 										className="h-11 w-full text-base md:text-sm"
 									>
