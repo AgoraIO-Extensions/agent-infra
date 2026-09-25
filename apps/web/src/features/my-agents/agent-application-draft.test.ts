@@ -134,6 +134,34 @@ describe("Agent application draft", () => {
 		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
 	});
 
+	it("rejects duplicate endpoint and model pairs with different option IDs", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				models: [
+					standardCreateDraft.models[0],
+					{
+						...standardCreateDraft.models[0],
+						optionId: "legacy-model",
+						credentialValue: "",
+					},
+				],
+			},
+			{
+				modelConfigurationVisible: true,
+				requiresReplacementCredential: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+				defaultModelReasoningLevels: ["medium", "high"],
+			},
+		);
+
+		expect(errors["model.0.modelId"]).toBe("模型选项不能重复。");
+		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
+	});
+
 	it("marks only repeated environment and Secret names", () => {
 		const errors = validateAgentApplicationDraft(
 			{

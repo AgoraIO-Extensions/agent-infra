@@ -311,7 +311,7 @@ describe("AgentApplicationForm", () => {
 				...deploymentConfiguration.modelCatalog,
 				endpoints: [
 					{
-						endpointId: "endpoint:primary",
+						endpointId: "endpoint%3Aprimary",
 						displayName: "Colon endpoint",
 						models: [{ modelId: "model:primary", reasoningLevels: ["medium"] }],
 					},
@@ -349,10 +349,10 @@ describe("AgentApplicationForm", () => {
 				modelConfiguration: expect.objectContaining({
 					options: [
 						expect.objectContaining({
-							optionId: "endpoint%3Aprimary:model%3Aprimary",
+							optionId: "endpoint%253Aprimary:model%3Aprimary",
 						}),
 					],
-					defaultOptionId: "endpoint%3Aprimary:model%3Aprimary",
+					defaultOptionId: "endpoint%253Aprimary:model%3Aprimary",
 				}),
 			}),
 		);
@@ -800,6 +800,43 @@ describe("AgentApplicationForm", () => {
 		expect(screen.getByRole("status").textContent).toContain("暂不可用");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("blocks a stale deployment projection before submitting choices", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "stale",
+				}}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		choose("模型", "gpt-5");
+		check("medium");
+		fireEvent.change(screen.getByLabelText("模型凭证"), {
+			target: { value: "never-echo-model" },
+		});
+		choose("默认模型", "Primary endpoint · gpt-5");
+		choose("默认推理档位", "medium");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(screen.getByRole("status").textContent).toBe(
+			"部署选项已过期，请重新加载后再提交。",
+		);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 

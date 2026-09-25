@@ -146,9 +146,11 @@ function blankModel(): AgentApplicationModelDraft {
 }
 
 function optionIdFor(endpointId: string, modelId: string) {
-	const encodeComponent = (value: string) =>
-		value.includes(":") ? encodeURIComponent(value) : value;
-	return `${encodeComponent(endpointId)}:${encodeComponent(modelId)}`;
+	return `${encodeURIComponent(endpointId)}:${encodeURIComponent(modelId)}`;
+}
+
+function legacyOptionIdFor(endpointId: string, modelId: string) {
+	return `${endpointId}:${modelId}`;
 }
 
 function endpointIdForModelOption(
@@ -160,6 +162,12 @@ function endpointIdForModelOption(
 			option.optionId === optionIdFor(endpoint.endpointId, option.modelId),
 	);
 	if (exact) return exact.endpointId;
+	const legacyExact = endpoints.filter(
+		(endpoint) =>
+			option.optionId ===
+			legacyOptionIdFor(endpoint.endpointId, option.modelId),
+	);
+	if (legacyExact.length === 1) return legacyExact[0]?.endpointId ?? "";
 	if (option.optionId.includes(":")) return "";
 	const candidates = endpoints.filter((endpoint) =>
 		endpoint.models.some((model) => model.modelId === option.modelId),
@@ -648,7 +656,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const standardChoicesBlocked =
 		sourceKind === "standard" &&
 		modelConfigurationVisible &&
-		(deployment.templates.length === 0 || !modelCatalogReady);
+		(deployment.status !== "populated" ||
+			deployment.templates.length === 0 ||
+			!modelCatalogReady);
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;

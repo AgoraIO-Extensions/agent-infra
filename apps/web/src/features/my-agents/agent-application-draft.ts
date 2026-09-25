@@ -156,10 +156,17 @@ export function validateAgentApplicationDraft(
 		});
 		const optionIndexes = new Map<string, number[]>();
 		draft.models.forEach((model, index) => {
-			if (!model.optionId) return;
-			const indexes = optionIndexes.get(model.optionId) ?? [];
-			indexes.push(index);
-			optionIndexes.set(model.optionId, indexes);
+			const keys = [
+				...(model.optionId ? [`id:${model.optionId}`] : []),
+				...(model.endpointId && model.modelId
+					? [`pair:${JSON.stringify([model.endpointId, model.modelId])}`]
+					: []),
+			];
+			for (const key of keys) {
+				const indexes = optionIndexes.get(key) ?? [];
+				indexes.push(index);
+				optionIndexes.set(key, indexes);
+			}
 		});
 		for (const indexes of optionIndexes.values()) {
 			if (indexes.length < 2) continue;
