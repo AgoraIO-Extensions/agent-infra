@@ -8,8 +8,8 @@ RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web... build
 
-FROM nginx:1.31.5-alpine3.24@sha256:a9ae6f6d078d477e21323310498e5196cb2b7c0aedd9e07b7306612077227d7c AS runner
-RUN apk add --no-cache libuuid=2.42.3-r1
+FROM nginx:1.31.6-alpine3.24@sha256:d10753d9289b8e3f884386351f73554ce72b631378949deddd75e83ee296c427 AS runner
+RUN apk add --no-cache libexpat=2.8.5-r0 libuuid=2.42.3-r1
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
