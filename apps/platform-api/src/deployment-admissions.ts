@@ -94,7 +94,10 @@ export function createDeploymentConfigurationProjectionV2(input: {
 				await modelOperationV1(signal, () => loadModelCatalog(signal)),
 			);
 			catalogRevision = snapshot.revision;
-			if (snapshot.validUntil <= Date.now()) {
+			if (
+				snapshot.revision !== input.modelCatalog.revision ||
+				snapshot.validUntil <= Date.now()
+			) {
 				catalogStatus = "stale";
 			} else {
 				endpoints = snapshot.endpoints
