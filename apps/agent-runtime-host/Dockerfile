@@ -18,6 +18,7 @@ RUN pnpm --fetch-timeout=300000 install --frozen-lockfile --store-dir /pnpm-stor
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
+RUN pnpm --filter @agent-infra/platform-worker... build
 RUN pnpm --config.store-dir=/pnpm-store --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
 RUN rm /prod/agent-runtime-host/pnpm-lock.yaml \
     /prod/agent-runtime-host/pnpm-workspace.yaml \
