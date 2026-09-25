@@ -87,11 +87,17 @@ function syntheticModelEvents() {
 	];
 }
 
-function writeSyntheticModelResponse(
+async function writeSyntheticModelResponse(
 	response: import("node:http").ServerResponse,
+	completionGate?: Promise<void>,
 ) {
 	response.writeHead(200, { "content-type": "text/event-stream" });
-	for (const event of syntheticModelEvents()) {
+	const events = syntheticModelEvents();
+	const first = events[0];
+	if (!first) throw Error("Synthetic model response is empty");
+	response.write(`event: ${first.type}\ndata: ${JSON.stringify(first)}\n\n`);
+	if (completionGate) await completionGate;
+	for (const event of events.slice(1)) {
 		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 	}
 	response.end();
@@ -125,6 +131,12 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const modelRequests: { body: string; authenticated: boolean }[] = [];
 	let modelServer: ReturnType<typeof createServer> | undefined;
 	let modelPort: number | undefined;
+	let releaseModelResponse: (() => void) | undefined;
+	const modelResponseGate = realCodexE2e
+		? new Promise<void>((resolve) => {
+				releaseModelResponse = resolve;
+			})
+		: Promise.resolve();
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const signing = {
@@ -222,7 +234,12 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 					response.end();
 					return;
 				}
-				if (!response.destroyed) writeSyntheticModelResponse(response);
+				// Keep the controlled provider response open until the Worker has
+				// durably observed the accepted running Execution. Otherwise the
+				// synthetic model can complete before the takeover assertions read
+				// the processing state that this test is exercising.
+				if (!response.destroyed)
+					await writeSyntheticModelResponse(response, modelResponseGate);
 			});
 			modelServer.listen(0, "127.0.0.1");
 			await once(modelServer, "listening");
@@ -601,6 +618,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		if (!active) throw Error("No running execution");
 		expect(await dispatchCount()).toBe(1);
 		if (realCodexE2e) {
+			releaseModelResponse?.();
 			await waitUntil(async () => {
 				const facts = await sql<{ phase: string }[]>`
 						select event_payload->'fact'->>'phase' as phase
@@ -772,6 +790,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			{ cause: error },
 		);
 	} finally {
+		releaseModelResponse?.();
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(
