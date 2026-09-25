@@ -76,6 +76,13 @@ describe("LDAP identity", () => {
 					profile({ url: "ldap://ldap.example.test" }),
 					() => ldap,
 				),
+		).not.toThrow();
+		expect(
+			() =>
+				new LdapAuthenticator(
+					profile({ url: "http://ldap.example.test" }),
+					() => ldap,
+				),
 		).toThrow("LDAP TLS is required");
 		const ambiguous = {
 			...ldap,
