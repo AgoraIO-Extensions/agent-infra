@@ -53,7 +53,6 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 type DraftField<T extends string> = {
 	key: T;
 	label: string;
-	multiline?: boolean;
 	options?: readonly { value: string; label: string; disabled?: boolean }[];
 	required?: boolean;
 	type?: "password" | "text";
@@ -129,11 +128,7 @@ function ModelRows({
 				const selectedModel = endpoint?.models.find(
 					(item) => item.modelId === model.modelId,
 				);
-				const modelOptions =
-					endpoint?.models.map((item) => ({
-						value: item.modelId,
-						label: item.modelId,
-					})) ?? [];
+				const modelOptions = endpoint?.models ?? [];
 				return (
 					<fieldset
 						className="grid min-w-0 gap-3 sm:grid-cols-2"
@@ -178,8 +173,8 @@ function ModelRows({
 								value={model.modelId}
 								disabled={modelOptions.length === 0}
 								itemToStringLabel={(value) =>
-									modelOptions.find((item) => item.value === value)?.label ??
-									String(value)
+									modelOptions.find((item) => item.modelId === value)
+										?.modelId ?? String(value)
 								}
 								onValueChange={(value) =>
 									value && onChange(index, "modelId", value)
@@ -193,8 +188,8 @@ function ModelRows({
 								</SelectTrigger>
 								<SelectContent>
 									{modelOptions.map((item) => (
-										<SelectItem key={item.value} value={item.value}>
-											{item.label}
+										<SelectItem key={item.modelId} value={item.modelId}>
+											{item.modelId}
 										</SelectItem>
 									))}
 								</SelectContent>
@@ -317,16 +312,6 @@ function DraftRows<T extends string>({
 										))}
 									</SelectContent>
 								</Select>
-							) : field.multiline ? (
-								<Textarea
-									className="min-h-20"
-									id={`application-${idPrefix}-${field.key}-${index}`}
-									onChange={(event) =>
-										onChange(index, field.key, event.target.value)
-									}
-									required={field.required}
-									value={row[field.key]}
-								/>
 							) : (
 								<Input
 									autoComplete={
