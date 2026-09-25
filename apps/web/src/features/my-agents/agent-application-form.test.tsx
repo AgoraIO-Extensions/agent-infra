@@ -824,7 +824,7 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
-	it("restores and canonicalizes a legacy option endpoint when the model match is unique", () => {
+	it("requires reselection when a legacy option has no exact endpoint match", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			configuration: {
@@ -854,26 +854,10 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		expect(
 			screen.getByRole("combobox", { name: "模型端点" }).textContent,
-		).toContain("Primary endpoint");
+		).toContain("选择模型端点");
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
-		expect(onSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({
-				modelConfiguration: {
-					options: [
-						expect.objectContaining({
-							optionId: "endpoint-primary:gpt-5",
-							endpointId: "endpoint-primary",
-							modelId: "gpt-5",
-						}),
-					],
-					defaultOptionId: "endpoint-primary:gpt-5",
-					defaultReasoningLevel: "medium",
-				},
-			}),
-		);
-		expect(
-			onSubmit.mock.calls[0]?.[0].modelConfiguration?.options[0],
-		).not.toHaveProperty("credentialValue");
+		expect(screen.getByText("模型选项已移除，请重新选择。")).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("rejects a canonical option that collides with another endpoint's legacy ID", () => {

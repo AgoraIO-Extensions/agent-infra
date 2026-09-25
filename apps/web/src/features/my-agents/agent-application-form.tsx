@@ -270,11 +270,7 @@ function endpointIdForModelOption(
 		return "";
 	if (exact) return exact.endpointId;
 	if (legacyExact.length === 1) return legacyExact[0]?.endpointId ?? "";
-	if (option.optionId.includes(":")) return "";
-	const candidates = endpoints.filter((endpoint) =>
-		endpoint.models.some((model) => model.modelId === option.modelId),
-	);
-	return candidates.length === 1 ? (candidates[0]?.endpointId ?? "") : "";
+	return "";
 }
 
 function canonicalOptionIdForModelOption(
