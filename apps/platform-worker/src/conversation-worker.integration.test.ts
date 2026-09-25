@@ -1515,10 +1515,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					(
 						await sql`
 							select 1 from platform.conversation_executions
-							where execution_id=${third.executionId} and status='cancelled'
+							where execution_id=${third.executionId} and status='failed'
 						`
 					).length === 1,
-				"revoked queued principal is cancelled before Runtime dispatch",
+				"revoked queued principal is rejected before Runtime dispatch",
 			);
 			expect(
 				requests.filter(
@@ -1527,23 +1527,21 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 						request.executionId === third.executionId,
 				),
 			).toHaveLength(0);
-			const [control] = await sql<
-				{ revokedAt: Date | null; reason: string; auditReason: string | null }[]
+			const [rejected] = await sql<
+				{ outboxStatus: string; errorCode: string }[]
 			>`
-				select r.revoked_at as "revokedAt", c.reason,
-				       a.details->>'reason' as "auditReason"
-				from platform.task_authorization_records r
-				join platform.task_control_records c
-				  on c.authorization_record_id=r.id
-				join platform.audit_events a
-				  on a.target_id=r.execution_id
-				 and a.action='task.control.created'
-				 and a.details->>'controlRecordId'=c.id
-				where r.execution_id=${third.executionId}
+				select o.status as "outboxStatus",
+				       p.payload->>'errorCode' as "errorCode"
+				from platform.outbox_items o
+				join platform.persisted_events p
+				  on p.stream_id='outbox:' || o.id and p.event_type='outbox.failed'
+				where o.payload->>'executionId'=${third.executionId}
 			`;
-			expect(control?.revokedAt).not.toBeNull();
-			expect(control?.reason).toBe("authorization_revoked");
-			expect(control?.auditReason).toBe("authorization_revoked");
+			expect(rejected).toEqual({
+				outboxStatus: "failed",
+				errorCode: "AUTHORIZATION_REVOKED",
+			});
+			expect(modelRequests).toHaveLength(2);
 			expect(await dispatchCount()).toBe(2);
 		}
 		if (!realCodexE2e) {
