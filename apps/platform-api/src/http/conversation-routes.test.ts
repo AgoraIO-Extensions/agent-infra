@@ -1,7 +1,10 @@
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV1Schema,
+	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV1Schema,
+	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -49,6 +52,33 @@ const persistedEvent = {
 	eventType: "text.delta",
 	eventPayload: { type: "text.delta", text: "Hello" },
 	occurredAt: new Date("2026-09-06T00:00:02.000Z"),
+	traceId: "trace-1",
+};
+
+const persistedOperationEvent = {
+	eventSchemaVersion: 2 as const,
+	eventId: "operation-event-1",
+	conversationId: conversation.conversationId,
+	executionId: "execution-1",
+	sequence: 2,
+	conversationCursor: "cursor-2",
+	eventType: "execution.operation",
+	eventPayload: {
+		kind: "model" as const,
+		operationRef: "operation-1",
+		attemptRef: "attempt-1",
+		phase: "completed" as const,
+		startedAt: "2026-09-06T00:00:02.000Z",
+		finishedAt: "2026-09-06T00:00:03.000Z",
+		durationMs: 1000,
+		model: {
+			configVersion: "config-1",
+			modelOptionId: "model-primary",
+			modelId: "model-1",
+			reasoningLevel: "medium",
+		},
+	},
+	occurredAt: new Date("2026-09-06T00:00:03.000Z"),
 	traceId: "trace-1",
 };
 
@@ -404,6 +434,60 @@ describe("Conversation HTTP routes", () => {
 		);
 	});
 
+	it("projects persisted operation facts in V2 history and execution reads", async () => {
+		const input = dependencies();
+		const detail = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+		);
+		if (!detail) throw new Error("Expected Conversation fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...detail,
+			events: [...detail.events, persistedOperationEvent],
+		});
+		input.query.getExecution = vi.fn().mockResolvedValue({
+			...detail,
+			execution: detail.executions[0],
+			events: [persistedOperationEvent],
+		});
+		const app = testApp(input).app;
+
+		const conversationResponse = await app.request(
+			"/api/v2/conversations/conversation-1",
+		);
+		const executionResponse = await app.request(
+			"/api/v2/conversations/conversation-1/executions/execution-1",
+		);
+
+		expect(conversationResponse.status).toBe(200);
+		const history = ConversationDetailProjectionV2Schema.parse(
+			await conversationResponse.json(),
+		);
+		expect(history.schemaVersion).toBe(2);
+		expect(history.events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					schemaVersion: 2,
+					type: "execution.operation",
+					payload: expect.objectContaining({
+						operationRef: "operation-1",
+					}),
+				}),
+			]),
+		);
+
+		expect(executionResponse.status).toBe(200);
+		const execution = ExecutionDetailProjectionV2Schema.parse(
+			await executionResponse.json(),
+		);
+		expect(execution.schemaVersion).toBe(2);
+		expect(execution.events).toHaveLength(1);
+		expect(execution.events[0]).toMatchObject({
+			type: "execution.operation",
+			payload: persistedOperationEvent.eventPayload,
+		});
+	});
+
 	it("uses the authoritative Core status across a normal read transition", async () => {
 		const input = dependencies();
 		const current = await input.query.get(
@@ -566,6 +650,46 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	it("replays V2 operation facts with their durable event identity", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent, persistedOperationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-2",
+			});
+
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("id: event-1");
+		expect(body).toContain("id: operation-event-1");
+		expect(body).toContain('"type":"timeline.reload"');
+		const frames = body
+			.split("\n\n")
+			.filter((frame) => frame.includes('"type":"execution.operation"'));
+		expect(frames).toHaveLength(1);
+		const data = frames[0]?.match(/^data: (.+)$/m)?.[1];
+		if (!data) throw new Error("Expected operation SSE payload");
+		expect(
+			ConversationSseMessageV2Schema.parse(JSON.parse(data)),
+		).toMatchObject({
+			schemaVersion: 2,
+			eventId: "operation-event-1",
+			type: "execution.operation",
+			payload: persistedOperationEvent.eventPayload,
+		});
+	});
+
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi
