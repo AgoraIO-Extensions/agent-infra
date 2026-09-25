@@ -136,7 +136,6 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 	const fallback =
 		document.getElementById("application-deployment-status") ??
 		document.getElementById("application-add-model-option");
-	if (controls[0] && !isActionable(controls[0]) && fallback) return fallback;
 	return controls.find(isActionable) ?? fallback;
 }
 
