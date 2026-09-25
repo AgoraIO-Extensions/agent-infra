@@ -913,8 +913,6 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				executionId: accepted.executionId,
 			};
 		})();
-		const second = await admit("second");
-
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
@@ -923,7 +921,15 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
 		);
-		start();
+		if (realCodexE2e) {
+			start();
+			await waitUntil(
+				async () => (await dispatchCount()) === 1,
+				"first HTTP dispatch",
+			);
+		}
+		const second = await admit("second");
+		if (!realCodexE2e) start();
 		start();
 		await waitUntil(
 			async () => (await dispatchCount()) === 1,
