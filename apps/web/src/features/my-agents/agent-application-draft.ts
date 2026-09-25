@@ -70,6 +70,8 @@ export type AgentApplicationFieldErrors = Record<string, string>;
 export type AgentApplicationValidationContext = {
 	configurationMessage?: string;
 	defaultModelReasoningLevels?: readonly string[];
+	allowedEnvironmentKeys?: readonly string[];
+	allowedSecretKeys?: readonly string[];
 	modelConfigurationVisible: boolean;
 	requiresReplacementCredential: boolean;
 	staleModel: boolean;
@@ -118,7 +120,9 @@ export function validateAgentApplicationDraft(
 	const validateRows = (
 		rows: readonly AgentApplicationEnvironmentDraft[],
 		prefix: "environment" | "secret",
+		allowedNames?: readonly string[],
 	) => {
+		const allowed = allowedNames ? new Set(allowedNames) : undefined;
 		const nameCounts = new Map<string, number>();
 		for (const row of rows) {
 			const name = row.name.trim();
@@ -126,6 +130,9 @@ export function validateAgentApplicationDraft(
 		}
 		rows.forEach((row, index) => {
 			const name = row.name.trim();
+			if (name && allowed && !allowed.has(name))
+				errors[`${prefix}.${index}.name`] =
+					"该名称已不再允许使用，请重新选择。";
 			if (name && nameCounts.get(name) !== 1)
 				errors[`${prefix}.${index}.name`] = "名称不能重复。";
 		});
@@ -135,8 +142,18 @@ export function validateAgentApplicationDraft(
 			if (!row.value) errors[`${prefix}.${index}.value`] = "请输入值。";
 		});
 	};
-	validateRows(draft.environment, "environment");
-	validateRows(draft.secrets, "secret");
+	validateRows(
+		draft.environment,
+		"environment",
+		draft.sourceKind === "standard"
+			? context.allowedEnvironmentKeys
+			: undefined,
+	);
+	validateRows(
+		draft.secrets,
+		"secret",
+		draft.sourceKind === "standard" ? context.allowedSecretKeys : undefined,
+	);
 	if (context.modelConfigurationVisible) {
 		if (draft.models.length === 0)
 			errors.defaultModelOptionId = "至少添加一个模型选项。";

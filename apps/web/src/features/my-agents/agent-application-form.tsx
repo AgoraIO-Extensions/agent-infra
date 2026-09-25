@@ -823,6 +823,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			defaultReasoningLevel,
 		};
 		const errors = validateAgentApplicationDraft(draft, {
+			allowedEnvironmentKeys: selectedTemplate?.allowedEnvironmentKeys,
+			allowedSecretKeys: selectedTemplate?.allowedSecretKeys,
 			configurationMessage,
 			defaultModelReasoningLevels: defaultModel?.reasoningLevels
 				?.split("\n")

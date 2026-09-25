@@ -195,6 +195,31 @@ describe("Agent application draft", () => {
 		expect(errors["secret.2.name"]).toBe("名称不能重复。");
 	});
 
+	it("rejects environment and Secret names outside the selected template", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				environment: [{ name: "REMOVED_ENV", value: "debug" }],
+				secrets: [{ name: "REMOVED_SECRET", value: "never-echo" }],
+			},
+			{
+				allowedEnvironmentKeys: ["LOG_LEVEL"],
+				allowedSecretKeys: ["MODEL_API_KEY"],
+				modelConfigurationVisible: false,
+				requiresReplacementCredential: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+
+		expect(errors["environment.0.name"]).toBe(
+			"该名称已不再允许使用，请重新选择。",
+		);
+		expect(errors["secret.0.name"]).toBe("该名称已不再允许使用，请重新选择。");
+	});
+
 	it("keeps a valid model row clear when another row is stale", () => {
 		const errors = validateAgentApplicationDraft(
 			{
