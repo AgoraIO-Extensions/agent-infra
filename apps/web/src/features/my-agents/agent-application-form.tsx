@@ -1632,9 +1632,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										<Label htmlFor="application-default-model-option">
 											默认模型
 										</Label>
-								<Select
-									value={defaultModelOptionId}
-									disabled={models.length === 0 || modelOptions.length === 0}
+										<Select
+											value={defaultModelOptionId}
+											disabled={
+												models.length === 0 || modelEndpoints.length === 0
+											}
 											itemToStringLabel={(value) => {
 												const model = models.find(
 													(item) => item.optionId === value,
