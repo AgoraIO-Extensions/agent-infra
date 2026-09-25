@@ -501,6 +501,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	)
 		? defaultReasoningLevel
 		: "";
+	const invalidDefaultModel =
+		modelConfigurationVisible &&
+		(!defaultModelOptionId ||
+			!defaultModelDefinition ||
+			!selectedDefaultReasoningLevel);
 	const configurationMessage =
 		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
 			? "部署选项已过期，请重新加载后再提交。"
@@ -514,10 +519,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
 					: staleTemplate || staleModel
 						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
-						: undefined;
+						: invalidDefaultModel
+							? "请选择默认模型和默认推理档位。"
+							: undefined;
 
 	const submit = () => {
-		if (standardChoicesBlocked || staleTemplate || staleModel) return;
+		if (
+			standardChoicesBlocked ||
+			staleTemplate ||
+			staleModel ||
+			invalidDefaultModel
+		)
+			return;
 		const draft = {
 			name,
 			description,

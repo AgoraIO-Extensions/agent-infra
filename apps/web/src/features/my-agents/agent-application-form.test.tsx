@@ -244,13 +244,7 @@ describe("AgentApplicationForm", () => {
 		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
-		expect(onSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({
-				modelConfiguration: expect.objectContaining({
-					defaultReasoningLevel: "",
-				}),
-			}),
-		);
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("hydrates an unresolved edit model after deployment choices load", async () => {
