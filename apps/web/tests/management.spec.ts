@@ -292,6 +292,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
 		.click();
+	await expect(page.getByLabel("Agent 来源")).toBeFocused();
 	await page.keyboard.press("Tab");
 	await expect(page.getByLabel("镜像地址")).toBeFocused();
 	await expect(page.getByLabel("Agent 来源")).toContainText(
