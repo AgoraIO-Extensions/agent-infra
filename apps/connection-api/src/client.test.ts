@@ -469,6 +469,50 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			})
 		).status,
 	).toBe(409);
+	expect(
+		(
+			await reserve({
+				...actionRequest,
+				action: {
+					...actionRequest.action,
+					arguments: { repositoryId: "invalid" },
+				},
+			})
+		).status,
+	).toBe(400);
+	const parallelRequest = {
+		...actionRequest,
+		requestId: "request-action-parallel",
+		idempotencyKey: "action-key-parallel",
+	};
+	const parallel = await Promise.all([
+		reserve(parallelRequest),
+		reserve(parallelRequest),
+	]);
+	expect(parallel.map((response) => response.status)).toEqual([202, 202]);
+	expect(
+		DirectActionReservationV1Schema.parse(await parallel[0]?.json()).callId,
+	).toBe(
+		DirectActionReservationV1Schema.parse(await parallel[1]?.json()).callId,
+	);
+	const competingRequest = {
+		...actionRequest,
+		requestId: "request-action-competing",
+		idempotencyKey: "action-key-competing",
+	};
+	const competing = await Promise.all([
+		reserve(competingRequest),
+		reserve({
+			...competingRequest,
+			action: {
+				...competingRequest.action,
+				arguments: { repositoryId: 8 },
+			},
+		}),
+	]);
+	expect(competing.map((response) => response.status).sort()).toEqual([
+		202, 409,
+	]);
 	expect((await reserve({ ...actionRequest, principalId: "bob" })).status).toBe(
 		400,
 	);
@@ -591,7 +635,16 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			})
 		).status,
 	).toBe(404);
-	await database.db.update(grants).set({ status: "revoked", revision: 2 });
+	const revocationRaceRequest = {
+		...actionRequest,
+		requestId: "request-action-revocation-race",
+		idempotencyKey: "action-key-revocation-race",
+	};
+	const [racedReservation] = await Promise.all([
+		reserve(revocationRaceRequest),
+		database.db.update(grants).set({ status: "revoked", revision: 2 }),
+	]);
+	expect([202, 403]).toContain(racedReservation.status);
 	expect(
 		(
 			await reserve({
@@ -601,7 +654,9 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 			})
 		).status,
 	).toBe(403);
-	expect(await database.db.select().from(actionCalls)).toHaveLength(2);
+	expect(await database.db.select().from(actionCalls)).toHaveLength(
+		racedReservation.status === 202 ? 5 : 4,
+	);
 	const reusedProof = dpop("/probe", {
 		method: "GET",
 		token: tokens.access_token,

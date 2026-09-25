@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-	type ActionCallRecord,
-	type ActionCallRequest,
-	actionCallNamespaceKey,
-	actionRequestDigest,
-	actorNamespaceId,
-	authorizeActionCall,
 	ClientAuthorizationDenied,
 	ConnectionAuthorizationDenied,
-	decideActionCallReplay,
+	DirectActionConflict,
+	findDirectActionCall,
 	InvalidDpopProof,
+	reserveDirectActionCall,
 } from "@agent-infra/connection-core";
 import {
 	DirectActionRequestV1Schema,
@@ -26,7 +22,6 @@ const noStore = { "Cache-Control": "no-store" };
 const validator = new Ajv2020({ strict: false });
 
 class InvalidActionRequest extends Error {}
-class ActionConflict extends Error {}
 
 function actionError(context: Context, error: unknown) {
 	const status =
@@ -35,7 +30,7 @@ function actionError(context: Context, error: unknown) {
 			: error instanceof ClientAuthorizationDenied ||
 					error instanceof InvalidDpopProof
 				? 401
-				: error instanceof ActionConflict
+				: error instanceof DirectActionConflict
 					? 409
 					: error instanceof ConnectionAuthorizationDenied
 						? 403
@@ -94,22 +89,6 @@ async function readActionBody(context: Context) {
 	}
 }
 
-function directCredentialContext(
-	client: ConnectionClientDependencies,
-	credential: Awaited<ReturnType<typeof authenticateDirectClient>>,
-	requiredScope?: string,
-) {
-	return {
-		credentialId: credential.credentialId,
-		principalId: credential.principalId,
-		consumerId: credential.consumerId,
-		consumerInstanceId: credential.consumerInstanceId,
-		actorId: credential.actorId,
-		audience: client.audience,
-		requiredScope,
-	};
-}
-
 export function addConnectionActionRoutes(
 	app: Hono,
 	client: ConnectionClientDependencies,
@@ -131,14 +110,6 @@ export function addConnectionActionRoutes(
 				version: body.action.actionVersion,
 			});
 			if (!version) throw new ConnectionAuthorizationDenied();
-			const requiredScope =
-				version.effect === "read"
-					? "action:read"
-					: version.effect === "write"
-						? "action:write"
-						: null;
-			if (!requiredScope || !credential.scopes.includes(requiredScope))
-				throw new ConnectionAuthorizationDenied();
 			let validateArguments: ReturnType<typeof validator.compile>;
 			try {
 				validateArguments = validator.compile(version.inputSchema);
@@ -147,99 +118,16 @@ export function addConnectionActionRoutes(
 			}
 			if (!validateArguments(body.action.arguments))
 				throw new InvalidActionRequest();
-			const request: ActionCallRequest = {
+			const record = await reserveDirectActionCall(authority, {
+				caller: credential,
+				audience: client.audience,
 				requestId: body.requestId,
 				idempotencyKey: body.idempotencyKey,
-				principalId: credential.principalId,
-				consumerId: credential.consumerId,
-				consumerInstanceId: credential.consumerInstanceId,
-				actorId: credential.actorId,
+				traceId: body.traceId,
 				actionVersionId: version.id,
+				effect: version.effect,
 				arguments: body.action.arguments,
-			};
-			const grant = await authorizeActionCall(
-				authority,
-				request,
-				credential.principalRecoveryGeneration,
-			);
-			const namespaceKey = actionCallNamespaceKey(request);
-			const credentialContext = directCredentialContext(
-				client,
-				credential,
-				requiredScope,
-			);
-			const replay = (existing: ActionCallRecord) => {
-				if (
-					existing.requestId !== body.requestId ||
-					existing.traceId !== body.traceId ||
-					decideActionCallReplay(existing, {
-						...request,
-						grantId: grant.id,
-						connectionId: grant.connectionId,
-					}).kind !== "reuse"
-				)
-					throw new ActionConflict();
-				return existing;
-			};
-			let record = await authority.findByIdempotencyForDirectClient(
-				namespaceKey,
-				request.idempotencyKey,
-				credentialContext,
-			);
-			if (record) record = replay(record);
-			else {
-				const id = randomUUID();
-				const candidate: ActionCallRecord = {
-					id,
-					callId: randomUUID(),
-					requestId: body.requestId,
-					traceId: body.traceId,
-					idempotencyKey: body.idempotencyKey,
-					namespaceKey,
-					principalId: credential.principalId,
-					consumerId: credential.consumerId,
-					consumerInstanceId: credential.consumerInstanceId,
-					actorId: actorNamespaceId(credential.actorId),
-					grantId: grant.id,
-					connectionId: grant.connectionId,
-					credentialVersionId: grant.credentialVersionId,
-					actionVersionId: version.id,
-					requestDigest: actionRequestDigest({
-						connectionId: grant.connectionId,
-						actionVersionId: request.actionVersionId,
-						arguments: request.arguments,
-					}),
-					status: "created",
-				};
-				try {
-					await authority.insertForDirectClient(
-						candidate,
-						{
-							id: randomUUID(),
-							traceId: body.traceId,
-							principalId: credential.principalId,
-							consumerInstanceId: credential.consumerInstanceId,
-							actorId: credential.actorId ?? undefined,
-							action: "mcp.call_reserved",
-							targetType: "action_call",
-							targetId: id,
-							outcome: "succeeded",
-							metadata: {},
-						},
-						grant,
-						credentialContext,
-					);
-					record = candidate;
-				} catch (error) {
-					const raced = await authority.findByIdempotencyForDirectClient(
-						namespaceKey,
-						request.idempotencyKey,
-						credentialContext,
-					);
-					if (!raced) throw error;
-					record = replay(raced);
-				}
-			}
+			});
 			return context.json(
 				{
 					schemaVersion: 1,
@@ -262,10 +150,11 @@ export function addConnectionActionRoutes(
 			const credential = await authenticateDirectClient(context, client);
 			const callId = context.req.param("callId");
 			if (callId.length > 128) throw new InvalidActionRequest();
-			const record = await authority.findByCallIdForDirectClient(
-				actionCallNamespaceKey(credential),
+			const record = await findDirectActionCall(
+				authority,
+				credential,
+				client.audience,
 				callId,
-				directCredentialContext(client, credential),
 			);
 			if (!record)
 				return context.json(
