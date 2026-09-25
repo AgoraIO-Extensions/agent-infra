@@ -460,7 +460,9 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 						],
 						authorizeExternalAction: async (action) => {
 							if (action.kind === "tool" || !host) {
-								throw new Error("controlled test lane forbids external actions");
+								throw new Error(
+									"controlled test lane forbids external actions",
+								);
 							}
 							await host.authorizeExternalAction(action);
 						},
