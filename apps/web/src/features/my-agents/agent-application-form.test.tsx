@@ -426,6 +426,10 @@ describe("AgentApplicationForm", () => {
 		expect(
 			screen.getByLabelText("Agent 名称").getAttribute("aria-invalid"),
 		).toBeNull();
+		const description = screen.getByLabelText("用途说明");
+		description.focus();
+		fireEvent.change(description, { target: { value: "Updated purpose" } });
+		expect(document.activeElement).toBe(description);
 	});
 
 	it("restores an edit endpoint from its persisted option ID after deployment loading", async () => {

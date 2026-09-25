@@ -153,11 +153,7 @@ function endpointIdForModelOption(
 		(endpoint) =>
 			option.optionId === optionIdFor(endpoint.endpointId, option.modelId),
 	);
-	if (exact) return exact.endpointId;
-	const matching = endpoints.filter((endpoint) =>
-		endpoint.models.some((model) => model.modelId === option.modelId),
-	);
-	return matching.length === 1 ? (matching[0]?.endpointId ?? "") : "";
+	return exact?.endpointId ?? "";
 }
 
 function modelLabel(
@@ -512,6 +508,11 @@ function DraftRows<T extends string>({
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const formRef = useRef<HTMLFormElement>(null);
+	const focusStateRef = useRef<{
+		fieldKeys: readonly string[];
+		formError?: string;
+		serverCode?: string;
+	}>({ fieldKeys: [] });
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
 	const deployment = props.deploymentConfiguration;
@@ -749,10 +750,23 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						: undefined;
 
 	useEffect(() => {
+		const serverCode = props.serverError?.code;
+		const fieldKeys = Object.keys(fieldErrors);
+		const previous = focusStateRef.current;
+		const shouldFocus =
+			fieldKeys.some((key) => !previous.fieldKeys.includes(key)) ||
+			serverCode !== previous.serverCode ||
+			serverFormError !== previous.formError;
+		focusStateRef.current = {
+			fieldKeys,
+			formError: serverFormError,
+			serverCode,
+		};
+		if (!shouldFocus) return;
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
 		else if (serverFormError) formRef.current?.focus();
-	}, [fieldErrors, serverFormError]);
+	}, [fieldErrors, props.serverError?.code, serverFormError]);
 
 	const submit = () => {
 		const draft = {
