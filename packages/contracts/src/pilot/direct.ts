@@ -604,6 +604,32 @@ export const DirectActionRequestV1Schema = withDirectPayloadBudget(
 	}),
 );
 
+export const DirectActionReservationV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	requestId: RequestIdV1Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
+	traceId: TraceIdV1Schema,
+	callId: boundedOpaqueId,
+	status: z.literal("reserved"),
+});
+
+export const DirectActionReferenceV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	requestId: RequestIdV1Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
+	traceId: TraceIdV1Schema,
+	callId: boundedOpaqueId,
+	status: z.enum([
+		"created",
+		"submission_started",
+		"provider_succeeded",
+		"provider_failed",
+		"result_pending",
+		"needs_manual_review",
+		"unresolved",
+	]),
+});
+
 const directResultShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
@@ -1159,7 +1185,10 @@ export const pilotDirectOpenApiPathsV1 = {
 	},
 	"/api/v1/actions": {
 		post: {
-			operationId: "executeConnectionAction",
+			operationId: "reserveConnectionAction",
+			requestParams: {
+				header: z.strictObject({ DPoP: z.string() }),
+			},
 			requestBody: {
 				required: true,
 				description: `The JSON request body must stay within the ${DirectPayloadMaximumByteLengthV1}-byte direct payload budget; Connection must enforce the transport limit before parsing.`,
@@ -1168,6 +1197,10 @@ export const pilotDirectOpenApiPathsV1 = {
 				},
 			},
 			responses: {
+				"202": directJsonResponse(
+					"Direct ActionCall reservation; Provider execution is separate",
+					DirectActionReservationV1Schema,
+				),
 				"200": directJsonResponse(
 					"Direct Connection Action result",
 					DirectActionResultV1Schema,
@@ -1186,6 +1219,33 @@ export const pilotDirectOpenApiPathsV1 = {
 				),
 				"409": directJsonResponse(
 					"Action conflicts with an existing operation",
+					PilotProtocolErrorV1Schema,
+				),
+				"503": directJsonResponse(
+					"Connection service is unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
+	"/api/v1/actions/{callId}": {
+		get: {
+			operationId: "getDirectActionReference",
+			requestParams: {
+				path: z.strictObject({ callId: boundedOpaqueId }),
+				header: z.strictObject({ DPoP: z.string() }),
+			},
+			responses: {
+				"200": directJsonResponse(
+					"Current ActionCall reference state",
+					DirectActionReferenceV1Schema,
+				),
+				"401": directJsonResponse(
+					"Authentication required",
+					PilotProtocolErrorV1Schema,
+				),
+				"404": directJsonResponse(
+					"ActionCall unavailable in this installation",
 					PilotProtocolErrorV1Schema,
 				),
 				"503": directJsonResponse(
@@ -1251,6 +1311,8 @@ export const pilotDirectSchemasV1 = {
 	DirectActionManualReviewV1: DirectActionManualReviewV1Schema,
 	DirectActionPendingV1: DirectActionPendingV1Schema,
 	DirectActionRequestV1: DirectActionRequestV1Schema,
+	DirectActionReservationV1: DirectActionReservationV1Schema,
+	DirectActionReferenceV1: DirectActionReferenceV1Schema,
 	DirectActionResultV1: DirectActionResultV1Schema,
 	DirectActionSucceededV1: DirectActionSucceededV1Schema,
 	DirectActionUnresolvedV1: DirectActionUnresolvedV1Schema,
@@ -1265,6 +1327,12 @@ export type DirectActionCatalogEntryV1 = z.infer<
 	typeof DirectActionCatalogEntryV1Schema
 >;
 export type DirectActionRequestV1 = z.infer<typeof DirectActionRequestV1Schema>;
+export type DirectActionReservationV1 = z.infer<
+	typeof DirectActionReservationV1Schema
+>;
+export type DirectActionReferenceV1 = z.infer<
+	typeof DirectActionReferenceV1Schema
+>;
 export type DirectActionResultV1 = z.infer<typeof DirectActionResultV1Schema>;
 export type DirectActionErrorV1 = z.infer<typeof DirectActionErrorV1Schema>;
 export type DirectCatalogResponseV1 = z.infer<

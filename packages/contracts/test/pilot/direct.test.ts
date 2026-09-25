@@ -649,13 +649,20 @@ describe("Pilot Direct MCP/API contracts", () => {
 	it("publishes the catalog, browser grant and Direct Action API paths", () => {
 		expect(Object.keys(pilotDirectOpenApiPathsV1).sort()).toEqual([
 			"/api/v1/actions",
+			"/api/v1/actions/{callId}",
 			"/api/v1/catalog",
 			"/api/v1/grants",
 			"/api/v1/grants/{grantId}/revoke",
 		]);
 		expect(pilotDirectOpenApiPathsV1["/api/v1/actions"].post?.operationId).toBe(
-			"executeConnectionAction",
+			"reserveConnectionAction",
 		);
+		expect(
+			pilotDirectOpenApiPathsV1["/api/v1/actions"].post?.responses,
+		).toHaveProperty("202");
+		expect(
+			pilotDirectOpenApiPathsV1["/api/v1/actions/{callId}"].get?.operationId,
+		).toBe("getDirectActionReference");
 		const revokeResponses =
 			pilotDirectOpenApiPathsV1["/api/v1/grants/{grantId}/revoke"].post
 				?.responses;

@@ -547,21 +547,26 @@ describe("Pilot standard artifacts", () => {
 				title: "Agent Infra Pilot Direct MCP/API",
 				version: "1.0.0",
 			},
-			security: [{ PrincipalBearer: [] }],
+			security: [{ DirectDpop: [] }],
 			paths: pilotDirectOpenApiPathsV1,
 			components: {
 				securitySchemes: {
-					PrincipalBearer: { type: "http", scheme: "bearer" },
+					DirectDpop: { type: "http", scheme: "DPoP" },
 				},
 				schemas: pilotDirectSchemasV1,
 			},
 		});
 
 		expect(document.openapi).toBe("3.1.0");
-		expect(document.security).toEqual([{ PrincipalBearer: [] }]);
+		expect(document.security).toEqual([{ DirectDpop: [] }]);
 		expect(document.paths).toHaveProperty(
 			"/api/v1/actions.post.operationId",
-			"executeConnectionAction",
+			"reserveConnectionAction",
+		);
+		expect(document.paths).toHaveProperty("/api/v1/actions.post.responses.202");
+		expect(document.paths).toHaveProperty(
+			"/api/v1/actions/{callId}.get.operationId",
+			"getDirectActionReference",
 		);
 		expect(document.paths).toHaveProperty(
 			"/api/v1/catalog.get.operationId",

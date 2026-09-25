@@ -221,6 +221,48 @@ function credentialClaims(row: Credential) {
 	};
 }
 
+/** Recheck a Direct credential under the same row locks as an ActionCall write. */
+export async function assertDirectCredentialCurrent(
+	tx: ConnectionTransaction,
+	input: {
+		credentialId: string;
+		principalId: string;
+		consumerId: string;
+		consumerInstanceId: string;
+		actorId: string | null;
+		audience: string;
+		requiredScope?: string;
+	},
+) {
+	const [row] = await tx
+		.select()
+		.from(clientCredentials)
+		.where(eq(clientCredentials.id, input.credentialId))
+		.for("update");
+	if (
+		!row ||
+		(row.kind !== "access" && row.kind !== "pat") ||
+		row.principalId !== input.principalId ||
+		row.consumerId !== input.consumerId ||
+		row.consumerInstanceId !== input.consumerInstanceId ||
+		row.actorId !== (input.actorId ?? consumerActorSentinel)
+	)
+		throw new ClientAuthorizationDenied();
+	const state = await currentBinding(tx, row);
+	assertCurrentClientCredential(credentialClaims(row), state, {
+		kind: row.kind,
+		audience: input.audience,
+		requiredScope: input.requiredScope,
+	});
+	if (
+		!input.requiredScope &&
+		!row.scopes.some(
+			(scope) => scope === "action:read" || scope === "action:write",
+		)
+	)
+		throw new ClientAuthorizationDenied();
+}
+
 export function createConnectionClientRepository(db: ConnectionDatabase) {
 	return {
 		async beginInstallation(
@@ -484,6 +526,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					actorId: row.actorId === consumerActorSentinel ? null : row.actorId,
 					scopes: row.scopes,
 					credentialId: row.id,
+					principalRecoveryGeneration: row.principalGeneration,
 				};
 			});
 		},

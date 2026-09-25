@@ -12,6 +12,7 @@ import {
 	connectionDatabaseUrlFromEnvironment,
 	createAuditEventStore,
 	createBrowserSessionStore,
+	createConnectionAuthorityRepository,
 	createConnectionClientRepository,
 	createConnectionDatabase,
 	createPostgresLoginThrottle,
@@ -171,6 +172,7 @@ function authFromEnvironment():
 		dependencies,
 		client: {
 			repository: createConnectionClientRepository(database.db),
+			authority: createConnectionAuthorityRepository(database.db),
 			auth: dependencies,
 			audience: new URL("/mcp", origin).href,
 			recheckPrincipal: (principalId) =>

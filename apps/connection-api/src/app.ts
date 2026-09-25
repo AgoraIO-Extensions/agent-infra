@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { addConnectionActionRoutes } from "./actions.js";
 import {
 	addConnectionAuthRoutes,
 	type ConnectionAuthDependencies,
@@ -24,6 +25,7 @@ export function createConnectionApp(
 	);
 	if (auth) addConnectionAuthRoutes(app, auth);
 	if (client) addConnectionClientRoutes(app, client);
+	if (client?.authority) addConnectionActionRoutes(app, client);
 
 	return app;
 }
