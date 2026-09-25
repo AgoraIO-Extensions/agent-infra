@@ -929,6 +929,20 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				);
 				expect(await taskSnapshot()).toEqual(beforeRevocation);
 			}
+			identity.resolveUser = async () => {
+				throw new Error("Synthetic current-directory outage");
+			};
+			await json(
+				await post(
+					`/conversations/${accepted[0]?.conversationId}/messages`,
+					"alice",
+					{ schemaVersion: 1, text: "directory unavailable" },
+					"directory-outage",
+				),
+				503,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
+			identity.resolveUser = async (userId) => currentUsers.get(userId) ?? null;
 			currentUsers.set("bob", {
 				schemaVersion: 1,
 				userId: "bob",
