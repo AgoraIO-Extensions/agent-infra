@@ -84,6 +84,29 @@ describe("LDAP identity", () => {
 					() => ldap,
 				),
 		).toThrow("LDAP TLS is required");
+		expect(
+			() =>
+				new LdapAuthenticator(
+					profile({
+						url: "ldap://10.20.30.40:389",
+						transportSecurity: "la3-private-plaintext",
+					}),
+					() => ldap,
+				),
+		).not.toThrow();
+		for (const url of [
+			"ldap://ldap.example.test:389",
+			"ldap://198.51.100.2:389",
+			"ldap://10.20.30.40:1389",
+			"ldaps://10.20.30.40:636",
+		])
+			expect(
+				() =>
+					new LdapAuthenticator(
+						profile({ url, transportSecurity: "la3-private-plaintext" }),
+						() => ldap,
+					),
+			).toThrow("fixed private IPv4 endpoint");
 		const ambiguous = {
 			...ldap,
 			search: vi.fn(async () => [

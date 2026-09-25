@@ -38,6 +38,24 @@ function runtimePort(value: string | undefined, fallback: number) {
 	return port;
 }
 
+export function ldapTransportSecurityFromEnvironment(
+	url: string,
+	environment: Record<string, string | undefined>,
+): "tls" | "la3-private-plaintext" {
+	const mode = environment.CONNECTION_LDAP_LA3_PLAINTEXT;
+	if (!mode) return "tls";
+	if (mode !== "enabled") throw new Error("LA3 plaintext LDAP mode is invalid");
+	if (
+		environment.CONNECTION_ENVIRONMENT !== "la3-connection-pilot" ||
+		environment.CONNECTION_LDAP_LA3_PRIVATE_ENDPOINT !== url ||
+		!environment.CONNECTION_LDAP_LA3_APPROVED_NETWORK_PATH?.trim() ||
+		!environment.CONNECTION_LDAP_LA3_RISK_OWNER?.trim() ||
+		!environment.CONNECTION_LDAP_LA3_RISK_RECORD?.trim()
+	)
+		throw new Error("LA3 plaintext LDAP approval or environment is incomplete");
+	return "la3-private-plaintext";
+}
+
 function authFromEnvironment():
 	| {
 			dependencies: ConnectionAuthDependencies;
@@ -85,6 +103,10 @@ function authFromEnvironment():
 		baseDn: process.env.CONNECTION_LDAP_BASE_DN ?? "",
 		serviceDn: process.env.CONNECTION_LDAP_SERVICE_DN ?? "",
 		servicePassword: process.env.CONNECTION_LDAP_SERVICE_PASSWORD ?? "",
+		transportSecurity: ldapTransportSecurityFromEnvironment(
+			process.env.CONNECTION_LDAP_URL ?? "",
+			process.env,
+		),
 	};
 	const ldap = createLdaptsAuthenticator(
 		profile,
