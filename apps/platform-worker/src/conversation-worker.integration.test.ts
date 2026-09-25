@@ -576,7 +576,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
-			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin perform nextval('platform.test_event_attempts'); raise exception 'injected event transaction failure'; end $$",
+			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin if nextval('platform.test_event_attempts') = 1 then raise exception 'injected event transaction failure'; end if; return new; end $$",
 		);
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
