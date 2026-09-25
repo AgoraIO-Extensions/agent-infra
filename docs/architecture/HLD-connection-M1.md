@@ -54,7 +54,7 @@ Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer �
 
 ### 5.1 Principal
 
-Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。LDAP 必须使用 TLS；客户端校验证书链和服务端 hostname，拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。若具名 LA3 Pilot 获准使用明文 LDAP，必须固定到该具名环境的专用 private endpoint、批准的网络路径和明确的环境配置，并由具名 Security/SRE Owner 记录风险接受；禁止动态 endpoint、TLS downgrade 或 fallback，并在启动门禁中拒绝进入其他环境。
+Connection 使用部署批准的 LDAP profile，以 `issuer + stable uid` 映射 Principal。默认使用 TLS，客户端校验证书链和服务端 hostname；具名 LA3 M1 Pilot 可通过显式环境配置使用固定的 `ldap://` endpoint，即使该域名解析为公网地址。明文例外只适用于 `la3-connection-pilot` 环境，启动时必须核对配置的精确 endpoint，禁止调用方动态选择 endpoint、TLS 失败后降级或回退；其他环境仍须使用 TLS。所有模式均拒绝匿名 bind，并为 bind、查询和响应设置 deadline。DN、filter 和用户名输入必须按 LDAP 语法转义，禁止字符串拼接注入。密码只存在于单次验证过程，不进入持久化、Token、Cookie、日志、错误、审计或模型上下文。邮箱、显示名和登录名不能作为授权键。
 
 Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Principal 撤销或 recovery generation 不匹配时，敏感操作 fail closed。
 
