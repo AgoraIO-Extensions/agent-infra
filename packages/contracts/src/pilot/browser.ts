@@ -485,6 +485,45 @@ export const PlatformAuditProjectionV2Schema =
 		]),
 	});
 
+export const DeploymentConfigurationStatusV2Schema = z.enum([
+	"populated",
+	"empty",
+	"unavailable",
+	"stale",
+]);
+
+export const DeploymentTemplateProjectionV2Schema = z.strictObject({
+	templateId: OpaqueIdV1Schema,
+	displayName: nonEmptyString(),
+	connectionEnabled: z.boolean(),
+	allowedEnvironmentKeys: z.array(nonEmptyString()),
+	allowedSecretKeys: z.array(nonEmptyString()),
+});
+
+export const DeploymentModelProjectionV2Schema = z.strictObject({
+	modelId: nonEmptyString(),
+	reasoningLevels: z.array(nonEmptyString()),
+});
+
+export const DeploymentModelEndpointProjectionV2Schema = z.strictObject({
+	endpointId: OpaqueIdV1Schema,
+	displayName: nonEmptyString(),
+	models: z.array(DeploymentModelProjectionV2Schema),
+});
+
+export const DeploymentModelCatalogProjectionV2Schema = z.strictObject({
+	status: DeploymentConfigurationStatusV2Schema,
+	revision: OpaqueIdV1Schema.nullable(),
+	endpoints: z.array(DeploymentModelEndpointProjectionV2Schema),
+});
+
+export const DeploymentConfigurationProjectionV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	status: DeploymentConfigurationStatusV2Schema,
+	templates: z.array(DeploymentTemplateProjectionV2Schema),
+	modelCatalog: DeploymentModelCatalogProjectionV2Schema,
+});
+
 const applicationPage = z.strictObject({
 	items: z.array(AgentApplicationProjectionV1Schema),
 	nextCursor: OpaqueCursorV1Schema.nullable(),
@@ -964,6 +1003,18 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/deployment/configuration": {
+		get: {
+			operationId: "getDeploymentConfigurationV2",
+			responses: {
+				"200": jsonResponse(
+					"Deployment-owned application choices",
+					DeploymentConfigurationProjectionV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agent-applications": {
 		get: {
 			operationId: "listAgentApplicationsV2",
@@ -1154,6 +1205,14 @@ export const pilotBrowserSchemasV2 = {
 	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,
 	AgentConfigurationProjectionV2: AgentConfigurationProjectionV2Schema,
 	AgentProjectionV2: AgentProjectionV2Schema,
+	DeploymentConfigurationStatusV2: DeploymentConfigurationStatusV2Schema,
+	DeploymentConfigurationProjectionV2:
+		DeploymentConfigurationProjectionV2Schema,
+	DeploymentModelCatalogProjectionV2: DeploymentModelCatalogProjectionV2Schema,
+	DeploymentModelEndpointProjectionV2:
+		DeploymentModelEndpointProjectionV2Schema,
+	DeploymentModelProjectionV2: DeploymentModelProjectionV2Schema,
+	DeploymentTemplateProjectionV2: DeploymentTemplateProjectionV2Schema,
 
 	PilotInternalErrorV1: PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1: PilotProtocolErrorV1Schema,

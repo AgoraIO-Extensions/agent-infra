@@ -13,7 +13,40 @@ import type {
 	AgentLifecycleCommandRequestV1,
 	ApprovalDecisionRequestV1,
 } from "../src/pilot/generated/types.gen";
-import type { AgentApplicationCreateRequestV2Writable } from "../src/pilot/generated-v2/types.gen";
+import type {
+	AgentApplicationCreateRequestV2Writable,
+	DeploymentConfigurationProjectionV2,
+} from "../src/pilot/generated-v2/types.gen";
+
+const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
+	modelCatalog: {
+		endpoints: [
+			{
+				displayName: "Primary endpoint",
+				endpointId: "endpoint-primary",
+				models: [
+					{
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		],
+		revision: "catalog-browser",
+		status: "populated",
+	},
+	schemaVersion: 2,
+	status: "populated",
+	templates: [
+		{
+			allowedEnvironmentKeys: ["LOG_LEVEL"],
+			allowedSecretKeys: ["MODEL_API_KEY"],
+			connectionEnabled: false,
+			displayName: "Codex",
+			templateId: "codex",
+		},
+	],
+};
 
 async function fixture(
 	page: Page,
@@ -36,6 +69,10 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
+		getDeploymentConfiguration: {
+			status: 200,
+			body: deploymentConfiguration,
+		},
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
