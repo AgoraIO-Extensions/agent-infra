@@ -953,6 +953,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										if (sourceKind !== "standard") setConfigureModels(true);
 									}
 									if (kind !== "standard") setConfigureModels(false);
+									document.getElementById("application-source-kind")?.focus();
 								}}
 							>
 								<SelectTrigger

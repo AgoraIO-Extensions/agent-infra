@@ -346,6 +346,12 @@ export function ActiveConversation({
 								<Select
 									disabled={blocked || commandLocked}
 									value={currentModelId || null}
+									itemToStringLabel={(value) =>
+										(!option && value === currentModelId
+											? "当前选项已移除"
+											: options.find((item) => item.optionId === value)
+													?.displayName) ?? String(value)
+									}
 									onValueChange={(value) => {
 										if (!value) return;
 										setModelId(value);
