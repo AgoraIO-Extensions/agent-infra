@@ -6,7 +6,7 @@ import test from "node:test";
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
-	rehoboamLegacyProviderReleaseId,
+	rehoboamLegacyProviderReleaseIds,
 } from "./rehoboam.ts";
 import { rehoboamExecutorDigest } from "./rehoboam-integrity.ts";
 
@@ -18,24 +18,30 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 });
 
 test("Rehoboam catalog exposes bounded release workflow actions", () => {
-	assert.equal(rehoboamLegacyProviderReleaseId, "rehoboam-connection-v4");
+	assert.deepEqual(rehoboamLegacyProviderReleaseIds, [
+		"rehoboam-connection-v4",
+		"rehoboam-connection-v5",
+		"rehoboam-connection-v6",
+		"rehoboam-connection-v7",
+	]);
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v7",
-			"rehoboam.list_releases@v4",
-			"rehoboam.get_release@v4",
-			"rehoboam.list_release_pipelines@v4",
-			"rehoboam.get_release_pipeline@v4",
-			"rehoboam.prepare_release_pipeline_run@v4",
-			"rehoboam.execute_release_pipeline@v4",
-			"rehoboam.list_execution_requests@v4",
-			"rehoboam.get_execution_request@v4",
-			"rehoboam.approve_execution_request@v4",
-			"rehoboam.withdraw_execution_request@v4",
-			"rehoboam.reject_execution_request@v4",
-			"rehoboam.list_release_pipeline_runs@v4",
-			"rehoboam.get_release_pipeline_run@v4",
+			"rehoboam.get_current_user@v8",
+			"rehoboam.list_releases@v5",
+			"rehoboam.get_release@v5",
+			"rehoboam.get_release_result@v1",
+			"rehoboam.list_release_pipelines@v5",
+			"rehoboam.get_release_pipeline@v5",
+			"rehoboam.prepare_release_pipeline_run@v5",
+			"rehoboam.execute_release_pipeline@v5",
+			"rehoboam.list_execution_requests@v5",
+			"rehoboam.get_execution_request@v5",
+			"rehoboam.approve_execution_request@v5",
+			"rehoboam.withdraw_execution_request@v5",
+			"rehoboam.reject_execution_request@v5",
+			"rehoboam.list_release_pipeline_runs@v5",
+			"rehoboam.get_release_pipeline_run@v5",
 		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
@@ -44,6 +50,34 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 			(action) => action.name === "rehoboam.execute_release_pipeline",
 		)?.effect,
 		"WRITE",
+	);
+});
+
+test("Rehoboam reads only the time-bound release result cursor", async () => {
+	let requestedUrl = "";
+	const adapter = new RehoboamAdapter(async (input) => {
+		requestedUrl = String(input);
+		return Response.json({
+			data: { content: "next", next_offset: null },
+			success: true,
+		});
+	}, "machine-key");
+	const request = {
+		action: "rehoboam.get_release_result",
+		credential: { accessToken: "stored-token" },
+		input: { releaseId: "rel/1", releaseInfoTime: 1790071492705, offset: 8000 },
+	};
+
+	assert.deepEqual(await adapter.execute(request), {
+		content: "next",
+		next_offset: null,
+	});
+	assert.equal(
+		requestedUrl,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/connection-release-result?time=1790071492705&offset=8000",
+	);
+	await assert.rejects(
+		adapter.execute({ ...request, input: { ...request.input, offset: -1 } }),
 	);
 });
 

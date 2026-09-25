@@ -174,6 +174,12 @@ exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/Pi
 未计算的 PipelineHistory 状态伪造空值；已保存的进度和状态原样保留。实际运行状态继续通过
 Release-scoped Job READ 查询；其余 Actions 只更新 immutable 绑定版本，不改变权限或写入语义。
 
+后续 `rehoboam-connection-v8` 保留 v7：新增 `get_release_result@v1`，凭 Release ID 与最新发布结果时间戳
+按字符 offset 每次最多读取 8000 字符；结果更新后旧时间戳 fail closed，不能遍历历史结果。Release Job 分页
+改为服务端在 Mongo 按当前 Release Card 的 history ID 集合查询、排序和截页，响应契约不变。Rehoboam
+MCP API 拥有错误码与安全详情，Connection 只透传有界错误 envelope 并按 HTTP/提交结果分类；旧 ProviderRelease
+继续可路由，不为错误解释增加 Rehoboam 业务规则。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
