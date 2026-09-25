@@ -876,6 +876,62 @@ describe("AgentApplicationForm", () => {
 		).not.toHaveProperty("credentialValue");
 	});
 
+	it("rejects a canonical option that collides with another endpoint's legacy ID", () => {
+		const conflictingDeployment = {
+			...deploymentConfiguration,
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				endpoints: [
+					{
+						endpointId: "endpoint:primary",
+						displayName: "Primary endpoint",
+						models: [{ modelId: "gpt-5", reasoningLevels: ["medium"] }],
+					},
+					{
+						endpointId: "endpoint%3Aprimary",
+						displayName: "Legacy endpoint",
+						models: [{ modelId: "gpt-5", reasoningLevels: ["medium"] }],
+					},
+				],
+			},
+		};
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint%3Aprimary:gpt-5",
+						displayName: "Ambiguous model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "endpoint%3Aprimary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				deploymentConfiguration={conflictingDeployment}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		expect(
+			screen.getByRole("combobox", { name: "模型端点" }).textContent,
+		).toContain("选择模型端点");
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getByText("模型选项已移除，请重新选择。")).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("marks a persisted model with an unmapped endpoint as stale", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
@@ -976,6 +1032,7 @@ describe("AgentApplicationForm", () => {
 	});
 
 	it("keeps a server model error after credential or reasoning changes", () => {
+		const onSubmit = vi.fn();
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			configuration: {
@@ -997,7 +1054,7 @@ describe("AgentApplicationForm", () => {
 				application={application}
 				action="edit"
 				mode="update"
-				onSubmit={vi.fn()}
+				onSubmit={onSubmit}
 				serverError={{ code: "MODEL_SELECTION_INVALID" }}
 				submitting={false}
 			/>,
@@ -1005,6 +1062,8 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		const defaultModel = screen.getByLabelText("默认模型");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
 		fireEvent.change(screen.getByLabelText("模型凭证"), {
 			target: { value: "replacement-secret" },
 		});

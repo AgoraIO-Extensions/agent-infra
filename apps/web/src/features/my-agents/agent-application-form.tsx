@@ -254,16 +254,22 @@ function endpointIdForModelOption(
 	option: Pick<AgentApplicationModelDraft, "modelId" | "optionId">,
 	endpoints: readonly DeploymentModelEndpointProjectionV2[],
 ) {
-	const exact = endpoints.find(
+	const exactMatches = endpoints.filter(
 		(endpoint) =>
 			option.optionId === optionIdFor(endpoint.endpointId, option.modelId),
 	);
-	if (exact) return exact.endpointId;
+	if (exactMatches.length > 1) return "";
+	const exact = exactMatches[0];
 	const legacyExact = endpoints.filter(
 		(endpoint) =>
 			option.optionId ===
 			legacyOptionIdFor(endpoint.endpointId, option.modelId),
 	);
+	if (
+		exact &&
+		legacyExact.some((endpoint) => endpoint.endpointId !== exact.endpointId)
+	)
+		return "";
 	if (legacyExact.length === 1) return legacyExact[0]?.endpointId ?? "";
 	if (option.optionId.includes(":")) return "";
 	const candidates = endpoints.filter((endpoint) =>
@@ -1003,7 +1009,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		});
 		setFieldErrors(errors);
 		setFocusRequest((current) => current + 1);
-		if (Object.keys(errors).length > 0) return;
+		if (
+			Object.keys(errors).length > 0 ||
+			Object.keys(serverFieldErrors).length > 0
+		)
+			return;
 		setSecrets([]);
 		setModels((current) =>
 			current.map((model) => ({ ...model, credentialValue: "" })),
