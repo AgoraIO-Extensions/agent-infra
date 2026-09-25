@@ -607,25 +607,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelServerErrorIndexes = useMemo(
 		() =>
 			props.serverError?.code === "MODEL_SELECTION_INVALID"
-				? staleModelIndexes.length > 0
-					? staleModelIndexes
-					: modelConfigurationVisible && models.length > 0
-						? [0]
-						: []
+				? staleModelIndexes
 				: [],
-		[
-			modelConfigurationVisible,
-			models.length,
-			props.serverError?.code,
-			staleModelIndexes,
-		],
+		[props.serverError?.code, staleModelIndexes],
 	);
 	const serverFieldErrors = useMemo(() => {
 		const errors: AgentApplicationFieldErrors = {};
 		for (const index of modelServerErrorIndexes)
 			errors[`model.${index}.modelId`] = "服务端拒绝了该模型选项，请重新选择。";
+		if (
+			props.serverError?.code === "MODEL_SELECTION_INVALID" &&
+			modelServerErrorIndexes.length === 0 &&
+			modelConfigurationVisible
+		)
+			errors.defaultModelOptionId = "服务端拒绝了默认模型，请重新选择。";
 		return errors;
-	}, [modelServerErrorIndexes]);
+	}, [
+		modelConfigurationVisible,
+		modelServerErrorIndexes,
+		props.serverError?.code,
+	]);
 	const serverFormError =
 		props.serverError?.code === "INVALID_REQUEST"
 			? "申请内容未通过服务端校验，请检查表单后重试。"

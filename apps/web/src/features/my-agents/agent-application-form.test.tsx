@@ -400,7 +400,7 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
-	it("focuses the model field after a server model-selection rejection", () => {
+	it("focuses the default model field after a server model-selection rejection", () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -411,10 +411,10 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		expect(screen.getByLabelText("模型").getAttribute("aria-invalid")).toBe(
+		expect(screen.getByLabelText("默认模型").getAttribute("aria-invalid")).toBe(
 			"true",
 		);
-		expect(document.activeElement).toBe(screen.getByLabelText("模型"));
+		expect(document.activeElement).toBe(screen.getByLabelText("默认模型"));
 	});
 
 	it("focuses the form for a server invalid-request error", () => {
