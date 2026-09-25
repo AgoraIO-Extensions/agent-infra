@@ -4389,10 +4389,25 @@
             "temporarily_unavailable"
           ],
           "type": "string"
+        },
+        "message": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
         }
       },
       "required": [
-        "error"
+        "error",
+        "message",
+        "traceId",
+        "retryable"
       ],
       "type": "object"
     },

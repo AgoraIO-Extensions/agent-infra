@@ -72,16 +72,24 @@ export function decideInstallationApproval(
 	},
 	principal: { status: string },
 	consumer: RegisteredConsumer,
+	binding: { principalId: string; browserSessionHash: string },
 	now = Date.now(),
 ): string {
 	assertInstallationConsentAvailable(request, consumer, now);
+	assertInstallationConsentBinding(request, binding);
+	if (principal.status !== "active") throw new ClientAuthorizationDenied();
+	return consumer.actorRequired ? randomUUID() : consumerActorSentinel;
+}
+
+export function assertInstallationConsentBinding(
+	request: { principalId: string | null; browserSessionHash: string | null },
+	binding: { principalId: string; browserSessionHash: string },
+): void {
 	if (
-		request.principalId !== null ||
-		request.browserSessionHash !== null ||
-		principal.status !== "active"
+		request.principalId !== binding.principalId ||
+		request.browserSessionHash !== binding.browserSessionHash
 	)
 		throw new ClientAuthorizationDenied();
-	return consumer.actorRequired ? randomUUID() : consumerActorSentinel;
 }
 
 export function assertInstallationConsentAvailable(

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	ClientAuthorizationDenied,
 	hashClientSecret,
@@ -114,17 +115,42 @@ function directBearerToken(context: Context): string {
 	return token;
 }
 
+const oauthMessages = {
+	invalid_request: "Invalid request",
+	invalid_grant: "Authorization denied",
+	forbidden: "Request forbidden",
+	unsupported_grant_type: "Unsupported grant type",
+	temporarily_unavailable: "Service temporarily unavailable",
+} as const;
+
+function clientError(
+	context: Context,
+	code: keyof typeof oauthMessages,
+	status: 400 | 401 | 403 | 503,
+) {
+	return context.json(
+		{
+			error: code,
+			message: oauthMessages[code],
+			traceId: randomUUID(),
+			retryable: status === 503,
+		},
+		status,
+		noStore,
+	);
+}
+
 function oauthError(context: Context, error: unknown) {
 	if (error instanceof InvalidClientRequest || error instanceof SyntaxError)
-		return context.json({ error: "invalid_request" }, 400, noStore);
+		return clientError(context, "invalid_request", 400);
 	if (error instanceof ClientForbidden)
-		return context.json({ error: "forbidden" }, 403, noStore);
+		return clientError(context, "forbidden", 403);
 	if (
 		error instanceof ClientAuthorizationDenied ||
 		error instanceof InvalidDpopProof
 	)
-		return context.json({ error: "invalid_grant" }, 401, noStore);
-	return context.json({ error: "temporarily_unavailable" }, 503, noStore);
+		return clientError(context, "invalid_grant", 401);
+	return clientError(context, "temporarily_unavailable", 503);
 }
 
 function tokenResponse(
@@ -185,7 +211,7 @@ export function addConnectionClientRoutes(
 				JSON.parse(await readLimitedBody(context, "application/json")),
 			);
 		} catch {
-			return context.json({ error: "invalid_request" }, 400, noStore);
+			return clientError(context, "invalid_request", 400);
 		}
 		try {
 			const proof = proofFor(context, client.auth.publicOrigin);
@@ -218,9 +244,11 @@ export function addConnectionClientRoutes(
 
 	app.get("/oauth/authorize/:id", async (context) => {
 		try {
-			await browserPrincipal(context, client.auth, false);
+			const browser = await browserPrincipal(context, client.auth, true);
 			const request = await client.repository.installationForConsent(
 				context.req.param("id"),
+				browser.principal.id,
+				browser.sessionHash,
 			);
 			return context.json(request, 200, noStore);
 		} catch (error) {
@@ -234,8 +262,7 @@ export function addConnectionClientRoutes(
 			const body = DirectConsentRequestV1Schema.safeParse(
 				JSON.parse(await readLimitedBody(context, "application/json")),
 			);
-			if (!body.success)
-				return context.json({ error: "invalid_request" }, 400, noStore);
+			if (!body.success) return clientError(context, "invalid_request", 400);
 			const redirect = await client.repository.approveInstallation(
 				context.req.param("id"),
 				browser.principal.id,
@@ -260,14 +287,14 @@ export function addConnectionClientRoutes(
 				throw new InvalidClientRequest();
 			const grantType = values.get("grant_type");
 			if (grantType !== "authorization_code" && grantType !== "refresh_token")
-				return context.json({ error: "unsupported_grant_type" }, 400, noStore);
+				return clientError(context, "unsupported_grant_type", 400);
 			const parsed = DirectTokenRequestV1Schema.safeParse(
 				Object.fromEntries(values),
 			);
 			if (!parsed.success) throw new InvalidClientRequest();
 			form = parsed.data;
 		} catch {
-			return context.json({ error: "invalid_request" }, 400, noStore);
+			return clientError(context, "invalid_request", 400);
 		}
 		try {
 			const grantType = form.grant_type;
@@ -322,10 +349,10 @@ export function addConnectionClientRoutes(
 					result.scopes,
 				);
 			}
-			return context.json({ error: "unsupported_grant_type" }, 400, noStore);
+			return clientError(context, "unsupported_grant_type", 400);
 		} catch (error) {
 			return error instanceof InvalidClientRequest
-				? context.json({ error: "invalid_request" }, 400, noStore)
+				? clientError(context, "invalid_request", 400)
 				: oauthError(context, error);
 		}
 	});
@@ -333,7 +360,7 @@ export function addConnectionClientRoutes(
 	app.post("/oauth/pat", async (context) => {
 		try {
 			if (await readLimitedBody(context))
-				return context.json({ error: "invalid_request" }, 400, noStore);
+				return clientError(context, "invalid_request", 400);
 			const token = directBearerToken(context);
 			await authenticateDirectClient(context, client, "pat:issue");
 			const pat = opaqueClientSecret();
@@ -351,7 +378,7 @@ export function addConnectionClientRoutes(
 	app.post("/oauth/pat/rotate", async (context) => {
 		try {
 			if (await readLimitedBody(context))
-				return context.json({ error: "invalid_request" }, 400, noStore);
+				return clientError(context, "invalid_request", 400);
 			const token = directBearerToken(context);
 			const stored = await client.repository.credentialByToken(token);
 			if (stored?.kind !== "pat") throw new ClientAuthorizationDenied();
@@ -375,7 +402,7 @@ export function addConnectionClientRoutes(
 	app.post("/oauth/revoke", async (context) => {
 		try {
 			if (await readLimitedBody(context))
-				return context.json({ error: "invalid_request" }, 400, noStore);
+				return clientError(context, "invalid_request", 400);
 			const token = directBearerToken(context);
 			const stored = await client.repository.credentialByToken(token);
 			if (stored?.kind !== "access") throw new ClientAuthorizationDenied();
@@ -390,7 +417,7 @@ export function addConnectionClientRoutes(
 	app.post("/oauth/instances/:id/revoke", async (context) => {
 		try {
 			if (await readLimitedBody(context))
-				return context.json({ error: "invalid_request" }, 400, noStore);
+				return clientError(context, "invalid_request", 400);
 			const browser = await browserPrincipal(context, client.auth, true);
 			await client.repository.revokeInstance(
 				browser.principal.id,
@@ -405,7 +432,7 @@ export function addConnectionClientRoutes(
 	app.post("/oauth/pats/:id/revoke", async (context) => {
 		try {
 			if (await readLimitedBody(context))
-				return context.json({ error: "invalid_request" }, 400, noStore);
+				return clientError(context, "invalid_request", 400);
 			const browser = await browserPrincipal(context, client.auth, true);
 			await client.repository.revokePat(
 				browser.principal.id,
