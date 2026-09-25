@@ -141,6 +141,85 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 	);
 }
 
+function reindexRowErrors(
+	errors: AgentApplicationFieldErrors,
+	prefix: "environment" | "secret" | "model",
+	removedIndex: number,
+) {
+	const next: AgentApplicationFieldErrors = {};
+	for (const [key, message] of Object.entries(errors)) {
+		const [keyPrefix, indexValue, ...fieldParts] = key.split(".");
+		if (keyPrefix !== prefix || fieldParts.length === 0) {
+			next[key] = message;
+			continue;
+		}
+		const rowIndex = Number(indexValue);
+		if (!Number.isInteger(rowIndex) || rowIndex === removedIndex) continue;
+		const nextIndex = rowIndex > removedIndex ? rowIndex - 1 : rowIndex;
+		next[`${prefix}.${nextIndex}.${fieldParts.join(".")}`] = message;
+	}
+	return next;
+}
+
+function recomputeDuplicateNameErrors(
+	errors: AgentApplicationFieldErrors,
+	prefix: "environment" | "secret",
+	rows: readonly AgentApplicationEnvironmentDraft[],
+) {
+	const duplicateMessage = "名称不能重复。";
+	for (const errorKey of Object.keys(errors)) {
+		if (
+			errorKey.startsWith(`${prefix}.`) &&
+			errorKey.endsWith(".name") &&
+			errors[errorKey] === duplicateMessage
+		)
+			delete errors[errorKey];
+	}
+	const nameCounts = new Map<string, number>();
+	for (const row of rows) {
+		const name = row.name.trim();
+		if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+	}
+	rows.forEach((row, index) => {
+		if (row.name.trim() && nameCounts.get(row.name.trim()) !== 1)
+			errors[`${prefix}.${index}.name`] = duplicateMessage;
+	});
+}
+
+function recomputeDuplicateModelErrors(
+	errors: AgentApplicationFieldErrors,
+	rows: readonly AgentApplicationModelDraft[],
+) {
+	const duplicateMessage = "模型选项不能重复。";
+	for (const errorKey of Object.keys(errors)) {
+		if (
+			errorKey.startsWith("model.") &&
+			errorKey.endsWith(".modelId") &&
+			errors[errorKey] === duplicateMessage
+		)
+			delete errors[errorKey];
+	}
+	const keyIndexes = new Map<string, number[]>();
+	rows.forEach((model, index) => {
+		const keys = [
+			...(model.optionId ? [`id:${model.optionId}`] : []),
+			...(model.endpointId && model.modelId
+				? [`pair:${JSON.stringify([model.endpointId, model.modelId])}`]
+				: []),
+		];
+		for (const key of keys) {
+			const indexes = keyIndexes.get(key) ?? [];
+			indexes.push(index);
+			keyIndexes.set(key, indexes);
+		}
+	});
+	for (const indexes of keyIndexes.values()) {
+		if (indexes.length < 2) continue;
+		for (const index of indexes)
+			errors[`model.${index}.modelId`] = duplicateMessage;
+	}
+}
+
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
 		<p aria-live="assertive" className="text-destructive text-sm" id={id}>
@@ -191,6 +270,14 @@ function endpointIdForModelOption(
 		endpoint.models.some((model) => model.modelId === option.modelId),
 	);
 	return candidates.length === 1 ? (candidates[0]?.endpointId ?? "") : "";
+}
+
+function canonicalOptionIdForModelOption(
+	option: Pick<AgentApplicationModelDraft, "modelId" | "optionId">,
+	endpoints: readonly DeploymentModelEndpointProjectionV2[],
+) {
+	const endpointId = endpointIdForModelOption(option, endpoints);
+	return endpointId ? optionIdFor(endpointId, option.modelId) : option.optionId;
 }
 
 function modelLabel(
@@ -559,7 +646,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	}>({ focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
+	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
+	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
 		application?.description ?? "",
@@ -610,19 +699,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [configureModels, setConfigureModels] = useState(false);
 	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
 		if (props.mode === "create") return [blankModel()];
-		const endpoints = props.deploymentConfiguration.modelCatalog.endpoints;
 		return (configuration?.modelOptions ?? []).map((option) => {
 			return {
 				credentialValue: "",
-				endpointId: endpointIdForModelOption(option, endpoints),
+				endpointId: endpointIdForModelOption(option, modelEndpoints),
 				modelId: option.modelId,
-				optionId: option.optionId,
+				optionId: canonicalOptionIdForModelOption(option, modelEndpoints),
 				reasoningLevels: option.reasoningLevels.join("\n"),
 			};
 		});
 	});
+	const initialDefaultModelOptionId = configuration?.defaultModelOptionId ?? "";
+	const initialDefaultModelOption = configuration?.modelOptions.find(
+		(option) => option.optionId === initialDefaultModelOptionId,
+	);
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
-		configuration?.defaultModelOptionId ?? "",
+		initialDefaultModelOption
+			? canonicalOptionIdForModelOption(
+					initialDefaultModelOption,
+					modelEndpoints,
+				)
+			: initialDefaultModelOptionId,
 	);
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
@@ -660,26 +757,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		setFieldErrors((current) => {
 			const next = { ...current };
 			delete next[`${prefix}.${index}.${key}`];
-			if (key === "name") {
-				const duplicateMessage = "名称不能重复。";
-				for (const errorKey of Object.keys(next)) {
-					if (
-						errorKey.startsWith(`${prefix}.`) &&
-						errorKey.endsWith(".name") &&
-						next[errorKey] === duplicateMessage
-					)
-						delete next[errorKey];
-				}
-				const nameCounts = new Map<string, number>();
-				for (const row of rows) {
-					const name = row.name.trim();
-					if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
-				}
-				rows.forEach((row, rowIndex) => {
-					if (row.name.trim() && nameCounts.get(row.name.trim()) !== 1)
-						next[`${prefix}.${rowIndex}.name`] = duplicateMessage;
-				});
-			}
+			if (key === "name") recomputeDuplicateNameErrors(next, prefix, rows);
 			return next;
 		});
 	};
@@ -688,34 +766,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	) => {
 		setFieldErrors((current) => {
 			const next = { ...current };
-			const duplicateMessage = "模型选项不能重复。";
-			for (const errorKey of Object.keys(next)) {
-				if (
-					errorKey.startsWith("model.") &&
-					errorKey.endsWith(".modelId") &&
-					next[errorKey] === duplicateMessage
-				)
-					delete next[errorKey];
-			}
-			const keyIndexes = new Map<string, number[]>();
-			rows.forEach((model, index) => {
-				const keys = [
-					...(model.optionId ? [`id:${model.optionId}`] : []),
-					...(model.endpointId && model.modelId
-						? [`pair:${JSON.stringify([model.endpointId, model.modelId])}`]
-						: []),
-				];
-				for (const key of keys) {
-					const indexes = keyIndexes.get(key) ?? [];
-					indexes.push(index);
-					keyIndexes.set(key, indexes);
-				}
-			});
-			for (const indexes of keyIndexes.values()) {
-				if (indexes.length < 2) continue;
-				for (const index of indexes)
-					next[`model.${index}.modelId`] = duplicateMessage;
-			}
+			recomputeDuplicateModelErrors(next, rows);
 			return next;
 		});
 	};
@@ -733,7 +784,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(application?.source.kind !== "standard" && sourceKind === "standard");
 	const persistedModelOptionIds =
 		props.mode === "update"
-			? (configuration?.modelOptions.map((option) => option.optionId) ?? [])
+			? (configuration?.modelOptions.map((option) =>
+					canonicalOptionIdForModelOption(option, modelEndpoints),
+				) ?? [])
 			: undefined;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
@@ -743,7 +796,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(deployment.status !== "populated" ||
 			deployment.templates.length === 0 ||
 			!modelCatalogReady);
-	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
 		setModels((current) => {
@@ -751,6 +803,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			const next = current.map((model) => {
 				const endpointId =
 					model.endpointId || endpointIdForModelOption(model, modelEndpoints);
+				const optionId = canonicalOptionIdForModelOption(model, modelEndpoints);
 				if (!endpointId) return model;
 				const definition = modelEndpoints
 					.find((endpoint) => endpoint.endpointId === endpointId)
@@ -763,15 +816,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					: model.reasoningLevels;
 				if (
 					endpointId === model.endpointId &&
+					optionId === model.optionId &&
 					reasoningLevels === model.reasoningLevels
 				)
 					return model;
 				changed = true;
-				return { ...model, endpointId, reasoningLevels };
+				return { ...model, endpointId, optionId, reasoningLevels };
 			});
 			return changed ? next : current;
 		});
-	}, [modelEndpoints, props.mode]);
+		setDefaultModelOptionId((current) => {
+			const option = persistedModelOptions?.find(
+				(item) => item.optionId === current,
+			);
+			return option
+				? canonicalOptionIdForModelOption(option, modelEndpoints)
+				: current;
+		});
+	}, [modelEndpoints, persistedModelOptions, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
@@ -1351,13 +1413,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								(_, itemIndex) => itemIndex !== index,
 							);
 							setEnvironment(next);
-							clearFieldErrors(
-								...Object.keys(fieldErrors).filter((key) =>
-									key.startsWith("environment."),
-								),
-							);
-							if (next.length > 0)
-								updateNameField("environment", next, 0, "name");
+							setFieldErrors((current) => {
+								const nextErrors = reindexRowErrors(
+									current,
+									"environment",
+									index,
+								);
+								recomputeDuplicateNameErrors(nextErrors, "environment", next);
+								return nextErrors;
+							});
 						}}
 						rows={environment}
 					/>
@@ -1416,12 +1480,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								(_, itemIndex) => itemIndex !== index,
 							);
 							setSecrets(next);
-							clearFieldErrors(
-								...Object.keys(fieldErrors).filter((key) =>
-									key.startsWith("secret."),
-								),
-							);
-							if (next.length > 0) updateNameField("secret", next, 0, "name");
+							setFieldErrors((current) => {
+								const nextErrors = reindexRowErrors(current, "secret", index);
+								recomputeDuplicateNameErrors(nextErrors, "secret", next);
+								return nextErrors;
+							});
 						}}
 						rows={secrets}
 					/>
@@ -1535,14 +1598,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											(_, itemIndex) => itemIndex !== index,
 										);
 										setModels(next);
-										clearFieldErrors(
-											...Object.keys(fieldErrors).filter((key) =>
-												key.startsWith("model."),
-											),
-											"defaultModelOptionId",
-											"defaultReasoningLevel",
-										);
-										updateModelSelectionErrors(next);
+										setFieldErrors((current) => {
+											const nextErrors = reindexRowErrors(
+												current,
+												"model",
+												index,
+											);
+											delete nextErrors.defaultModelOptionId;
+											delete nextErrors.defaultReasoningLevel;
+											recomputeDuplicateModelErrors(nextErrors, next);
+											return nextErrors;
+										});
 										dismissServerValidation();
 									}}
 								/>

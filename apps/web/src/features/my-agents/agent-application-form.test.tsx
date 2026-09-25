@@ -824,7 +824,7 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
-	it("restores a legacy option endpoint when the model match is unique", () => {
+	it("restores and canonicalizes a legacy option endpoint when the model match is unique", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			configuration: {
@@ -841,12 +841,13 @@ describe("AgentApplicationForm", () => {
 				defaultReasoningLevel: "medium",
 			},
 		});
+		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
 				application={application}
 				action="edit"
 				mode="update"
-				onSubmit={vi.fn()}
+				onSubmit={onSubmit}
 				submitting={false}
 			/>,
 		);
@@ -854,6 +855,25 @@ describe("AgentApplicationForm", () => {
 		expect(
 			screen.getByRole("combobox", { name: "模型端点" }).textContent,
 		).toContain("Primary endpoint");
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				modelConfiguration: {
+					options: [
+						expect.objectContaining({
+							optionId: "endpoint-primary:gpt-5",
+							endpointId: "endpoint-primary",
+							modelId: "gpt-5",
+						}),
+					],
+					defaultOptionId: "endpoint-primary:gpt-5",
+					defaultReasoningLevel: "medium",
+				},
+			}),
+		);
+		expect(
+			onSubmit.mock.calls[0]?.[0].modelConfiguration?.options[0],
+		).not.toHaveProperty("credentialValue");
 	});
 
 	it("marks a persisted model with an unmapped endpoint as stale", () => {
