@@ -36,11 +36,26 @@ function AgentApplicationForm(
 
 function choose(label: string, option: string) {
 	fireEvent.click(screen.getByRole("combobox", { name: label }));
-	fireEvent.click(screen.getByRole("option", { name: option }));
+	const item = screen.getByRole("option", { name: option });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
+}
+
+function chooseAt(label: string, option: string, index: number) {
+	fireEvent.click(screen.getAllByRole("combobox", { name: label })[index]!);
+	const item = screen.getByRole("option", { name: option });
+	fireEvent.pointerDown(item);
+	fireEvent.pointerUp(item);
+	fireEvent.click(item);
 }
 
 function check(label: string) {
 	fireEvent.click(screen.getByRole("checkbox", { name: label }));
+}
+
+function checkAt(label: string, index: number) {
+	fireEvent.click(screen.getAllByRole("checkbox", { name: label })[index]!);
 }
 
 describe("AgentApplicationForm", () => {
@@ -273,6 +288,104 @@ describe("AgentApplicationForm", () => {
 		if (!secondName) throw new Error("second environment name input missing");
 		fireEvent.change(secondName, { target: { value: "C" } });
 		expect(screen.queryByText("名称不能重复。")).toBeNull();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("clears Secret values when the template or Secret name changes", async () => {
+		const onSubmit = vi.fn();
+		const deploymentWithSecretTemplates = {
+			...deploymentConfiguration,
+			templates: [
+				...deploymentConfiguration.templates,
+				{
+					templateId: "minimal",
+					displayName: "Minimal",
+					connectionEnabled: false,
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: ["OTHER_SECRET"],
+				},
+			],
+		};
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={deploymentWithSecretTemplates}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		choose("标准模板 ID", "Codex");
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		choose("Secret 名称", "MODEL_API_KEY");
+		fireEvent.change(screen.getByLabelText("替换值"), {
+			target: { value: "old-secret" },
+		});
+		choose("标准模板 ID", "Minimal");
+		await waitFor(() =>
+			expect((screen.getByLabelText("替换值") as HTMLInputElement).value).toBe(
+				"",
+			),
+		);
+		choose("Secret 名称", "OTHER_SECRET");
+		expect((screen.getByLabelText("替换值") as HTMLInputElement).value).toBe(
+			"",
+		);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("recomputes duplicate model errors after a selection changes", async () => {
+		const onSubmit = vi.fn();
+		const deploymentWithSecondaryModel = {
+			...deploymentConfiguration,
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				endpoints: [
+					...deploymentConfiguration.modelCatalog.endpoints,
+					{
+						endpointId: "endpoint-secondary",
+						displayName: "Secondary endpoint",
+						models: [{ modelId: "claude-3", reasoningLevels: ["medium"] }],
+					},
+				],
+			},
+		};
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={deploymentWithSecondaryModel}
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		chooseAt("模型端点", "Primary endpoint", 0);
+		chooseAt("模型", "gpt-5", 0);
+		checkAt("medium", 0);
+		fireEvent.change(screen.getAllByLabelText("模型凭证")[0]!, {
+			target: { value: "credential-one" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
+		chooseAt("模型端点", "Primary endpoint", 1);
+		chooseAt("模型", "gpt-5", 1);
+		checkAt("medium", 1);
+		fireEvent.change(screen.getAllByLabelText("模型凭证")[1]!, {
+			target: { value: "credential-two" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
+
+		chooseAt("模型端点", "Secondary endpoint", 0);
+		await waitFor(() =>
+			expect(screen.queryAllByText("模型选项不能重复。")).toHaveLength(0),
+		);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 

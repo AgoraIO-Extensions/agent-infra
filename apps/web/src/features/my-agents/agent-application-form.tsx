@@ -664,6 +664,42 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return next;
 		});
 	};
+	const updateModelSelectionErrors = (
+		rows: readonly AgentApplicationModelDraft[],
+	) => {
+		setFieldErrors((current) => {
+			const next = { ...current };
+			const duplicateMessage = "模型选项不能重复。";
+			for (const errorKey of Object.keys(next)) {
+				if (
+					errorKey.startsWith("model.") &&
+					errorKey.endsWith(".modelId") &&
+					next[errorKey] === duplicateMessage
+				)
+					delete next[errorKey];
+			}
+			const keyIndexes = new Map<string, number[]>();
+			rows.forEach((model, index) => {
+				const keys = [
+					...(model.optionId ? [`id:${model.optionId}`] : []),
+					...(model.endpointId && model.modelId
+						? [`pair:${JSON.stringify([model.endpointId, model.modelId])}`]
+						: []),
+				];
+				for (const key of keys) {
+					const indexes = keyIndexes.get(key) ?? [];
+					indexes.push(index);
+					keyIndexes.set(key, indexes);
+				}
+			});
+			for (const indexes of keyIndexes.values()) {
+				if (indexes.length < 2) continue;
+				for (const index of indexes)
+					next[`model.${index}.modelId`] = duplicateMessage;
+			}
+			return next;
+		});
+	};
 	const dismissServerValidation = () => {
 		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
 			setServerValidationDismissed(true);
@@ -1036,6 +1072,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									onValueChange={(value) => {
 										if (!value) return;
 										setTemplateId(value);
+										setSecrets((current) =>
+											current.map((item) => ({ ...item, value: "" })),
+										);
 										clearFieldErrors("templateId");
 									}}
 								>
@@ -1316,7 +1355,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
 						onChange={(index, key, value) => {
 							const next = secrets.map((item, itemIndex) =>
-								itemIndex === index ? { ...item, [key]: value } : item,
+								itemIndex === index
+									? {
+											...item,
+											[key]: value,
+											...(key === "name" ? { value: "" } : {}),
+										}
+									: item,
 							);
 							setSecrets(next);
 							updateNameField("secret", next, index, key);
@@ -1377,33 +1422,32 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									persistedModelOptionIds={persistedModelOptionIds}
 									requiresReplacementCredential={requiresReplacementCredential}
 									onChange={(index, key, value) => {
-										setModels((current) =>
-											current.map((item, itemIndex) =>
-												itemIndex !== index
-													? item
-													: key === "endpointId" || key === "modelId"
-														? {
-																...item,
-																[key]: value,
-																...(key === "endpointId"
-																	? {
-																			modelId: "",
-																			reasoningLevels: "",
-																			optionId: "",
-																			credentialValue: "",
-																		}
-																	: {
-																			optionId:
-																				item.endpointId && value
-																					? optionIdFor(item.endpointId, value)
-																					: "",
-																			reasoningLevels: "",
-																			credentialValue: "",
-																		}),
-															}
-														: { ...item, [key]: value },
-											),
+										const nextModels = models.map((item, itemIndex) =>
+											itemIndex !== index
+												? item
+												: key === "endpointId" || key === "modelId"
+													? {
+															...item,
+															[key]: value,
+															...(key === "endpointId"
+																? {
+																		modelId: "",
+																		reasoningLevels: "",
+																		optionId: "",
+																		credentialValue: "",
+																	}
+																: {
+																		optionId:
+																			item.endpointId && value
+																				? optionIdFor(item.endpointId, value)
+																				: "",
+																		reasoningLevels: "",
+																		credentialValue: "",
+																	}),
+														}
+													: { ...item, [key]: value },
 										);
+										setModels(nextModels);
 										const rowErrorKeys = [
 											"endpointId",
 											"modelId",
@@ -1419,6 +1463,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													]
 												: [`model.${index}.${key}`]),
 										);
+										if (key === "endpointId" || key === "modelId")
+											updateModelSelectionErrors(nextModels);
 										if (key === "endpointId" || key === "modelId")
 											dismissServerValidation();
 									}}
