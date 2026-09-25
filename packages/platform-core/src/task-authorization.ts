@@ -92,9 +92,6 @@ function accessSources(
 ): readonly TaskAccessSourceV1[] {
 	if (user.accountStatus !== "active") return [];
 	const sources: TaskAccessSourceV1[] = [];
-	if (agent.ownerIds.includes(user.userId)) {
-		sources.push({ kind: "owner", userId: user.userId });
-	}
 	for (const target of agent.availability) {
 		if (
 			target.kind === "user"

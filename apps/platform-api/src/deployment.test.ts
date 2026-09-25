@@ -795,6 +795,16 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 					authorizationRevision: "directory-b",
 				},
 			],
+			[
+				"administrator",
+				{
+					schemaVersion: 1,
+					userId: "administrator",
+					accountStatus: "active",
+					organizationIds: ["org-admin"],
+					authorizationRevision: "directory-admin",
+				},
+			],
 		]);
 		const previousResolveUser = identity.resolveUser;
 		identity.resolveUser = async (userId) => currentUsers.get(userId) ?? null;
@@ -846,6 +856,17 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				"insert into platform.agent_availability(agent_id,target_type,target_id) values($1,'organization','org-a'),($1,'organization','org-b')",
 				[agentId],
 			);
+			const beforeAdmission = await taskSnapshot();
+			await json(
+				await post(
+					`/agents/${agentId}/conversations`,
+					"admin",
+					{ schemaVersion: 1 },
+					"owner-without-use-permission",
+				),
+				404,
+			);
+			expect(await taskSnapshot()).toEqual(beforeAdmission);
 			const accepted: {
 				user: "alice" | "bob";
 				conversationId: string;
@@ -914,6 +935,14 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 					}),
 				});
 			const beforeRevocation = await taskSnapshot();
+			await json(
+				await fetch(
+					`${origin}/api/v1/conversations/${accepted[0]?.conversationId}`,
+					{ headers: { authorization: sessionKeys.admin } },
+				),
+				404,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
 			for (const [user, conversationId] of [
 				["alice", accepted[1]?.conversationId],
 				["bob", accepted[0]?.conversationId],
@@ -929,6 +958,20 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				);
 				expect(await taskSnapshot()).toEqual(beforeRevocation);
 			}
+			identity.resolveUser = async () => {
+				throw new Error("Synthetic current-directory outage");
+			};
+			await json(
+				await post(
+					`/conversations/${accepted[0]?.conversationId}/messages`,
+					"alice",
+					{ schemaVersion: 1, text: "directory unavailable" },
+					"directory-outage",
+				),
+				503,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
+			identity.resolveUser = async (userId) => currentUsers.get(userId) ?? null;
 			currentUsers.set("bob", {
 				schemaVersion: 1,
 				userId: "bob",

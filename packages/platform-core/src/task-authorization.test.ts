@@ -168,22 +168,31 @@ describe("task authorization boundary", () => {
 		).toBe(false);
 	});
 
-	it("rejects direct access and Owner access after their respective original grants are removed", () => {
-		for (const original of [
-			{ ...agent, ownerIds: [user.userId], availability: [] },
-			{
-				...agent,
-				availability: [{ kind: "user" as const, userId: user.userId }],
-			},
-		]) {
-			const boundary = requiredBoundary({ agent: original });
-			expect(
-				isTaskAuthorizationCurrentV1({ boundary, user, agent: original }),
-			).toBe(true);
-			expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(
-				false,
-			);
-		}
+	it("requires explicit use scope even for an Owner", () => {
+		const owner = { ...agent, ownerIds: [user.userId], availability: [] };
+		expect(capture({ agent: owner })).toBeNull();
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary: {
+					...requiredBoundary(),
+					accessSources: [{ kind: "owner", userId: user.userId }],
+				},
+				user,
+				agent: owner,
+			}),
+		).toBe(false);
+	});
+
+	it("rejects direct access after its original grant is removed", () => {
+		const original = {
+			...agent,
+			availability: [{ kind: "user" as const, userId: user.userId }],
+		};
+		const boundary = requiredBoundary({ agent: original });
+		expect(
+			isTaskAuthorizationCurrentV1({ boundary, user, agent: original }),
+		).toBe(true);
+		expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(false);
 	});
 
 	it("fails closed on malformed directory facts and persisted boundaries without evaluating getters", () => {
