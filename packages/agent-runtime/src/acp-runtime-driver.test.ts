@@ -193,9 +193,9 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 it.each([
 	{ permitted: true, mode: "tool-permission" },
 	{ permitted: false, mode: "tool-permission" },
-	{ permitted: true, mode: "tool-late-permission" },
+	{ permitted: true, mode: "tool-status-before-permission" },
 ])(
-	"records ACP $mode permission $permitted only before the tool starts",
+	"records ACP $mode authorization $permitted without inferring tool start",
 	async ({ permitted, mode }) => {
 		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
 		const driver = await GenericAcpRuntimeDriver.open({
@@ -258,24 +258,17 @@ it.each([
 					: [],
 			);
 			expect(tools.map((fact) => fact.phase)).toEqual(
-				mode === "tool-late-permission"
-					? []
-					: permitted
-						? ["intent", "started", "completed"]
-						: ["intent", "failed"],
+				!permitted
+					? ["intent", "failed"]
+					: mode === "tool-status-before-permission"
+						? ["intent", "completed"]
+						: ["intent", "started", "completed"],
 			);
 			if (!permitted)
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
-			if (mode === "tool-late-permission") {
-				const events = await driver.replayEvents(
-					accepted.nativeSessionRef,
-					command.executionId,
-				);
-				expect(
-					events.flatMap((event) =>
-						event.type === "tool" ? [event.payload.phase] : [],
-					),
-				).toEqual(["started", "failed"]);
+			if (mode === "tool-status-before-permission") {
+				expect(tools.at(-1)?.startedAt).toBeUndefined();
+				expect(tools.at(-1)?.durationMs).toBeUndefined();
 			}
 		} finally {
 			await driver.close();

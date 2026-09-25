@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -104,50 +104,3 @@ it("rejects a foreign-session permission request without recording a tool intent
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
-
-it("rejects permission when tool execution starts during asynchronous authorization", async () => {
-	const cwd = await mkdtemp(join(tmpdir(), "acp-permission-race-"));
-	const workspace = join(cwd, "workspace");
-	await mkdir(workspace);
-	let finishAuthorization!: () => void;
-	const inProgress = new Promise<void>((resolve) => {
-		finishAuthorization = resolve;
-	});
-	const authorize = vi.fn(async () => {
-		await writeFile(join(workspace, "authorize-started"), "ready");
-		await inProgress;
-		return true;
-	});
-	const toolRequestStarted = vi.fn().mockResolvedValue(undefined);
-	const session = await openAcpSession({
-		directory: cwd,
-		cwd: workspace,
-		launch: {
-			command: process.execPath,
-			args: [
-				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
-			],
-			env: { ACP_TEST_MODE: "tool-authorize-race" },
-			authorize,
-		},
-		toolRequestStarted,
-		update: async ({ update }) => {
-			if (
-				(update.sessionUpdate === "tool_call" ||
-					update.sessionUpdate === "tool_call_update") &&
-				update.status === "in_progress"
-			)
-				finishAuthorization();
-		},
-	});
-	try {
-		expect(await session.prompt("synthetic input")).toEqual({
-			stopReason: "end_turn",
-		});
-		expect(authorize).toHaveBeenCalledOnce();
-		expect(toolRequestStarted).not.toHaveBeenCalled();
-	} finally {
-		await session.close();
-		await rm(cwd, { recursive: true, force: true });
-	}
-}, 10_000);

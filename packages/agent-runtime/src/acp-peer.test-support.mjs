@@ -138,8 +138,7 @@ const connection = new AgentSideConnection(
 			if (
 				[
 					"tool-permission",
-					"tool-late-permission",
-					"tool-authorize-race",
+					"tool-status-before-permission",
 					"tool-permission-hold",
 					"tool-permission-completed-hold",
 				].includes(process.env.ACP_TEST_MODE)
@@ -156,9 +155,9 @@ const connection = new AgentSideConnection(
 						},
 					});
 				await updateTool("pending");
-				if (process.env.ACP_TEST_MODE === "tool-late-permission")
+				if (process.env.ACP_TEST_MODE === "tool-status-before-permission")
 					await updateTool("in_progress");
-				const permissionRequest = connection.requestPermission({
+				const permission = await connection.requestPermission({
 					sessionId,
 					toolCall: {
 						toolCallId: "tool-permission",
@@ -171,22 +170,6 @@ const connection = new AgentSideConnection(
 						{ optionId: "reject", name: "Reject", kind: "reject_once" },
 					],
 				});
-				if (process.env.ACP_TEST_MODE === "tool-authorize-race") {
-					const marker = join(process.cwd(), "authorize-started");
-					const deadline = Date.now() + 3000;
-					while (
-						!(await readFile(marker).then(
-							() => true,
-							() => false,
-						))
-					) {
-						if (Date.now() > deadline)
-							throw new Error("authorization callback did not start");
-						await new Promise((resolve) => setTimeout(resolve, 10));
-					}
-					await updateTool("in_progress");
-				}
-				const permission = await permissionRequest;
 				const allowed =
 					permission.outcome?.outcome === "selected" &&
 					permission.outcome.optionId === "allow";
