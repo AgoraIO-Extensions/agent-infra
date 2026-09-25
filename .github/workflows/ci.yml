@@ -78,7 +78,7 @@ jobs:
           docker run --init --rm --pull=never --network=host --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
-            --tmpfs /app/apps/platform-worker/dist:rw,exec,size=128m \
+            --tmpfs /app/apps/platform-worker/dist:rw,exec,size=128m,mode=1777,uid=1000,gid=1000 \
             --env AGENT_INFRA_REAL_CODEX_E2E \
             --env PLATFORM_TEST_DATABASE_URL \
             agent-infra-codex-native-test \
