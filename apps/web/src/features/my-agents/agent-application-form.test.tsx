@@ -308,6 +308,12 @@ describe("AgentApplicationForm", () => {
 				screen.getByRole("combobox", { name: "模型端点" }).textContent,
 			).toContain("Primary endpoint"),
 		);
+		expect(
+			screen.getByRole("combobox", { name: "默认模型" }).textContent,
+		).toContain("Primary endpoint · gpt-5");
+		expect(
+			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
+		).toBe(true);
 	});
 
 	it("uses a rejected projection for explicit resubmission without replaying Secrets", () => {

@@ -434,7 +434,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				})
 			: [];
 	const originalOptionIds = new Set(
-		initialModelOptions.map((option) => option.optionId),
+		(configuration?.modelOptions ?? []).map((option) => option.optionId),
 	);
 	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
 		if (props.mode === "create") return [blankModel()];
@@ -470,7 +470,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
-		const currentDefaultModel = models.find(
+		const currentDefaultIndex = models.findIndex(
 			(model) => model.optionId === defaultModelOptionId,
 		);
 		let changed = false;
@@ -485,13 +485,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return { ...model, endpointId, optionId };
 		});
 		if (!changed) return;
-		const hydratedDefaultModel = currentDefaultModel
-			? next.find(
-					(model) =>
-						model.modelId === currentDefaultModel.modelId &&
-						model.endpointId === currentDefaultModel.endpointId,
-				)
-			: undefined;
+		const hydratedDefaultModel =
+			currentDefaultIndex >= 0 ? next[currentDefaultIndex] : undefined;
 		if (hydratedDefaultModel) {
 			setDefaultModelOptionId(hydratedDefaultModel.optionId);
 		}
