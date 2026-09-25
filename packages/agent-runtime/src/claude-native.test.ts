@@ -185,6 +185,7 @@ it("canonicalizes command field order during durable lookup and preserves unknow
 	);
 	expect(toolFacts.map((fact) => fact.phase)).toEqual(["started", "unknown"]);
 	expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
+	expect(toolFacts.at(-1)?.startedAt).toBeUndefined();
 	expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
 	expect(
 		(
@@ -588,14 +589,16 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 					event.payload.phase === "intent",
 			),
 		).toHaveLength(6);
+		const observedToolFacts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload]
+				: [],
+		);
 		expect(
-			events.filter(
-				(event) =>
-					event.type === "operation" &&
-					event.payload.kind === "tool" &&
-					event.payload.phase === "started",
+			observedToolFacts.every(
+				(fact) => fact.startedAt === undefined && fact.durationMs === undefined,
 			),
-		).toHaveLength(2);
+		).toBe(true);
 		expect(
 			events.filter(
 				(event) =>

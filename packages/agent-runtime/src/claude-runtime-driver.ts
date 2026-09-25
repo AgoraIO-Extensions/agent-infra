@@ -883,16 +883,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				join(directory, "memory"),
 				async ({ name, toolUseID, permitted }) =>
 					observeToolRequest(name, toolUseID, permitted),
-				async ({ name, toolUseID }) => {
-					const toolCallId = createHash("sha256")
-						.update(toolUseID)
-						.digest("hex");
-					await this.toolPhase(file, command.executionId, {
-						toolCallId,
-						name,
-						phase: "started",
-					});
-				},
 			);
 			native = claudeQuery(
 				{
@@ -1238,8 +1228,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				pending.push(event.payload);
 		}
 		for (const fact of pending) {
+			const { startedAt: _startedAt, durationMs: _durationMs, ...base } = fact;
 			await this.appendOperationFact(file, executionId, {
-				...fact,
+				...base,
 				phase: "unknown",
 				failureCode: "recovery_unconfirmed",
 			});
@@ -1372,11 +1363,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			)
 				return;
 			if (previous.phase !== "intent") return;
-			const startedAt = new Date().toISOString();
 			await this.appendOperationFact(file, executionId, {
 				...previous,
 				phase: "started",
-				startedAt,
 			});
 			return;
 		}
@@ -1385,18 +1374,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}
 		if (["completed", "failed", "unknown"].includes(previous.phase)) return;
 		const now = new Date().toISOString();
+		const {
+			startedAt: _startedAt,
+			durationMs: _durationMs,
+			...base
+		} = previous;
 		await this.appendOperationFact(file, executionId, {
-			...previous,
+			...base,
 			phase: value.phase,
 			finishedAt: now,
-			...(previous.startedAt
-				? {
-						durationMs: Math.max(
-							0,
-							Date.parse(now) - Date.parse(previous.startedAt),
-						),
-					}
-				: {}),
 			...(value.phase === "failed"
 				? { failureCode: value.failureCode ?? ("operation_failed" as const) }
 				: {}),

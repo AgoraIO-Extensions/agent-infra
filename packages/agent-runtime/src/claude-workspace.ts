@@ -1,8 +1,4 @@
-import type {
-	HookCallbackMatcher,
-	HookInput,
-	Options,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { workspacePathAllowed } from "./workspace-path.js";
 
 export type ClaudeToolRequestObserver = (request: {
@@ -11,17 +7,11 @@ export type ClaudeToolRequestObserver = (request: {
 	permitted: boolean;
 }) => Promise<void>;
 
-export type ClaudeToolExecutionObserver = (request: {
-	name: string;
-	toolUseID: string;
-}) => Promise<void>;
-
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
 	observer?: ClaudeToolRequestObserver,
-	executionObserver?: ClaudeToolExecutionObserver,
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const permits = async (name: string, input: unknown) => {
 		if (
@@ -85,33 +75,6 @@ export function claudeWorkspaceTools(
 					],
 				},
 			],
-			PostToolUse: [executionHook(executionObserver, "PostToolUse")],
-			PostToolUseFailure: [
-				executionHook(executionObserver, "PostToolUseFailure"),
-			],
 		},
-	};
-}
-
-function executionHook(
-	executionObserver: ClaudeToolExecutionObserver | undefined,
-	hookEventName: "PostToolUse" | "PostToolUseFailure",
-): HookCallbackMatcher {
-	return {
-		hooks: [
-			async (input: HookInput) => {
-				if (input.hook_event_name === hookEventName)
-					if ("tool_name" in input && "tool_use_id" in input)
-						try {
-							await executionObserver?.({
-								name: input.tool_name,
-								toolUseID: input.tool_use_id,
-							});
-						} catch {
-							// The tool has already run; its result remains authoritative.
-						}
-				return {};
-			},
-		],
 	};
 }
