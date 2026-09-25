@@ -13,7 +13,40 @@ import type {
 	AgentLifecycleCommandRequestV1,
 	ApprovalDecisionRequestV1,
 } from "../src/pilot/generated/types.gen";
-import type { AgentApplicationCreateRequestV2Writable } from "../src/pilot/generated-v2/types.gen";
+import type {
+	AgentApplicationCreateRequestV2Writable,
+	DeploymentConfigurationProjectionV2,
+} from "../src/pilot/generated-v2/types.gen";
+
+const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
+	modelCatalog: {
+		endpoints: [
+			{
+				displayName: "Primary endpoint",
+				endpointId: "endpoint-primary",
+				models: [
+					{
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		],
+		revision: "catalog-browser",
+		status: "populated",
+	},
+	schemaVersion: 2,
+	status: "populated",
+	templates: [
+		{
+			allowedEnvironmentKeys: ["LOG_LEVEL"],
+			allowedSecretKeys: ["MODEL_API_KEY"],
+			connectionEnabled: false,
+			displayName: "Codex",
+			templateId: "codex",
+		},
+	],
+};
 
 async function fixture(
 	page: Page,
@@ -36,6 +69,10 @@ async function fixture(
 	};
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: { status: 200, body: session },
+		getDeploymentConfiguration: {
+			status: 200,
+			body: deploymentConfiguration,
+		},
 		listAgents: (request) => {
 			const ownerScope =
 				new URL(request.url).searchParams.get("scope") === "owner";
@@ -250,13 +287,15 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByLabel("用途说明", { exact: true })
 		.fill("Helps the release team");
-	await page.getByLabel("Agent 来源").focus();
-	await page.getByLabel("Agent 来源").selectOption("custom-platform-adapter");
+	const source = page.getByRole("combobox", { name: "Agent 来源" });
+	await source.click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await source.focus();
 	await page.keyboard.press("Tab");
 	await expect(page.getByLabel("镜像地址")).toBeFocused();
-	await expect(page.getByLabel("Agent 来源")).toHaveValue(
-		"custom-platform-adapter",
-	);
+	await expect(source).toContainText("自定义 Agent · 平台交互入口");
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
 	await capture(page, info, "create-application");
 	api.holdNextCommand();
