@@ -162,6 +162,14 @@ Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员�
 `auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
 exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
 
+后续 `rehoboam-connection-v5` 不改写 v4：`get_release@v2` 改为固定的有界摘要入口，
+`list_release_pipeline_runs@v2` 增加服务端分页（单页最多 20 条）并返回可查询的 Job ID；
+其余 Actions 仅为 immutable ProviderRelease 绑定发布新版本，语义与权限保持不变。
+
+后续 `rehoboam-connection-v6` 保留 v5：`get_release@v3` 在有界摘要中返回 Rehoboam 已存储的
+最新 `release_infos` 发布结果，优先最终 HTML、回退描述，内容最多 8000 字符并显式标记截断；
+不暴露完整历史或任意正文查询。其他 Actions 只随 immutable ProviderRelease 更新版本，不改变语义与权限。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
