@@ -923,14 +923,17 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		);
 		if (realCodexE2e) {
 			start();
+			start();
 			await waitUntil(
 				async () => (await dispatchCount()) === 1,
 				"first HTTP dispatch",
 			);
 		}
 		const second = await admit("second");
-		if (!realCodexE2e) start();
-		start();
+		if (!realCodexE2e) {
+			start();
+			start();
+		}
 		await waitUntil(
 			async () => (await dispatchCount()) === 1,
 			"single effective first dispatch",
