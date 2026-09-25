@@ -1060,6 +1060,58 @@ describe("AgentApplicationForm", () => {
 		expect(document.activeElement).toBe(screen.getByLabelText("默认模型"));
 	});
 
+	it("focuses earlier local errors before server model errors", () => {
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(document.activeElement).toBe(screen.getByLabelText("Agent 名称"));
+	});
+
+	it("focuses the model toggle when hidden model rows are rejected", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "removed-model",
+						displayName: "Removed model",
+						modelId: "removed-model",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "removed-model",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+
+		const toggle = screen.getByRole("checkbox", { name: "修改模型配置" });
+		expect(toggle.getAttribute("aria-invalid")).toBe("true");
+		expect(document.activeElement).toBe(toggle);
+	});
+
 	it("focuses the model configuration toggle when an update rejects its model", () => {
 		render(
 			<AgentApplicationForm

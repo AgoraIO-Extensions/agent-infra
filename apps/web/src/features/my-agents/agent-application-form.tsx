@@ -112,11 +112,28 @@ function describedBy(...ids: (string | undefined)[]) {
 }
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
-	const first = Object.keys(errors)[0];
-	if (!first) return undefined;
-	const element = document.getElementById(fieldId(first));
-	if (element instanceof HTMLElement && !element.hasAttribute("disabled"))
-		return element;
+	const entries = Object.keys(errors).map((key) => ({
+		key,
+		element: document.getElementById(fieldId(key)),
+	}));
+	const firstElement = entries[0]?.element;
+	if (firstElement?.hasAttribute("disabled"))
+		return (
+			document.getElementById("application-deployment-status") ??
+			document.getElementById("application-add-model-option")
+		);
+	const elements = entries
+		.map(({ element }) => element)
+		.filter(
+			(element): element is HTMLElement =>
+				element instanceof HTMLElement && !element.hasAttribute("disabled"),
+		)
+		.sort((left, right) =>
+			left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING
+				? -1
+				: 1,
+		);
+	if (elements[0]) return elements[0];
 	return (
 		document.getElementById("application-deployment-status") ??
 		document.getElementById("application-add-model-option")
@@ -805,7 +822,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const serverFieldErrors = useMemo(() => {
 		const errors: AgentApplicationFieldErrors = {};
-		if (!serverValidationDismissed)
+		if (!serverValidationDismissed && modelConfigurationVisible)
 			for (const index of modelServerErrorIndexes)
 				errors[`model.${index}.modelId`] =
 					"服务端拒绝了该模型选项，请重新选择。";
@@ -882,9 +899,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			(Object.keys(fieldErrors).length === 0 && !serverFormError)
 		)
 			return;
+		if (serverFormError) {
+			formRef.current?.focus();
+			return;
+		}
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
-		else if (serverFormError) formRef.current?.focus();
 	}, [fieldErrors, focusRequest, props.serverError?.code, serverFormError]);
 
 	const submit = () => {
