@@ -641,6 +641,84 @@ describe("Connection PostgreSQL migration", () => {
 					audit: stateAudit(executionCall, "outcome"),
 				}),
 			).toBe(true);
+			const pendingCall: ActionCallRecord = {
+				...executionCall,
+				id: "call-store-pending",
+				requestId: "request-store-pending",
+				callId: "call-ref-store-pending",
+				idempotencyKey: "store-key-pending",
+			};
+			const pendingDispatch: DispatchRecord = {
+				...dispatch,
+				id: "dispatch-store-pending",
+				actionCallId: pendingCall.id,
+			};
+			const pendingEffect: EffectRecord = {
+				...effect,
+				id: "effect-store-pending",
+				actionCallId: pendingCall.id,
+			};
+			await repository.reserveExecution({
+				grant: resolved,
+				actionCall: pendingCall,
+				dispatch: pendingDispatch,
+				effect: pendingEffect,
+				audit: stateAudit(pendingCall, "reserved"),
+			});
+			expect(
+				await repository.claimCurrentDispatchState({
+					actionCallId: pendingCall.id,
+					dispatchId: pendingDispatch.id,
+					effectId: pendingEffect.id,
+					grantRevision: resolved.revision,
+					principalRecoveryGeneration: 1,
+					leaseOwner: "lease-store-pending",
+					leaseExpiresAt: Date.now() + 60_000,
+					audit: stateAudit(pendingCall, "claimed"),
+				}),
+			).toBe(true);
+			expect(
+				await repository.recordProviderOutcome({
+					actionCallId: pendingCall.id,
+					dispatchId: pendingDispatch.id,
+					effectId: pendingEffect.id,
+					outcome: { kind: "unknown" },
+					audit: stateAudit(pendingCall, "unknown"),
+				}),
+			).toBe(true);
+			await expect(
+				repository.recordProviderOutcome({
+					actionCallId: pendingCall.id,
+					dispatchId: pendingDispatch.id,
+					effectId: pendingEffect.id,
+					outcome: { kind: "unknown" },
+					audit: stateAudit(pendingCall, "unknown-again"),
+				}),
+			).rejects.toThrow();
+			expect(
+				await repository.recordProviderOutcome({
+					actionCallId: pendingCall.id,
+					dispatchId: pendingDispatch.id,
+					effectId: pendingEffect.id,
+					outcome: { kind: "succeeded", result: { recovered: true } },
+					audit: stateAudit(pendingCall, "recovered"),
+				}),
+			).toBe(true);
+			expect(
+				(
+					await databaseClient`
+						select a.status as action_status, d.status as dispatch_status, e.status as effect_status
+						from connection.action_calls a
+						join connection.dispatches d on d.action_call_id = a.id
+						join connection.effects e on e.action_call_id = a.id
+						where a.id = 'call-store-pending'
+					`
+				)[0],
+			).toMatchObject({
+				action_status: "provider_succeeded",
+				dispatch_status: "completed",
+				effect_status: "succeeded",
+			});
 			await expect(
 				databaseClient`update connection.action_calls set status = 'created' where id = 'call-store-execution'`,
 			).rejects.toThrow();

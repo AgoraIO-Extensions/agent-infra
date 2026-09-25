@@ -14,7 +14,7 @@ import {
 	isCurrentAuthority,
 	outcomeStatuses,
 } from "@agent-infra/connection-core";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { ConnectionDatabase } from "./database.js";
 import {
 	actionCalls,
@@ -552,9 +552,23 @@ export function createConnectionAuthorityRepository(
 				dispatch: dispatchStatus,
 				effect: effectStatus,
 			} = outcomeStatuses(outcome);
-			assertEffectTransition("submitted", effectStatus);
-			assertDispatchTransition("claimed", dispatchStatus);
-			assertActionCallTransition("submission_started", actionStatus);
+			if (outcome.kind === "unknown") {
+				assertEffectTransition("submitted", effectStatus);
+				assertDispatchTransition("claimed", dispatchStatus);
+				assertActionCallTransition("submission_started", actionStatus);
+			} else {
+				assertEffectTransition("unknown", effectStatus);
+				assertDispatchTransition("unknown", dispatchStatus);
+				assertActionCallTransition("result_pending", actionStatus);
+			}
+			const effectFrom =
+				outcome.kind === "unknown" ? ["submitted"] : ["submitted", "unknown"];
+			const dispatchFrom =
+				outcome.kind === "unknown" ? ["claimed"] : ["claimed", "unknown"];
+			const actionFrom =
+				outcome.kind === "unknown"
+					? ["submission_started"]
+					: ["submission_started", "result_pending"];
 			await db.transaction(async (tx) => {
 				const [storedEffect] = await tx
 					.select({ id: effects.id })
@@ -576,7 +590,7 @@ export function createConnectionAuthorityRepository(
 						.where(
 							and(
 								eq(effects.id, effectId),
-								eq(effects.status, "submitted"),
+								inArray(effects.status, effectFrom),
 								eq(effects.actionCallId, actionCallId),
 							),
 						)
@@ -597,7 +611,7 @@ export function createConnectionAuthorityRepository(
 					.where(
 						and(
 							eq(dispatches.id, dispatchId),
-							eq(dispatches.status, "claimed"),
+							inArray(dispatches.status, dispatchFrom),
 							eq(dispatches.actionCallId, actionCallId),
 						),
 					)
@@ -612,7 +626,7 @@ export function createConnectionAuthorityRepository(
 					.where(
 						and(
 							eq(actionCalls.id, actionCallId),
-							eq(actionCalls.status, "submission_started"),
+							inArray(actionCalls.status, actionFrom),
 						),
 					)
 					.returning({ id: actionCalls.id });
