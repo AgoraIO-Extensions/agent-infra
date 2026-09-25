@@ -94,11 +94,11 @@ export function createLdaptsAuthenticator(
 				timeout: timeoutMs,
 				connectTimeout: timeoutMs,
 				autoRebind: false,
-				tlsOptions,
+				...(protocol === "ldaps:" ? { tlsOptions } : {}),
 			}),
 			timeoutMs,
 			protocol === "ldap:" &&
-				profile.transportSecurity !== "la3-private-plaintext"
+				profile.transportSecurity !== "la3-pilot-plaintext"
 				? tlsOptions
 				: undefined,
 		);
