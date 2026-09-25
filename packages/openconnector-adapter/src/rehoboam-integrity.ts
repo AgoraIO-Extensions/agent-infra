@@ -1,2 +1,2 @@
 export const rehoboamExecutorDigest =
-	"sha256:1fa79ebf32f053247be2e6300193b5d870b8ef016c27979012e2188b938bdd4a";
+	"sha256:3972224b3b9adc10cfb54c3cf4b1fd4f795dbf91ff87ab3fc46017f792173bb6";

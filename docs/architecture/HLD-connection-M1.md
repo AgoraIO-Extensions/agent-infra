@@ -170,6 +170,10 @@ exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/Pi
 最新 `release_infos` 发布结果，优先最终 HTML、回退描述，内容最多 8000 字符并显式标记截断；
 不暴露完整历史或任意正文查询。其他 Actions 只随 immutable ProviderRelease 更新版本，不改变语义与权限。
 
+后续 `rehoboam-connection-v7` 保留 v6：`get_release@v4` 和 Card 查询不再为未记录的进度节点或
+未计算的 PipelineHistory 状态伪造空值；已保存的进度和状态原样保留。实际运行状态继续通过
+Release-scoped Job READ 查询；其余 Actions 只更新 immutable 绑定版本，不改变权限或写入语义。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
