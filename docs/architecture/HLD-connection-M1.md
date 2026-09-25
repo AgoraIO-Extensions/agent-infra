@@ -74,6 +74,8 @@ Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必�
 
 Catalog 是只读投影，只包含 Provider、immutable ActionVersion、输入/输出 Schema、effect、required scope 和发布状态。Catalog 不包含 Principal、Connection、Grant、Credential、调用或审计。
 
+ActionVersion 的 `requiredScopes` 是 Provider 授权所需的 scope，由 Connection 在 Provider OAuth 回调、刷新及每次 Provider 访问前针对当前 Provider Credential 校验。Direct MCP/API 的 access token 或 PAT scope 独立于该字段：调用预留时按 Action effect 校验 `action:read` 或 `action:write`，并在持久化事务中复核；两种 scope 不能互相代替。
+
 Grant 绑定：
 
 - 当前 Principal；

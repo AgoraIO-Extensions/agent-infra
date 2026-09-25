@@ -350,8 +350,10 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		access_token: string;
 		refresh_token: string;
 		token_type: string;
+		scope: string;
 	};
 	expect(tokens.token_type).toBe("DPoP");
+	expect(tokens.scope).toBe(installationBody.scope);
 	expect((await tokenRequest(dpop("/oauth/token"))).status).toBe(401);
 	const probe = (
 		token: string,
@@ -413,23 +415,6 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 				additionalProperties: false,
 			},
 			outputSchema: { type: "object" },
-			requiredScopes: ["action:read"],
-			status: "published",
-		},
-		{
-			id: "action-v3",
-			providerId: "provider",
-			providerReleaseId: "release",
-			actionId: "read-issue",
-			version: "v3",
-			effect: "read",
-			inputSchema: {
-				type: "object",
-				properties: { issueNumber: { type: "integer" } },
-				required: ["issueNumber"],
-				additionalProperties: false,
-			},
-			outputSchema: { type: "object" },
 			requiredScopes: ["provider:read"],
 			status: "published",
 		},
@@ -456,7 +441,7 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 		actorId: installedActor.id,
 		connectionId: "connection",
 		credentialVersionId: "provider-credential-v1",
-		approvedActionVersionIds: ["action-v1", "action-v2", "action-v3"],
+		approvedActionVersionIds: ["action-v1", "action-v2"],
 		principalRecoveryGeneration: 1,
 		expiresAt: new Date(Date.now() + 60_000),
 	});
@@ -693,32 +678,6 @@ it("binds OAuth, PAT and each call to one installation, rotates refresh and reje
 	});
 	expect(await wrongProvider.json()).toMatchObject({
 		result: { isError: true },
-	});
-	const missingScopeNonce = randomUUID();
-	const missingScope = await mcp({
-		...mcpRequest,
-		id: 11,
-		params: {
-			...mcpRequest.params,
-			arguments: {
-				...mcpRequest.params.arguments,
-				actionVersion: "v3",
-				input: { issueNumber: 42 },
-			},
-			_meta: {
-				"connection.clientRequest/v1": {
-					operationNonce: missingScopeNonce,
-					attemptNonce: randomUUID(),
-					idempotencyKey: missingScopeNonce,
-				},
-			},
-		},
-	});
-	expect(await missingScope.json()).toMatchObject({
-		result: {
-			isError: true,
-			content: [{ type: "text", text: "ACTION_UNAVAILABLE" }],
-		},
 	});
 	expect((await mcp({ ...mcpRequest, principalId: "bob" })).status).toBe(400);
 	expect(await database.db.select().from(mcpCallBindings)).toMatchObject([

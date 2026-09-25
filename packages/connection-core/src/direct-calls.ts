@@ -36,7 +36,7 @@ export interface DirectCredentialContext {
 	consumerInstanceId: string;
 	actorId: string | null;
 	audience: string;
-	requiredScopes?: readonly string[];
+	requiredScope?: string;
 }
 
 export interface DirectActionCallRepository extends ActiveGrantRepository {
@@ -71,12 +71,7 @@ export interface PublishedDirectActionRepository
 		actionId: string;
 		version: string;
 	}): Promise<
-		| {
-				id: string;
-				effect: string;
-				inputSchema: Record<string, unknown>;
-				requiredScopes: readonly string[];
-		  }
+		| { id: string; effect: string; inputSchema: Record<string, unknown> }
 		| undefined
 	>;
 }
@@ -87,7 +82,7 @@ export async function reservePublishedDirectActionCall(
 	repository: PublishedDirectActionRepository,
 	input: Omit<
 		Parameters<typeof reserveDirectActionCall>[1],
-		"actionVersionId" | "effect" | "requiredScopes"
+		"actionVersionId" | "effect"
 	> & {
 		selector: { providerId: string; actionId: string; version: string };
 		validateArguments: (
@@ -104,7 +99,6 @@ export async function reservePublishedDirectActionCall(
 		...input,
 		actionVersionId: version.id,
 		effect: version.effect,
-		requiredScopes: version.requiredScopes,
 	});
 }
 
@@ -161,7 +155,7 @@ export class DirectActionConflict extends Error {
 function credentialContext(
 	caller: DirectAuthenticatedCaller,
 	audience: string,
-	requiredScopes?: readonly string[],
+	requiredScope?: string,
 ): DirectCredentialContext {
 	return {
 		credentialId: caller.credentialId,
@@ -170,7 +164,7 @@ function credentialContext(
 		consumerInstanceId: caller.consumerInstanceId,
 		actorId: caller.actorId,
 		audience,
-		requiredScopes,
+		requiredScope,
 	};
 }
 
@@ -184,7 +178,6 @@ export async function reserveDirectActionCall(
 		traceId: string;
 		actionVersionId: string;
 		effect: string;
-		requiredScopes: readonly string[];
 		arguments: unknown;
 		mcpBinding?: McpCallAttemptBinding;
 	},
@@ -196,12 +189,7 @@ export async function reserveDirectActionCall(
 			: input.effect === "write"
 				? "action:write"
 				: null;
-	if (
-		!requiredScope ||
-		![requiredScope, ...input.requiredScopes].every((scope) =>
-			caller.scopes.includes(scope),
-		)
-	)
+	if (!requiredScope || !caller.scopes.includes(requiredScope))
 		throw new ConnectionAuthorizationDenied();
 	const request: ActionCallRequest = {
 		requestId: input.requestId,
@@ -219,10 +207,7 @@ export async function reserveDirectActionCall(
 		caller.principalRecoveryGeneration,
 	);
 	const namespaceKey = actionCallNamespaceKey(request);
-	const credential = credentialContext(caller, input.audience, [
-		requiredScope,
-		...input.requiredScopes,
-	]);
+	const credential = credentialContext(caller, input.audience, requiredScope);
 	const replay = async (existing: ActionCallRecord) => {
 		if (
 			existing.requestId !== request.requestId ||
@@ -330,10 +315,6 @@ export function findDirectActionCall(
 	return repository.findByCallIdForDirectClient(
 		actionCallNamespaceKey(caller),
 		callId,
-		credentialContext(
-			caller,
-			audience,
-			requiredScope ? [requiredScope] : undefined,
-		),
+		credentialContext(caller, audience, requiredScope),
 	);
 }

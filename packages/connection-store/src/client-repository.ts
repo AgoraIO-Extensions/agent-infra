@@ -231,7 +231,7 @@ export async function assertDirectCredentialCurrent(
 		consumerInstanceId: string;
 		actorId: string | null;
 		audience: string;
-		requiredScopes?: readonly string[];
+		requiredScope?: string;
 	},
 ) {
 	const [row] = await tx
@@ -252,13 +252,13 @@ export async function assertDirectCredentialCurrent(
 	assertCurrentClientCredential(credentialClaims(row), state, {
 		kind: row.kind,
 		audience: input.audience,
+		requiredScope: input.requiredScope,
 	});
 	if (
-		input.requiredScopes?.length
-			? input.requiredScopes.some((scope) => !row.scopes.includes(scope))
-			: !row.scopes.some(
-					(scope) => scope === "action:read" || scope === "action:write",
-				)
+		!input.requiredScope &&
+		!row.scopes.some(
+			(scope) => scope === "action:read" || scope === "action:write",
+		)
 	)
 		throw new ClientAuthorizationDenied();
 }
