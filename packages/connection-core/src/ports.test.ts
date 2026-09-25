@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { actionCallNamespaceKey, actionRequestDigest } from "./calls.js";
 import { createGrant } from "./grants.js";
 import {
+	ActionCallIdempotencyConflict,
 	authorizeActionCall,
 	ConnectionAuthorizationDenied,
 	reserveActionCall,
@@ -146,13 +147,31 @@ describe("Connection repository ports", () => {
 			findByIdempotency: async () => stored,
 			insert: async () => {
 				stored = { ...record, id: "concurrent-winner" };
-				throw new Error("duplicate key value violates unique constraint");
+				throw new ActionCallIdempotencyConflict();
 			},
 			transition: async () => true,
 		};
 		expect(
 			(await reserveActionCall(repository, record, request, grant)).id,
 		).toBe("concurrent-winner");
+	});
+
+	it("does not turn an unrelated insert failure into a replay", async () => {
+		const record = callRecord();
+		const duplicateIdError = new Error("duplicate record id");
+		let lookups = 0;
+		const repository = {
+			findByIdempotency: async () =>
+				++lookups === 1 ? undefined : { ...record, id: "other" },
+			insert: async () => {
+				throw duplicateIdError;
+			},
+			transition: async () => true,
+		};
+		await expect(
+			reserveActionCall(repository, record, request, grant),
+		).rejects.toBe(duplicateIdError);
+		expect(lookups).toBe(1);
 	});
 
 	it("uses a compare-and-set transition and rejects an illegal transition", async () => {

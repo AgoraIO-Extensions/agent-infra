@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+	ActionCallIdempotencyConflict,
 	type ActionCallRecord,
 	type ActionCallRequest,
 	actionCallNamespaceKey,
@@ -331,6 +332,30 @@ describe("Connection PostgreSQL migration", () => {
 					)
 				).id,
 			).toBe(record.id);
+			const sameKeyRecord = {
+				...record,
+				id: "call-store-same-key",
+				callId: "call-ref-store-same-key",
+			};
+			await expect(
+				repository.insert(
+					sameKeyRecord,
+					stateAudit(sameKeyRecord, "same-key"),
+					resolved,
+				),
+			).rejects.toBeInstanceOf(ActionCallIdempotencyConflict);
+			await expect(
+				repository.insert(
+					{
+						...record,
+						requestId: "request-store-duplicate-id",
+						callId: "call-ref-store-duplicate-id",
+						idempotencyKey: "store-key-duplicate-id",
+					},
+					stateAudit(record, "duplicate-id"),
+					resolved,
+				),
+			).rejects.not.toBeInstanceOf(ActionCallIdempotencyConflict);
 
 			const consumerRequest: ActionCallRequest = {
 				...request,

@@ -79,6 +79,14 @@ export class ConnectionAuthorizationDenied extends Error {
 	}
 }
 
+/** Only the Store's idempotency unique index may trigger race recovery. */
+export class ActionCallIdempotencyConflict extends Error {
+	constructor() {
+		super("ActionCall idempotency conflict");
+		this.name = "ActionCallIdempotencyConflict";
+	}
+}
+
 function rejectAuthoritySelectors(request: ActionCallRequest): void {
 	if (
 		"grantId" in request ||
@@ -180,6 +188,7 @@ export async function reserveActionCall(
 			grant,
 		);
 	} catch (error) {
+		if (!(error instanceof ActionCallIdempotencyConflict)) throw error;
 		const raced = await repository.findByIdempotency(
 			record.namespaceKey,
 			request.idempotencyKey,

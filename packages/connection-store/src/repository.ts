@@ -1,4 +1,5 @@
 import {
+	ActionCallIdempotencyConflict,
 	type ActionCallRecord,
 	type ActionCallStatus,
 	type ActionExecutionRepository,
@@ -33,6 +34,22 @@ import {
 	providerReleases,
 	providers,
 } from "./schema.js";
+
+function isActionCallIdempotencyConflict(error: unknown): boolean {
+	let current = error;
+	for (let depth = 0; depth < 3; depth += 1) {
+		if (typeof current !== "object" || current === null) return false;
+		if (
+			"code" in current &&
+			current.code === "23505" &&
+			"constraint_name" in current &&
+			current.constraint_name === "action_calls_namespace_key_unique"
+		)
+			return true;
+		current = "cause" in current ? current.cause : undefined;
+	}
+	return false;
+}
 
 const authorityColumns = {
 	grant: grants,
@@ -324,7 +341,13 @@ export function createConnectionAuthorityRepository(
 			requireCallAudit(audit, record.id);
 			await db.transaction(async (tx) => {
 				await requireCurrentCallAuthority(tx, record, grant, false);
-				await tx.insert(actionCalls).values(actionCallValues(record));
+				try {
+					await tx.insert(actionCalls).values(actionCallValues(record));
+				} catch (error) {
+					if (isActionCallIdempotencyConflict(error))
+						throw new ActionCallIdempotencyConflict();
+					throw error;
+				}
 				await tx.insert(auditEvents).values(auditValues(audit));
 			});
 		},
