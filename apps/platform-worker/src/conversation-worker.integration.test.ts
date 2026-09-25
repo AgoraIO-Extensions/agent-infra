@@ -748,50 +748,6 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				const phases = new Set(facts.map((fact) => fact.phase));
 				return phases.has("intent") && phases.has("started");
 			}, "persisted Codex model operation start facts");
-			releaseModelResponse?.();
-			await waitUntil(async () => {
-				const facts = await sql<{ phase: string }[]>`
-						select event_payload->'fact'->>'phase' as phase
-						from platform.conversation_events
-						where execution_id=${active.execution_id}
-						  and event_type='execution.operation'
-					`;
-				const phases = new Set(facts.map((fact) => fact.phase));
-				return ["intent", "started", "completed"].every((phase) =>
-					phases.has(phase),
-				);
-			}, "persisted Codex model operation facts");
-			const operationFacts = await sql<
-				{
-					phase: string;
-					kind: string;
-					modelOptionId: string | null;
-				}[]
-			>`
-				select event_payload->'fact'->>'phase' as phase,
-				       event_payload->'fact'->>'kind' as kind,
-				       event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId"
-				from platform.conversation_events
-				where execution_id=${active.execution_id}
-				  and event_type='execution.operation'
-				order by sequence
-			`;
-			expect(operationFacts.map((fact) => fact.phase)).toEqual(
-				expect.arrayContaining(["intent", "started", "completed"]),
-			);
-			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
-			expect(
-				operationFacts.every(
-					(fact) => fact.modelOptionId === "worker-controlled-model",
-				),
-			).toBe(true);
-			const operationAudits = await sql`
-				select id
-				from platform.audit_events
-				where target_id=${active.execution_id}
-				  and action='execution.operation.observed'
-			`;
-			expect(operationAudits.length).toBeGreaterThanOrEqual(3);
 		}
 		// Kill both process owners, expire only this test's owned lease, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
@@ -841,54 +797,109 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				.filter((request) => request.executionId === active.execution_id)
 				.every((request) => request.deliveryFence === after?.fence),
 		).toBe(true);
-		// The same Conversation cannot start another concurrent reply.
-		const supplement = await api.accept({
-			schemaVersion: 1,
-			command: "message",
-			conversationId: active.conversation_id,
-			text: "supplement",
-			idempotencyKey: "supplement",
-			requestId: "supplement",
-			traceId: "supplement",
-		});
-		expect(supplement.outcome).toBe("accepted");
-		if (supplement.outcome !== "accepted")
-			throw Error("Expected supplementary instruction");
-		expect(supplement.result.executionId).toBe(active.execution_id);
-		await waitUntil(
-			async () =>
-				requests.some(
-					(request) =>
-						request.path.endsWith("/instructions") &&
-						request.executionId === active.execution_id &&
-						request.responseStatus === 200,
+		if (realCodexE2e) {
+			releaseModelResponse?.();
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return ["intent", "started", "completed"].every((phase) =>
+					phases.has(phase),
+				);
+			}, "persisted Codex model operation facts");
+			const operationFacts = await sql<
+				{
+					phase: string;
+					kind: string;
+					modelOptionId: string | null;
+				}[]
+			>`
+				select event_payload->'fact'->>'phase' as phase,
+				       event_payload->'fact'->>'kind' as kind,
+				       event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId"
+				from platform.conversation_events
+				where execution_id=${active.execution_id}
+				  and event_type='execution.operation'
+				order by sequence
+			`;
+			expect(operationFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
+			expect(
+				operationFacts.every(
+					(fact) => fact.modelOptionId === "worker-controlled-model",
 				),
-			"supplement preserves the active Execution",
-		);
-		const stop = await api.stop({
-			schemaVersion: 1,
-			command: "stop",
-			targetExecutionId: active.execution_id,
-			conversationId: active.conversation_id,
-			idempotencyKey: "stop",
-			requestId: "stop",
-			traceId: "stop",
-		});
-		expect(stop.outcome).toBe("accepted");
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
-				).length === 1,
-			"durable stop completion",
-		);
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
-				).length === 1,
-			"deferred conversation after capacity release",
-		);
+			).toBe(true);
+			const operationAudits = await sql`
+				select id
+				from platform.audit_events
+				where target_id=${active.execution_id}
+				  and action='execution.operation.observed'
+			`;
+			expect(operationAudits.length).toBeGreaterThanOrEqual(3);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='completed'`
+					).length === 1,
+				"recovered Codex execution completes",
+			);
+		}
+		if (!realCodexE2e) {
+			// The same Conversation cannot start another concurrent reply.
+			const supplement = await api.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: active.conversation_id,
+				text: "supplement",
+				idempotencyKey: "supplement",
+				requestId: "supplement",
+				traceId: "supplement",
+			});
+			expect(supplement.outcome).toBe("accepted");
+			if (supplement.outcome !== "accepted")
+				throw Error("Expected supplementary instruction");
+			expect(supplement.result.executionId).toBe(active.execution_id);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path.endsWith("/instructions") &&
+							request.executionId === active.execution_id &&
+							request.responseStatus === 200,
+					),
+				"supplement preserves the active Execution",
+			);
+			const stop = await api.stop({
+				schemaVersion: 1,
+				command: "stop",
+				targetExecutionId: active.execution_id,
+				conversationId: active.conversation_id,
+				idempotencyKey: "stop",
+				requestId: "stop",
+				traceId: "stop",
+			});
+			expect(stop.outcome).toBe("accepted");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
+					).length === 1,
+				"durable stop completion",
+			);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
+					).length === 1,
+				"deferred conversation after capacity release",
+			);
+		}
 		expect(ackCount).toBeGreaterThan(0);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
