@@ -90,6 +90,31 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("shows one selectable model when the catalog repeats its ID", () => {
+		const endpoint = at(deploymentConfiguration.modelCatalog.endpoints, 0);
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					modelCatalog: {
+						...deploymentConfiguration.modelCatalog,
+						endpoints: [
+							{ ...endpoint, models: [...endpoint.models, ...endpoint.models] },
+						],
+					},
+				}}
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		choose("标准模板 ID", "Codex");
+		choose("模型端点", "Primary endpoint");
+		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+		expect(screen.getAllByRole("option", { name: "gpt-5" })).toHaveLength(1);
+	});
+
 	it("does not submit an initial standard application without a model credential", () => {
 		const onSubmit = vi.fn();
 		render(

@@ -327,11 +327,9 @@ function ModelRows({
 				const selectedModel = endpoint?.models.find(
 					(item) => item.modelId === model.modelId,
 				);
-				const modelOptions =
-					endpoint?.models.map((item) => ({
-						value: item.modelId,
-						label: item.modelId,
-					})) ?? [];
+				const modelOptions = [
+					...new Set(endpoint?.models.map((item) => item.modelId) ?? []),
+				].map((modelId) => ({ value: modelId, label: modelId }));
 				const needsReplacementCredential =
 					requiresReplacementCredential ||
 					(persistedModelOptionIds !== undefined &&
