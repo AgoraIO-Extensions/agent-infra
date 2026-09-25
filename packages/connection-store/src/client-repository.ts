@@ -231,7 +231,7 @@ export async function assertDirectCredentialCurrent(
 		consumerInstanceId: string;
 		actorId: string | null;
 		audience: string;
-		requiredScope?: string;
+		requiredScopes?: readonly string[];
 	},
 ) {
 	const [row] = await tx
@@ -252,13 +252,13 @@ export async function assertDirectCredentialCurrent(
 	assertCurrentClientCredential(credentialClaims(row), state, {
 		kind: row.kind,
 		audience: input.audience,
-		requiredScope: input.requiredScope,
 	});
 	if (
-		!input.requiredScope &&
-		!row.scopes.some(
-			(scope) => scope === "action:read" || scope === "action:write",
-		)
+		input.requiredScopes?.length
+			? input.requiredScopes.some((scope) => !row.scopes.includes(scope))
+			: !row.scopes.some(
+					(scope) => scope === "action:read" || scope === "action:write",
+				)
 	)
 		throw new ClientAuthorizationDenied();
 }
@@ -526,6 +526,7 @@ export function createConnectionClientRepository(db: ConnectionDatabase) {
 					actorId: row.actorId === consumerActorSentinel ? null : row.actorId,
 					scopes: row.scopes,
 					credentialId: row.id,
+					credentialExpiresAt: row.expiresAt.getTime(),
 					principalRecoveryGeneration: row.principalGeneration,
 				};
 			});

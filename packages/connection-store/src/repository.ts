@@ -10,9 +10,11 @@ import {
 	type ConnectionAuthorityRepository,
 	ConnectionAuthorizationDenied,
 	consumerActorSentinel,
+	DirectActionConflict,
 	type GrantRecord,
 	isCurrentAuthority,
 	outcomeStatuses,
+	type PublishedDirectActionRepository,
 } from "@agent-infra/connection-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { assertDirectCredentialCurrent } from "./client-repository.js";
@@ -30,6 +32,7 @@ import {
 	dispatches,
 	effects,
 	grants,
+	mcpCallBindings,
 	principals,
 	providerReleases,
 	providers,
@@ -119,6 +122,29 @@ function actionCallRecord(
 	};
 }
 
+async function directActionCallRecord(
+	tx: ConnectionTransaction,
+	row: typeof actionCalls.$inferSelect,
+): Promise<ActionCallRecord> {
+	const [binding] = await tx
+		.select()
+		.from(mcpCallBindings)
+		.where(eq(mcpCallBindings.actionCallId, row.id));
+	return {
+		...actionCallRecord(row),
+		...(binding
+			? {
+					mcpBinding: {
+						operationNonce: binding.operationNonce,
+						attemptNonces: binding.attemptNonces,
+						requestDigestVersion: "connection-request-v1" as const,
+						requestDigest: binding.requestDigest,
+					},
+				}
+			: {}),
+	};
+}
+
 function auditValues(event: ConnectionAuditEvent) {
 	return {
 		id: event.id,
@@ -151,20 +177,8 @@ type DirectCredentialContext = Parameters<
 	typeof assertDirectCredentialCurrent
 >[1];
 
-interface DirectActionAuthorityRepository {
-	findPublishedActionVersion(selector: {
-		providerId: string;
-		actionId: string;
-		version: string;
-	}): Promise<
-		| {
-				id: string;
-				effect: string;
-				inputSchema: Record<string, unknown>;
-				requiredScopes: readonly string[];
-		  }
-		| undefined
-	>;
+interface DirectActionAuthorityRepository
+	extends PublishedDirectActionRepository {
 	findByIdempotencyForDirectClient(
 		namespaceKey: string,
 		idempotencyKey: string,
@@ -402,7 +416,7 @@ export function createConnectionAuthorityRepository(
 					)
 					.limit(2);
 				return rows.length === 1 && rows[0]
-					? actionCallRecord(rows[0])
+					? directActionCallRecord(tx, rows[0])
 					: undefined;
 			});
 		},
@@ -421,7 +435,7 @@ export function createConnectionAuthorityRepository(
 					)
 					.limit(2);
 				return rows.length === 1 && rows[0]
-					? actionCallRecord(rows[0])
+					? directActionCallRecord(tx, rows[0])
 					: undefined;
 			});
 		},
@@ -441,7 +455,52 @@ export function createConnectionAuthorityRepository(
 				await assertDirectCredentialCurrent(tx, credential);
 				await requireCurrentCallAuthority(tx, record, grant, false);
 				await tx.insert(actionCalls).values(actionCallValues(record));
+				if (record.mcpBinding)
+					await tx.insert(mcpCallBindings).values({
+						actionCallId: record.id,
+						...record.mcpBinding,
+						attemptNonces: [...record.mcpBinding.attemptNonces],
+					});
 				await tx.insert(auditEvents).values(auditValues(audit));
+			});
+		},
+
+		async appendMcpAttemptForDirectClient(record, binding, grant, credential) {
+			return db.transaction(async (tx) => {
+				await assertDirectCredentialCurrent(tx, credential);
+				await requireCurrentCallAuthority(tx, record, grant, false);
+				const [stored] = await tx
+					.select()
+					.from(mcpCallBindings)
+					.where(eq(mcpCallBindings.actionCallId, record.id))
+					.for("update");
+				if (
+					!stored ||
+					stored.operationNonce !== binding.operationNonce ||
+					stored.requestDigestVersion !== binding.requestDigestVersion ||
+					stored.requestDigest !== binding.requestDigest
+				)
+					throw new DirectActionConflict();
+				const attemptNonces = stored.attemptNonces.includes(
+					binding.attemptNonce,
+				)
+					? stored.attemptNonces
+					: [...stored.attemptNonces, binding.attemptNonce];
+				if (attemptNonces.length > 256) throw new DirectActionConflict();
+				if (attemptNonces !== stored.attemptNonces)
+					await tx
+						.update(mcpCallBindings)
+						.set({ attemptNonces })
+						.where(eq(mcpCallBindings.actionCallId, record.id));
+				return {
+					...record,
+					mcpBinding: {
+						operationNonce: stored.operationNonce,
+						requestDigestVersion: "connection-request-v1" as const,
+						requestDigest: stored.requestDigest,
+						attemptNonces,
+					},
+				};
 			});
 		},
 

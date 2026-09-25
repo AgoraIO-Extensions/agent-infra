@@ -2,15 +2,23 @@ import { randomUUID } from "node:crypto";
 import {
 	ClientAuthorizationDenied,
 	ConnectionAuthorizationDenied,
+	consumerActorSentinel,
 	DirectActionConflict,
 	findDirectActionCall,
+	InvalidDirectActionArguments,
 	InvalidDpopProof,
-	reserveDirectActionCall,
+	reservePublishedDirectActionCall,
+	reservePublishedDirectMcpActionCall,
 } from "@agent-infra/connection-core";
 import {
 	DirectActionRequestV1Schema,
+	DirectMcpClientRequestMetaV1Schema,
+	DirectMcpExecuteActionArgumentsV1Schema,
+	DirectMcpExecuteActionRequestV1Schema,
 	DirectPayloadMaximumByteLengthV1,
 } from "@agent-infra/contracts/pilot";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import Ajv2020 from "ajv/dist/2020.js";
 import type { Context, Hono } from "hono";
 import {
@@ -25,7 +33,9 @@ class InvalidActionRequest extends Error {}
 
 function actionError(context: Context, error: unknown) {
 	const status =
-		error instanceof InvalidActionRequest || error instanceof SyntaxError
+		error instanceof InvalidActionRequest ||
+		error instanceof InvalidDirectActionArguments ||
+		error instanceof SyntaxError
 			? 400
 			: error instanceof ClientAuthorizationDenied ||
 					error instanceof InvalidDpopProof
@@ -89,12 +99,197 @@ async function readActionBody(context: Context) {
 	}
 }
 
+function validateActionArguments(
+	schema: Record<string, unknown>,
+	argumentsValue: unknown,
+): boolean {
+	let validate: ReturnType<typeof validator.compile>;
+	try {
+		validate = validator.compile(schema);
+	} catch {
+		throw new Error("Published Action schema is invalid");
+	}
+	return Boolean(validate(argumentsValue));
+}
+
 export function addConnectionActionRoutes(
 	app: Hono,
 	client: ConnectionClientDependencies,
 ) {
 	const authority = client.authority;
 	if (!authority) throw new Error("Connection Action authority is required");
+
+	app.get("/api/client/identity", async (context) => {
+		try {
+			const caller = await authenticateDirectClient(context, client);
+			return context.json(
+				{
+					principal: { type: "user", key: caller.principalId },
+					actorId: caller.actorId ?? consumerActorSentinel,
+					consumerId: caller.consumerId,
+					clientId: caller.consumerInstanceId,
+					issuer: client.auth.publicOrigin,
+					resource: client.audience,
+					revision: caller.credentialId,
+					expiresAt: caller.credentialExpiresAt,
+				},
+				200,
+				noStore,
+			);
+		} catch (error) {
+			return actionError(context, error);
+		}
+	});
+
+	app.get("/api/client/calls/:callRef", async (context) => {
+		try {
+			const caller = await authenticateDirectClient(
+				context,
+				client,
+				"calls:read",
+			);
+			const callRef = context.req.param("callRef");
+			if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(callRef))
+				throw new InvalidActionRequest();
+			const record = await findDirectActionCall(
+				authority,
+				caller,
+				client.audience,
+				callRef,
+				"calls:read",
+			);
+			if (!record?.mcpBinding)
+				return context.json(
+					{
+						schemaVersion: 1,
+						code: "RESOURCE_UNAVAILABLE",
+						message: "Action unavailable",
+						traceId: randomUUID(),
+						retryable: false,
+					},
+					404,
+					noStore,
+				);
+			return context.json(
+				{
+					callRef: record.callId,
+					operationNonce: record.mcpBinding.operationNonce,
+					requestDigestVersion: record.mcpBinding.requestDigestVersion,
+					requestDigest: record.mcpBinding.requestDigest,
+					principal: { type: "user", key: record.principalId },
+					actorId: record.actorId,
+					actionVersionId: record.actionVersionId,
+					attemptNonces: record.mcpBinding.attemptNonces,
+					consumerId: record.consumerId,
+					clientId: record.consumerInstanceId,
+				},
+				200,
+				noStore,
+			);
+		} catch (error) {
+			return actionError(context, error);
+		}
+	});
+
+	app.all("/mcp", async (context) => {
+		try {
+			const caller = await authenticateDirectClient(context, client);
+			const body =
+				context.req.method === "POST"
+					? await readActionBody(context)
+					: undefined;
+			if (Array.isArray(body)) throw new InvalidActionRequest();
+			if (
+				body &&
+				typeof body === "object" &&
+				!Array.isArray(body) &&
+				"method" in body &&
+				body.method === "tools/call" &&
+				"params" in body &&
+				typeof body.params === "object" &&
+				body.params !== null &&
+				"name" in body.params &&
+				body.params.name === "execute_action" &&
+				!DirectMcpExecuteActionRequestV1Schema.safeParse(body).success
+			)
+				throw new InvalidActionRequest();
+			const server = new McpServer({
+				name: "agent-infra-connection",
+				version: "1.0.0",
+			});
+			server.registerTool(
+				"execute_action",
+				{
+					description: "Reserve an authorized Connection ActionCall",
+					inputSchema: DirectMcpExecuteActionArgumentsV1Schema,
+				},
+				async (argumentsValue, extra) => {
+					try {
+						const binding = DirectMcpClientRequestMetaV1Schema.parse(
+							extra._meta?.["connection.clientRequest/v1"],
+						);
+						const record = await reservePublishedDirectMcpActionCall(
+							authority,
+							{
+								caller,
+								audience: client.audience,
+								selector: {
+									providerId: argumentsValue.providerId,
+									actionId: argumentsValue.actionId,
+									version: argumentsValue.actionVersion,
+								},
+								arguments: argumentsValue.input,
+								meta: binding,
+								validateArguments: validateActionArguments,
+							},
+						);
+						if (!record.mcpBinding)
+							throw new Error("MCP receipt binding missing");
+						return {
+							content: [{ type: "text" as const, text: "Action reserved" }],
+							structuredContent: { callId: record.callId, status: "RESERVED" },
+							_meta: {
+								"connection.receipt/v1": {
+									callRef: record.callId,
+									operationNonce: binding.operationNonce,
+									attemptNonce: binding.attemptNonce,
+									requestDigestVersion: "connection-request-v1",
+									requestDigest: record.mcpBinding.requestDigest,
+									principal: { type: "user", key: record.principalId },
+									actorId: record.actorId,
+									actionVersionId: record.actionVersionId,
+								},
+							},
+						};
+					} catch (error) {
+						const code =
+							error instanceof DirectActionConflict
+								? "ACTION_CONFLICT"
+								: error instanceof InvalidDirectActionArguments
+									? "INVALID_ARGUMENTS"
+									: error instanceof ConnectionAuthorizationDenied
+										? "ACTION_UNAVAILABLE"
+										: "CONNECTION_UNAVAILABLE";
+						return {
+							isError: true,
+							content: [{ type: "text" as const, text: code }],
+						};
+					}
+				},
+			);
+			const transport = new WebStandardStreamableHTTPServerTransport({
+				enableJsonResponse: true,
+			});
+			await server.connect(transport);
+			const response = await transport.handleRequest(context.req.raw, {
+				...(context.req.method === "POST" ? { parsedBody: body } : {}),
+			});
+			response.headers.set("Cache-Control", "no-store");
+			return response;
+		} catch (error) {
+			return actionError(context, error);
+		}
+	});
 
 	app.post("/api/v1/actions", async (context) => {
 		try {
@@ -104,29 +299,19 @@ export function addConnectionActionRoutes(
 			);
 			if (!parsed.success) throw new InvalidActionRequest();
 			const body = parsed.data;
-			const version = await authority.findPublishedActionVersion({
-				providerId: body.action.providerId,
-				actionId: body.action.actionId,
-				version: body.action.actionVersion,
-			});
-			if (!version) throw new ConnectionAuthorizationDenied();
-			let validateArguments: ReturnType<typeof validator.compile>;
-			try {
-				validateArguments = validator.compile(version.inputSchema);
-			} catch {
-				throw new Error("Published Action schema is invalid");
-			}
-			if (!validateArguments(body.action.arguments))
-				throw new InvalidActionRequest();
-			const record = await reserveDirectActionCall(authority, {
+			const record = await reservePublishedDirectActionCall(authority, {
 				caller: credential,
 				audience: client.audience,
 				requestId: body.requestId,
 				idempotencyKey: body.idempotencyKey,
 				traceId: body.traceId,
-				actionVersionId: version.id,
-				effect: version.effect,
+				selector: {
+					providerId: body.action.providerId,
+					actionId: body.action.actionId,
+					version: body.action.actionVersion,
+				},
 				arguments: body.action.arguments,
+				validateArguments: validateActionArguments,
 			});
 			return context.json(
 				{

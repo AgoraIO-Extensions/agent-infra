@@ -630,6 +630,90 @@ export const DirectActionReferenceV1Schema = z.strictObject({
 	]),
 });
 
+const DirectClientPrincipalV1Schema = z.strictObject({
+	type: z.enum(["user", "application"]),
+	key: nonEmptyString(),
+});
+
+export const DirectClientIdentityV1Schema = z.strictObject({
+	principal: DirectClientPrincipalV1Schema,
+	actorId: boundedOpaqueId,
+	consumerId: boundedOpaqueId,
+	clientId: boundedOpaqueId,
+	issuer: z.url(),
+	resource: z.url(),
+	revision: boundedOpaqueId,
+	expiresAt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+
+export const DirectClientCallRecordV1Schema = z.strictObject({
+	callRef: boundedOpaqueId,
+	operationNonce: z.uuid(),
+	requestDigestVersion: z.literal("connection-request-v1"),
+	requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	principal: DirectClientPrincipalV1Schema,
+	actorId: boundedOpaqueId,
+	actionVersionId: boundedOpaqueId,
+	attemptNonces: z.array(z.uuid()).min(1).max(256),
+	consumerId: boundedOpaqueId,
+	clientId: boundedOpaqueId,
+});
+
+export const DirectMcpExecuteActionArgumentsV1Schema = z.strictObject({
+	providerId: boundedOpaqueId,
+	actionId: boundedOpaqueId,
+	actionVersion: nonEmptyString(),
+	input: directActionArgumentsRecordV1Schema,
+});
+
+export const DirectMcpClientRequestMetaV1Schema = z.strictObject({
+	operationNonce: z.uuid(),
+	attemptNonce: z.uuid(),
+	idempotencyKey: z.uuid(),
+});
+
+export const DirectMcpExecuteActionRequestV1Schema = z.strictObject({
+	jsonrpc: z.literal("2.0"),
+	id: z.union([
+		z.string().min(1).max(256),
+		z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+	]),
+	method: z.literal("tools/call"),
+	params: z.strictObject({
+		name: z.literal("execute_action"),
+		arguments: DirectMcpExecuteActionArgumentsV1Schema,
+		_meta: z.strictObject({
+			"connection.clientRequest/v1": DirectMcpClientRequestMetaV1Schema,
+		}),
+	}),
+});
+
+export const DirectMcpExecuteActionResponseV1Schema = z.strictObject({
+	jsonrpc: z.literal("2.0"),
+	id: DirectMcpExecuteActionRequestV1Schema.shape.id,
+	result: z.strictObject({
+		content: z.array(
+			z.strictObject({ type: z.literal("text"), text: z.string() }),
+		),
+		structuredContent: z.strictObject({
+			callId: boundedOpaqueId,
+			status: z.literal("RESERVED"),
+		}),
+		_meta: z.strictObject({
+			"connection.receipt/v1": z.strictObject({
+				callRef: boundedOpaqueId,
+				operationNonce: z.uuid(),
+				attemptNonce: z.uuid(),
+				requestDigestVersion: z.literal("connection-request-v1"),
+				requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+				principal: DirectClientPrincipalV1Schema,
+				actorId: boundedOpaqueId,
+				actionVersionId: boundedOpaqueId,
+			}),
+		}),
+	}),
+});
+
 const directResultShape = {
 	schemaVersion: SchemaVersionV1Schema,
 	requestId: RequestIdV1Schema,
@@ -1164,6 +1248,91 @@ export const pilotDirectOAuthOpenApiPathsV1 = {
 } as const;
 
 export const pilotDirectOpenApiPathsV1 = {
+	"/api/client/identity": {
+		get: {
+			operationId: "getDirectClientIdentity",
+			requestParams: { header: z.strictObject({ DPoP: z.string() }) },
+			responses: {
+				"200": directJsonResponse(
+					"Current Direct credential identity",
+					DirectClientIdentityV1Schema,
+				),
+				"401": directJsonResponse(
+					"Authentication required",
+					PilotProtocolErrorV1Schema,
+				),
+				"503": directJsonResponse(
+					"Connection unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
+	"/api/client/calls/{callRef}": {
+		get: {
+			operationId: "readDirectClientCall",
+			requestParams: {
+				path: z.strictObject({ callRef: boundedOpaqueId }),
+				header: z.strictObject({ DPoP: z.string() }),
+			},
+			responses: {
+				"200": directJsonResponse(
+					"Authenticated ActionCall readback",
+					DirectClientCallRecordV1Schema,
+				),
+				"401": directJsonResponse(
+					"Authentication required",
+					PilotProtocolErrorV1Schema,
+				),
+				"404": directJsonResponse(
+					"ActionCall unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+				"503": directJsonResponse(
+					"Connection unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
+	"/mcp": {
+		post: {
+			operationId: "reserveDirectMcpExecuteAction",
+			requestParams: { header: z.strictObject({ DPoP: z.string() }) },
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": { schema: DirectMcpExecuteActionRequestV1Schema },
+				},
+			},
+			responses: {
+				"200": directJsonResponse(
+					"ActionCall reservation with same-response receipt",
+					DirectMcpExecuteActionResponseV1Schema,
+				),
+				"400": directJsonResponse(
+					"Invalid request",
+					PilotProtocolErrorV1Schema,
+				),
+				"401": directJsonResponse(
+					"Authentication required",
+					PilotProtocolErrorV1Schema,
+				),
+				"403": directJsonResponse(
+					"Action is not authorized",
+					PilotProtocolErrorV1Schema,
+				),
+				"409": directJsonResponse(
+					"Action conflict",
+					PilotProtocolErrorV1Schema,
+				),
+				"503": directJsonResponse(
+					"Connection unavailable",
+					PilotProtocolErrorV1Schema,
+				),
+			},
+		},
+	},
 	"/api/v1/catalog": {
 		get: {
 			operationId: "listConnectionCatalog",
@@ -1313,6 +1482,10 @@ export const pilotDirectSchemasV1 = {
 	DirectActionRequestV1: DirectActionRequestV1Schema,
 	DirectActionReservationV1: DirectActionReservationV1Schema,
 	DirectActionReferenceV1: DirectActionReferenceV1Schema,
+	DirectClientIdentityV1: DirectClientIdentityV1Schema,
+	DirectClientCallRecordV1: DirectClientCallRecordV1Schema,
+	DirectMcpExecuteActionRequestV1: DirectMcpExecuteActionRequestV1Schema,
+	DirectMcpExecuteActionResponseV1: DirectMcpExecuteActionResponseV1Schema,
 	DirectActionResultV1: DirectActionResultV1Schema,
 	DirectActionSucceededV1: DirectActionSucceededV1Schema,
 	DirectActionUnresolvedV1: DirectActionUnresolvedV1Schema,
