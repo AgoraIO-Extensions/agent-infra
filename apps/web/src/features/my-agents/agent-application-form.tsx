@@ -533,11 +533,12 @@ function DraftRows<T extends string>({
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const formRef = useRef<HTMLFormElement>(null);
+	const [focusRequest, setFocusRequest] = useState(0);
 	const focusStateRef = useRef<{
-		fieldKeys: readonly string[];
+		focusRequest: number;
 		formError?: string;
 		serverCode?: string;
-	}>({ fieldKeys: [] });
+	}>({ focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
 	const deployment = props.deploymentConfiguration;
@@ -858,22 +859,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 
 	useEffect(() => {
 		const serverCode = props.serverError?.code;
-		const fieldKeys = Object.keys(fieldErrors);
 		const previous = focusStateRef.current;
 		const shouldFocus =
-			fieldKeys.some((key) => !previous.fieldKeys.includes(key)) ||
+			focusRequest !== previous.focusRequest ||
 			serverCode !== previous.serverCode ||
 			serverFormError !== previous.formError;
 		focusStateRef.current = {
-			fieldKeys,
+			focusRequest,
 			formError: serverFormError,
 			serverCode,
 		};
-		if (!shouldFocus) return;
+		if (
+			!shouldFocus ||
+			(Object.keys(fieldErrors).length === 0 && !serverFormError)
+		)
+			return;
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
 		else if (serverFormError) formRef.current?.focus();
-	}, [fieldErrors, props.serverError?.code, serverFormError]);
+	}, [fieldErrors, focusRequest, props.serverError?.code, serverFormError]);
 
 	const submit = () => {
 		const draft = {
@@ -910,6 +914,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			standardChoicesBlocked,
 		});
 		setFieldErrors(errors);
+		setFocusRequest((current) => current + 1);
 		if (Object.keys(errors).length > 0) return;
 		setSecrets([]);
 		setModels((current) =>

@@ -656,6 +656,33 @@ describe("AgentApplicationForm", () => {
 		expect(document.activeElement).toBe(description);
 	});
 
+	it("does not steal focus during edits and refocuses repeated invalid submissions", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		const form = screen
+			.getByRole("button", { name: "提交申请" })
+			.closest("form");
+		if (!form) throw new Error("application form missing");
+		fireEvent.submit(form);
+		const name = screen.getByLabelText("Agent 名称");
+		expect(document.activeElement).toBe(name);
+
+		const description = screen.getByLabelText("用途说明");
+		description.focus();
+		fireEvent.change(description, { target: { value: "Updated purpose" } });
+		expect(document.activeElement).toBe(description);
+
+		fireEvent.submit(form);
+		expect(document.activeElement).toBe(name);
+	});
+
 	it("restores an edit endpoint from its persisted option ID after deployment loading", async () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
