@@ -496,6 +496,38 @@ describe("AgentApplicationForm", () => {
 		);
 	});
 
+	it("restores a legacy option endpoint when the model match is unique", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "legacy-model",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "legacy-model",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		expect(
+			screen.getByRole("combobox", { name: "模型端点" }).textContent,
+		).toContain("Primary endpoint");
+	});
+
 	it("dismisses a server model error after the selection changes", () => {
 		const onSubmit = vi.fn();
 		render(

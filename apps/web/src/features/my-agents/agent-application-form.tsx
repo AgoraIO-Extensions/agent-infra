@@ -153,7 +153,12 @@ function endpointIdForModelOption(
 		(endpoint) =>
 			option.optionId === optionIdFor(endpoint.endpointId, option.modelId),
 	);
-	return exact?.endpointId ?? "";
+	if (exact) return exact.endpointId;
+	if (option.optionId.includes(":")) return "";
+	const candidates = endpoints.filter((endpoint) =>
+		endpoint.models.some((model) => model.modelId === option.modelId),
+	);
+	return candidates.length === 1 ? (candidates[0]?.endpointId ?? "") : "";
 }
 
 function modelLabel(
@@ -1409,21 +1414,23 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectValue placeholder="选择默认模型" />
 											</SelectTrigger>
 											<SelectContent>
-												{models.map((model) => {
-													const endpoint = modelEndpoints.find(
-														(item) => item.endpointId === model.endpointId,
-													);
-													return (
-														<SelectItem
-															key={model.optionId}
-															value={model.optionId}
-														>
-															{endpoint
-																? modelLabel(endpoint, model.modelId)
-																: "已移除模型"}
-														</SelectItem>
-													);
-												})}
+												{models
+													.filter((model) => model.optionId)
+													.map((model) => {
+														const endpoint = modelEndpoints.find(
+															(item) => item.endpointId === model.endpointId,
+														);
+														return (
+															<SelectItem
+																key={model.optionId}
+																value={model.optionId}
+															>
+																{endpoint
+																	? modelLabel(endpoint, model.modelId)
+																	: "已移除模型"}
+															</SelectItem>
+														);
+													})}
 											</SelectContent>
 										</Select>
 										<FieldError
