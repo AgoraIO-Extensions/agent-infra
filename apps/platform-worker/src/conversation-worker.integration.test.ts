@@ -5,7 +5,7 @@ import {
 } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -146,6 +146,11 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		responseStatus?: number;
 	}[] = [];
 	const modelRequests: { body: string; authenticated: boolean }[] = [];
+	const modelJournalAtArrival: {
+		executionId: string;
+		operationRef: string;
+		attemptRef: string;
+	}[] = [];
 	let modelServer: ReturnType<typeof createServer> | undefined;
 	let modelPort: number | undefined;
 	let releaseModelResponse: (() => void) | undefined;
@@ -251,6 +256,52 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 					response.end();
 					return;
 				}
+				const state = JSON.parse(
+					await readFile(join(directory, "driver.json"), "utf8"),
+				) as {
+					sessions: Record<
+						string,
+						{
+							executions: Record<string, { nativeTurnId: string }>;
+							journals?: Record<
+								string,
+								{
+									events: {
+										type: string;
+										payload?: {
+											kind?: string;
+											phase?: string;
+											operationRef?: string;
+											attemptRef?: string;
+										};
+									}[];
+								}
+							>;
+						}
+					>;
+				};
+				modelJournalAtArrival.push(
+					...Object.values(state.sessions).flatMap((session) =>
+						Object.entries(session.executions).flatMap(
+							([executionId, execution]) =>
+								(
+									session.journals?.[execution.nativeTurnId]?.events ?? []
+								).flatMap((event) =>
+									event.type === "operation" &&
+									event.payload?.kind === "model" &&
+									event.payload.phase === "intent"
+										? [
+												{
+													executionId,
+													operationRef: event.payload.operationRef ?? "",
+													attemptRef: event.payload.attemptRef ?? "",
+												},
+											]
+										: [],
+								),
+						),
+					),
+				);
 				// Keep the controlled provider response open until the Worker has
 				// durably observed the accepted running Execution. Otherwise the
 				// synthetic model can complete before the takeover assertions read
@@ -724,6 +775,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		if (realCodexE2e) {
 			expect(modelRequests[0]?.authenticated).toBe(true);
 			expect(modelRequests[0]?.body).toContain("controlled dispatch");
+			expect(modelJournalAtArrival).toHaveLength(1);
 		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
 		await waitUntil(
@@ -752,6 +804,12 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		if (!active) throw Error("No running execution");
 		expect(await dispatchCount()).toBe(1);
 		if (realCodexE2e) {
+			const intent = modelJournalAtArrival[0];
+			if (!intent) throw Error("No model intent in durable journal at arrival");
+			expect(intent.executionId).toBe(active.execution_id);
+			expect(intent.operationRef).toBeTruthy();
+			expect(intent.attemptRef).toBeTruthy();
+			expect(intent.operationRef).not.toBe(intent.attemptRef);
 			await waitUntil(async () => {
 				const facts = await sql<{ phase: string }[]>`
 						select event_payload->'fact'->>'phase' as phase
@@ -827,18 +885,36 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			}, "persisted Codex model operation facts");
 			const operationFacts = await sql<
 				{
+					eventId: string;
 					phase: string;
 					kind: string;
 					modelOptionId: string | null;
+					operationRef: string;
+					attemptRef: string;
+					auditEventId: string | null;
+					auditOperationRef: string | null;
+					auditAttemptRef: string | null;
+					auditPhase: string | null;
 				}[]
 			>`
-				select event_payload->'fact'->>'phase' as phase,
-				       event_payload->'fact'->>'kind' as kind,
-				       event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId"
-				from platform.conversation_events
-				where execution_id=${active.execution_id}
-				  and event_type='execution.operation'
-				order by sequence
+				select e.event_id as "eventId",
+				       e.event_payload->'fact'->>'phase' as phase,
+				       e.event_payload->'fact'->>'kind' as kind,
+				       e.event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId",
+				       e.event_payload->'fact'->>'operationRef' as "operationRef",
+				       e.event_payload->'fact'->>'attemptRef' as "attemptRef",
+				       a.details->>'eventId' as "auditEventId",
+				       a.details->'fact'->>'operationRef' as "auditOperationRef",
+				       a.details->'fact'->>'attemptRef' as "auditAttemptRef",
+				       a.details->'fact'->>'phase' as "auditPhase"
+				from platform.conversation_events e
+				left join platform.audit_events a
+				  on a.id='operation-observed:' || e.event_id
+				 and a.target_id=e.execution_id
+				 and a.action='execution.operation.observed'
+				where e.execution_id=${active.execution_id}
+				  and e.event_type='execution.operation'
+				order by e.sequence
 			`;
 			expect(operationFacts.map((fact) => fact.phase)).toEqual(
 				expect.arrayContaining(["intent", "started", "completed"]),
@@ -849,13 +925,21 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					(fact) => fact.modelOptionId === "worker-controlled-model",
 				),
 			).toBe(true);
-			const operationAudits = await sql`
-				select id
-				from platform.audit_events
-				where target_id=${active.execution_id}
-				  and action='execution.operation.observed'
-			`;
-			expect(operationAudits.length).toBeGreaterThanOrEqual(3);
+			const intent = modelJournalAtArrival[0];
+			if (!intent) throw Error("No model intent in durable journal at arrival");
+			expect(
+				operationFacts.every(
+					(fact) =>
+						fact.operationRef === intent.operationRef &&
+						fact.attemptRef === intent.attemptRef &&
+						fact.auditEventId === fact.eventId &&
+						fact.auditOperationRef === intent.operationRef &&
+						fact.auditAttemptRef === intent.attemptRef &&
+						fact.auditPhase === fact.phase,
+				),
+			).toBe(true);
+			expect(modelJournalAtArrival).toHaveLength(1);
+			expect(await dispatchCount()).toBe(1);
 			await waitUntil(
 				async () =>
 					(
