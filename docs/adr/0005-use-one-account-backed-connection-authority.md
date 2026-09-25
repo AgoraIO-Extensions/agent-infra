@@ -14,7 +14,7 @@ Connection 同时需要公司员工登录。Agent Platform 已通过部署 Ident
 
 1. Connection 使用单一账号级 control plane 和 PostgreSQL 权威，保存 Principal、Consumer/Actor、Connection、Credential、Grant、调用和审计。
 2. Connection 直接使用部署批准的公司 LDAP profile 完成员工登录，以 `issuer + uid` 映射稳定 Principal，并建立自己的 hash-only BrowserSession。
-3. Agent Platform 只保存 Agent Action policy 和 Connection `callId` 引用；用户 Grant 只保存在 Connection。
+3. Agent Platform 保存自身 Agent、Execution、工具事实、Agent Action policy 和受信采集的 Connection `callId` 引用；用户 Grant 只保存在 Connection。
 4. Agent 或客户端通过 Connection 独立签发的访问凭据直接调用 MCP/API；Connection 解析当前 Principal、Consumer、ConsumerInstance、Actor 和 Grant，调用方字段不能指定 Principal、Connection 或 Credential。Platform 不签发 Connection 代调用 assertion。
 5. `LOCAL_SINGLE_USER`、`REMOTE_SHARED`、本机 installation identity、SQLite、Runtime token 和本机 Credential store 不作为产品模式。可选本机组件只能是无状态 edge。
 6. 公司 LDAP 登录参考 Rehoboam 已验证的 Service Bind 查找、稳定 `uid` 和用户 DN bind 契约，不复制其 Token、Socket 登录或 Session。LDAP transport 默认要求验证证书和主机名的 LDAPS/StartTLS；具名 LA3 M1 Pilot 可显式选择部署配置的固定 `ldap://` endpoint，包括域名解析到公网地址的情形，并接受员工密码和 Service Bind Credential 明文传输风险；该例外禁止降级/fallback、不能跨环境复用，正式上线前必须关闭。具体环境门禁以 [Connection M1 HLD](../architecture/HLD-connection-M1.md#51-principal) 为准。
