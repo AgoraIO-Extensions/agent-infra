@@ -31,6 +31,7 @@ const grant = createGrant({
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: [request.actionVersionId],
 	principalRecoveryGeneration: 3,
+	consumerInstanceRecoveryGeneration: 2,
 	issuedAt: Date.now() - 1000,
 	expiresAt: Date.now() + 60_000,
 });

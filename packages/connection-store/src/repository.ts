@@ -69,6 +69,7 @@ function grantRecord(row: typeof grants.$inferSelect): GrantRecord {
 		revision: row.revision,
 		status: row.status as GrantRecord["status"],
 		principalRecoveryGeneration: row.principalRecoveryGeneration,
+		consumerInstanceRecoveryGeneration: row.consumerInstanceRecoveryGeneration,
 		issuedAt: row.createdAt.getTime(),
 		expiresAt: row.expiresAt.getTime(),
 	};

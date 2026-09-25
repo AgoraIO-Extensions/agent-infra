@@ -13,6 +13,7 @@ const input = {
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: ["github.get_current_user@v1"],
 	principalRecoveryGeneration: 3,
+	consumerInstanceRecoveryGeneration: 2,
 	issuedAt: now - 1000,
 	expiresAt: now + 60_000,
 } as const;
@@ -53,6 +54,9 @@ describe("Connection Grant invariants", () => {
 		expect(() =>
 			createGrant({ ...input, consumerActorRequired: true }),
 		).toThrow("Actor mode does not match Consumer");
+		expect(() =>
+			createGrant({ ...input, consumerInstanceRecoveryGeneration: 0 }),
+		).toThrow("consumerInstanceRecoveryGeneration");
 	});
 
 	it("revokes monotonically and remains revoked on replay", () => {

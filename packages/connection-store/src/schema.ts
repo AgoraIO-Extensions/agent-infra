@@ -353,6 +353,10 @@ export const grants = connectionSchema.table(
 		principalRecoveryGeneration: bigint("principal_recovery_generation", {
 			mode: "number",
 		}).notNull(),
+		consumerInstanceRecoveryGeneration: bigint(
+			"consumer_instance_recovery_generation",
+			{ mode: "number" },
+		).notNull(),
 		status: varchar("status", { length: 32 }).default("active").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -431,6 +435,10 @@ export const grants = connectionSchema.table(
 		check(
 			"grants_principal_generation_positive",
 			sql`${table.principalRecoveryGeneration} > 0`,
+		),
+		check(
+			"grants_instance_generation_positive",
+			sql`${table.consumerInstanceRecoveryGeneration} > 0`,
 		),
 		nonEmpty("grant_id", table.id),
 		nonEmpty("grant_credential_version_id", table.credentialVersionId),

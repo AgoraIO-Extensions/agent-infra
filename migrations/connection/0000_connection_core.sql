@@ -116,8 +116,8 @@ CREATE TABLE "connection"."credential_versions" (
 
 ALTER TABLE "connection"."connections"
   ADD CONSTRAINT "connections_current_credential_version_fk"
-  FOREIGN KEY ("current_credential_version_id")
-  REFERENCES "connection"."credential_versions" ("id");
+  FOREIGN KEY ("current_credential_version_id", "id")
+  REFERENCES "connection"."credential_versions" ("id", "connection_id");
 
 CREATE TABLE "connection"."grants" (
   "id" text PRIMARY KEY NOT NULL,
@@ -129,6 +129,7 @@ CREATE TABLE "connection"."grants" (
   "credential_version_id" text NOT NULL,
   "revision" bigint DEFAULT 1 NOT NULL,
   "principal_recovery_generation" bigint NOT NULL,
+  "consumer_instance_recovery_generation" bigint NOT NULL,
   "status" varchar(32) DEFAULT 'active' NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "revoked_at" timestamp with time zone,
@@ -143,9 +144,38 @@ CREATE TABLE "connection"."grants" (
   CONSTRAINT "grants_status_check" CHECK ("status" IN ('active', 'revoked')),
   CONSTRAINT "grants_revision_positive" CHECK ("revision" > 0),
   CONSTRAINT "grants_principal_generation_positive" CHECK ("principal_recovery_generation" > 0),
+  CONSTRAINT "grants_instance_generation_positive" CHECK ("consumer_instance_recovery_generation" > 0),
   CONSTRAINT "grant_id_non_empty" CHECK (char_length("id") > 0),
   CONSTRAINT "grant_credential_version_id_non_empty" CHECK (char_length("credential_version_id") > 0)
 );
+
+CREATE FUNCTION "connection"."bind_grant_recovery_generations"()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  principal_generation bigint;
+  instance_generation bigint;
+BEGIN
+  SELECT p."recovery_generation", i."recovery_generation"
+    INTO principal_generation, instance_generation
+    FROM "connection"."principals" p
+    JOIN "connection"."consumer_instances" i
+      ON i."principal_id" = p."id"
+   WHERE p."id" = NEW."principal_id"
+     AND i."id" = NEW."consumer_instance_id"
+   FOR UPDATE OF p, i;
+  IF principal_generation IS DISTINCT FROM NEW."principal_recovery_generation" OR
+     instance_generation IS DISTINCT FROM NEW."consumer_instance_recovery_generation" THEN
+    RAISE EXCEPTION 'Grant recovery generation is not current';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "grants_current_recovery_generations_trigger"
+BEFORE INSERT ON "connection"."grants"
+FOR EACH ROW EXECUTE FUNCTION "connection"."bind_grant_recovery_generations"();
 
 CREATE TABLE "connection"."grant_actions" (
   "grant_id" text NOT NULL,

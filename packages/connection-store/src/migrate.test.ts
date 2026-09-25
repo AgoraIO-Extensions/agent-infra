@@ -53,7 +53,7 @@ beforeAll(async () => {
 afterAll(async () => {
 	await client?.end();
 	await testDatabase?.stop();
-});
+}, 120_000);
 
 describe("Connection PostgreSQL migration", () => {
 	it("creates the authority schema from zero and is idempotent", async () => {
@@ -135,20 +135,27 @@ describe("Connection PostgreSQL migration", () => {
 		await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-bob', 'provider-a', 'account-bob')`;
 		await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-bob-v1', 'connection-bob', 1, 'ciphertext-bob')`;
 		await databaseClient`update connection.connections set current_credential_version_id = 'credential-bob-v1' where id = 'connection-bob'`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1', 'action-write-v1'], 1, now() + interval '1 hour')`;
 		await expect(
-			databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-			values ('grant-invalid-sentinel', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`,
+			databaseClient`update connection.connections set current_credential_version_id = 'credential-bob-v1' where id = 'connection-a'`,
 		).rejects.toThrow();
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-			values ('grant-consumer', 'principal-a', 'consumer-consumer', 'instance-consumer', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, created_at, expires_at)
-			values ('grant-expired', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-a', 'credential-a-v1', ARRAY['action-write-v1'], 1, now() - interval '2 hours', now() - interval '1 hour')`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-			values ('grant-bob', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-bob', 'credential-bob-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
-		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-			values ('grant-other-consumer', 'principal-a', 'consumer-b', 'instance-other-consumer', 'actor-other-consumer', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+		await expect(
+			databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+				values ('grant-future-instance', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-bob', 'credential-bob-v1', ARRAY['action-a-v1'], 1, 2, now() + interval '1 hour')`,
+		).rejects.toThrow("Grant recovery generation is not current");
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+			values ('grant-a', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1', 'action-write-v1'], 1, 1, now() + interval '1 hour')`;
+		await expect(
+			databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+			values ('grant-invalid-sentinel', 'principal-a', 'consumer-a', 'instance-a', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`,
+		).rejects.toThrow();
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+			values ('grant-consumer', 'principal-a', 'consumer-consumer', 'instance-consumer', ${consumerActorSentinel}, 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, created_at, expires_at)
+			values ('grant-expired', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-a', 'credential-a-v1', ARRAY['action-write-v1'], 1, 1, now() - interval '2 hours', now() - interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+			values ('grant-bob', 'principal-b', 'consumer-a', 'instance-b', 'actor-b', 'connection-bob', 'credential-bob-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
+		await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+			values ('grant-other-consumer', 'principal-a', 'consumer-b', 'instance-other-consumer', 'actor-other-consumer', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
 
 		const handle = createConnectionDatabase(database.databaseUrl);
 		try {
@@ -172,6 +179,9 @@ describe("Connection PostgreSQL migration", () => {
 			).rejects.toThrow();
 			await expect(
 				databaseClient`update connection.grants set revision = revision + 1 where id = 'grant-consumer'`,
+			).rejects.toThrow();
+			await expect(
+				databaseClient`update connection.grants set consumer_instance_recovery_generation = 2 where id = 'grant-consumer'`,
 			).rejects.toThrow();
 			await expect(
 				databaseClient`update connection.grants set expires_at = expires_at + interval '1 hour' where id = 'grant-consumer'`,
@@ -759,18 +769,18 @@ describe("Connection PostgreSQL migration", () => {
 			await databaseClient`insert into connection.connections (id, provider_id, external_account_id) values ('connection-b', 'provider-a', 'account-b')`;
 			await databaseClient`insert into connection.credential_versions (id, connection_id, version, ciphertext) values ('credential-b-v1', 'connection-b', 1, 'ciphertext-b')`;
 			await databaseClient`update connection.connections set current_credential_version_id = 'credential-b-v1' where id = 'connection-b'`;
-			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-				values ('grant-a2', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+				values ('grant-a2', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
 			await expect(
-				databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`,
+				databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`,
 			).rejects.toThrow();
 			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
 				"grant-a2",
 			);
 			await databaseClient`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-a2'`;
-			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+				values ('grant-b', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-b', 'credential-b-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
 			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
 				"grant-b",
 			);
@@ -783,8 +793,8 @@ describe("Connection PostgreSQL migration", () => {
 			).rejects.toThrow("Connection authorization denied");
 			const { nextGrant } = await databaseClient.begin(async (tx) => {
 				await tx`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-b'`;
-				const nextGrant = databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, expires_at)
-					values ('grant-c', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, now() + interval '1 hour')`;
+				const nextGrant = databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+					values ('grant-c', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 1, now() + interval '1 hour')`;
 				expect(
 					await Promise.race([
 						nextGrant.then(() => "finished"),
@@ -799,8 +809,17 @@ describe("Connection PostgreSQL migration", () => {
 			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
 				"grant-c",
 			);
-			await databaseClient`update connection.principals set recovery_generation = 2 where id = 'principal-a'`;
 			await databaseClient`update connection.consumer_instances set recovery_generation = 2 where id = 'instance-a'`;
+			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
+				"Connection authorization denied",
+			);
+			await databaseClient`update connection.grants set status = 'revoked', revision = revision + 1 where id = 'grant-c'`;
+			await databaseClient`insert into connection.grants (id, principal_id, consumer_id, consumer_instance_id, actor_id, connection_id, credential_version_id, approved_action_version_ids, principal_recovery_generation, consumer_instance_recovery_generation, expires_at)
+				values ('grant-d', 'principal-a', 'consumer-a', 'instance-a', 'actor-a', 'connection-a', 'credential-a-v1', ARRAY['action-a-v1'], 1, 2, now() + interval '1 hour')`;
+			expect((await authorizeActionCall(repository, request, 1)).id).toBe(
+				"grant-d",
+			);
+			await databaseClient`update connection.principals set recovery_generation = 2 where id = 'principal-a'`;
 			await expect(authorizeActionCall(repository, request, 1)).rejects.toThrow(
 				"Connection authorization denied",
 			);

@@ -63,7 +63,7 @@ export function isCurrentAuthority(
 		state.instanceStatus === "active" &&
 		state.instancePrincipalId === context.principalId &&
 		state.instanceConsumerId === context.consumerId &&
-		state.instanceGeneration === context.principalRecoveryGeneration &&
+		state.instanceGeneration === grant.consumerInstanceRecoveryGeneration &&
 		(actorId === consumerActorSentinel ||
 			(state.actorStatus === "active" &&
 				state.actorInstanceId === context.consumerInstanceId)) &&

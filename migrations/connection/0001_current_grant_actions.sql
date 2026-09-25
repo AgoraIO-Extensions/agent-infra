@@ -145,6 +145,7 @@ BEGIN
      NEW."connection_id" IS DISTINCT FROM OLD."connection_id" OR
      NEW."credential_version_id" IS DISTINCT FROM OLD."credential_version_id" OR
      NEW."principal_recovery_generation" IS DISTINCT FROM OLD."principal_recovery_generation" OR
+     NEW."consumer_instance_recovery_generation" IS DISTINCT FROM OLD."consumer_instance_recovery_generation" OR
      NEW."approved_action_version_ids" IS DISTINCT FROM OLD."approved_action_version_ids" THEN
     RAISE EXCEPTION 'grant binding is immutable';
   END IF;

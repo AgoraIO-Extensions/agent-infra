@@ -16,6 +16,7 @@ export interface GrantInput {
 	credentialVersionId: string;
 	actionVersionIds: readonly string[];
 	principalRecoveryGeneration: number;
+	consumerInstanceRecoveryGeneration: number;
 	issuedAt: number;
 	expiresAt: number;
 }
@@ -61,6 +62,14 @@ export function createGrant(input: GrantInput): GrantRecord {
 		throw new Error("principalRecoveryGeneration must be a positive integer");
 	}
 	if (
+		!Number.isSafeInteger(input.consumerInstanceRecoveryGeneration) ||
+		input.consumerInstanceRecoveryGeneration < 1
+	) {
+		throw new Error(
+			"consumerInstanceRecoveryGeneration must be a positive integer",
+		);
+	}
+	if (
 		!Number.isSafeInteger(input.issuedAt) ||
 		!Number.isSafeInteger(input.expiresAt) ||
 		input.expiresAt <= input.issuedAt
@@ -84,6 +93,8 @@ export function createGrant(input: GrantInput): GrantRecord {
 		revision: 1,
 		status: "active",
 		principalRecoveryGeneration: input.principalRecoveryGeneration,
+		consumerInstanceRecoveryGeneration:
+			input.consumerInstanceRecoveryGeneration,
 		issuedAt: input.issuedAt,
 		expiresAt: input.expiresAt,
 	};

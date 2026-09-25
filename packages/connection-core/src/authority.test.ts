@@ -14,6 +14,7 @@ const grant = createGrant({
 	credentialVersionId: "credential-a-v1",
 	actionVersionIds: ["action-a-v1"],
 	principalRecoveryGeneration: 2,
+	consumerInstanceRecoveryGeneration: 3,
 	issuedAt: 1000,
 	expiresAt: 5000,
 });
@@ -26,7 +27,7 @@ const state: CurrentAuthorityState = {
 	instanceStatus: "active",
 	instancePrincipalId: "principal-a",
 	instanceConsumerId: "consumer-a",
-	instanceGeneration: 2,
+	instanceGeneration: 3,
 	actorStatus: "active",
 	actorInstanceId: "instance-a",
 	connectionStatus: "active",
@@ -61,7 +62,7 @@ describe("current Connection authority", () => {
 	it("denies stale identity, actor, Provider, Effect, and lifetime", () => {
 		for (const change of [
 			{ principalStatus: "disabled" },
-			{ instanceGeneration: 3 },
+			{ instanceGeneration: 4 },
 			{ actorStatus: "revoked" },
 			{ actionProviderId: "provider-b" },
 			{ releaseStatus: "disabled" },

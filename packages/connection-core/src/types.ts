@@ -78,6 +78,7 @@ export interface GrantRecord {
 	revision: number;
 	status: ConnectionGrantStatus;
 	principalRecoveryGeneration: number;
+	consumerInstanceRecoveryGeneration: number;
 	issuedAt: number;
 	expiresAt: number;
 }
