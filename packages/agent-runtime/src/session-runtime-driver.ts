@@ -59,6 +59,7 @@ export interface NativeSessionOptions {
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
+	modelRequestIntent?: () => Promise<void>;
 	modelRequestStarted?: () => Promise<void>;
 	modelUsage?: (
 		usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
@@ -557,6 +558,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								}
 							: undefined,
 						selection,
+						modelRequestIntent: async () => unavailable(),
 						modelRequestStarted: async () => {},
 						admit: async () => unavailable(),
 						update: async () => {},
@@ -871,6 +873,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					);
 					admitted();
 				},
+				modelRequestIntent: () =>
+					this.modelRequestIntent(file, command.executionId),
 				modelRequestStarted: () =>
 					this.modelRequestStarted(file, command.executionId),
 				modelRequestFinished: (state, usage) =>
@@ -1142,7 +1146,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			});
 		}
 	}
-	private async modelRequestStarted(
+	private async modelRequestIntent(
 		file: DurableJsonFile<Session>,
 		executionId: string,
 	) {
@@ -1150,41 +1154,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && latestFact(turn, "model");
-		if (previous?.kind !== "model") return;
-		if (previous.phase === "intent") {
-			await this.modelPhase(file, executionId, "started");
-			return;
-		}
-		if (previous.phase === "started") {
-			await this.modelPhase(
-				file,
-				executionId,
-				"unknown",
-				"recovery_unconfirmed",
-			);
-			const latest = file
-				.read()
-				.turns.find((entry) => entry.executionId === executionId);
-			const completed = latest && latestFact(latest, "model");
-			if (completed?.kind !== "model") return;
-			const {
-				phase: _phase,
-				startedAt: _startedAt,
-				finishedAt: _finishedAt,
-				durationMs: _durationMs,
-				failureCode: _failureCode,
-				usage: _usage,
-				...base
-			} = completed;
-			await this.appendOperationFact(file, executionId, {
-				...base,
-				attemptRef: randomUUID(),
-				phase: "intent",
-			});
-			await this.modelPhase(file, executionId, "started");
-			return;
-		}
-		if (["completed", "failed", "unknown"].includes(previous.phase)) {
+		if (previous?.kind !== "model") unavailable();
+		if (previous.phase === "intent") return;
+		if (previous.phase === "completed") {
 			const {
 				phase: _phase,
 				startedAt: _startedAt,
@@ -1199,8 +1171,20 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				attemptRef: randomUUID(),
 				phase: "intent",
 			});
-			await this.modelPhase(file, executionId, "started");
+			return;
 		}
+		unavailable();
+	}
+	private async modelRequestStarted(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (turn && latestFact(turn, "model")?.phase === "intent")
+			await this.modelPhase(file, executionId, "started");
+		else unavailable();
 	}
 	private async event(
 		file: DurableJsonFile<Session>,

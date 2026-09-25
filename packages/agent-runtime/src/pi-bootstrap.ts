@@ -64,6 +64,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			directory,
 			selection,
 			admit,
+			modelRequestIntent,
 			modelRequestStarted,
 			modelUsage,
 			toolRequestStarted,
@@ -80,6 +81,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				effort: selection.reasoningLevel,
 				admit,
 				client: "pi",
+				beforeSend: modelRequestIntent,
 				started: modelRequestStarted,
 				receipt: async (state, _endTurn, usage) => {
 					if (state !== "sent") await modelRequestFinished?.(state, usage);

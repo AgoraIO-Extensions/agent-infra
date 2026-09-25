@@ -814,6 +814,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
+			beforeSend: () => this.modelRequestIntent(file, command.executionId),
 			started: () => this.modelRequestStarted(file, command.executionId),
 			receipt: async (response, endTurn, usage) => {
 				if (response === "completed")
@@ -1244,7 +1245,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			});
 		}
 	}
-	private async modelRequestStarted(
+	private async modelRequestIntent(
 		file: DurableJsonFile<Session>,
 		executionId: string,
 	) {
@@ -1252,41 +1253,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && latestFact(turn, "model");
-		if (previous?.kind !== "model") return;
-		if (previous.phase === "intent") {
-			await this.modelPhase(file, executionId, "started");
-			return;
-		}
-		if (previous.phase === "started") {
-			await this.modelPhase(
-				file,
-				executionId,
-				"unknown",
-				"recovery_unconfirmed",
-			);
-			const latest = file
-				.read()
-				.turns.find((entry) => entry.executionId === executionId);
-			const completed = latest && latestFact(latest, "model");
-			if (completed?.kind !== "model") return;
-			const {
-				phase: _phase,
-				startedAt: _startedAt,
-				finishedAt: _finishedAt,
-				durationMs: _durationMs,
-				failureCode: _failureCode,
-				usage: _usage,
-				...base
-			} = completed;
-			await this.appendOperationFact(file, executionId, {
-				...base,
-				attemptRef: randomUUID(),
-				phase: "intent",
-			});
-			await this.modelPhase(file, executionId, "started");
-			return;
-		}
-		if (["completed", "failed", "unknown"].includes(previous.phase)) {
+		if (previous?.kind !== "model") unavailable();
+		if (previous.phase === "intent") return;
+		if (previous.phase === "completed") {
 			const {
 				phase: _phase,
 				startedAt: _startedAt,
@@ -1301,8 +1270,20 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				attemptRef: randomUUID(),
 				phase: "intent",
 			});
-			await this.modelPhase(file, executionId, "started");
+			return;
 		}
+		unavailable();
+	}
+	private async modelRequestStarted(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (turn && latestFact(turn, "model")?.phase === "intent")
+			await this.modelPhase(file, executionId, "started");
+		else unavailable();
 	}
 	private async toolRequestStarted(
 		file: DurableJsonFile<Session>,

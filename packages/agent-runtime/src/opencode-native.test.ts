@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeEvent } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
@@ -183,12 +184,32 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 			async (toolName) => {
 				const path = await mkdtemp(join(tmpdir(), "opencode-tools-"));
 				const calls: string[] = [];
+				const persistedIntentsAtSend: number[] = [];
+				let ownerRef: string | undefined;
 				let target = "owner.txt";
 				let sequence = 0;
 				const server = createServer(async (req, res) => {
 					let body = "";
 					for await (const chunk of req) body += chunk;
 					const request = JSON.parse(body);
+					if (ownerRef) {
+						const persisted = JSON.parse(
+							await readFile(
+								join(path, "driver", ownerRef, "state.json"),
+								"utf8",
+							),
+						) as { turns: { events: RuntimeEvent[] }[] };
+						persistedIntentsAtSend.push(
+							persisted.turns
+								.flatMap((turn) => turn.events)
+								.filter(
+									(event) =>
+										event.type === "operation" &&
+										event.payload.kind === "model" &&
+										event.payload.phase === "intent",
+								).length,
+						);
+					}
 					calls.push(body);
 					sequence++;
 					const isToolResult = calls.length > 1;
@@ -310,6 +331,7 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						operationId: "prepare",
 						selection: { ...command.selection, modelOptionId: "missing" },
 					});
+					ownerRef = binding.nativeSessionRef;
 					const workspace = join(
 						path,
 						"driver",
@@ -370,6 +392,14 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						"started",
 						"completed",
 					]);
+					expect(persistedIntentsAtSend.slice(0, 2)).toEqual([1, 2]);
+					expect(
+						new Set(
+							modelFacts
+								.filter((fact) => fact.phase === "intent")
+								.map((fact) => fact.attemptRef),
+						).size,
+					).toBe(2);
 					expect(modelFacts[2]?.usage).toMatchObject({
 						inputTokens: 10,
 						outputTokens: 10,

@@ -26,6 +26,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		modelRequestIntent?: () => Promise<void>,
 		modelRequestStarted?: () => Promise<void>,
 		modelUsage?: (
 			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
@@ -59,6 +60,7 @@ export const GenericAcpRuntimeDriver = {
 			openSession: async ({
 				selection,
 				admit,
+				modelRequestIntent,
 				modelRequestStarted,
 				modelUsage,
 				modelRequestFinished,
@@ -89,6 +91,7 @@ export const GenericAcpRuntimeDriver = {
 					session.directory,
 					selection,
 					admit,
+					modelRequestIntent,
 					modelRequestStarted,
 					modelUsage,
 					normalizedToolRequestStarted,
@@ -144,6 +147,7 @@ export const GenericAcpRuntimeDriver = {
 					startTurn: (next: NativeSessionOptions) => {
 						native.startTurn?.(next);
 						launch.onTurn?.({
+							modelRequestIntent: next.modelRequestIntent,
 							modelRequestStarted: next.modelRequestStarted,
 							modelUsage: next.modelUsage,
 							modelRequestFinished: next.modelRequestFinished,

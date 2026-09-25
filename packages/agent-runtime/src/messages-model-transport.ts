@@ -12,6 +12,7 @@ export interface RuntimeMessagesTransportOptions {
 	readonly model: string;
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
+	readonly beforeSend?: () => Promise<void>;
 	readonly started?: () => Promise<void>;
 	readonly toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
@@ -142,6 +143,7 @@ export async function openRuntimeMessagesTransport(
 				if (!response.writableFinished) controller.abort();
 			});
 			let sent = false;
+			let intentPrepared = false;
 			try {
 				const chunks: Buffer[] = [];
 				let size = 0;
@@ -195,6 +197,8 @@ export async function openRuntimeMessagesTransport(
 					headers["x-api-key"] = access.credential;
 				else headers.authorization = `Bearer ${access.credential}`;
 				if (!counting) {
+					await options.beforeSend?.();
+					intentPrepared = true;
 					sent = true;
 					await options.receipt?.("sent");
 				}
@@ -271,7 +275,7 @@ export async function openRuntimeMessagesTransport(
 			} catch {
 				controller.abort();
 				if (!closed && !failure) failure = sent ? "unknown" : "failed";
-				if (failure && !counting) {
+				if (failure && !counting && intentPrepared) {
 					try {
 						await options.receipt?.(failure);
 					} catch {

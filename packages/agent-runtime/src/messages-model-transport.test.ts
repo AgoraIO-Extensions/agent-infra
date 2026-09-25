@@ -536,3 +536,49 @@ it("contains persistent receipt failures without an upstream retry or unhandled 
 		await transport.close();
 	}
 });
+
+it("blocks a second model request when its durable intent cannot be prepared", async () => {
+	let preparations = 0;
+	let upstreamRequests = 0;
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		beforeSend: async () => {
+			preparations++;
+			if (preparations === 2)
+				throw Error("synthetic intent persistence failure");
+		},
+		fetch: async () => {
+			upstreamRequests++;
+			return new Response(messages(["OK"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	try {
+		const request = () =>
+			fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			});
+		expect((await request()).status).toBe(200);
+		expect((await request()).status).toBe(400);
+		expect(preparations).toBe(2);
+		expect(upstreamRequests).toBe(1);
+	} finally {
+		await transport.close();
+	}
+});

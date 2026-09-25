@@ -55,6 +55,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			directory,
 			selection,
 			admit,
+			modelRequestIntent,
 			modelRequestStarted,
 			_modelUsage,
 			_toolRequestStarted,
@@ -64,6 +65,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			let currentModelRequestIntent = modelRequestIntent;
 			let currentModelRequestStarted = modelRequestStarted;
 			let currentModelRequestFinished = modelRequestFinished;
 			let currentModelUsage = _modelUsage;
@@ -72,6 +74,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
+				beforeSend: async () => {
+					await currentModelRequestIntent?.();
+				},
 				started: async () => {
 					await currentModelRequestStarted?.();
 				},
@@ -173,6 +178,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					},
 					close: () => transport.close(),
 					onTurn: (callbacks) => {
+						currentModelRequestIntent = callbacks.modelRequestIntent;
 						currentModelRequestStarted = callbacks.modelRequestStarted;
 						currentModelRequestFinished = callbacks.modelRequestFinished;
 						currentModelUsage = callbacks.modelUsage;
