@@ -1320,6 +1320,11 @@ describe("AgentApplicationForm", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Retry after correction" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalled();
 	});
 
 	it("marks a removed existing template instead of submitting it", () => {

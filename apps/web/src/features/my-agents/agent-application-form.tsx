@@ -734,14 +734,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		useState<AgentApplicationFieldErrors>({});
 	const [serverValidationDismissed, setServerValidationDismissed] =
 		useState(false);
+	const serverErrorCodeRef = useRef<string | undefined>(
+		props.serverError?.code,
+	);
 	useEffect(() => {
 		if (
 			props.submitting ||
-			props.serverError?.code !== "MODEL_SELECTION_INVALID"
+			props.serverError?.code !== serverErrorCodeRef.current
 		)
 			setServerValidationDismissed(false);
+		serverErrorCodeRef.current = props.serverError?.code;
 	}, [props.serverError?.code, props.submitting]);
+	function dismissServerValidation() {
+		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
+			setServerValidationDismissed(true);
+	}
+	function dismissServerFormError() {
+		if (props.serverError?.code === "INVALID_REQUEST")
+			setServerValidationDismissed(true);
+	}
 	const clearFieldErrors = (...keys: string[]) => {
+		dismissServerFormError();
 		setFieldErrors((current) => {
 			const next = { ...current };
 			let changed = false;
@@ -760,6 +773,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		index: number,
 		key: "name" | "value",
 	) => {
+		dismissServerFormError();
 		setFieldErrors((current) => {
 			const next = { ...current };
 			delete next[`${prefix}.${index}.${key}`];
@@ -775,10 +789,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			recomputeDuplicateModelErrors(next, rows);
 			return next;
 		});
-	};
-	const dismissServerValidation = () => {
-		if (props.serverError?.code === "MODEL_SELECTION_INVALID")
-			setServerValidationDismissed(true);
 	};
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
@@ -918,7 +928,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		serverValidationDismissed,
 	]);
 	const serverFormError =
-		props.serverError?.code === "INVALID_REQUEST"
+		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed
 			? "申请内容未通过服务端校验，请检查表单后重试。"
 			: undefined;
 	const hasActiveServerValidationError =
