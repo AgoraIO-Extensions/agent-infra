@@ -916,6 +916,56 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("requires a replacement credential after canonicalizing a legacy option", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint:primary:gpt-5",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "endpoint:primary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const onSubmit = vi.fn();
+		const colonDeployment = {
+			...deploymentConfiguration,
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				endpoints: [
+					{
+						endpointId: "endpoint:primary",
+						displayName: "Primary endpoint",
+						models: [{ modelId: "gpt-5", reasoningLevels: ["medium"] }],
+					},
+				],
+			},
+		};
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				deploymentConfiguration={colonDeployment}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		const credential = screen.getByLabelText("模型凭证") as HTMLInputElement;
+		expect(credential.required).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getByText("请输入模型凭证。")).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("marks a persisted model with an unmapped endpoint as stale", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,

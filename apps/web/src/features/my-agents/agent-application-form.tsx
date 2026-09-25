@@ -796,9 +796,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(application?.source.kind !== "standard" && sourceKind === "standard");
 	const persistedModelOptionIds =
 		props.mode === "update"
-			? (configuration?.modelOptions.map((option) =>
-					canonicalOptionIdForModelOption(option, modelEndpoints),
-				) ?? [])
+			? (configuration?.modelOptions.map((option) => option.optionId) ?? [])
 			: undefined;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
