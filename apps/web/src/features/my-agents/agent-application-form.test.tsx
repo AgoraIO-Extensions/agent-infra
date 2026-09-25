@@ -400,6 +400,98 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("uses custom validation before native required checks and clears fixed errors", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+
+		const form = screen
+			.getByRole("button", { name: "提交申请" })
+			.closest("form");
+		if (!form) throw new Error("application form missing");
+		expect(form).toHaveProperty("noValidate", true);
+		fireEvent.submit(form);
+		expect(screen.getByLabelText("Agent 名称").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		expect(
+			screen.getByLabelText("Agent 名称").getAttribute("aria-invalid"),
+		).toBeNull();
+	});
+
+	it("restores an edit endpoint from its persisted option ID after deployment loading", async () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [
+					{
+						optionId: "endpoint-secondary:gpt-5",
+						displayName: "Secondary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultModelOptionId: "endpoint-secondary:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		});
+		const initiallyUnavailable = {
+			...deploymentConfiguration,
+			modelCatalog: { ...deploymentConfiguration.modelCatalog, endpoints: [] },
+		};
+		const loadedDeployment = {
+			...deploymentConfiguration,
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				endpoints: [
+					...deploymentConfiguration.modelCatalog.endpoints,
+					{
+						endpointId: "endpoint-secondary",
+						displayName: "Secondary endpoint",
+						models: [{ modelId: "gpt-5", reasoningLevels: ["medium"] }],
+					},
+				],
+			},
+		};
+		const { rerender } = render(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				deploymentConfiguration={initiallyUnavailable}
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		rerender(
+			<AgentApplicationForm
+				application={application}
+				action="edit"
+				deploymentConfiguration={loadedDeployment}
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.getByRole("combobox", { name: "模型端点" }).textContent,
+			).toContain("Secondary endpoint"),
+		);
+	});
+
 	it("focuses the default model field after a server model-selection rejection", () => {
 		const onSubmit = vi.fn();
 		render(

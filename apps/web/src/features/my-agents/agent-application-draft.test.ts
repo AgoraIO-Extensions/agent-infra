@@ -134,6 +134,39 @@ describe("Agent application draft", () => {
 		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
 	});
 
+	it("marks only repeated environment and Secret names", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				environment: [
+					{ name: "LOG_LEVEL", value: "debug" },
+					{ name: "LOG_LEVEL", value: "info" },
+					{ name: "PORT", value: "8080" },
+				],
+				secrets: [
+					{ name: "MODEL_API_KEY", value: "one" },
+					{ name: "OTHER_SECRET", value: "two" },
+					{ name: "MODEL_API_KEY", value: "three" },
+				],
+			},
+			{
+				modelConfigurationVisible: false,
+				requiresReplacementCredential: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+
+		expect(errors["environment.0.name"]).toBe("名称不能重复。");
+		expect(errors["environment.1.name"]).toBe("名称不能重复。");
+		expect(errors["environment.2.name"]).toBeUndefined();
+		expect(errors["secret.0.name"]).toBe("名称不能重复。");
+		expect(errors["secret.1.name"]).toBeUndefined();
+		expect(errors["secret.2.name"]).toBe("名称不能重复。");
+	});
+
 	it("keeps a valid model row clear when another row is stale", () => {
 		const errors = validateAgentApplicationDraft(
 			{

@@ -119,13 +119,16 @@ export function validateAgentApplicationDraft(
 		rows: readonly AgentApplicationEnvironmentDraft[],
 		prefix: "environment" | "secret",
 	) => {
-		const names = rows.map((row) => row.name.trim()).filter(Boolean);
-		if (new Set(names).size !== names.length) {
-			rows.forEach((row, index) => {
-				if (row.name.trim())
-					errors[`${prefix}.${index}.name`] = "名称不能重复。";
-			});
+		const nameCounts = new Map<string, number>();
+		for (const row of rows) {
+			const name = row.name.trim();
+			if (name) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
 		}
+		rows.forEach((row, index) => {
+			const name = row.name.trim();
+			if (name && nameCounts.get(name) !== 1)
+				errors[`${prefix}.${index}.name`] = "名称不能重复。";
+		});
 		rows.forEach((row, index) => {
 			if (!row.name.trim())
 				errors[`${prefix}.${index}.name`] = "请选择或填写名称。";

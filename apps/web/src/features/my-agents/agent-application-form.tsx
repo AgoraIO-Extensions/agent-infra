@@ -140,6 +140,21 @@ function optionIdFor(endpointId: string, modelId: string) {
 	return `${endpointId}:${modelId}`;
 }
 
+function endpointIdForModelOption(
+	option: Pick<AgentApplicationModelDraft, "modelId" | "optionId">,
+	endpoints: readonly DeploymentModelEndpointProjectionV2[],
+) {
+	const exact = endpoints.find(
+		(endpoint) =>
+			option.optionId === optionIdFor(endpoint.endpointId, option.modelId),
+	);
+	if (exact) return exact.endpointId;
+	const matching = endpoints.filter((endpoint) =>
+		endpoint.models.some((model) => model.modelId === option.modelId),
+	);
+	return matching.length === 1 ? (matching[0]?.endpointId ?? "") : "";
+}
+
 function modelLabel(
 	endpoint: DeploymentModelEndpointProjectionV2,
 	modelId: string,
@@ -528,14 +543,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (props.mode === "create") return [blankModel()];
 		const endpoints = props.deploymentConfiguration.modelCatalog.endpoints;
 		return (configuration?.modelOptions ?? []).map((option) => {
-			const endpointIds = endpoints
-				.filter((endpoint) =>
-					endpoint.models.some((model) => model.modelId === option.modelId),
-				)
-				.map((endpoint) => endpoint.endpointId);
 			return {
 				credentialValue: "",
-				endpointId: endpointIds.length === 1 ? (endpointIds[0] ?? "") : "",
+				endpointId: endpointIdForModelOption(option, endpoints),
 				modelId: option.modelId,
 				optionId: option.optionId,
 				reasoningLevels: option.reasoningLevels.join("\n"),
@@ -550,6 +560,32 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const [localFieldErrors, setFieldErrors] =
 		useState<AgentApplicationFieldErrors>({});
+	const clearFieldErrors = (...keys: string[]) => {
+		setFieldErrors((current) => {
+			const next = { ...current };
+			let changed = false;
+			for (const key of keys) {
+				if (key in next) {
+					delete next[key];
+					changed = true;
+				}
+			}
+			return changed ? next : current;
+		});
+	};
+	const clearNameErrors = (prefix: "environment" | "secret") => {
+		setFieldErrors((current) => {
+			const next = { ...current };
+			let changed = false;
+			for (const key of Object.keys(next)) {
+				if (key.startsWith(`${prefix}.`) && key.endsWith(".name")) {
+					delete next[key];
+					changed = true;
+				}
+			}
+			return changed ? next : current;
+		});
+	};
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
 		sourceKind,
@@ -564,6 +600,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		sourceKind === "standard" &&
 		(deployment.templates.length === 0 || !modelCatalogReady);
 	const modelEndpoints = deployment.modelCatalog.endpoints;
+	useEffect(() => {
+		if (props.mode !== "update" || modelEndpoints.length === 0) return;
+		setModels((current) => {
+			let changed = false;
+			const next = current.map((model) => {
+				if (model.endpointId) return model;
+				const endpointId = endpointIdForModelOption(model, modelEndpoints);
+				if (!endpointId) return model;
+				changed = true;
+				return { ...model, endpointId };
+			});
+			return changed ? next : current;
+		});
+	}, [modelEndpoints, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
@@ -709,6 +759,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	return (
 		<form
 			ref={formRef}
+			noValidate
 			aria-describedby={serverFormError ? "application-form-error" : undefined}
 			className="space-y-6"
 			onSubmit={(event) => {
@@ -746,7 +797,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								}
 								aria-invalid={fieldErrors.name ? true : undefined}
 								id="application-name"
-								onChange={(event) => setName(event.target.value)}
+								onChange={(event) => {
+									setName(event.target.value);
+									clearFieldErrors("name");
+								}}
 								required
 								value={name}
 							/>
@@ -761,7 +815,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								aria-invalid={fieldErrors.description ? true : undefined}
 								className="min-h-28"
 								id="application-description"
-								onChange={(event) => setDescription(event.target.value)}
+								onChange={(event) => {
+									setDescription(event.target.value);
+									clearFieldErrors("description");
+								}}
 								required
 								value={description}
 							/>
@@ -845,7 +902,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										)?.displayName ??
 										(staleTemplate ? "已移除模板（请重新加载）" : String(value))
 									}
-									onValueChange={(value) => value && setTemplateId(value)}
+									onValueChange={(value) => {
+										if (!value) return;
+										setTemplateId(value);
+										clearFieldErrors("templateId");
+									}}
 								>
 									<SelectTrigger
 										id="application-template-id"
@@ -895,7 +956,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									}
 									aria-invalid={fieldErrors.imageReference ? true : undefined}
 									id="application-image-reference"
-									onChange={(event) => setImageReference(event.target.value)}
+									onChange={(event) => {
+										setImageReference(event.target.value);
+										clearFieldErrors("imageReference");
+									}}
 									required
 									value={imageReference}
 								/>
@@ -968,7 +1032,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									fieldErrors.coOwnerIds ? errorId("coOwnerIds") : undefined,
 								)}
 								aria-invalid={fieldErrors.coOwnerIds ? true : undefined}
-								onChange={(event) => setCoOwnerIds(event.target.value)}
+								onChange={(event) => {
+									setCoOwnerIds(event.target.value);
+									clearFieldErrors("coOwnerIds");
+								}}
 								value={coOwnerIds}
 							/>
 							<FieldError
@@ -992,7 +1059,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								aria-invalid={
 									fieldErrors.userAvailabilityIds ? true : undefined
 								}
-								onChange={(event) => setUserAvailabilityIds(event.target.value)}
+								onChange={(event) => {
+									setUserAvailabilityIds(event.target.value);
+									clearFieldErrors("userAvailabilityIds");
+								}}
 								value={userAvailabilityIds}
 							/>
 							<FieldError
@@ -1016,9 +1086,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								aria-invalid={
 									fieldErrors.organizationAvailabilityIds ? true : undefined
 								}
-								onChange={(event) =>
-									setOrganizationAvailabilityIds(event.target.value)
-								}
+								onChange={(event) => {
+									setOrganizationAvailabilityIds(event.target.value);
+									clearFieldErrors("organizationAvailabilityIds");
+								}}
 								value={organizationAvailabilityIds}
 							/>
 							<FieldError
@@ -1051,18 +1122,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						errorFor={(index, key) =>
 							fieldErrors[`environment.${index}.${key}`]
 						}
-						onChange={(index, key, value) =>
+						onChange={(index, key, value) => {
 							setEnvironment((current) =>
 								current.map((item, itemIndex) =>
 									itemIndex === index ? { ...item, [key]: value } : item,
 								),
-							)
-						}
-						onRemove={(index) =>
+							);
+							if (key === "name") clearNameErrors("environment");
+							clearFieldErrors(`environment.${index}.${key}`);
+						}}
+						onRemove={(index) => {
 							setEnvironment((current) =>
 								current.filter((_, itemIndex) => itemIndex !== index),
-							)
-						}
+							);
+							clearFieldErrors(
+								...Object.keys(fieldErrors).filter((key) =>
+									key.startsWith("environment."),
+								),
+							);
+						}}
 						rows={environment}
 					/>
 					<Button
@@ -1102,18 +1180,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						idPrefix="secret"
 						label="Secret"
 						errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
-						onChange={(index, key, value) =>
+						onChange={(index, key, value) => {
 							setSecrets((current) =>
 								current.map((item, itemIndex) =>
 									itemIndex === index ? { ...item, [key]: value } : item,
 								),
-							)
-						}
-						onRemove={(index) =>
+							);
+							if (key === "name") clearNameErrors("secret");
+							clearFieldErrors(`secret.${index}.${key}`);
+						}}
+						onRemove={(index) => {
 							setSecrets((current) =>
 								current.filter((_, itemIndex) => itemIndex !== index),
-							)
-						}
+							);
+							clearFieldErrors(
+								...Object.keys(fieldErrors).filter((key) =>
+									key.startsWith("secret."),
+								),
+							);
+						}}
 						rows={secrets}
 					/>
 					<Button
@@ -1158,7 +1243,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									errors={fieldErrors}
 									models={models}
 									requiresReplacementCredential={requiresReplacementCredential}
-									onChange={(index, key, value) =>
+									onChange={(index, key, value) => {
 										setModels((current) =>
 											current.map((item, itemIndex) =>
 												itemIndex !== index
@@ -1185,13 +1270,35 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 															}
 														: { ...item, [key]: value },
 											),
-										)
-									}
-									onRemove={(index) =>
+										);
+										const rowErrorKeys = [
+											"endpointId",
+											"modelId",
+											"reasoningLevels",
+											"credentialValue",
+										].map((field) => `model.${index}.${field}`);
+										clearFieldErrors(
+											...(key === "endpointId" || key === "modelId"
+												? [
+														...rowErrorKeys,
+														"defaultModelOptionId",
+														"defaultReasoningLevel",
+													]
+												: [`model.${index}.${key}`]),
+										);
+									}}
+									onRemove={(index) => {
 										setModels((current) =>
 											current.filter((_, itemIndex) => itemIndex !== index),
-										)
-									}
+										);
+										clearFieldErrors(
+											...Object.keys(fieldErrors).filter((key) =>
+												key.startsWith("model."),
+											),
+											"defaultModelOptionId",
+											"defaultReasoningLevel",
+										);
+									}}
 								/>
 								<div className="form-grid">
 									<div className="space-y-2">
@@ -1214,9 +1321,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													? modelLabel(endpoint, model.modelId)
 													: "已移除模型";
 											}}
-											onValueChange={(value) =>
-												value && setDefaultModelOptionId(value)
-											}
+											onValueChange={(value) => {
+												if (!value) return;
+												setDefaultModelOptionId(value);
+												clearFieldErrors(
+													"defaultModelOptionId",
+													"defaultReasoningLevel",
+												);
+											}}
 										>
 											<SelectTrigger
 												id="application-default-model-option"
@@ -1262,9 +1374,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										<Select
 											value={defaultReasoningLevel}
 											disabled={!defaultModelDefinition}
-											onValueChange={(value) =>
-												value && setDefaultReasoningLevel(value)
-											}
+											onValueChange={(value) => {
+												if (!value) return;
+												setDefaultReasoningLevel(value);
+												clearFieldErrors("defaultReasoningLevel");
+											}}
 										>
 											<SelectTrigger
 												id="application-default-reasoning-level"
