@@ -3,7 +3,7 @@ import {
 	execFile as execFileCallback,
 	spawn,
 } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -21,7 +21,16 @@ import {
 	RuntimeHost,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
-import { createConversationExecutionUseCaseV1 } from "@agent-infra/platform-core";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import {
+	createFakeModelAccessValidatorV1,
+	createFakeModelCatalogAdapterV1,
+	projectRuntimeModelConfigurationV1,
+} from "@agent-infra/model-catalog";
+import {
+	type AgentConfigurationRecordV2,
+	createConversationExecutionUseCaseV1,
+} from "@agent-infra/platform-core";
 import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -29,6 +38,7 @@ import {
 import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
+import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
@@ -248,33 +258,142 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				throw Error("Controlled model server did not bind");
 			modelPort = modelAddress.port;
 		}
-		const desired = workloadDesiredFixture(1, "agent-cli", "internal-only");
-		const adapter = createKubernetesRuntimeAdapterV1({
-			client: fake.client,
-			policy,
-			probe: async () => true,
-		});
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending")
-			throw Error("Expected controlled Workload identity");
-		await adapter.promote(desired, identity);
-		const configuration = {
+		const baseDesired = workloadDesiredFixture(1, "agent-cli", "internal-only");
+		const configuration: AgentConfigurationRecordV2 = {
 			schemaVersion: 2,
-			agentId: desired.agentId,
+			agentId: baseDesired.agentId,
 			revision: 1,
-			source: {
-				kind: "custom",
-				imageDigest: desired.imageDigest,
-				admissionRevision: "admitted",
-				interactionMode: "platform-adapter",
-				connectionEnabled: false,
-			},
-			modelConfiguration: null,
+			source: realCodexE2e
+				? {
+						kind: "standard",
+						templateId: "worker-controlled-codex",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: [],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					}
+				: {
+						kind: "custom",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						interactionMode: "platform-adapter",
+						connectionEnabled: false,
+					},
+			modelConfiguration: realCodexE2e
+				? {
+						catalogRevision: "worker-controlled-catalog",
+						options: [
+							{
+								optionId: "worker-controlled-model",
+								endpointId: "worker-controlled-endpoint",
+								modelId: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								credential: {
+									secretId: "worker-controlled-secret",
+									version: 1,
+									isSet: true,
+								},
+							},
+						],
+						defaultOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+					}
+				: null,
 			environment: [],
 			secrets: [],
 			channels: [],
 			channelRevision: "channels-1",
 		};
+		const modelSecretRef = {
+			schemaVersion: 1 as const,
+			ownerType: "agent-owner" as const,
+			ownerId: "user-cli",
+			agentId: baseDesired.agentId,
+			secretId: "worker-controlled-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "worker-key",
+			name: "worker-controlled-model-secret",
+		};
+		const modelSecretKey = `MODEL_CREDENTIAL_${createHash("sha256")
+			.update("model:worker-controlled-model")
+			.digest("hex")
+			.toUpperCase()}`;
+		const catalog = catalogFixture();
+		const catalogEndpoint = catalog.endpoints[0];
+		if (!catalogEndpoint) throw Error("Controlled model endpoint is missing");
+		const modelProjection = realCodexE2e
+			? await projectRuntimeModelConfigurationV1({
+					configuration,
+					protocol: "openai-responses-v1",
+					catalog: createFakeModelCatalogAdapterV1({
+						...catalog,
+						revision: "worker-controlled-catalog",
+						endpoints: [
+							{
+								...catalogEndpoint,
+								endpointId: "worker-controlled-endpoint",
+							},
+						],
+					}),
+					access: createFakeModelAccessValidatorV1([
+						{
+							endpointId: "worker-controlled-endpoint",
+							modelId: "gpt-5.6-sol",
+							reasoningLevels: ["medium"],
+							credential: "worker-controlled-model-credential",
+						},
+					]),
+					signal: AbortSignal.timeout(1000),
+					credentialFor: async () => ({
+						reference: {
+							secretId: modelSecretRef.secretId,
+							secretVersion: 1,
+							configRevision: 1,
+							name: modelSecretRef.name,
+						},
+						key: modelSecretKey,
+						plaintext: new TextEncoder().encode(
+							"worker-controlled-model-credential",
+						),
+					}),
+				})
+			: undefined;
+		const desired = realCodexE2e
+			? validateAgentWorkloadDesiredV1({
+					...baseDesired,
+					secretRefs: [modelSecretRef],
+				})
+			: baseDesired;
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: fake.client,
+			policy,
+			...(modelProjection ? { modelProjection } : {}),
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending")
+			throw Error("Expected controlled Workload identity");
+		if (realCodexE2e) {
+			const secretUid = await adapter.applyImmutableSecret(
+				desired,
+				modelSecretRef.name,
+				modelSecretKey,
+				new TextEncoder().encode("worker-controlled-model-credential"),
+			);
+			await adapter.bindSecretFence(
+				desired,
+				identity,
+				modelSecretRef.name,
+				1,
+				secretUid,
+			);
+		}
+		await adapter.promote(desired, identity);
 		const capacity = {
 			schemaVersion: 1,
 			imageDigest: desired.imageDigest,
@@ -287,6 +406,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			configuration,
 			deployment: desired,
 			executionCapacity: capacity,
+			...(modelProjection ? { modelProjection } : {}),
 		};
 		const state = {
 			schemaVersion: 1,
@@ -314,8 +434,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
-		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(configuration)})`;
-		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(state)}, now() + interval '1 hour')`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
+		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
 		const fakeDriver = realCodexE2e
 			? undefined
 			: await FakeRuntimeDriver.open(join(directory, "driver.json"));
