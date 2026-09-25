@@ -113,10 +113,15 @@ function describedBy(...ids: (string | undefined)[]) {
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
 	const first = Object.keys(errors)[0];
-	const element = first ? document.getElementById(fieldId(first)) : undefined;
+	if (!first) return undefined;
+	const element = document.getElementById(fieldId(first));
 	if (element instanceof HTMLElement && !element.hasAttribute("disabled"))
 		return element;
-	return document.getElementById("application-deployment-status") ?? element;
+	return (
+		document.getElementById("application-deployment-status") ??
+		document.getElementById("application-add-model-option") ??
+		element
+	);
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {
@@ -1484,6 +1489,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								</div>
 								<Button
 									variant="outline"
+									id="application-add-model-option"
 									onClick={() =>
 										setModels((current) => [...current, blankModel()])
 									}
