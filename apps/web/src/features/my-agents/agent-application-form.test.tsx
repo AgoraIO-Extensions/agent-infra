@@ -307,6 +307,35 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	it("recomputes duplicate Secret errors after row removal", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		choose("标准模板 ID", "Codex");
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		chooseAt("Secret 名称", "MODEL_API_KEY", 0);
+		chooseAt("Secret 名称", "MODEL_API_KEY", 1);
+		fireEvent.change(at(screen.getAllByLabelText("替换值"), 0), {
+			target: { value: "secret-one" },
+		});
+		fireEvent.change(at(screen.getAllByLabelText("替换值"), 1), {
+			target: { value: "secret-two" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
+
+		fireEvent.click(
+			at(screen.getAllByRole("button", { name: "移除Secret" }), 1),
+		);
+		expect(screen.queryByText("名称不能重复。")).toBeNull();
+	});
+
 	it("clears Secret values when the template or Secret name changes", async () => {
 		const onSubmit = vi.fn();
 		const deploymentWithSecretTemplates = {
@@ -403,6 +432,44 @@ describe("AgentApplicationForm", () => {
 			expect(screen.queryAllByText("模型选项不能重复。")).toHaveLength(0),
 		);
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("recomputes duplicate model errors after row removal", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板 ID", "Codex");
+		chooseAt("模型端点", "Primary endpoint", 0);
+		chooseAt("模型", "gpt-5", 0);
+		checkAt("medium", 0);
+		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 0), {
+			target: { value: "credential-one" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
+		chooseAt("模型端点", "Primary endpoint", 1);
+		chooseAt("模型", "gpt-5", 1);
+		checkAt("medium", 1);
+		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 1), {
+			target: { value: "credential-two" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
+
+		fireEvent.click(
+			at(screen.getAllByRole("button", { name: "移除模型选项" }), 1),
+		);
+		expect(screen.queryByText("模型选项不能重复。")).toBeNull();
 	});
 
 	it("submits the writable application configuration entered by the employee", () => {
