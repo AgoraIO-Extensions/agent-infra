@@ -61,7 +61,6 @@ export type AgentApplicationServerError = {
 type DraftField<T extends string> = {
 	key: T;
 	label: string;
-	multiline?: boolean;
 	options?: readonly { value: string; label: string; disabled?: boolean }[];
 	required?: boolean;
 	type?: "password" | "text";
@@ -585,18 +584,6 @@ function DraftRows<T extends string>({
 													))}
 												</SelectContent>
 											</Select>
-										) : field.multiline ? (
-											<Textarea
-												aria-describedby={message ? errorId(key) : undefined}
-												aria-invalid={message ? true : undefined}
-												className="min-h-20"
-												id={id}
-												onChange={(event) =>
-													onChange(index, field.key, event.target.value)
-												}
-												required={field.required}
-												value={row[field.key]}
-											/>
 										) : (
 											<Input
 												aria-describedby={message ? errorId(key) : undefined}
