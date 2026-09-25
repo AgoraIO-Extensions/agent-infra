@@ -73,6 +73,7 @@ export type AgentApplicationValidationContext = {
 	modelConfigurationVisible: boolean;
 	requiresReplacementCredential: boolean;
 	staleModel: boolean;
+	staleModelIndexes?: readonly number[];
 	staleTemplate: boolean;
 	standardChoicesBlocked: boolean;
 };
@@ -144,9 +145,24 @@ export function validateAgentApplicationDraft(
 				errors[`model.${index}.reasoningLevels`] = "至少选择一个推理档位。";
 			if (context.requiresReplacementCredential && !model.credentialValue)
 				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
-			if (context.staleModel)
+			if (
+				context.staleModelIndexes?.includes(index) ||
+				(context.staleModelIndexes === undefined && context.staleModel)
+			)
 				errors[`model.${index}.modelId`] = "模型选项已移除，请重新选择。";
 		});
+		const optionIndexes = new Map<string, number[]>();
+		draft.models.forEach((model, index) => {
+			if (!model.optionId) return;
+			const indexes = optionIndexes.get(model.optionId) ?? [];
+			indexes.push(index);
+			optionIndexes.set(model.optionId, indexes);
+		});
+		for (const indexes of optionIndexes.values()) {
+			if (indexes.length < 2) continue;
+			for (const index of indexes)
+				errors[`model.${index}.modelId`] = "模型选项不能重复。";
+		}
 		if (
 			!draft.defaultModelOptionId ||
 			draft.models.filter(

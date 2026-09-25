@@ -389,10 +389,51 @@ describe("AgentApplicationForm", () => {
 		expect(
 			screen.getByLabelText("共同 Owner 用户 ID").getAttribute("aria-invalid"),
 		).toBe("true");
+		expect(
+			screen
+				.getByLabelText("共同 Owner 用户 ID")
+				.getAttribute("aria-describedby"),
+		).toBe("application-access-help application-co-owner-ids-error");
 		expect(document.activeElement).toBe(
 			screen.getByLabelText("共同 Owner 用户 ID"),
 		);
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("focuses the model field after a server model-selection rejection", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				serverError={{ code: "MODEL_SELECTION_INVALID" }}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByLabelText("模型").getAttribute("aria-invalid")).toBe(
+			"true",
+		);
+		expect(document.activeElement).toBe(screen.getByLabelText("模型"));
+	});
+
+	it("focuses the form for a server invalid-request error", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				serverError={{ code: "INVALID_REQUEST" }}
+				submitting={false}
+			/>,
+		);
+
+		const form = document.querySelector("form");
+		if (!form) throw new Error("application form missing");
+		expect(
+			screen.getByText("申请内容未通过服务端校验，请检查表单后重试。"),
+		).toBeTruthy();
+		expect(document.activeElement).toBe(form);
 	});
 
 	it("marks a removed existing template instead of submitting it", () => {

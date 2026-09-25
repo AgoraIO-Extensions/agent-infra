@@ -125,6 +125,7 @@ export function AgentApplicationSubmissionScreen(
 							}
 							{...props}
 							cancelAction={cancelAction}
+							serverError={props.error}
 						/>
 					)}
 					{props.result ? (

@@ -160,7 +160,12 @@ export async function createMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error ?? {});
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
 
 	return result.data;
 }
@@ -185,7 +190,12 @@ export async function updateMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error ?? {});
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
 	if (result.data.applicationId !== applicationId)
 		throw requestError({ retryable: false });
 

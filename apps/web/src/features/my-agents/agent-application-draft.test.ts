@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AgentApplicationFormDraft,
 	buildAgentApplicationRequest,
+	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
 
 const standardCreateDraft = {
@@ -107,5 +108,58 @@ describe("Agent application draft", () => {
 				source: { kind: "standard", templateId: "codex" },
 			}),
 		);
+	});
+
+	it("marks only duplicated model options on their model fields", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				models: [
+					standardCreateDraft.models[0],
+					{ ...standardCreateDraft.models[0], credentialValue: "" },
+				],
+			},
+			{
+				modelConfigurationVisible: true,
+				requiresReplacementCredential: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+				defaultModelReasoningLevels: ["medium", "high"],
+			},
+		);
+
+		expect(errors["model.0.modelId"]).toBe("模型选项不能重复。");
+		expect(errors["model.1.modelId"]).toBe("模型选项不能重复。");
+	});
+
+	it("keeps a valid model row clear when another row is stale", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				models: [
+					standardCreateDraft.models[0],
+					{
+						...standardCreateDraft.models[0],
+						optionId: "stale",
+						modelId: "gone",
+					},
+				],
+				defaultModelOptionId: "model-primary",
+			},
+			{
+				modelConfigurationVisible: true,
+				requiresReplacementCredential: false,
+				staleModel: true,
+				staleModelIndexes: [1],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+				defaultModelReasoningLevels: ["medium", "high"],
+			},
+		);
+
+		expect(errors["model.0.modelId"]).toBeUndefined();
+		expect(errors["model.1.modelId"]).toBe("模型选项已移除，请重新选择。");
 	});
 });

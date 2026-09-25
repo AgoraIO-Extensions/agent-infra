@@ -1,5 +1,5 @@
 import { PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,7 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 			mode: "create";
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
+			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
 	  }
 	| {
@@ -48,9 +49,14 @@ type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			mode: "update";
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
+			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
 	  }
 );
+
+export type AgentApplicationServerError = {
+	readonly code?: string;
+};
 
 type DraftField<T extends string> = {
 	key: T;
@@ -97,6 +103,10 @@ function fieldId(key: string) {
 
 function errorId(key: string) {
 	return `${fieldId(key)}-error`;
+}
+
+function describedBy(...ids: (string | undefined)[]) {
+	return ids.filter(Boolean).join(" ") || undefined;
 }
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
@@ -462,6 +472,7 @@ function DraftRows<T extends string>({
 }
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
+	const formRef = useRef<HTMLFormElement>(null);
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
 	const deployment = props.deploymentConfiguration;
@@ -537,9 +548,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
 	);
-	const [fieldErrors, setFieldErrors] = useState<AgentApplicationFieldErrors>(
-		{},
-	);
+	const [localFieldErrors, setFieldErrors] =
+		useState<AgentApplicationFieldErrors>({});
 	const modelConfigurationVisible = showsModelConfiguration(
 		props.mode,
 		sourceKind,
@@ -568,25 +578,61 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		(value) => ({ value, label: value }),
 	);
 	const staleTemplate = templateId.length > 0 && selectedTemplate === undefined;
-	const staleModel = models.some(
-		(model) =>
-			model.endpointId.length > 0 &&
-			(!model.modelId ||
-				!model.reasoningLevels.trim() ||
-				!modelEndpoints.some(
-					(endpoint) =>
-						endpoint.endpointId === model.endpointId &&
-						endpoint.models.some((entry) => entry.modelId === model.modelId),
-				) ||
-				!model.reasoningLevels
-					.split("\n")
-					.filter(Boolean)
-					.every((level) =>
-						modelEndpoints
-							.find((endpoint) => endpoint.endpointId === model.endpointId)
-							?.models.find((entry) => entry.modelId === model.modelId)
-							?.reasoningLevels.includes(level),
-					)),
+	const staleModelIndexes = useMemo(
+		() =>
+			models.flatMap((model, index) =>
+				model.endpointId.length > 0 &&
+				(!model.modelId ||
+					!model.reasoningLevels.trim() ||
+					!modelEndpoints.some(
+						(endpoint) =>
+							endpoint.endpointId === model.endpointId &&
+							endpoint.models.some((entry) => entry.modelId === model.modelId),
+					) ||
+					!model.reasoningLevels
+						.split("\n")
+						.filter(Boolean)
+						.every((level) =>
+							modelEndpoints
+								.find((endpoint) => endpoint.endpointId === model.endpointId)
+								?.models.find((entry) => entry.modelId === model.modelId)
+								?.reasoningLevels.includes(level),
+						))
+					? [index]
+					: [],
+			),
+		[modelEndpoints, models],
+	);
+	const staleModel = staleModelIndexes.length > 0;
+	const modelServerErrorIndexes = useMemo(
+		() =>
+			props.serverError?.code === "MODEL_SELECTION_INVALID"
+				? staleModelIndexes.length > 0
+					? staleModelIndexes
+					: modelConfigurationVisible && models.length > 0
+						? [0]
+						: []
+				: [],
+		[
+			modelConfigurationVisible,
+			models.length,
+			props.serverError?.code,
+			staleModelIndexes,
+		],
+	);
+	const serverFieldErrors = useMemo(() => {
+		const errors: AgentApplicationFieldErrors = {};
+		for (const index of modelServerErrorIndexes)
+			errors[`model.${index}.modelId`] = "服务端拒绝了该模型选项，请重新选择。";
+		return errors;
+	}, [modelServerErrorIndexes]);
+	const serverFormError =
+		props.serverError?.code === "INVALID_REQUEST"
+			? "申请内容未通过服务端校验，请检查表单后重试。"
+			: undefined;
+	const fieldErrors = useMemo(
+		() => ({ ...serverFieldErrors, ...localFieldErrors }),
+		[serverFieldErrors, localFieldErrors],
 	);
 	const defaultModel = models.find(
 		(model) => model.optionId === defaultModelOptionId,
@@ -612,7 +658,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	useEffect(() => {
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
-	}, [fieldErrors]);
+		else if (serverFormError) formRef.current?.focus();
+	}, [fieldErrors, serverFormError]);
 
 	const submit = () => {
 		const draft = {
@@ -641,6 +688,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			modelConfigurationVisible,
 			requiresReplacementCredential,
 			staleModel,
+			staleModelIndexes,
 			staleTemplate,
 			standardChoicesBlocked,
 		});
@@ -659,13 +707,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 
 	return (
 		<form
+			ref={formRef}
+			aria-describedby={serverFormError ? "application-form-error" : undefined}
 			className="space-y-6"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (props.submitting) return;
 				submit();
 			}}
+			tabIndex={serverFormError ? -1 : undefined}
 		>
+			{serverFormError ? (
+				<p
+					aria-live="assertive"
+					className="text-destructive text-sm"
+					id="application-form-error"
+				>
+					{serverFormError}
+				</p>
+			) : null}
 			<fieldset
 				disabled={props.submitting}
 				className="min-w-0 space-y-6"
@@ -902,7 +962,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<Textarea
 								className="min-h-24"
 								id="application-co-owner-ids"
-								aria-describedby="application-access-help"
+								aria-describedby={describedBy(
+									"application-access-help",
+									fieldErrors.coOwnerIds ? errorId("coOwnerIds") : undefined,
+								)}
 								aria-invalid={fieldErrors.coOwnerIds ? true : undefined}
 								onChange={(event) => setCoOwnerIds(event.target.value)}
 								value={coOwnerIds}
@@ -919,7 +982,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<Textarea
 								className="min-h-24"
 								id="application-user-availability-ids"
-								aria-describedby="application-access-help"
+								aria-describedby={describedBy(
+									"application-access-help",
+									fieldErrors.userAvailabilityIds
+										? errorId("userAvailabilityIds")
+										: undefined,
+								)}
 								aria-invalid={
 									fieldErrors.userAvailabilityIds ? true : undefined
 								}
@@ -938,7 +1006,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<Textarea
 								className="min-h-24"
 								id="application-organization-availability-ids"
-								aria-describedby="application-access-help"
+								aria-describedby={describedBy(
+									"application-access-help",
+									fieldErrors.organizationAvailabilityIds
+										? errorId("organizationAvailabilityIds")
+										: undefined,
+								)}
 								aria-invalid={
 									fieldErrors.organizationAvailabilityIds ? true : undefined
 								}
@@ -1098,6 +1171,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																			modelId: "",
 																			reasoningLevels: "",
 																			optionId: "",
+																			credentialValue: "",
 																		}
 																	: {
 																			optionId:
@@ -1105,6 +1179,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																					? optionIdFor(item.endpointId, value)
 																					: "",
 																			reasoningLevels: "",
+																			credentialValue: "",
 																		}),
 															}
 														: { ...item, [key]: value },
