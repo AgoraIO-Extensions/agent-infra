@@ -106,7 +106,7 @@ function validateProfile(
 		throw new Error("LDAP URL is invalid");
 	}
 	if (
-		url.protocol !== "ldaps:" ||
+		(url.protocol !== "ldaps:" && url.protocol !== "ldap:") ||
 		!url.hostname ||
 		url.username ||
 		url.password ||

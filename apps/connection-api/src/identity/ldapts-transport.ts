@@ -1,3 +1,4 @@
+import type { ConnectionOptions } from "node:tls";
 import { Client } from "ldapts";
 import type { LdapEntry, LdapProfile, LdapTransport } from "./ldap.js";
 import { LdapAuthenticator, LdapUnavailableError } from "./ldap.js";
@@ -17,9 +18,12 @@ function ldapEntry(entry: { dn: string; [name: string]: unknown }): LdapEntry {
 }
 
 class LdaptsTransport implements LdapTransport {
+	private secured = false;
+
 	constructor(
 		private readonly client: Client,
 		private readonly timeoutMs: number,
+		private readonly startTlsOptions?: ConnectionOptions,
 	) {}
 
 	private async operation<T>(
@@ -32,6 +36,10 @@ class LdaptsTransport implements LdapTransport {
 		};
 		signal.addEventListener("abort", abort, { once: true });
 		try {
+			if (this.startTlsOptions && !this.secured) {
+				await this.client.startTLS(this.startTlsOptions);
+				this.secured = true;
+			}
 			return await work();
 		} finally {
 			signal.removeEventListener("abort", abort);
@@ -73,20 +81,22 @@ export function createLdaptsAuthenticator(
 ): LdapAuthenticator {
 	return new LdapAuthenticator(profile, () => {
 		const timeoutMs = profile.timeoutMs ?? 5_000;
+		const tlsOptions: ConnectionOptions = {
+			ca: caPem,
+			minVersion: "TLSv1.2",
+			rejectUnauthorized: true,
+			servername: new URL(profile.url).hostname,
+		};
 		return new LdaptsTransport(
 			new Client({
 				url: profile.url,
 				timeout: timeoutMs,
 				connectTimeout: timeoutMs,
 				autoRebind: false,
-				tlsOptions: {
-					ca: caPem,
-					minVersion: "TLSv1.2",
-					rejectUnauthorized: true,
-					servername: new URL(profile.url).hostname,
-				},
+				tlsOptions,
 			}),
 			timeoutMs,
+			new URL(profile.url).protocol === "ldap:" ? tlsOptions : undefined,
 		);
 	});
 }
