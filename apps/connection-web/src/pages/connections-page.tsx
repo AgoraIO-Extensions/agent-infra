@@ -157,16 +157,13 @@ export function ConnectionsPage() {
 			setRehoboamPending(false);
 		}
 	};
-	const connectManhattan = async (credential: {
-		password: string;
-		username: string;
-	}) => {
+	const connectManhattan = async (accessToken: string) => {
 		setManhattanPending(true);
 		setManhattanError(null);
 		try {
 			await connectionApi.connectProviderCredential({
+				accessToken,
 				providerId: "manhattan",
-				...credential,
 			});
 			setManhattanOpen(false);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
@@ -345,6 +342,13 @@ export function ConnectionsPage() {
 				...new Set(
 					data.upgradeTasks
 						.filter((task) => task.status === "PENDING_CONNECTION")
+						.filter((task) =>
+							data.connections.every(
+								(connection) =>
+									connection.id !== task.connectionId ||
+									connection.providerId !== "manhattan",
+							),
+						)
 						.map((task) => task.connectionId),
 				),
 			]
@@ -806,32 +810,31 @@ export function ConnectionsPage() {
 						className="form-stack"
 						onSubmit={(event: FormEvent<HTMLFormElement>) => {
 							event.preventDefault();
-							const form = new FormData(event.currentTarget);
-							const username = form.get("username");
-							const password = form.get("password");
-							if (typeof username === "string" && typeof password === "string")
-								void connectManhattan({ password, username });
+							const accessToken = new FormData(event.currentTarget).get(
+								"accessToken",
+							);
+							if (typeof accessToken === "string") {
+								event.currentTarget.reset();
+								void connectManhattan(accessToken);
+							}
 						}}
 					>
-						<label htmlFor="manhattan-username">公司账号</label>
+						<label htmlFor="manhattan-access-token">Manhattan PAT</label>
 						<input
-							autoComplete="username"
-							defaultValue={overview.data?.account.email ?? ""}
-							id="manhattan-username"
-							maxLength={256}
-							name="username"
-							required
-							type="text"
-						/>
-						<label htmlFor="manhattan-password">公司密码</label>
-						<input
-							autoComplete="current-password"
-							id="manhattan-password"
-							maxLength={1024}
-							name="password"
+							autoComplete="off"
+							id="manhattan-access-token"
+							maxLength={8192}
+							name="accessToken"
 							required
 							type="password"
 						/>
+						<a
+							href="https://manhattan.agoralab.co/account/personal-tokens"
+							target="_blank"
+							rel="noreferrer"
+						>
+							在 Manhattan 创建 PAT
+						</a>
 						<div className="dialog-actions">
 							<Button type="submit" disabled={manhattanPending}>
 								<KeyRound aria-hidden="true" size={17} />
@@ -1342,14 +1345,16 @@ function ConnectorManagementWorkspace(props: {
 										variant="secondary"
 										disabled={props.upgradingConnectionId === selected.id}
 										onClick={() =>
-											selected.providerId === "github"
+											selected.providerId === "github" ||
+											selected.providerId === "manhattan"
 												? props.onReconnect(selected)
 												: props.onUpgrade(selected.id)
 										}
 									>
 										{props.upgradingConnectionId === selected.id
 											? "正在升级"
-											: selected.providerId === "github"
+											: selected.providerId === "github" ||
+													selected.providerId === "manhattan"
 												? "重新连接"
 												: "升级连接"}
 									</Button>

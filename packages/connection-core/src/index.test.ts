@@ -1557,6 +1557,23 @@ describe("Connection application service", () => {
 		});
 	});
 
+	it("requires a personal PAT instead of upgrading an old Manhattan token", async () => {
+		const repository = new MemoryRepository();
+		repository.getProviderCredentialForUpgrade = async () => ({
+			accessToken: "old-short-lived-token",
+			credentialVersionId: "credential-v3",
+			externalAccount: "user@example.com",
+			grantedScopes: ["manhattan.sdk.read"],
+			providerId: "manhattan",
+		});
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => ({}),
+		});
+		await expect(
+			service.upgradeProviderConnection("alice", "connection-manhattan"),
+		).rejects.toMatchObject({ code: "PROVIDER_REAUTHORIZATION_REQUIRED" });
+	});
+
 	it("does not retry an uncertain Bitbucket write with the same idempotency key", async () => {
 		const repository = new MemoryRepository();
 		const bitbucketInvocation = {

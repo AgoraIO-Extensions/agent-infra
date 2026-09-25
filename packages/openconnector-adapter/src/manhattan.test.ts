@@ -5,9 +5,7 @@ import test from "node:test";
 import { ManhattanAdapter, manhattanConnectionCatalog } from "./manhattan.ts";
 import { manhattanExecutorDigest } from "./manhattan-integrity.ts";
 
-function loginCredential() {
-	return JSON.stringify({ password: "secret", username: "user@example.com" });
-}
+const personalPAT = `mhpat_${"a".repeat(43)}`;
 
 test("Manhattan executor digest pins its reviewed source", () => {
 	const digest = createHash("sha256")
@@ -21,10 +19,10 @@ test("Manhattan catalog is read only", () => {
 	assert.deepEqual(
 		manhattanConnectionCatalog.actions.map((action) => action.id),
 		[
-			"manhattan.get_current_user@v3",
-			"manhattan.list_sdk_dumps@v3",
-			"manhattan.get_sdk_dump@v3",
-			"manhattan.list_symbols@v3",
+			"manhattan.get_current_user@v4",
+			"manhattan.list_sdk_dumps@v4",
+			"manhattan.get_sdk_dump@v4",
+			"manhattan.list_symbols@v4",
 		],
 	);
 	assert.ok(
@@ -34,32 +32,51 @@ test("Manhattan catalog is read only", () => {
 	);
 });
 
-test("Manhattan exchanges login credentials and stores only the token", async () => {
-	const requests: Array<{ body?: string; headers: Headers; url: string }> = [];
+test("Manhattan validates a personal PAT without sending a company password", async () => {
+	const requests: Array<{ headers: Headers; url: string }> = [];
 	const adapter = new ManhattanAdapter(async (input, init) => {
 		requests.push({
-			body: init?.body as string,
 			headers: new Headers(init?.headers),
 			url: String(input),
 		});
-		if (String(input).endsWith("/login"))
-			return Response.json({ data: { token: "personal-token" } });
-		return Response.json({ email: "user@example.com", displayName: "User" });
+		return Response.json({
+			email: "user@example.com",
+			displayName: "User",
+			scopes: ["manhattan.sdk.read"],
+		});
 	}, "machine-key");
-	const identity = await adapter.validateCredential(loginCredential());
-	assert.deepEqual(JSON.parse(requests[0]?.body ?? "{}"), {
-		password: "secret",
-		username: "user@example.com",
-	});
+	const identity = await adapter.validateCredential(personalPAT);
+	assert.equal(requests.length, 1);
+	assert.equal(
+		requests[0]?.url,
+		"https://manhattan-api.agoralab.co/api/connection/whoami",
+	);
 	assert.equal(requests[0]?.headers.get("apikey"), "machine-key");
 	assert.equal(
-		requests[1]?.headers.get("authorization"),
-		"Bearer personal-token",
+		requests[0]?.headers.get("authorization"),
+		`Bearer ${personalPAT}`,
 	);
 	assert.equal(identity.externalAccount, "user@example.com");
 	assert.deepEqual(identity.grantedScopes, ["manhattan.sdk.read"]);
-	assert.equal(identity.accessToken, "personal-token");
-	assert.equal(JSON.stringify(identity).includes("secret"), false);
+	assert.equal(identity.accessToken, personalPAT);
+	await assert.rejects(
+		adapter.validateCredential(
+			JSON.stringify({ username: "user", password: "secret" }),
+		),
+		/Manhattan personal PAT is required/,
+	);
+	assert.equal(requests.length, 1);
+});
+
+test("Manhattan refuses a PAT whose identity has no read scope", async () => {
+	const adapter = new ManhattanAdapter(
+		async () => Response.json({ email: "user@example.com", scopes: [] }),
+		"machine-key",
+	);
+	await assert.rejects(
+		adapter.validateCredential(personalPAT),
+		/lacks the required read scope/,
+	);
 });
 
 test("Manhattan maps actions only to fixed endpoints", async () => {

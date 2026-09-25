@@ -83,6 +83,13 @@ Rehoboam Ingress 的 Kong `key-auth`。用户从 Rehoboam Security 创建隐含 
 Connection；Connection 不接收 Rehoboam 密码，只加密保存该 PAT。
 机器 `apiKey` 不进入浏览器、用户 credential envelope、MCP 参数或调用结果。
 
+Manhattan v4 使用用户在 Manhattan 现有 HCI 登录页面自助创建的个人只读 PAT。
+Connection 只加密保存 PAT，并与服务端注入的 `MANHATTAN_KONG_API_KEY` 一起调用固定
+`/api/connection/*`；Manhattan 按 PAT owner 和实时 RBAC 校验，Token 撤销或过期后立即失效。
+旧 v3 短期 OAuth Token 不可静默升级，须重新连接；发布前必须先评审并执行 Manhattan 的
+`migrations/20260925_manhattan_connection_pats.sql`，部署其 Web/OpenAPI 与个人 Token 页面，
+再在 Connection 发布 `manhattan-connection-v4` 并以真实个人 PAT 验证无害 READ。
+
 ## 验收边界
 
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收

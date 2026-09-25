@@ -8,7 +8,7 @@ import { manhattanExecutorDigest } from "./manhattan-integrity.ts";
 const apiOrigin = "https://manhattan-api.agoralab.co";
 const maxResponseBytes = 64 * 1024;
 const providerId = "manhattan";
-const providerReleaseId = "manhattan-connection-v3";
+const providerReleaseId = "manhattan-connection-v4";
 const readScope = "manhattan.sdk.read";
 
 export const manhattanConnectionCatalog = {
@@ -16,7 +16,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "获取当前通过 HCI OAuth 鉴权的 Manhattan 用户。",
 			effect: "READ" as const,
-			id: "manhattan.get_current_user@v3",
+			id: "manhattan.get_current_user@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
@@ -29,7 +29,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "查询 Manhattan SDK dump 历史。",
 			effect: "READ" as const,
-			id: "manhattan.list_sdk_dumps@v3",
+			id: "manhattan.list_sdk_dumps@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -51,7 +51,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "获取一条 Manhattan SDK dump 详情。",
 			effect: "READ" as const,
-			id: "manhattan.get_sdk_dump@v3",
+			id: "manhattan.get_sdk_dump@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { id: { minimum: 1, type: "integer" } },
@@ -64,7 +64,7 @@ export const manhattanConnectionCatalog = {
 		{
 			description: "分页查询 Manhattan Symbol。",
 			effect: "READ" as const,
-			id: "manhattan.list_symbols@v3",
+			id: "manhattan.list_symbols@v4",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -81,7 +81,7 @@ export const manhattanConnectionCatalog = {
 	],
 	authProfile: {
 		gatewayHeader: "apiKey",
-		personalCredential: "login-exchanged-bearer-token",
+		personalCredential: "personal-access-token",
 	},
 	deploymentProfile: {
 		apiOrigin,
@@ -109,16 +109,21 @@ export class ManhattanAdapter
 	}
 
 	async validateCredential(encodedCredential: string) {
-		const { password, username } = parseLoginCredential(encodedCredential);
-		const accessToken = await this.login(username, password);
-		const identity = await this.request("/api/connection/whoami", accessToken);
+		if (!/^mhpat_[A-Za-z0-9_-]{43}$/.test(encodedCredential))
+			throw invalidCredential("Manhattan personal PAT is required");
+		const identity = await this.request(
+			"/api/connection/whoami",
+			encodedCredential,
+		);
 		const email =
 			typeof identity.email === "string"
 				? identity.email.trim().toLowerCase()
 				: "";
 		if (!email) throw invalidCredential("Manhattan identity is incomplete");
+		if (!Array.isArray(identity.scopes) || !identity.scopes.includes(readScope))
+			throw invalidCredential("Manhattan PAT lacks the required read scope");
 		return {
-			accessToken,
+			accessToken: encodedCredential,
 			displayName:
 				typeof identity.displayName === "string" ? identity.displayName : email,
 			externalAccount: email,
@@ -191,32 +196,6 @@ export class ManhattanAdapter
 			throw providerError("Manhattan returned invalid JSON");
 		}
 	}
-
-	private async login(username: string, password: string) {
-		const data = await this.request("/api/connection/login", "", {
-			password,
-			username,
-		});
-		const payload =
-			data.data && typeof data.data === "object"
-				? (data.data as Record<string, unknown>)
-				: data;
-		const token = typeof payload.token === "string" ? payload.token : "";
-		if (!token)
-			throw invalidCredential("Manhattan login did not return a token");
-		return token;
-	}
-}
-
-function parseLoginCredential(encoded: string) {
-	try {
-		const value = JSON.parse(encoded) as Record<string, unknown>;
-		const username =
-			typeof value.username === "string" ? value.username.trim() : "";
-		const password = typeof value.password === "string" ? value.password : "";
-		if (username && password) return { password, username };
-	} catch {}
-	throw invalidCredential("Manhattan username and password are required");
 }
 
 async function boundedResponseText(response: Response) {

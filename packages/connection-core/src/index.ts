@@ -1095,6 +1095,11 @@ export class ConnectionApplicationService {
 			connectionId,
 			principalId,
 		});
+		if (current.providerId === "manhattan")
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Manhattan requires a personal PAT reconnect",
+			);
 		const connector = this.credentialConnectors[current.providerId];
 		if (!connector) {
 			throw new ConnectionError(

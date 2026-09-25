@@ -568,6 +568,30 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("Manhattan 使用个人 PAT，不再收集公司密码", async () => {
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Manhattan 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		const input = screen.getByLabelText("Manhattan PAT") as HTMLInputElement;
+		fireEvent.change(input, { target: { value: `mhpat_${"a".repeat(43)}` } });
+		expect(screen.queryByLabelText("公司密码")).toBeNull();
+		expect(
+			screen
+				.getByRole("link", { name: "在 Manhattan 创建 PAT" })
+				.getAttribute("href"),
+		).toBe("https://manhattan.agoralab.co/account/personal-tokens");
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledWith({
+				providerId: "manhattan",
+				accessToken: `mhpat_${"a".repeat(43)}`,
+			}),
+		);
+		expect(input.value).toBe("");
+	});
+
 	it("连接页调用 Jira Server credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });

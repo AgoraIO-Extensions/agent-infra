@@ -169,10 +169,10 @@ exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/Pi
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
-v3 连接表单接收公司 HCI 用户名与密码，并只发送到固定 `/api/connection/login`；Manhattan 服务端完成
-password grant 后返回短期个人 Token，Connection 只加密保存该 Token，不保存账号密码。随后 Manhattan
-调用固定 user-info endpoint 验证 Token 并执行现有 RBAC 校验。机器 key 只由 Secret Manager 注入，不得
-进入 credential envelope。手工 Bearer v1 和 HCI Cookie v2 保持不可变；`manhattan-connection-v3` 发布当前用户、SDK dump 列表/详情和 Symbol
+v3 的 password grant 账号体系与员工 IAM 分离，不能用于公司账号。v4 由员工在 Manhattan 已有 HCI 登录态下
+自助创建固定 `manhattan.sdk.read` 的个人 PAT，Connection 只接受并加密保存 PAT，不接收公司密码；
+Manhattan 按 PAT 持有人与实时 RBAC 授权执行 Action。机器 key 只由 Secret Manager 注入，不得
+进入 credential envelope。手工 Bearer v1、HCI Cookie v2 和密码交换 v3 保持不可变；`manhattan-connection-v4` 发布当前用户、SDK dump 列表/详情和 Symbol
 列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
 为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
 
