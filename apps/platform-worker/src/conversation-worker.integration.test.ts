@@ -618,6 +618,16 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		if (!active) throw Error("No running execution");
 		expect(await dispatchCount()).toBe(1);
 		if (realCodexE2e) {
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return phases.has("intent") && phases.has("started");
+			}, "persisted Codex model operation start facts");
 			releaseModelResponse?.();
 			await waitUntil(async () => {
 				const facts = await sql<{ phase: string }[]>`
