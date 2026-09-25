@@ -113,32 +113,31 @@ function describedBy(...ids: (string | undefined)[]) {
 
 function firstFieldError(errors: AgentApplicationFieldErrors) {
 	if (Object.keys(errors).length === 0) return undefined;
-	const first = Object.keys(errors)
+	const controls = Object.keys(errors)
 		.map((key) => document.getElementById(fieldId(key)))
 		.filter((element): element is HTMLElement => element instanceof HTMLElement)
 		.sort((left, right) =>
 			left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING
 				? -1
 				: 1,
-		)[0];
-	if (
-		first &&
-		!first.closest("[disabled]") &&
-		(!(first instanceof HTMLFieldSetElement) ||
-			Array.from(
-				first.querySelectorAll(
-					"input, button, select, textarea, [role='checkbox']",
-				),
-			).some(
-				(control) =>
-					control instanceof HTMLElement && !control.closest("[disabled]"),
-			))
-	)
-		return first;
-	return (
+		);
+	const isActionable = (element: HTMLElement) => {
+		if (element.closest("[disabled]")) return false;
+		if (!(element instanceof HTMLFieldSetElement)) return true;
+		return Array.from(
+			element.querySelectorAll(
+				"input, button, select, textarea, [role='checkbox']",
+			),
+		).some(
+			(control) =>
+				control instanceof HTMLElement && !control.closest("[disabled]"),
+		);
+	};
+	const fallback =
 		document.getElementById("application-deployment-status") ??
-		document.getElementById("application-add-model-option")
-	);
+		document.getElementById("application-add-model-option");
+	if (controls[0] && !isActionable(controls[0]) && fallback) return fallback;
+	return controls.find(isActionable) ?? fallback;
 }
 
 function reindexRowErrors(
@@ -270,6 +269,7 @@ function endpointIdForModelOption(
 		legacyExact.some((endpoint) => endpoint.endpointId !== exact.endpointId)
 	)
 		return "";
+	if (exact) return exact.endpointId;
 	if (legacyExact.length === 1) return legacyExact[0]?.endpointId ?? "";
 	if (option.optionId.includes(":")) return "";
 	const candidates = endpoints.filter((endpoint) =>
@@ -490,6 +490,7 @@ function ModelRows({
 							</Label>
 							<Input
 								autoComplete="new-password"
+								disabled={modelOptions.length === 0}
 								aria-describedby={
 									errors[`model.${index}.credentialValue`]
 										? errorId(`model.${index}.credentialValue`)
@@ -921,6 +922,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		props.serverError?.code === "INVALID_REQUEST"
 			? "申请内容未通过服务端校验，请检查表单后重试。"
 			: undefined;
+	const hasActiveServerValidationError =
+		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
+		!serverValidationDismissed;
 	const fieldErrors = useMemo(
 		() => ({ ...serverFieldErrors, ...localFieldErrors }),
 		[serverFieldErrors, localFieldErrors],
@@ -1012,6 +1016,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (
 			Object.keys(errors).length > 0 ||
 			Object.keys(serverFieldErrors).length > 0 ||
+			hasActiveServerValidationError ||
 			serverFormError
 		)
 			return;
@@ -1627,9 +1632,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										<Label htmlFor="application-default-model-option">
 											默认模型
 										</Label>
-										<Select
-											value={defaultModelOptionId}
-											disabled={models.length === 0}
+								<Select
+									value={defaultModelOptionId}
+									disabled={models.length === 0 || modelOptions.length === 0}
 											itemToStringLabel={(value) => {
 												const model = models.find(
 													(item) => item.optionId === value,
