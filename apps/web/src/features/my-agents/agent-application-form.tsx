@@ -86,6 +86,18 @@ function optionIdFor(endpointId: string, modelId: string) {
 	return `${encodeURIComponent(endpointId)}:${encodeURIComponent(modelId)}`;
 }
 
+function uniqueEndpointIdFor(
+	endpoints: readonly DeploymentModelEndpointProjectionV2[],
+	modelId: string,
+) {
+	const matches = endpoints
+		.filter((endpoint) =>
+			endpoint.models.some((model) => model.modelId === modelId),
+		)
+		.map((endpoint) => endpoint.endpointId);
+	return matches.length === 1 ? (matches[0] ?? "") : "";
+}
+
 function modelLabel(
 	endpoint: DeploymentModelEndpointProjectionV2,
 	modelId: string,
@@ -106,12 +118,14 @@ function ModelRows({
 	models,
 	endpoints,
 	requiresReplacementCredential,
+	originalOptionIds,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
 	requiresReplacementCredential: boolean;
+	originalOptionIds: ReadonlySet<string>;
 	onChange: (
 		index: number,
 		key: keyof AgentApplicationModelDraft,
@@ -235,7 +249,10 @@ function ModelRows({
 								onChange={(event) =>
 									onChange(index, "credentialValue", event.target.value)
 								}
-								required={requiresReplacementCredential}
+								required={
+									requiresReplacementCredential ||
+									!originalOptionIds.has(model.optionId)
+								}
 								type="password"
 								value={model.credentialValue}
 							/>
@@ -397,26 +414,42 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		[],
 	);
 	const [configureModels, setConfigureModels] = useState(false);
+	const initialModelOptions =
+		props.mode === "update"
+			? (configuration?.modelOptions ?? []).map((option) => {
+					const endpointId = uniqueEndpointIdFor(
+						props.deploymentConfiguration.modelCatalog.endpoints,
+						option.modelId,
+					);
+					return {
+						credentialValue: "",
+						endpointId,
+						modelId: option.modelId,
+						optionId:
+							endpointId.length > 0
+								? optionIdFor(endpointId, option.modelId)
+								: option.optionId,
+						reasoningLevels: option.reasoningLevels.join("\n"),
+					};
+				})
+			: [];
+	const originalOptionIds = new Set(
+		initialModelOptions.map((option) => option.optionId),
+	);
 	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
 		if (props.mode === "create") return [blankModel()];
-		const endpoints = props.deploymentConfiguration.modelCatalog.endpoints;
-		return (configuration?.modelOptions ?? []).map((option) => {
-			const endpointIds = endpoints
-				.filter((endpoint) =>
-					endpoint.models.some((model) => model.modelId === option.modelId),
-				)
-				.map((endpoint) => endpoint.endpointId);
-			return {
-				credentialValue: "",
-				endpointId: endpointIds.length === 1 ? (endpointIds[0] ?? "") : "",
-				modelId: option.modelId,
-				optionId: option.optionId,
-				reasoningLevels: option.reasoningLevels.join("\n"),
-			};
-		});
+		return initialModelOptions;
 	});
 	const [defaultModelOptionId, setDefaultModelOptionId] = useState(
-		configuration?.defaultModelOptionId ?? "",
+		(() => {
+			const persistedId = configuration?.defaultModelOptionId ?? "";
+			const index = (configuration?.modelOptions ?? []).findIndex(
+				(option) => option.optionId === persistedId,
+			);
+			return index >= 0
+				? (initialModelOptions[index]?.optionId ?? persistedId)
+				: persistedId;
+		})(),
 	);
 	const [defaultReasoningLevel, setDefaultReasoningLevel] = useState(
 		configuration?.defaultReasoningLevel ?? "",
@@ -437,22 +470,33 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
-		setModels((current) => {
-			let changed = false;
-			const next = current.map((model) => {
-				if (model.endpointId || !model.modelId) return model;
-				const endpointIds = modelEndpoints
-					.filter((endpoint) =>
-						endpoint.models.some((entry) => entry.modelId === model.modelId),
-					)
-					.map((endpoint) => endpoint.endpointId);
-				if (endpointIds.length !== 1) return model;
-				changed = true;
-				return { ...model, endpointId: endpointIds[0] ?? "" };
-			});
-			return changed ? next : current;
+		const currentDefaultModel = models.find(
+			(model) => model.optionId === defaultModelOptionId,
+		);
+		let changed = false;
+		const next = models.map((model) => {
+			const endpointId =
+				model.endpointId || uniqueEndpointIdFor(modelEndpoints, model.modelId);
+			if (!endpointId || !model.modelId) return model;
+			const optionId = optionIdFor(endpointId, model.modelId);
+			if (model.endpointId === endpointId && model.optionId === optionId)
+				return model;
+			changed = true;
+			return { ...model, endpointId, optionId };
 		});
-	}, [modelEndpoints, props.mode]);
+		if (!changed) return;
+		const hydratedDefaultModel = currentDefaultModel
+			? next.find(
+					(model) =>
+						model.modelId === currentDefaultModel.modelId &&
+						model.endpointId === currentDefaultModel.endpointId,
+				)
+			: undefined;
+		if (hydratedDefaultModel) {
+			setDefaultModelOptionId(hydratedDefaultModel.optionId);
+		}
+		setModels(next);
+	}, [defaultModelOptionId, modelEndpoints, models, props.mode]);
 	const environmentOptions = Array.from(
 		new Set([
 			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
@@ -526,6 +570,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const submit = () => {
 		if (
 			standardChoicesBlocked ||
+			(sourceKind === "standard" && !selectedTemplate) ||
 			staleTemplate ||
 			staleModel ||
 			invalidDefaultModel
@@ -935,6 +980,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									endpoints={modelEndpoints}
 									models={models}
 									requiresReplacementCredential={requiresReplacementCredential}
+									originalOptionIds={originalOptionIds}
 									onChange={(index, key, value) =>
 										setModels((current) =>
 											current.map((item, itemIndex) =>
