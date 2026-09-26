@@ -1297,7 +1297,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						id="application-access-help"
 					>
 						当前申请人自动成为 Owner。可补充共同 Owner
-						及使用范围，每行填写一个用户或组织 ID。
+						及使用范围；请向部署管理员获取本环境的用户或组织 ID，每行填写一个。
 					</p>
 					<div className="form-grid">
 						<div className="space-y-2">
