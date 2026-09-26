@@ -977,6 +977,7 @@ test("uses pinned PR-Agent official inline publishing", async () => {
     "reopened",
     "ready_for_review",
     "review_requested",
+    "edited",
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
@@ -1020,11 +1021,11 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(suggestionsAction.env["github_action_config.auto_improve"], "true");
   assert.deepEqual(
     JSON.parse(reviewAction.env["github_action_config.pr_actions"]),
-    ["opened", "reopened", "ready_for_review", "review_requested"],
+    ["opened", "reopened", "ready_for_review", "review_requested", "edited"],
   );
   assert.deepEqual(
     JSON.parse(suggestionsAction.env["github_action_config.pr_actions"]),
-    ["opened", "reopened", "ready_for_review", "review_requested"],
+    ["opened", "reopened", "ready_for_review", "review_requested", "edited"],
   );
   assert.equal(
     reviewAction.env["pr_reviewer.extra_instructions"],
