@@ -1362,6 +1362,25 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					)
 				`;
 				const accessAuthorizationId = `access-authorization-${suffix}`;
+				for (const grantedScopes of [
+					[],
+					["approval.read", "unapproved.write"],
+				]) {
+					await expect(
+						requestRepository.consumeConnectPermit({
+							accessAuthorizationId,
+							connectionId,
+							grantedScopes,
+							principalId: applicantId,
+							requestId,
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					const [unconsumed] = await sql`
+						SELECT consumed_at, (SELECT count(*)::int FROM connection_access_authorizations WHERE id = ${accessAuthorizationId}) AS authorizations
+						FROM connection_connect_permits WHERE request_id = ${requestId}
+					`;
+					expect(unconsumed).toEqual({ consumed_at: null, authorizations: 0 });
+				}
 				await sql`UPDATE connection_provider_releases SET status = 'DISABLED' WHERE id = ${releaseId}`;
 				await expect(
 					requestRepository.consumeConnectPermit({

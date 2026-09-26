@@ -2314,6 +2314,7 @@ export async function consumeConnectPermitInTransaction(
 	if (
 		!Array.isArray(approvedScopes) ||
 		approvedScopes.some((scope) => typeof scope !== "string") ||
+		approvedScopes.some((scope) => !input.grantedScopes.includes(scope)) ||
 		input.grantedScopes.some((scope) => !approvedScopes.includes(scope))
 	) {
 		forbidden();
