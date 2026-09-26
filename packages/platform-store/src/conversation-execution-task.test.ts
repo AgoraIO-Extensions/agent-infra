@@ -2,6 +2,7 @@ import {
 	type ConversationExecutionAuthorityV1,
 	createConversationExecutionUseCaseV1,
 	createConversationTaskAdmissionUseCaseV1,
+	isTaskAuthorizationCurrentV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
@@ -20,10 +21,12 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
 let store: PostgresConversationExecutionTransactionV1;
+let authorizationStore: PostgresTaskAuthorizationStoreV1;
 let nextId = 0;
 let currentAuthority: ConversationExecutionAuthorityV1;
 const now = () => new Date("2026-09-26T00:00:00.000Z");
@@ -84,6 +87,9 @@ beforeAll(async () => {
 	database = await startPostgresTestDatabase("task-admission");
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	sql = postgres(database.databaseUrl, { max: 10 });
+	authorizationStore = new PostgresTaskAuthorizationStoreV1({
+		databaseUrl: database.databaseUrl,
+	});
 	store = new PostgresConversationExecutionTransactionV1({
 		databaseUrl: database.databaseUrl,
 	});
@@ -162,10 +168,11 @@ afterEach(async () => {
 		platform.conversation_audit_events, platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
 		platform.conversation_executions, platform.conversations,
-		platform.agent_configuration_revisions, platform.agent_applications, platform.agents cascade`;
+		platform.agent_configuration_revisions, platform.agent_applications, platform.agents, platform.platform_applications, platform.platform_api_credentials cascade`;
 });
 
 afterAll(async () => {
+	await authorizationStore?.close();
 	await store?.close();
 	await sql?.end();
 	await database?.stop();
@@ -530,3 +537,298 @@ describe("durable task admission", () => {
 		}
 	});
 });
+
+async function seedApplication(applicationId = "shared") {
+	await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent_task', 'owner_task', now()) on conflict do nothing`;
+	await sql`insert into platform.platform_applications (id, name, responsible_user_id, authorization_revision) values (${applicationId}, 'Independent application', 'owner_task', 'app_1')`;
+	await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent_task', 'application', ${applicationId}, 'use', 'grant_1')`;
+}
+
+it("admits application work and isolates a user with the same ID", async () => {
+	await seedApplication();
+	if (!currentAuthority.taskBoundary) throw Error();
+	const originalBoundary = currentAuthority.taskBoundary;
+	await sql`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent_task', 'user', 'shared', 'use', 'grant_1')`;
+	currentAuthority = {
+		...currentAuthority,
+		actorId: "shared",
+		channelId: "api:application",
+		taskBoundary: {
+			...originalBoundary,
+			principal: { kind: "application", id: "shared" },
+			channelId: "api:application",
+			accessSources: [{ kind: "application", applicationId: "shared" }],
+		},
+	};
+	const application = await taskUseCase().submitTask(command("same-id"));
+	expect(application.outcome).toBe("accepted");
+	if (application.outcome !== "accepted") throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		channelId: "api:user",
+		taskBoundary: {
+			...originalBoundary,
+			principal: { kind: "user", id: "shared" },
+			channelId: "api:user",
+			accessSources: [{ kind: "user", userId: "shared" }],
+		},
+	};
+	expect(
+		await taskUseCase().submitTask(
+			command("continued", {
+				conversationId: application.result.conversationId,
+			}),
+		),
+	).toMatchObject({ outcome: "denied" });
+	const user = await taskUseCase().submitTask(command("same-id"));
+	expect(user.outcome).toBe("accepted");
+	if (user.outcome !== "accepted") throw Error();
+	expect(user.result.conversationId).not.toBe(
+		application.result.conversationId,
+	);
+});
+
+it("captures current application independently from its responsible user and rechecks disablement/use revocation", async () => {
+	await seedApplication();
+	const input = {
+		applicationId: "shared",
+		agentId: "agent_task",
+		channelId: "api:application",
+	};
+	const boundary = await authorizationStore.captureApplicationBoundary(input);
+	expect(boundary).toMatchObject({
+		principal: { kind: "application", id: "shared" },
+		identityRevision: "app_1",
+	});
+	if (!boundary) throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		actorId: "shared",
+		channelId: "api:application",
+		taskBoundary: boundary,
+	};
+	const accepted = await taskUseCase().submitTask(command("capture"));
+	expect(accepted.outcome).toBe("accepted");
+	if (accepted.outcome !== "accepted") throw Error();
+	const original = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(original?.application).toEqual({
+		schemaVersion: 1,
+		applicationId: "shared",
+		accountStatus: "active",
+		authorizationRevision: "app_1",
+	});
+	if (!original?.application) throw Error();
+	expect(isTaskAuthorizationCurrentV1(original)).toBe(true);
+	await sql`insert into platform.platform_api_credentials (id, principal_type, principal_id, credential_hash, scopes, revoked_at) values ('revoked', 'application', 'shared', ${"a".repeat(64)}, '[]', now())`;
+	const afterCredentialRevocation = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(
+		afterCredentialRevocation &&
+			isTaskAuthorizationCurrentV1(afterCredentialRevocation),
+	).toBe(true);
+	await sql`update platform.platform_applications set status = 'disabled', authorization_revision = 'app_2' where id = 'shared'`;
+	expect(await authorizationStore.captureApplicationBoundary(input)).toBeNull();
+	const disabled = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(disabled?.application?.accountStatus).toBe("disabled");
+	expect(disabled && isTaskAuthorizationCurrentV1(disabled)).toBe(false);
+	if (!disabled) throw Error();
+	const control = await authorizationStore.recordControl({
+		executionId: accepted.result.executionId,
+		authorizationRecordId: disabled.authorizationRecordId,
+		reason: "authorization_revoked",
+		workerId: "worker-system",
+		traceId: "trace_revoke",
+		requestId: "request_revoke",
+	});
+	expect(control.controlRecordId).toBeTypeOf("string");
+	const [cancelled] = await sql<
+		{ status: string }[]
+	>`select status from platform.conversation_executions where execution_id = ${accepted.result.executionId}`;
+	expect(cancelled?.status).toBe("cancelled");
+	const [audit] = await sql<
+		{
+			actor_type: string;
+			actor_id: string;
+			details: { originalPrincipal: { kind: string; id: string } };
+		}[]
+	>`select actor_type, actor_id, details from platform.audit_events where action = 'task.control.created'`;
+	expect(audit).toMatchObject({
+		actor_type: "system",
+		actor_id: "worker-system",
+		details: { originalPrincipal: { kind: "application", id: "shared" } },
+	});
+	await sql`update platform.platform_applications set status = 'active' where id = 'shared'`;
+	await sql`update platform.agent_principal_grants set revoked_at = now() where principal_type = 'application' and principal_id = 'shared'`;
+	expect(await authorizationStore.captureApplicationBoundary(input)).toBeNull();
+	const revoked = await authorizationStore.readExecution(
+		accepted.result.executionId,
+	);
+	expect(revoked && isTaskAuthorizationCurrentV1(revoked)).toBe(false);
+});
+
+it.each(["disabled", "revoked-grant"])(
+	"rolls back stale accepted application boundary after %s",
+	async (change) => {
+		await seedApplication();
+		const boundary = await authorizationStore.captureApplicationBoundary({
+			applicationId: "shared",
+			agentId: "agent_task",
+			channelId: "api:application",
+		});
+		if (!boundary) throw Error();
+		currentAuthority = {
+			...currentAuthority,
+			actorId: "shared",
+			channelId: "api:application",
+			taskBoundary: boundary,
+		};
+		if (change === "disabled")
+			await sql`update platform.platform_applications set status = 'disabled' where id = 'shared'`;
+		else
+			await sql`update platform.agent_principal_grants set revoked_at = now() where principal_type = 'application' and principal_id = 'shared'`;
+		await expect(
+			taskUseCase().submitTask(command("stale-app")),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(await counts()).toEqual({
+			conversations: 0,
+			executions: 0,
+			messages: 0,
+			outboxes: 0,
+			audits: 0,
+			idempotency: 0,
+		});
+	},
+);
+
+it("cancels an application waiting task through the caller stop use case without dispatching a native Turn or stop", async () => {
+	await seedApplication();
+	const boundary = await authorizationStore.captureApplicationBoundary({
+		applicationId: "shared",
+		agentId: "agent_task",
+		channelId: "api:application",
+	});
+	if (!boundary) throw Error();
+	currentAuthority = {
+		...currentAuthority,
+		actorId: "shared",
+		channelId: "api:application",
+		taskBoundary: boundary,
+	};
+	const task = await taskUseCase().submitTask(command("caller-cancel"));
+	if (task.outcome !== "accepted") throw Error();
+	const commands = createConversationExecutionUseCaseV1(
+		{
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed", authority: currentAuthority };
+				},
+			},
+			transaction: store,
+		},
+		{ now },
+	);
+	const cancel = {
+		schemaVersion: 1 as const,
+		command: "stop" as const,
+		conversationId: task.result.conversationId,
+		targetExecutionId: task.result.executionId,
+		idempotencyKey: "cancel-app",
+		requestId: "request_cancel",
+		traceId: "trace_cancel",
+	};
+	expect(await commands.stop(cancel)).toMatchObject({
+		outcome: "accepted",
+		result: { status: "submitted", executionId: task.result.executionId },
+	});
+	expect(await commands.stop(cancel)).toMatchObject({
+		outcome: "replayed",
+		result: { status: "submitted" },
+	});
+	expect(
+		await commands.stop({ ...cancel, idempotencyKey: "cancel-again" }),
+	).toMatchObject({
+		outcome: "replayed",
+		result: { status: "already_finished" },
+	});
+	const [execution] =
+		await sql`select status, delivery_fence::int from platform.conversation_executions where execution_id = ${task.result.executionId}`;
+	expect(execution).toMatchObject({ status: "cancelled", delivery_fence: 0 });
+	const outboxes =
+		await sql`select operation, status from platform.outbox_items`;
+	expect(outboxes).toEqual([
+		{ operation: "conversation.turn.submit.v1", status: "failed" },
+	]);
+	const [receipt] =
+		await sql`select status from platform.conversation_stops where execution_id = ${task.result.executionId}`;
+	expect(receipt?.status).toBe("completed");
+	const [event] =
+		await sql`select event_payload from platform.conversation_events where execution_id = ${task.result.executionId} and event_payload->>'status' = 'cancelled'`;
+	expect(event?.event_payload).toEqual({
+		type: "task.status",
+		status: "cancelled",
+	});
+	const [audit] =
+		await sql`select count(*)::int as count from platform.conversation_audit_events where action = 'conversation.stop.accepted'`;
+	expect(audit?.count).toBe(1);
+});
+
+it.each(["disabled", "revoked-grant"])(
+	"does not cancel using an application request captured before %s",
+	async (change) => {
+		await seedApplication();
+		const boundary = await authorizationStore.captureApplicationBoundary({
+			applicationId: "shared",
+			agentId: "agent_task",
+			channelId: "api:application",
+		});
+		if (!boundary) throw Error();
+		currentAuthority = {
+			...currentAuthority,
+			actorId: "shared",
+			channelId: "api:application",
+			taskBoundary: boundary,
+		};
+		const task = await taskUseCase().submitTask(command("stale-caller-cancel"));
+		if (task.outcome !== "accepted") throw Error();
+		if (change === "disabled")
+			await sql`update platform.platform_applications set status = 'disabled' where id = 'shared'`;
+		else
+			await sql`update platform.agent_principal_grants set revoked_at = now() where principal_type = 'application' and principal_id = 'shared'`;
+		const commands = createConversationExecutionUseCaseV1(
+			{
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: currentAuthority };
+					},
+				},
+				transaction: store,
+			},
+			{ now },
+		);
+		await expect(
+			commands.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: task.result.conversationId,
+				targetExecutionId: task.result.executionId,
+				idempotencyKey: "stale-cancel-app",
+				requestId: "request_cancel",
+				traceId: "trace_cancel",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		const [execution] =
+			await sql`select status from platform.conversation_executions where execution_id = ${task.result.executionId}`;
+		expect(execution?.status).toBe("waiting");
+		expect(await sql`select * from platform.conversation_stops`).toHaveLength(
+			0,
+		);
+		expect(
+			await sql`select * from platform.conversation_events where event_payload->>'status' = 'cancelled'`,
+		).toHaveLength(0);
+	},
+);

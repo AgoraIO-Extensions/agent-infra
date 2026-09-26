@@ -7,12 +7,15 @@ import {
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import {
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	isTaskAuthorizationCurrentV1,
+	isTaskPrincipalChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
 	type TaskSystemControlReasonV1,
+	taskApiChannelIdV1,
 } from "./task-authorization.js";
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
@@ -33,6 +36,7 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly executionId: string;
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly revokedAt: Date | null;
+	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
 	readonly configurationRevision: number;
 	readonly workload: WorkloadReconciliationStateV1 | null;
@@ -124,11 +128,18 @@ function denied(code = "AUTHORIZATION_REVOKED"): never {
 	throw new ConversationRuntimeHostError(code, true);
 }
 
-/** Platform Web channel policy over the Store's current, execution-bound configuration. */
+/** Platform channel policy over the Store's current, execution-bound configuration. */
 export function isPlatformConversationChannelCurrentV1(
 	record: TaskRuntimeAuthorizationRecordV1,
 ): boolean {
-	if (record.boundary.channelId !== "web")
+	if (
+		record.boundary.channelId !==
+			taskApiChannelIdV1(record.boundary.principal) &&
+		!(
+			record.boundary.channelId === "web" &&
+			record.boundary.principal.kind === "user"
+		)
+	)
 		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
 	const workload = record.workload;
 	const configuration = workload?.candidate.configuration;
@@ -160,7 +171,7 @@ export function isPlatformConversationChannelCurrentV1(
 	return true;
 }
 
-/** Current user authority and durable system control share the original task boundary. */
+/** Current subject authority and durable system control share the original task boundary. */
 export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 	if (!options.workerId) throw new TypeError("Task Worker identity is invalid");
 	async function stateFor(context: Context, signal: AbortSignal) {
@@ -189,7 +200,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		}
 		if (
 			record.executionId !== claim.executionId ||
-			boundary.principal.kind !== "user" ||
+			!isTaskPrincipalChannelV1(boundary.principal, boundary.channelId) ||
 			boundary.principal.id !== claim.actorId ||
 			boundary.agentId !== claim.agentId ||
 			boundary.channelId !== claim.channelId ||
@@ -365,10 +376,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				authority: await control(context, "authorization_revoked", signal),
 				record,
 			};
-		const user = await options.resolveCurrentUser(
-			record.boundary.principal.id,
-			signal,
-		);
+		const user =
+			record.boundary.principal.kind === "user"
+				? await options.resolveCurrentUser(record.boundary.principal.id, signal)
+				: undefined;
 		const latest = await recordFor(context.claim, signal);
 		if (latest.authorizationRecordId !== context.authorizationRecordId)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
@@ -376,10 +387,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			latest.revokedAt ||
 			(options.channelAuthorizationCurrent &&
 				!(await options.channelAuthorizationCurrent(latest, signal))) ||
-			!user ||
+			(latest.boundary.principal.kind === "user" && !user) ||
 			!isTaskAuthorizationCurrentV1({
 				boundary: latest.boundary,
-				user,
+				user: user ?? undefined,
+				application: latest.application,
 				agent: latest.agent,
 			})
 		)

@@ -17,6 +17,7 @@ import {
 	unavailable,
 } from "./conversation-dispatch-values.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import { isTaskPrincipalChannelV1 } from "./task-authorization.js";
 
 export function parseConversationMetadataRecoveryV1(
 	value: unknown,
@@ -162,12 +163,19 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"originalPrincipal",
 		]);
 		const principal = exactObject(isolation.originalPrincipal, ["kind", "id"]);
-		if (principal.kind !== "user" || principal.id !== input.actorId)
+		if (
+			(principal.kind !== "user" && principal.kind !== "application") ||
+			principal.id !== input.actorId ||
+			!isTaskPrincipalChannelV1(
+				{ kind: principal.kind, id: text(principal.id) },
+				text(input.channelId),
+			)
+		)
 			unavailable();
 		generationIsolation = {
 			operationId: text(isolation.operationId),
 			controlRecordId: text(isolation.controlRecordId),
-			originalPrincipal: { kind: "user", id: text(principal.id) },
+			originalPrincipal: { kind: principal.kind, id: text(principal.id) },
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";

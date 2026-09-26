@@ -8,6 +8,7 @@ import {
 	type ConversationDispatchStorePortV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	isTaskPrincipalChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
@@ -355,7 +356,10 @@ export class PostgresConversationDispatchStoreV1
 					},
 				});
 				const principal = boundary.principal;
-				if (principal.kind !== "user" || principal.id !== claim.actorId)
+				if (
+					!isTaskPrincipalChannelV1(principal, claim.channelId) ||
+					principal.id !== claim.actorId
+				)
 					throw new StaleDispatchLease();
 				originalPrincipal = principal;
 				controlSourceId = authorization.id;

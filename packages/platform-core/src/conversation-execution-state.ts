@@ -23,7 +23,10 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import {
+	isTaskPrincipalChannelV1,
+	parseTaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 export function parseState(
 	input: ConversationExecutionStateV1,
@@ -219,7 +222,8 @@ export function parseState(
 					execution.modelOptionId === null,
 					execution.reasoningLevel === null,
 				]).size !== 1 ||
-				(status !== "submitted" &&
+				(status !== "waiting" &&
+					status !== "submitted" &&
 					status !== "processing" &&
 					status !== "unknown" &&
 					status !== "completed" &&
@@ -565,7 +569,7 @@ export function planMetadataRecovery(
 			continue;
 		}
 		if (
-			boundary.principal.kind !== "user" ||
+			!isTaskPrincipalChannelV1(boundary.principal, boundary.channelId) ||
 			boundary.principal.id !== execution.actorId ||
 			boundary.agentId !== execution.agentId ||
 			boundary.channelId !== execution.channelId ||

@@ -19,7 +19,7 @@ export interface GenerationTombstoneRow {
 	item_id: string;
 	control_record_id: string;
 	control_source_id: string;
-	original_principal: { kind: "user"; id: string };
+	original_principal: { kind: "user" | "application"; id: string };
 	host_session_ref: string;
 	status: "pending" | "confirmed";
 }

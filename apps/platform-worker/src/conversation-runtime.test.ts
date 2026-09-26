@@ -1365,7 +1365,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			...record,
 			boundary: {
 				...record.boundary,
-				// @ts-expect-error Exercise an unsupported persisted principal at runtime.
+				// Exercise a mismatched persisted principal at runtime.
 				principal: { kind: "application", id: "user" },
 			},
 		});

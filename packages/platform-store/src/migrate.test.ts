@@ -358,6 +358,9 @@ describe("Platform PostgreSQL migration foundation", () => {
 				`;
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
+				"api_credential_delivery_grants",
+				"platform_api_credentials",
+				"platform_api_credentials.credential_hash",
 				"wecom_connections",
 				"wecom_receipts.connection_bot_id",
 				"wecom_receipts.connection_fence",

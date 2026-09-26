@@ -191,6 +191,7 @@ export interface ConversationExecutionStateV1 {
 				readonly modelOptionId: string | null;
 				readonly reasoningLevel: string | null;
 				readonly status:
+					| "waiting"
 					| "submitted"
 					| "processing"
 					| "unknown"

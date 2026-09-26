@@ -4,6 +4,7 @@ import type {
 	ConversationTaskAdmissionTransactionPortV1,
 	ConversationTaskSubmitResultV1,
 } from "@agent-infra/platform-core";
+import { isTaskPrincipalChannelV1 } from "@agent-infra/platform-core";
 import {
 	safeInteger,
 	type Transaction,
@@ -142,7 +143,8 @@ export async function submitConversationTask(
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
 	if (
-		principal?.kind !== "user" ||
+		!principal ||
+		!isTaskPrincipalChannelV1(principal, authority.channelId) ||
 		principal.id !== authority.actorId ||
 		request.command.agentId !== authority.agentId
 	)

@@ -27,6 +27,12 @@ import {
 	conversations,
 } from "./schema-conversations";
 import {
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+} from "./schema-identities";
+import {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -84,6 +90,12 @@ export {
 	conversations,
 } from "./schema-conversations";
 export {
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
+	platformApiCredentials,
+	platformApplications,
+} from "./schema-identities";
+export {
 	auditEvents,
 	conversationGenerationTombstones,
 	idempotencyRecords,
@@ -123,4 +135,8 @@ export const platformInfrastructureTables = [
 	platformFiles,
 	platformFileAccesses,
 	fileReconciliation,
+	platformApplications,
+	platformApiCredentials,
+	agentPrincipalGrants,
+	apiCredentialDeliveryGrants,
 ] as const;

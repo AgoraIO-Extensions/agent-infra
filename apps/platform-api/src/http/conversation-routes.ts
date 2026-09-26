@@ -298,7 +298,7 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function eventProjection(input: ConversationQueryEventV1): SseMessage {
+export function eventProjection(input: ConversationQueryEventV1): SseMessage {
 	const persisted = parseConversationPersistedEventPayloadV1(
 		input.eventPayload,
 	);

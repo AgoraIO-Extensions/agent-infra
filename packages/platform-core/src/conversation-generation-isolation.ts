@@ -1,5 +1,6 @@
 import type { ConversationDispatchClaimV1 } from "./conversation-dispatch.js";
 import type { TaskPrincipalV1 } from "./task-authorization.js";
+import { isTaskPrincipalChannelV1 } from "./task-authorization.js";
 
 export interface ConversationGenerationIsolationV1 {
 	readonly operationId: string;
@@ -18,7 +19,7 @@ export function planConversationGenerationIsolationV1(input: {
 	if (
 		input.failureCode !== "RUNTIME_SESSION_RECOVERY_FAILED" ||
 		!input.controlSourceId ||
-		originalPrincipal.kind !== "user" ||
+		!isTaskPrincipalChannelV1(originalPrincipal, claim.channelId) ||
 		originalPrincipal.id !== claim.actorId ||
 		![
 			"conversation.turn.submit.v1",
@@ -70,7 +71,10 @@ export function planConversationGenerationConfirmationV1(
 		!claim.hostSessionRef ||
 		claim.generationIsolation.operationId !==
 			`generation:${claim.conversationId}:${claim.sessionGeneration}` ||
-		claim.generationIsolation.originalPrincipal.kind !== "user" ||
+		!isTaskPrincipalChannelV1(
+			claim.generationIsolation.originalPrincipal,
+			claim.channelId,
+		) ||
 		claim.generationIsolation.originalPrincipal.id !== claim.actorId ||
 		!Number.isSafeInteger(claim.sessionGeneration) ||
 		claim.sessionGeneration < 1 ||

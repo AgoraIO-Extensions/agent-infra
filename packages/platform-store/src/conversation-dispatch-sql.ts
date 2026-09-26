@@ -3,6 +3,7 @@ import type {
 	ConversationDispatchStateTransitionV1,
 	ConversationGenerationIsolationV1,
 } from "@agent-infra/platform-core";
+import { isTaskPrincipalChannelV1 } from "@agent-infra/platform-core";
 import {
 	type Client,
 	type ConversationPayload,
@@ -30,15 +31,29 @@ export async function readGenerationIsolation(
 	conversationId: string,
 	generation: number,
 ) {
-	const [row] = await transaction<GenerationTombstoneRow[]>`
-    select * from platform.conversation_generation_tombstones
-    where conversation_id = ${conversationId} and session_generation = ${generation} and status = 'pending'
+	const [row] = await transaction<
+		(GenerationTombstoneRow & {
+			execution_actor_id: string;
+			execution_channel_id: string;
+		})[]
+	>`
+   select tombstone.*, execution.actor_id as execution_actor_id, execution.channel_id as execution_channel_id
+   from platform.conversation_generation_tombstones tombstone
+   join platform.conversation_executions execution on execution.execution_id = tombstone.execution_id
+    and execution.conversation_id = tombstone.conversation_id and execution.session_generation = tombstone.session_generation
+   where tombstone.conversation_id = ${conversationId} and tombstone.session_generation = ${generation} and tombstone.status = 'pending'
   `;
 	if (!row) return undefined;
 	if (
 		row.operation_id !== `generation:${conversationId}:${generation}` ||
 		!row.control_record_id ||
-		row.original_principal?.kind !== "user" ||
+		(row.original_principal?.kind !== "user" &&
+			row.original_principal?.kind !== "application") ||
+		!isTaskPrincipalChannelV1(
+			row.original_principal,
+			row.execution_channel_id,
+		) ||
+		row.original_principal.id !== row.execution_actor_id ||
 		!row.original_principal.id ||
 		!row.host_session_ref
 	)

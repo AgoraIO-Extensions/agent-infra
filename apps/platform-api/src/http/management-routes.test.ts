@@ -112,7 +112,7 @@ const agentProjection = {
 };
 
 function createApp(
-	options: { administrator?: boolean; missing?: boolean } = {},
+	options: { administrator?: boolean; missing?: boolean; api?: boolean } = {},
 ) {
 	const app = new Hono();
 	const submit = vi.fn().mockResolvedValue({
@@ -184,6 +184,34 @@ function createApp(
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
+	const apiIdentity = options.api
+		? {
+				schemaVersion: 1 as const,
+				principal: { kind: "application" as const, id: "application-caller" },
+				accountStatus: "active" as const,
+				organizationIds: ["org-1"],
+				authorizationRevision: "authorization-api-1",
+				ownerId: "user-1",
+				credential: {
+					schemaVersion: 1 as const,
+					credentialId: "credential-1",
+					principal: {
+						kind: "application" as const,
+						id: "application-caller",
+					},
+					scopes: ["agent:read", "agent:manage"] as const,
+					expiresAt: null,
+					revokedAt: null,
+					createdAt: new Date("2026-09-01T00:00:00Z"),
+				},
+			}
+		: undefined;
+	const resolveApiCredential = options.api
+		? vi.fn().mockResolvedValue(apiIdentity)
+		: undefined;
+	const resolveAgentQueryGrantType = vi.fn().mockResolvedValue("any");
+	const authorizeCredentialScope = vi.fn().mockResolvedValue(undefined);
+	const recordAccessRejection = vi.fn().mockResolvedValue(undefined);
 
 	registerManagementRoutes(app, {
 		identity: {
@@ -194,7 +222,29 @@ function createApp(
 					: identity.roles,
 			}),
 			hydrateUsers: vi.fn().mockResolvedValue([]),
+			...(resolveApiCredential ? { resolveApiCredential } : {}),
 		},
+		...(apiIdentity
+			? {
+					apiIdentity: {
+						authorizeCredentialScope,
+						resolveAgentQueryGrantType,
+						listUserCredentials: vi.fn(),
+						issueUserCredential: vi.fn(),
+						revokeUserCredential: vi.fn(),
+						listApplications: vi.fn(),
+						createApplication: vi.fn(),
+						listApplicationCredentials: vi.fn(),
+						issueApplicationCredential: vi.fn(),
+						revokeApplicationCredential: vi.fn(),
+						grantCredentialDelivery: vi.fn(),
+						revokeCredentialDelivery: vi.fn(),
+						grantAgent: vi.fn(),
+						revokeAgentGrant: vi.fn(),
+						recordAccessRejection,
+					},
+				}
+			: {}),
 		foundation: { submit },
 		revision: { revise },
 		management: { executeManagementCommand },
@@ -220,6 +270,10 @@ function createApp(
 		readAgentProjection,
 		prepareSecretReplacements,
 		allocateApplicationIds,
+		apiIdentity,
+		resolveAgentQueryGrantType,
+		authorizeCredentialScope,
+		recordAccessRejection,
 	};
 }
 
@@ -312,6 +366,396 @@ describe("management routes", () => {
 		});
 		expect(readApplicationProjection).toHaveBeenCalledWith(
 			expect.objectContaining({ application: applicationRecord, identity }),
+		);
+	});
+
+	it("accepts direct creation only through an active scoped API principal", async () => {
+		const direct = createApp();
+		const apiIdentity = {
+			schemaVersion: 1,
+			principal: { kind: "application", id: "application-caller" },
+			accountStatus: "active",
+			organizationIds: ["org-1"],
+			authorizationRevision: "authorization-api-1",
+			ownerId: "user-1",
+			credential: {
+				schemaVersion: 1,
+				credentialId: "credential-1",
+				principal: { kind: "application", id: "application-caller" },
+				scopes: ["agent:create"],
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-01T00:00:00Z"),
+			},
+		};
+		// Re-register the route with the API identity boundary for this request.
+		const apiApp = new Hono();
+		const prepareSecretReplacements = vi.fn().mockResolvedValue({
+			secrets: [],
+			modelConfiguration: undefined,
+		});
+		registerManagementRoutes(apiApp, {
+			identity: {
+				resolve: vi.fn(),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveApiCredential: vi.fn().mockResolvedValue(apiIdentity),
+			},
+			apiIdentity: {
+				authorizeCredentialScope: vi.fn(),
+				resolveAgentQueryGrantType: vi.fn(),
+				listUserCredentials: vi.fn(),
+				issueUserCredential: vi.fn(),
+				revokeUserCredential: vi.fn(),
+				listApplications: vi.fn(),
+				createApplication: vi.fn(),
+				listApplicationCredentials: vi.fn(),
+				issueApplicationCredential: vi.fn(),
+				revokeApplicationCredential: vi.fn(),
+				grantCredentialDelivery: vi.fn(),
+				revokeCredentialDelivery: vi.fn(),
+				grantAgent: vi.fn(),
+				revokeAgentGrant: vi.fn(),
+				recordAccessRejection: vi.fn(),
+			},
+			foundation: { submit: direct.submit },
+			revision: { revise: vi.fn() },
+			management: { executeManagementCommand: vi.fn() },
+			configuration: { upgradeCustomImage: vi.fn() },
+			query: {
+				listApplications: vi.fn(),
+				getApplication: vi.fn(),
+				listAgents: vi.fn(),
+				getAgent: vi.fn(),
+			},
+			allocateApplicationIds: vi.fn(),
+			prepareSecretReplacements,
+			readApplicationProjection: vi.fn(),
+			readAgentProjection: vi.fn(),
+		});
+		const response = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-01",
+			},
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Direct agent",
+				description: "Created through the API",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [],
+			}),
+		});
+		expect(response.status).toBe(201);
+		expect(await response.json()).toMatchObject({ status: "creating" });
+		expect(direct.submit).toHaveBeenCalledWith(
+			expect.objectContaining({ schemaVersion: 2 }),
+			expect.objectContaining({
+				userId: "user-1",
+				principal: { kind: "application", id: "application-caller" },
+				creationMode: "api",
+			}),
+			undefined,
+		);
+
+		const attachment = { resolve: vi.fn() };
+		prepareSecretReplacements.mockResolvedValue({
+			secrets: [{ name: "BOT_TOKEN", replace: true }],
+			modelConfiguration: undefined,
+			attachment,
+		});
+		const withSecret = await apiApp.request("/api/v1/agents", {
+			method: "POST",
+			headers: {
+				...headers,
+				Authorization: "Bearer secret",
+				"Idempotency-Key": "Direct.Aa-02",
+			},
+			body: JSON.stringify({
+				schemaVersion: 2,
+				name: "Direct agent with secret",
+				description: "Created through the API",
+				source: { kind: "standard", templateId: "template-1" },
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [{ name: "BOT_TOKEN", value: "secret-value" }],
+			}),
+		});
+		expect(withSecret.status).toBe(201);
+		expect(direct.submit).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				secrets: [{ name: "BOT_TOKEN", replace: true }],
+			}),
+			expect.objectContaining({ creationMode: "api" }),
+			attachment,
+		);
+	});
+
+	it("does not return an application credential to its responsible user", async () => {
+		const app = new Hono();
+		const issueCredential = vi.fn().mockResolvedValue({
+			credentialId: "credential-issued",
+			metadata: {
+				schemaVersion: 1,
+				credentialId: "credential-issued",
+				principal: { kind: "application", id: "application-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-01T00:00:00Z"),
+			},
+		});
+		const grantCredentialDelivery = vi.fn().mockResolvedValue(undefined);
+		const revokeCredentialDelivery = vi.fn().mockResolvedValue(true);
+		const listCredentials = vi.fn().mockResolvedValue([
+			{
+				schemaVersion: 1,
+				credentialId: "credential-1",
+				principal: { kind: "application", id: "application-1" },
+				scopes: ["agent:read"],
+				expiresAt: null,
+				revokedAt: null,
+				createdAt: new Date("2026-09-01T00:00:00Z"),
+			},
+		]);
+		const resolve = vi.fn().mockResolvedValue(identity);
+		const resolveUser = vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			userId: "user-1",
+			accountStatus: "active",
+			organizationIds: [],
+			authorizationRevision: "user-revision-1",
+		});
+		registerManagementRoutes(app, {
+			identity: {
+				resolve,
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveUser,
+			},
+			apiIdentity: {
+				authorizeCredentialScope: vi.fn(),
+				resolveAgentQueryGrantType: vi.fn(),
+				listUserCredentials: vi.fn(),
+				issueUserCredential: vi.fn(),
+				revokeUserCredential: vi.fn(),
+				listApplications: vi.fn(),
+				createApplication: vi.fn(),
+				listApplicationCredentials: vi.fn().mockImplementation(() =>
+					listCredentials({
+						principal: { kind: "application", id: "application-1" },
+					}),
+				),
+				issueApplicationCredential: vi
+					.fn()
+					.mockImplementation((_actor, _applicationId, value) =>
+						issueCredential(value),
+					),
+				revokeApplicationCredential: vi.fn(),
+				grantCredentialDelivery: vi
+					.fn()
+					.mockImplementation((value) => grantCredentialDelivery(value)),
+				revokeCredentialDelivery: vi
+					.fn()
+					.mockImplementation((value) => revokeCredentialDelivery(value)),
+				grantAgent: vi.fn(),
+				revokeAgentGrant: vi.fn(),
+				recordAccessRejection: vi.fn(),
+			},
+			foundation: { submit: vi.fn() },
+			revision: { revise: vi.fn() },
+			management: { executeManagementCommand: vi.fn() },
+			configuration: { upgradeCustomImage: vi.fn() },
+			query: {
+				listApplications: vi.fn(),
+				getApplication: vi.fn(),
+				listAgents: vi.fn(),
+				getAgent: vi.fn(),
+			},
+			allocateApplicationIds: vi.fn(),
+			prepareSecretReplacements: vi.fn(),
+			readApplicationProjection: vi.fn(),
+			readAgentProjection: vi.fn(),
+		});
+		const metadataResponse = await app.request(
+			"/api/v1/applications/application-1/credentials",
+		);
+		expect(metadataResponse.status).toBe(200);
+		expect(await metadataResponse.json()).toMatchObject({
+			items: [{ credentialId: "credential-1", scopes: ["agent:read"] }],
+		});
+		expect(listCredentials).toHaveBeenCalledWith({
+			principal: { kind: "application", id: "application-1" },
+		});
+		const deliveryBody = JSON.stringify({ kind: "user", id: "user-1" });
+		const grantedAsOwner = await app.request(
+			"/api/v1/applications/application-1/credential-delivery",
+			{ method: "POST", headers, body: deliveryBody },
+		);
+		expect(grantedAsOwner.status).toBe(204);
+		expect(grantCredentialDelivery).toHaveBeenCalled();
+
+		resolve.mockResolvedValue({
+			...identity,
+			roles: ["employee", "system_admin"],
+		});
+		const granted = await app.request(
+			"/api/v1/applications/application-1/credential-delivery",
+			{ method: "POST", headers, body: deliveryBody },
+		);
+		expect(granted.status).toBe(204);
+		expect(grantCredentialDelivery).toHaveBeenCalledWith(
+			expect.objectContaining({
+				applicationId: "application-1",
+				principal: { kind: "user", id: "user-1" },
+			}),
+		);
+		const revoked = await app.request(
+			"/api/v1/applications/application-1/credential-delivery",
+			{ method: "DELETE", headers, body: deliveryBody },
+		);
+		expect(revoked.status).toBe(204);
+		expect(revokeCredentialDelivery).toHaveBeenCalledOnce();
+		resolveUser.mockResolvedValue({
+			schemaVersion: 1,
+			userId: "user-1",
+			accountStatus: "disabled",
+			organizationIds: [],
+			authorizationRevision: "user-revision-2",
+		});
+		const disabledGrant = await app.request(
+			"/api/v1/applications/application-1/credential-delivery",
+			{ method: "POST", headers, body: deliveryBody },
+		);
+		expect(disabledGrant.status).toBe(204);
+		expect(grantCredentialDelivery).toHaveBeenCalledTimes(3);
+		resolve.mockResolvedValue(identity);
+
+		const response = await app.request(
+			"/api/v1/applications/application-1/credentials",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					scopes: ["agent:read"],
+					expiresAt: null,
+					recipient: { kind: "user", id: "user-2" },
+				}),
+			},
+		);
+
+		expect(response.status).toBe(201);
+		expect(await response.json()).not.toHaveProperty("credential");
+		expect(issueCredential).toHaveBeenCalled();
+
+		resolve.mockResolvedValue({
+			...identity,
+			userId: "user-2",
+			displayName: "Recipient",
+		});
+		const recipientResponse = await app.request(
+			"/api/v1/applications/application-1/credentials",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					scopes: ["agent:read"],
+					expiresAt: null,
+				}),
+			},
+		);
+		expect(recipientResponse.status).toBe(201);
+		expect(await recipientResponse.json()).toMatchObject({
+			metadata: { principal: { kind: "application", id: "application-1" } },
+			credential: expect.any(String),
+		});
+	});
+
+	it("grants and revokes an application principal through the owner boundary", async () => {
+		const app = new Hono();
+		const grantAgent = vi.fn().mockResolvedValue("authorization-revision-2");
+		const revokeAgentGrant = vi.fn().mockResolvedValue(true);
+		const getAgent = vi.fn().mockResolvedValue(agentRecord);
+		registerManagementRoutes(app, {
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+			},
+			apiIdentity: {
+				authorizeCredentialScope: vi.fn(),
+				resolveAgentQueryGrantType: vi.fn(),
+				listUserCredentials: vi.fn(),
+				issueUserCredential: vi.fn(),
+				revokeUserCredential: vi.fn(),
+				listApplications: vi.fn(),
+				createApplication: vi.fn(),
+				listApplicationCredentials: vi.fn(),
+				issueApplicationCredential: vi.fn(),
+				revokeApplicationCredential: vi.fn(),
+				grantCredentialDelivery: vi.fn(),
+				revokeCredentialDelivery: vi.fn(),
+				grantAgent,
+				revokeAgentGrant,
+				recordAccessRejection: vi.fn(),
+			},
+			foundation: { submit: vi.fn() },
+			revision: { revise: vi.fn() },
+			management: { executeManagementCommand: vi.fn() },
+			configuration: { upgradeCustomImage: vi.fn() },
+			query: {
+				listApplications: vi.fn(),
+				getApplication: vi.fn(),
+				listAgents: vi.fn(),
+				getAgent,
+			},
+			allocateApplicationIds: vi.fn(),
+			prepareSecretReplacements: vi.fn(),
+			readApplicationProjection: vi.fn(),
+			readAgentProjection: vi.fn(),
+		});
+		const body = JSON.stringify({
+			schemaVersion: 1,
+			principal: { kind: "application", id: "application-caller" },
+			grantType: "use",
+		});
+		const granted = await app.request("/api/v1/agents/agent-1/grants", {
+			method: "POST",
+			headers,
+			body,
+		});
+		expect(granted.status).toBe(200);
+		expect(await granted.json()).toMatchObject({
+			agentId: "agent-1",
+			principal: { kind: "application", id: "application-caller" },
+			grantType: "use",
+			revokedAt: null,
+		});
+		expect(grantAgent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				principal: { kind: "application", id: "application-caller" },
+				grantType: "use",
+			}),
+		);
+
+		const revoked = await app.request("/api/v1/agents/agent-1/grants", {
+			method: "DELETE",
+			headers,
+			body,
+		});
+		expect(revoked.status).toBe(204);
+		expect(revokeAgentGrant).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				principal: { kind: "application", id: "application-caller" },
+				grantType: "use",
+			}),
 		);
 	});
 
@@ -481,6 +925,45 @@ describe("management routes", () => {
 		expect(missing.prepareSecretReplacements).not.toHaveBeenCalled();
 		expect((await missing.app.request("/api/v1/agents/unknown")).status).toBe(
 			(await missing.app.request("/api/v1/agents/not-owned")).status,
+		);
+	});
+
+	it("audits API agent resource refusals", async () => {
+		const missing = createApp({ missing: true, api: true });
+		const apiHeaders = { Authorization: "Bearer secret" };
+
+		const detail = await missing.app.request("/api/v1/agents/unknown", {
+			headers: apiHeaders,
+		});
+		expect(detail.status).toBe(404);
+		expect(missing.recordAccessRejection).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				targetId: "unknown",
+				reason: "resource_unavailable",
+			}),
+		);
+
+		missing.recordAccessRejection.mockClear();
+		const lifecycle = await missing.app.request(
+			"/api/v1/agents/unknown/lifecycle",
+			{
+				method: "POST",
+				headers: {
+					...apiHeaders,
+					"content-type": "application/json",
+					"Idempotency-Key": "api-missing-agent",
+				},
+				body: JSON.stringify({ schemaVersion: 1, command: "restart" }),
+			},
+		);
+		expect(lifecycle.status).toBe(404);
+		expect(missing.recordAccessRejection).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				targetId: "unknown",
+				reason: "resource_unavailable",
+			}),
 		);
 	});
 

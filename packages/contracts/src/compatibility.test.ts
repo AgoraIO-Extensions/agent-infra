@@ -92,6 +92,65 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the fixed task API addition and still rejects published route changes", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"CancelTaskRequestV1",
+			"SubmitTaskRequestV1",
+			"TaskAcceptedV1",
+			"TaskCancellationV1",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+			"TaskStreamErrorV1",
+		])
+			delete previous.components.schemas[name];
+		delete previous.components.securitySchemes;
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-task-api-"));
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const mutations = [
+				(value: typeof current) => {
+					delete value.paths["/api/v1/agents/{agentId}/tasks"].post.security;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SubmitTaskRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/session"].get.responses["200"].description =
+						"changed published route";
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.unreviewed = {
+						type: "http",
+						scheme: "basic",
+					};
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(

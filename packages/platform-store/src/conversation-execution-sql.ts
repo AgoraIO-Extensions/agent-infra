@@ -397,7 +397,11 @@ export async function readStopState(
 	const target = rows[0];
 	if (!target) return state;
 	const status = text(target.status);
-	if (!activeExecutionStatuses.has(status) && !executionIsTerminal(status)) {
+	if (
+		status !== "waiting" &&
+		!activeExecutionStatuses.has(status) &&
+		!executionIsTerminal(status)
+	) {
 		unavailable();
 	}
 	const stops = await transaction<StopRow[]>`
@@ -426,6 +430,7 @@ export async function readStopState(
 			reasoningLevel:
 				target.reasoning_level === null ? null : text(target.reasoning_level),
 			status: status as
+				| "waiting"
 				| "submitted"
 				| "processing"
 				| "unknown"

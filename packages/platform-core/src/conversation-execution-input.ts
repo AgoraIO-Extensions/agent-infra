@@ -15,7 +15,10 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import {
+	isTaskPrincipalChannelV1,
+	parseTaskAuthorizationBoundaryV1,
+} from "./task-authorization.js";
 
 export function parseCreateCommand(
 	input: unknown,
@@ -245,7 +248,10 @@ export function parseAuthority(
 			: parseTaskAuthorizationBoundaryV1(values.taskBoundary);
 	if (
 		taskBoundary &&
-		(taskBoundary.principal.kind !== "user" ||
+		(!isTaskPrincipalChannelV1(
+			taskBoundary.principal,
+			taskBoundary.channelId,
+		) ||
 			taskBoundary.principal.id !== values.actorId ||
 			taskBoundary.agentId !== values.agentId ||
 			taskBoundary.channelId !== values.channelId ||

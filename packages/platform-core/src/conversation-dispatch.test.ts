@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseClaim } from "./conversation-dispatch-input.js";
+import { planConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
 import {
@@ -2149,5 +2151,79 @@ describe("terminal Runtime delivery recovery", () => {
 		expect(h.events.persisted).toHaveLength(2);
 		expect(h.events.persisted[1]?.operationMetadataOnly).toBeUndefined();
 		expect(runtimeHost.sideEffectCount()).toBe(1);
+	});
+});
+
+describe("application original-generation isolation", () => {
+	function applicationClaim() {
+		return claim({
+			channelId: "api:application",
+			executionStatus: "unknown",
+			hostSessionRef: "original-host",
+			generationIsolation: {
+				operationId: "generation:conversation-1:1",
+				controlRecordId: "control-app",
+				originalPrincipal: { kind: "application", id: "actor-1" },
+			},
+		});
+	}
+	it("parses the persisted application principal without converting it to a user", () => {
+		expect(
+			parseClaim(applicationClaim()).generationIsolation?.originalPrincipal,
+		).toEqual({ kind: "application", id: "actor-1" });
+	});
+	it("plans application isolation and confirmation on the original execution and generation", () => {
+		const original = applicationClaim();
+		const plan = planConversationGenerationIsolationV1({
+			claim: original,
+			originalPrincipal: { kind: "application", id: original.actorId },
+			controlSourceId: "app-authorization",
+			failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+		});
+		expect(plan).toMatchObject({
+			operationId: "generation:conversation-1:1",
+			originalPrincipal: { kind: "application", id: "actor-1" },
+		});
+		expect(planConversationGenerationConfirmationV1(original)).toMatchObject({
+			nextGeneration: 2,
+			conversationStatus: "unavailable",
+		});
+	});
+	it.each([
+		"equal-id-user",
+		"wrong-actor",
+		"wrong-generation",
+		"wrong-channel",
+	])("rejects %s isolation provenance", (change) => {
+		const original = applicationClaim();
+		if (!original.generationIsolation) throw Error();
+		if (change === "equal-id-user")
+			Object.assign(original, {
+				generationIsolation: {
+					...original.generationIsolation,
+					originalPrincipal: { kind: "user", id: original.actorId },
+				},
+			});
+		if (change === "wrong-actor")
+			Object.assign(original, {
+				generationIsolation: {
+					...original.generationIsolation,
+					originalPrincipal: { kind: "application", id: "other" },
+				},
+			});
+		if (change === "wrong-generation")
+			Object.assign(original, {
+				generationIsolation: {
+					...original.generationIsolation,
+					operationId: "generation:conversation-1:2",
+				},
+			});
+		if (change === "wrong-channel")
+			Object.assign(original, { channelId: "web" });
+		expect(() => planConversationGenerationConfirmationV1(original)).toThrow(
+			"Generation confirmation binding is invalid",
+		);
+		if (change !== "wrong-generation")
+			expect(() => parseClaim(original)).toThrow();
 	});
 });

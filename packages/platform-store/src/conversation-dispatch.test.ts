@@ -4399,3 +4399,70 @@ describe("confirmed unsent task reconciliation", () => {
 		}
 	});
 });
+
+it("persists and confirms isolation of the original application generation after recovery failure", async () => {
+	const work = await seedIsolation();
+	const boundary = {
+		schemaVersion: 1,
+		principal: { kind: "application", id: "actor-dispatch" },
+		agentId: "agent-dispatch",
+		channelId: "api:application",
+		identityRevision: "app-original",
+		agentAuthorizationRevision: "authorization-dispatch",
+		accessSources: [{ kind: "application", applicationId: "actor-dispatch" }],
+	};
+	await client`update platform.conversations set channel_id = 'api:application' where id = ${work.conversationId}`;
+	await client`update platform.conversation_executions set channel_id = 'api:application' where execution_id = ${work.executionId}`;
+	await client`update platform.task_authorization_records set boundary = ${client.json(boundary)} where execution_id = ${work.executionId}`;
+	const first = await claim(work.itemId);
+	try {
+		if (first.decision.outcome !== "claimed") throw Error();
+		expect(
+			await first.store.beginGenerationIsolation({
+				claim: first.decision.claim,
+				hostSessionRef: "original-host",
+				failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+			}),
+		).toBe(true);
+		expect(
+			await first.store.retry({
+				claim: first.decision.claim,
+				retryDelayMs: 0,
+				errorCode: "GENERATION_BARRIER_UNCONFIRMED",
+				transition: {},
+			}),
+		).toBe(true);
+		const next = await first.store.claim({
+			schemaVersion: 1,
+			itemId: work.itemId,
+			workerId: "app-recovery",
+			leaseDurationMs: 30000,
+		});
+		if (next.outcome !== "claimed") throw Error();
+		expect(next.claim.generationIsolation?.originalPrincipal).toEqual({
+			kind: "application",
+			id: "actor-dispatch",
+		});
+		expect(
+			await first.store.confirmGenerationIsolation({
+				claim: next.claim,
+				operationId: `generation:${work.conversationId}:1`,
+				hostSessionRef: "original-host",
+			}),
+		).toBe(true);
+		expect(await isolationState(work)).toMatchObject({
+			generation: 2,
+			status: "unavailable",
+			execution_status: "failed",
+			isolation_status: "confirmed",
+		});
+		const [tombstone] =
+			await client`select original_principal from platform.conversation_generation_tombstones where conversation_id = ${work.conversationId}`;
+		expect(tombstone?.original_principal).toEqual({
+			kind: "application",
+			id: "actor-dispatch",
+		});
+	} finally {
+		await first.store.close();
+	}
+});
