@@ -3,23 +3,42 @@ import {
 	execFile as execFileCallback,
 	spawn,
 } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
+	CodexRuntimeDriver,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
+	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
-import { createConversationExecutionUseCaseV1 } from "@agent-infra/platform-core";
+import {
+	CommandAcceptedProjectionV1Schema,
+	ConversationDetailProjectionV2Schema,
+	ConversationProjectionV1Schema,
+	ConversationSseMessageV2Schema,
+	ExecutionDetailProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import {
+	createFakeModelAccessValidatorV1,
+	createFakeModelCatalogAdapterV1,
+	projectRuntimeModelConfigurationV1,
+} from "@agent-infra/model-catalog";
+import {
+	type AgentConfigurationRecordV2,
+	createConversationExecutionUseCaseV1,
+} from "@agent-infra/platform-core";
 import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -27,9 +46,16 @@ import {
 import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
+import { catalogFixture } from "../../../packages/model-catalog/src/catalog.fixture.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { setProductionDeploymentInput } from "../../../tests/fixtures/platform-api-production-deployment.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
+import type { ProductionPlatformApiInputV1 } from "../../platform-api/src/deployment.js";
+import {
+	createPlatformApiShutdown,
+	startPlatformApiFromDeployment,
+} from "../../platform-api/src/index.js";
 import {
 	fakeKubernetesApi,
 	workloadDesiredFixture,
@@ -39,6 +65,68 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
+const realCodexE2e = process.env.AGENT_INFRA_REAL_CODEX_E2E === "1";
+
+function syntheticModelEvents() {
+	const item = {
+		type: "message",
+		id: "worker-codex-message",
+		role: "assistant",
+		status: "completed",
+		content: [
+			{ type: "output_text", text: "controlled dispatch", annotations: [] },
+		],
+	};
+	return [
+		{
+			type: "response.created",
+			response: {
+				id: "worker-codex-response",
+				status: "in_progress",
+				output: [],
+			},
+		},
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: { ...item, status: "in_progress", content: [] },
+		},
+		{
+			type: "response.output_text.delta",
+			item_id: item.id,
+			output_index: 0,
+			content_index: 0,
+			delta: "controlled dispatch",
+		},
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id: "worker-codex-response",
+				status: "completed",
+				output: [item],
+				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+			},
+		},
+	];
+}
+
+async function writeSyntheticModelResponse(
+	response: import("node:http").ServerResponse,
+	completionGate?: Promise<void>,
+) {
+	response.writeHead(200, { "content-type": "text/event-stream" });
+	const events = syntheticModelEvents();
+	const first = events[0];
+	if (!first) throw Error("Synthetic model response is empty");
+	response.write(`event: ${first.type}\ndata: ${JSON.stringify(first)}\n\n`);
+	if (completionGate) await completionGate;
+	for (const event of events.slice(1)) {
+		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+	}
+	response.end();
+}
+
 async function waitUntil(check: () => Promise<boolean>, label: string) {
 	for (let attempt = 0; attempt < 150; attempt++) {
 		if (await check()) return;
@@ -48,10 +136,18 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 }
 
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
-// and Runtime HTTP. This is not real model, identity-provider or Connection acceptance.
+// and Runtime HTTP. AGENT_INFRA_REAL_CODEX_E2E adds the fixed Codex/provider lane;
+// neither mode is identity-provider, Connection, or browser acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "worker-766-"));
-	const database = await startPostgresTestDatabase("766-worker-dispatch");
+	const externalDatabaseUrl = process.env.PLATFORM_TEST_DATABASE_URL;
+	const database =
+		realCodexE2e && externalDatabaseUrl
+			? {
+					databaseUrl: externalDatabaseUrl,
+					stop: async () => undefined,
+				}
+			: await startPostgresTestDatabase("766-worker-dispatch");
 	const sql = postgres(database.databaseUrl, { max: 2 });
 	const children: ChildProcess[] = [];
 	const output: string[] = [];
@@ -63,6 +159,24 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		confirmedCursor?: string;
 		responseStatus?: number;
 	}[] = [];
+	const modelRequests: { body: string; authenticated: boolean }[] = [];
+	const modelJournalAtArrival: {
+		executionId: string;
+		operationRef: string;
+		attemptRef: string;
+	}[] = [];
+	let modelServer: ReturnType<typeof createServer> | undefined;
+	let modelPort: number | undefined;
+	let releaseModelResponse: (() => void) | undefined;
+	let releaseSecondModelResponse: (() => void) | undefined;
+	const modelResponseGate = realCodexE2e
+		? new Promise<void>((resolve) => {
+				releaseModelResponse = resolve;
+			})
+		: Promise.resolve();
+	const secondModelResponseGate = new Promise<void>((resolve) => {
+		releaseSecondModelResponse = resolve;
+	});
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 	const signing = {
@@ -142,35 +256,229 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	let execution: PostgresConversationExecutionTransactionV1 | undefined;
 	let authorization: PostgresTaskAuthorizationStoreV1 | undefined;
 	let moduleDirectory: string | undefined;
+	let apiRunning:
+		| Awaited<ReturnType<typeof startPlatformApiFromDeployment>>
+		| undefined;
+	let apiOrigin: string | undefined;
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
-		const desired = workloadDesiredFixture(1, "agent-cli", "internal-only");
-		const adapter = createKubernetesRuntimeAdapterV1({
-			client: fake.client,
-			policy,
-			probe: async () => true,
-		});
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending")
-			throw Error("Expected controlled Workload identity");
-		await adapter.promote(desired, identity);
-		const configuration = {
+		if (realCodexE2e) {
+			modelServer = createServer(async (request, response) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of request) chunks.push(chunk);
+				const body = Buffer.concat(chunks).toString();
+				modelRequests.push({
+					body,
+					authenticated:
+						request.headers.authorization ===
+						"Bearer worker-controlled-model-credential",
+				});
+				if (!modelRequests.at(-1)?.authenticated) {
+					response.writeHead(401);
+					response.end();
+					return;
+				}
+				const state = JSON.parse(
+					await readFile(join(directory, "driver.json"), "utf8"),
+				) as {
+					sessions: Record<
+						string,
+						{
+							executions: Record<string, { nativeTurnId: string }>;
+							journals?: Record<
+								string,
+								{
+									events: {
+										type: string;
+										payload?: {
+											kind?: string;
+											phase?: string;
+											operationRef?: string;
+											attemptRef?: string;
+										};
+									}[];
+								}
+							>;
+						}
+					>;
+				};
+				modelJournalAtArrival.push(
+					...Object.values(state.sessions).flatMap((session) =>
+						Object.entries(session.executions).flatMap(
+							([executionId, execution]) =>
+								(
+									session.journals?.[execution.nativeTurnId]?.events ?? []
+								).flatMap((event) =>
+									event.type === "operation" &&
+									event.payload?.kind === "model" &&
+									event.payload.phase === "intent"
+										? [
+												{
+													executionId,
+													operationRef: event.payload.operationRef ?? "",
+													attemptRef: event.payload.attemptRef ?? "",
+												},
+											]
+										: [],
+								),
+						),
+					),
+				);
+				// Keep the controlled provider response open until the Worker has
+				// durably observed the accepted running Execution. Otherwise the
+				// synthetic model can complete before the takeover assertions read
+				// the processing state that this test is exercising.
+				if (!response.destroyed)
+					await writeSyntheticModelResponse(
+						response,
+						modelRequests.length === 2
+							? secondModelResponseGate
+							: modelResponseGate,
+					);
+			});
+			modelServer.listen(0, "127.0.0.1");
+			await once(modelServer, "listening");
+			const modelAddress = modelServer.address();
+			if (!modelAddress || typeof modelAddress === "string")
+				throw Error("Controlled model server did not bind");
+			modelPort = modelAddress.port;
+		}
+		const baseDesired = workloadDesiredFixture(1, "agent-cli", "internal-only");
+		const configuration: AgentConfigurationRecordV2 = {
 			schemaVersion: 2,
-			agentId: desired.agentId,
+			agentId: baseDesired.agentId,
 			revision: 1,
-			source: {
-				kind: "custom",
-				imageDigest: desired.imageDigest,
-				admissionRevision: "admitted",
-				interactionMode: "platform-adapter",
-				connectionEnabled: false,
-			},
-			modelConfiguration: null,
+			source: realCodexE2e
+				? {
+						kind: "standard",
+						templateId: "worker-controlled-codex",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: [],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					}
+				: {
+						kind: "custom",
+						imageDigest: baseDesired.imageDigest,
+						admissionRevision: "admitted",
+						interactionMode: "platform-adapter",
+						connectionEnabled: false,
+					},
+			modelConfiguration: realCodexE2e
+				? {
+						catalogRevision: "worker-controlled-catalog",
+						options: [
+							{
+								optionId: "worker-controlled-model",
+								endpointId: "worker-controlled-endpoint",
+								modelId: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								credential: {
+									secretId: "worker-controlled-secret",
+									version: 1,
+									isSet: true,
+								},
+							},
+						],
+						defaultOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+					}
+				: null,
 			environment: [],
 			secrets: [],
 			channels: [],
 			channelRevision: "channels-1",
 		};
+		const modelSecretRef = {
+			schemaVersion: 1 as const,
+			ownerType: "agent-owner" as const,
+			ownerId: "user-cli",
+			agentId: baseDesired.agentId,
+			secretId: "worker-controlled-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "worker-key",
+			name: "worker-controlled-model-secret",
+		};
+		const modelSecretKey = `MODEL_CREDENTIAL_${createHash("sha256")
+			.update("model:worker-controlled-model")
+			.digest("hex")
+			.toUpperCase()}`;
+		const catalog = catalogFixture();
+		const catalogEndpoint = catalog.endpoints[0];
+		if (!catalogEndpoint) throw Error("Controlled model endpoint is missing");
+		const modelProjection = realCodexE2e
+			? await projectRuntimeModelConfigurationV1({
+					configuration,
+					protocol: "openai-responses-v1",
+					catalog: createFakeModelCatalogAdapterV1({
+						...catalog,
+						revision: "worker-controlled-catalog",
+						endpoints: [
+							{
+								...catalogEndpoint,
+								endpointId: "worker-controlled-endpoint",
+							},
+						],
+					}),
+					access: createFakeModelAccessValidatorV1([
+						{
+							endpointId: "worker-controlled-endpoint",
+							modelId: "gpt-5.6-sol",
+							reasoningLevels: ["medium"],
+							credential: "worker-controlled-model-credential",
+						},
+					]),
+					signal: AbortSignal.timeout(1000),
+					credentialFor: async () => ({
+						reference: {
+							secretId: modelSecretRef.secretId,
+							secretVersion: 1,
+							configRevision: 1,
+							name: modelSecretRef.name,
+						},
+						key: modelSecretKey,
+						plaintext: new TextEncoder().encode(
+							"worker-controlled-model-credential",
+						),
+					}),
+				})
+			: undefined;
+		const desired = realCodexE2e
+			? validateAgentWorkloadDesiredV1({
+					...baseDesired,
+					secretRefs: [modelSecretRef],
+				})
+			: baseDesired;
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: fake.client,
+			policy,
+			...(modelProjection ? { modelProjection } : {}),
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending")
+			throw Error("Expected controlled Workload identity");
+		if (realCodexE2e) {
+			const secretUid = await adapter.applyImmutableSecret(
+				desired,
+				modelSecretRef.name,
+				modelSecretKey,
+				new TextEncoder().encode("worker-controlled-model-credential"),
+			);
+			await adapter.bindSecretFence(
+				desired,
+				identity,
+				modelSecretRef.name,
+				1,
+				secretUid,
+			);
+		}
+		await adapter.promote(desired, identity);
 		const capacity = {
 			schemaVersion: 1,
 			imageDigest: desired.imageDigest,
@@ -183,6 +491,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			configuration,
 			deployment: desired,
 			executionCapacity: capacity,
+			...(modelProjection ? { modelProjection } : {}),
 		};
 		const state = {
 			schemaVersion: 1,
@@ -210,9 +519,48 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
-		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(configuration)})`;
-		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(state)}, now() + interval '1 hour')`;
-		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		await sql`insert into platform.agent_availability (agent_id, target_type, target_id) values (${desired.agentId}, 'user', 'user-second')`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, ${configuration.source.kind === "standard" ? configuration.source.templateId : configuration.source.imageDigest}, now(), ${sql.json(JSON.parse(JSON.stringify(configuration)))})`;
+		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(JSON.parse(JSON.stringify(state)))}, now() + interval '1 hour')`;
+		const fakeDriver = realCodexE2e
+			? undefined
+			: await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const driver = realCodexE2e
+			? await (async () => {
+					await verifyCodexPilotInstallation();
+					return CodexRuntimeDriver.open({
+						nativeLane: "official-model-only",
+						path: join(directory, "driver.json"),
+						launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
+						configVersion: "worker-controlled-codex-v1",
+						defaultModelOptionId: "worker-controlled-model",
+						defaultReasoningLevel: "medium",
+						modelOptions: [
+							{
+								modelOptionId: "worker-controlled-model",
+								model: "gpt-5.6-sol",
+								reasoningLevels: ["medium"],
+								endpoint: `http://127.0.0.1:${modelPort}/v1`,
+								credential: "worker-controlled-model-credential",
+							},
+						],
+						authorizeExternalAction: async (action) => {
+							if (action.kind === "tool" || !host) {
+								throw new Error(
+									"controlled test lane forbids external actions",
+								);
+							}
+							await host.authorizeExternalAction(action);
+						},
+					});
+				})()
+			: fakeDriver;
+		if (!driver) throw Error("Runtime driver was not assembled");
+		const dispatchCount = async () => {
+			if (realCodexE2e) return modelRequests.length;
+			if (!fakeDriver) throw Error("Fake runtime driver was not assembled");
+			return fakeDriver.sideEffectCount();
+		};
 		host = await RuntimeHost.open({
 			driver: Object.assign(driver, {
 				probeReadiness: () => driver.getCapabilities(),
@@ -341,8 +689,10 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
-export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
-export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
+export const directory = { async resolveUser(userId) { if (!['user-cli', 'user-second'].includes(userId)) return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
+const workerDatabaseUrl = new URL(${JSON.stringify(database.databaseUrl)});
+workerDatabaseUrl.searchParams.set('application_name', 'conversation-worker-' + process.pid);
+export const workloadInput = { databaseUrl: workerDatabaseUrl.toString(), policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
@@ -435,23 +785,224 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: created.result.conversationId,
 			};
 		};
-		const first = await admit("first");
-		const second = await admit("second");
-
+		const admitHttp = async (userId: string, key: string) => {
+			const command = (path: string, key: string, body: unknown) =>
+				fetch(`${apiOrigin}${path}`, {
+					method: "POST",
+					headers: {
+						authorization: `controlled-${userId}`,
+						"content-type": "application/json",
+						"Idempotency-Key": key,
+					},
+					body: JSON.stringify(body),
+				});
+			const createdResponse = await command(
+				`/api/v1/agents/${desired.agentId}/conversations`,
+				`${key}-create`,
+				{ schemaVersion: 1 },
+			);
+			const createdBody = await createdResponse.json();
+			expect(createdResponse.status, JSON.stringify(createdBody)).toBe(201);
+			const created = ConversationProjectionV1Schema.parse(createdBody);
+			const acceptedResponse = await command(
+				`/api/v1/conversations/${created.conversationId}/messages`,
+				`${key}-message`,
+				{ schemaVersion: 1, text: "controlled dispatch" },
+			);
+			const acceptedBody = await acceptedResponse.json();
+			expect(acceptedResponse.status, JSON.stringify(acceptedBody)).toBe(202);
+			const accepted = CommandAcceptedProjectionV1Schema.parse(acceptedBody);
+			if (!accepted.executionId) throw Error("HTTP command had no execution");
+			return {
+				conversationId: created.conversationId,
+				executionId: accepted.executionId,
+			};
+		};
+		const admitFirst = async () => {
+			const publicKey = wrapping.publicKey.export({
+				format: "der",
+				type: "spki",
+			});
+			const input: ProductionPlatformApiInputV1 = {
+				databaseUrl: database.databaseUrl,
+				imageRepository: "registry.example.test/agents/codex",
+				identity: {
+					resolve: async (request) => {
+						const token = request.headers.get("authorization");
+						if (
+							!token ||
+							!["controlled-user-cli", "controlled-user-second"].includes(token)
+						)
+							return null;
+						return {
+							schemaVersion: 1,
+							userId: token.slice("controlled-".length),
+							displayName: "Controlled user",
+							accountStatus: "active",
+							organizationIds: [],
+							roles: ["employee"],
+							authorizationRevision: "identity-1",
+						};
+					},
+					hydrateUsers: async (ids) =>
+						ids.map((userId) => ({
+							userId,
+							displayName: "Controlled user",
+							roles: ["employee"],
+						})),
+					resolveUser: async (userId) =>
+						["user-cli", "user-second"].includes(userId)
+							? {
+									schemaVersion: 1,
+									userId,
+									accountStatus: "active",
+									organizationIds: [],
+									authorizationRevision: "identity-1",
+								}
+							: null,
+				},
+				loadAuthorityContext: async () => ({
+					schemaVersion: 1,
+					users: ["user-cli", "user-second"].map((userId) => ({
+						userId,
+						accountStatus: "active" as const,
+					})),
+					organizationIds: [],
+				}),
+				registry: {
+					endpoint: "https://registry.example.test",
+					imageReferencePrefix: "registry.example.test/agents",
+					admissionPolicyRef: "controlled-policy",
+					fetch: async () => new Response(null, { status: 404 }),
+					policy: { authorize: async () => ({ status: "rejected" }) },
+				},
+				templates: [
+					{
+						templateId: "worker-controlled-codex",
+						imageDigest: desired.imageDigest,
+						imageReference: `registry.example.test/agents/codex@${desired.imageDigest}`,
+						allowedEnvironmentKeys: [],
+						allowedSecretKeys: [],
+						platformManagedKeys: [],
+						connectionEnabled: false,
+					},
+				],
+				modelCatalog: {
+					revision: "worker-controlled-catalog",
+					load: async () => ({
+						schemaVersion: 1,
+						revision: "worker-controlled-catalog",
+						validUntil: Date.now() + 60_000,
+						endpoints: [],
+					}),
+				},
+				channelPolicy: { revision: "channels-1", bindings: [] },
+				encryptionKeys: {
+					schemaVersion: 1,
+					activeWrappingKeyVersion: "worker-key",
+					keys: [
+						{
+							schemaVersion: 1,
+							keyVersion: "worker-key",
+							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+							publicKeySpkiDerBase64: publicKey.toString("base64"),
+							publicKeyFingerprint: createHash("sha256")
+								.update(publicKey)
+								.digest("hex"),
+							rsaModulusBits: 3072,
+							status: "active",
+						},
+					],
+				},
+				resourceProfile: {
+					profileId: "standard-medium",
+					displayName: "Standard medium",
+					estimatedResources: {
+						cpuMillicores: 2000,
+						memoryMiB: 4096,
+						storageGiB: 20,
+					},
+				},
+			};
+			setProductionDeploymentInput(input);
+			apiRunning = await startPlatformApiFromDeployment({
+				moduleSpecifier: new URL(
+					"../../../tests/fixtures/platform-api-production-deployment.ts",
+					import.meta.url,
+				).href,
+				port: 0,
+				log: () => {},
+			});
+			apiOrigin = `http://127.0.0.1:${(apiRunning.server.address() as AddressInfo).port}`;
+			return admitHttp("user-cli", "worker-http");
+		};
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
-			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin perform nextval('platform.test_event_attempts'); raise exception 'injected event transaction failure'; end $$",
+			"create function platform.test_event_failure() returns trigger language plpgsql as $$ begin if nextval('platform.test_event_attempts') = 1 then raise exception 'injected event transaction failure'; end if; return new; end $$",
 		);
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
 		);
-		start();
-		start();
+		if (realCodexE2e) {
+			start();
+			start();
+			await waitUntil(async () => {
+				const sessions = await sql<{ application_name: string }[]>`
+					select distinct application_name from pg_stat_activity
+					where application_name like 'conversation-worker-%'
+					  and query like '%select id, operation from platform.outbox_items%'
+				`;
+				return children
+					.slice(0, 2)
+					.every((child) =>
+						sessions.some(
+							(session) =>
+								session.application_name === `conversation-worker-${child.pid}`,
+						),
+					);
+			}, "both packaged Workers polling before first admission");
+		}
+		const first = await admitFirst();
+		if (realCodexE2e) {
+			await waitUntil(
+				async () => (await dispatchCount()) === 1,
+				"first HTTP dispatch",
+			);
+		}
+		const second = realCodexE2e
+			? await admitHttp("user-second", "worker-second")
+			: await admit("second");
+		if (realCodexE2e) {
+			const [admission] = await sql<
+				{ actorId: string; principalId: string; accessKind: string }[]
+			>`
+				select e.actor_id as "actorId",
+				       r.boundary->'principal'->>'id' as "principalId",
+				       r.boundary->'accessSources'->0->>'kind' as "accessKind"
+				from platform.conversation_executions e
+				join platform.task_authorization_records r on r.execution_id=e.execution_id
+				where e.execution_id=${second.executionId}
+			`;
+			expect(admission).toEqual({
+				actorId: "user-second",
+				principalId: "user-second",
+				accessKind: "user",
+			});
+		}
+		if (!realCodexE2e) {
+			start();
+			start();
+		}
 		await waitUntil(
-			async () => (await driver.sideEffectCount()) === 1,
+			async () => (await dispatchCount()) === 1,
 			"single effective first dispatch",
 		);
+		if (realCodexE2e) {
+			expect(modelRequests[0]?.authenticated).toBe(true);
+			expect(modelRequests[0]?.body).toContain("controlled dispatch");
+			expect(modelJournalAtArrival).toHaveLength(1);
+		}
 		expect(children.every((child) => child.exitCode === null)).toBe(true);
 		await waitUntil(
 			async () =>
@@ -477,7 +1028,37 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [active] =
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
 		if (!active) throw Error("No running execution");
-		expect(await driver.sideEffectCount()).toBe(1);
+		expect(await dispatchCount()).toBe(1);
+		if (!realCodexE2e) {
+			const response = await fetch(
+				`${apiOrigin}/api/v2/conversations/${first.conversationId}/executions/${first.executionId}`,
+				{ headers: { authorization: "controlled-user-cli" } },
+			);
+			const body = await response.json();
+			expect(response.status, JSON.stringify(body)).toBe(200);
+			const detail = ExecutionDetailProjectionV2Schema.parse(body);
+			expect(detail.executionId).toBe(first.executionId);
+		}
+		if (realCodexE2e) {
+			expect(active.execution_id).toBe(first.executionId);
+			expect(active.conversation_id).toBe(first.conversationId);
+			const intent = modelJournalAtArrival[0];
+			if (!intent) throw Error("No model intent in durable journal at arrival");
+			expect(intent.executionId).toBe(active.execution_id);
+			expect(intent.operationRef).toBeTruthy();
+			expect(intent.attemptRef).toBeTruthy();
+			expect(intent.operationRef).not.toBe(intent.attemptRef);
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return phases.has("intent") && phases.has("started");
+			}, "persisted Codex model operation start facts");
+		}
 		// Kill both process owners, expire only this test's owned lease, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
 		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
@@ -486,9 +1067,117 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
-		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
-		start();
-		start();
+		const [target] = await sql<
+			{ id: string; attemptCount: number; fence: number }[]
+		>`
+			update platform.outbox_items
+			set lease_expires_at=clock_timestamp()+interval '1 hour'
+			where payload->>'executionId'=${active.execution_id} and status='processing'
+			returning id, attempt_count::int as "attemptCount", delivery_fence::int as fence
+		`;
+		if (!target) throw Error("No expired outbox lease for takeover");
+		const [queued] = await sql<
+			{
+				id: string;
+				status: string;
+				availableAt: Date;
+				leaseExpiresAt: Date | null;
+			}[]
+		>`
+			select id, status, available_at as "availableAt",
+				lease_expires_at as "leaseExpiresAt" from platform.outbox_items
+			where payload->>'executionId'=${second.executionId}
+		`;
+		if (
+			!queued ||
+			!["pending", "retry_scheduled", "processing"].includes(queued.status)
+		)
+			throw Error("No deferred outbox item for second execution");
+		await sql`
+			update platform.outbox_items
+			set available_at=clock_timestamp()+interval '1 hour',
+				lease_expires_at=case when status='processing'
+					then clock_timestamp()+interval '1 hour' else lease_expires_at end
+			where id=${queued.id}
+		`;
+		try {
+			start();
+			start();
+			const ready = new Set<number>();
+			await waitUntil(async () => {
+				const sessions = await sql<{ application_name: string }[]>`
+					select distinct application_name from pg_stat_activity
+					where datname=current_database()
+						and query like '%select id, operation from platform.outbox_items%'
+				`;
+				for (const child of children.slice(2))
+					if (
+						child.pid &&
+						sessions.some(
+							(session) =>
+								session.application_name === `conversation-worker-${child.pid}`,
+						)
+					)
+						ready.add(child.pid);
+				return ready.size === 2;
+			}, "both replacement Workers polling before lease expiry");
+			await sql`
+				update platform.outbox_items
+				set lease_expires_at=clock_timestamp()+interval '3 seconds'
+				where id=${target.id}
+			`;
+			await sql.begin(async (transaction) => {
+				const [locked] = await transaction<{ notExpired: boolean }[]>`
+					select lease_expires_at > clock_timestamp() as "notExpired"
+					from platform.outbox_items where id=${target.id} for update
+				`;
+				expect(locked?.notExpired).toBe(true);
+				let observedSessions: {
+					applicationName: string;
+					waitEventType: string | null;
+					claimQuery: boolean;
+				}[] = [];
+				try {
+					await waitUntil(async () => {
+						observedSessions = await sql<typeof observedSessions>`
+							select application_name as "applicationName",
+								wait_event_type as "waitEventType",
+								query like '%from platform.outbox_items where id =%' as "claimQuery"
+							from pg_stat_activity where datname=current_database()
+								and application_name like 'conversation-worker-%'
+						`;
+						return children
+							.slice(2)
+							.every((child) =>
+								observedSessions.some(
+									(session) =>
+										session.applicationName ===
+											`conversation-worker-${child.pid}` &&
+										session.waitEventType === "Lock" &&
+										session.claimQuery,
+								),
+							);
+					}, "both replacement Workers blocked on the same outbox claim");
+				} catch (error) {
+					throw new Error(JSON.stringify(observedSessions), { cause: error });
+				}
+				const [held] = await sql<{ attemptCount: number; fence: number }[]>`
+					select attempt_count::int as "attemptCount", delivery_fence::int as fence
+					from platform.outbox_items where id=${target.id}
+				`;
+				expect(held).toEqual({
+					attemptCount: target.attemptCount,
+					fence: target.fence,
+				});
+			});
+		} finally {
+			if (!realCodexE2e)
+				await sql`
+					update platform.outbox_items
+					set available_at=${queued.availableAt}, lease_expires_at=${queued.leaseExpiresAt}
+					where id=${queued.id}
+				`;
+		}
 		await waitUntil(
 			async () =>
 				requests
@@ -512,7 +1201,15 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					),
 			"takeover acknowledges existing committed cursor",
 		);
-		expect(await driver.sideEffectCount()).toBe(1);
+		const [claimed] = await sql<{ attemptCount: number; fence: number }[]>`
+			select attempt_count::int as "attemptCount", delivery_fence::int as fence
+			from platform.outbox_items where id=${target.id}
+		`;
+		expect(claimed).toEqual({
+			attemptCount: target.attemptCount + 1,
+			fence: target.fence + 1,
+		});
+		expect(await dispatchCount()).toBe(1);
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
 		).toHaveLength(1);
@@ -526,54 +1223,377 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				.filter((request) => request.executionId === active.execution_id)
 				.every((request) => request.deliveryFence === after?.fence),
 		).toBe(true);
-		// The same Conversation cannot start another concurrent reply.
-		const supplement = await api.accept({
-			schemaVersion: 1,
-			command: "message",
-			conversationId: active.conversation_id,
-			text: "supplement",
-			idempotencyKey: "supplement",
-			requestId: "supplement",
-			traceId: "supplement",
-		});
-		expect(supplement.outcome).toBe("accepted");
-		if (supplement.outcome !== "accepted")
-			throw Error("Expected supplementary instruction");
-		expect(supplement.result.executionId).toBe(active.execution_id);
-		await waitUntil(
-			async () =>
-				requests.some(
-					(request) =>
-						request.path.endsWith("/instructions") &&
-						request.executionId === active.execution_id &&
-						request.responseStatus === 200,
+		if (realCodexE2e) {
+			releaseModelResponse?.();
+			await waitUntil(async () => {
+				const facts = await sql<{ phase: string }[]>`
+						select event_payload->'fact'->>'phase' as phase
+						from platform.conversation_events
+						where execution_id=${active.execution_id}
+						  and event_type='execution.operation'
+					`;
+				const phases = new Set(facts.map((fact) => fact.phase));
+				return ["intent", "started", "completed"].every((phase) =>
+					phases.has(phase),
+				);
+			}, "persisted Codex model operation facts");
+			const operationFacts = await sql<
+				{
+					eventId: string;
+					phase: string;
+					kind: string;
+					modelOptionId: string | null;
+					operationRef: string;
+					attemptRef: string;
+					auditEventId: string | null;
+					auditOperationRef: string | null;
+					auditAttemptRef: string | null;
+					auditPhase: string | null;
+				}[]
+			>`
+				select e.event_id as "eventId",
+				       e.event_payload->'fact'->>'phase' as phase,
+				       e.event_payload->'fact'->>'kind' as kind,
+				       e.event_payload->'fact'->'model'->>'modelOptionId' as "modelOptionId",
+				       e.event_payload->'fact'->>'operationRef' as "operationRef",
+				       e.event_payload->'fact'->>'attemptRef' as "attemptRef",
+				       a.details->>'eventId' as "auditEventId",
+				       a.details->'fact'->>'operationRef' as "auditOperationRef",
+				       a.details->'fact'->>'attemptRef' as "auditAttemptRef",
+				       a.details->'fact'->>'phase' as "auditPhase"
+				from platform.conversation_events e
+				left join platform.audit_events a
+				  on a.id='operation-observed:' || e.event_id
+				 and a.target_id=e.execution_id
+				 and a.action='execution.operation.observed'
+				where e.execution_id=${active.execution_id}
+				  and e.event_type='execution.operation'
+				order by e.sequence
+			`;
+			expect(operationFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
+			expect(
+				operationFacts.every(
+					(fact) => fact.modelOptionId === "worker-controlled-model",
 				),
-			"supplement preserves the active Execution",
-		);
-		const stop = await api.stop({
-			schemaVersion: 1,
-			command: "stop",
-			targetExecutionId: active.execution_id,
-			conversationId: active.conversation_id,
-			idempotencyKey: "stop",
-			requestId: "stop",
-			traceId: "stop",
-		});
-		expect(stop.outcome).toBe("accepted");
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
-				).length === 1,
-			"durable stop completion",
-		);
-		await waitUntil(
-			async () =>
-				(
-					await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
-				).length === 1,
-			"deferred conversation after capacity release",
-		);
+			).toBe(true);
+			const intent = modelJournalAtArrival[0];
+			if (!intent) throw Error("No model intent in durable journal at arrival");
+			expect(
+				operationFacts.every(
+					(fact) =>
+						fact.operationRef === intent.operationRef &&
+						fact.attemptRef === intent.attemptRef &&
+						fact.auditEventId === fact.eventId &&
+						fact.auditOperationRef === intent.operationRef &&
+						fact.auditAttemptRef === intent.attemptRef &&
+						fact.auditPhase === fact.phase,
+				),
+			).toBe(true);
+			expect(modelJournalAtArrival).toHaveLength(1);
+			expect(await dispatchCount()).toBe(1);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='completed'`
+					).length === 1,
+				"recovered Codex execution completes",
+			);
+			if (!apiOrigin) throw Error("Production API did not start");
+			const read = async (path: string) => {
+				const response = await fetch(`${apiOrigin}${path}`, {
+					headers: { authorization: "controlled-user-cli" },
+				});
+				const body = await response.json();
+				expect(response.status, JSON.stringify(body)).toBe(200);
+				return body;
+			};
+			const path = `/api/v2/conversations/${first.conversationId}`;
+			const history = ConversationDetailProjectionV2Schema.parse(
+				await read(path),
+			);
+			const executionDetail = ExecutionDetailProjectionV2Schema.parse(
+				await read(`${path}/executions/${first.executionId}`),
+			);
+			const assertPersistedOperations = (events: typeof history.events) => {
+				const operations = events.filter(
+					(event) => event.type === "execution.operation",
+				);
+				for (const fact of operationFacts) {
+					const event = operations.find(
+						(item) => item.eventId === fact.eventId,
+					);
+					expect(event).toMatchObject({
+						eventId: fact.eventId,
+						conversationId: first.conversationId,
+						executionId: first.executionId,
+						payload: {
+							kind: "model",
+							phase: fact.phase,
+							operationRef: fact.operationRef,
+							attemptRef: fact.attemptRef,
+						},
+					});
+				}
+			};
+			assertPersistedOperations(history.events);
+			assertPersistedOperations(executionDetail.events);
+			const [cursorFact, ...replayedFacts] = operationFacts;
+			if (!cursorFact) throw Error("No persisted operation replay cursor");
+			expect(cursorFact.phase).toBe("intent");
+			expect(replayedFacts.length).toBeGreaterThan(0);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 10_000);
+			try {
+				const response = await fetch(`${apiOrigin}${path}/events`, {
+					headers: {
+						authorization: "controlled-user-cli",
+						"Last-Event-ID": cursorFact.eventId,
+					},
+					signal: controller.signal,
+				});
+				expect(response.status).toBe(200);
+				expect(response.headers.get("content-type")).toContain(
+					"text/event-stream",
+				);
+				if (!response.body) throw Error("V2 SSE body is missing");
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				const pending = new Set(replayedFacts.map((fact) => fact.eventId));
+				let buffer = "";
+				while (pending.size > 0) {
+					const next = await reader.read();
+					if (next.done) throw Error("V2 SSE ended before operation replay");
+					buffer += decoder.decode(next.value, { stream: true });
+					let end = buffer.indexOf("\n\n");
+					while (end >= 0) {
+						const frame = buffer.slice(0, end);
+						buffer = buffer.slice(end + 2);
+						const eventId = frame.match(/^id: (.+)$/m)?.[1];
+						const data = frame.match(/^data: (.+)$/m)?.[1];
+						expect(eventId).not.toBe(cursorFact.eventId);
+						if (eventId && data && pending.has(eventId)) {
+							const parsed = ConversationSseMessageV2Schema.parse(
+								JSON.parse(data),
+							);
+							const fact = operationFacts.find(
+								(item) => item.eventId === eventId,
+							);
+							expect(parsed).toMatchObject({
+								eventId,
+								type: "execution.operation",
+								conversationId: first.conversationId,
+								executionId: first.executionId,
+								payload: {
+									phase: fact?.phase,
+									operationRef: fact?.operationRef,
+									attemptRef: fact?.attemptRef,
+								},
+							});
+							pending.delete(eventId);
+						}
+						end = buffer.indexOf("\n\n");
+					}
+				}
+			} finally {
+				clearTimeout(timeout);
+				controller.abort();
+			}
+			expect(await dispatchCount()).toBe(1);
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp(),
+				    lease_expires_at=case when status='processing'
+				      then clock_timestamp() else lease_expires_at end
+				where id=${queued.id}
+			`;
+			await waitUntil(
+				async () => modelRequests.length === 2,
+				"second principal reaches controlled native model endpoint",
+			);
+			expect(modelRequests[1]?.authenticated).toBe(true);
+			expect(modelRequests[1]?.body).toContain("controlled dispatch");
+			await waitUntil(
+				async () =>
+					modelJournalAtArrival.some(
+						(intent) => intent.executionId === second.executionId,
+					),
+				"second principal model intent preceded provider request",
+			);
+			const secondIntent = modelJournalAtArrival.find(
+				(intent) => intent.executionId === second.executionId,
+			);
+			if (!secondIntent) throw Error("Second principal model intent missing");
+			const third = await admitHttp("user-second", "worker-third");
+			await waitUntil(async () => {
+				const [queuedThird] = await sql<{ status: string }[]>`
+					select status from platform.outbox_items
+					where payload->>'executionId'=${third.executionId}
+				`;
+				return ["pending", "retry_scheduled"].includes(
+					queuedThird?.status ?? "",
+				);
+			}, "third task remains queued behind second principal");
+			await sql`
+				update platform.outbox_items
+				set available_at=clock_timestamp()+interval '1 hour'
+				where payload->>'executionId'=${third.executionId}
+			`;
+			releaseSecondModelResponse?.();
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.conversation_executions
+							where execution_id=${second.executionId} and status='completed'
+						`
+					).length === 1,
+				"second principal native Codex execution completes",
+			);
+			const secondFacts = await sql<
+				{
+					phase: string;
+					operationRef: string;
+					attemptRef: string;
+					auditEventId: string | null;
+					eventId: string;
+				}[]
+			>`
+				select e.event_id as "eventId",
+				       e.event_payload->'fact'->>'phase' as phase,
+				       e.event_payload->'fact'->>'operationRef' as "operationRef",
+				       e.event_payload->'fact'->>'attemptRef' as "attemptRef",
+				       a.details->>'eventId' as "auditEventId"
+				from platform.conversation_events e
+				left join platform.audit_events a
+				  on a.id='operation-observed:' || e.event_id
+				 and a.target_id=e.execution_id
+				 and a.action='execution.operation.observed'
+				where e.execution_id=${second.executionId}
+				  and e.event_type='execution.operation'
+			`;
+			expect(secondFacts.map((fact) => fact.phase)).toEqual(
+				expect.arrayContaining(["intent", "started", "completed"]),
+			);
+			expect(
+				secondFacts.every(
+					(fact) =>
+						fact.operationRef === secondIntent.operationRef &&
+						fact.attemptRef === secondIntent.attemptRef &&
+						fact.auditEventId === fact.eventId,
+				),
+			).toBe(true);
+			await sql.begin(async (transaction) => {
+				await transaction`
+					delete from platform.agent_availability
+					where agent_id=${desired.agentId}
+					  and target_type='user' and target_id='user-second'
+				`;
+				await transaction`
+					update platform.agents set authorization_revision='authority-2'
+					where id=${desired.agentId}
+				`;
+			});
+			const [revoked] = await sql`
+				select authorization_revision from platform.agents
+				where id=${desired.agentId}
+				  and not exists (
+				    select 1 from platform.agent_availability
+				    where agent_id=${desired.agentId}
+				      and target_type='user' and target_id='user-second'
+				  )
+			`;
+			expect(revoked?.authorization_revision).toBe("authority-2");
+			await sql`
+				update platform.outbox_items set available_at=clock_timestamp()
+				where payload->>'executionId'=${third.executionId}
+			`;
+			await waitUntil(
+				async () =>
+					(
+						await sql`
+							select 1 from platform.conversation_executions
+							where execution_id=${third.executionId} and status='failed'
+						`
+					).length === 1,
+				"revoked queued principal is rejected before Runtime dispatch",
+			);
+			expect(
+				requests.filter(
+					(request) =>
+						request.path.endsWith("/turns") &&
+						request.executionId === third.executionId,
+				),
+			).toHaveLength(0);
+			const [rejected] = await sql<
+				{ outboxStatus: string; errorCode: string }[]
+			>`
+				select o.status as "outboxStatus",
+				       p.payload->>'errorCode' as "errorCode"
+				from platform.outbox_items o
+				join platform.persisted_events p
+				  on p.stream_id='outbox:' || o.id and p.event_type='outbox.failed'
+				where o.payload->>'executionId'=${third.executionId}
+			`;
+			expect(rejected).toEqual({
+				outboxStatus: "failed",
+				errorCode: "AUTHORIZATION_REVOKED",
+			});
+			expect(modelRequests).toHaveLength(2);
+			expect(await dispatchCount()).toBe(2);
+		}
+		if (!realCodexE2e) {
+			// The same Conversation cannot start another concurrent reply.
+			const supplement = await api.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: active.conversation_id,
+				text: "supplement",
+				idempotencyKey: "supplement",
+				requestId: "supplement",
+				traceId: "supplement",
+			});
+			expect(supplement.outcome).toBe("accepted");
+			if (supplement.outcome !== "accepted")
+				throw Error("Expected supplementary instruction");
+			expect(supplement.result.executionId).toBe(active.execution_id);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.path.endsWith("/instructions") &&
+							request.executionId === active.execution_id &&
+							request.responseStatus === 200,
+					),
+				"supplement preserves the active Execution",
+			);
+			const stop = await api.stop({
+				schemaVersion: 1,
+				command: "stop",
+				targetExecutionId: active.execution_id,
+				conversationId: active.conversation_id,
+				idempotencyKey: "stop",
+				requestId: "stop",
+				traceId: "stop",
+			});
+			expect(stop.outcome).toBe("accepted");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${active.execution_id} and status='cancelled'`
+					).length === 1,
+				"durable stop completion",
+			);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id<>${active.execution_id} and status='processing'`
+					).length === 1,
+				"deferred conversation after capacity release",
+			);
+		}
 		expect(ackCount).toBeGreaterThan(0);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
@@ -605,6 +1625,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			{ cause: error },
 		);
 	} finally {
+		releaseModelResponse?.();
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(
@@ -617,9 +1638,11 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await Promise.all([
 			execution?.close(),
 			authorization?.close(),
-			sql.end({ timeout: 0 }),
+			apiRunning ? createPlatformApiShutdown(apiRunning)() : undefined,
 		]);
+		await sql.end({ timeout: 0 });
 		await host?.close();
+		modelServer?.closeAllConnections();
 		runtimeServer?.closeAllConnections();
 		kube.closeAllConnections();
 		await Promise.all([
@@ -627,6 +1650,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				? new Promise<void>((done) => runtimeServer?.close(() => done()))
 				: undefined,
 			new Promise<void>((done) => kube.close(() => done())),
+			modelServer
+				? new Promise<void>((done) => modelServer?.close(() => done()))
+				: undefined,
 		]);
 		await database.stop();
 		if (moduleDirectory)

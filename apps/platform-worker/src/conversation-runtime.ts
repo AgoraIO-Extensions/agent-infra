@@ -40,7 +40,10 @@ export interface ConversationTaskAuthorizationStoreV2 {
 		readonly workerId: string;
 		readonly traceId: string;
 		readonly requestId: string;
-	}): Promise<{ readonly controlRecordId: string }>;
+	}): Promise<{
+		readonly controlRecordId: string;
+		readonly reason: RuntimeControlReasonV2;
+	}>;
 }
 
 /** Read-only projection of already verified system migration evidence. */
@@ -684,7 +687,12 @@ export function createConversationRuntimeV2(
 				} catch (error) {
 					if (
 						!(error instanceof ConversationRuntimeHostError) ||
-						!error.retryable
+						(!error.retryable &&
+							!(
+								authority.purpose === "business" &&
+								!terminal &&
+								error.code === "RUNTIME_GRANT_INVALID"
+							))
 					)
 						throw error;
 					streamFailure = error;

@@ -11,6 +11,7 @@ import {
 	PostgresAgentConfigurationQueryV1,
 } from "@agent-infra/platform-store";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { agentConfigurationConformanceRecordV1 } from "../../../packages/platform-core/src/agent-configuration.conformance.js";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -766,6 +767,250 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		expect(close).toHaveBeenCalledTimes(1);
 		close.mockRestore();
 		await openApi();
+	});
+	it("admits two current users' Conversation tasks and rejects revoked access in production assembly", async () => {
+		const agentId = "agent_production_task";
+		const configuration = {
+			...agentConfigurationConformanceRecordV1,
+			agentId,
+		};
+		const currentUsers = new Map<string, unknown>([
+			[
+				"alice",
+				{
+					schemaVersion: 1,
+					userId: "alice",
+					accountStatus: "active",
+					organizationIds: ["org-a"],
+					authorizationRevision: "directory-a",
+				},
+			],
+			[
+				"bob",
+				{
+					schemaVersion: 1,
+					userId: "bob",
+					accountStatus: "active",
+					organizationIds: ["org-b"],
+					authorizationRevision: "directory-b",
+				},
+			],
+		]);
+		const previousResolveUser = identity.resolveUser;
+		identity.resolveUser = async (userId) => currentUsers.get(userId) ?? null;
+		const post = (path: string, user: User, body: unknown, key: string) =>
+			fetch(`${origin}/api/v1${path}`, {
+				method: "POST",
+				headers: {
+					authorization: sessionKeys[user],
+					"content-type": "application/json",
+					"Idempotency-Key": key,
+				},
+				body: JSON.stringify(body),
+			});
+		const taskSnapshot = async () => {
+			const result = await snapshot();
+			for (const name of [
+				"conversations",
+				"conversation_messages",
+				"conversation_executions",
+				"conversation_audit_events",
+				"conversation_events",
+				"task_authorization_records",
+				"task_control_records",
+			])
+				result[name] = await reader.unsafe(
+					`select * from platform.${name} as row order by to_jsonb(row)::text`,
+				);
+			return result;
+		};
+		try {
+			// Only the already-ready Agent prerequisite is seeded; task admission uses the production HTTP/Store assembly.
+			await reader.unsafe(
+				"insert into platform.agents(id,current_configuration_revision,authorization_revision) values($1,7,'agent-authorization')",
+				[agentId],
+			);
+			await reader.unsafe(
+				"insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('production-task-application',$1,'administrator','Agent','Controlled production task prerequisite','available','trace-seed','request-seed',now(),11,1,'ready','running',1,1)",
+				[agentId],
+			);
+			await reader.unsafe(
+				"insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) values($1,7,'template_01',now(),$2::text::jsonb)",
+				[agentId, JSON.stringify(configuration)],
+			);
+			await reader.unsafe(
+				"insert into platform.agent_owners(agent_id,owner_id,created_at) values($1,'administrator',now())",
+				[agentId],
+			);
+			await reader.unsafe(
+				"insert into platform.agent_availability(agent_id,target_type,target_id) values($1,'organization','org-a'),($1,'organization','org-b')",
+				[agentId],
+			);
+			const accepted: {
+				user: "alice" | "bob";
+				conversationId: string;
+				executionId: string;
+			}[] = [];
+			for (const user of ["alice", "bob"] as const) {
+				const conversation = (await json(
+					await post(
+						`/agents/${agentId}/conversations`,
+						user,
+						{ schemaVersion: 1 },
+						`create-${user}`,
+					),
+					201,
+				)) as { conversationId: string };
+				const task = (await json(
+					await post(
+						`/conversations/${conversation.conversationId}/messages`,
+						user,
+						{ schemaVersion: 1, text: `controlled ${user} task` },
+						`message-${user}`,
+					),
+					202,
+				)) as { executionId: string };
+				accepted.push({
+					user,
+					conversationId: conversation.conversationId,
+					executionId: task.executionId,
+				});
+			}
+			const records = await reader.unsafe(
+				"select execution_id,boundary from platform.task_authorization_records where execution_id in ($1,$2) order by execution_id",
+				accepted.map(({ executionId }) => executionId),
+			);
+			expect(records).toHaveLength(2);
+			for (const { user, executionId } of accepted)
+				expect(records).toContainEqual({
+					execution_id: executionId,
+					boundary: {
+						schemaVersion: 1,
+						principal: { kind: "user", id: user },
+						agentId,
+						channelId: "web",
+						identityRevision: `directory-${user === "alice" ? "a" : "b"}`,
+						agentAuthorizationRevision: "agent-authorization",
+						accessSources: [
+							{
+								kind: "organization",
+								organizationId: user === "alice" ? "org-a" : "org-b",
+							},
+						],
+					},
+				});
+			const audits = await reader.unsafe(
+				"select actor_id,target_id,details from platform.audit_events where action='task.authorization.accepted' and target_id in ($1,$2)",
+				accepted.map(({ executionId }) => executionId),
+			);
+			expect(audits).toHaveLength(2);
+			for (const { user, executionId } of accepted)
+				expect(audits).toContainEqual({
+					actor_id: user,
+					target_id: executionId,
+					details: expect.objectContaining({
+						identityRevision: `directory-${user === "alice" ? "a" : "b"}`,
+						agentAuthorizationRevision: "agent-authorization",
+					}),
+				});
+			const beforeRevocation = await taskSnapshot();
+			for (const [user, conversationId] of [
+				["alice", accepted[1]?.conversationId],
+				["bob", accepted[0]?.conversationId],
+			] as const) {
+				await json(
+					await post(
+						`/conversations/${conversationId}/messages`,
+						user,
+						{ schemaVersion: 1, text: "cross-user task" },
+						`cross-user-${user}`,
+					),
+					404,
+				);
+				expect(await taskSnapshot()).toEqual(beforeRevocation);
+			}
+			identity.resolveUser = async () => {
+				throw new Error("Synthetic current-directory outage");
+			};
+			await json(
+				await post(
+					`/conversations/${accepted[0]?.conversationId}/messages`,
+					"alice",
+					{ schemaVersion: 1, text: "directory unavailable" },
+					"directory-outage",
+				),
+				503,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
+			identity.resolveUser = async (userId) => currentUsers.get(userId) ?? null;
+			currentUsers.set("bob", {
+				schemaVersion: 1,
+				userId: "bob",
+				accountStatus: "active",
+				organizationIds: [],
+				authorizationRevision: "directory-b-revoked",
+			});
+			await json(
+				await post(
+					`/conversations/${accepted[1]?.conversationId}/messages`,
+					"bob",
+					{ schemaVersion: 1, text: "revoked bob task" },
+					"bob-revoked",
+				),
+				404,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
+			currentUsers.set("bob", {
+				schemaVersion: 1,
+				userId: "bob",
+				accountStatus: "disabled",
+				organizationIds: ["org-b"],
+				authorizationRevision: "directory-b-disabled",
+			});
+			await json(
+				await post(
+					`/conversations/${accepted[1]?.conversationId}/messages`,
+					"bob",
+					{ schemaVersion: 1, text: "disabled bob task" },
+					"bob-disabled",
+				),
+				403,
+			);
+			expect(await taskSnapshot()).toEqual(beforeRevocation);
+			await json(
+				await request(
+					`/api/v1/agents/${agentId}/configuration`,
+					"admin",
+					{
+						schemaVersion: 1,
+						availability: [{ kind: "organization", organizationId: "org-b" }],
+					},
+					"revoke-alice-access",
+				),
+				200,
+			);
+			expect(
+				await reader.unsafe(
+					"select target_id from platform.agent_availability where agent_id=$1",
+					[agentId],
+				),
+			).toEqual([{ target_id: "org-b" }]);
+			const afterAvailabilityRevocation = await taskSnapshot();
+			await json(
+				await post(
+					`/conversations/${accepted[0]?.conversationId}/messages`,
+					"alice",
+					{ schemaVersion: 1, text: "revoked alice task" },
+					"alice-revoked",
+				),
+				404,
+			);
+			const afterDenied = await taskSnapshot();
+			expect(afterDenied).toEqual(afterAvailabilityRevocation);
+			expect(JSON.stringify(afterDenied)).not.toMatch(/synthetic-session-[ab]/);
+		} finally {
+			identity.resolveUser = previousResolveUser;
+		}
 	});
 	it.each([
 		"databaseUrl",
