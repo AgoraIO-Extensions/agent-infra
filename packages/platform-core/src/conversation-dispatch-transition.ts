@@ -157,11 +157,17 @@ export function retryTransition(claim: ConversationDispatchClaimV1) {
 	});
 }
 
-export function rejectedTransition(claim: ConversationDispatchClaimV1) {
-	return claim.operation === "conversation.turn.submit.v1" ||
-		claim.operation === "conversation.turn.regenerate.v1"
-		? transitionForStatus("failed")
-		: {};
+export function rejectedTransition(
+	claim: ConversationDispatchClaimV1,
+	errorCode?: string,
+): ConversationDispatchStateTransitionV1 {
+	if (!isTurnOperation(claim.operation)) return {};
+	if (claim.executionStatus === "waiting")
+		return {
+			executionStatus:
+				errorCode === "AUTHORIZATION_REVOKED" ? "cancelled" : "failed",
+		};
+	return transitionForStatus("failed");
 }
 
 export function runtimeFailure(error: unknown) {
@@ -229,7 +235,7 @@ export async function reject(
 	store: ConversationDispatchStorePortV1,
 	claim: ConversationDispatchClaimV1,
 	errorCode: string,
-	transition = rejectedTransition(claim),
+	transition = rejectedTransition(claim, errorCode),
 ): Promise<ConversationDispatchDecisionV1> {
 	const finished = await store.finish({
 		claim,

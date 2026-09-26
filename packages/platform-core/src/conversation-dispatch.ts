@@ -547,6 +547,7 @@ export function createConversationDispatchUseCaseV1(
 			if (
 				authority.controlOnly &&
 				(claim.operation === "conversation.turn.supplement.v1" ||
+					claim.executionStatus === "waiting" ||
 					claim.executionStatus === "submitted" ||
 					(!executionTerminal(claim.executionStatus) &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
@@ -580,7 +581,8 @@ export function createConversationDispatchUseCaseV1(
 					claim.operation === "conversation.turn.regenerate.v1");
 			if (
 				recoveringOriginalTurn &&
-				(claim.executionStatus === "submitted" ||
+				(claim.executionStatus === "waiting" ||
+					claim.executionStatus === "submitted" ||
 					(claim.hostSessionRef === null &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
 			) {
@@ -589,8 +591,11 @@ export function createConversationDispatchUseCaseV1(
 					claim,
 					retryDelayMs,
 					"RUNTIME_ACCEPTANCE_UNKNOWN",
-					"unknown",
-					claim.executionStatus === "submitted" ? {} : retryTransition(claim),
+					claim.executionStatus === "waiting" ? "retry" : "unknown",
+					claim.executionStatus === "waiting" ||
+						claim.executionStatus === "submitted"
+						? {}
+						: retryTransition(claim),
 				);
 			}
 			if (claim.metadataRecovery) {
@@ -967,6 +972,11 @@ export function createConversationDispatchUseCaseV1(
 			}
 
 			if (response.result.outcome === "busy") {
+				if (
+					isTurnOperation(claim.operation) &&
+					claim.taskWaitOrder !== undefined
+				)
+					return reject(dependencies.store, claim, "RUNTIME_BUSY");
 				return retry(
 					dependencies.store,
 					claim,

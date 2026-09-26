@@ -13,6 +13,12 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
 import {
+	lockConversation,
+	lockExecution,
+	lockOutbox,
+} from "./conversation-dispatch-sql.js";
+import { finishWaitingTask } from "./conversation-dispatch-task.js";
+import {
 	agents,
 	conversationExecutions,
 	taskAuthorizationRecords,
@@ -199,6 +205,19 @@ export class PostgresTaskAuthorizationStoreV1 {
 	}): Promise<{ controlRecordId: string }> {
 		try {
 			return await this.#client.begin(async (transaction) => {
+				await transaction`select set_config('lock_timeout', '5s', true)`;
+				await transaction`
+					select a.id from platform.agents a join platform.conversation_executions e on e.agent_id = a.id
+					where e.execution_id = ${input.executionId} for share of a
+				`;
+				const [original] = await transaction<{ id: string }[]>`
+					select id from platform.outbox_items
+					where scope_type = 'conversation' and payload->>'executionId' = ${input.executionId}
+						and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+				`;
+				const outbox = original
+					? await lockOutbox(transaction, original.id)
+					: undefined;
 				await transaction`select conversation.id from platform.conversations conversation join platform.conversation_executions execution on execution.conversation_id = conversation.id where execution.execution_id = ${input.executionId} for update of conversation`;
 				const [execution] = await transaction<
 					{
@@ -235,6 +254,31 @@ export class PostgresTaskAuthorizationStoreV1 {
 				});
 				if (plan.workerId !== input.workerId)
 					throw new TaskAuthorizationStoreError();
+				if (
+					execution.status === "waiting" &&
+					["stop", "authorization_revoked"].includes(input.reason)
+				) {
+					const conversation = await lockConversation(
+						transaction,
+						execution.conversation_id,
+					);
+					const waiting = await lockExecution(
+						transaction,
+						execution.conversation_id,
+						input.executionId,
+					);
+					if (!outbox || !conversation || !waiting)
+						throw new TaskAuthorizationStoreError();
+					await finishWaitingTask(
+						transaction,
+						{ outbox, conversation, execution: waiting },
+						"cancelled",
+						input.reason === "stop"
+							? "TASK_CANCELLED"
+							: "AUTHORIZATION_REVOKED",
+						input.workerId,
+					);
+				}
 				if (plan.ensureStop) {
 					const [stop] = await transaction<
 						{ stop_request_id: string }[]

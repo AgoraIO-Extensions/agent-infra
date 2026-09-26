@@ -62,7 +62,9 @@ export async function lockOutbox(
 ): Promise<OutboxRow | undefined> {
 	const rows = await transaction<OutboxRow[]>`
 		select id, scope_type, scope_id, operation, payload, status, attempt_count,
-			available_at, lease_owner, lease_expires_at, delivery_fence::text,
+			available_at, available_at <= clock_timestamp() as available_now,
+			available_at = 'infinity'::timestamptz as waiting_available,
+			lease_owner, lease_expires_at, delivery_fence::text,
 			trace_id, request_id, clock_timestamp() as decision_at
 		from platform.outbox_items where id = ${itemId} for update
 	`;
@@ -90,7 +92,8 @@ export async function lockExecution(
 		select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
-			model_configuration_revision::text, model_option_id, reasoning_level
+			model_configuration_revision::text, model_option_id, reasoning_level,
+			task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update
@@ -202,7 +205,7 @@ export async function cancelStoppedTurn(
 		set status = 'ready', updated_at = clock_timestamp()
 		where id = ${conversation.id}
 			and session_generation = ${payload.sessionGeneration}
-			and authorization_revision = ${execution.authorization_revision}
+			and authorization_revision = ${conversation.authorization_revision}
 		returning id
 	`;
 	const completedTurn = await transaction<{ id: string }[]>`
@@ -281,11 +284,13 @@ export function bindingMatches(
 		conversation.actor_id === execution.actor_id &&
 		conversation.channel_id === execution.channel_id &&
 		(payload.metadataRecovery !== undefined ||
+			execution.task_wait_order !== null ||
 			conversation.authorization_revision ===
 				execution.authorization_revision) &&
 		generation === payload.sessionGeneration &&
 		executionGeneration === payload.sessionGeneration &&
 		(payload.metadataRecovery !== undefined ||
+			execution.status === "waiting" ||
 			conversation.status !== "unavailable") &&
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
@@ -324,6 +329,10 @@ function claimMatchesState(
 			: safeCounter(state.execution.model_configuration_revision, 1);
 	return (
 		state.outbox.status === "processing" &&
+		(state.execution.task_wait_order === null
+			? claim.taskWaitOrder === undefined
+			: safeCounter(state.execution.task_wait_order, 1) ===
+				claim.taskWaitOrder) &&
 		state.outbox.lease_owner === claim.leaseOwner &&
 		state.outbox.lease_expires_at !== null &&
 		state.outbox.lease_expires_at.getTime() >
@@ -337,6 +346,7 @@ function claimMatchesState(
 		state.conversation.actor_id === claim.actorId &&
 		state.conversation.channel_id === claim.channelId &&
 		(claim.metadataRecovery !== undefined ||
+			state.execution.task_wait_order !== null ||
 			state.conversation.authorization_revision ===
 				claim.authorizationRevision) &&
 		state.execution.execution_id === claim.executionId &&
@@ -360,6 +370,7 @@ export async function ownedState(
 	claim: ConversationDispatchClaimV1,
 	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
+	await transaction`select id from platform.agents where id = ${claim.agentId} for share`;
 	const outbox = await lockOutbox(transaction, claim.itemId);
 	if (!outbox) return undefined;
 	const conversation = await lockConversation(
@@ -389,11 +400,13 @@ function transitionAllowed(
 	// Only prepareRuntimeDispatch can reserve new Agent capacity. A later event
 	// or retry must never turn an occupied execution back into unreserved waiting.
 	if (
-		(state.execution.status === "submitted" &&
+		(["waiting", "submitted"].includes(state.execution.status) &&
 			(transition.executionStatus === "unknown" ||
 				transition.executionStatus === "processing")) ||
 		(state.execution.status !== "submitted" &&
-			transition.executionStatus === "submitted")
+			transition.executionStatus === "submitted") ||
+		(state.execution.status !== "waiting" &&
+			transition.executionStatus === "waiting")
 	)
 		return false;
 	if (
@@ -440,7 +453,7 @@ export async function applyTransition(
 			set status = ${transition.conversationStatus}, updated_at = clock_timestamp()
 			where id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
-				and authorization_revision = ${claim.authorizationRevision}
+				and authorization_revision = ${state.conversation.authorization_revision}
 				and status = ${state.conversation.status}
 			returning id
 		`;

@@ -269,6 +269,7 @@ export function planTaskSystemControlV1(input: {
 		!Number.isSafeInteger(input.execution.sessionGeneration) ||
 		input.execution.sessionGeneration < 1 ||
 		![
+			"waiting",
 			"submitted",
 			"processing",
 			"unknown",
@@ -293,7 +294,7 @@ export function planTaskSystemControlV1(input: {
 			sessionGeneration: input.execution.sessionGeneration,
 		},
 		ensureStop:
-			input.reason === "authorization_revoked" &&
+			["stop", "authorization_revoked"].includes(input.reason) &&
 			["submitted", "processing", "unknown"].includes(input.execution.status),
 		revokeAuthorization: input.reason === "authorization_revoked",
 		audit: {

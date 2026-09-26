@@ -47,6 +47,7 @@ function executionStatus(
 	value: unknown,
 ): ConversationDispatchExecutionStatusV1 {
 	if (
+		value !== "waiting" &&
 		value !== "submitted" &&
 		value !== "processing" &&
 		value !== "unknown" &&
@@ -104,7 +105,12 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionStatus",
 			"stopPending",
 		],
-		["generationIsolation", "runtimeTerminalEventSeen", "metadataRecovery"],
+		[
+			"generationIsolation",
+			"runtimeTerminalEventSeen",
+			"metadataRecovery",
+			"taskWaitOrder",
+		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -179,6 +185,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	}
 	return {
 		schemaVersion: 1,
+		...(input.taskWaitOrder === undefined
+			? {}
+			: { taskWaitOrder: positiveInteger(input.taskWaitOrder) }),
 		itemId: text(input.itemId),
 		leaseOwner: text(input.leaseOwner),
 		operation: parsedOperation,

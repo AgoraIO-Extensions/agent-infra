@@ -172,7 +172,7 @@ afterAll(async () => {
 });
 
 describe("durable task admission", () => {
-	it("creates a default Conversation once, saves waiting work atomically, and keeps it undiscoverable", async () => {
+	it("creates a default Conversation once and saves discoverable waiting work atomically", async () => {
 		const task = taskUseCase();
 		const decisions = await Promise.all([
 			task.submitTask(command("same")),
@@ -249,7 +249,12 @@ describe("durable task admission", () => {
 			databaseUrl: database.databaseUrl,
 		});
 		try {
-			expect(await dispatch.findDispatchable({ limit: 10 })).toEqual([]);
+			expect(await dispatch.findDispatchable({ limit: 10 })).toEqual([
+				{
+					itemId: `conversation:turn:${first.result.executionId}`,
+					operation: "conversation.turn.submit.v1",
+				},
+			]);
 		} finally {
 			await dispatch.close();
 		}

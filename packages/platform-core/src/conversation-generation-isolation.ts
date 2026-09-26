@@ -80,7 +80,7 @@ export function planConversationGenerationConfirmationV1(
 	return {
 		nextGeneration: claim.sessionGeneration + 1,
 		conversationStatus: "unavailable" as const,
-		executionStatusesToFail: ["submitted", "processing", "unknown"],
+		executionStatusesToFail: ["waiting", "submitted", "processing", "unknown"],
 		businessOperations: [
 			"conversation.turn.submit.v1",
 			"conversation.turn.regenerate.v1",

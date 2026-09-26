@@ -454,7 +454,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				const state = await options.readRuntimeState(claim, signal);
 				if (!state) unavailable("RUNTIME_FENCE_STALE");
 				const original = await legacyRecordFor(claim, state, signal);
-				if (original.executionStatus === "submitted")
+				if (
+					original.executionStatus === "waiting" ||
+					original.executionStatus === "submitted"
+				)
 					return { outcome: "unavailable" };
 				context = {
 					kind: "legacy-control",

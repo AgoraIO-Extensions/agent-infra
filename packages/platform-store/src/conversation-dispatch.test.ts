@@ -17,6 +17,7 @@ import {
 } from "../../platform-core/src/conversation-dispatch.ts";
 import { createConversationEventUseCaseV1 } from "../../platform-core/src/conversation-events.ts";
 import { createConversationExecutionUseCaseV1 } from "../../platform-core/src/conversation-execution.ts";
+import { createConversationTaskAdmissionUseCaseV1 } from "../../platform-core/src/conversation-execution-task.ts";
 import { FakeConversationRuntimeHostV1 } from "../../platform-core/src/fake-conversation-runtime-host.ts";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
@@ -26,6 +27,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -3219,4 +3221,816 @@ describe("authorized historical metadata rearm", () => {
 			await h.close();
 		}
 	});
+});
+
+async function waitingTaskHarness(maximumConcurrentExecutions = 1) {
+	const agentId = `waiting-agent-${fixture++}`;
+	const ready = await seedCapacityAgent(agentId, maximumConcurrentExecutions);
+	await client`update platform.agents set authorization_revision = 'waiting-grant' where id = ${agentId}`;
+	await client`insert into platform.agent_configuration_revisions
+		(agent_id, revision, source_reference, created_at, configuration)
+		values (${agentId}, 4, 'waiting-fixture', now(), ${client.json(ready.verified.configuration)})`;
+	const transaction = new PostgresConversationExecutionTransactionV1({
+		databaseUrl,
+	});
+	const store = open();
+	const controls = new PostgresTaskAuthorizationStoreV1({ databaseUrl });
+	const runtimeHost = new FakeConversationRuntimeHostV1();
+	const submit = async (prefix: string, conversationId?: string) => {
+		let nextId = 0;
+		const decision = await createConversationTaskAdmissionUseCaseV1(
+			{
+				transaction,
+				authorization: {
+					async authorize() {
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "waiting-user",
+								agentId,
+								channelId: "api",
+								authorizationRevision: "waiting-grant",
+								supportsSupplementaryInstruction: false,
+								taskBoundary: {
+									schemaVersion: 1,
+									principal: { kind: "user", id: "waiting-user" },
+									agentId,
+									channelId: "api",
+									identityRevision: "waiting-identity",
+									agentAuthorizationRevision: "waiting-grant",
+									accessSources: [{ kind: "user", userId: "waiting-user" }],
+								},
+							},
+						};
+					},
+				},
+			},
+			{ maximumWaitingTasksPerAgent: 20, waitingTimeoutMs: 120_000 },
+			{
+				now: () => new Date(),
+				newId: () => `${agentId}-${prefix}-${++nextId}`,
+			},
+		).submitTask({
+			schemaVersion: 1,
+			agentId,
+			...(conversationId ? { conversationId } : {}),
+			text: "bounded waiting fixture",
+			idempotencyKey: prefix,
+			requestId: `request-${prefix}`,
+			traceId: `trace-${prefix}`,
+		});
+		if (decision.outcome !== "accepted")
+			throw new Error(`Expected waiting admission: ${decision.outcome}`);
+		const [outbox] = await client<
+			{ id: string }[]
+		>`select id from platform.outbox_items
+			where payload->>'executionId' = ${decision.result.executionId} and operation = 'conversation.turn.submit.v1'`;
+		if (!outbox) throw new Error("Missing admitted outbox");
+		return { ...decision.result, itemId: outbox.id };
+	};
+	const own = async (itemId: string, workerId = "waiting-worker") => {
+		const decision = await store.claim({
+			schemaVersion: 1,
+			itemId,
+			workerId,
+			leaseDurationMs: 30_000,
+		});
+		if (decision.outcome !== "claimed")
+			throw new Error(`Expected waiting claim: ${decision.outcome}`);
+		return decision.claim;
+	};
+	const dispatch = async (
+		itemId: string,
+		beforeAuthorize?: (claim: ConversationDispatchClaimV1) => Promise<void>,
+	) =>
+		createConversationDispatchUseCaseV1(
+			{
+				store,
+				runtimeHost,
+				authorization: {
+					async authorize({ claim }) {
+						await beforeAuthorize?.(claim);
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								agentId: claim.agentId,
+								actorId: claim.actorId,
+								channelId: claim.channelId,
+								conversationId: claim.conversationId,
+								executionId: claim.executionId,
+								turnId: claim.turnId,
+								sessionGeneration: claim.sessionGeneration,
+								authorizationRevision: claim.authorizationRevision,
+								runtimeGrant: "synthetic-waiting-grant",
+							},
+						};
+					},
+				},
+				events: {
+					async persist() {
+						throw new Error("No Runtime events in waiting fixture");
+					},
+				},
+			},
+			{ retryDelayMs: 0 },
+		).dispatch({ schemaVersion: 1, itemId, workerId: `dispatch-${fixture++}` });
+	const control = async (
+		executionId: string,
+		reason: "stop" | "authorization_revoked",
+	) => {
+		const [record] = await client<
+			{ id: string }[]
+		>`select id from platform.task_authorization_records where execution_id = ${executionId}`;
+		if (!record) throw new Error("Missing admitted authorization");
+		return controls.recordControl({
+			executionId,
+			authorizationRecordId: record.id,
+			reason,
+			workerId: "waiting-control",
+			traceId: "waiting-control-trace",
+			requestId: "waiting-control-request",
+		});
+	};
+	const close = () =>
+		Promise.all([transaction.close(), store.close(), controls.close()]);
+	return {
+		agentId,
+		ready,
+		store,
+		runtimeHost,
+		submit,
+		own,
+		dispatch,
+		control,
+		close,
+	};
+}
+
+async function taskQueueState(executionId: string) {
+	const [row] = await client`select status, task_wait_order::text as wait_order,
+		task_wait_deadline, delivery_fence::text as fence from platform.conversation_executions where execution_id = ${executionId}`;
+	if (!row) throw new Error("Missing task state");
+	return row;
+}
+
+async function expireTask(executionId: string) {
+	await client`update platform.conversation_executions set task_wait_deadline = clock_timestamp() - interval '1 second' where execution_id = ${executionId}`;
+}
+
+describe("durable waiting task dispatch from real admission", () => {
+	it("promotes only the earliest same-Conversation task despite reversed discovery order and concurrent claims", async () => {
+		const h = await waitingTaskHarness(2);
+		try {
+			const first = await h.submit("z-first");
+			const second = await h.submit("a-second", first.conversationId);
+			const discovered = await h.store.findDispatchable({ limit: 20 });
+			expect(discovered.map((work) => work.itemId)).toEqual([
+				second.itemId,
+				first.itemId,
+			]);
+			const claims = await Promise.all(
+				[first, second].map((work, index) =>
+					h.store.claim({
+						schemaVersion: 1,
+						itemId: work.itemId,
+						workerId: `order-worker-${index}`,
+						leaseDurationMs: 30_000,
+					}),
+				),
+			);
+			expect(claims[1]).toEqual({ outcome: "busy" });
+			const original = claims[0];
+			if (original?.outcome !== "claimed")
+				throw new Error("Earliest claim missing");
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: original.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect((await taskQueueState(first.executionId)).status).toBe("unknown");
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "blocked-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			await h.store.finish({
+				claim: original.claim,
+				status: "succeeded",
+				transition: { executionStatus: "processing" },
+			});
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "processing-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			await client`update platform.conversation_executions set status = 'completed' where execution_id = ${first.executionId}`;
+			await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at)
+				values (${first.executionId}, 'waiting-order-stop', 'submitted', clock_timestamp(), clock_timestamp())`;
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "stop-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			await client`update platform.conversation_stops set status = 'completed' where execution_id = ${first.executionId}`;
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: await h.own(second.itemId),
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("atomically reserves capacity across Conversations and retains unknown occupancy after restart and deadline expiry", async () => {
+		const h = await waitingTaskHarness();
+		const restarted = open();
+		try {
+			const works = [await h.submit("first"), await h.submit("second")];
+			const originals = await Promise.all(
+				works.map((work, index) =>
+					h.own(work.itemId, `capacity-waiting-${index}`),
+				),
+			);
+			const prepared = await Promise.all(
+				originals.map((claim) =>
+					h.store.prepareRuntimeDispatch({ claim, leaseDurationMs: 30_000 }),
+				),
+			);
+			expect(prepared.filter((outcome) => outcome === true)).toHaveLength(1);
+			const winnerIndex = prepared.indexOf(true);
+			const loserIndex = winnerIndex === 0 ? 1 : 0;
+			const winner = works[winnerIndex];
+			const loser = works[loserIndex];
+			const winnerClaim = originals[winnerIndex];
+			const loserClaim = originals[loserIndex];
+			if (!winner || !loser || !winnerClaim || !loserClaim)
+				throw new Error("Missing capacity fixture");
+			expect((await taskQueueState(loser.executionId)).status).toBe("waiting");
+			const original = await taskQueueState(winner.executionId);
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${winner.itemId}`;
+			const takeover = await restarted.claim({
+				schemaVersion: 1,
+				itemId: winner.itemId,
+				workerId: "restart-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (takeover.outcome !== "claimed")
+				throw new Error("Restart claim missing");
+			expect(
+				await restarted.prepareRuntimeDispatch({
+					claim: takeover.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect(await taskQueueState(winner.executionId)).toMatchObject({
+				status: "unknown",
+				wait_order: original.wait_order,
+				task_wait_deadline: original.task_wait_deadline,
+			});
+			await expireTask(winner.executionId);
+			expect(
+				await restarted.prepareRuntimeDispatch({
+					claim: takeover.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect((await taskQueueState(winner.executionId)).status).toBe("unknown");
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: loserClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).not.toBe(true);
+			await expireTask(loser.executionId);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: loserClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect((await taskQueueState(loser.executionId)).status).toBe("failed");
+			const events =
+				await client`select event_payload from platform.conversation_events where execution_id = ${loser.executionId} order by sequence`;
+			expect(events.map((event) => event.event_payload.status)).toEqual([
+				"waiting",
+				"failed",
+			]);
+			expect(
+				await client`select details from platform.audit_events where target_id = ${loser.executionId} and action = 'task.status.changed'`,
+			).toEqual([
+				expect.objectContaining({
+					details: expect.objectContaining({
+						status: "failed",
+						reason: "TASK_WAIT_TIMEOUT",
+					}),
+				}),
+			]);
+		} finally {
+			await Promise.all([h.close(), restarted.close()]);
+		}
+	});
+
+	it("preserves queued deadline and order through durable retry and discovers timeout even before retry availability", async () => {
+		const h = await waitingTaskHarness();
+		const restarted = open();
+		try {
+			const work = await h.submit("retry-deadline");
+			const original = await taskQueueState(work.executionId);
+			const claimed = await h.own(work.itemId);
+			expect(
+				await h.store.retry({
+					claim: claimed,
+					retryDelayMs: 60_000,
+					errorCode: "AUTHORIZATION_UNAVAILABLE",
+					transition: {},
+				}),
+			).toBe(true);
+			expect(await taskQueueState(work.executionId)).toMatchObject({
+				status: "waiting",
+				wait_order: original.wait_order,
+				task_wait_deadline: original.task_wait_deadline,
+			});
+			expect(await restarted.findDispatchable({ limit: 20 })).toEqual([]);
+			await expireTask(work.executionId);
+			expect(await restarted.findDispatchable({ limit: 20 })).toEqual([
+				{ itemId: work.itemId, operation: "conversation.turn.submit.v1" },
+			]);
+			expect(
+				await restarted.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "retry-timeout-worker",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "failed" });
+			expect((await taskQueueState(work.executionId)).status).toBe("failed");
+			expect(h.runtimeHost.sideEffectCount()).toBe(0);
+		} finally {
+			await Promise.all([h.close(), restarted.close()]);
+		}
+	});
+
+	it("rolls back promotion, status event and Conversation cursor if the required task status audit cannot persist", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const work = await h.submit("audit-rollback");
+			const claimed = await h.own(work.itemId);
+			const original = await taskQueueState(work.executionId);
+			const before =
+				await client`select status, last_conversation_cursor from platform.conversations where id = ${work.conversationId}`;
+			await client`create function platform.waiting_task_audit_failure() returns trigger language plpgsql as $$
+				begin if NEW.action = 'task.status.changed' then raise exception 'task status audit unavailable'; end if; return NEW; end $$`;
+			await client`create trigger waiting_task_audit_failure before insert on platform.audit_events
+				for each row execute function platform.waiting_task_audit_failure()`;
+			await expect(
+				h.store.prepareRuntimeDispatch({
+					claim: claimed,
+					leaseDurationMs: 30_000,
+				}),
+			).rejects.toThrow("Conversation dispatch store is unavailable");
+			expect(await taskQueueState(work.executionId)).toEqual(original);
+			expect(
+				await client`select status, last_conversation_cursor from platform.conversations where id = ${work.conversationId}`,
+			).toEqual(before);
+			const events =
+				await client`select event_payload from platform.conversation_events where execution_id = ${work.executionId} order by sequence`;
+			expect(events.map((event) => event.event_payload.status)).toEqual([
+				"waiting",
+			]);
+			expect(
+				await client`select id from platform.audit_events where target_id = ${work.executionId} and action = 'task.status.changed'`,
+			).toEqual([]);
+			await client`drop trigger waiting_task_audit_failure on platform.audit_events`;
+			await client`drop function platform.waiting_task_audit_failure()`;
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: claimed,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await client`drop trigger if exists waiting_task_audit_failure on platform.audit_events`;
+			await client`drop function if exists platform.waiting_task_audit_failure()`;
+			await h.close();
+		}
+	});
+
+	it.each(["starting", "updating"])(
+		"keeps %s tasks durable until service readiness returns",
+		async (availability) => {
+			const h = await waitingTaskHarness();
+			try {
+				await client`update platform.agent_applications set service_availability = ${availability} where agent_id = ${h.agentId}`;
+				const work = await h.submit(availability);
+				const original = await taskQueueState(work.executionId);
+				expect(await h.dispatch(work.itemId)).toMatchObject({
+					outcome: "busy",
+				});
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+				expect(await taskQueueState(work.executionId)).toEqual(original);
+				await client`update platform.agent_applications set service_availability = 'ready' where agent_id = ${h.agentId}`;
+				await h.dispatch(work.itemId);
+				expect(h.runtimeHost.sideEffectCount()).toBe(1);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each(["stopping", "fault"])(
+		"fails a waiting task after Agent changes to %s",
+		async (availability) => {
+			const h = await waitingTaskHarness();
+			try {
+				const work = await h.submit(availability);
+				if (availability === "stopping")
+					await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = ${h.agentId}`;
+				else
+					await client`update platform.agent_applications set service_availability = 'unavailable', failure_code = 'workload_unavailable' where agent_id = ${h.agentId}`;
+				await h.dispatch(work.itemId);
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+				expect((await taskQueueState(work.executionId)).status).toBe("failed");
+				expect((await dispatchState(work))?.status).toBe("failed");
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each(["timeout", "lifecycle"])(
+		"rechecks %s after claim and before any Runtime call",
+		async (change) => {
+			const h = await waitingTaskHarness();
+			try {
+				const work = await h.submit(change);
+				await h.dispatch(work.itemId, async () => {
+					if (change === "timeout") await expireTask(work.executionId);
+					else
+						await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = ${h.agentId}`;
+				});
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+				expect((await taskQueueState(work.executionId)).status).toBe("failed");
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each(["stop", "authorization_revoked"] as const)(
+		"locally cancels waiting work for %s during authorization without sending Runtime stop",
+		async (reason) => {
+			const h = await waitingTaskHarness();
+			try {
+				const work = await h.submit(reason);
+				await h.dispatch(work.itemId, async () => {
+					await h.control(work.executionId, reason);
+				});
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+				expect((await taskQueueState(work.executionId)).status).toBe(
+					"cancelled",
+				);
+				expect(
+					await client`select execution_id from platform.conversation_stops where execution_id = ${work.executionId}`,
+				).toEqual([]);
+				expect(
+					await client`select id from platform.outbox_items where operation = 'conversation.turn.stop.v1'`,
+				).toEqual([]);
+				expect(
+					await client`select action from platform.audit_events where target_id = ${work.executionId} and actor_type = 'system' and action = 'task.control.created'`,
+				).toHaveLength(1);
+				const events =
+					await client`select event_payload from platform.conversation_events where execution_id = ${work.executionId} order by sequence`;
+				expect(events.map((event) => event.event_payload.status)).toEqual([
+					"waiting",
+					"cancelled",
+				]);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each(["stop", "authorization_revoked"] as const)(
+		"serializes concurrent %s control against waiting promotion",
+		async (reason) => {
+			const h = await waitingTaskHarness();
+			try {
+				const work = await h.submit(`race-${reason}`);
+				const claimed = await h.own(work.itemId);
+				const [prepared] = await Promise.all([
+					h.store.prepareRuntimeDispatch({
+						claim: claimed,
+						leaseDurationMs: 30_000,
+					}),
+					h.control(work.executionId, reason),
+				]);
+				const state = await taskQueueState(work.executionId);
+				const stops =
+					await client`select status from platform.conversation_stops where execution_id = ${work.executionId}`;
+				if (prepared === true) {
+					expect(state.status).toBe("unknown");
+					expect(stops).toEqual([
+						expect.objectContaining({ status: "submitted" }),
+					]);
+				} else {
+					expect(state.status).toBe("cancelled");
+					expect(stops).toEqual([]);
+				}
+				expect(
+					await h.store.prepareRuntimeDispatch({
+						claim: claimed,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(false);
+				expect(
+					await client`select action from platform.audit_events where target_id = ${work.executionId} and actor_type = 'system' and action = 'task.control.created'`,
+				).toHaveLength(1);
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it("rejects an expired lease and old fence while preserving the original waiting deadline and order", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const work = await h.submit("takeover");
+			const original = await taskQueueState(work.executionId);
+			const old = await h.own(work.itemId, "old-worker");
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${work.itemId}`;
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: old,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			const current = await h.own(work.itemId, "new-worker");
+			expect(current.executionDeliveryFence).toBeGreaterThan(
+				old.executionDeliveryFence,
+			);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: old,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect(await taskQueueState(work.executionId)).toMatchObject({
+				status: "waiting",
+				wait_order: original.wait_order,
+				task_wait_deadline: original.task_wait_deadline,
+			});
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: current,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("persists one local cancelled task status after original Runtime acceptance is proven absent, retaining original authorization provenance", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const work = await h.submit("unaccepted-cancel");
+			const original = await h.own(work.itemId);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			await client`update platform.conversations set authorization_revision = 'new-conversation-grant' where id = ${work.conversationId}`;
+			await h.control(work.executionId, "stop");
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${work.itemId}`;
+			const recovered = await h.own(work.itemId, "not-found-proof-worker");
+			expect(recovered).toMatchObject({
+				executionStatus: "unknown",
+				stopPending: true,
+				authorizationRevision: "waiting-grant",
+			});
+			const [before] =
+				await client`select last_conversation_cursor::int as cursor from platform.conversations where id = ${work.conversationId}`;
+			// The RuntimeHost not_found result authorizes this existing local cancel method.
+			expect(await h.store.cancelUnaccepted({ claim: recovered })).toBe(true);
+			expect((await taskQueueState(work.executionId)).status).toBe("cancelled");
+			const events =
+				await client`select event_payload from platform.conversation_events where execution_id = ${work.executionId} and event_type = 'task.status' order by sequence`;
+			expect(events.map((event) => event.event_payload.status)).toEqual([
+				"waiting",
+				"unknown",
+				"cancelled",
+			]);
+			const audits =
+				await client`select actor_id, details from platform.audit_events where target_id = ${work.executionId}
+				and action = 'task.status.changed' and details->>'status' = 'cancelled'`;
+			expect(audits).toEqual([
+				expect.objectContaining({
+					actor_id: "not-found-proof-worker",
+					details: expect.objectContaining({
+						status: "cancelled",
+						reason: "TASK_CANCELLED",
+						originalPrincipal: { kind: "user", id: "waiting-user" },
+					}),
+				}),
+			]);
+			const conversation =
+				await client`select status, authorization_revision, last_conversation_cursor::int as cursor from platform.conversations where id = ${work.conversationId}`;
+			expect(conversation).toEqual([
+				{
+					status: "ready",
+					authorization_revision: "new-conversation-grant",
+					cursor: Number(before?.cursor) + 1,
+				},
+			]);
+			expect(await h.store.cancelUnaccepted({ claim: recovered })).toBe(false);
+			expect(
+				await client`select status, authorization_revision, last_conversation_cursor::int as cursor from platform.conversations where id = ${work.conversationId}`,
+			).toEqual(conversation);
+			expect(
+				await client`select event_payload from platform.conversation_events where execution_id = ${work.executionId} and event_type = 'task.status' order by sequence`,
+			).toEqual(events);
+			expect(
+				await client`select actor_id, details from platform.audit_events where target_id = ${work.executionId}
+				and action = 'task.status.changed' and details->>'status' = 'cancelled'`,
+			).toEqual(audits);
+			expect(h.runtimeHost.sideEffectCount()).toBe(0);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("completes concurrent message admission and model reads against waiting preparation without a lock cycle", async () => {
+		const h = await waitingTaskHarness();
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+		try {
+			const work = await h.submit("web-race");
+			const claimed = await h.own(work.itemId);
+			const web = createConversationExecutionUseCaseV1({
+				transaction,
+				authorization: {
+					async authorize() {
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "waiting-user",
+								agentId: h.agentId,
+								channelId: "api",
+								authorizationRevision: "waiting-grant",
+								supportsSupplementaryInstruction: false,
+							},
+						};
+					},
+				},
+			});
+			const [prepared, message, read, selection] = await Promise.all([
+				h.store.prepareRuntimeDispatch({
+					claim: claimed,
+					leaseDurationMs: 30_000,
+				}),
+				web.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId: work.conversationId,
+					text: "concurrent normal message",
+					idempotencyKey: "web-race-message",
+					requestId: "web-race-message",
+					traceId: "web-race-trace",
+				}),
+				web.readConversation({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+				}),
+				web.selectModel({
+					schemaVersion: 1,
+					command: "model.select",
+					conversationId: work.conversationId,
+					modelOptionId: "model-option-dispatch",
+					reasoningLevel: "medium",
+					idempotencyKey: "web-race-model",
+					requestId: "web-race-model",
+					traceId: "web-race-trace",
+				}),
+			]);
+			expect(prepared).toBe(true);
+			expect(message).toEqual({ outcome: "busy" });
+			expect(read).toMatchObject({ outcome: "found" });
+			expect(selection).toMatchObject({ outcome: "accepted" });
+			expect((await taskQueueState(work.executionId)).status).toBe("unknown");
+			expect(
+				await client`select execution_id from platform.conversation_executions where conversation_id = ${work.conversationId}`,
+			).toEqual([{ execution_id: work.executionId }]);
+		} finally {
+			await Promise.all([h.close(), transaction.close()]);
+		}
+	});
+
+	it("keeps accepted provenance when the Conversation authorization revision changes before promotion", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const work = await h.submit("auth-revision");
+			await client`update platform.conversations set authorization_revision = 'current-conversation-grant' where id = ${work.conversationId}`;
+			expect(
+				await h.dispatch(work.itemId, async (claim) => {
+					expect(claim.authorizationRevision).toBe("waiting-grant");
+				}),
+			).toMatchObject({ outcome: "retry" });
+			expect(h.runtimeHost.sideEffectCount()).toBe(1);
+			expect((await taskQueueState(work.executionId)).status).toBe("unknown");
+			const [binding] =
+				await client`select e.authorization_revision as accepted_revision, a.boundary->>'agentAuthorizationRevision' as original_revision,
+				c.authorization_revision as conversation_revision, c.host_session_ref from platform.conversation_executions e
+				join platform.task_authorization_records a on a.execution_id = e.execution_id
+				join platform.conversations c on c.id = e.conversation_id where e.execution_id = ${work.executionId}`;
+			expect(binding).toEqual({
+				accepted_revision: "waiting-grant",
+				original_revision: "waiting-grant",
+				conversation_revision: "current-conversation-grant",
+				host_session_ref: `host-session-${work.conversationId}`,
+			});
+			const events =
+				await client`select event_payload from platform.conversation_events where execution_id = ${work.executionId} and event_type = 'task.status' order by sequence`;
+			expect(events.map((event) => event.event_payload.status)).toContain(
+				"processing",
+			);
+			expect(events.at(-1)?.event_payload.status).toBe("unknown");
+		} finally {
+			await h.close();
+		}
+	});
+
+	it.each(["busy", "rejected"] as const)(
+		"releases only the promoted Conversation occupancy after Runtime %s",
+		async (outcome) => {
+			const h = await waitingTaskHarness(2);
+			try {
+				const occupied = await h.submit("occupied");
+				expect(await h.dispatch(occupied.itemId)).toMatchObject({
+					outcome: "retry",
+				});
+				const rejected = await h.submit("rejected");
+				h.runtimeHost.setResult(
+					outcome === "busy"
+						? { outcome: "busy" }
+						: {
+								outcome: "rejected",
+								code: "RUNTIME_TURN_NOT_ACTIVE",
+								message: "Runtime turn is no longer active",
+								retryable: false,
+							},
+				);
+				await h.dispatch(rejected.itemId);
+				expect((await taskQueueState(occupied.executionId)).status).toBe(
+					"unknown",
+				);
+				expect((await taskQueueState(rejected.executionId)).status).toBe(
+					"failed",
+				);
+				expect(h.runtimeHost.sideEffectCount()).toBe(2);
+				expect(await h.dispatch(rejected.itemId)).toMatchObject({
+					outcome: "rejected",
+				});
+				expect(h.runtimeHost.sideEffectCount()).toBe(2);
+				const conversations =
+					await client`select id, status from platform.conversations order by id`;
+				expect(conversations).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							id: occupied.conversationId,
+							status: "active",
+						}),
+						expect.objectContaining({
+							id: rejected.conversationId,
+							status: "ready",
+						}),
+					]),
+				);
+				const next = await h.submit("next", rejected.conversationId);
+				h.runtimeHost.setResult({ outcome: "accepted", status: "running" });
+				await h.dispatch(next.itemId);
+				expect((await taskQueueState(next.executionId)).status).toBe("unknown");
+			} finally {
+				await h.close();
+			}
+		},
+	);
 });

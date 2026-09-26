@@ -253,6 +253,7 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationStateDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversationForRead(
 				transaction,
 				text(request.query.conversationId),
@@ -354,6 +355,7 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -520,6 +522,7 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationModelSelectionDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -604,6 +607,7 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationCommandDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),
@@ -736,6 +740,7 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationStopDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversation(
 				transaction,
 				text(request.command.conversationId),

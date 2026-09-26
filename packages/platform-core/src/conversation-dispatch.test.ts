@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
 import {
@@ -14,6 +14,7 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
 	decideConversationDispatchRetryTransitionV1,
+	planConversationGenerationConfirmationV1,
 } from "./index.js";
 
 describe("current-state retry transition", () => {
@@ -187,7 +188,8 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		if (
 			(input.claim.operation === "conversation.turn.submit.v1" ||
 				input.claim.operation === "conversation.turn.regenerate.v1") &&
-			this.current.executionStatus === "submitted"
+			(this.current.executionStatus === "submitted" ||
+				this.current.executionStatus === "waiting")
 		) {
 			this.current = { ...this.current, executionStatus: "unknown" };
 		}
@@ -424,6 +426,90 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it("sends an eligible waiting task as its original Turn without recovery", async () => {
+		const native = new FakeConversationRuntimeHostV1();
+		native.setEvents([runtimeEvent(1)]);
+		const recoverOriginalStatus = vi.fn(async () => {
+			throw new Error("Waiting task has never been sent");
+		});
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "waiting" }),
+		);
+		const f = setup({
+			store,
+			runtimeHost: {
+				dispatch: native.dispatch.bind(native),
+				events: native.events.bind(native),
+				recoverStatus: native.recoverStatus.bind(native),
+				recoverOriginalStatus,
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+		expect(native.sideEffectCount()).toBe(1);
+		expect(recoverOriginalStatus).not.toHaveBeenCalled();
+		expect(store.current.executionId).toBe("execution-1");
+		expect(store.current.executionStatus).toBe("completed");
+	});
+
+	it("cancels revoked waiting work without releasing another Turn's Conversation", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "waiting" }),
+		);
+		const finish = vi.spyOn(store, "finish");
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					return { outcome: "denied" };
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "rejected" });
+		expect(store.current.executionStatus).toBe("cancelled");
+		expect(finish.mock.calls[0]?.[0].transition).toEqual({
+			executionStatus: "cancelled",
+		});
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+
+	it("holds never-sent waiting work when a pending stop races its claim", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "waiting", stopPending: true }),
+		);
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const f = setup({ store, runtimeHost });
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.current.executionStatus).toBe("waiting");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+
+	it("includes original-generation waiting work in a confirmed isolation failure", () => {
+		const plan = planConversationGenerationConfirmationV1(
+			claim({
+				executionStatus: "unknown",
+				hostSessionRef: "host-session-conversation-1",
+				generationIsolation: {
+					operationId: "generation:conversation-1:1",
+					controlRecordId: "control-1",
+					originalPrincipal: { kind: "user", id: "actor-1" },
+				},
+			}),
+		);
+		expect(plan.nextGeneration).toBe(2);
+		expect(plan.executionStatusesToFail).toEqual([
+			"waiting",
+			"submitted",
+			"processing",
+			"unknown",
+		]);
+		expect(plan.conversationStatus).toBe("unavailable");
+	});
+
 	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
 		let dispatches = 0;
 		let recoveries = 0;
@@ -535,18 +621,26 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_STATUS_CONFLICT");
 	});
 
-	it.each(["capacity_wait", "capacity_unavailable"] as const)(
-		"preserves unreserved submitted work when preparation reports %s",
-		async (capacity) => {
+	it.each([
+		["submitted", "capacity_wait"],
+		["submitted", "capacity_unavailable"],
+		["waiting", "capacity_wait"],
+		["waiting", "capacity_unavailable"],
+	] as const)(
+		"preserves unreserved %s work when preparation reports %s",
+		async (executionStatus, capacity) => {
 			const runtimeHost = new FakeConversationRuntimeHostV1();
 			runtimeHost.setEvents([runtimeEvent(1)]);
-			const f = setup({ runtimeHost });
+			const f = setup({
+				runtimeHost,
+				store: new MemoryDispatchStore(claim({ executionStatus })),
+			});
 			f.store.capacity = capacity;
 			expect(await dispatch(f.useCase)).toMatchObject({
 				outcome: "retry",
 				retryScheduled: true,
 			});
-			expect(f.store.current.executionStatus).toBe("submitted");
+			expect(f.store.current.executionStatus).toBe(executionStatus);
 			expect(f.store.outboxStatus).toBe("retry_scheduled");
 			expect(f.store.errorCode).toBe(
 				capacity === "capacity_wait"
@@ -1014,6 +1108,31 @@ describe("Conversation Worker dispatch", () => {
 		expect(runtimeHost.acknowledgedEventCount()).toBe(1);
 		expect(store.errorCode).toBe("RUNTIME_EVENT_CONFLICT");
 	});
+
+	it.each(["waiting", "unknown"] as const)(
+		"terminates an accepted API task after confirmed busy from %s without replaying it",
+		async (executionStatus) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult({ outcome: "busy" });
+			const { useCase, store } = setup({
+				runtimeHost,
+				store: new MemoryDispatchStore(
+					claim({ executionStatus, taskWaitOrder: 1 }),
+				),
+			});
+			await expect(dispatch(useCase)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "rejected",
+			});
+			expect(store.errorCode).toBe("RUNTIME_BUSY");
+			expect(store.outboxStatus).toBe("failed");
+			await expect(dispatch(useCase)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "rejected",
+			});
+			expect(runtimeHost.sideEffectCount()).toBe(1);
+		},
+	);
 
 	it.each([
 		[

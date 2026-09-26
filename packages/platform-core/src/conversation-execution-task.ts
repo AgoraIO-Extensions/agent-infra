@@ -149,6 +149,56 @@ export interface ConversationTaskAdmissionPolicyV1 {
 	readonly waitingTimeoutMs: number;
 }
 
+/** Only never-sent waiting tasks use this decision; capacity is checked separately. */
+export function decideConversationTaskWaitingV1(state: {
+	readonly nowMs: number;
+	readonly deadlineMs: number;
+	readonly agent: {
+		readonly status: string | null;
+		readonly desiredState: string | null;
+		readonly serviceAvailability: string | null;
+	} | null;
+	readonly conversationAvailable: boolean;
+	readonly isolationPending: boolean;
+	readonly occupied: boolean;
+	readonly earlierWaiting: boolean;
+}):
+	| { readonly outcome: "dispatch" | "wait" }
+	| {
+			readonly outcome: "fail";
+			readonly reason:
+				| "TASK_WAIT_TIMEOUT"
+				| "AGENT_UNAVAILABLE"
+				| "CONVERSATION_UNAVAILABLE";
+	  } {
+	if (
+		!Number.isSafeInteger(state.nowMs) ||
+		!Number.isSafeInteger(state.deadlineMs)
+	)
+		throw new TypeError("Task waiting clock is invalid");
+	if (state.nowMs >= state.deadlineMs)
+		return { outcome: "fail", reason: "TASK_WAIT_TIMEOUT" };
+	if (state.isolationPending) return { outcome: "wait" };
+	if (!state.conversationAvailable)
+		return { outcome: "fail", reason: "CONVERSATION_UNAVAILABLE" };
+	if (
+		state.agent?.status !== "available" ||
+		state.agent.desiredState !== "running" ||
+		!["ready", "starting", "updating"].includes(
+			state.agent.serviceAvailability ?? "",
+		)
+	)
+		return { outcome: "fail", reason: "AGENT_UNAVAILABLE" };
+	return {
+		outcome:
+			state.agent.serviceAvailability !== "ready" ||
+			state.occupied ||
+			state.earlierWaiting
+				? "wait"
+				: "dispatch",
+	};
+}
+
 export function createConversationTaskAdmissionUseCaseV1(
 	dependencies: {
 		readonly authorization: ConversationTaskAdmissionAuthorizationPortV1;

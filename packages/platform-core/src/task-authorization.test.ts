@@ -211,6 +211,7 @@ describe("task authorization boundary", () => {
 
 describe("system control transaction plan", () => {
 	it.each([
+		["waiting", false],
 		["submitted", true],
 		["processing", true],
 		["unknown", true],
@@ -273,7 +274,7 @@ describe("system control transaction plan", () => {
 				},
 			});
 			expect(plan).toMatchObject({
-				ensureStop: false,
+				ensureStop: reason === "stop",
 				revokeAuthorization: false,
 				audit: { reason },
 			});

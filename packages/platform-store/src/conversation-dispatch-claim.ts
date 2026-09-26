@@ -21,6 +21,10 @@ import {
 	readStop,
 } from "./conversation-dispatch-sql.js";
 import {
+	finishWaitingTask,
+	waitingDecision,
+} from "./conversation-dispatch-task.js";
+import {
 	exactPayload,
 	isTurn,
 	operation,
@@ -36,6 +40,13 @@ export async function claimWork(
 		readonly leaseDurationMs: number;
 	},
 ): Promise<ConversationDispatchClaimDecisionV1> {
+	// Follow dispatch preparation's Agent -> outbox -> Conversation lock order.
+	await transaction`
+		select a.id from platform.agents a
+		join platform.conversations c on c.agent_id = a.id
+		join platform.outbox_items o on o.scope_id = c.id and o.scope_type = 'conversation'
+		where o.id = ${input.itemId} for share of a
+	`;
 	const outbox = await lockOutbox(transaction, input.itemId);
 	if (outbox?.scope_type !== "conversation") return { outcome: "stale" };
 	const conversation = await lockConversation(transaction, outbox.scope_id);
@@ -52,11 +63,9 @@ export async function claimWork(
 		return { outcome: "failed" };
 	const decisionAt = outbox.decision_at.getTime();
 	if (
-		(outbox.status === "processing" &&
-			(outbox.lease_expires_at?.getTime() ?? Number.POSITIVE_INFINITY) >
-				decisionAt) ||
-		(outbox.status !== "processing" &&
-			outbox.available_at.getTime() > decisionAt)
+		outbox.status === "processing" &&
+		(outbox.lease_expires_at?.getTime() ?? Number.POSITIVE_INFINITY) >
+			decisionAt
 	) {
 		return { outcome: "busy" };
 	}
@@ -70,11 +79,68 @@ export async function claimWork(
 		payload.executionId,
 	);
 	if (
+		outbox.status !== "processing" &&
+		!outbox.available_now &&
+		!(
+			execution?.status === "waiting" &&
+			((outbox.status === "pending" && outbox.waiting_available) ||
+				(execution.task_wait_deadline?.getTime() ?? Number.POSITIVE_INFINITY) <=
+					decisionAt)
+		)
+	)
+		return { outcome: "busy" };
+	if (
 		!conversation ||
 		!execution ||
 		!bindingMatches(outbox, payload, conversation, execution)
 	) {
 		return { outcome: "stale" };
+	}
+	if (execution.status === "waiting") {
+		if (selectedOperation !== "conversation.turn.submit.v1")
+			return { outcome: "stale" };
+		const [agent] = await transaction<
+			{
+				status: string | null;
+				desired_state: string | null;
+				service_availability: string | null;
+			}[]
+		>`
+			select status, desired_state, service_availability
+			from platform.agent_applications where agent_id = ${execution.agent_id}
+		`;
+		const state = { outbox, conversation, execution };
+		const [authorization] = await transaction<{ revoked: boolean }[]>`
+			select revoked_at is not null as revoked from platform.task_authorization_records
+			where execution_id = ${execution.execution_id}
+		`;
+		if (authorization?.revoked) {
+			await finishWaitingTask(
+				transaction,
+				state,
+				"cancelled",
+				"AUTHORIZATION_REVOKED",
+				input.workerId,
+			);
+			return { outcome: "failed" };
+		}
+		const decision = await waitingDecision(
+			transaction,
+			state,
+			agent,
+			Boolean(isolation),
+		);
+		if (decision.outcome === "fail") {
+			await finishWaitingTask(
+				transaction,
+				state,
+				"failed",
+				decision.reason,
+				input.workerId,
+			);
+			return { outcome: "failed" };
+		}
+		if (decision.outcome === "wait") return { outcome: "busy" };
 	}
 	if (
 		isolation &&
@@ -201,6 +267,9 @@ export async function claimWork(
 		: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
+		...(execution.task_wait_order === null
+			? {}
+			: { taskWaitOrder: requireSafeCounter(execution.task_wait_order, 1) }),
 		itemId: outbox.id,
 		leaseOwner: input.workerId,
 		operation: selectedOperation,
