@@ -2369,7 +2369,10 @@ describe("Connection API", () => {
 		expect(await response.json()).toEqual({
 			error: {
 				code: -32001,
-				data: { providerHttpStatus: 404 },
+				data: {
+					providerCode: "provider_error",
+					providerHttpStatus: 404,
+				},
 				message: "Provider resource was not found",
 			},
 			id: 5,
