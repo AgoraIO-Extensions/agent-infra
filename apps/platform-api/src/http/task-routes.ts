@@ -490,10 +490,18 @@ export function registerTaskRoutes(
 			const subscriptionId = audit.subscriptionId;
 			if (!subscriptionId) throw new Error("Task subscription ID is absent");
 			return streamSSE(context, async (stream) => {
+				const authorizationRevoked = (error: unknown) =>
+					error instanceof HttpProtocolError &&
+					[
+						"AUTHENTICATION_REQUIRED",
+						"AUTHORIZATION_REVOKED",
+						"RESOURCE_UNAVAILABLE",
+					].includes(error.body.code);
 				let endResult: TaskApiAuditInputV1["result"] = "succeeded";
 				let endReason: TaskApiAuditInputV1["reason"] = "stream_ended";
 				let maintenanceFailure = false;
 				let maintenance: Promise<void> | undefined;
+				let failureSignal: Promise<void> | undefined;
 				const maintain = () => {
 					maintenance ??= dependencies.audit
 						.renewSubscription(subscriptionId)
@@ -502,34 +510,93 @@ export function registerTaskRoutes(
 						})
 						.catch((error: unknown) => {
 							maintenanceFailure = true;
-							endResult =
-								error instanceof HttpProtocolError && error.status < 500
-									? "rejected"
-									: "failed";
+							if (!failureSignal) {
+								endResult =
+									error instanceof HttpProtocolError && error.status < 500
+										? "rejected"
+										: "failed";
+								endReason = authorizationRevoked(error)
+									? "authorization_revoked"
+									: error instanceof HttpProtocolError
+										? auditReason(error)
+										: "dependency_unavailable";
+							}
+							throw error;
+						})
+						.finally(() => {
+							if (!maintenanceFailure) maintenance = undefined;
+						});
+					return maintenance;
+				};
+				let outputPending = false;
+				const sendFailure = (error: unknown) => {
+					failureSignal ??= (async () => {
+						if (!maintenanceFailure) {
+							endResult = "failed";
 							endReason =
 								error instanceof HttpProtocolError
 									? auditReason(error)
 									: "dependency_unavailable";
-							stream.abort();
-							throw error;
-						})
-						.finally(() => {
-							maintenance = undefined;
-						});
-					return maintenance;
+						}
+						const revoked = maintenanceFailure
+							? endReason === "authorization_revoked"
+							: authorizationRevoked(error);
+						if (revoked) {
+							endResult = "rejected";
+							endReason = "authorization_revoked";
+						}
+						if (stream.aborted) return;
+						// Bound terminal writes so a slow reader cannot retain the subscription.
+						const deadline = setTimeout(() => stream.abort(), 1000);
+						deadline.unref();
+						try {
+							const signal = revoked
+								? ConversationSseMessageV2Schema.parse({
+										schemaVersion: 1,
+										kind: "control",
+										type: "authorization.revoked",
+										error: new HttpProtocolError(
+											"AUTHORIZATION_REVOKED",
+											metadata.traceId,
+										).body,
+									})
+								: frameTaskSseMessageV1({
+										schemaVersion: 1,
+										kind: "control",
+										type: "task.stream.error",
+										error: new HttpProtocolError(
+											"DEPENDENCY_UNAVAILABLE",
+											metadata.traceId,
+										).body,
+									}).data;
+							await stream.writeSSE({ data: JSON.stringify(signal) });
+						} finally {
+							clearTimeout(deadline);
+						}
+					})();
+					return failureSignal;
 				};
 				const leaseTimer = setInterval(() => {
-					void maintain().catch(() => {});
+					void maintain().catch(async (error: unknown) => {
+						if (outputPending) stream.abort();
+						await sendFailure(error).catch(() => {});
+						stream.abort();
+					});
 				}, 5000);
 				leaseTimer.unref();
 				const write = async (value: unknown) => {
 					await maintain();
 					if (stream.aborted) throw new Error("Task subscription is closed");
 					const frame = frameTaskSseMessageV1(value);
-					await stream.writeSSE({
-						...(frame.id === undefined ? {} : { id: frame.id }),
-						data: JSON.stringify(frame.data),
-					});
+					outputPending = true;
+					try {
+						await stream.writeSSE({
+							...(frame.id === undefined ? {} : { id: frame.id }),
+							data: JSON.stringify(frame.data),
+						});
+					} finally {
+						outputPending = false;
+					}
 				};
 				try {
 					while (!stream.aborted) {
@@ -576,51 +643,14 @@ export function registerTaskRoutes(
 						);
 					}
 				} catch (error) {
-					endResult = "failed";
-					endReason =
-						error instanceof HttpProtocolError
-							? auditReason(error)
-							: "dependency_unavailable";
-					if (
-						!stream.aborted &&
-						error instanceof HttpProtocolError &&
-						[
-							"AUTHENTICATION_REQUIRED",
-							"AUTHORIZATION_REVOKED",
-							"RESOURCE_UNAVAILABLE",
-						].includes(error.body.code)
-					) {
-						endResult = "rejected";
-						endReason = "authorization_revoked";
-						const signal = ConversationSseMessageV2Schema.parse({
-							schemaVersion: 1,
-							kind: "control",
-							type: "authorization.revoked",
-							error: new HttpProtocolError(
-								"AUTHORIZATION_REVOKED",
-								metadata.traceId,
-							).body,
-						});
-						await stream.writeSSE({ data: JSON.stringify(signal) });
-					} else if (!stream.aborted) {
-						const frame = frameTaskSseMessageV1({
-							schemaVersion: 1,
-							kind: "control",
-							type: "task.stream.error",
-							error: new HttpProtocolError(
-								"DEPENDENCY_UNAVAILABLE",
-								metadata.traceId,
-							).body,
-						});
-						await stream.writeSSE({ data: JSON.stringify(frame.data) });
-					}
+					await sendFailure(error);
 				} finally {
 					clearInterval(leaseTimer);
 					await maintenance?.catch(() => {});
 					await audit.record(
 						"subscription.ended",
 						endResult,
-						stream.aborted && !maintenanceFailure
+						stream.aborted && !maintenanceFailure && !failureSignal
 							? "client_disconnected"
 							: endReason,
 					);

@@ -10,6 +10,7 @@ import {
 	PostgresConversationDispatchStoreV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import { SSEStreamingApi } from "hono/streaming";
 import {
 	afterAll,
 	afterEach,
@@ -25,6 +26,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import { startPlatformApi } from "./index.js";
 
@@ -54,6 +56,22 @@ let assembly: PlatformApiAssembly;
 let server: ReturnType<typeof startPlatformApi>;
 let origin: string;
 let userActive = true;
+
+function captureSubscriptionTimer() {
+	let tick: (() => void) | undefined;
+	const interval = globalThis.setInterval;
+	vi.spyOn(globalThis, "setInterval").mockImplementation((...args) => {
+		if (args[1] === 5000 && typeof args[0] === "function") {
+			const callback = args[0];
+			tick = () => callback();
+		}
+		return interval(...args);
+	});
+	return () => {
+		if (!tick) throw new Error("Subscription timer is absent");
+		tick();
+	};
+}
 
 function request(
 	path: string,
@@ -1000,11 +1018,19 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 			});
 		});
 	});
-	it.each(["credential", "use grant"] as const)(
-		"rechecks a revoked %s after a subscription renewal wait before sending output",
-		async (revocation) => {
+	it.each(
+		(["credential", "credential expiry", "use grant"] as const).flatMap(
+			(revocation) =>
+				(["foreground", "timer overlap"] as const).map(
+					(maintenance) => [revocation, maintenance] as const,
+				),
+		),
+	)(
+		"rechecks a revoked %s after a %s subscription renewal before sending output",
+		async (revocation, maintenance) => {
 			const task = await submit();
 			await output(task, "synthetic renewal protected output");
+			const leaseTick = captureSubscriptionTimer();
 			const audit = assembly.dependencies.tasks?.audit;
 			if (!audit) throw new Error("Formal task audit assembly is absent");
 			const renew = audit.renewSubscription.bind(audit);
@@ -1016,17 +1042,104 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 						await db.unsafe(
 							"update platform.platform_api_credentials set revoked_at=now() where id='user_credential'",
 						);
+					else if (revocation === "credential expiry")
+						await db.unsafe(
+							"update platform.platform_api_credentials set expires_at=clock_timestamp()-interval '1 second' where id='user_credential'",
+						);
 					else
 						await db.unsafe(
 							"update platform.agent_principal_grants set revoked_at=now() where principal_type='user' and principal_id=$1 and grant_type='use'",
 							[sharedId],
 						);
+					if (maintenance === "timer overlap") leaseTick();
 				}
 			});
 			const response = await request(`${path(task)}/events`);
 			const body = await response.text();
 			expect(renewals).toBeGreaterThanOrEqual(2);
 			expect(body).not.toContain("synthetic renewal protected output");
+			expect(body).toContain('"type":"authorization.revoked"');
+			expect(body.match(/"type":"authorization.revoked"/g)).toHaveLength(1);
+			await vi.waitFor(async () => {
+				const [ended] = await db.unsafe(
+					"select outcome,details from platform.audit_events where action='task.api.subscription.ended'",
+				);
+				expect(ended).toMatchObject({
+					outcome: "rejected",
+					details: { reason: "authorization_revoked" },
+				});
+			});
+			const replacement = await request(path(task), credentials.replacement);
+			if (revocation === "use grant") expect(replacement.status).toBe(404);
+			else
+				expect(await replacement.json()).toMatchObject({ status: "waiting" });
+		},
+	);
+	it.each(["credential", "audit lease"] as const)(
+		"discards backpressured output when background maintenance loses its %s",
+		async (failure) => {
+			const task = await submit();
+			await output(task, "synthetic backpressured protected output");
+			const leaseTick = captureSubscriptionTimer();
+			const write = SSEStreamingApi.prototype.writeSSE;
+			let outputPending = false;
+			vi.spyOn(SSEStreamingApi.prototype, "writeSSE").mockImplementation(
+				async function (this: SSEStreamingApi, message) {
+					const protectedOutput = (await message.data).includes(
+						"synthetic backpressured protected output",
+					);
+					if (protectedOutput) outputPending = true;
+					try {
+						return await write.call(this, message);
+					} finally {
+						if (protectedOutput) outputPending = false;
+					}
+				},
+			);
+			const response = await createPlatformApp(assembly.dependencies).request(
+				`/api/v1${path(task)}/events`,
+				{ headers: { authorization: `Bearer ${credentials.user}` } },
+			);
+			try {
+				await vi.waitFor(() => expect(outputPending).toBe(true));
+				if (failure === "credential")
+					await db.unsafe(
+						"update platform.platform_api_credentials set revoked_at=now() where id='user_credential'",
+					);
+				else {
+					const audit = assembly.dependencies.tasks?.audit;
+					if (!audit) throw new Error("Formal task audit assembly is absent");
+					vi.spyOn(audit, "renewSubscription").mockRejectedValue(
+						new Error("Synthetic private lease failure"),
+					);
+				}
+				leaseTick();
+				await vi.waitFor(
+					async () => {
+						const [ended] = await db.unsafe(
+							"select outcome,details from platform.audit_events where action='task.api.subscription.ended'",
+						);
+						expect(ended).toMatchObject({
+							outcome: failure === "credential" ? "rejected" : "failed",
+							details: {
+								reason:
+									failure === "credential"
+										? "authorization_revoked"
+										: "dependency_unavailable",
+							},
+						});
+					},
+					{ timeout: 500 },
+				);
+				const body = await response.text();
+				expect(body).not.toContain("synthetic backpressured protected output");
+				expect(body).not.toContain("Synthetic private lease failure");
+				expect(
+					await (await request(path(task), credentials.replacement)).json(),
+				).toMatchObject({ status: "waiting" });
+			} finally {
+				if (!response.bodyUsed) await response.body?.cancel();
+			}
 		},
 	);
 	it.each(["submit", "read", "cancel"] as const)(
