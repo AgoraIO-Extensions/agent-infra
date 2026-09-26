@@ -226,6 +226,8 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 
 ### 8.3 个人 Connection 前置审批
 
+- 审批模块可先部署、后配置启用。管理员可保存尚未填写免责声明或审批人的策略草稿；正式目录确认及发布所需配置齐全前，不得发布策略或开放新连接申请。免责声明通过管理界面维护，目录接入参数通过部署配置维护，不要求修改代码。
+
 - 员工创建任何个人 Connection 前，必须选择已发布的 Capability Profile、申请有效期、填写用途并确认精确免责声明版本。
 - Connection 按已发布 Policy 的顺序阶段通知审批人；每阶段可以要求任意一人、全部或至少 N 人通过。禁止申请人自审、越级审批和自动批准。
 - 全部阶段通过后，Connection 只在服务端生成一次性 Connect Permit；用户才可以进入 Provider OAuth 或提交 PAT/API Key。一次 Permit 只能成功创建一个外部账号 Connection。

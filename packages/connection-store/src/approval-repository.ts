@@ -74,23 +74,30 @@ export function validateApprovalPolicyDraft(input: ApprovalPolicyDraft) {
 	if (input.stages.length < 1 || input.stages.length > 10) {
 		invalid("Approval policy must contain between 1 and 10 stages");
 	}
-	unique(input.disclaimerVersionIds, "Approval policy disclaimers are invalid");
+	if (input.disclaimerVersionIds.length > 0)
+		unique(
+			input.disclaimerVersionIds,
+			"Approval policy disclaimers are invalid",
+		);
 	unique(
 		input.durations.map((duration) => duration.id),
 		"Approval policy durations are invalid",
 	);
 	const allApprovers: string[] = [];
 	for (const stage of input.stages) {
-		if (stage.approvers.length < 1 || stage.approvers.length > 50) {
-			invalid("Approval stage must contain between 1 and 50 approvers");
+		if (stage.approvers.length > 50) {
+			invalid("Approval stage cannot contain more than 50 approvers");
 		}
-		unique(
-			stage.approvers.map((approver) => approver.principalId),
-			"Approval stage approvers are invalid",
-		);
+		if (stage.approvers.length > 0)
+			unique(
+				stage.approvers.map((approver) => approver.principalId),
+				"Approval stage approvers are invalid",
+			);
 		if (
 			stage.quorumType === "AT_LEAST_N" &&
-			(!stage.quorumCount || stage.quorumCount > stage.approvers.length)
+			(!stage.quorumCount ||
+				(stage.approvers.length > 0 &&
+					stage.quorumCount > stage.approvers.length))
 		) {
 			invalid("Approval stage quorum cannot be satisfied");
 		}
@@ -101,7 +108,8 @@ export function validateApprovalPolicyDraft(input: ApprovalPolicyDraft) {
 			...stage.approvers.map((approver) => approver.principalId),
 		);
 	}
-	unique(allApprovers, "An approver cannot appear in multiple stages");
+	if (allApprovers.length > 0)
+		unique(allApprovers, "An approver cannot appear in multiple stages");
 	const finiteDays = input.durations.flatMap((duration) =>
 		duration.kind === "FINITE" ? [duration.days] : [],
 	);
@@ -401,6 +409,47 @@ export class PostgresConnectionApprovalRepository {
 		};
 	}
 
+	async getPolicyDraft(policyVersionId: string) {
+		const [row] = await this.sql<
+			{ draft: ApprovalPolicyDraft & { revision: string } }[]
+		>`
+			SELECT jsonb_build_object(
+				'id', policy.id, 'revision', policy.revision::text,
+				'providerReleaseId', policy.provider_release_id,
+				'capabilityProfileId', policy.capability_profile_id,
+				'priority', policy.priority, 'allowPermanent', policy.allow_permanent,
+				'createdByPrincipalId', policy.created_by_principal_id,
+				'connectTtlSeconds', policy.connect_ttl_seconds,
+				'requestTtlSeconds', policy.request_ttl_seconds,
+				'renewalLeadSeconds', policy.renewal_lead_seconds,
+				'defaultDurationDays', policy.default_duration_days,
+				'disclaimerVersionIds', COALESCE((SELECT jsonb_agg(disclaimer_version_id ORDER BY ordinal)
+					FROM connection_access_policy_disclaimers WHERE policy_version_id = policy.id), '[]'::jsonb),
+				'durations', COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+					'id', id, 'kind', duration_kind, 'days', duration_days)) ORDER BY id)
+					FROM connection_access_policy_durations WHERE policy_version_id = policy.id), '[]'::jsonb),
+				'stages', COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+					'id', stage.id, 'name', stage.name, 'quorumType', stage.quorum_type,
+					'quorumCount', stage.quorum_count, 'timeoutSeconds', stage.timeout_seconds,
+					'approvers', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+						'principalId', approver_principal_id, 'displaySnapshot', display_snapshot) ORDER BY approver_principal_id)
+						FROM connection_approval_stage_approvers WHERE stage_id = stage.id), '[]'::jsonb))) ORDER BY ordinal)
+					FROM connection_approval_stages stage WHERE stage.policy_version_id = policy.id), '[]'::jsonb)
+			) AS draft FROM connection_access_policy_versions policy
+			WHERE policy.id = ${policyVersionId} AND policy.status = 'DRAFT'
+		`;
+		if (!row)
+			throw new ConnectionError(
+				"RESOURCE_NOT_FOUND",
+				"Policy draft is unavailable",
+			);
+		const { defaultDurationDays, ...draft } = row.draft;
+		return {
+			...draft,
+			...(defaultDurationDays == null ? {} : { defaultDurationDays }),
+		};
+	}
+
 	async getPolicyStages(policyVersionId: string) {
 		const stages = await this.sql<
 			{
@@ -600,10 +649,49 @@ export class PostgresConnectionApprovalRepository {
 		});
 	}
 
-	async createPolicyDraft(input: ApprovalPolicyDraft) {
+	createPolicyDraft(input: ApprovalPolicyDraft) {
+		return this.savePolicyDraft(input);
+	}
+
+	updatePolicyDraft(input: ApprovalPolicyDraft & { expectedRevision: string }) {
+		if (!/^[1-9][0-9]*$/.test(input.expectedRevision))
+			invalid("Draft revision is invalid");
+		return this.savePolicyDraft(input, input.expectedRevision);
+	}
+
+	private async savePolicyDraft(
+		input: ApprovalPolicyDraft,
+		expectedRevision?: string,
+	) {
 		validateApprovalPolicyDraft(input);
 		await this.sql.begin(async (sql) => {
-			await sql`
+			if (expectedRevision) {
+				const [actor] = await sql<{ id: string }[]>`
+					SELECT principal.id FROM connection_principals principal
+					JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+					WHERE principal.id = ${input.createdByPrincipalId} AND principal.status = 'ACTIVE'
+						AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+					FOR SHARE OF principal, role_binding
+				`;
+				if (!actor)
+					invalid("Draft actor is not an active Connection administrator");
+				const updated = await sql`
+					UPDATE connection_access_policy_versions SET
+						provider_release_id = ${input.providerReleaseId}, capability_profile_id = ${input.capabilityProfileId},
+						priority = ${input.priority}, default_duration_days = ${input.defaultDurationDays ?? null},
+						allow_permanent = ${input.allowPermanent}, request_ttl_seconds = ${input.requestTtlSeconds},
+						connect_ttl_seconds = ${input.connectTtlSeconds}, renewal_lead_seconds = ${input.renewalLeadSeconds},
+						revision = revision + 1
+					WHERE id = ${input.id} AND status = 'DRAFT' AND revision::text = ${expectedRevision}
+				`;
+				if (updated.count !== 1)
+					invalid("Draft is unavailable or its revision changed");
+				await sql`DELETE FROM connection_approval_stage_approvers WHERE policy_version_id = ${input.id}`;
+				await sql`DELETE FROM connection_approval_stages WHERE policy_version_id = ${input.id}`;
+				await sql`DELETE FROM connection_access_policy_disclaimers WHERE policy_version_id = ${input.id}`;
+				await sql`DELETE FROM connection_access_policy_durations WHERE policy_version_id = ${input.id}`;
+			} else {
+				await sql`
 				INSERT INTO connection_access_policy_versions (
 					id, provider_release_id, capability_profile_id, priority,
 					default_duration_days, allow_permanent, request_ttl_seconds,
@@ -617,6 +705,7 @@ export class PostgresConnectionApprovalRepository {
 					${input.createdByPrincipalId}
 				)
 			`;
+			}
 			for (const duration of input.durations) {
 				await sql`
 					INSERT INTO connection_access_policy_durations (
@@ -659,6 +748,12 @@ export class PostgresConnectionApprovalRepository {
 					`;
 				}
 			}
+			if (expectedRevision)
+				await this.auditAndEnqueue(sql, {
+					actorPrincipalId: input.createdByPrincipalId,
+					aggregateId: input.id,
+					event: "connection.access-policy.draft-updated",
+				});
 		});
 		return { policyVersionId: input.id };
 	}

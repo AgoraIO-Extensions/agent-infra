@@ -181,7 +181,7 @@ export const accessPolicyDraftSchema = z.strictObject({
 	capabilityProfileId: opaqueId,
 	connectTtlSeconds: z.number().int().min(60).max(2_592_000),
 	defaultDurationDays: z.number().int().min(1).max(3_650).optional(),
-	disclaimerVersionIds: z.array(opaqueId).min(1).max(100),
+	disclaimerVersionIds: z.array(opaqueId).max(100),
 	durations: z
 		.array(
 			z.union([
@@ -201,7 +201,7 @@ export const accessPolicyDraftSchema = z.strictObject({
 	stages: z
 		.array(
 			z.strictObject({
-				approverCandidateIds: z.array(opaqueId).min(1).max(50),
+				approverCandidateIds: z.array(opaqueId).max(50),
 				name: z.string().trim().min(1).max(120),
 				quorumCount: z.number().int().min(1).max(50).optional(),
 				quorumType: z.enum(["ANY", "ALL", "AT_LEAST_N"]),

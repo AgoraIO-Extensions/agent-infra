@@ -953,6 +953,75 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/access-policies/{policyId}": {
+			"get": {
+				"operationId": "getConnectionAccessPolicyDraft",
+				"parameters": [
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Editable policy draft with administrator-bound employee candidates",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AccessPolicyDraftResponse"
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"403": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"put": {
+				"operationId": "updateConnectionAccessPolicy",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "policyId",
+						"in": "path",
+						"required": true,
+						"schema": { "type": "string" }
+					},
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string", "pattern": "^\"[1-9][0-9]*\"$" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": { "$ref": "#/components/schemas/AccessPolicyDraft" }
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Policy draft updated",
+						"content": {
+							"application/json": {
+								"schema": { "$ref": "#/components/schemas/AccessPolicyCreated" }
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"503": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/access-policies/{policyId}/stages": {
 			"get": {
 				"operationId": "getApprovalPolicyStages",
@@ -2505,7 +2574,7 @@
 					},
 					"approverCandidateIds": {
 						"type": "array",
-						"minItems": 1,
+						"minItems": 0,
 						"maxItems": 50,
 						"items": { "type": "string" }
 					}
@@ -2559,7 +2628,7 @@
 					},
 					"disclaimerVersionIds": {
 						"type": "array",
-						"minItems": 1,
+						"minItems": 0,
 						"maxItems": 100,
 						"items": { "type": "string" }
 					},
@@ -2568,6 +2637,19 @@
 						"minItems": 1,
 						"maxItems": 10,
 						"items": { "$ref": "#/components/schemas/ApprovalPolicyStageDraft" }
+					}
+				}
+			},
+			"AccessPolicyDraftResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["policyId", "revision", "draft", "candidates"],
+				"properties": {
+					"policyId": { "type": "string" },
+					"revision": { "type": "string" },
+					"draft": { "$ref": "#/components/schemas/AccessPolicyDraft" },
+					"candidates": {
+						"$ref": "#/components/schemas/EmployeeCandidatesResponse/properties/candidates"
 					}
 				}
 			},

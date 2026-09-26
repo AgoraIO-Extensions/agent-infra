@@ -123,6 +123,12 @@ migration hook。候选提交必须包含 `packages/connection-contracts/approva
 tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 manifest，拒绝缺失、移除或
 协议版本下降。工作区未提交文件的单元测试不等于 tag 发布验证。
 
+允许先部署管理模块、后配置启用。正式目录与免责声明尚未就绪时，保持
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可保存和编辑不含员工候选的策略草稿，
+但不得发布 Policy 或为新连接绕过审批。免责声明通过管理界面补充，目录参数通过部署配置与
+Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号、scope 或 Grant。迁移评审、
+代码评审与适用于本次部署的人工验证仍须完成，不能用此分阶段安排豁免下述启用门禁。
+
 启用 `ENFORCED` 前，Data Owner 必须确认个人 Connection 清单和 baseline 适用性，DBA/SRE 必须完成
 0032 迁移重放及兼容回滚演练，Identity/Security/QA 必须确认正式目录、免责声明和真实 Provider
 验收，并提供 cutoff 后只准部署审批兼容镜像的集群级控制及审计证据。当前 guard 只覆盖上述正常

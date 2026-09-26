@@ -1172,32 +1172,127 @@ export function createConnectionOAuthApp(
 			},
 		);
 
-		app.post("/api/v1/connection/admin/access-policies", async (context) => {
+		app.get(
+			"/api/v1/connection/admin/access-policies/:policyId",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const result = await browserApiOperation(context, async () => {
+					const policy = await catalog.getPolicyDraft(
+						context.req.param("policyId"),
+					);
+					const candidates =
+						await options.service.prepareEmployeeCandidatesForPrincipals(
+							session.account.principalId,
+							policy.stages.flatMap((stage) =>
+								stage.approvers.map((approver) => approver.principalId),
+							),
+						);
+					const candidateIds = new Map(
+						candidates.map((candidate) => [
+							candidate.principalId,
+							candidate.candidateId,
+						]),
+					);
+					return {
+						policyId: policy.id,
+						revision: policy.revision,
+						candidates: candidates.map(
+							({ candidateId, displayName, email, alias }) => ({
+								candidateId,
+								displayName,
+								email,
+								alias,
+							}),
+						),
+						draft: {
+							allowPermanent: policy.allowPermanent,
+							capabilityProfileId: policy.capabilityProfileId,
+							connectTtlSeconds: policy.connectTtlSeconds,
+							defaultDurationDays: policy.defaultDurationDays,
+							disclaimerVersionIds: policy.disclaimerVersionIds,
+							durations: policy.durations.map((duration) =>
+								duration.kind === "FINITE"
+									? { kind: duration.kind, days: duration.days }
+									: { kind: duration.kind },
+							),
+							priority: policy.priority,
+							providerReleaseId: policy.providerReleaseId,
+							renewalLeadSeconds: policy.renewalLeadSeconds,
+							requestTtlSeconds: policy.requestTtlSeconds,
+							stages: policy.stages.map((stage) => ({
+								name: stage.name,
+								quorumType: stage.quorumType,
+								quorumCount: stage.quorumCount,
+								timeoutSeconds: stage.timeoutSeconds,
+								approverCandidateIds: stage.approvers.map((approver) => {
+									const candidateId = candidateIds.get(approver.principalId);
+									if (!candidateId)
+										throw new ConnectionError(
+											"PROVIDER_UNAVAILABLE",
+											"Approver candidate is unavailable",
+										);
+									return candidateId;
+								}),
+							})),
+						},
+					};
+				});
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		const saveAccessPolicyDraft = async (context: Context) => {
 			requireSameOrigin(context.req.raw.headers, options.issuer);
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
+			const policyVersionId = context.req.param("policyId");
+			const ifMatch = context.req.header("if-match");
+			if (policyVersionId && (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch)))
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"A current draft revision is required",
+				);
+			const expectedRevision = policyVersionId
+				? ifMatch?.slice(1, -1)
+				: undefined;
 			const catalog = management.approvalCatalog;
 			if (!catalog)
 				throw new ConnectionError(
 					"PROVIDER_UNAVAILABLE",
 					"Approval catalog is unavailable",
 				);
-			if (!management.approvalDirectoryEnabled)
-				throw new ConnectionError(
-					"PROVIDER_UNAVAILABLE",
-					"Employee directory approval gate is unavailable",
-				);
 			const body = parseJsonBody(
 				accessPolicyDraftSchema,
 				await context.req.json().catch(() => undefined),
 			);
+			if (
+				!management.approvalDirectoryEnabled &&
+				body.stages.some((stage) => stage.approverCandidateIds.length > 0)
+			)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Employee directory approval gate is unavailable",
+				);
 			const result = await browserApiOperation(context, () =>
 				browserCommand(
 					options,
 					context,
 					{
-						operation: "connection.access-policy.create",
-						request: body,
+						operation: policyVersionId
+							? "connection.access-policy.update"
+							: "connection.access-policy.create",
+						request: policyVersionId
+							? { ...body, policyVersionId, expectedRevision }
+							: body,
 						subject: session.account.principalId,
 					},
 					async () => {
@@ -1223,23 +1318,31 @@ export function createConnectionOAuthApp(
 								approvers,
 							});
 						}
-						return catalog.createPolicyDraft({
+						const draft = {
 							...body,
 							createdByPrincipalId: session.account.principalId,
-							id: `access-policy-${randomUUID()}`,
+							id: policyVersionId ?? `access-policy-${randomUUID()}`,
 							durations: body.durations.map((duration) => ({
 								...duration,
 								id: `duration-${randomUUID()}`,
 							})),
 							stages,
-						});
+						};
+						return expectedRevision
+							? catalog.updatePolicyDraft({ ...draft, expectedRevision })
+							: catalog.createPolicyDraft(draft);
 					},
 				),
 			);
 			if (result instanceof Response) return result;
 			context.header("cache-control", "no-store");
-			return context.json(result, 201);
-		});
+			return context.json(result, policyVersionId ? 200 : 201);
+		};
+		app.post("/api/v1/connection/admin/access-policies", saveAccessPolicyDraft);
+		app.put(
+			"/api/v1/connection/admin/access-policies/:policyId",
+			saveAccessPolicyDraft,
+		);
 
 		app.post(
 			"/api/v1/connection/admin/access-policies/:policyId/publish",

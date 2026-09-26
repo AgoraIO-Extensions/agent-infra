@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type {
+	AccessPolicyDraftResponse,
 	ApprovalDelegationsResponse,
 	ApprovalPolicyCatalog,
 	OutboxFailuresResponse,
@@ -17,6 +18,37 @@ import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
+	getApprovalPolicyStages: vi.fn(async () => ({ stages: [] })),
+	getConnectionAccessPolicyDraft: vi.fn(
+		async (): Promise<AccessPolicyDraftResponse> => ({
+			policyId: "policy-1",
+			revision: "4",
+			candidates: [],
+			draft: {
+				allowPermanent: true,
+				capabilityProfileId: "profile-1",
+				providerReleaseId: "jira-release-1",
+				connectTtlSeconds: 7200,
+				requestTtlSeconds: 14400,
+				renewalLeadSeconds: 3600,
+				priority: 123,
+				defaultDurationDays: 30,
+				disclaimerVersionIds: [],
+				durations: [{ kind: "FINITE", days: 30 }, { kind: "PERMANENT" }],
+				stages: [
+					{
+						name: "待配置审批人",
+						quorumType: "ANY",
+						timeoutSeconds: 86400,
+						approverCandidateIds: [],
+					},
+				],
+			},
+		}),
+	),
+	updateConnectionAccessPolicy: vi.fn(async (_input: unknown) => ({
+		policyVersionId: "policy-1",
+	})),
 	listApprovalPolicyCatalog: vi.fn(
 		async (): Promise<ApprovalPolicyCatalog> => ({
 			profiles: [],
@@ -91,6 +123,65 @@ afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
+});
+
+it("reloads an incomplete draft and saves edits with its revision and original timing", async () => {
+	api.listApprovalPolicyCatalog.mockResolvedValueOnce({
+		profiles: [
+			{
+				id: "profile-1",
+				name: "Jira Read",
+				providerReleaseId: "jira-release-1",
+				effectCeiling: "READ",
+				status: "PUBLISHED",
+			},
+		],
+		providers: [
+			{ provider: "jira", providerReleaseId: "jira-release-1", actions: [] },
+		],
+		disclaimers: [],
+		policies: [
+			{
+				id: "policy-1",
+				capabilityProfileId: "profile-1",
+				providerReleaseId: "jira-release-1",
+				revision: "4",
+				status: "DRAFT",
+				materialChange: false,
+			},
+		],
+	});
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	fireEvent.click(await screen.findByRole("button", { name: "编辑草稿" }));
+	const name = await screen.findByLabelText("阶段名称");
+	expect((name as HTMLInputElement).value).toBe("待配置审批人");
+	fireEvent.change(name, { target: { value: "安全审批" } });
+	expect(screen.queryByRole("button", { name: "发布策略" })).toBeNull();
+	fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+	await waitFor(() =>
+		expect(api.updateConnectionAccessPolicy).toHaveBeenCalledOnce(),
+	);
+	expect(api.updateConnectionAccessPolicy.mock.calls[0]?.[0]).toMatchObject({
+		policyId: "policy-1",
+		revision: "4",
+		body: {
+			priority: 123,
+			connectTtlSeconds: 7200,
+			requestTtlSeconds: 14400,
+			renewalLeadSeconds: 3600,
+			defaultDurationDays: 30,
+			allowPermanent: true,
+			disclaimerVersionIds: [],
+			stages: [{ name: "安全审批", approverCandidateIds: [] }],
+		},
+	});
 });
 
 it("publishes a material policy only with an explicit reapproval deadline", async () => {

@@ -52,7 +52,11 @@ describe("approval employee candidate identity", () => {
 						: undefined,
 				getEmployeePrincipalIdentity: async (principalId: string) =>
 					principalId === "principal-alice"
-						? { identityReference: protectedIdentity }
+						? {
+								identityReference: protectedIdentity,
+								displayName: "Alice",
+								email: "alice@example.invalid",
+							}
 						: undefined,
 				resolveEmployeeCandidate: async () => ({
 					displaySnapshot: {
@@ -101,5 +105,37 @@ describe("approval employee candidate identity", () => {
 		await expect(
 			service.resolveEmployeeCandidate("admin", candidateId),
 		).resolves.toMatchObject({ principalId: "principal-alice" });
+		const restored = await service.prepareEmployeeCandidatesForPrincipals(
+			"editing-admin",
+			["principal-alice", "principal-alice"],
+		);
+		expect(restored).toHaveLength(1);
+		expect(restored[0]).toMatchObject({
+			principalId: "principal-alice",
+			displayName: "Alice",
+		});
+		expect(restored[0]?.candidateId).not.toBe(candidateId);
+		expect(requestedBy).toBe("editing-admin");
+		await expect(
+			service.resolveEmployeeCandidate("admin", restored[0]?.candidateId ?? ""),
+		).rejects.toMatchObject({ error: "access_denied" });
+		isActive = false;
+		await expect(
+			service.resolveEmployeeCandidate(
+				"editing-admin",
+				restored[0]?.candidateId ?? "",
+			),
+		).rejects.toMatchObject({ error: "access_denied" });
+		await expect(
+			service.prepareEmployeeCandidatesForPrincipals("editing-admin", [
+				"unknown",
+			]),
+		).rejects.toMatchObject({ error: "access_denied" });
+		await expect(
+			service.prepareEmployeeCandidatesForPrincipals(
+				"editing-admin",
+				Array(501).fill("principal-alice"),
+			),
+		).rejects.toMatchObject({ status: 400 });
 	});
 });

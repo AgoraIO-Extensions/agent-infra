@@ -4,7 +4,10 @@ import { canonicalHash } from "@agent-infra/connection-core";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
-import { PostgresConnectionApprovalRepository } from "./approval-repository";
+import {
+	type ApprovalPolicyDraft,
+	PostgresConnectionApprovalRepository,
+} from "./approval-repository";
 import { seedApprovedConnectPermit } from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionNotificationDispatcher } from "./notification-dispatcher";
@@ -550,6 +553,112 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					actorPrincipalId: adminId,
 					disclaimerVersionId: disclaimerId,
 				});
+				for (const missing of ["disclaimer", "approvers"] as const) {
+					const incompleteId = `incomplete-${missing}-${suffix}`;
+					const incompleteDraft: ApprovalPolicyDraft = {
+						allowPermanent: false,
+						capabilityProfileId: profileId,
+						connectTtlSeconds: 604_800,
+						createdByPrincipalId: adminId,
+						defaultDurationDays: 90,
+						disclaimerVersionIds:
+							missing === "disclaimer" ? [] : [disclaimerId],
+						durations: [
+							{ days: 90, id: `duration-${incompleteId}`, kind: "FINITE" },
+						],
+						id: incompleteId,
+						priority: 100,
+						providerReleaseId: releaseId,
+						renewalLeadSeconds: 1_209_600,
+						requestTtlSeconds: 1_209_600,
+						stages: [
+							{
+								approvers:
+									missing === "approvers"
+										? []
+										: [
+												{
+													principalId: approverId,
+													displaySnapshot: { displayName: "Reviewer" },
+												},
+											],
+								id: `stage-${incompleteId}`,
+								name: "Review",
+								quorumType: "ANY",
+								timeoutSeconds: 259_200,
+							},
+						],
+					};
+					await repository.createPolicyDraft(incompleteDraft);
+					expect(await repository.getPolicyDraft(incompleteId)).toMatchObject({
+						...incompleteDraft,
+						revision: "1",
+					});
+					await expect(
+						repository.publishPolicy({
+							actorPrincipalId: adminId,
+							policyVersionId: incompleteId,
+						}),
+					).rejects.toThrow("Approval policy dependencies are not publishable");
+					const [incomplete] = await sql<{ status: string }[]>`
+						SELECT status FROM connection_access_policy_versions WHERE id = ${incompleteId}
+					`;
+					expect(incomplete?.status).toBe("DRAFT");
+					await expect(
+						repository.updatePolicyDraft({
+							...incompleteDraft,
+							expectedRevision: "1",
+							createdByPrincipalId: approverId,
+						}),
+					).rejects.toThrow(
+						"Draft actor is not an active Connection administrator",
+					);
+					const edited = {
+						...incompleteDraft,
+						expectedRevision: "1",
+						priority: 101,
+					};
+					const writes = await Promise.allSettled([
+						repository.updatePolicyDraft(edited),
+						repository.updatePolicyDraft(edited),
+					]);
+					expect(
+						writes.filter((result) => result.status === "fulfilled"),
+					).toHaveLength(1);
+					expect(
+						writes.filter((result) => result.status === "rejected"),
+					).toHaveLength(1);
+					const [updated] = await sql<
+						{ priority: number; revision: string; status: string }[]
+					>`
+						SELECT priority, revision::text, status FROM connection_access_policy_versions WHERE id = ${incompleteId}
+					`;
+					expect(updated).toEqual({
+						priority: 101,
+						revision: "2",
+						status: "DRAFT",
+					});
+					await expect(
+						repository.updatePolicyDraft({
+							...incompleteDraft,
+							expectedRevision: "2",
+							priority: 102,
+							disclaimerVersionIds: [`missing-disclaimer-${suffix}`],
+						}),
+					).rejects.toThrow();
+					const [rolledBack] = await sql<
+						{ priority: number; revision: string; stage_count: number }[]
+					>`
+						SELECT priority, revision::text,
+							(SELECT count(*)::int FROM connection_approval_stages WHERE policy_version_id = ${incompleteId}) AS stage_count
+						FROM connection_access_policy_versions WHERE id = ${incompleteId}
+					`;
+					expect(rolledBack).toEqual({
+						priority: 101,
+						revision: "2",
+						stage_count: 1,
+					});
+				}
 				await repository.createPolicyDraft({
 					allowPermanent: true,
 					capabilityProfileId: profileId,
@@ -591,6 +700,9 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					FROM connection_access_policy_versions WHERE id = ${policyId}
 				`;
 				expect(policy).toEqual({ revision: "2", status: "PUBLISHED" });
+				await expect(repository.getPolicyDraft(policyId)).rejects.toThrow(
+					"Policy draft is unavailable",
+				);
 				const [evidence] = await sql<
 					{ audit_count: number; outbox_count: number }[]
 				>`

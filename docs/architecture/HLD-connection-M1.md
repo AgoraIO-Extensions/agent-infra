@@ -1193,6 +1193,8 @@ WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读�
 
 员工候选搜索只向管理员返回最小展示投影，审批权威使用 LDAP issuer + uid 的 Principal 映射；姓名、邮箱、alias 和外部目录 iamId 不得成为授权键。生产员工目录 contract 未通过 Identity Owner gate 时，Policy 发布保持禁用。
 
+模块部署与 Policy 发布独立：DRAFT 可暂缺 Disclaimer bundle 和 Stage approvers，但仍验证已提供数据的结构、数量上限与重复项；目录未启用时只允许保存不含员工候选的草稿，不能接受未经目录验证的身份。PUBLISHED 的完整性校验与目录门禁保持不变。未配置时不开放新申请，既有连接仍遵守 pre-launch 与 cutoff 规则；此分阶段部署不豁免迁移、人工验证或 cutoff 的安全要求。
+
 审批 migration 记录不可变 pre-launch 账号清单时间；此后新个人 Connection 即使尚未执行 cutoff，也必须先获得 Permit。清单内尚无 Authorization 的旧连接可在 cutoff 前继续按旧 Grant 使用，但一旦产生 Authorization 不再回退到旧权限。enforcement 启用时记录不可变 cutoff，只按清单内 exact 已有账号、scope 和 active Grant ActionVersion 并集生成 `PRE_LAUNCH_BASELINE` Authorization；已按审批创建有效 Authorization 的连接保持原资格，不重复生成 baseline。cutoff 后全部新个人 Connection 强制 Permit。发现真实生产 legacy 或不明数据时禁止使用该简化 baseline。
 
 ## 17. Consumer Grant 与授权交集

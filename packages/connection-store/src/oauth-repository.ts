@@ -268,8 +268,14 @@ export class PostgresConnectionOAuthRepository
 	}
 
 	async getEmployeePrincipalIdentity(principalId: string) {
-		const rows = await this.sql<{ identity_reference: string }[]>`
-			SELECT identity.identity_reference
+		const rows = await this.sql<
+			{
+				identity_reference: string;
+				display_name: string;
+				email: string | null;
+			}[]
+		>`
+			SELECT identity.identity_reference, principal.display_name, principal.email
 			FROM connection_principal_identities identity
 			JOIN connection_principals principal
 				ON principal.id = identity.principal_id
@@ -279,7 +285,11 @@ export class PostgresConnectionOAuthRepository
 		`;
 		const [identity] = rows;
 		return rows.length === 1 && identity
-			? { identityReference: identity.identity_reference }
+			? {
+					identityReference: identity.identity_reference,
+					displayName: identity.display_name,
+					email: identity.email,
+				}
 			: undefined;
 	}
 

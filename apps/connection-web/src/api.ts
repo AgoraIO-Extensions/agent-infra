@@ -53,6 +53,7 @@ import {
 	disconnectConnection,
 	disconnectSharedConnection,
 	getApprovalPolicyStages,
+	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
 	getSession,
@@ -116,6 +117,7 @@ import {
 	submitConnectionAccessRenewal,
 	submitConnectionAccessRequest,
 	type TokenList,
+	updateConnectionAccessPolicy,
 	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
 
@@ -414,11 +416,29 @@ export const connectionApi = {
 				path: { disclaimerId },
 			}),
 		),
+	getConnectionAccessPolicyDraft: (policyId: string) =>
+		unwrap(getConnectionAccessPolicyDraft({ path: { policyId } })),
 	createConnectionAccessPolicy: (body: AccessPolicyDraft) =>
 		unwrap(
 			createConnectionAccessPolicy({
 				body: parseClientInput(accessPolicyDraftSchema, body, "审批策略无效"),
 				headers: commandHeaders(),
+			}),
+		),
+	updateConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+		body: AccessPolicyDraft;
+	}) =>
+		unwrap(
+			updateConnectionAccessPolicy({
+				body: parseClientInput(
+					accessPolicyDraftSchema,
+					input.body,
+					"审批策略无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
 			}),
 		),
 	publishConnectionAccessPolicy: (input: {

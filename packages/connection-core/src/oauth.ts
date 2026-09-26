@@ -165,7 +165,10 @@ export interface ConnectionOAuthRepository {
 	}): Promise<{ identityReference: string } | undefined>;
 	getEmployeePrincipalIdentity?(
 		principalId: string,
-	): Promise<{ identityReference: string } | undefined>;
+	): Promise<
+		| { identityReference: string; displayName?: string; email?: string | null }
+		| undefined
+	>;
 	resolveEmployeeCandidate?(input: {
 		candidateId: string;
 		requestedByPrincipalId: string;
@@ -697,6 +700,63 @@ export class ConnectionOAuthService {
 			candidates,
 		});
 		return candidates.map(({ id, displayName, email, alias }) => ({
+			candidateId: id,
+			displayName,
+			email,
+			alias,
+		}));
+	}
+
+	async prepareEmployeeCandidatesForPrincipals(
+		administratorPrincipalId: string,
+		principalIds: readonly string[],
+	) {
+		if (principalIds.length > 500)
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Too many approvers",
+				400,
+			);
+		if (!principalIds.length) return [];
+		const get = this.options.repository.getEmployeePrincipalIdentity;
+		const store = this.options.repository.storeEmployeeCandidates;
+		if (!get || !store)
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory is unavailable",
+				503,
+			);
+		const candidates = [];
+		for (const principalId of new Set(principalIds)) {
+			const record = await get.call(this.options.repository, principalId);
+			if (!record?.displayName)
+				throw new OAuthProtocolError(
+					"access_denied",
+					"Approver identity is unavailable",
+					403,
+				);
+			const identity = this.protector.unprotect(record.identityReference);
+			candidates.push({
+				principalId,
+				alias: null,
+				displayName: record.displayName,
+				email: record.email ?? null,
+				id: `employee-candidate-${randomUUID()}`,
+				identityIssuer: identity.issuer,
+				identityReference: record.identityReference,
+				identitySubjectHash: this.protector.subjectHash(
+					this.options.identityRealm,
+					identity,
+				),
+				legacyIdentitySubjectHash: this.protector.legacySubjectHash(identity),
+			});
+		}
+		await store.call(this.options.repository, {
+			requestedByPrincipalId: administratorPrincipalId,
+			candidates,
+		});
+		return candidates.map(({ principalId, id, displayName, email, alias }) => ({
+			principalId,
 			candidateId: id,
 			displayName,
 			email,

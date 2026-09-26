@@ -731,6 +731,185 @@ describe("Connection API", () => {
 		expect(JSON.stringify(calls)).not.toContain("actorPrincipalId");
 	});
 
+	it("saves incomplete drafts with the directory disabled but blocks candidates and publication", async () => {
+		const saved: unknown[] = [];
+		const updated: unknown[] = [];
+		const candidateRequests: unknown[] = [];
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			management: {
+				approvalDirectoryEnabled: false,
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					authorizeConnectionAdministration: async () => true,
+				} as unknown as ConnectionApplicationService,
+				approvalCatalog: {
+					getPolicyDraft: async () => ({
+						...body,
+						id: "draft-1",
+						revision: "1",
+						createdByPrincipalId: "internal-admin",
+						stages: body.stages.map((stage) => ({
+							...stage,
+							approvers: [
+								{ principalId: "internal-approver", displaySnapshot: {} },
+							],
+						})),
+					}),
+					updatePolicyDraft: async (input: unknown) => {
+						updated.push(input);
+						return { policyVersionId: "draft-1" };
+					},
+					createPolicyDraft: async (input: unknown) => {
+						saved.push(input);
+						return { policyVersionId: "draft-1" };
+					},
+				} as never,
+			},
+			service: {
+				prepareEmployeeCandidatesForPrincipals: async (
+					administrator: string,
+					principals: string[],
+				) => {
+					candidateRequests.push({ administrator, principals });
+					return [
+						{
+							principalId: "internal-approver",
+							candidateId: "opaque-candidate",
+							displayName: "Reviewer",
+							email: null,
+							alias: null,
+						},
+					];
+				},
+				getBrowserAccount: async () => ({
+					displayName: "Admin",
+					email: null,
+					principalId: "admin-1",
+				}),
+			} as unknown as ConnectionOAuthService,
+		});
+		const body = {
+			allowPermanent: false,
+			capabilityProfileId: "profile-1",
+			providerReleaseId: "release-1",
+			connectTtlSeconds: 3600,
+			requestTtlSeconds: 3600,
+			renewalLeadSeconds: 0,
+			defaultDurationDays: 90,
+			priority: 100,
+			durations: [{ kind: "FINITE", days: 90 }],
+			disclaimerVersionIds: [],
+			stages: [
+				{
+					name: "Review",
+					quorumType: "ANY",
+					timeoutSeconds: 3600,
+					approverCandidateIds: [] as string[],
+				},
+			],
+		};
+		const headers = {
+			cookie: "connection_session=test",
+			origin: "https://connection.example",
+			"content-type": "application/json",
+			"idempotency-key": "draft-disabled-directory",
+		};
+		const created = await app.request(
+			"/api/v1/connection/admin/access-policies",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			},
+		);
+		expect(created.status).toBe(201);
+		const loaded = await app.request(
+			"/api/v1/connection/admin/access-policies/draft-1",
+			{ headers },
+		);
+		expect(loaded.status).toBe(200);
+		const loadedBody = await loaded.json();
+		expect(loadedBody).toMatchObject({
+			policyId: "draft-1",
+			revision: "1",
+			draft: { stages: [{ approverCandidateIds: ["opaque-candidate"] }] },
+		});
+		expect(JSON.stringify(loadedBody)).not.toContain("internal-");
+		expect(candidateRequests).toEqual([
+			{ administrator: "admin-1", principals: ["internal-approver"] },
+		]);
+		expect(saved).toHaveLength(1);
+		expect(saved[0]).toMatchObject({
+			disclaimerVersionIds: [],
+			stages: [{ approvers: [] }],
+		});
+		for (const revision of [undefined, "1", '"0"', "*"]) {
+			const rejected = await app.request(
+				"/api/v1/connection/admin/access-policies/draft-1",
+				{
+					method: "PUT",
+					body: JSON.stringify(body),
+					headers: {
+						...headers,
+						...(revision ? { "if-match": revision } : {}),
+					},
+				},
+			);
+			expect(rejected.status).toBe(400);
+		}
+		expect(updated).toHaveLength(0);
+		const edited = await app.request(
+			"/api/v1/connection/admin/access-policies/draft-1",
+			{
+				method: "PUT",
+				body: JSON.stringify(body),
+				headers: {
+					...headers,
+					"if-match": '"1"',
+					"idempotency-key": "update-draft-1",
+				},
+			},
+		);
+		expect(edited.status).toBe(200);
+		expect(updated[0]).toMatchObject({
+			id: "draft-1",
+			expectedRevision: "1",
+			createdByPrincipalId: "admin-1",
+		});
+		body.stages[0]?.approverCandidateIds.push("unverified-candidate");
+		const withCandidate = await app.request(
+			"/api/v1/connection/admin/access-policies",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			},
+		);
+		expect(withCandidate.status).toBe(503);
+		expect(saved).toHaveLength(1);
+		const editedWithCandidate = await app.request(
+			"/api/v1/connection/admin/access-policies/draft-1",
+			{
+				method: "PUT",
+				body: JSON.stringify(body),
+				headers: { ...headers, "if-match": '"2"' },
+			},
+		);
+		expect(editedWithCandidate.status).toBe(503);
+		expect(updated).toHaveLength(1);
+		const published = await app.request(
+			"/api/v1/connection/admin/access-policies/draft-1/publish",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({ materialChange: false }),
+			},
+		);
+		expect(published.status).toBe(503);
+	});
+
 	it("hides employee search and policy management from non-administrators", async () => {
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
@@ -768,6 +947,24 @@ describe("Connection API", () => {
 			},
 		);
 		expect(policy.status).toBe(404);
+		const updatePolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1",
+			{
+				method: "PUT",
+				body: "{}",
+				headers: {
+					...headers,
+					"content-type": "application/json",
+					"if-match": '"1"',
+				},
+			},
+		);
+		expect(updatePolicy.status).toBe(404);
+		const readDraft = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1",
+			{ headers },
+		);
+		expect(readDraft.status).toBe(404);
 		const disclaimers = await app.request(
 			"/api/v1/connection/admin/disclaimers",
 			{ headers },

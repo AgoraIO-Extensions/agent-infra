@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Check,
 	ChevronRight,
+	Pencil,
 	Plus,
 	Search,
 	ShieldX,
@@ -43,6 +44,11 @@ export function ApprovalPoliciesPage() {
 	const [profileId, setProfileId] = useState("");
 	const [policyId, setPolicyId] = useState("");
 	const [creatingNew, setCreatingNew] = useState(false);
+	const [editingDraft, setEditingDraft] = useState<{
+		revision: string;
+		draft: AccessPolicyDraft;
+	} | null>(null);
+	const editable = !policyId || Boolean(editingDraft);
 	const [stageIndex, setStageIndex] = useState(0);
 	const [stages, setStages] = useState<StageDraft[]>([newStage(1)]);
 	const [candidateLabels, setCandidateLabels] = useState<
@@ -219,6 +225,38 @@ export function ApprovalPoliciesPage() {
 	});
 	const refresh = () =>
 		client.invalidateQueries({ queryKey: ["approval-catalog"] });
+	const loadDraft = useMutation({
+		mutationFn: connectionApi.getConnectionAccessPolicyDraft,
+		onSuccess: (result) => {
+			if (result.policyId !== policyId) return;
+			setEditingDraft({ revision: result.revision, draft: result.draft });
+			setStages(result.draft.stages);
+			setCandidateLabels(
+				Object.fromEntries(
+					result.candidates.map((candidate) => [
+						candidate.candidateId,
+						candidate.displayName,
+					]),
+				),
+			);
+			setProviderReleaseId(result.draft.providerReleaseId);
+			setProfileId(result.draft.capabilityProfileId);
+			setDisclaimerIds(result.draft.disclaimerVersionIds);
+			setAllowPermanent(result.draft.allowPermanent);
+			setDurationDays(result.draft.defaultDurationDays ?? 90);
+			setStageIndex(0);
+			setQuery("");
+		},
+	});
+	const updatePolicy = useMutation({
+		mutationFn: connectionApi.updateConnectionAccessPolicy,
+		onSuccess: async () => {
+			setEditingDraft(null);
+			setNotice("策略草稿已更新。");
+			await refresh();
+			await client.invalidateQueries({ queryKey: ["approval-policy-stages"] });
+		},
+	});
 	const createPolicy = useMutation({
 		mutationFn: connectionApi.createConnectionAccessPolicy,
 		onSuccess: async (created) => {
@@ -284,12 +322,16 @@ export function ApprovalPoliciesPage() {
 		},
 	});
 	const busy =
+		loadDraft.isPending ||
+		updatePolicy.isPending ||
 		createPolicy.isPending ||
 		publishPolicy.isPending ||
 		revokePolicy.isPending ||
 		createProfile.isPending ||
 		createDisclaimer.isPending;
 	const error =
+		loadDraft.error ||
+		updatePolicy.error ||
 		createPolicy.error ||
 		publishPolicy.error ||
 		revokePolicy.error ||
@@ -309,6 +351,7 @@ export function ApprovalPoliciesPage() {
 	function selectPolicy(id: string) {
 		const next = catalog.data?.policies.find((item) => item.id === id);
 		if (!next) return;
+		setEditingDraft(null);
 		setPolicyId(id);
 		setCreatingNew(false);
 		setProfileId(next.capabilityProfileId);
@@ -317,26 +360,35 @@ export function ApprovalPoliciesPage() {
 		setTab("chain");
 	}
 	function savePolicy() {
-		if (!profile || !provider || !disclaimerIds.length) {
-			setNotice("请先选择已发布能力包和免责声明。");
+		if (!profile || !provider) {
+			setNotice("请先选择已发布能力包。");
 			return;
 		}
-		createPolicy.mutate({
+		const base = editingDraft?.draft;
+		const body: AccessPolicyDraft = {
 			allowPermanent,
 			capabilityProfileId: profile.id,
-			connectTtlSeconds: 7 * 86_400,
-			defaultDurationDays: durationDays,
+			connectTtlSeconds: base?.connectTtlSeconds ?? 7 * 86_400,
+			defaultDurationDays:
+				base && durationDays === (base.defaultDurationDays ?? 90)
+					? base.defaultDurationDays
+					: durationDays,
 			disclaimerVersionIds: disclaimerIds,
 			durations: [
-				{ days: durationDays, kind: "FINITE" },
+				...(base && durationDays === (base.defaultDurationDays ?? 90)
+					? base.durations.filter((duration) => duration.kind === "FINITE")
+					: [{ days: durationDays, kind: "FINITE" as const }]),
 				...(allowPermanent ? [{ kind: "PERMANENT" as const }] : []),
 			],
-			priority: 100,
+			priority: base?.priority ?? 100,
 			providerReleaseId: provider.providerReleaseId,
-			renewalLeadSeconds: 14 * 86_400,
-			requestTtlSeconds: 14 * 86_400,
+			renewalLeadSeconds: base?.renewalLeadSeconds ?? 14 * 86_400,
+			requestTtlSeconds: base?.requestTtlSeconds ?? 14 * 86_400,
 			stages,
-		});
+		};
+		if (editingDraft)
+			updatePolicy.mutate({ policyId, revision: editingDraft.revision, body });
+		else createPolicy.mutate(body);
 	}
 
 	return (
@@ -359,6 +411,7 @@ export function ApprovalPoliciesPage() {
 							aria-label="新建策略"
 							onClick={() => {
 								setCreatingNew(true);
+								setEditingDraft(null);
 								setPolicyId("");
 								setStages([newStage(1)]);
 								setStageIndex(0);
@@ -428,7 +481,7 @@ export function ApprovalPoliciesPage() {
 						<div className="approval-chain-layout">
 							<div className="approval-chain">
 								<div className="approval-terminal">员工提交申请</div>
-								{(policyId && savedStages.data
+								{(policyId && !editingDraft && savedStages.data
 									? savedStages.data.stages
 									: stages
 								).map((stage, index) => (
@@ -456,7 +509,7 @@ export function ApprovalPoliciesPage() {
 									</button>
 								))}
 								<div className="approval-terminal">开放 Provider 连接</div>
-								{!policyId && stages.length < 10 ? (
+								{editable && stages.length < 10 ? (
 									<Button
 										variant="secondary"
 										onClick={() => {
@@ -473,7 +526,7 @@ export function ApprovalPoliciesPage() {
 								) : null}
 							</div>
 							<aside className="approval-inspector">
-								{activeStage && !policyId ? (
+								{activeStage && editable ? (
 									<>
 										<span>第 {stageIndex + 1} 级</span>
 										<label>
@@ -691,7 +744,7 @@ export function ApprovalPoliciesPage() {
 										))}
 								</select>
 							</label>
-							{!policyId ? (
+							{editable ? (
 								<>
 									<div className="approval-subsection">
 										<h3>新能力包</h3>
@@ -833,30 +886,44 @@ export function ApprovalPoliciesPage() {
 						</div>
 					)}
 					<div className="approval-editor-actions">
-						{!policyId ? (
-							<Button
-								disabled={
-									busy ||
-									!profile ||
-									stages.some((stage) => !stage.approverCandidateIds.length)
-								}
-								onClick={savePolicy}
-							>
-								保存草稿
-							</Button>
+						{editable ? (
+							<>
+								<Button disabled={busy || !profile} onClick={savePolicy}>
+									保存草稿
+								</Button>
+								{editingDraft ? (
+									<Button
+										variant="secondary"
+										disabled={busy}
+										onClick={() => setEditingDraft(null)}
+									>
+										取消编辑
+									</Button>
+								) : null}
+							</>
 						) : selectedPolicy?.status === "DRAFT" ? (
-							<Button
-								disabled={busy}
-								onClick={() => {
-									setPolicyMaterial(false);
-									setPolicyDeadline("");
-									setPolicyReason("");
-									setPolicyPublishOpen(true);
-								}}
-							>
-								<Check size={16} />
-								发布策略
-							</Button>
+							<>
+								<Button
+									variant="secondary"
+									disabled={busy}
+									onClick={() => loadDraft.mutate(policyId)}
+								>
+									<Pencil size={16} />
+									编辑草稿
+								</Button>
+								<Button
+									disabled={busy}
+									onClick={() => {
+										setPolicyMaterial(false);
+										setPolicyDeadline("");
+										setPolicyReason("");
+										setPolicyPublishOpen(true);
+									}}
+								>
+									<Check size={16} />
+									发布策略
+								</Button>
+							</>
 						) : selectedPolicy?.status === "PUBLISHED" ? (
 							<Button
 								variant="danger"

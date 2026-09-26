@@ -44,6 +44,13 @@ describe("approval policy draft validation", () => {
 		expect(() => validateApprovalPolicyDraft(draft())).not.toThrow();
 	});
 
+	it("accepts an incomplete draft without inventing disclaimers or approvers", () => {
+		const value = draft();
+		value.disclaimerVersionIds = [];
+		value.stages = value.stages.map((stage) => ({ ...stage, approvers: [] }));
+		expect(() => validateApprovalPolicyDraft(value)).not.toThrow();
+	});
+
 	it("rejects one approver assigned to multiple stages", () => {
 		const value = draft();
 		value.stages = [

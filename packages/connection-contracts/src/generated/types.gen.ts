@@ -454,6 +454,18 @@ export type AccessPolicyDraft = {
     stages: Array<ApprovalPolicyStageDraft>;
 };
 
+export type AccessPolicyDraftResponse = {
+    policyId: string;
+    revision: string;
+    draft: AccessPolicyDraft;
+    candidates: Array<{
+        candidateId: string;
+        displayName: string;
+        email: string | null;
+        alias: string | null;
+    }>;
+};
+
 export type AccessPolicyCreated = {
     policyVersionId: string;
 };
@@ -2131,6 +2143,88 @@ export type CreateConnectionAccessPolicyResponses = {
 };
 
 export type CreateConnectionAccessPolicyResponse = CreateConnectionAccessPolicyResponses[keyof CreateConnectionAccessPolicyResponses];
+
+export type GetConnectionAccessPolicyDraftData = {
+    body?: never;
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}';
+};
+
+export type GetConnectionAccessPolicyDraftErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetConnectionAccessPolicyDraftError = GetConnectionAccessPolicyDraftErrors[keyof GetConnectionAccessPolicyDraftErrors];
+
+export type GetConnectionAccessPolicyDraftResponses = {
+    /**
+     * Editable policy draft with administrator-bound employee candidates
+     */
+    200: AccessPolicyDraftResponse;
+};
+
+export type GetConnectionAccessPolicyDraftResponse = GetConnectionAccessPolicyDraftResponses[keyof GetConnectionAccessPolicyDraftResponses];
+
+export type UpdateConnectionAccessPolicyData = {
+    body: AccessPolicyDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}';
+};
+
+export type UpdateConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type UpdateConnectionAccessPolicyError = UpdateConnectionAccessPolicyErrors[keyof UpdateConnectionAccessPolicyErrors];
+
+export type UpdateConnectionAccessPolicyResponses = {
+    /**
+     * Policy draft updated
+     */
+    200: AccessPolicyCreated;
+};
+
+export type UpdateConnectionAccessPolicyResponse = UpdateConnectionAccessPolicyResponses[keyof UpdateConnectionAccessPolicyResponses];
 
 export type GetApprovalPolicyStagesData = {
     body?: never;
