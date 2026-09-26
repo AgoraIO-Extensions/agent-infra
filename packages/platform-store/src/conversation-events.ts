@@ -786,6 +786,13 @@ export class PostgresConversationEventTransactionV1
 		const persistedRequest = request(requestInput);
 		if (typeof decide !== "function") unavailable();
 		return this.#transaction(async (transaction) => {
+			// Match stop and dispatch: outbox before Conversation, then Execution.
+			if (persistedRequest.command.dispatchLease) {
+				await transaction`
+					select id from platform.outbox_items
+					where id = ${persistedRequest.command.dispatchLease.itemId} for update
+				`;
+			}
 			const conversation = await lockConversation(
 				transaction,
 				persistedRequest.command.conversationId,
