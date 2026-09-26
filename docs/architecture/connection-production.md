@@ -97,6 +97,23 @@ test 验收。
 
 ## GZ3 受监督发布
 
+### 管理员操作记录
+
+`/connection/admin/action-calls` 使用当前浏览器会话查询调用记录；仅当前有效的
+`CONNECTION_ADMIN` 可访问列表与详情。姓名、邮箱、Action 和 Call ID 搜索与时间、结果组合过滤。
+日期按 UTC+08:00 的自然日计算，自定义结束分钟包含在范围内，单次范围不超过 93 天。
+分页每页最多 50 条，按创建时间和 Call ID 排序；查询审计写入失败时不返回查询结果。
+
+页面遵循 [HLD 21.7、21.8 与 26 节](HLD-connection-M1.md#26-审计模型与查询权限)，
+只展示固定白名单的输入输出摘要，不提供原始 JSON、Credential、业务正文或对话内容。
+未知 Action、未记录的事件、失败原因和耗时不推断或补造。历史调用的人员姓名、邮箱与
+Consumer 名称来自当前身份目录，不表示执行时的 profile 快照；稳定标识保留在技术详情。
+
+本入口不覆盖尚未创建 Call 的请求拒绝，也不关闭审计防篡改、保留策略、outbox 或 PITR 门禁。
+新增查询索引必须走下述经评审的 migration 发布流程；上线前确认表规模和建索引锁影响。
+
+### 发布步骤
+
 创建 PR 前先运行：
 
 ```bash
@@ -122,6 +139,11 @@ pnpm connection:gz3:release connection-vX.Y.Z --publish --deploy
 migration hook。候选提交必须包含 `packages/connection-contracts/approval-fence.json`；正常 Connection
 tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 manifest，拒绝缺失、移除或
 协议版本下降。工作区未提交文件的单元测试不等于 tag 发布验证。
+
+审计索引迁移 `0033_audit_query_indexes` 先进入主线，其既有 journal 时间戳保持不变。
+审批迁移尚未发布，journal 将 `0032_connection_access_approval` 排在该索引迁移之后；
+实际执行顺序以 journal 的 `idx` 和 `when` 为准，不按文件名排序，避免已有审计迁移的数据库跳过审批表。
+升级回归必须覆盖仅含审计索引的基线升级至审批版本，并验证重复迁移幂等。
 
 允许先部署管理模块、后配置启用。正式目录与免责声明尚未就绪时，保持
 `CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可保存和编辑不含员工候选的策略草稿，

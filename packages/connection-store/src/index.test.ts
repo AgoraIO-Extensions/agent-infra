@@ -68,6 +68,7 @@ describe("Connection store migrations", () => {
 			"0029_provider_egress_admission",
 			"0030_github_oauth_refresh",
 			"0031_provider_upgrade_campaigns",
+			"0033_audit_query_indexes",
 			"0032_connection_access_approval",
 		]);
 		for (const migration of journal.entries) {

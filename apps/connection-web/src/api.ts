@@ -21,6 +21,8 @@ import {
 	type ApprovalQueueResponse,
 	type ApprovalRerouteRequest,
 	type ApprovalRoutingBlockedResponse,
+	type AuditDetail,
+	type AuditPage,
 	type AuthorizationConsentRequest,
 	type AuthorizationPreviewRequest,
 	type AuthorizationPreviewResponse,
@@ -53,6 +55,7 @@ import {
 	disconnectConnection,
 	disconnectSharedConnection,
 	getApprovalPolicyStages,
+	getAuditCall,
 	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
@@ -64,12 +67,14 @@ import {
 	idempotencyKeySchema,
 	issueToken,
 	issueTokenRequestSchema,
+	type ListAuditCallsData,
 	type LoginRequest,
 	listAdminAccessAuthorizations,
 	listAdministrators,
 	listApprovalDelegations,
 	listApprovalPolicyCatalog,
 	listApprovalRoutingBlocked,
+	listAuditCalls,
 	listConnectionAccessOptions,
 	listConnectionAccessRequests,
 	listConnectionApprovalQueue,
@@ -615,6 +620,10 @@ export const connectionApi = {
 		),
 	listAdministrators: () =>
 		unwrap<AdministratorsResponse>(listAdministrators()),
+	listAuditCalls: (query: ListAuditCallsData["query"]) =>
+		unwrap<AuditPage>(listAuditCalls({ query })),
+	getAuditCall: (callId: string) =>
+		unwrap<AuditDetail>(getAuditCall({ path: { callId } })),
 	listProviderUpgradeCampaigns: () =>
 		unwrap<ProviderUpgradeCampaignsResponse>(listProviderUpgradeCampaigns()),
 	grantAdministrator: (principalId: string) =>

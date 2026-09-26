@@ -2,6 +2,16 @@ import { z } from "zod";
 
 const opaqueId = z.string().min(1).max(512);
 
+export const auditQuerySchema = z.strictObject({
+	from: z.string().datetime(),
+	to: z.string().datetime(),
+	query: z.string().trim().max(120).optional(),
+	status: z
+		.enum(["AUTHORIZED", "DENIED_LOCAL", "SUCCEEDED", "FAILED", "UNCERTAIN"])
+		.optional(),
+	cursor: z.string().min(1).max(2048).optional(),
+});
+
 export const idempotencyKeySchema = z
 	.string()
 	.min(8)

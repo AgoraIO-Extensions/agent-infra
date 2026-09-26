@@ -4,6 +4,7 @@ import {
 	Bell,
 	Bot,
 	Cable,
+	FileClock,
 	KeyRound,
 	ListChecks,
 	LogOut,
@@ -89,6 +90,12 @@ export function ConsoleShell(props: { children: ReactNode }) {
 								icon={<ListChecks size={18} />}
 							>
 								审批管理
+							</NavLink>
+							<NavLink
+								to="/connection/admin/action-calls"
+								icon={<FileClock size={18} />}
+							>
+								操作记录
 							</NavLink>
 							<NavLink to="/connection/admin/agents" icon={<Bot size={18} />}>
 								Agent 接入
@@ -266,6 +273,7 @@ function NavLink(props: {
 	children: ReactNode;
 	icon: ReactNode;
 	to:
+		| "/connection/admin/action-calls"
 		| "/connection/connections"
 		| "/connection/approvals"
 		| "/connection/tokens"

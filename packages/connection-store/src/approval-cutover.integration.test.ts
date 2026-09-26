@@ -1,4 +1,13 @@
 import { randomUUID } from "node:crypto";
+import {
+	copyFile,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -21,6 +30,52 @@ describe("personal Connection approval cutover", () => {
 		"baselines only the existing account and atomically enforces approval",
 		async () => {
 			if (!databaseUrl) return;
+			const migrationsDirectory = resolve(
+				import.meta.dirname,
+				"../../../migrations/connection",
+			);
+			const baselineDirectory = await mkdtemp(
+				resolve(tmpdir(), "connection-audit-baseline-"),
+			);
+			const probe = postgres(databaseUrl);
+			try {
+				const journal = JSON.parse(
+					await readFile(
+						resolve(migrationsDirectory, "meta/_journal.json"),
+						"utf8",
+					),
+				);
+				journal.entries = journal.entries.filter(
+					(entry: { tag: string }) =>
+						entry.tag !== "0032_connection_access_approval",
+				);
+				await mkdir(resolve(baselineDirectory, "meta"));
+				await writeFile(
+					resolve(baselineDirectory, "meta/_journal.json"),
+					JSON.stringify(journal),
+				);
+				for (const entry of journal.entries) {
+					await copyFile(
+						resolve(migrationsDirectory, `${entry.tag}.sql`),
+						resolve(baselineDirectory, `${entry.tag}.sql`),
+					);
+				}
+				await migrateConnectionDatabase(databaseUrl, baselineDirectory);
+				const [before] =
+					await probe`SELECT to_regclass('public.connection_access_enforcement') AS approval_table`;
+				expect(before?.approval_table).toBeNull();
+				await migrateConnectionDatabase(databaseUrl, migrationsDirectory);
+				await migrateConnectionDatabase(databaseUrl, migrationsDirectory);
+				const [after] =
+					await probe`SELECT to_regclass('public.connection_access_enforcement') AS approval_table, (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations`;
+				expect(after).toEqual({
+					approval_table: "connection_access_enforcement",
+					migrations: journal.entries.length + 1,
+				});
+			} finally {
+				await probe.end();
+				await rm(baselineDirectory, { recursive: true, force: true });
+			}
 			await migrateConnectionDatabase(
 				databaseUrl,
 				resolve(import.meta.dirname, "../../../migrations/connection"),

@@ -229,7 +229,14 @@
     {
       "idx": 32,
       "version": "7",
-      "when": 1790222400000,
+      "when": 1790424000000,
+      "tag": "0033_audit_query_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790424001000,
       "tag": "0032_connection_access_approval",
       "breakpoints": true
     }

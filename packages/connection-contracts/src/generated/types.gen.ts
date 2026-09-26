@@ -4,6 +4,59 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AuditCall = {
+    callId: string;
+    createdAt: string;
+    principalId: string;
+    person: string;
+    consumerId: string;
+    consumer: string;
+    instanceId: string;
+    connectionId: string;
+    providerId: string;
+    action: string;
+    actionVersionId: string;
+    email: string | null;
+    actorKey: string | null;
+    status: 'AUTHORIZED' | 'DENIED_LOCAL' | 'SUCCEEDED' | 'FAILED' | 'UNCERTAIN';
+};
+
+export type AuditPage = {
+    items: Array<AuditCall>;
+    nextCursor: string | null;
+};
+
+export type AuditDetail = {
+    callId: string;
+    createdAt: string;
+    principalId: string;
+    person: string;
+    consumerId: string;
+    consumer: string;
+    instanceId: string;
+    connectionId: string;
+    providerId: string;
+    action: string;
+    actionVersionId: string;
+    email: string | null;
+    actorKey: string | null;
+    status: 'AUTHORIZED' | 'DENIED_LOCAL' | 'SUCCEEDED' | 'FAILED' | 'UNCERTAIN';
+    input: Array<{
+        label: string;
+        value: string;
+        state: 'AVAILABLE' | 'REDACTED';
+    }>;
+    output: Array<{
+        label: string;
+        value: string;
+        state: 'AVAILABLE' | 'REDACTED';
+    }>;
+    timeline: Array<{
+        event: string;
+        occurredAt: string;
+    }>;
+};
+
 export type Error = {
     error: {
         code: string;
@@ -703,6 +756,88 @@ export type PrincipalId = string;
 export type SharedScopeId = string;
 
 export type TokenId = string;
+
+export type ListAuditCallsData = {
+    body?: never;
+    path?: never;
+    query: {
+        from: string;
+        to: string;
+        query?: string;
+        status?: 'AUTHORIZED' | 'DENIED_LOCAL' | 'SUCCEEDED' | 'FAILED' | 'UNCERTAIN';
+        cursor?: string;
+    };
+    url: '/api/v1/connection/admin/action-calls';
+};
+
+export type ListAuditCallsErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    500: Error;
+};
+
+export type ListAuditCallsError = ListAuditCallsErrors[keyof ListAuditCallsErrors];
+
+export type ListAuditCallsResponses = {
+    /**
+     * Controlled administrator audit projection
+     */
+    200: AuditPage;
+};
+
+export type ListAuditCallsResponse = ListAuditCallsResponses[keyof ListAuditCallsResponses];
+
+export type GetAuditCallData = {
+    body?: never;
+    path: {
+        callId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/action-calls/{callId}';
+};
+
+export type GetAuditCallErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    500: Error;
+};
+
+export type GetAuditCallError = GetAuditCallErrors[keyof GetAuditCallErrors];
+
+export type GetAuditCallResponses = {
+    /**
+     * Controlled administrator audit projection
+     */
+    200: AuditDetail;
+};
+
+export type GetAuditCallResponse = GetAuditCallResponses[keyof GetAuditCallResponses];
 
 export type GetConnectionBrowserOpenApiData = {
     body?: never;
