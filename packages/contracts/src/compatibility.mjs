@@ -816,6 +816,117 @@ function isAgentOwnerScopeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #481 adds the bearer-authenticated direct Agent creation entry point.
+function isAgentDirectCreationOpenApiAddition(previous, current) {
+	const path = "/api/v1/agents";
+	const requestName = "AgentApplicationCreateRequestV2";
+	const responseName = "AgentDirectCreationProjectionV1";
+	const currentOperation = current.paths?.[path]?.post;
+	if (
+		previous.paths?.[path]?.post !== undefined ||
+		previous.components?.schemas?.[requestName] !== undefined ||
+		previous.components?.schemas?.[responseName] !== undefined ||
+		!currentOperation
+	)
+		return false;
+	const addition = {
+		path: currentOperation,
+		schemas: {
+			[requestName]: current.components?.schemas?.[requestName],
+			[responseName]: current.components?.schemas?.[responseName],
+		},
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6a96512f7940a4b06e579b8703550c814dbcf38268e228176eb97d8e0386ccfe"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].post;
+	delete normalized.components.schemas[requestName];
+	delete normalized.components.schemas[responseName];
+	return sameValue(previous, normalized);
+}
+
+// #481 adds the Platform API identity and grant management surface. The new
+// paths and the application/start variants are additive to the existing V1/V2
+// contracts, so normalize them before running the generic breaking check.
+function isAgentApiIdentityOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const addedPaths = [
+		"/api/v1/api-credentials",
+		"/api/v1/api-credentials/{credentialId}",
+		"/api/v1/applications",
+		"/api/v1/applications/{applicationId}/credential-delivery",
+		"/api/v1/applications/{applicationId}/credentials",
+		"/api/v1/applications/{applicationId}/credentials/{credentialId}",
+		"/api/v1/agents/{agentId}/grants",
+	];
+	const addedSchemas = [
+		"ApiAgentGrantProjectionV1",
+		"ApiAgentGrantRequestV1",
+		"ApiApplicationCreateRequestV1",
+		"ApiApplicationCredentialIssueProjectionV1",
+		"ApiApplicationProjectionV1",
+		"ApiCredentialIssueProjectionV1",
+		"ApiCredentialIssueRequestV1",
+		"ApiCredentialMetadataProjectionV1",
+		"ApiCredentialScopeV1",
+		"ApiPrincipalV1",
+	];
+	const directPath = "/api/v1/agents";
+	const directSchemas = [
+		"AgentApplicationCreateRequestV2",
+		"AgentDirectCreationProjectionV1",
+	];
+	if (
+		addedPaths.some((path) => previous.paths?.[path] !== undefined) ||
+		addedSchemas.some(
+			(name) => previous.components?.schemas?.[name] !== undefined,
+		) ||
+		(normalized.paths?.[directPath]?.post !== undefined &&
+			previous.paths?.[directPath]?.post !== undefined)
+	)
+		return false;
+	for (const path of addedPaths) delete normalized.paths[path];
+	if (normalized.paths?.[directPath]?.post !== undefined) {
+		delete normalized.paths[directPath].post;
+		for (const name of directSchemas) {
+			if (previous.components?.schemas?.[name] === undefined)
+				delete normalized.components.schemas[name];
+		}
+	}
+	for (const name of addedSchemas) delete normalized.components.schemas[name];
+	for (const schema of Object.values(normalized.components.schemas)) {
+		const options = schema?.properties?.availability?.items?.oneOf;
+		if (Array.isArray(options)) {
+			schema.properties.availability.items.oneOf = options.filter(
+				(option) => option?.properties?.kind?.const !== "application",
+			);
+		}
+		for (const option of schema?.oneOf ?? []) {
+			const command = option?.properties?.command;
+			if (Array.isArray(command?.enum)) {
+				command.enum = command.enum.filter((value) => value !== "start");
+			}
+		}
+	}
+	for (const name of [
+		"PlatformAuditProjectionV1",
+		"PlatformAuditProjectionV2",
+	]) {
+		const actor = normalized.components.schemas[name]?.properties?.actor;
+		if (!Array.isArray(actor?.anyOf)) continue;
+		const options = actor.anyOf.filter(
+			(option) => option?.properties?.kind?.const !== "application",
+		);
+		if (options.length === 1)
+			normalized.components.schemas[name].properties.actor = options[0];
+		else actor.anyOf = options;
+	}
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -861,7 +972,7 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"75bcba81cd9d5ab09407ea0ad48f23bc086bb9d9545f25796a0e1fce737a8a58"
+		"0f603548c654bfd12101d2c66f0785f7d02f0c4b76229b2c93ae2304c883e65d"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1045,6 +1156,8 @@ function findBreakingChanges(previous, current) {
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
+			!isAgentDirectCreationOpenApiAddition(previous, current) &&
+			!isAgentApiIdentityOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)

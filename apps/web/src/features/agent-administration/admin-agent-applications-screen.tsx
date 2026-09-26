@@ -173,7 +173,9 @@ function ApplicationReview({
 									.map((target) =>
 										target.kind === "user"
 											? `员工：${target.userId}`
-											: `组织：${target.organizationId}`,
+											: target.kind === "organization"
+												? `组织：${target.organizationId}`
+												: `应用：${target.applicationId}`,
 									)
 									.join("；") || "未提供额外范围"}
 							</dd>

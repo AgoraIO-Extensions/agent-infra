@@ -11,6 +11,9 @@ export type AgentApplicationCreateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -92,6 +95,9 @@ export type AgentApplicationUpdateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -136,6 +142,9 @@ export type AgentConfigurationProjectionV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels: Array<{
         kind: 'web' | 'wecom_bot' | 'wecom_app';
@@ -172,6 +181,9 @@ export type AgentConfigurationUpdateRequestV2 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels?: Array<{
         bindingReference: string;
@@ -203,7 +215,7 @@ export type AgentConfigurationUpdateRequestV2 = {
 };
 
 export type AgentLifecycleCommandRequestV1 = {
-    command: 'stop' | 'restart' | 'retry_creation' | 'disable';
+    command: 'start' | 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
 } | {
     command: 'upgrade_custom_image';
@@ -561,6 +573,9 @@ export type PlatformAuditProjectionV2 = {
         userId: string;
     } | {
         actorId: string;
+        kind: 'application';
+    } | {
+        actorId: string;
         kind: 'system';
     };
     auditId: string;
@@ -639,6 +654,9 @@ export type AgentApplicationCreateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -685,6 +703,9 @@ export type AgentApplicationUpdateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -731,6 +752,9 @@ export type AgentConfigurationUpdateRequestV2Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels?: Array<{
         bindingReference: string;

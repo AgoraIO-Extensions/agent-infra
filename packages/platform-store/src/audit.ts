@@ -7,8 +7,57 @@ import postgres from "postgres";
 import { auditEvents } from "./schema.js";
 
 const platformAuditActionMetadata = {
+	"api.access.rejected": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_access",
+	},
+	"api.application.created": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.issued": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.delivery.granted": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.credential.delivery.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.agent.grant.granted": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
+	"api.agent.grant.revoked": {
+		actorKind: "user",
+		actorKinds: ["user", "application"],
+		subjectKind: "grant",
+		details: "api_identity",
+	},
 	"agent.application.submitted": {
 		actorKind: "user",
+		actorKinds: ["user", "application"],
 		subjectKind: "agent_application",
 		details: false,
 	},
@@ -150,12 +199,17 @@ export interface PlatformAuditProjectionV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly actor: {
-		readonly kind: "user" | "system";
+		readonly kind: "user" | "application" | "system";
 		readonly actorId: string;
 	};
 	readonly action: PlatformAuditActionV1;
 	readonly subject: {
-		readonly kind: "agent_application" | "agent" | "secret" | "secret_key";
+		readonly kind:
+			| "agent_application"
+			| "agent"
+			| "secret"
+			| "secret_key"
+			| "grant";
 		readonly subjectId: string;
 	};
 	readonly result: "succeeded" | "failed";
@@ -261,7 +315,7 @@ function validDate(input: unknown): input is Date {
 function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
-): readonly PlatformAuditChangedFieldV1[] {
+): readonly string[] {
 	const detailKind = platformAuditActionMetadata[action].details;
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
@@ -294,6 +348,69 @@ function changedFields(
 			throw new PlatformAuditQueryError("unavailable");
 		}
 		return [];
+	}
+	if (detailKind === "api_identity") {
+		if (
+			!exactObject(details, ["recipient", "grantType"]) &&
+			!exactObject(details, ["recipient"])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly recipient: unknown;
+			readonly grantType?: unknown;
+		};
+		const recipient = value.recipient;
+		if (
+			value.grantType !== undefined &&
+			value.grantType !== null &&
+			value.grantType !== "manage" &&
+			value.grantType !== "use"
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (recipient !== null) {
+			if (!exactObject(recipient, ["kind", "id"]))
+				throw new PlatformAuditQueryError("unavailable");
+			const value = recipient as {
+				readonly kind: unknown;
+				readonly id: unknown;
+			};
+			if (
+				(value.kind !== "user" && value.kind !== "application") ||
+				!validText(value.id)
+			)
+				throw new PlatformAuditQueryError("unavailable");
+		}
+		return [];
+	}
+	if (detailKind === "api_access") {
+		if (!exactObject(details, ["reason", "requiredScopes"]))
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as {
+			readonly reason: unknown;
+			readonly requiredScopes: unknown;
+		};
+		if (
+			value.reason !== "account_inactive" &&
+			value.reason !== "invalid_credential" &&
+			value.reason !== "missing_scope" &&
+			value.reason !== "operation_forbidden" &&
+			value.reason !== "resource_unavailable"
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		if (
+			!Array.isArray(value.requiredScopes) ||
+			value.requiredScopes.some(
+				(scope) =>
+					scope !== "agent:create" &&
+					scope !== "agent:manage" &&
+					scope !== "agent:use" &&
+					scope !== "agent:read",
+			) ||
+			new Set(value.requiredScopes).size !== value.requiredScopes.length
+		) {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+		return [value.reason as string];
 	}
 	if (!exactObject(details, ["changedFields"])) {
 		throw new PlatformAuditQueryError("unavailable");
@@ -343,9 +460,11 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	const action = row.action as PlatformAuditActionV1;
 	const metadata = platformAuditActionMetadata[action];
 	const expectedActorType = metadata.actorKind;
+	const allowedActorTypes =
+		"actorKinds" in metadata ? metadata.actorKinds : [expectedActorType];
 	const expectedTargetType = metadata.subjectKind;
 	if (
-		row.actorType !== expectedActorType ||
+		!allowedActorTypes.some((actorType) => actorType === row.actorType) ||
 		row.targetType !== expectedTargetType ||
 		(row.outcome !== "succeeded" &&
 			row.outcome !== "rejected" &&
@@ -357,7 +476,10 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 	return {
 		schemaVersion: 1,
 		auditId: row.auditId,
-		actor: { kind: expectedActorType, actorId: row.actorId },
+		actor: {
+			kind: row.actorType as "user" | "application" | "system",
+			actorId: row.actorId,
+		},
 		action,
 		subject: {
 			kind: expectedTargetType,

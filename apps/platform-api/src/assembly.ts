@@ -3,6 +3,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
+	createApiIdentityManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
@@ -12,6 +13,7 @@ import {
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
+	PostgresApiIdentityStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresConversationExecutionTransactionV1,
@@ -20,6 +22,7 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
+import { withApiIdentityResolverV1 } from "./deployment-identity.js";
 import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
@@ -50,6 +53,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
+	readonly apiIdentity?: PostgresApiIdentityStoreV1;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
@@ -77,6 +81,14 @@ export function assemblePlatformApi(
 	const managementTransaction = new PostgresAgentManagementTransactionV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const apiIdentity =
+		input.apiIdentity ??
+		new PostgresApiIdentityStoreV1({ databaseUrl: input.databaseUrl });
+	const identity: IdentityAdapter = withApiIdentityResolverV1(
+		input.identity,
+		apiIdentity,
+	);
+	const identityAdapter = identity;
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -122,6 +134,52 @@ export function assemblePlatformApi(
 		...admissions,
 	});
 	const management = createAgentManagementV1(managementTransaction);
+	const apiIdentityManagement = createApiIdentityManagementV1({
+		store: apiIdentity,
+		directory: {
+			async resolveUser(userId) {
+				const current = await resolveCurrentTaskUser(
+					identityAdapter,
+					userId,
+					randomUUID(),
+				);
+				return current
+					? { userId: current.userId, accountStatus: current.accountStatus }
+					: null;
+			},
+		},
+		agentAccess: {
+			async canManage({ actor, agentId }) {
+				const principal = actor.principal ?? {
+					kind: "user" as const,
+					id: actor.userId,
+				};
+				if (actor.isAdministrator)
+					return (
+						(await managementQuery.getAgent(
+							{ kind: "administrator" },
+							agentId,
+						)) !== undefined
+					);
+				if (
+					actor.principal === undefined &&
+					principal.kind === "user" &&
+					(await managementQuery.getAgent(
+						{ kind: "owner", ownerId: principal.id },
+						agentId,
+					))
+				)
+					return true;
+				return (
+					(await managementQuery.getAgent(
+						{ kind: "principal", principal, grantType: "manage" },
+						agentId,
+					)) !== undefined
+				);
+			},
+		},
+		idFactory: randomUUID,
+	});
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...admissions,
@@ -135,7 +193,7 @@ export function assemblePlatformApi(
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
 			const currentUser = await resolveCurrentTaskUser(
-				input.identity,
+				identityAdapter,
 				identity.userId,
 				randomUUID(),
 			);
@@ -224,7 +282,7 @@ export function assemblePlatformApi(
 		? assemblePlatformFilesV1({
 				databaseUrl: input.databaseUrl,
 				deployment: input.files,
-				identity: input.identity,
+				identity: identityAdapter,
 				conversationAuthorization,
 				async readCurrentLimits(identity, scope, kind) {
 					const configuration = await configurationQuery.read({
@@ -278,6 +336,7 @@ export function assemblePlatformApi(
 			management,
 			configuration,
 			query: managementQuery,
+			apiIdentity: apiIdentityManagement,
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
@@ -321,6 +380,7 @@ export function assemblePlatformApi(
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,
+		apiIdentity,
 		managementQuery,
 		configurationTransaction,
 		configurationQuery,

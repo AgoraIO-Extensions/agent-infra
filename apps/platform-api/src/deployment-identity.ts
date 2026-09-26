@@ -1,7 +1,40 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { type IdentityAdapter, resolveIdentity } from "./http/identity.js";
+import {
+	type IdentityAdapter,
+	resolveApiIdentity,
+	resolveIdentity,
+} from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
+
+interface ApiIdentityResolverV1 {
+	resolveApiCredential(
+		credential: string,
+		resolveUser?: (userId: string) => Promise<unknown | null>,
+	): Promise<unknown | null>;
+}
+
+/** Attach the platform Store credential resolver once at the assembly boundary. */
+export function withApiIdentityResolverV1<T extends IdentityAdapter>(
+	identity: T,
+	apiIdentity: ApiIdentityResolverV1,
+): T {
+	if (identity.resolveApiCredential) return identity;
+	// Keep the deployment adapter as the live prototype so revocation and
+	// directory changes made by the host are observed on every request.
+	const resolved = Object.create(identity) as T;
+	Object.defineProperty(resolved, "resolveApiCredential", {
+		enumerable: true,
+		value: (credential: string) =>
+			apiIdentity.resolveApiCredential(
+				credential,
+				identity.resolveUser
+					? async (userId) => (await identity.resolveUser?.(userId)) ?? null
+					: undefined,
+			),
+	});
+	return resolved;
+}
 
 /** Bind admission to the authenticated HTTP request across concurrent awaits. */
 export function createDeploymentIdentityScope(identity: IdentityAdapter) {
@@ -21,8 +54,38 @@ export function createDeploymentIdentityScope(identity: IdentityAdapter) {
 			if (!request)
 				throw new Error("Authenticated request scope is unavailable");
 			// Resolve again at admission: a previous session lookup is not authority.
+			if (
+				/^Bearer\s+[^\s]+$/.test(request.headers.get("authorization") ?? "")
+			) {
+				const api = await resolveApiIdentity(identity, request, traceId);
+				return {
+					schemaVersion: 1 as const,
+					userId: api.ownerId,
+					displayName: api.principal.id,
+					accountStatus: "active" as const,
+					organizationIds: api.organizationIds,
+					roles: [] as const,
+					authorizationRevision: api.authorizationRevision,
+					principal: api.principal,
+				};
+			}
 			return resolveIdentity(identity, request, traceId);
 		},
+	};
+}
+
+export function allocateDeploymentDirectApplicationIds(
+	principalKind: "user" | "application",
+	principalId: string,
+	idempotencyKey: string,
+): { readonly applicationId: string; readonly agentId: string } {
+	const digest = createHash("sha256")
+		.update(`${principalKind}\0${principalId}\0${idempotencyKey}`, "utf8")
+		.digest("hex")
+		.slice(0, 32);
+	return {
+		applicationId: `application_api_${digest}`,
+		agentId: `agent_api_${digest}`,
 	};
 }
 

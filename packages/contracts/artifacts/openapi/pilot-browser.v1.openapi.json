@@ -71,6 +71,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -283,6 +301,281 @@
           "coOwnerIds",
           "availability",
           "actions",
+          "environment",
+          "secrets"
+        ],
+        "type": "object"
+      },
+      "AgentApplicationCreateRequestV2": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "user",
+                      "type": "string"
+                    },
+                    "userId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "userId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "organization",
+                      "type": "string"
+                    },
+                    "organizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "organizationId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "coOwnerIds": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "environment": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "modelConfiguration": {
+            "additionalProperties": false,
+            "properties": {
+              "defaultOptionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "defaultReasoningLevel": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "credentialValue": {
+                      "minLength": 1,
+                      "type": "string",
+                      "writeOnly": true
+                    },
+                    "endpointId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "modelId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "optionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "reasoningLevels": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "optionId",
+                    "endpointId",
+                    "modelId",
+                    "reasoningLevels"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "options",
+              "defaultOptionId",
+              "defaultReasoningLevel"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "secrets": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "minLength": 1,
+                  "type": "string",
+                  "writeOnly": true
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "standard",
+                    "type": "string"
+                  },
+                  "templateId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "templateId"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "enum": [
+                      "self-managed",
+                      "platform-managed"
+                    ],
+                    "type": "string"
+                  },
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode",
+                  "identityResponsibility"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "platform-adapter",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "name",
+          "description",
+          "source",
+          "coOwnerIds",
+          "availability",
           "environment",
           "secrets"
         ],
@@ -512,6 +805,24 @@
                   "required": [
                     "kind",
                     "organizationId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
                   ],
                   "type": "object"
                 }
@@ -777,6 +1088,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -994,6 +1323,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -1125,6 +1472,34 @@
         ],
         "type": "object"
       },
+      "AgentDirectCreationProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "applicationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "const": "creating",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "agentId",
+          "status"
+        ],
+        "type": "object"
+      },
       "AgentLifecycleCommandRequestV1": {
         "oneOf": [
           {
@@ -1132,6 +1507,7 @@
             "properties": {
               "command": {
                 "enum": [
+                  "start",
                   "stop",
                   "restart",
                   "retry_creation",
@@ -1399,6 +1775,304 @@
           "profileId",
           "displayName",
           "estimatedResources"
+        ],
+        "type": "object"
+      },
+      "ApiAgentGrantProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authorizationRevision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "grantType": {
+            "enum": [
+              "manage",
+              "use"
+            ],
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/ApiPrincipalV1"
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "principal",
+          "grantType",
+          "authorizationRevision",
+          "revokedAt"
+        ],
+        "type": "object"
+      },
+      "ApiAgentGrantRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "grantType": {
+            "enum": [
+              "manage",
+              "use"
+            ],
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/ApiPrincipalV1"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "principal",
+          "grantType"
+        ],
+        "type": "object"
+      },
+      "ApiApplicationCreateRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ApiApplicationCredentialIssueProjectionV1": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ApiCredentialIssueProjectionV1"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "metadata": {
+                "$ref": "#/components/schemas/ApiCredentialMetadataProjectionV1"
+              }
+            },
+            "required": [
+              "metadata"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ApiApplicationProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authorizationRevision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "responsibleUserId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "name",
+          "responsibleUserId",
+          "status",
+          "authorizationRevision"
+        ],
+        "type": "object"
+      },
+      "ApiCredentialIssueProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "credential": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ApiCredentialMetadataProjectionV1"
+          }
+        },
+        "required": [
+          "metadata",
+          "credential"
+        ],
+        "type": "object"
+      },
+      "ApiCredentialIssueRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/ApiPrincipalV1"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiCredentialScopeV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "scopes",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "ApiCredentialMetadataProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "credentialId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "principal": {
+            "$ref": "#/components/schemas/ApiPrincipalV1"
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiCredentialScopeV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "credentialId",
+          "principal",
+          "scopes",
+          "expiresAt",
+          "revokedAt",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ApiCredentialScopeV1": {
+        "enum": [
+          "agent:create",
+          "agent:manage",
+          "agent:use",
+          "agent:read"
+        ],
+        "type": "string"
+      },
+      "ApiPrincipalV1": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "user",
+              "application"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
         ],
         "type": "object"
       },
@@ -3412,34 +4086,56 @@
             "type": "string"
           },
           "actor": {
-            "additionalProperties": false,
-            "properties": {
-              "displayName": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "roles": {
-                "items": {
-                  "enum": [
-                    "employee",
-                    "system_admin"
-                  ],
-                  "type": "string"
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "roles": {
+                    "items": {
+                      "enum": [
+                        "employee",
+                        "system_admin"
+                      ],
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "userId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
                 },
-                "minItems": 1,
-                "type": "array"
+                "required": [
+                  "userId",
+                  "displayName",
+                  "roles"
+                ],
+                "type": "object"
               },
-              "userId": {
-                "minLength": 1,
-                "type": "string"
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "application",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "actorId"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "userId",
-              "displayName",
-              "roles"
-            ],
-            "type": "object"
+            ]
           },
           "auditId": {
             "minLength": 1,
@@ -4652,6 +5348,114 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      },
+      "post": {
+        "operationId": "createAgentDirectly",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentApplicationCreateRequestV2"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDirectCreationProjectionV1"
+                }
+              }
+            },
+            "description": "Agent creation accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
       }
     },
     "/api/v1/agents/{agentId}": {
@@ -5063,6 +5867,213 @@
               }
             },
             "description": "Conversation created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agentId}/grants": {
+      "delete": {
+        "operationId": "revokeAgentPrincipalGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiAgentGrantRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Agent principal grant revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "grantAgentPrincipal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiAgentGrantRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiAgentGrantProjectionV1"
+                }
+              }
+            },
+            "description": "Agent principal grant"
           },
           "400": {
             "content": {
@@ -5931,6 +6942,1092 @@
               }
             },
             "description": "Candidate pending Worker validation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/api-credentials": {
+      "get": {
+        "operationId": "listApiCredentials",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/ApiCredentialMetadataProjectionV1"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "API credentials"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "issueApiCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiCredentialIssueRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiCredentialIssueProjectionV1"
+                }
+              }
+            },
+            "description": "Issued API credential"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/api-credentials/{credentialId}": {
+      "delete": {
+        "operationId": "revokeApiCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "API credential revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/applications": {
+      "get": {
+        "operationId": "listApiApplications",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/ApiApplicationProjectionV1"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "API applications"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createApiApplication",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiApplicationCreateRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiApplicationProjectionV1"
+                }
+              }
+            },
+            "description": "API application"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/applications/{applicationId}/credential-delivery": {
+      "delete": {
+        "operationId": "revokeApplicationCredentialDelivery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "applicationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiPrincipalV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Credential delivery revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "grantApplicationCredentialDelivery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "applicationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiPrincipalV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Credential delivery granted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/applications/{applicationId}/credentials": {
+      "get": {
+        "operationId": "listApplicationCredentials",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "applicationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "$ref": "#/components/schemas/ApiCredentialMetadataProjectionV1"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Application credential metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "issueApplicationCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "applicationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiCredentialIssueRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiApplicationCredentialIssueProjectionV1"
+                }
+              }
+            },
+            "description": "Issued application credential"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/applications/{applicationId}/credentials/{credentialId}": {
+      "delete": {
+        "operationId": "revokeApplicationCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "applicationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Application credential revoked"
           },
           "400": {
             "content": {

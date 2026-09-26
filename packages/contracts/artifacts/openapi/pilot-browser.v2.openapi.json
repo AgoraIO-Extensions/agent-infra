@@ -42,6 +42,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -520,6 +538,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -776,6 +812,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -1011,6 +1065,24 @@
                     "organizationId"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "applicationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "application",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "applicationId"
+                  ],
+                  "type": "object"
                 }
               ],
               "type": "object"
@@ -1198,6 +1270,7 @@
             "properties": {
               "command": {
                 "enum": [
+                  "start",
                   "stop",
                   "restart",
                   "retry_creation",
@@ -3249,6 +3322,24 @@
                   "userId",
                   "displayName",
                   "roles"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "actorId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "application",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "actorId"
                 ],
                 "type": "object"
               },
