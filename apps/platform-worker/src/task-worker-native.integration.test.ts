@@ -932,11 +932,16 @@ it.skipIf(!enabled)(
 				resolve(import.meta.dirname, "../dist/deployment.mjs"),
 				join(moduleDirectory, "deployment.mjs"),
 			);
+			const workerDatabaseUrl = new URL(database.databaseUrl);
+			workerDatabaseUrl.searchParams.set(
+				"application_name",
+				"task-native-worker",
+			);
 			const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directoryPath, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; const response=await fetch(${JSON.stringify(runtimeUrl)}+'/test-directory/user-cli'); if(!response.ok) throw new Error('TASK_NATIVE_DIRECTORY_UNAVAILABLE'); return response.json(); } };
-export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
+export const workloadInput = { databaseUrl: ${JSON.stringify(workerDatabaseUrl.href)}, policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
 admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[{templateId:"codex",imageDigest:${JSON.stringify(desired.imageDigest)},protocol:"openai-responses-v1"}], executionCapacityProfiles:[${JSON.stringify(capacity)}],
@@ -1516,8 +1521,21 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			const liveWorkers = children.filter(
 				(child) => child.exitCode === null && !child.signalCode,
 			);
+			expect(
+				(
+					await sql`select 1 from pg_stat_activity where datname = current_database() and application_name = 'task-native-worker'`
+				).length,
+			).toBeGreaterThan(0);
 			for (const child of liveWorkers) child.kill("SIGKILL");
 			await Promise.all(liveWorkers.map((child) => once(child, "exit")));
+			// PostgreSQL can finish a received COMMIT after its Worker process exits.
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from pg_stat_activity where datname = current_database() and application_name = 'task-native-worker'`
+					).length === 0,
+				"killed Worker database connections drained before migration snapshot",
+			);
 			const historicalIds = [
 				historicalComplete.executionId,
 				historicalActive.executionId,
@@ -1932,7 +1950,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			await writeFile(
 				join(moduleDirectory, "configuration.mjs"),
 				configSource.replace(
-					JSON.stringify(database.databaseUrl),
+					JSON.stringify(workerDatabaseUrl.href),
 					JSON.stringify(upgradeDatabase.databaseUrl),
 				),
 				{ mode: 0o600 },
@@ -2225,7 +2243,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			await writeFile(
 				join(moduleDirectory, "configuration.mjs"),
 				configSource.replace(
-					JSON.stringify(database.databaseUrl),
+					JSON.stringify(workerDatabaseUrl.href),
 					JSON.stringify(webUpgradeDatabase.databaseUrl),
 				),
 				{ mode: 0o600 },
