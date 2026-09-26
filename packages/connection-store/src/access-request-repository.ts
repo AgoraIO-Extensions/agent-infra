@@ -922,6 +922,18 @@ export class PostgresConnectionAccessRequestRepository
 					WHERE connection_id = ${account.id} AND status = 'ACTIVE'
 				`;
 				await sql`
+					UPDATE connection_work_items
+					SET status = 'EXPIRED', completed_at = now(), updated_at = now()
+					WHERE business_type = 'CONNECTION_ACCESS_AUTHORIZATION'
+						AND business_id = ${authorization.id}
+						AND action_type = 'REAPPROVE' AND status = 'OPEN'
+				`;
+				await sql`
+					UPDATE connection_access_reapproval_targets
+					SET status = 'CANCELED', completed_at = now()
+					WHERE access_authorization_id = ${authorization.id} AND status = 'PENDING'
+				`;
+				await sql`
 					WITH created AS (
 						INSERT INTO connection_notifications (
 							id, recipient_principal_id, business_type, business_id,
@@ -1352,11 +1364,15 @@ export class PostgresConnectionAccessRequestRepository
 			`;
 			if (!applicant) forbidden();
 			const [policy] = await sql<PolicyRow[]>`
-				SELECT provider_release_id, capability_profile_id,
-					request_ttl_seconds, connect_ttl_seconds, renewal_lead_seconds
-				FROM connection_access_policy_versions
-				WHERE id = ${input.policyVersionId} AND status = 'PUBLISHED'
-				FOR SHARE
+				SELECT policy.provider_release_id, policy.capability_profile_id,
+					policy.request_ttl_seconds, policy.connect_ttl_seconds, policy.renewal_lead_seconds
+				FROM connection_access_policy_versions policy
+				JOIN connection_capability_profiles profile ON profile.id = policy.capability_profile_id
+					AND profile.provider_release_id = policy.provider_release_id
+				JOIN connection_provider_releases release ON release.id = policy.provider_release_id
+				WHERE policy.id = ${input.policyVersionId} AND policy.status = 'PUBLISHED'
+					AND profile.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
+				FOR SHARE OF policy, profile, release
 			`;
 			if (
 				!policy ||

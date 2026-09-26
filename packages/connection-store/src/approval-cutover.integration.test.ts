@@ -461,6 +461,23 @@ describe("personal Connection approval cutover", () => {
 					state: "SUSPENDED",
 					grant_status: "PAUSED_CONNECTION",
 				});
+				expect(
+					(await access.listNotifications(principalId)).reapprovalWorkItems,
+				).toBe(0);
+				const [expiredWork] = await sql<
+					{ work_status: string; target_status: string }[]
+				>`
+					SELECT item.status AS work_status, target.status AS target_status
+					FROM connection_access_authorizations access
+					JOIN connection_work_items item ON item.business_id = access.id AND item.action_type = 'REAPPROVE'
+					JOIN connection_access_reapproval_targets target ON target.access_authorization_id = access.id
+					WHERE access.connection_id = ${connectionId}
+				`;
+				expect(expiredWork).toEqual({
+					work_status: "EXPIRED",
+					target_status: "CANCELED",
+				});
+				expect(await access.expireDueAuthorizations()).toBe(0);
 				const [authorization] = await sql<{ id: string; revision: string }[]>`
 					SELECT id, revision::text FROM connection_access_authorizations
 					WHERE connection_id = ${connectionId}

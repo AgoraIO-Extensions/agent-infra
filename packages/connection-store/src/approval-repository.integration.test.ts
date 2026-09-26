@@ -660,6 +660,85 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						revision: "2",
 						stage_count: 1,
 					});
+					if (missing === "approvers") {
+						const staleProfileId = `stale-profile-${suffix}`;
+						const stalePolicyId = `stale-policy-${suffix}`;
+						await repository.createCapabilityProfileDraft({
+							id: staleProfileId,
+							name: "Stale dependency test",
+							providerReleaseId: releaseId,
+							actionVersionIds: [actionId],
+						});
+						await repository.publishCapabilityProfile({
+							actorPrincipalId: adminId,
+							capabilityProfileId: staleProfileId,
+						});
+						await repository.createPolicyDraft({
+							...incompleteDraft,
+							id: stalePolicyId,
+							capabilityProfileId: staleProfileId,
+							durations: [
+								{ id: `stale-duration-${suffix}`, kind: "FINITE", days: 90 },
+							],
+							stages: [
+								{
+									id: `stale-stage-${suffix}`,
+									name: "Review",
+									quorumType: "ANY",
+									timeoutSeconds: 86400,
+									approvers: [
+										{
+											principalId: approverId,
+											displaySnapshot: { displayName: "Reviewer" },
+										},
+									],
+								},
+							],
+						});
+						await repository.publishPolicy({
+							actorPrincipalId: adminId,
+							policyVersionId: stalePolicyId,
+						});
+						const staleOption = (
+							await requestRepository.listAccessOptions(applicantId)
+						).find((item) => item.policyVersionId === stalePolicyId);
+						if (!staleOption)
+							throw new Error("Stale policy fixture is missing");
+						const staleRequest = {
+							applicantPrincipalId: applicantId,
+							capabilityProfileId: staleProfileId,
+							disclaimerConfirmations: [
+								{
+									contentSha256: disclaimerDigest,
+									disclaimerVersionId: disclaimerId,
+									locale: "zh-CN",
+								},
+							],
+							duration: { kind: "FINITE" as const, days: 90 },
+							id: `stale-request-${suffix}`,
+							policyVersionId: stalePolicyId,
+							presentationId: staleOption.presentationId,
+							providerReleaseId: releaseId,
+							purpose: "Stale policy dependencies",
+						};
+						await sql`UPDATE connection_provider_releases SET status = 'DISABLED' WHERE id = ${releaseId}`;
+						await expect(
+							requestRepository.createRequest(staleRequest),
+						).rejects.toThrow(
+							"Approval policy does not match the requested capability",
+						);
+						await sql`UPDATE connection_provider_releases SET status = 'PUBLISHED' WHERE id = ${releaseId}`;
+						await sql`UPDATE connection_capability_profiles SET status = 'SUPERSEDED' WHERE id = ${staleProfileId}`;
+						await expect(
+							requestRepository.createRequest(staleRequest),
+						).rejects.toThrow(
+							"Approval policy does not match the requested capability",
+						);
+						const [staleCount] = await sql<
+							{ count: number }[]
+						>`SELECT count(*)::int AS count FROM connection_access_requests WHERE id = ${staleRequest.id}`;
+						expect(staleCount?.count).toBe(0);
+					}
 				}
 				await repository.createPolicyDraft({
 					allowPermanent: true,
