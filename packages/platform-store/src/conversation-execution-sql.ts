@@ -38,12 +38,13 @@ import {
 	type parseStopResult,
 } from "./conversation-execution-records.js";
 
-async function lockAgentConfiguration(
+export async function lockAgentConfiguration(
 	transaction: Transaction,
 	agentId: string,
 ): Promise<
 	| {
 			readonly authorizationRevision: string | null;
+			readonly sourceKind: "standard" | "custom" | undefined;
 			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	  }
 	| undefined
@@ -64,6 +65,7 @@ async function lockAgentConfiguration(
 	if (row.configuration === null) {
 		return {
 			authorizationRevision: row.authorization_revision,
+			sourceKind: undefined,
 			modelConfiguration: undefined,
 		};
 	}
@@ -79,6 +81,7 @@ async function lockAgentConfiguration(
 		const model = configuration.modelConfiguration;
 		return {
 			authorizationRevision: row.authorization_revision,
+			sourceKind: configuration.source.kind,
 			modelConfiguration: model
 				? {
 						configurationRevision: revision,

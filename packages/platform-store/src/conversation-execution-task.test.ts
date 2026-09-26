@@ -26,6 +26,7 @@ let sql: ReturnType<typeof postgres>;
 let store: PostgresConversationExecutionTransactionV1;
 let nextId = 0;
 let currentAuthority: ConversationExecutionAuthorityV1;
+const now = () => new Date("2026-09-26T00:00:00.000Z");
 
 const command = (
 	key: string,
@@ -52,7 +53,7 @@ function taskUseCase(maximumWaitingTasksPerAgent = 2) {
 		},
 		{ maximumWaitingTasksPerAgent, waitingTimeoutMs: 60_000 },
 		{
-			now: () => new Date("2026-09-26T00:00:00.000Z"),
+			now,
 			newId: () => `task_id_${++nextId}`,
 		},
 	);
@@ -344,14 +345,17 @@ describe("durable task admission", () => {
 		const orders = await sql<{ task_wait_order: string }[]>`
 			select task_wait_order::text from platform.conversation_executions order by task_wait_order`;
 		expect(orders.map((row) => row.task_wait_order)).toEqual(["1", "2"]);
-		const conversationCommands = createConversationExecutionUseCaseV1({
-			authorization: {
-				async authorize() {
-					return { outcome: "allowed", authority: currentAuthority };
+		const conversationCommands = createConversationExecutionUseCaseV1(
+			{
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: currentAuthority };
+					},
 				},
+				transaction: store,
 			},
-			transaction: store,
-		});
+			{ now },
+		);
 		expect(
 			await conversationCommands.accept({
 				schemaVersion: 1,
@@ -440,14 +444,17 @@ describe("durable task admission", () => {
 	});
 
 	it("preserves an active same-channel Turn's supplementary instruction while a task waits", async () => {
-		const conversationCommands = createConversationExecutionUseCaseV1({
-			authorization: {
-				async authorize() {
-					return { outcome: "allowed", authority: currentAuthority };
+		const conversationCommands = createConversationExecutionUseCaseV1(
+			{
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: currentAuthority };
+					},
 				},
+				transaction: store,
 			},
-			transaction: store,
-		});
+			{ now },
+		);
 		const created = await conversationCommands.createConversation({
 			schemaVersion: 1,
 			agentId: "agent_task",

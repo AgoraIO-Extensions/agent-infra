@@ -1,11 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
-	ConversationModelConfigurationV1,
 	ConversationTaskAdmissionStateV1,
 	ConversationTaskAdmissionTransactionPortV1,
 	ConversationTaskSubmitResultV1,
 } from "@agent-infra/platform-core";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	safeInteger,
 	type Transaction,
@@ -19,6 +17,7 @@ import {
 import {
 	completeIdempotency,
 	insertModelSelectionFallback,
+	lockAgentConfiguration,
 	lockConversation,
 	readIdempotency,
 	reserveIdempotency,
@@ -62,15 +61,7 @@ async function readAgent(
 		readonly authorizationRevision: string | null;
 	}
 > {
-	const [agent] = await transaction<
-		{
-			current_configuration_revision: string | number;
-			authorization_revision: string | null;
-		}[]
-	>`
-		select current_configuration_revision, authorization_revision from platform.agents
-		where id = ${agentId} for share
-	`;
+	const agent = await lockAgentConfiguration(transaction, agentId);
 	if (!agent)
 		return {
 			agent: null,
@@ -88,37 +79,8 @@ async function readAgent(
 		select status, desired_state, service_availability
 		from platform.agent_applications where agent_id = ${agentId} for share
 	`;
-	const [configuration] = await transaction<{ configuration: unknown }[]>`
-		select configuration from platform.agent_configuration_revisions
-		where agent_id = ${agentId}
-			and revision = ${agent.current_configuration_revision}
-		for share
-	`;
-	let modelConfiguration: ConversationModelConfigurationV1 | null = null;
-	let sourceKind: "standard" | "custom" | null = null;
-	if (configuration) {
-		const record = decodeAgentConfigurationRecord(configuration.configuration);
-		sourceKind = record.source.kind;
-		const model = record.modelConfiguration;
-		if (
-			record.agentId !== agentId ||
-			record.revision !== safeInteger(agent.current_configuration_revision, 1)
-		)
-			unavailable();
-		if (model) {
-			modelConfiguration = {
-				configurationRevision: record.revision,
-				options: model.options.map(({ optionId, reasoningLevels }) => ({
-					optionId,
-					reasoningLevels,
-				})),
-				defaultOptionId: model.defaultOptionId,
-				defaultReasoningLevel: model.defaultReasoningLevel,
-			};
-		}
-	}
 	return {
-		authorizationRevision: agent.authorization_revision,
+		authorizationRevision: agent.authorizationRevision,
 		agent: application
 			? {
 					status: application.status,
@@ -126,8 +88,8 @@ async function readAgent(
 					serviceAvailability: application.service_availability,
 				}
 			: null,
-		modelConfiguration,
-		sourceKind,
+		modelConfiguration: agent.modelConfiguration ?? null,
+		sourceKind: agent.sourceKind ?? null,
 	};
 }
 
