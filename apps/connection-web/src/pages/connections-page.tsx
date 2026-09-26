@@ -1475,13 +1475,12 @@ function ConnectorManagementWorkspace(props: {
 					) : (
 						<Button
 							variant={accounts.length ? "secondary" : "primary"}
-							disabled={Boolean(currentRequest)}
 							onClick={() => connector && props.onConnect(connector.providerId)}
 						>
 							{currentRequest?.state === "APPROVED_PENDING_CONNECTION"
-								? "连接窗口已过期"
+								? "重新申请"
 								: currentRequest
-									? "审批中"
+									? "申请其他能力"
 									: "申请连接"}
 						</Button>
 					)}

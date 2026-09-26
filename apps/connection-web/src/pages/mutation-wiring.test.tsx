@@ -846,9 +846,12 @@ describe("Connection 管理 mutation wiring", () => {
 			"等待前置审批",
 		);
 		expect(
-			(screen.getByRole("button", { name: "审批中" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+			(
+				screen.getByRole("button", {
+					name: "申请其他能力",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
 		expect(screen.queryByRole("button", { name: "提交申请" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "取消申请" }));
 		await waitFor(() =>
@@ -859,12 +862,32 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 	});
 
-	it("Provider 详情确认正式条款后提交申请", async () => {
+	it("Provider 已有待审申请时仍可确认条款并申请其他能力", async () => {
 		window.history.replaceState(
 			{},
 			"",
 			"/connection/connections?provider=jira",
 		);
+		api.listConnectionAccessRequests.mockResolvedValueOnce({
+			requests: [
+				{
+					id: "pending-other-profile",
+					providerId: "jira",
+					providerReleaseId: "jira-release-1",
+					capabilityProfileName: "其他待审能力",
+					connectExpiresAt: null,
+					revision: "1",
+					state: "IN_REVIEW",
+					renewal: false,
+					purpose: "已有申请",
+					createdAt: "2026-09-24T00:00:00.000Z",
+					expiresAt: "2030-01-01T00:00:00.000Z",
+					duration: { kind: "FINITE", days: 90 },
+					currentStageOrdinal: 1,
+					stages: [],
+				},
+			],
+		});
 		api.getConnectionAccessOptions.mockResolvedValueOnce({
 			options: [
 				{
@@ -889,6 +912,9 @@ describe("Connection 管理 mutation wiring", () => {
 			],
 		});
 		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "申请其他能力" }),
+		);
 		fireEvent.click(await screen.findByRole("button", { name: /研发读写/ }));
 		const submit = screen.getByRole("button", {
 			name: "提交申请",
