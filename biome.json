@@ -8,6 +8,7 @@
 	"files": {
 		"ignoreUnknown": true,
 		"includes": [
+			".agents/skills/coordination-harness/**",
 			"apps/**",
 			"packages/**",
 			"tests/**",

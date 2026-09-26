@@ -1,0 +1,5 @@
+{
+	"extends": "../../../packages/config/tsconfig.base.json",
+	"compilerOptions": { "noEmit": true },
+	"include": ["scripts/*.ts", "../../../tests/coordination-harness*.ts"]
+}
