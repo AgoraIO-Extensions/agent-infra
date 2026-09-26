@@ -7,6 +7,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
 	CheckCheck,
+	ClipboardList,
 	Grid2X2,
 	Layers,
 	Menu,
@@ -126,15 +127,19 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		? "文本对话与个人历史"
 		: pathname.includes("/configuration")
 			? "配置与生命周期"
-			: pathname.startsWith("/admin")
-				? "审批"
-				: pathname === "/my-agents/new"
-					? "创建申请"
-					: pathname.startsWith("/my-agents")
-						? "我的 Agent"
-						: pathname === "/agents" || pathname === "/agents/"
-							? "Agent"
-							: "Agent 详情";
+			: pathname === "/admin/audit"
+				? "平台审计"
+				: pathname === "/audit"
+					? "我的执行审计"
+					: pathname.startsWith("/admin")
+						? "审批"
+						: pathname === "/my-agents/new"
+							? "创建申请"
+							: pathname.startsWith("/my-agents")
+								? "我的 Agent"
+								: pathname === "/agents" || pathname === "/agents/"
+									? "Agent"
+									: "Agent 详情";
 	const navigation = (
 		<>
 			<div className="platform-brand">
@@ -163,14 +168,32 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<Layers size={19} aria-hidden="true" />
 					我的 Agent
 				</Link>
+				<Link
+					className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
+					to="/audit"
+					onClick={() => setSheet(false)}
+				>
+					<ClipboardList size={19} aria-hidden="true" />
+					我的执行审计
+				</Link>
 				{admin && (
 					<Link
-						className={`platform-nav-item ${pathname.startsWith("/admin") ? "selected" : ""}`}
+						className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
 						to="/admin/approvals"
 						onClick={() => setSheet(false)}
 					>
 						<CheckCheck size={19} aria-hidden="true" />
 						审批
+					</Link>
+				)}
+				{admin && (
+					<Link
+						className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
+						to="/admin/audit"
+						onClick={() => setSheet(false)}
+					>
+						<ClipboardList size={19} aria-hidden="true" />
+						平台审计
 					</Link>
 				)}
 			</nav>
