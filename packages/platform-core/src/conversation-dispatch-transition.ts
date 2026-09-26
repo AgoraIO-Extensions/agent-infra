@@ -134,6 +134,34 @@ export function executionTerminal(
 	);
 }
 
+export function decideConversationStopConfirmationTimeoutV1(input: {
+	readonly executionStatus: ConversationDispatchExecutionStatusV1;
+	readonly confirmationDeadline: number;
+	readonly observedAt: number;
+	readonly alreadyTimedOut: boolean;
+}) {
+	if (
+		(input.executionStatus !== "processing" &&
+			input.executionStatus !== "unknown") ||
+		input.alreadyTimedOut ||
+		input.observedAt < input.confirmationDeadline
+	)
+		return undefined;
+	return {
+		status: "unknown" as const,
+		reason: "STOP_CONFIRMATION_TIMEOUT" as const,
+	};
+}
+
+export function decideConversationStopConfirmationStatusV1(input: {
+	readonly executionStatus: ConversationDispatchExecutionStatusV1;
+	readonly confirmationTimedOut: boolean;
+}): ConversationDispatchExecutionStatusV1 {
+	return input.executionStatus === "processing" && input.confirmationTimedOut
+		? "unknown"
+		: input.executionStatus;
+}
+
 /** Decide against the latest state under the same lock as retry/outbox commit. */
 export function decideConversationDispatchRetryTransitionV1(input: {
 	readonly operation: ConversationDispatchOperationV1;
@@ -157,11 +185,17 @@ export function retryTransition(claim: ConversationDispatchClaimV1) {
 	});
 }
 
-export function rejectedTransition(claim: ConversationDispatchClaimV1) {
-	return claim.operation === "conversation.turn.submit.v1" ||
-		claim.operation === "conversation.turn.regenerate.v1"
-		? transitionForStatus("failed")
-		: {};
+export function rejectedTransition(
+	claim: ConversationDispatchClaimV1,
+	errorCode?: string,
+): ConversationDispatchStateTransitionV1 {
+	if (!isTurnOperation(claim.operation)) return {};
+	if (claim.executionStatus === "waiting")
+		return {
+			executionStatus:
+				errorCode === "AUTHORIZATION_REVOKED" ? "cancelled" : "failed",
+		};
+	return transitionForStatus("failed");
 }
 
 export function runtimeFailure(error: unknown) {
@@ -229,7 +263,7 @@ export async function reject(
 	store: ConversationDispatchStorePortV1,
 	claim: ConversationDispatchClaimV1,
 	errorCode: string,
-	transition = rejectedTransition(claim),
+	transition = rejectedTransition(claim, errorCode),
 ): Promise<ConversationDispatchDecisionV1> {
 	const finished = await store.finish({
 		claim,

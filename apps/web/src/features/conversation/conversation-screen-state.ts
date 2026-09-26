@@ -23,11 +23,12 @@ export function executionStatus(
 	executionId: string | null,
 	fallback?: ExecutionStatus,
 ): ExecutionStatus | undefined {
-	const last = events.findLast(
-		(event) =>
-			event.executionId === executionId && event.type === "execution.status",
+	return (
+		currentExecution(
+			null,
+			events.filter((event) => event.executionId === executionId),
+		).status ?? fallback
 	);
-	return last?.type === "execution.status" ? last.payload.status : fallback;
 }
 
 /** Answer projections can omit an execution until its first text delta. The
@@ -36,10 +37,15 @@ export function currentExecution(
 	history: ConversationDetailProjectionV2 | null,
 	events: readonly PersistedConversationEventV2[],
 	acceptedExecution?: string,
-): { executionId: string | undefined; status: ExecutionStatus | undefined } {
+): {
+	executionId: string | undefined;
+	status: ExecutionStatus | undefined;
+	reason?: "STOP_CONFIRMATION_TIMEOUT";
+} {
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	const persistedStatuses = new Set<string>();
+	const stopTimeouts = new Set<string>();
 	for (const message of messages) {
 		// A terminal user-message status describes delivery of that message, not
 		// the execution it started. Keep only its non-terminal state as a
@@ -51,10 +57,19 @@ export function currentExecution(
 			statuses.set(message.executionId, message.status);
 	}
 	for (const event of events) {
-		if (event.type !== "execution.status") continue;
+		if (event.type !== "execution.status" && event.type !== "task.status")
+			continue;
+		const nextStatus =
+			event.payload.status === "waiting" ? "submitted" : event.payload.status;
+		if (event.type === "task.status" && event.schemaVersion === 2)
+			stopTimeouts.add(event.executionId);
+		if (isTerminal(nextStatus)) stopTimeouts.delete(event.executionId);
 		persistedStatuses.add(event.executionId);
 		statuses.delete(event.executionId);
-		statuses.set(event.executionId, event.payload.status);
+		statuses.set(
+			event.executionId,
+			stopTimeouts.has(event.executionId) ? "unknown" : nextStatus,
+		);
 	}
 	// A new receipt remains authoritative until its persisted execution status is
 	// observed. After a reload, reconstruct that pending state from the latest
@@ -76,7 +91,14 @@ export function currentExecution(
 			status: "submitted",
 		};
 	const active = [...statuses].findLast(([, status]) => !isTerminal(status));
-	if (active) return { executionId: active[0], status: active[1] };
+	if (active)
+		return {
+			executionId: active[0],
+			status: active[1],
+			...(stopTimeouts.has(active[0])
+				? { reason: "STOP_CONFIRMATION_TIMEOUT" as const }
+				: {}),
+		};
 	const executionId =
 		events.at(-1)?.executionId ??
 		messages.findLast((message) => message.executionId)?.executionId ??

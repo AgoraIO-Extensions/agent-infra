@@ -41,7 +41,7 @@ function runtimePort(value: string | undefined, fallback: number) {
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
-	return serve(
+	const server = serve(
 		{
 			fetch: createPlatformApp(options.dependencies).fetch,
 			port,
@@ -55,6 +55,36 @@ export function startPlatformApi(options: StartOptions) {
 				}),
 			),
 	);
+	const audit = options.dependencies.tasks?.audit;
+	if (audit) {
+		server.once("listening", () => {
+			let recovering = false;
+			const recover = async () => {
+				if (recovering) return;
+				recovering = true;
+				try {
+					await audit.recoverSubscriptions();
+				} catch {
+					log(
+						JSON.stringify({
+							service: platformApiService,
+							status: "task_audit_recovery_failed",
+						}),
+					);
+				} finally {
+					recovering = false;
+				}
+			};
+			const timer = setInterval(() => {
+				void recover();
+			}, 5000);
+			timer.unref();
+			server.once("close", () => clearInterval(timer));
+			server.once("error", () => clearInterval(timer));
+			void recover();
+		});
+	}
+	return server;
 }
 
 export async function loadPlatformApiAssembly(

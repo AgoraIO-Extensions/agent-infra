@@ -155,7 +155,9 @@ export function MyAgentApplicationDetailScreen({
 											<li key={JSON.stringify(target)}>
 												{target.kind === "user"
 													? `用户 ${target.userId}`
-													: `组织 ${target.organizationId}`}
+													: target.kind === "organization"
+														? `组织 ${target.organizationId}`
+														: `应用 ${target.applicationId}`}
 											</li>
 										))}
 									</ul>

@@ -9,6 +9,7 @@ import {
 	requireAgentManagementExactKeys as requireExactKeys,
 	snapshotAgentManagementDataObject as snapshotDataObject,
 } from "./agent-management-input.js";
+import type { ApiPrincipalV1 } from "./api-identity.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
 export { AgentManagementError } from "./agent-management-input.js";
@@ -41,6 +42,7 @@ export interface AgentManagementActorContextV1 {
 	readonly accountStatus: "active" | "disabled";
 	readonly organizationIds: readonly string[];
 	readonly isAdministrator: boolean;
+	readonly principal?: ApiPrincipalV1;
 }
 
 interface AgentManagementCommandBaseV1 {
@@ -131,8 +133,15 @@ export interface AgentManagementStateV1 {
 	readonly availability: readonly (
 		| { readonly kind: "user"; readonly userId: string }
 		| { readonly kind: "organization"; readonly organizationId: string }
+		| { readonly kind: "application"; readonly applicationId: string }
 	)[];
 	readonly failureCode: AgentFailureCodeV1 | null;
+	readonly principalGrants?: readonly {
+		readonly principal: ApiPrincipalV1;
+		readonly grantType: "manage" | "use";
+		readonly authorizationRevision: string;
+		readonly revokedAt: Date | null;
+	}[];
 }
 
 /** Owner authority is independent of administrative visibility. */
@@ -149,13 +158,23 @@ export function isAgentAccessAllowedV1(
 	intent: AgentAccessQueryV1["intent"],
 ): boolean {
 	if (actor.accountStatus !== "active") return false;
+	if (actor.principal !== undefined) {
+		return (state.principalGrants ?? []).some(
+			(grant) =>
+				grant.principal.kind === actor.principal?.kind &&
+				grant.principal.id === actor.principal?.id &&
+				grant.grantType === (intent === "manage" ? "manage" : "use") &&
+				grant.revokedAt === null,
+		);
+	}
 	if (isAgentOwnerV1(state, actor.userId)) return true;
 	return (
 		intent !== "manage" &&
 		state.availability.some((target) =>
 			target.kind === "user"
 				? target.userId === actor.userId
-				: actor.organizationIds.includes(target.organizationId),
+				: target.kind === "organization" &&
+					actor.organizationIds.includes(target.organizationId),
 		)
 	);
 }
@@ -204,6 +223,7 @@ export interface AgentManagementWritePlanV1 {
 			| "agent.workload.service_updating"
 			| "agent.workload.service_unavailable";
 		readonly actorId: string;
+		readonly actorType?: "user" | "application";
 		readonly subjectType: "agent_application" | "agent";
 		readonly subjectId: string;
 		readonly traceId: string;
@@ -357,10 +377,17 @@ function unavailablePlan(): never {
 function planObject(
 	input: unknown,
 	keys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ): Record<string, unknown> {
 	try {
 		const values = snapshotDataObject(input);
-		requireExactKeys(values, keys);
+		const allowed = new Set([...keys, ...optionalKeys]);
+		if (
+			Object.keys(values).length < keys.length ||
+			Object.keys(values).some((key) => !allowed.has(key)) ||
+			keys.some((key) => !Object.hasOwn(values, key))
+		)
+			throw new Error();
 		return values;
 	} catch {
 		unavailablePlan();
@@ -406,15 +433,19 @@ export function snapshotAgentManagementWritePlanV1(
 		"to",
 		"occurredAt",
 	]);
-	const audit = planObject(values.auditEvent, [
-		"action",
-		"actorId",
-		"subjectType",
-		"subjectId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
+	const audit = planObject(
+		values.auditEvent,
+		[
+			"action",
+			"actorId",
+			"subjectType",
+			"subjectId",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["actorType"],
+	);
 	const idempotency = planObject(values.idempotency, ["key", "requestDigest"]);
 	const operation = values.operation as AgentManagementOperationV1;
 	const expectedSubjectType =
@@ -449,6 +480,9 @@ export function snapshotAgentManagementWritePlanV1(
 		transition.to !== state.status ||
 		audit.action !== expectedAction ||
 		!capturedText(audit.actorId) ||
+		(audit.actorType !== undefined &&
+			audit.actorType !== "user" &&
+			audit.actorType !== "application") ||
 		audit.subjectType !== expectedSubjectType ||
 		audit.subjectId !== subjectId ||
 		!capturedText(audit.traceId) ||
@@ -532,6 +566,9 @@ export function snapshotAgentManagementWritePlanV1(
 			action:
 				audit.action as AgentManagementWritePlanV1["auditEvent"]["action"],
 			actorId: audit.actorId as string,
+			...(audit.actorType === undefined
+				? {}
+				: { actorType: audit.actorType as "user" | "application" }),
 			subjectType: expectedSubjectType,
 			subjectId,
 			traceId: audit.traceId as string,
@@ -742,7 +779,10 @@ function accepted(
 						},
 			auditEvent: {
 				action,
-				actorId: actor.userId,
+				actorId: actor.principal?.id ?? actor.userId,
+				...(actor.principal === undefined
+					? {}
+					: { actorType: actor.principal.kind }),
 				subjectType,
 				subjectId,
 				traceId: command.traceId,
@@ -828,7 +868,7 @@ export function createAgentManagementV1(
 						operation: command.command,
 						subjectType,
 						subjectId,
-						actorId: actorContext.userId,
+						actorId: actorContext.principal?.id ?? actorContext.userId,
 						idempotencyKey: command.idempotencyKey,
 						requestDigest,
 					},
@@ -848,15 +888,28 @@ export function createAgentManagementV1(
 							command.command === "approve_application" ||
 							command.command === "reject_application";
 						const owner = state.ownerIds.includes(actorContext.userId);
-						const authorized = applicationCommand
-							? administratorApplicationCommand
-								? actorContext.isAdministrator
-								: state.applicantId === actorContext.userId
-							: command.command === "disable_agent"
-								? actorContext.isAdministrator
-								: command.command === "retry_agent_creation"
-									? owner || actorContext.isAdministrator
-									: owner;
+						const principalGrant = actorContext.principal
+							? (state.principalGrants ?? []).some(
+									(grant) =>
+										grant.principal.kind === actorContext.principal?.kind &&
+										grant.principal.id === actorContext.principal?.id &&
+										grant.grantType === "manage" &&
+										grant.revokedAt === null,
+								)
+							: false;
+						const authorized = actorContext.principal
+							? !administratorApplicationCommand &&
+								!applicationCommand &&
+								principalGrant
+							: applicationCommand
+								? administratorApplicationCommand
+									? actorContext.isAdministrator
+									: state.applicantId === actorContext.userId
+								: command.command === "disable_agent"
+									? actorContext.isAdministrator
+									: command.command === "retry_agent_creation"
+										? owner || actorContext.isAdministrator
+										: owner;
 						if (!authorized) {
 							return { outcome: "denied", writePlan: null };
 						}

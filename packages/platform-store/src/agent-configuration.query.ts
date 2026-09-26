@@ -6,6 +6,7 @@ import {
 	type AgentRuntimePresentationDecisionV1,
 	type AgentRuntimePresentationExpectationV1,
 	type AgentRuntimePresentationFactsV1,
+	type ApiPrincipalV1,
 	decideAgentRuntimePresentationV1,
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
@@ -27,6 +28,7 @@ import {
 	agentAvailability,
 	agentConfigurationRevisions,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	workloadReconciliations,
 } from "./schema.js";
@@ -39,6 +41,7 @@ export interface AgentConfigurationQueryInputV1 {
 	readonly actorId: string;
 	readonly organizationIds: readonly string[];
 	readonly isAdministrator: boolean;
+	readonly principal?: ApiPrincipalV1;
 	readonly intent: AgentConfigurationQueryIntentV1;
 }
 
@@ -426,6 +429,10 @@ export class PostgresAgentConfigurationQueryV1 {
 				!validateText(input.actorId) ||
 				typeof input.isAdministrator !== "boolean" ||
 				(input.intent !== "discover" && input.intent !== "manage") ||
+				(input.principal !== undefined &&
+					((input.principal.kind !== "user" &&
+						input.principal.kind !== "application") ||
+						!validateText(input.principal.id))) ||
 				!Array.isArray(input.organizationIds) ||
 				input.organizationIds.length > maxAccessTargets ||
 				input.organizationIds.some(
@@ -439,6 +446,7 @@ export class PostgresAgentConfigurationQueryV1 {
 					const [current] = await transaction
 						.select({
 							currentConfigurationRevision: agents.currentConfigurationRevision,
+							authorizationRevision: agents.authorizationRevision,
 							configuration: agentConfigurationRevisions.configuration,
 							sourceReference: agentConfigurationRevisions.sourceReference,
 						})
@@ -456,19 +464,32 @@ export class PostgresAgentConfigurationQueryV1 {
 						.where(eq(agents.id, input.agentId))
 						.limit(1);
 					if (!current?.configuration) return { outcome: "unavailable" };
-					const [owners, availabilityRows] = await Promise.all([
-						transaction
-							.select({ ownerId: agentOwners.ownerId })
-							.from(agentOwners)
-							.where(eq(agentOwners.agentId, input.agentId)),
-						transaction
-							.select({
-								targetType: agentAvailability.targetType,
-								targetId: agentAvailability.targetId,
-							})
-							.from(agentAvailability)
-							.where(eq(agentAvailability.agentId, input.agentId)),
-					]);
+					const [owners, availabilityRows, principalGrants] = await Promise.all(
+						[
+							transaction
+								.select({ ownerId: agentOwners.ownerId })
+								.from(agentOwners)
+								.where(eq(agentOwners.agentId, input.agentId)),
+							transaction
+								.select({
+									targetType: agentAvailability.targetType,
+									targetId: agentAvailability.targetId,
+								})
+								.from(agentAvailability)
+								.where(eq(agentAvailability.agentId, input.agentId)),
+							transaction
+								.select({
+									principalType: agentPrincipalGrants.principalType,
+									principalId: agentPrincipalGrants.principalId,
+									grantType: agentPrincipalGrants.grantType,
+									authorizationRevision:
+										agentPrincipalGrants.authorizationRevision,
+									revokedAt: agentPrincipalGrants.revokedAt,
+								})
+								.from(agentPrincipalGrants)
+								.where(eq(agentPrincipalGrants.agentId, input.agentId)),
+						],
+					);
 					const ownerIds = owners.map(({ ownerId }) => ownerId).toSorted();
 					if (
 						ownerIds.length === 0 ||
@@ -476,7 +497,9 @@ export class PostgresAgentConfigurationQueryV1 {
 						ownerIds.some((ownerId) => !validateText(ownerId)) ||
 						availabilityRows.some(
 							({ targetType, targetId }) =>
-								(targetType !== "user" && targetType !== "organization") ||
+								(targetType !== "user" &&
+									targetType !== "organization" &&
+									targetType !== "application") ||
 								!validateText(targetId),
 						)
 					) {
@@ -487,32 +510,64 @@ export class PostgresAgentConfigurationQueryV1 {
 							.map(({ targetType, targetId }) =>
 								targetType === "user"
 									? { kind: "user" as const, userId: targetId }
-									: {
-											kind: "organization" as const,
-											organizationId: targetId,
-										},
+									: targetType === "organization"
+										? {
+												kind: "organization" as const,
+												organizationId: targetId,
+											}
+										: {
+												kind: "application" as const,
+												applicationId: targetId,
+											},
 							)
 							.toSorted((left, right) => {
 								const leftKey =
 									left.kind === "user"
 										? `user\0${left.userId}`
-										: `organization\0${left.organizationId}`;
+										: left.kind === "organization"
+											? `organization\0${left.organizationId}`
+											: `application\0${left.applicationId}`;
 								const rightKey =
 									right.kind === "user"
 										? `user\0${right.userId}`
-										: `organization\0${right.organizationId}`;
+										: right.kind === "organization"
+											? `organization\0${right.organizationId}`
+											: `application\0${right.applicationId}`;
 								return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 							});
 					const owner = ownerIds.includes(input.actorId);
 					const available = availability.some((target) =>
 						target.kind === "user"
 							? target.userId === input.actorId
-							: input.organizationIds.includes(target.organizationId),
+							: target.kind === "organization" &&
+								input.organizationIds.includes(target.organizationId),
 					);
+					const principalAllowed =
+						input.principal !== undefined &&
+						validateText(current.authorizationRevision) &&
+						principalGrants.some(
+							(grant) =>
+								(grant.principalType === "user" ||
+									grant.principalType === "application") &&
+								validateText(grant.principalId) &&
+								(grant.grantType === "manage" || grant.grantType === "use") &&
+								grant.principalType === input.principal?.kind &&
+								grant.principalId === input.principal?.id &&
+								grant.authorizationRevision === current.authorizationRevision &&
+								grant.revokedAt === null &&
+								(input.intent === "manage"
+									? grant.grantType === "manage"
+									: grant.grantType === "manage" || grant.grantType === "use"),
+						);
+					const ownerAllowed =
+						input.principal?.kind === "application" ? false : owner;
+					const availabilityAllowed =
+						input.principal?.kind === "application" ? false : available;
 					if (
 						!input.isAdministrator &&
-						!owner &&
-						(input.intent === "manage" || !available)
+						!principalAllowed &&
+						!ownerAllowed &&
+						(input.intent === "manage" || !availabilityAllowed)
 					) {
 						return { outcome: "unavailable" };
 					}

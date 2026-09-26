@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	allocateDeploymentApplicationIds,
+	allocateDeploymentDirectApplicationIds,
 	createDeploymentIdentityScope,
 } from "./deployment-identity.js";
 import type { IdentityContext } from "./http/identity.js";
@@ -69,6 +70,15 @@ describe("deployment identity scope", () => {
 				identity: { ...identity, userId: "bob" },
 			}),
 		).not.toEqual(first);
+		expect(
+			allocateDeploymentDirectApplicationIds(
+				"application",
+				"alice",
+				"request_01",
+			),
+		).not.toEqual(
+			allocateDeploymentDirectApplicationIds("user", "alice", "request_01"),
+		);
 		expect(
 			await allocateDeploymentApplicationIds({
 				...input,

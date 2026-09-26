@@ -7,16 +7,21 @@ import {
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import {
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	isTaskAuthorizationCurrentV1,
+	isTaskPrincipalChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
 	type TaskSystemControlReasonV1,
+	taskApiChannelIdV1,
 } from "./task-authorization.js";
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 export interface TaskRuntimeRecoveryStateV1 {
+	/** Derived from the original API acceptance row, never from Runtime output. */
+	readonly taskWaitOrder?: number;
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly hostSessionRef: string | null;
@@ -31,6 +36,7 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly executionId: string;
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly revokedAt: Date | null;
+	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
 	readonly configurationRevision: number;
 	readonly workload: WorkloadReconciliationStateV1 | null;
@@ -122,11 +128,18 @@ function denied(code = "AUTHORIZATION_REVOKED"): never {
 	throw new ConversationRuntimeHostError(code, true);
 }
 
-/** Platform Web channel policy over the Store's current, execution-bound configuration. */
+/** Platform channel policy over the Store's current, execution-bound configuration. */
 export function isPlatformConversationChannelCurrentV1(
 	record: TaskRuntimeAuthorizationRecordV1,
 ): boolean {
-	if (record.boundary.channelId !== "web")
+	if (
+		record.boundary.channelId !==
+			taskApiChannelIdV1(record.boundary.principal) &&
+		!(
+			record.boundary.channelId === "web" &&
+			record.boundary.principal.kind === "user"
+		)
+	)
 		unavailable("CHANNEL_AUTHORIZATION_UNAVAILABLE");
 	const workload = record.workload;
 	const configuration = workload?.candidate.configuration;
@@ -158,7 +171,7 @@ export function isPlatformConversationChannelCurrentV1(
 	return true;
 }
 
-/** Current user authority and durable system control share the original task boundary. */
+/** Current subject authority and durable system control share the original task boundary. */
 export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 	if (!options.workerId) throw new TypeError("Task Worker identity is invalid");
 	async function stateFor(context: Context, signal: AbortSignal) {
@@ -187,7 +200,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		}
 		if (
 			record.executionId !== claim.executionId ||
-			boundary.principal.kind !== "user" ||
+			!isTaskPrincipalChannelV1(boundary.principal, boundary.channelId) ||
 			boundary.principal.id !== claim.actorId ||
 			boundary.agentId !== claim.agentId ||
 			boundary.channelId !== claim.channelId ||
@@ -358,15 +371,27 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 			return { authority: await control(context, "recovery", signal), record };
 		}
+		const currentControl = async (reason: "stop" | "authorization_revoked") => {
+			const authority = await control(context, reason, signal);
+			// A lost acceptance response needs authenticated original-operation lookup
+			// before stop/revocation control can address the recovered Host Session.
+			if (
+				command === "session.status" &&
+				state.hostSessionRef === null &&
+				["processing", "unknown"].includes(state.executionStatus)
+			)
+				return control(context, "recovery", signal);
+			return authority;
+		};
 		if (record.revokedAt)
 			return {
-				authority: await control(context, "authorization_revoked", signal),
+				authority: await currentControl("authorization_revoked"),
 				record,
 			};
-		const user = await options.resolveCurrentUser(
-			record.boundary.principal.id,
-			signal,
-		);
+		const user =
+			record.boundary.principal.kind === "user"
+				? await options.resolveCurrentUser(record.boundary.principal.id, signal)
+				: undefined;
 		const latest = await recordFor(context.claim, signal);
 		if (latest.authorizationRecordId !== context.authorizationRecordId)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
@@ -374,20 +399,32 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			latest.revokedAt ||
 			(options.channelAuthorizationCurrent &&
 				!(await options.channelAuthorizationCurrent(latest, signal))) ||
-			!user ||
+			(latest.boundary.principal.kind === "user" && !user) ||
 			!isTaskAuthorizationCurrentV1({
 				boundary: latest.boundary,
-				user,
+				user: user ?? undefined,
+				application: latest.application,
 				agent: latest.agent,
 			})
 		)
 			return {
-				authority: await control(context, "authorization_revoked", signal),
+				authority: await currentControl("authorization_revoked"),
 				record: latest,
 			};
 		if (state.stopPending || command === "turn.stop")
 			return {
-				authority: await control(context, "stop", signal),
+				authority: await currentControl("stop"),
+				record: latest,
+			};
+		if (
+			state.taskWaitOrder !== undefined &&
+			((command === "session.status" &&
+				["processing", "unknown"].includes(state.executionStatus)) ||
+				(state.executionStatus === "unknown" &&
+					["events.persist", "events.ack"].includes(command)))
+		)
+			return {
+				authority: await control(context, "recovery", signal),
 				record: latest,
 			};
 		const workload = latest.workload;
@@ -454,7 +491,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				const state = await options.readRuntimeState(claim, signal);
 				if (!state) unavailable("RUNTIME_FENCE_STALE");
 				const original = await legacyRecordFor(claim, state, signal);
-				if (original.executionStatus === "submitted")
+				if (
+					original.executionStatus === "waiting" ||
+					original.executionStatus === "submitted"
+				)
 					return { outcome: "unavailable" };
 				context = {
 					kind: "legacy-control",

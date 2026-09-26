@@ -101,3 +101,38 @@ describe("current conversation execution", () => {
 		});
 	});
 });
+
+describe("stop confirmation timeout presentation", () => {
+	it("retains the controlled timeout explanation through a later running event until a real terminal", () => {
+		const timeout = {
+			...event(1),
+			schemaVersion: 2 as const,
+			type: "task.status" as const,
+			payload: {
+				status: "unknown" as const,
+				reason: "STOP_CONFIRMATION_TIMEOUT" as const,
+			},
+		};
+		const running = {
+			...event(2),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "processing" as const },
+		};
+		expect(currentExecution(null, [timeout, running])).toEqual({
+			executionId: timeout.executionId,
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		const completed = {
+			...event(3),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "completed" as const },
+		};
+		expect(currentExecution(null, [timeout, running, completed])).toEqual({
+			executionId: timeout.executionId,
+			status: "completed",
+		});
+	});
+});

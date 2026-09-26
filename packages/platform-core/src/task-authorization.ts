@@ -10,9 +10,27 @@ import {
 import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispatch.js";
 
 export interface TaskPrincipalV1 {
-	/** Application principals are supplied by the #481 application-grant slice. */
-	readonly kind: "user";
+	readonly kind: "user" | "application";
 	readonly id: string;
+}
+
+/** Server-owned API channels also isolate equal user/application IDs in legacy actor columns. */
+export function taskApiChannelIdV1(
+	input: TaskPrincipalV1,
+): "api:user" | "api:application" {
+	const subject = principal(input);
+	return subject.kind === "user" ? "api:user" : "api:application";
+}
+
+/** Existing user channels remain valid; application and reserved API channels bind subject type. */
+export function isTaskPrincipalChannelV1(
+	subject: TaskPrincipalV1,
+	channelId: string,
+): boolean {
+	return (
+		(subject.kind === "user" && !channelId.startsWith("api:")) ||
+		channelId === taskApiChannelIdV1(subject)
+	);
 }
 
 /**
@@ -28,6 +46,14 @@ export interface CurrentTaskUserV1 {
 	readonly authorizationRevision: string;
 }
 
+/** Current facts for an independently authenticated application principal. */
+export interface CurrentTaskApplicationV1 {
+	readonly schemaVersion: 1;
+	readonly applicationId: string;
+	readonly accountStatus: "active" | "disabled";
+	readonly authorizationRevision: string;
+}
+
 /** Deployment-selected IdentityAdapter boundary for task-scoped user facts. */
 export interface TaskUserDirectoryV1 {
 	/** Untrusted adapter payload; the identity package parses it before use. */
@@ -36,7 +62,8 @@ export interface TaskUserDirectoryV1 {
 
 type TaskAccessSourceV1 =
 	| { readonly kind: "owner" | "user"; readonly userId: string }
-	| { readonly kind: "organization"; readonly organizationId: string };
+	| { readonly kind: "organization"; readonly organizationId: string }
+	| { readonly kind: "application"; readonly applicationId: string };
 
 export interface TaskAuthorizationBoundaryV1 {
 	readonly schemaVersion: 1;
@@ -77,20 +104,67 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 	};
 }
 
+export function parseCurrentTaskApplicationV1(
+	input: unknown,
+): CurrentTaskApplicationV1 {
+	const value = object(input);
+	exact(value, [
+		"schemaVersion",
+		"applicationId",
+		"accountStatus",
+		"authorizationRevision",
+	]);
+	if (
+		value.schemaVersion !== 1 ||
+		!text(value.applicationId) ||
+		(value.accountStatus !== "active" && value.accountStatus !== "disabled") ||
+		!text(value.authorizationRevision)
+	) {
+		throw new TypeError("Current application identity is invalid");
+	}
+	return {
+		schemaVersion: 1,
+		applicationId: value.applicationId,
+		accountStatus: value.accountStatus,
+		authorizationRevision: value.authorizationRevision,
+	};
+}
+
 function principal(input: unknown): TaskPrincipalV1 {
 	const value = object(input);
 	exact(value, ["kind", "id"]);
-	if (value.kind !== "user" || !text(value.id)) {
+	if (
+		(value.kind !== "user" && value.kind !== "application") ||
+		!text(value.id)
+	) {
 		throw new TypeError("Task principal is invalid");
 	}
 	return { kind: value.kind, id: value.id };
 }
 
 function accessSources(
-	user: CurrentTaskUserV1,
+	principalValue: TaskPrincipalV1,
+	user: CurrentTaskUserV1 | undefined,
 	agent: AgentManagementStateV1,
+	channelId: string,
 ): readonly TaskAccessSourceV1[] {
-	if (user.accountStatus !== "active") return [];
+	if (!isTaskPrincipalChannelV1(principalValue, channelId)) return [];
+	if (principalValue.kind === "user" && user?.accountStatus !== "active")
+		return [];
+	if (principalValue.kind === "application" || channelId === "api:user") {
+		const granted = agent.principalGrants?.some(
+			(grant) =>
+				grant.principal.kind === principalValue.kind &&
+				grant.principal.id === principalValue.id &&
+				grant.grantType === "use" &&
+				grant.revokedAt === null,
+		);
+		if (!granted) return [];
+		return principalValue.kind === "application"
+			? [{ kind: "application", applicationId: principalValue.id }]
+			: [{ kind: "user", userId: principalValue.id }];
+	}
+	if (!user) return [];
 	const sources: TaskAccessSourceV1[] = [];
 	if (agent.ownerIds.includes(user.userId)) {
 		sources.push({ kind: "owner", userId: user.userId });
@@ -99,7 +173,8 @@ function accessSources(
 		if (
 			target.kind === "user"
 				? target.userId === user.userId
-				: user.organizationIds.includes(target.organizationId)
+				: target.kind === "organization" &&
+					user.organizationIds.includes(target.organizationId)
 		) {
 			sources.push({ ...target });
 		}
@@ -108,10 +183,13 @@ function accessSources(
 }
 
 function sourceKey(source: TaskAccessSourceV1): string {
-	return JSON.stringify([
-		source.kind,
-		source.kind === "organization" ? source.organizationId : source.userId,
-	]);
+	if (source.kind === "organization") {
+		return JSON.stringify([source.kind, source.organizationId]);
+	}
+	if (source.kind === "application") {
+		return JSON.stringify([source.kind, source.applicationId]);
+	}
+	return JSON.stringify([source.kind, source.userId]);
 }
 
 export function parseTaskAuthorizationBoundaryV1(
@@ -144,12 +222,24 @@ export function parseTaskAuthorizationBoundaryV1(
 			const source = object(input);
 			if (source.kind === "organization") {
 				exact(source, ["kind", "organizationId"]);
-				if (!text(source.organizationId))
+				if (subject.kind !== "user" || !text(source.organizationId))
 					throw new TypeError("Task access source is invalid");
 				return { kind: "organization", organizationId: source.organizationId };
 			}
+			if (source.kind === "application") {
+				exact(source, ["kind", "applicationId"]);
+				if (
+					!text(source.applicationId) ||
+					subject.kind !== "application" ||
+					source.applicationId !== subject.id
+				) {
+					throw new TypeError("Task access source is invalid");
+				}
+				return { kind: "application", applicationId: source.applicationId };
+			}
 			exact(source, ["kind", "userId"]);
 			if (
+				subject.kind !== "user" ||
 				(source.kind !== "owner" && source.kind !== "user") ||
 				!text(source.userId) ||
 				source.userId !== subject.id
@@ -186,8 +276,8 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 	const subject = principal(input.principal);
 	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
-	if (subject.id !== user.userId) return null;
-	const sources = accessSources(user, agent);
+	if (subject.kind !== "user" || subject.id !== user.userId) return null;
+	const sources = accessSources(subject, user, agent, input.channelId);
 	if (sources.length === 0) return null;
 	return parseTaskAuthorizationBoundaryV1({
 		schemaVersion: 1,
@@ -195,6 +285,33 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 		agentId: agent.agentId,
 		channelId: input.channelId,
 		identityRevision: user.authorizationRevision,
+		agentAuthorizationRevision: input.agentAuthorizationRevision,
+		accessSources: sources,
+	});
+}
+
+/** Capture the same durable boundary for an independently authorized application. */
+export function captureApplicationTaskAuthorizationBoundaryV1(input: {
+	readonly application: CurrentTaskApplicationV1;
+	readonly agent: AgentManagementStateV1;
+	readonly channelId: string;
+	readonly agentAuthorizationRevision: string;
+}): TaskAuthorizationBoundaryV1 | null {
+	const application = parseCurrentTaskApplicationV1(input.application);
+	const agent = parseAgentManagementPortState(input.agent);
+	if (application.accountStatus !== "active") return null;
+	const subject: TaskPrincipalV1 = {
+		kind: "application",
+		id: application.applicationId,
+	};
+	const sources = accessSources(subject, undefined, agent, input.channelId);
+	if (sources.length === 0) return null;
+	return parseTaskAuthorizationBoundaryV1({
+		schemaVersion: 1,
+		principal: subject,
+		agentId: agent.agentId,
+		channelId: input.channelId,
+		identityRevision: application.authorizationRevision,
 		agentAuthorizationRevision: input.agentAuthorizationRevision,
 		accessSources: sources,
 	});
@@ -209,19 +326,32 @@ export function captureTaskAuthorizationBoundaryV1(input: {
  */
 export function isTaskAuthorizationCurrentV1(input: {
 	readonly boundary: TaskAuthorizationBoundaryV1;
-	readonly user: CurrentTaskUserV1;
+	readonly user?: CurrentTaskUserV1;
+	readonly application?: CurrentTaskApplicationV1;
 	readonly agent: AgentManagementStateV1;
 }): boolean {
 	const boundary = parseTaskAuthorizationBoundaryV1(input.boundary);
-	const user = parseCurrentTaskUserV1(input.user);
 	const agent = parseAgentManagementPortState(input.agent);
-	if (
-		boundary.principal.kind !== "user" ||
-		boundary.principal.id !== user.userId ||
-		boundary.agentId !== agent.agentId
-	)
-		return false;
-	const current = new Set(accessSources(user, agent).map(sourceKey));
+	if (boundary.agentId !== agent.agentId) return false;
+	let user: CurrentTaskUserV1 | undefined;
+	if (boundary.principal.kind === "user") {
+		if (!input.user) return false;
+		user = parseCurrentTaskUserV1(input.user);
+		if (boundary.principal.id !== user.userId) return false;
+	} else {
+		if (!input.application) return false;
+		const application = parseCurrentTaskApplicationV1(input.application);
+		if (
+			boundary.principal.id !== application.applicationId ||
+			application.accountStatus !== "active"
+		)
+			return false;
+	}
+	const current = new Set(
+		accessSources(boundary.principal, user, agent, boundary.channelId).map(
+			sourceKey,
+		),
+	);
 	return boundary.accessSources.some((source) =>
 		current.has(sourceKey(source)),
 	);
@@ -269,6 +399,7 @@ export function planTaskSystemControlV1(input: {
 		!Number.isSafeInteger(input.execution.sessionGeneration) ||
 		input.execution.sessionGeneration < 1 ||
 		![
+			"waiting",
 			"submitted",
 			"processing",
 			"unknown",
@@ -276,7 +407,6 @@ export function planTaskSystemControlV1(input: {
 			"failed",
 			"cancelled",
 		].includes(input.execution.status) ||
-		boundary.principal.kind !== "user" ||
 		boundary.principal.id !== input.execution.actorId ||
 		boundary.agentId !== input.execution.agentId ||
 		boundary.channelId !== input.execution.channelId ||
@@ -293,7 +423,7 @@ export function planTaskSystemControlV1(input: {
 			sessionGeneration: input.execution.sessionGeneration,
 		},
 		ensureStop:
-			input.reason === "authorization_revoked" &&
+			["stop", "authorization_revoked"].includes(input.reason) &&
 			["submitted", "processing", "unknown"].includes(input.execution.status),
 		revokeAuthorization: input.reason === "authorization_revoked",
 		audit: {

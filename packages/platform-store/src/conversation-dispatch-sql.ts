@@ -4,6 +4,10 @@ import type {
 	ConversationGenerationIsolationV1,
 } from "@agent-infra/platform-core";
 import {
+	decideConversationStopConfirmationStatusV1,
+	isTaskPrincipalChannelV1,
+} from "@agent-infra/platform-core";
+import {
 	type Client,
 	type ConversationPayload,
 	type ConversationRow,
@@ -19,6 +23,7 @@ import {
 	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
+import { observeStopConfirmationTimeout } from "./conversation-dispatch-task.js";
 import {
 	exactPayload,
 	operation,
@@ -30,15 +35,29 @@ export async function readGenerationIsolation(
 	conversationId: string,
 	generation: number,
 ) {
-	const [row] = await transaction<GenerationTombstoneRow[]>`
-    select * from platform.conversation_generation_tombstones
-    where conversation_id = ${conversationId} and session_generation = ${generation} and status = 'pending'
+	const [row] = await transaction<
+		(GenerationTombstoneRow & {
+			execution_actor_id: string;
+			execution_channel_id: string;
+		})[]
+	>`
+   select tombstone.*, execution.actor_id as execution_actor_id, execution.channel_id as execution_channel_id
+   from platform.conversation_generation_tombstones tombstone
+   join platform.conversation_executions execution on execution.execution_id = tombstone.execution_id
+    and execution.conversation_id = tombstone.conversation_id and execution.session_generation = tombstone.session_generation
+   where tombstone.conversation_id = ${conversationId} and tombstone.session_generation = ${generation} and tombstone.status = 'pending'
   `;
 	if (!row) return undefined;
 	if (
 		row.operation_id !== `generation:${conversationId}:${generation}` ||
 		!row.control_record_id ||
-		row.original_principal?.kind !== "user" ||
+		(row.original_principal?.kind !== "user" &&
+			row.original_principal?.kind !== "application") ||
+		!isTaskPrincipalChannelV1(
+			row.original_principal,
+			row.execution_channel_id,
+		) ||
+		row.original_principal.id !== row.execution_actor_id ||
 		!row.original_principal.id ||
 		!row.host_session_ref
 	)
@@ -62,7 +81,9 @@ export async function lockOutbox(
 ): Promise<OutboxRow | undefined> {
 	const rows = await transaction<OutboxRow[]>`
 		select id, scope_type, scope_id, operation, payload, status, attempt_count,
-			available_at, lease_owner, lease_expires_at, delivery_fence::text,
+			available_at, available_at <= clock_timestamp() as available_now,
+			available_at = 'infinity'::timestamptz as waiting_available,
+			lease_owner, lease_expires_at, delivery_fence::text,
 			trace_id, request_id, clock_timestamp() as decision_at
 		from platform.outbox_items where id = ${itemId} for update
 	`;
@@ -90,7 +111,8 @@ export async function lockExecution(
 		select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id,
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
-			model_configuration_revision::text, model_option_id, reasoning_level
+			model_configuration_revision::text, model_option_id, reasoning_level,
+			task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update
@@ -116,7 +138,7 @@ export async function readStop(
 	executionId: string,
 ): Promise<StopRow | undefined> {
 	const rows = await transaction<StopRow[]>`
-		select execution_id, stop_request_id, status
+		select execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at
 		from platform.conversation_stops where execution_id = ${executionId}
 	`;
 	return rows[0];
@@ -199,10 +221,18 @@ export async function cancelStoppedTurn(
 	`;
 	const readied = await transaction<{ id: string }[]>`
 		update platform.conversations
-		set status = 'ready', updated_at = clock_timestamp()
+		set status = case when status = 'active'
+			and not exists (select 1 from platform.conversation_executions e
+				where e.conversation_id = ${conversation.id} and e.status in ('submitted', 'processing', 'unknown'))
+			and not exists (select 1 from platform.conversation_stops s
+				join platform.conversation_executions e on e.execution_id = s.execution_id
+				where e.conversation_id = ${conversation.id} and s.execution_id <> ${execution.execution_id} and s.status = 'submitted')
+			and not exists (select 1 from platform.conversation_generation_tombstones t
+				where t.conversation_id = ${conversation.id} and t.status = 'pending')
+			then 'ready'::platform.conversation_status else status end, updated_at = clock_timestamp()
 		where id = ${conversation.id}
 			and session_generation = ${payload.sessionGeneration}
-			and authorization_revision = ${execution.authorization_revision}
+			and authorization_revision = ${conversation.authorization_revision}
 		returning id
 	`;
 	const completedTurn = await transaction<{ id: string }[]>`
@@ -281,11 +311,13 @@ export function bindingMatches(
 		conversation.actor_id === execution.actor_id &&
 		conversation.channel_id === execution.channel_id &&
 		(payload.metadataRecovery !== undefined ||
+			execution.task_wait_order !== null ||
 			conversation.authorization_revision ===
 				execution.authorization_revision) &&
 		generation === payload.sessionGeneration &&
 		executionGeneration === payload.sessionGeneration &&
 		(payload.metadataRecovery !== undefined ||
+			execution.status === "waiting" ||
 			conversation.status !== "unavailable") &&
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
@@ -324,6 +356,10 @@ function claimMatchesState(
 			: safeCounter(state.execution.model_configuration_revision, 1);
 	return (
 		state.outbox.status === "processing" &&
+		(state.execution.task_wait_order === null
+			? claim.taskWaitOrder === undefined
+			: safeCounter(state.execution.task_wait_order, 1) ===
+				claim.taskWaitOrder) &&
 		state.outbox.lease_owner === claim.leaseOwner &&
 		state.outbox.lease_expires_at !== null &&
 		state.outbox.lease_expires_at.getTime() >
@@ -337,6 +373,7 @@ function claimMatchesState(
 		state.conversation.actor_id === claim.actorId &&
 		state.conversation.channel_id === claim.channelId &&
 		(claim.metadataRecovery !== undefined ||
+			state.execution.task_wait_order !== null ||
 			state.conversation.authorization_revision ===
 				claim.authorizationRevision) &&
 		state.execution.execution_id === claim.executionId &&
@@ -360,6 +397,7 @@ export async function ownedState(
 	claim: ConversationDispatchClaimV1,
 	allowStopChange = false,
 ): Promise<DispatchState | undefined> {
+	await transaction`select id from platform.agents where id = ${claim.agentId} for share`;
 	const outbox = await lockOutbox(transaction, claim.itemId);
 	if (!outbox) return undefined;
 	const conversation = await lockConversation(
@@ -374,12 +412,50 @@ export async function ownedState(
 	if (!conversation || !execution) return undefined;
 	const state = { outbox, conversation, execution };
 	if (!claimMatchesState(claim, state)) return undefined;
+	await observeStopConfirmationTimeout(transaction, state, claim.leaseOwner);
 	const stop = await readStop(transaction, claim.executionId);
 	return allowStopChange ||
 		claim.metadataRecovery !== undefined ||
 		(stop?.status === "submitted") === claim.stopPending
 		? state
 		: undefined;
+}
+
+export async function retryFencedStop(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+): Promise<boolean> {
+	if (claim.operation !== "conversation.turn.stop.v1") return false;
+	const [execution] = await transaction<{ delivery_fence: string | number }[]>`
+		select delivery_fence from platform.conversation_executions
+		where execution_id = ${claim.executionId} and conversation_id = ${claim.conversationId}
+	`;
+	if (!execution) return false;
+	const currentFence = safeCounter(execution.delivery_fence);
+	if (
+		currentFence === undefined ||
+		currentFence <= claim.executionDeliveryFence
+	)
+		return false;
+	const outbox = await lockOutbox(transaction, claim.itemId);
+	const payload = outbox && exactPayload(outbox.payload, claim.operation);
+	const stop = await readStop(transaction, claim.executionId);
+	if (
+		payload?.stopRequestId !== claim.stopRequestId ||
+		stop?.stop_request_id !== claim.stopRequestId ||
+		stop.status !== "submitted"
+	)
+		return false;
+	// Check the independent stop lease and every other binding; never return
+	// authority for the new Execution fence to this stale caller.
+	const state = await ownedState(
+		transaction,
+		{ ...claim, executionDeliveryFence: currentFence },
+		true,
+	);
+	if (!state) return false;
+	await retryOutbox(transaction, state, claim, 0, "EXECUTION_FENCE_CHANGED");
+	return true;
 }
 
 function transitionAllowed(
@@ -389,11 +465,13 @@ function transitionAllowed(
 	// Only prepareRuntimeDispatch can reserve new Agent capacity. A later event
 	// or retry must never turn an occupied execution back into unreserved waiting.
 	if (
-		(state.execution.status === "submitted" &&
+		(["waiting", "submitted"].includes(state.execution.status) &&
 			(transition.executionStatus === "unknown" ||
 				transition.executionStatus === "processing")) ||
 		(state.execution.status !== "submitted" &&
-			transition.executionStatus === "submitted")
+			transition.executionStatus === "submitted") ||
+		(state.execution.status !== "waiting" &&
+			transition.executionStatus === "waiting")
 	)
 		return false;
 	if (
@@ -419,11 +497,25 @@ export async function applyTransition(
 	claim: ConversationDispatchClaimV1,
 	transition: ConversationDispatchStateTransitionV1,
 ) {
-	if (!transitionAllowed(state, transition)) throw new StaleDispatchLease();
-	if (transition.executionStatus !== undefined) {
+	let effectiveTransition = transition;
+	if (!transitionAllowed(state, effectiveTransition))
+		throw new StaleDispatchLease();
+	if (effectiveTransition.executionStatus === "processing") {
+		const [stop] = await transaction<
+			{ timed_out: boolean }[]
+		>`select confirmation_timed_out_at is not null as timed_out from platform.conversation_stops where execution_id = ${claim.executionId}`;
+		effectiveTransition = {
+			...effectiveTransition,
+			executionStatus: decideConversationStopConfirmationStatusV1({
+				executionStatus: effectiveTransition.executionStatus,
+				confirmationTimedOut: stop?.timed_out === true,
+			}),
+		};
+	}
+	if (effectiveTransition.executionStatus !== undefined) {
 		const rows = await transaction<{ execution_id: string }[]>`
 			update platform.conversation_executions
-			set status = ${transition.executionStatus}, updated_at = clock_timestamp()
+			set status = ${effectiveTransition.executionStatus}, updated_at = clock_timestamp()
 			where execution_id = ${claim.executionId}
 				and conversation_id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
@@ -432,20 +524,27 @@ export async function applyTransition(
 			returning execution_id
 		`;
 		if (rows.length !== 1) throw new StaleDispatchLease();
-		state.execution.status = transition.executionStatus;
+		state.execution.status = effectiveTransition.executionStatus;
+		if (
+			["completed", "failed", "cancelled"].includes(
+				effectiveTransition.executionStatus,
+			)
+		) {
+			await transaction`update platform.conversation_stops set status = 'completed', updated_at = clock_timestamp() where execution_id = ${claim.executionId}`;
+		}
 	}
-	if (transition.conversationStatus !== undefined) {
+	if (effectiveTransition.conversationStatus !== undefined) {
 		const rows = await transaction<{ id: string }[]>`
 			update platform.conversations
-			set status = ${transition.conversationStatus}, updated_at = clock_timestamp()
+			set status = ${effectiveTransition.conversationStatus}, updated_at = clock_timestamp()
 			where id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
-				and authorization_revision = ${claim.authorizationRevision}
+				and authorization_revision = ${state.conversation.authorization_revision}
 				and status = ${state.conversation.status}
 			returning id
 		`;
 		if (rows.length !== 1) throw new StaleDispatchLease();
-		state.conversation.status = transition.conversationStatus;
+		state.conversation.status = effectiveTransition.conversationStatus;
 	}
 }
 
