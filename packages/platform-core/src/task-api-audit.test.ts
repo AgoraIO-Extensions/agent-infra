@@ -24,6 +24,60 @@ const input: TaskApiAuditInputV1 = {
 };
 
 describe("Task API persistent audit", () => {
+	it("binds submit results only to a truthful domain outcome and target", async () => {
+		const write = vi.fn().mockResolvedValue(undefined);
+		const audit = createTaskApiAuditV1({
+			write,
+			renewSubscription: vi.fn(),
+			recoverSubscriptions: vi.fn(),
+		});
+		const submitted: TaskApiAuditInputV1 = {
+			...input,
+			operation: "submit",
+			phase: "submit.result",
+			reason: "task_accepted",
+		};
+		for (const reason of ["task_accepted", "task_replayed"] as const) {
+			await audit.record({ ...submitted, reason });
+			expect(write.mock.lastCall?.[0]).toMatchObject({
+				action: "task.api.submit.result",
+				target: input.target,
+				reason,
+			});
+		}
+		for (const reason of [
+			"idempotency_conflict",
+			"capacity_full",
+			"agent_unavailable",
+			"conversation_unavailable",
+			"model_unavailable",
+		] as const)
+			await audit.record({
+				...submitted,
+				result: "rejected",
+				reason,
+				target: { kind: "agent", agentId: "agent_trusted" },
+			});
+		write.mockClear();
+		for (const malformed of [
+			{ ...submitted, operation: "read" },
+			{ ...submitted, phase: "access" },
+			{ ...submitted, result: "failed" },
+			{ ...submitted, reason: "request_accepted" },
+			{ ...submitted, subscriptionId: "sub" },
+			{ ...submitted, target: { kind: "agent", agentId: "agent_trusted" } },
+			{ ...submitted, result: "rejected", reason: "idempotency_conflict" },
+			{
+				...submitted,
+				principal: { kind: "unknown" },
+				target: { kind: "unknown" },
+			},
+		])
+			await expect(
+				audit.record(malformed as TaskApiAuditInputV1),
+			).rejects.toMatchObject({ code: "invalid_input" });
+		expect(write).not.toHaveBeenCalled();
+	});
 	it("requires and awaits the writer with a detached finite plan", async () => {
 		const write = vi.fn().mockResolvedValue(undefined);
 		await createTaskApiAuditV1({

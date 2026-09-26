@@ -36,6 +36,32 @@ const record = {
 };
 
 describe("scoped public audit contract", () => {
+	it.each(["task_accepted", "task_replayed"])(
+		"exposes %s as a submission attempt linked to its original Execution",
+		(reason) => {
+			const attempt = {
+				...record,
+				action: "task.api.submit.result",
+				result: "succeeded",
+				executor: null,
+				operation: null,
+				taskApi: { operation: "submit", phase: "submit.result", reason },
+			};
+			expect(ScopedPlatformAuditProjectionV1Schema.parse(attempt)).toEqual(
+				attempt,
+			);
+			expect(
+				ScopedPlatformAuditQueryV1Schema.parse({
+					action: "task.api.submit.result",
+					executionId: record.executionId,
+				}),
+			).toEqual({
+				action: "task.api.submit.result",
+				executionId: record.executionId,
+			});
+		},
+	);
+
 	it("preserves the original application and actual Worker separately", () => {
 		expect(ScopedPlatformAuditProjectionV1Schema.parse(record)).toEqual(record);
 	});

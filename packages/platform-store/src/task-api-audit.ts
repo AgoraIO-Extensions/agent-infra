@@ -94,7 +94,7 @@ async function requireAudit(
 	if (!isDeepStrictEqual(existingPayload, newPayload))
 		throw new TaskApiAuditError("unavailable");
 }
-async function writeAudit(
+export async function writeTaskApiAudit(
 	transaction: postgres.TransactionSql,
 	plan: TaskApiAuditPlanV1,
 ): Promise<void> {
@@ -199,18 +199,13 @@ export class PostgresTaskApiAuditStoreV1 implements TaskApiAuditStoreV1 {
 		try {
 			const { action, ...input } = plan;
 			const parsed = parseTaskApiAuditInputV1(input);
-			const expectedAction =
-				parsed.phase === "access"
-					? "task.api.access"
-					: parsed.phase === "subscription.started"
-						? "task.api.subscription.started"
-						: "task.api.subscription.ended";
+			const expectedAction = `task.api.${parsed.phase}`;
 			if (action !== expectedAction)
 				throw new TaskApiAuditError("invalid_input");
 			const value = { ...parsed, action };
 			await this.#client.begin(async (transaction) => {
-				if (value.phase === "access") {
-					await writeAudit(transaction, value);
+				if (value.phase === "access" || value.phase === "submit.result") {
+					await writeTaskApiAudit(transaction, value);
 					return;
 				}
 				const subscriptionId = value.subscriptionId as string;
@@ -235,7 +230,7 @@ export class PostgresTaskApiAuditStoreV1 implements TaskApiAuditStoreV1 {
 						!row.lease_active
 					)
 						throw new TaskApiAuditError("unavailable");
-					await writeAudit(transaction, value);
+					await writeTaskApiAudit(transaction, value);
 					return;
 				}
 				const row = await this.#subscription(transaction, subscriptionId);
@@ -258,7 +253,7 @@ export class PostgresTaskApiAuditStoreV1 implements TaskApiAuditStoreV1 {
 					!row.lease_active
 				)
 					throw new TaskApiAuditError("unavailable");
-				await writeAudit(transaction, value);
+				await writeTaskApiAudit(transaction, value);
 				await this.#complete(transaction, row);
 			});
 		} catch {
@@ -314,7 +309,7 @@ export class PostgresTaskApiAuditStoreV1 implements TaskApiAuditStoreV1 {
 						...intent.endInput,
 						occurredAt: claimed.observed_at,
 					});
-					await writeAudit(transaction, {
+					await writeTaskApiAudit(transaction, {
 						...parsed,
 						action: "task.api.subscription.ended",
 					});

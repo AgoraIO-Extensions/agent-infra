@@ -8,6 +8,12 @@ import type { TaskPrincipalV1 } from "./task-authorization.js";
 
 export type TaskApiAuditReasonV1 =
 	| "request_accepted"
+	| "task_accepted"
+	| "task_replayed"
+	| "idempotency_conflict"
+	| "agent_unavailable"
+	| "conversation_unavailable"
+	| "model_unavailable"
 	| "invalid_request"
 	| "authentication_required"
 	| "authorization_revoked"
@@ -21,6 +27,7 @@ export type TaskApiAuditReasonV1 =
 	| "subscription_unconfirmed";
 export type TaskApiAuditActionV1 =
 	| "task.api.access"
+	| "task.api.submit.result"
 	| "task.api.subscription.started"
 	| "task.api.subscription.ended";
 export type TaskApiAuditTargetV1 =
@@ -43,7 +50,11 @@ export interface TaskApiAuditInputV1 {
 	readonly schemaVersion: 1;
 	readonly auditId: string;
 	readonly operation: "submit" | "read" | "cancel" | "subscribe";
-	readonly phase: "access" | "subscription.started" | "subscription.ended";
+	readonly phase:
+		| "access"
+		| "submit.result"
+		| "subscription.started"
+		| "subscription.ended";
 	readonly result: "succeeded" | "rejected" | "failed";
 	readonly reason: TaskApiAuditReasonV1;
 	readonly principal: TaskPrincipalV1 | { readonly kind: "unknown" };
@@ -74,6 +85,12 @@ export class TaskApiAuditError extends Error {
 }
 const reasons = new Set<string>([
 	"request_accepted",
+	"task_accepted",
+	"task_replayed",
+	"idempotency_conflict",
+	"agent_unavailable",
+	"conversation_unavailable",
+	"model_unavailable",
 	"invalid_request",
 	"authentication_required",
 	"authorization_revoked",
@@ -122,16 +139,23 @@ export function parseTaskApiAuditInputV1(
 			!["submit", "read", "cancel", "subscribe"].includes(
 				value.operation as string,
 			) ||
-			!["access", "subscription.started", "subscription.ended"].includes(
-				value.phase as string,
-			) ||
+			![
+				"access",
+				"submit.result",
+				"subscription.started",
+				"subscription.ended",
+			].includes(value.phase as string) ||
 			!["succeeded", "rejected", "failed"].includes(value.result as string) ||
 			typeof value.reason !== "string" ||
 			!reasons.has(value.reason) ||
-			(value.phase !== "access" && value.operation !== "subscribe") ||
+			(value.phase !== "access" &&
+				value.phase !== "submit.result" &&
+				value.operation !== "subscribe") ||
 			(value.subscriptionId !== undefined &&
 				(value.operation !== "subscribe" || !text(value.subscriptionId))) ||
-			(value.phase !== "access" && !text(value.subscriptionId))
+			(value.phase !== "access" &&
+				value.phase !== "submit.result" &&
+				!text(value.subscriptionId))
 		)
 			throw new TaskApiAuditError("invalid_input");
 		const principal = object(value.principal);
@@ -162,6 +186,7 @@ export function parseTaskApiAuditInputV1(
 			(value.result === "succeeded" &&
 				(principal.kind === "unknown" || target.kind === "unknown")) ||
 			(value.phase !== "access" &&
+				value.phase !== "submit.result" &&
 				(principal.kind === "unknown" || target.kind !== "execution")) ||
 			(value.phase === "subscription.started" &&
 				(value.result !== "succeeded" ||
@@ -170,6 +195,39 @@ export function parseTaskApiAuditInputV1(
 				(value.phase !== "subscription.ended" || value.result !== "failed"))
 		)
 			throw new TaskApiAuditError("invalid_input");
+		if (value.phase === "submit.result") {
+			if (
+				value.operation !== "submit" ||
+				principal.kind === "unknown" ||
+				value.subscriptionId !== undefined ||
+				!(
+					(value.result === "succeeded" &&
+						target.kind === "execution" &&
+						["task_accepted", "task_replayed"].includes(value.reason)) ||
+					(value.result === "rejected" &&
+						target.kind === "agent" &&
+						[
+							"idempotency_conflict",
+							"capacity_full",
+							"agent_unavailable",
+							"conversation_unavailable",
+							"model_unavailable",
+						].includes(value.reason))
+				)
+			)
+				throw new TaskApiAuditError("invalid_input");
+		} else if (
+			[
+				"task_accepted",
+				"task_replayed",
+				"idempotency_conflict",
+				"agent_unavailable",
+				"conversation_unavailable",
+				"model_unavailable",
+			].includes(value.reason)
+		) {
+			throw new TaskApiAuditError("invalid_input");
+		}
 		const occurredAt =
 			value.occurredAt === undefined
 				? new Date()
@@ -218,12 +276,7 @@ export function createTaskApiAuditV1(store: TaskApiAuditStoreV1): {
 					parsed.phase === "subscription.ended"
 						? taskApiSubscriptionEndAuditIdV1(parsed.subscriptionId as string)
 						: parsed.auditId,
-				action:
-					parsed.phase === "access"
-						? "task.api.access"
-						: parsed.phase === "subscription.started"
-							? "task.api.subscription.started"
-							: "task.api.subscription.ended",
+				action: `task.api.${parsed.phase}`,
 			};
 			try {
 				await store.write(plan);

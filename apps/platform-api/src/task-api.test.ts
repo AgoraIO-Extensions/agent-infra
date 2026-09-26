@@ -558,11 +558,38 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 					authorizationRecordId: null,
 					taskApi: { phase: "access", reason: "request_accepted" },
 				});
+			const resultsResponse = await request(
+				`/audit?executionId=${task.executionId}&action=task.api.submit.result`,
+				credential,
+			);
+			expect(resultsResponse.status).toBe(200);
+			const results = ScopedPlatformAuditPageV1Schema.parse(
+				await resultsResponse.json(),
+			).items;
+			expect(results.map((attempt) => attempt.taskApi?.reason).sort()).toEqual(
+				principal.kind === "application"
+					? ["task_accepted", "task_replayed"]
+					: ["task_accepted"],
+			);
+			for (const attempt of results) {
+				expect(attempt).toMatchObject({
+					executionId: task.executionId,
+					conversationId: task.conversationId,
+					originalPrincipal: principal,
+					result: "succeeded",
+					taskApi: { operation: "submit", phase: "submit.result" },
+				});
+				expect(
+					(await request(`/audit/${attempt.auditId}`, credential)).status,
+				).toBe(200);
+			}
 			records.push({
 				task,
 				credential,
 				auditId: page.items[0]?.auditId,
-				attemptAuditIds: submitAttempts.map((attempt) => attempt.auditId),
+				attemptAuditIds: [...submitAttempts, ...results].map(
+					(attempt) => attempt.auditId,
+				),
 			});
 		}
 		for (const record of records) {
@@ -600,6 +627,46 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 		);
 		expect(JSON.stringify(page)).not.toContain("synthetic task");
 	});
+	it.each(["accepted", "replayed"] as const)(
+		"returns a sanitized error for %s result audit failure and retains only the original task",
+		async (outcome) => {
+			const task = outcome === "replayed" ? await submit() : null;
+			await db.unsafe(
+				"create function platform.submit_result_failure() returns trigger language plpgsql as $$ begin if NEW.action='task.api.submit.result' then raise exception 'PRIVATE_SUBMIT_DATABASE_SENTINEL'; end if; return NEW; end $$",
+			);
+			await db.unsafe(
+				"create trigger submit_result_failure before insert on platform.audit_events for each row execute function platform.submit_result_failure()",
+			);
+			try {
+				const failed = await request(
+					`/agents/${configuration.agentId}/tasks`,
+					credentials.user,
+					{ schemaVersion: 1, text: "synthetic task" },
+				);
+				expect(failed.status).toBe(503);
+				expect(await failed.text()).not.toContain(
+					"PRIVATE_SUBMIT_DATABASE_SENTINEL",
+				);
+				const retained = task ? 1 : 0;
+				expect(await counts()).toEqual({
+					conversations: retained,
+					executions: retained,
+					authorizations: retained,
+				});
+				expect(
+					await db.unsafe(
+						"select id from platform.audit_events where action='task.api.submit.result'",
+					),
+				).toHaveLength(retained);
+				if (task) expect((await request(path(task))).status).toBe(200);
+			} finally {
+				await db.unsafe(
+					"drop trigger submit_result_failure on platform.audit_events",
+				);
+				await db.unsafe("drop function platform.submit_result_failure()");
+			}
+		},
+	);
 	it("rechecks audit authority and returns sanitized HTTP failure when necessary query audit cannot persist", async () => {
 		const task = await submit();
 		const response = await request(
@@ -743,6 +810,22 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 				)
 			).status,
 		).toBe(409);
+		const rejectedResponse = await request(
+			`/audit?agentId=${configuration.agentId}&action=task.api.submit.result&result=rejected`,
+		);
+		expect(rejectedResponse.status).toBe(200);
+		const rejectedResults = ScopedPlatformAuditPageV1Schema.parse(
+			await rejectedResponse.json(),
+		).items;
+		expect(
+			rejectedResults.map((attempt) => attempt.taskApi?.reason).sort(),
+		).toEqual(["capacity_full", "idempotency_conflict"]);
+		for (const attempt of rejectedResults)
+			expect(attempt).toMatchObject({
+				executionId: null,
+				conversationId: null,
+				taskApi: { phase: "submit.result" },
+			});
 		expect(await counts()).toEqual({
 			conversations: 2,
 			executions: 2,
@@ -773,6 +856,20 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 				)
 			).status,
 		).toBe(503);
+		const rejectedResponse = await request(
+			`/audit?agentId=${configuration.agentId}&action=task.api.submit.result&result=rejected`,
+		);
+		expect(rejectedResponse.status).toBe(200);
+		expect(
+			ScopedPlatformAuditPageV1Schema.parse(await rejectedResponse.json())
+				.items,
+		).toMatchObject([
+			{
+				result: "rejected",
+				executionId: null,
+				taskApi: { phase: "submit.result", reason: "agent_unavailable" },
+			},
+		]);
 		expect(await counts()).toEqual({
 			conversations: 1,
 			executions: 1,
@@ -1229,7 +1326,16 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 		const rows = await db.unsafe(
 			"select action,actor_type,actor_id,target_type,target_id,outcome,details,request_id,trace_id from platform.audit_events where action like 'task.api.%' order by occurred_at",
 		);
-		const subscription = rows.filter((row) => row.action !== "task.api.access");
+		const subscription = rows.filter((row) =>
+			String(row.action).startsWith("task.api.subscription."),
+		);
+		expect(rows).toContainEqual(
+			expect.objectContaining({
+				action: "task.api.submit.result",
+				target_id: task.executionId,
+				details: expect.objectContaining({ reason: "task_accepted" }),
+			}),
+		);
 		expect(subscription.map((row) => row.action)).toEqual([
 			"task.api.subscription.started",
 			"task.api.subscription.ended",

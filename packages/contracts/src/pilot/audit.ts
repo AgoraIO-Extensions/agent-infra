@@ -53,6 +53,7 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"api.agent.grant.granted",
 	"api.agent.grant.revoked",
 	"task.api.access",
+	"task.api.submit.result",
 	"task.api.subscription.started",
 	"task.api.subscription.ended",
 	"task.authorization.accepted",
@@ -101,9 +102,20 @@ export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
 	taskApi: z
 		.strictObject({
 			operation: z.enum(["submit", "read", "cancel", "subscribe"]),
-			phase: z.enum(["access", "subscription.started", "subscription.ended"]),
+			phase: z.enum([
+				"access",
+				"submit.result",
+				"subscription.started",
+				"subscription.ended",
+			]),
 			reason: z.enum([
 				"request_accepted",
+				"task_accepted",
+				"task_replayed",
+				"idempotency_conflict",
+				"agent_unavailable",
+				"conversation_unavailable",
+				"model_unavailable",
 				"invalid_request",
 				"authentication_required",
 				"authorization_revoked",

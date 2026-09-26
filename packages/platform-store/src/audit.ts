@@ -17,6 +17,7 @@ const taskApiAuditMetadata = {
 
 const platformAuditActionMetadata = {
 	"task.api.access": taskApiAuditMetadata,
+	"task.api.submit.result": taskApiAuditMetadata,
 	"task.api.subscription.started": taskApiAuditMetadata,
 	"task.api.subscription.ended": taskApiAuditMetadata,
 	"api.access.rejected": {

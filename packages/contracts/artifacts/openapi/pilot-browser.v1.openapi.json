@@ -4256,6 +4256,7 @@
           "api.agent.grant.granted",
           "api.agent.grant.revoked",
           "task.api.access",
+          "task.api.submit.result",
           "task.api.subscription.started",
           "task.api.subscription.ended",
           "task.authorization.accepted",
@@ -4755,6 +4756,7 @@
                   "phase": {
                     "enum": [
                       "access",
+                      "submit.result",
                       "subscription.started",
                       "subscription.ended"
                     ],
@@ -4763,6 +4765,12 @@
                   "reason": {
                     "enum": [
                       "request_accepted",
+                      "task_accepted",
+                      "task_replayed",
+                      "idempotency_conflict",
+                      "agent_unavailable",
+                      "conversation_unavailable",
+                      "model_unavailable",
                       "invalid_request",
                       "authentication_required",
                       "authorization_revoked",

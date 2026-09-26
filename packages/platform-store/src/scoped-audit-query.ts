@@ -189,17 +189,19 @@ function candidates(
 		and agent.authorization_revision is not null
 		and exists (select 1 from platform.agent_applications application where application.agent_id = e.agent_id)
 		and ${currentAccess}`;
-	// A trusted pre-admission API attempt has no Execution binding. Keep its
-	// own Agent-target metadata visible without inventing that association.
+	// Access attempts and rejected admission results have no Execution binding.
+	// Keep their own Agent-target metadata visible without inventing one.
 	const ownership =
 		scope.kind === "administrator"
 			? transaction`true`
 			: transaction`(
 		${executionOwnership} or (
-			a.source = 'platform' and a.action = 'task.api.access' and a."targetType" = 'agent'
+			a.source = 'platform' and a."targetType" = 'agent'
+			and ((a.action = 'task.api.access' and a.details ->> 'phase' = 'access')
+				or (a.action = 'task.api.submit.result' and a.details ->> 'phase' = 'submit.result'))
 			and a."actorType" = ${scope.principal.kind} and a."actorId" = ${scope.principal.id}
 			and a.details ->> 'schemaVersion' = '1' and a.details ->> 'operation' = 'submit'
-			and a.details ->> 'phase' = 'access' and a.details -> 'target' ->> 'kind' = 'agent'
+			and a.details -> 'target' ->> 'kind' = 'agent'
 			and a.details -> 'target' ->> 'agentId' = a."agentId" and a."targetId" = a."agentId"
 			and agent.authorization_revision is not null
 			and exists (select 1 from platform.agent_applications application where application.agent_id = agent.id)
@@ -336,7 +338,7 @@ function project(
 		scope.kind === "execution" &&
 		!(
 			row.source === "platform" &&
-			row.action === "task.api.access" &&
+			["task.api.access", "task.api.submit.result"].includes(row.action) &&
 			row.targetType === "agent" &&
 			row.agentId === row.targetId &&
 			row.actorType === scope.principal.kind &&
@@ -353,6 +355,11 @@ function project(
 		row.action.startsWith("task.api.") && legacy
 			? (row.details as TaskApiAuditInputV1)
 			: null;
+	if (
+		taskDetails?.target.kind === "execution" &&
+		taskDetails.target.conversationId !== row.boundConversationId
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
 	const taskApi = taskDetails
 		? {
 				operation: taskDetails.operation,

@@ -76,6 +76,7 @@ export const platformAuditQueryActionsV1 = [
 	"api.agent.grant.granted",
 	"api.agent.grant.revoked",
 	"task.api.access",
+	"task.api.submit.result",
 	"task.api.subscription.started",
 	"task.api.subscription.ended",
 	"task.authorization.accepted",

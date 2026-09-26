@@ -127,6 +127,246 @@ async function fixture(
 }
 
 describe("controlled PostgreSQL audit query", () => {
+	it.each(["user", "application"] as const)(
+		"queries accepted and replayed attempts through the same original %s Execution",
+		async (kind) => {
+			const f = await fixture({ kind, id: randomUUID() });
+			const other = await fixture({ kind, id: randomUUID() }, f.agentId);
+			const producer = new PostgresTaskApiAuditStoreV1({
+				databaseUrl: database.databaseUrl,
+			});
+			const auditIds: string[] = [];
+			const requestIds: string[] = [];
+			try {
+				for (const reason of ["task_accepted", "task_replayed"] as const) {
+					const auditId = randomUUID();
+					const metadata = request();
+					auditIds.push(auditId);
+					requestIds.push(metadata.requestId);
+					await createTaskApiAuditV1(producer).record({
+						schemaVersion: 1,
+						auditId,
+						operation: "submit",
+						phase: "submit.result",
+						result: "succeeded",
+						reason,
+						principal: f.principal,
+						target: {
+							kind: "execution",
+							agentId: f.agentId,
+							conversationId: f.conversationId,
+							executionId: f.executionId,
+						},
+						...metadata,
+					});
+					const attempt = await query.getAudit(
+						f.scope,
+						auditId,
+						detail,
+						request(),
+					);
+					expect(attempt).toMatchObject({
+						auditId,
+						requestId: metadata.requestId,
+						executionId: f.executionId,
+						conversationId: f.conversationId,
+						originalPrincipal: f.principal,
+						result: "succeeded",
+						taskApi: { operation: "submit", phase: "submit.result", reason },
+						summary: expect.stringContaining(reason),
+					});
+					await expect(
+						query.getAudit(other.scope, auditId, detail, request()),
+					).rejects.toMatchObject({ code: "access_denied" });
+				}
+				const associated = await query.listAudit(
+					f.scope,
+					{
+						...page,
+						filters: {
+							executionId: f.executionId,
+							action: "task.api.submit.result",
+							result: "succeeded",
+						},
+					},
+					request(),
+				);
+				expect(associated.items.map((row) => row.auditId).sort()).toEqual(
+					auditIds.sort(),
+				);
+				expect(new Set(associated.items.map((row) => row.requestId))).toEqual(
+					new Set(requestIds),
+				);
+				expect(new Set(associated.items.map((row) => row.executionId))).toEqual(
+					new Set([f.executionId]),
+				);
+				expect(
+					associated.items.every((row) => row.authorizationRecordId !== null),
+				).toBe(true);
+				await sql`update platform.agent_principal_grants set revoked_at = now() where agent_id = ${f.agentId} and principal_type = ${kind} and principal_id = ${f.principal.id}`;
+				if (kind === "user")
+					await sql`delete from platform.agent_availability where agent_id = ${f.agentId} and target_type = 'user' and target_id = ${f.principal.id}`;
+				await expect(
+					query.getAudit(f.scope, auditIds[0] as string, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+			} finally {
+				await producer.close();
+			}
+		},
+	);
+
+	it("keeps actual admission rejections distinguishable and unbound in its own scope", async () => {
+		const f = await fixture({ kind: "application", id: randomUUID() });
+		const other = await fixture(
+			{ kind: "application", id: randomUUID() },
+			f.agentId,
+		);
+		const producer = new PostgresTaskApiAuditStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const auditIds: string[] = [];
+		try {
+			for (const reason of [
+				"idempotency_conflict",
+				"capacity_full",
+				"agent_unavailable",
+				"conversation_unavailable",
+				"model_unavailable",
+			] as const) {
+				const auditId = randomUUID();
+				auditIds.push(auditId);
+				await createTaskApiAuditV1(producer).record({
+					schemaVersion: 1,
+					auditId,
+					operation: "submit",
+					phase: "submit.result",
+					result: "rejected",
+					reason,
+					principal: f.principal,
+					target: { kind: "agent", agentId: f.agentId },
+					...request(),
+				});
+				const attempt = await query.getAudit(
+					f.scope,
+					auditId,
+					detail,
+					request(),
+				);
+				expect(attempt).toMatchObject({
+					executionId: null,
+					conversationId: null,
+					originalPrincipal: null,
+					authorizationRecordId: null,
+					result: "rejected",
+					taskApi: { operation: "submit", phase: "submit.result", reason },
+					summary: expect.stringContaining(reason),
+				});
+				await expect(
+					query.getAudit(other.scope, auditId, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+			}
+			const associated = await query.listAudit(
+				f.scope,
+				{ ...page, filters: { executionId: f.executionId } },
+				request(),
+			);
+			expect(
+				associated.items.some((row) => auditIds.includes(row.auditId)),
+			).toBe(false);
+			await sql`update platform.agent_principal_grants set revoked_at = now() where agent_id = ${f.agentId} and principal_type = 'application' and principal_id = ${f.principal.id}`;
+			await expect(
+				query.getAudit(f.scope, auditIds[0] as string, detail, request()),
+			).rejects.toMatchObject({ code: "access_denied" });
+		} finally {
+			await producer.close();
+		}
+	});
+
+	it("does not bind an accepted attempt with a different Conversation or missing authorization provenance", async () => {
+		const producer = new PostgresTaskApiAuditStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			const f = await fixture();
+			const auditId = randomUUID();
+			await createTaskApiAuditV1(producer).record({
+				schemaVersion: 1,
+				auditId,
+				operation: "submit",
+				phase: "submit.result",
+				result: "succeeded",
+				reason: "task_replayed",
+				principal: f.principal,
+				target: {
+					kind: "execution",
+					agentId: f.agentId,
+					conversationId: randomUUID(),
+					executionId: f.executionId,
+				},
+				...request(),
+			});
+			for (const scope of [admin, f.scope])
+				await expect(
+					query.getAudit(scope, auditId, detail, request()),
+				).rejects.toMatchObject({ code: "unavailable" });
+			const missing = await fixture(f.principal, f.agentId, false);
+			const missingId = randomUUID();
+			await createTaskApiAuditV1(producer).record({
+				schemaVersion: 1,
+				auditId: missingId,
+				operation: "submit",
+				phase: "submit.result",
+				result: "succeeded",
+				reason: "task_accepted",
+				principal: missing.principal,
+				target: {
+					kind: "execution",
+					agentId: missing.agentId,
+					conversationId: missing.conversationId,
+					executionId: missing.executionId,
+				},
+				...request(),
+			});
+			await expect(
+				query.getAudit(missing.scope, missingId, detail, request()),
+			).rejects.toMatchObject({ code: "access_denied" });
+			expect(
+				await query.getAudit(admin, missingId, detail, request()),
+			).toMatchObject({ originalPrincipal: null, authorizationRecordId: null });
+		} finally {
+			await producer.close();
+		}
+	});
+
+	it("strictly validates admission metadata before the own Agent exception can expose it", async () => {
+		const f = await fixture();
+		for (const malformed of [
+			{ reason: "SENSITIVE_SENTINEL" },
+			{ operation: "read" },
+			{ reason: "task_accepted" },
+			{ subscriptionId: "caller-subscription" },
+			{ body: "SENSITIVE_SENTINEL" },
+		]) {
+			const auditId = randomUUID();
+			const details = {
+				schemaVersion: 1,
+				operation: "submit",
+				phase: "submit.result",
+				reason: "capacity_full",
+				target: { kind: "agent", agentId: f.agentId },
+				...malformed,
+			};
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, details)
+				values (${auditId}, 'attempt-trace', 'attempt-request', ${f.principal.kind}, ${f.principal.id}, 'task.api.submit.result', 'agent', ${f.agentId}, 'rejected', ${f.agentId}, ${sql.json(details)})`;
+			await expect(
+				query.getAudit(f.scope, auditId, detail, request()),
+			).rejects.toMatchObject({
+				code: malformed.operation ? "access_denied" : "unavailable",
+			});
+			await sql`delete from platform.audit_events where id = ${auditId}`;
+		}
+	});
+
 	it("retains the actual durable control reference and truthful status timeout reason in detail", async () => {
 		const f = await fixture();
 		const authority = new PostgresTaskAuthorizationStoreV1({
