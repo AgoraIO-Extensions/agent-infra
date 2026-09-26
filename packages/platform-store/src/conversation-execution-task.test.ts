@@ -163,7 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-	await sql`truncate platform.conversation_generation_tombstones, platform.task_control_records,
+	await sql`truncate platform.audit_events, platform.conversation_generation_tombstones, platform.task_control_records,
 		platform.task_authorization_records, platform.conversation_events,
 		platform.conversation_audit_events, platform.outbox_items, platform.idempotency_records,
 		platform.conversation_stops, platform.conversation_messages,
@@ -179,11 +179,76 @@ afterAll(async () => {
 });
 
 describe("durable task admission", () => {
+	it("records a missing applied configuration as model-unavailable without an Execution binding", async () => {
+		await sql`delete from platform.agent_configuration_revisions where agent_id='agent_task'`;
+		expect(await taskUseCase().submitTask(command("model_missing"))).toEqual({
+			outcome: "denied",
+			reason: "model_unavailable",
+		});
+		expect(await counts()).toEqual({
+			conversations: 0,
+			executions: 0,
+			messages: 0,
+			outboxes: 0,
+			audits: 0,
+			idempotency: 0,
+		});
+		const [attempt] =
+			await sql`select outcome, details from platform.audit_events where action='task.api.submit.result'`;
+		expect(attempt).toMatchObject({
+			outcome: "rejected",
+			details: {
+				reason: "model_unavailable",
+				target: { kind: "agent", agentId: "agent_task" },
+			},
+		});
+	});
+	it.each(["accepted", "replayed"] as const)(
+		"fails %s when its result audit cannot persist without creating another task",
+		async (outcome) => {
+			const task = taskUseCase();
+			if (outcome === "replayed")
+				await task.submitTask(command("audit_failure"));
+			await sql`create function platform.reject_submit_result() returns trigger language plpgsql as $$
+			begin if NEW.action='task.api.submit.result' then raise exception 'private submit audit failure'; end if; return NEW; end $$`;
+			await sql`create trigger reject_submit_result before insert on platform.audit_events for each row execute function platform.reject_submit_result()`;
+			try {
+				await expect(
+					task.submitTask({
+						...command("audit_failure"),
+						requestId: "failed_attempt",
+					}),
+				).rejects.toMatchObject({ code: "unavailable" });
+				const retained = outcome === "replayed" ? 1 : 0;
+				expect(await counts()).toEqual({
+					conversations: retained,
+					executions: retained,
+					messages: retained,
+					outboxes: retained,
+					audits: retained,
+					idempotency: retained,
+				});
+				expect(
+					await sql`select execution_id from platform.task_authorization_records`,
+				).toHaveLength(retained);
+				expect(
+					await sql`select id from platform.audit_events where action='task.api.submit.result'`,
+				).toHaveLength(retained);
+			} finally {
+				await sql`drop trigger reject_submit_result on platform.audit_events`;
+				await sql`drop function platform.reject_submit_result()`;
+			}
+		},
+	);
 	it("creates a default Conversation once and saves discoverable waiting work atomically", async () => {
 		const task = taskUseCase();
 		const decisions = await Promise.all([
 			task.submitTask(command("same")),
-			task.submitTask(command("same")),
+			task.submitTask({
+				...command("same"),
+				requestId: "request_retry",
+				traceId: "trace_retry",
+			}),
 		]);
 		expect(decisions.map((decision) => decision.outcome).sort()).toEqual([
 			"accepted",
@@ -196,6 +261,34 @@ describe("durable task admission", () => {
 		if (first?.outcome !== "accepted")
 			throw new Error("Expected accepted task");
 		expect(replay).toMatchObject({ result: first.result });
+		const attempts =
+			await sql`select id, request_id, trace_id, target_type, target_id, outcome, details
+			from platform.audit_events where action='task.api.submit.result'`;
+		expect(attempts).toHaveLength(2);
+		expect(new Set(attempts.map((row) => row.id)).size).toBe(2);
+		expect(attempts.map((row) => row.request_id).sort()).toEqual([
+			"request_retry",
+			"request_same",
+		]);
+		expect(attempts.map((row) => row.details.reason).sort()).toEqual([
+			"task_accepted",
+			"task_replayed",
+		]);
+		for (const row of attempts) {
+			expect(row).toMatchObject({
+				target_type: "execution",
+				target_id: first.result.executionId,
+				outcome: "succeeded",
+				details: {
+					phase: "submit.result",
+					target: {
+						conversationId: first.result.conversationId,
+						executionId: first.result.executionId,
+					},
+				},
+			});
+			expect(JSON.stringify(row)).not.toContain("private task input");
+		}
 		expect(await counts()).toEqual({
 			conversations: 1,
 			executions: 1,
@@ -268,6 +361,16 @@ describe("durable task admission", () => {
 		expect(
 			await task.submitTask(command("same", { text: "different" })),
 		).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
+		const [conflict] =
+			await sql`select target_type, target_id, outcome, details from platform.audit_events
+			where action='task.api.submit.result' and details->>'reason'='idempotency_conflict'`;
+		expect(conflict).toMatchObject({
+			target_type: "agent",
+			target_id: "agent_task",
+			outcome: "rejected",
+			details: { target: { kind: "agent", agentId: "agent_task" } },
+		});
+		expect(conflict?.details.target).not.toHaveProperty("executionId");
 	});
 
 	it("rejects full capacity before default Conversation creation", async () => {
@@ -280,6 +383,13 @@ describe("durable task admission", () => {
 		});
 		expect(await task.submitTask(command("two"))).toEqual({
 			outcome: "capacity_full",
+		});
+		const [rejected] =
+			await sql`select outcome, details from platform.audit_events
+			where action='task.api.submit.result' and details->>'reason'='capacity_full'`;
+		expect(rejected).toMatchObject({
+			outcome: "rejected",
+			details: { target: { kind: "agent", agentId: "agent_task" } },
 		});
 		expect(await counts()).toEqual({
 			conversations: 1,
@@ -403,6 +513,22 @@ describe("durable task admission", () => {
 			outcome: "denied",
 			reason: "agent_unavailable",
 		});
+		const rejected =
+			await sql`select outcome, target_type, details from platform.audit_events where action='task.api.submit.result'`;
+		expect(rejected.map((row) => row.details.reason).sort()).toEqual([
+			"agent_unavailable",
+			"conversation_unavailable",
+			"conversation_unavailable",
+			"conversation_unavailable",
+		]);
+		for (const row of rejected) {
+			expect(row).toMatchObject({
+				outcome: "rejected",
+				target_type: "agent",
+				details: { target: { kind: "agent", agentId: "agent_task" } },
+			});
+			expect(row.details.target).not.toHaveProperty("conversationId");
+		}
 		expect(await counts()).toEqual({
 			conversations: 3,
 			executions: 0,

@@ -1,6 +1,8 @@
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import {
+	ScopedPlatformAuditPageV1Schema,
+	ScopedPlatformAuditProjectionV1Schema,
 	TaskProjectionV1Schema,
 	TaskSseMessageV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -290,6 +292,198 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 			{ timeout: 5000 },
 		);
 	});
+	it("preserves distinct authentication and authorization query denials through PostgreSQL and administrator detail HTTP", async () => {
+		for (const [credential, status, reason] of [
+			["PRIVATE_INVALID_BEARER", 401, "AUTHENTICATION_REQUIRED"],
+			[credentials.user, 403, "AUTHORIZATION_REVOKED"],
+		] as const) {
+			userActive = credential !== credentials.user;
+			const response = await request(
+				"/audit?agentId=PRIVATE_FILTER_SENTINEL",
+				credential,
+			);
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code: reason });
+		}
+		userActive = true;
+		const rows = await db.unsafe(
+			"select id, actor_type, actor_id, details from platform.audit_events where action='audit.query.failed' order by occurred_at",
+		);
+		expect(rows).toHaveLength(2);
+		for (const [index, reason] of [
+			"AUTHENTICATION_REQUIRED",
+			"AUTHORIZATION_REVOKED",
+		].entries()) {
+			const row = rows[index];
+			if (!row) throw new Error("Early query denial audit is missing");
+			expect(row).toMatchObject({
+				actor_type: "unknown",
+				actor_id: "unknown",
+				details: {
+					reason,
+					scope: { kind: "denied", requestedScope: "execution" },
+				},
+			});
+			const response = await fetch(`${origin}/api/v3/admin/audit/${row.id}`, {
+				headers: { cookie: "synthetic-admin-session" },
+			});
+			expect(response.status).toBe(200);
+			const record = ScopedPlatformAuditProjectionV1Schema.parse(
+				await response.json(),
+			);
+			expect(record.summary).toBe(`audit.query.failed: reason=${reason}`);
+			expect(record.actor).toEqual({ kind: "unknown", actorId: "unknown" });
+			expect(JSON.stringify([row, record])).not.toMatch(
+				/PRIVATE|synthetic-task-user-credential/,
+			);
+		}
+	});
+
+	it("retains the persisted credential adapter's generic authentication denial for expired bearers", async () => {
+		await db.unsafe(
+			"update platform.platform_api_credentials set expires_at=now()-interval '1 minute' where id='user_credential'",
+		);
+		const response = await request("/audit");
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({
+			code: "AUTHENTICATION_REQUIRED",
+		});
+		const [row] = await db.unsafe(
+			"select id, actor_type, actor_id, details from platform.audit_events where action='audit.query.failed'",
+		);
+		expect(row).toMatchObject({
+			actor_type: "unknown",
+			actor_id: "unknown",
+			details: { reason: "AUTHENTICATION_REQUIRED" },
+		});
+		if (!row) throw new Error("Expired credential query audit is missing");
+		const readback = await fetch(`${origin}/api/v3/admin/audit/${row.id}`, {
+			headers: { cookie: "synthetic-admin-session" },
+		});
+		expect(readback.status).toBe(200);
+		expect(await readback.json()).toMatchObject({
+			summary: "audit.query.failed: reason=AUTHENTICATION_REQUIRED",
+		});
+		expect(JSON.stringify(row)).not.toContain(credentials.user);
+	});
+
+	it("keeps early query denial closed and sanitized when its PostgreSQL audit cannot persist", async () => {
+		await db.unsafe(
+			"create function platform.early_audit_http_failure() returns trigger language plpgsql as $$ begin if NEW.action='audit.query.failed' then raise exception 'PRIVATE_DENIAL_DATABASE_SENTINEL'; end if; return NEW; end $$",
+		);
+		await db.unsafe(
+			"create trigger early_audit_http_failure before insert on platform.audit_events for each row execute function platform.early_audit_http_failure()",
+		);
+		try {
+			const response = await request("/audit", "PRIVATE_INVALID_BEARER");
+			expect(response.status).toBe(503);
+			const body = await response.json();
+			expect(body).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE" });
+			expect(JSON.stringify(body)).not.toMatch(/PRIVATE|items|nextCursor/);
+			expect(
+				await db.unsafe(
+					"select id from platform.audit_events where action like 'audit.query.%'",
+				),
+			).toHaveLength(0);
+		} finally {
+			await db.unsafe(
+				"drop trigger early_audit_http_failure on platform.audit_events",
+			);
+			await db.unsafe("drop function platform.early_audit_http_failure()");
+		}
+	});
+
+	it("reads the actual accepted task audit through list and default detail HTTP queries", async () => {
+		const task = await submit();
+		const response = await request(
+			`/audit?executionId=${task.executionId}&action=task.authorization.accepted`,
+		);
+		expect(response.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+		expect(page.items).toHaveLength(1);
+		const accepted = page.items[0];
+		expect(accepted).toMatchObject({
+			executionId: task.executionId,
+			originalPrincipal: { kind: "user", id: sharedId },
+			result: "accepted",
+		});
+		const detail = await request(`/audit/${accepted?.auditId}`);
+		expect(detail.status).toBe(200);
+		expect(
+			ScopedPlatformAuditProjectionV1Schema.parse(await detail.json()),
+		).toEqual(accepted);
+	});
+	it("reads own submission attempts and replays without inventing an Execution association", async () => {
+		const task = await submit();
+		expect(await submit()).toEqual(task);
+		const response = await request(
+			`/audit?agentId=${configuration.agentId}&action=task.api.access`,
+		);
+		expect(response.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+		expect(page.items).toHaveLength(2);
+		for (const attempt of page.items) {
+			expect(attempt).toMatchObject({
+				actor: { kind: "user", actorId: sharedId },
+				subject: { kind: "agent", subjectId: configuration.agentId },
+				result: "succeeded",
+				summary: "task.api.access: request_accepted",
+				taskApi: {
+					operation: "submit",
+					phase: "access",
+					reason: "request_accepted",
+				},
+				executionId: null,
+				authorizationRecordId: null,
+				originalPrincipal: null,
+				operation: null,
+			});
+			const detail = await request(`/audit/${attempt.auditId}`);
+			expect(detail.status).toBe(200);
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.parse(await detail.json()),
+			).toEqual(attempt);
+		}
+		expect(new Set(page.items.map((attempt) => attempt.requestId)).size).toBe(
+			2,
+		);
+		const associated = await request(
+			`/audit?executionId=${task.executionId}&action=task.api.access`,
+		);
+		expect(associated.status).toBe(200);
+		expect(
+			ScopedPlatformAuditPageV1Schema.parse(await associated.json()).items,
+		).toEqual([]);
+		expect((await request(path(task))).status).toBe(200);
+		expect(
+			(
+				await request(`${path(task)}/cancel`, credentials.user, {
+					schemaVersion: 1,
+				})
+			).status,
+		).toBe(202);
+		const operations = await request(
+			`/audit?executionId=${task.executionId}&action=task.api.access`,
+		);
+		expect(operations.status).toBe(200);
+		const operationPage = ScopedPlatformAuditPageV1Schema.parse(
+			await operations.json(),
+		);
+		expect(
+			operationPage.items.map((attempt) => attempt.taskApi?.operation).sort(),
+		).toEqual(["cancel", "read"]);
+		for (const attempt of operationPage.items) {
+			expect(attempt).toMatchObject({
+				executionId: task.executionId,
+				taskApi: { phase: "access", reason: "request_accepted" },
+			});
+			const detail = await request(`/audit/${attempt.auditId}`);
+			expect(detail.status).toBe(200);
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.parse(await detail.json()),
+			).toEqual(attempt);
+		}
+	});
 	it("atomically accepts and replays user/application tasks with the same ID and key", async () => {
 		const user = await submit();
 		const application = await submit(credentials.application);
@@ -323,6 +517,295 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 			(await request(`${path(application)}/events`, credentials.owner)).status,
 		).toBe(404);
 	});
+	it("isolates actual task audit producers for two users, the application and the administrator", async () => {
+		const user = await submit();
+		const application = await submit(credentials.application);
+		expect(
+			(
+				await request(`${path(user)}/cancel`, credentials.user, {
+					schemaVersion: 1,
+				})
+			).status,
+		).toBe(202);
+		const owner = await submit(credentials.owner);
+		expect(await submit(credentials.application)).toEqual(application);
+		const records = [];
+		for (const [task, credential, principal] of [
+			[user, credentials.user, { kind: "user", id: sharedId }],
+			[
+				application,
+				credentials.application,
+				{ kind: "application", id: sharedId },
+			],
+			[owner, credentials.owner, { kind: "user", id: "owner_01" }],
+		] as const) {
+			const response = await request(
+				"/audit?action=task.authorization.accepted",
+				credential,
+			);
+			expect(response.status).toBe(200);
+			const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+			expect(page.items).toHaveLength(1);
+			expect(page.items[0]).toMatchObject({
+				executionId: task.executionId,
+				originalPrincipal: principal,
+			});
+			const attempts = await request(
+				`/audit?agentId=${configuration.agentId}&action=task.api.access`,
+				credential,
+			);
+			expect(attempts.status).toBe(200);
+			const attemptPage = ScopedPlatformAuditPageV1Schema.parse(
+				await attempts.json(),
+			);
+			for (const attempt of attemptPage.items)
+				expect(attempt.actor).toEqual({
+					kind: principal.kind,
+					actorId: principal.id,
+				});
+			const submitAttempts = attemptPage.items.filter(
+				(attempt) => attempt.taskApi?.operation === "submit",
+			);
+			expect(submitAttempts).toHaveLength(
+				principal.kind === "application" ? 2 : 1,
+			);
+			for (const attempt of submitAttempts)
+				expect(attempt).toMatchObject({
+					subject: { kind: "agent", subjectId: configuration.agentId },
+					executionId: null,
+					authorizationRecordId: null,
+					taskApi: { phase: "access", reason: "request_accepted" },
+				});
+			const resultsResponse = await request(
+				`/audit?executionId=${task.executionId}&action=task.api.submit.result`,
+				credential,
+			);
+			expect(resultsResponse.status).toBe(200);
+			const results = ScopedPlatformAuditPageV1Schema.parse(
+				await resultsResponse.json(),
+			).items;
+			expect(results.map((attempt) => attempt.taskApi?.reason).sort()).toEqual(
+				principal.kind === "application"
+					? ["task_accepted", "task_replayed"]
+					: ["task_accepted"],
+			);
+			for (const attempt of results) {
+				expect(attempt).toMatchObject({
+					executionId: task.executionId,
+					conversationId: task.conversationId,
+					originalPrincipal: principal,
+					result: "succeeded",
+					taskApi: { operation: "submit", phase: "submit.result" },
+				});
+				expect(
+					(await request(`/audit/${attempt.auditId}`, credential)).status,
+				).toBe(200);
+			}
+			records.push({
+				task,
+				credential,
+				auditId: page.items[0]?.auditId,
+				attemptAuditIds: [...submitAttempts, ...results].map(
+					(attempt) => attempt.auditId,
+				),
+			});
+		}
+		for (const record of records) {
+			for (const other of records.filter((candidate) => candidate !== record)) {
+				expect(
+					(await request(`/audit/${record.auditId}`, other.credential)).status,
+				).toBe(404);
+				for (const attemptAuditId of record.attemptAuditIds)
+					expect(
+						(await request(`/audit/${attemptAuditId}`, other.credential))
+							.status,
+					).toBe(404);
+				expect(
+					(
+						await request(
+							`/audit?executionId=${record.task.executionId}`,
+							other.credential,
+						)
+					).status,
+				).toBe(404);
+			}
+		}
+		const administrator = await fetch(
+			`${origin}/api/v3/admin/audit?action=task.authorization.accepted`,
+			{
+				headers: { cookie: "synthetic-admin-session" },
+			},
+		);
+		expect(administrator.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(
+			await administrator.json(),
+		);
+		expect(page.items.map((record) => record.executionId).sort()).toEqual(
+			[user.executionId, application.executionId, owner.executionId].sort(),
+		);
+		expect(JSON.stringify(page)).not.toContain("synthetic task");
+	});
+	it.each(["accepted", "replayed"] as const)(
+		"returns a sanitized error for %s result audit failure and retains only the original task",
+		async (outcome) => {
+			const task = outcome === "replayed" ? await submit() : null;
+			await db.unsafe(
+				"create function platform.submit_result_failure() returns trigger language plpgsql as $$ begin if NEW.action='task.api.submit.result' then raise exception 'PRIVATE_SUBMIT_DATABASE_SENTINEL'; end if; return NEW; end $$",
+			);
+			await db.unsafe(
+				"create trigger submit_result_failure before insert on platform.audit_events for each row execute function platform.submit_result_failure()",
+			);
+			try {
+				const failed = await request(
+					`/agents/${configuration.agentId}/tasks`,
+					credentials.user,
+					{ schemaVersion: 1, text: "synthetic task" },
+				);
+				expect(failed.status).toBe(503);
+				expect(await failed.text()).not.toContain(
+					"PRIVATE_SUBMIT_DATABASE_SENTINEL",
+				);
+				const retained = task ? 1 : 0;
+				expect(await counts()).toEqual({
+					conversations: retained,
+					executions: retained,
+					authorizations: retained,
+				});
+				expect(
+					await db.unsafe(
+						"select id from platform.audit_events where action='task.api.submit.result'",
+					),
+				).toHaveLength(retained);
+				if (task) expect((await request(path(task))).status).toBe(200);
+			} finally {
+				await db.unsafe(
+					"drop trigger submit_result_failure on platform.audit_events",
+				);
+				await db.unsafe("drop function platform.submit_result_failure()");
+			}
+		},
+	);
+	it("rechecks audit authority and returns sanitized HTTP failure when necessary query audit cannot persist", async () => {
+		const task = await submit();
+		const response = await request(
+			`/audit?executionId=${task.executionId}&limit=1`,
+		);
+		expect(response.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+		expect(page.nextCursor).not.toBeNull();
+		await db.unsafe(
+			"update platform.agent_principal_grants set revoked_at=now() where principal_type='user' and principal_id=$1",
+			[sharedId],
+		);
+		for (const url of [
+			`/audit/${page.items[0]?.auditId}`,
+			`/audit?executionId=${task.executionId}&limit=1&cursor=${page.nextCursor}`,
+		])
+			expect((await request(url)).status).toBe(404);
+		await db.unsafe(
+			"update platform.agent_principal_grants set revoked_at=null where principal_type='user' and principal_id=$1",
+			[sharedId],
+		);
+		await db.unsafe(
+			"create function platform.audit_http_failure() returns trigger language plpgsql as $$ begin if NEW.action like 'audit.query.%' then raise exception 'PRIVATE_AUDIT_DATABASE_SENTINEL'; end if; return NEW; end $$",
+		);
+		await db.unsafe(
+			"create trigger audit_http_failure before insert on platform.audit_events for each row execute function platform.audit_http_failure()",
+		);
+		try {
+			const failed = await request(`/audit?executionId=${task.executionId}`);
+			expect(failed.status).toBe(503);
+			expect(await failed.json()).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+			});
+			const failedDetail = await request(`/audit/${page.items[0]?.auditId}`);
+			expect(failedDetail.status).toBe(503);
+			expect(await failedDetail.text()).not.toMatch(
+				/PRIVATE_AUDIT_DATABASE_SENTINEL|items|nextCursor/,
+			);
+		} finally {
+			await db.unsafe(
+				"drop trigger audit_http_failure on platform.audit_events",
+			);
+			await db.unsafe("drop function platform.audit_http_failure()");
+		}
+	});
+	it("preserves legacy administrator audit and mixed-record paging without inventing user ownership", async () => {
+		await db.unsafe(
+			"insert into platform.audit_events(id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,agent_id,occurred_at,details) values('legacy_audit','legacy_trace','user',$1,'agent.application.rejected','agent_application','legacy_application','rejected',$2,'2026-09-01T00:00:00Z',null)",
+			[sharedId, configuration.agentId],
+		);
+		const adminHeaders = { cookie: "synthetic-admin-session" };
+		const legacy = await fetch(`${origin}/api/v1/admin/audit`, {
+			headers: adminHeaders,
+		});
+		expect(legacy.status).toBe(200);
+		expect(await legacy.json()).toMatchObject({
+			items: [
+				{ auditId: "legacy_audit", action: "agent.application.rejected" },
+			],
+		});
+		const task = await submit();
+		const records = [];
+		let cursor: string | null = null;
+		do {
+			const search = new URLSearchParams({
+				limit: "1",
+				agentId: configuration.agentId,
+			});
+			if (cursor) search.set("cursor", cursor);
+			const response = await fetch(`${origin}/api/v3/admin/audit?${search}`, {
+				headers: adminHeaders,
+			});
+			expect(response.status).toBe(200);
+			const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+			records.push(...page.items);
+			cursor = page.nextCursor;
+			expect(records.length).toBeLessThan(20);
+		} while (cursor);
+		expect(new Set(records.map((record) => record.auditId)).size).toBe(
+			records.length,
+		);
+		expect(
+			records.find((record) => record.auditId === "legacy_audit"),
+		).toMatchObject({
+			result: "rejected",
+			originalPrincipal: null,
+			executionId: null,
+		});
+		expect(
+			records.some((record) => record.executionId === task.executionId),
+		).toBe(true);
+		expect(JSON.stringify(records)).not.toContain("details");
+		const own = await request(`/audit?agentId=${configuration.agentId}`);
+		expect(own.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(await own.json());
+		const executions = page.items.filter(
+			(record) => record.executionId !== null,
+		);
+		expect(executions.length).toBeGreaterThan(0);
+		expect(
+			executions.every((record) => record.executionId === task.executionId),
+		).toBe(true);
+		const attempts = page.items.filter((record) => record.executionId === null);
+		expect(attempts).toHaveLength(1);
+		expect(attempts[0]).toMatchObject({
+			action: "task.api.access",
+			actor: { kind: "user", actorId: sharedId },
+			subject: { kind: "agent", subjectId: configuration.agentId },
+			taskApi: {
+				operation: "submit",
+				phase: "access",
+				reason: "request_accepted",
+			},
+			authorizationRecordId: null,
+			originalPrincipal: null,
+		});
+		expect(page.items.some((record) => record.auditId === "legacy_audit")).toBe(
+			false,
+		);
+		expect((await request("/audit/legacy_audit")).status).toBe(404);
+	});
 	it("rejects conflicting retries and capacity before creating another conversation", async () => {
 		await submit();
 		expect(
@@ -345,6 +828,22 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 				)
 			).status,
 		).toBe(409);
+		const rejectedResponse = await request(
+			`/audit?agentId=${configuration.agentId}&action=task.api.submit.result&result=rejected`,
+		);
+		expect(rejectedResponse.status).toBe(200);
+		const rejectedResults = ScopedPlatformAuditPageV1Schema.parse(
+			await rejectedResponse.json(),
+		).items;
+		expect(
+			rejectedResults.map((attempt) => attempt.taskApi?.reason).sort(),
+		).toEqual(["capacity_full", "idempotency_conflict"]);
+		for (const attempt of rejectedResults)
+			expect(attempt).toMatchObject({
+				executionId: null,
+				conversationId: null,
+				taskApi: { phase: "submit.result" },
+			});
 		expect(await counts()).toEqual({
 			conversations: 2,
 			executions: 2,
@@ -375,6 +874,20 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 				)
 			).status,
 		).toBe(503);
+		const rejectedResponse = await request(
+			`/audit?agentId=${configuration.agentId}&action=task.api.submit.result&result=rejected`,
+		);
+		expect(rejectedResponse.status).toBe(200);
+		expect(
+			ScopedPlatformAuditPageV1Schema.parse(await rejectedResponse.json())
+				.items,
+		).toMatchObject([
+			{
+				result: "rejected",
+				executionId: null,
+				taskApi: { phase: "submit.result", reason: "agent_unavailable" },
+			},
+		]);
 		expect(await counts()).toEqual({
 			conversations: 1,
 			executions: 1,
@@ -831,7 +1344,16 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 		const rows = await db.unsafe(
 			"select action,actor_type,actor_id,target_type,target_id,outcome,details,request_id,trace_id from platform.audit_events where action like 'task.api.%' order by occurred_at",
 		);
-		const subscription = rows.filter((row) => row.action !== "task.api.access");
+		const subscription = rows.filter((row) =>
+			String(row.action).startsWith("task.api.subscription."),
+		);
+		expect(rows).toContainEqual(
+			expect.objectContaining({
+				action: "task.api.submit.result",
+				target_id: task.executionId,
+				details: expect.objectContaining({ reason: "task_accepted" }),
+			}),
+		);
 		expect(subscription.map((row) => row.action)).toEqual([
 			"task.api.subscription.started",
 			"task.api.subscription.ended",

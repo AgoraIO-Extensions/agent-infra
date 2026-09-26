@@ -196,6 +196,78 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits scoped audit queries while rejecting private fields and changes to published contracts", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v1/audit",
+			"/api/v1/audit/{auditId}",
+			"/api/v3/admin/audit",
+			"/api/v3/admin/audit/{auditId}",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"ScopedPlatformAuditActionV1",
+			"ScopedPlatformAuditPageV1",
+			"ScopedPlatformAuditProjectionV1",
+			"ScopedPlatformAuditResultV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-scoped-audit-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths["/api/v1/audit"].get.security;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.details =
+						{ type: "object" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.taskApi.anyOf[0].properties.secret =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.taskApi.anyOf[0].properties.reason.enum.push(
+						"caller_supplied_reason",
+					);
+				},
+				(value: typeof current) => {
+					delete value.components.schemas.ScopedPlatformAuditProjectionV1
+						.properties.summary.maxLength;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/admin/audit"].get.operationId =
+						"changedPublishedAudit";
+				},
+				(value: typeof current) => {
+					value.components.schemas.TaskProjectionV1.properties.output = {
+						type: "number",
+					};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(

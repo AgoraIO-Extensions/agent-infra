@@ -17,6 +17,7 @@ const taskApiAuditMetadata = {
 
 const platformAuditActionMetadata = {
 	"task.api.access": taskApiAuditMetadata,
+	"task.api.submit.result": taskApiAuditMetadata,
 	"task.api.subscription.started": taskApiAuditMetadata,
 	"task.api.subscription.ended": taskApiAuditMetadata,
 	"api.access.rejected": {
@@ -453,7 +454,7 @@ function changedFields(
 	return fields as PlatformAuditChangedFieldV1[];
 }
 
-interface AuditRow {
+export interface AuditRow {
 	readonly requestId: string | null;
 	readonly agentId: string | null;
 	readonly auditId: string;
@@ -565,6 +566,8 @@ function decodeRow(row: AuditRow): PlatformAuditProjectionV1 {
 		traceId: row.traceId,
 	};
 }
+
+export { decodeRow as decodePlatformAuditRowV1 };
 
 const auditSelection = {
 	requestId: auditEvents.requestId,

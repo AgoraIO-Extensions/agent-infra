@@ -22,6 +22,8 @@ import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
+	ScopedPlatformAuditPageV1Schema,
+	ScopedPlatformAuditProjectionV1Schema,
 	TaskAcceptedV1Schema,
 	TaskProjectionV1Schema,
 	TaskSseMessageV1Schema,
@@ -1443,6 +1445,159 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			checks.push(
 				"credential-revoke-blocks-http-without-cancelling-task",
 				"capacity-waiting-drains-after-native-release",
+			);
+			// Consume actual native model facts; this does not prove native tool capability.
+			const nativeModelAudit = [];
+			for (const principal of ["user", "application"] as const) {
+				const task = principal === "user" ? first : second;
+				const credential =
+					principal === "user"
+						? replacementCredential.credential
+						: applicationCredential.credential;
+				const query = `executionId=${task.executionId}&action=execution.operation.observed`;
+				const page = ScopedPlatformAuditPageV1Schema.parse(
+					await checkedJson(
+						await taskRequest(`/audit?${query}&limit=100`, credential),
+						200,
+					),
+				);
+				const produced =
+					await sql`select e.event_id,e.event_payload->'fact' as fact,a.id as audit_id,a.details->'fact' as audited_fact from platform.conversation_events e left join platform.audit_events a on a.details->>'eventId'=e.event_id and a.action='execution.operation.observed' where e.execution_id=${task.executionId} and e.source='runtime' and e.event_type='execution.operation' order by e.conversation_cursor`;
+				expect(produced).toHaveLength(3);
+				expect(produced.every((row) => typeof row.audit_id === "string")).toBe(
+					true,
+				);
+				expect(page.nextCursor).toBeNull();
+				expect(page.items).toHaveLength(produced.length);
+				expect(new Set(page.items.map((item) => item.auditId)).size).toBe(3);
+				expect(
+					page.items.map((record) => record.operation?.fact.phase).sort(),
+				).toEqual(["completed", "intent", "started"]);
+				for (const record of page.items) {
+					const event = produced.find((row) => row.audit_id === record.auditId);
+					expect(record.originalPrincipal).toEqual({
+						kind: principal,
+						id: principal === "user" ? user.userId : application.applicationId,
+					});
+					expect(record.executor).toBe("platform_worker");
+					expect(record.authorizationRecordId).toBeTruthy();
+					expect(record.operation).toEqual({
+						eventId: event?.event_id,
+						fact: event?.fact,
+					});
+					expect(event?.audited_fact).toEqual(event?.fact);
+					expect(
+						ScopedPlatformAuditProjectionV1Schema.parse(
+							await checkedJson(
+								await taskRequest(
+									`/audit/${encodeURIComponent(record.auditId)}?${query}`,
+									credential,
+								),
+								200,
+							),
+						),
+					).toEqual(record);
+				}
+				const model = page.items.find(
+					(record) => record.operation?.fact.phase === "completed",
+				);
+				if (model?.operation?.fact.kind !== "model")
+					throw new Error("TASK_NATIVE_MODEL_AUDIT_REQUIRED");
+				expect(model.operation.fact.startedAt).toBeTruthy();
+				expect(model.operation.fact.finishedAt).toBeTruthy();
+				expect(model.operation.fact.durationMs).toBeGreaterThanOrEqual(0);
+				expect(model.operation.fact.usage).toMatchObject({
+					inputTokens: 1,
+					outputTokens: 1,
+				});
+				expect(
+					page.items.every(
+						(record) =>
+							record.operation?.fact.kind === "model" &&
+							record.operation.fact.operationRef ===
+								model.operation?.fact.operationRef &&
+							record.operation.fact.attemptRef ===
+								model.operation?.fact.attemptRef,
+					),
+				).toBe(true);
+				const otherCredential =
+					principal === "user"
+						? applicationCredential.credential
+						: replacementCredential.credential;
+				const otherTask = principal === "user" ? second : first;
+				const otherQuery = `executionId=${otherTask.executionId}&action=execution.operation.observed`;
+				expect(
+					(await taskRequest(`/audit?${otherQuery}&limit=1`, otherCredential))
+						.status,
+				).toBe(200);
+				const paginated = [];
+				let cursor: string | null = null;
+				for (let index = 0; index < page.items.length; index++) {
+					const path = `/audit?${query}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+					const single = ScopedPlatformAuditPageV1Schema.parse(
+						await checkedJson(await taskRequest(path, credential), 200),
+					);
+					expect(single.items).toHaveLength(1);
+					paginated.push(...single.items);
+					cursor = single.nextCursor;
+					if (index < page.items.length - 1) {
+						expect(cursor).toBeTruthy();
+						expect(
+							(
+								await taskRequest(
+									`/audit?${otherQuery}&limit=1&cursor=${encodeURIComponent(cursor ?? "")}`,
+									otherCredential,
+								)
+							).status,
+						).toBe(404);
+					} else expect(cursor).toBeNull();
+				}
+				expect(paginated).toEqual(page.items);
+				expect(
+					(await taskRequest(`/audit?${query}`, otherCredential)).status,
+				).toBe(404);
+				expect(
+					(
+						await taskRequest(
+							`/audit/${encodeURIComponent(model.auditId)}`,
+							otherCredential,
+						)
+					).status,
+				).toBe(404);
+				expect(
+					ScopedPlatformAuditPageV1Schema.parse(
+						await checkedJson(
+							await fetch(
+								`${apiOrigin}/api/v3/admin/audit?${query}&limit=100`,
+								{
+									headers: { cookie: "synthetic-admin-session" },
+								},
+							),
+							200,
+						),
+					),
+				).toEqual(page);
+				nativeModelAudit.push(model);
+			}
+			checks.push(
+				"native-model-audit-api-pagination-detail-and-principal-isolation",
+			);
+			const [userModel, applicationModel] = nativeModelAudit;
+			if (!userModel || !applicationModel)
+				throw new Error("TASK_NATIVE_MODEL_AUDIT_MATRIX_REQUIRED");
+			const { verifyNativeModelAuditBrowser } = await import(
+				"../../web/tests/native-model-audit-browser.js"
+			);
+			const nativeModelAuditBrowser = await verifyNativeModelAuditBrowser({
+				apiOrigin,
+				userModel,
+				applicationModel,
+				evidenceDirectory: process.env.AGENT_INFRA_TASK_NATIVE_EVIDENCE
+					? `${process.env.AGENT_INFRA_TASK_NATIVE_EVIDENCE}.browser`
+					: join(directoryPath, "audit-browser"),
+			});
+			checks.push(
+				"native-model-audit-browser-own-and-administrator-desktop-and-mobile",
 			);
 			const webRequest = (path: string, body?: unknown, key = "web-native") =>
 				fetch(`${apiOrigin}/api/v1${path}`, {
@@ -3932,6 +4087,13 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				lateWireObservation,
 				preparedCandidateObservation,
 				liveModelObservations,
+				nativeModelAudit: nativeModelAudit.map((record) => ({
+					auditId: record.auditId,
+					executionId: record.executionId,
+					originalPrincipal: record.originalPrincipal,
+					operation: record.operation,
+				})),
+				nativeModelAuditBrowser,
 				waiting: {
 					policy: {
 						maximumWaitingTasksPerAgent: 3,

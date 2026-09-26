@@ -1267,6 +1267,44 @@ function isStopConfirmationReasonOpenApiAddition(previous, current) {
 	return removed > 0 && findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #484 adds scoped queries; all existing routes, facts and security remain exact.
+function isScopedAuditOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v1/audit",
+		"/api/v1/audit/{auditId}",
+		"/api/v3/admin/audit",
+		"/api/v3/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditActionV1",
+		"ScopedPlatformAuditPageV1",
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditResultV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f8efbdc797703b1c22df7ee8d43cd609a7a67dae8a45f02d4fad53624a4641e5"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1276,6 +1314,7 @@ function findBreakingChanges(previous, current) {
 			!isTaskStatusOpenApiAddition(previous, current) &&
 			!isStopConfirmationReasonOpenApiAddition(previous, current) &&
 			!isTaskApiOpenApiAddition(previous, current) &&
+			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&

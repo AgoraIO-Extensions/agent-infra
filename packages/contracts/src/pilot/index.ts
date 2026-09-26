@@ -1,3 +1,4 @@
+export * from "./audit.ts";
 export * from "./browser.ts";
 export * from "./delegated.ts";
 export * from "./direct.ts";

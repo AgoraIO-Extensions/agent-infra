@@ -3,9 +3,13 @@ import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload"
 import type {
 	ConversationTaskAdmissionStateV1,
 	ConversationTaskAdmissionTransactionPortV1,
+	ConversationTaskSubmitDecisionV1,
 	ConversationTaskSubmitResultV1,
 } from "@agent-infra/platform-core";
-import { isTaskPrincipalChannelV1 } from "@agent-infra/platform-core";
+import {
+	isTaskPrincipalChannelV1,
+	parseTaskApiAuditInputV1,
+} from "@agent-infra/platform-core";
 import {
 	safeInteger,
 	type Transaction,
@@ -24,6 +28,7 @@ import {
 	readIdempotency,
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
+import { writeTaskApiAudit } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
@@ -177,6 +182,45 @@ export async function submitConversationTask(
 		request.command.agentId !== authority.agentId
 	)
 		return { outcome: "denied", reason: "conversation_unavailable" };
+	async function recordResult(
+		decision: ConversationTaskSubmitDecisionV1,
+		occurredAt?: Date,
+	): Promise<ConversationTaskSubmitDecisionV1> {
+		const succeeded =
+			decision.outcome === "accepted" || decision.outcome === "replayed";
+		const input = parseTaskApiAuditInputV1({
+			schemaVersion: 1,
+			auditId: randomUUID(),
+			operation: "submit",
+			phase: "submit.result",
+			result: succeeded ? "succeeded" : "rejected",
+			reason:
+				"reason" in decision
+					? decision.reason
+					: decision.outcome === "capacity_full"
+						? "capacity_full"
+						: decision.outcome === "accepted"
+							? "task_accepted"
+							: "task_replayed",
+			principal,
+			target: succeeded
+				? {
+						kind: "execution",
+						agentId: authority.agentId,
+						conversationId: decision.result.conversationId,
+						executionId: decision.result.executionId,
+					}
+				: { kind: "agent", agentId: authority.agentId },
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			...(occurredAt ? { occurredAt } : {}),
+		});
+		await writeTaskApiAudit(transaction, {
+			...input,
+			action: "task.api.submit.result",
+		});
+		return decision;
+	}
 	const scope = {
 		scopeType: "principal",
 		scopeId: JSON.stringify([principal.kind, principal.id]),
@@ -189,22 +233,28 @@ export async function submitConversationTask(
 	const existing = await readIdempotency(transaction, scope);
 	if (existing) {
 		if (existing.request_digest !== request.requestDigest)
-			return { outcome: "conflict", reason: "idempotency_conflict" };
+			return recordResult({
+				outcome: "conflict",
+				reason: "idempotency_conflict",
+			});
 		if (existing.status !== "completed") unavailable();
 		const result = replayResult(existing.result);
 		await requireReplay(transaction, result, request);
-		return { outcome: "replayed", result };
+		return recordResult({ outcome: "replayed", result });
 	}
 	// Different principals share one Agent waiting capacity and order.
 	await transaction`select pg_advisory_xact_lock(pg_catalog.hashtextextended(${`task:agent:${authority.agentId}`}, 0))`;
 	const agent = await readAgent(transaction, authority.agentId);
 	if (agent.authorizationRevision !== authority.authorizationRevision)
-		return { outcome: "denied", reason: "agent_unavailable" };
+		return recordResult({ outcome: "denied", reason: "agent_unavailable" });
 	const conversation = request.command.conversationId
 		? await lockConversation(transaction, request.command.conversationId)
 		: undefined;
 	if (conversation && !matchesBinding(conversation, authority))
-		return { outcome: "denied", reason: "conversation_unavailable" };
+		return recordResult({
+			outcome: "denied",
+			reason: "conversation_unavailable",
+		});
 	const [queue] = await transaction<
 		{ waiting_count: string; last_order: string | null }[]
 	>`
@@ -220,7 +270,7 @@ export async function submitConversationTask(
 		lastWaitOrder: safeInteger(queue.last_order ?? "0", 0),
 	};
 	const decision = decide(state);
-	if ("outcome" in decision) return decision;
+	if ("outcome" in decision) return recordResult(decision);
 	const plan = decision;
 	const statusEvent = plan.statusEvent;
 	const finalCursor =
@@ -344,5 +394,5 @@ export async function submitConversationTask(
 		result,
 		plan.acceptedAt,
 	);
-	return { outcome: "accepted", result };
+	return recordResult({ outcome: "accepted", result }, plan.acceptedAt);
 }
