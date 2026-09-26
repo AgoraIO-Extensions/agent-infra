@@ -834,6 +834,52 @@ describe("Conversation Worker dispatch", () => {
 		},
 	);
 
+	it.each(["processing", "unknown"] as const)(
+		"keeps original %s work occupied when recovery lookup is rejected",
+		async (executionStatus) => {
+			const original = claim({
+				executionStatus,
+				hostSessionRef: "host-original",
+			});
+			const store = new MemoryDispatchStore(original);
+			const native = new FakeConversationRuntimeHostV1();
+			const lookup = vi.fn(async () => {
+				throw new ConversationRuntimeHostError(
+					"RUNTIME_SESSION_BINDING_MISMATCH",
+					false,
+				);
+			});
+			const f = setup({
+				store,
+				runtimeHost: {
+					dispatch: native.dispatch.bind(native),
+					events: native.events.bind(native),
+					recoverStatus: native.recoverStatus.bind(native),
+					recoverOriginalStatus: lookup,
+				},
+			});
+			for (let attempt = 0; attempt < 2; attempt++) {
+				expect(await dispatch(f.useCase)).toMatchObject({
+					outcome: "unknown",
+					retryScheduled: true,
+				});
+				expect(store.current).toMatchObject({
+					executionStatus: "unknown",
+					executionId: original.executionId,
+					conversationId: original.conversationId,
+					turnId: original.turnId,
+					hostSessionRef: original.hostSessionRef,
+					sessionGeneration: original.sessionGeneration,
+				});
+				expect(store.outboxStatus).toBe("retry_scheduled");
+				expect(store.errorCode).toBe("RUNTIME_SESSION_BINDING_MISMATCH");
+			}
+			expect(lookup).toHaveBeenCalledTimes(2);
+			expect(native.sideEffectCount()).toBe(0);
+			expect(f.events.persisted).toHaveLength(0);
+		},
+	);
+
 	it("keeps confirmed running API work occupied and never reconciles it as unsent", async () => {
 		const store = new MemoryDispatchStore(
 			claim({

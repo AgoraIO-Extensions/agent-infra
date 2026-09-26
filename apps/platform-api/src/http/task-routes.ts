@@ -3,7 +3,6 @@ import {
 	CancelTaskRequestV1Schema,
 	ConversationSseMessageV2Schema,
 	frameTaskSseMessageV1,
-	PersistedConversationEventV2Schema,
 	resolvePilotReplaySelectorV1,
 	SubmitTaskRequestV1Schema,
 	TaskAcceptedV1Schema,
@@ -17,7 +16,6 @@ import {
 	type ConversationTaskSubmitCommandV1,
 	type ConversationTaskSubmitDecisionV1,
 	hasApiCredentialScopeV1,
-	parseConversationOperationEventV2,
 	parseTaskAuthorizationBoundaryV1,
 	sameApiPrincipalV1,
 	type TaskApiAuditInputV1,
@@ -26,7 +24,6 @@ import {
 import {
 	type ConversationExecutionDetailV1,
 	ConversationQueryError,
-	type ConversationQueryEventV1,
 	type PostgresConversationQueryV1,
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
@@ -225,23 +222,6 @@ async function currentIdentity(
 	return current;
 }
 
-function taskEvent(event: ConversationQueryEventV1) {
-	if (event.eventType !== "execution.operation") return eventProjection(event);
-	const operation = parseConversationOperationEventV2(event.eventPayload);
-	return PersistedConversationEventV2Schema.parse({
-		schemaVersion: 2,
-		kind: "event",
-		type: "execution.operation",
-		eventId: event.eventId,
-		conversationId: event.conversationId,
-		executionId: event.executionId,
-		sequence: event.sequence,
-		conversationCursor: event.conversationCursor,
-		occurredAt: event.occurredAt.toISOString(),
-		payload: operation.fact,
-	});
-}
-
 function taskProjection(detail: ConversationExecutionDetailV1) {
 	const events = detail.events.map((event) => {
 		if (
@@ -249,7 +229,7 @@ function taskProjection(detail: ConversationExecutionDetailV1) {
 			event.conversationId !== detail.execution.conversationId
 		)
 			throw new Error("Task events are inconsistent");
-		return taskEvent(event);
+		return eventProjection(event);
 	});
 	return TaskProjectionV1Schema.parse({
 		schemaVersion: 1,
@@ -576,7 +556,7 @@ export function registerTaskRoutes(
 								event.conversationId !== conversationId
 							)
 								throw new Error("Task replay contains another execution");
-							await write(taskEvent(event));
+							await write(eventProjection(event));
 						}
 						const last = batch.events.at(-1);
 						if (last) next = { kind: "last-event-id", value: last.eventId };

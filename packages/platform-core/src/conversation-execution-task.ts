@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import { parseAuthority } from "./conversation-execution-input.js";
 import {
 	effectiveModelSelection,
@@ -20,6 +22,7 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import type { WorkloadVersionV1 } from "./workload-reconciliation.js";
 
 export interface ConversationTaskSubmitCommandV1 {
 	readonly schemaVersion: 1;
@@ -42,6 +45,17 @@ export interface ConversationTaskAdmissionStateV1 {
 	readonly sourceKind: "standard" | "custom" | null;
 	readonly conversation: ConversationExecutionConversationStateV1 | null;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | null;
+	readonly customCapability?: {
+		readonly configuration: AgentConfigurationRecordV2;
+		readonly verified: WorkloadVersionV1;
+		readonly deployment: {
+			readonly agentId: string;
+			readonly configurationRevision: number;
+			readonly interactionMode: string;
+			readonly imageDigest: string;
+			readonly resourceProfileRef: string;
+		};
+	} | null;
 }
 
 export interface ConversationTaskAdmissionPlanV1 {
@@ -50,9 +64,9 @@ export interface ConversationTaskAdmissionPlanV1 {
 	readonly executionId: string;
 	readonly turnId: string;
 	readonly messageId: string;
-	readonly modelConfigurationRevision: number;
-	readonly modelOptionId: string;
-	readonly reasoningLevel: string;
+	readonly modelConfigurationRevision: number | null;
+	readonly modelOptionId: string | null;
+	readonly reasoningLevel: string | null;
 	readonly acceptedAt: Date;
 	readonly waitDeadline: Date;
 	readonly waitOrder: number;
@@ -70,9 +84,9 @@ export interface ConversationTaskAdmissionPlanV1 {
 			readonly messageId: string;
 			readonly turnId: string;
 			readonly sessionGeneration: number;
-			readonly modelConfigurationRevision: number;
-			readonly modelOptionId: string;
-			readonly reasoningLevel: string;
+			readonly modelConfigurationRevision: number | null;
+			readonly modelOptionId: string | null;
+			readonly reasoningLevel: string | null;
 		};
 	};
 	readonly auditAction: "conversation.task.accepted";
@@ -199,6 +213,31 @@ export function decideConversationTaskWaitingV1(state: {
 	};
 }
 
+function customTaskCompatible(
+	state: ConversationTaskAdmissionStateV1,
+	agentId: string,
+): boolean {
+	const proof = state.customCapability;
+	if (!proof) return false;
+	const { configuration, verified, deployment } = proof;
+	const capacity = verified.executionCapacity;
+	return (
+		configuration.agentId === agentId &&
+		configuration.source.kind === "custom" &&
+		configuration.source.interactionMode === "platform-adapter" &&
+		configuration.modelConfiguration === null &&
+		isDeepStrictEqual(configuration, verified.configuration) &&
+		deployment.agentId === agentId &&
+		deployment.configurationRevision === configuration.revision &&
+		deployment.interactionMode === "platform-adapter" &&
+		deployment.imageDigest === configuration.source.imageDigest &&
+		capacity?.imageDigest === deployment.imageDigest &&
+		capacity.resourceProfileRef === deployment.resourceProfileRef &&
+		Number.isSafeInteger(capacity.maximumConcurrentExecutions) &&
+		capacity.maximumConcurrentExecutions > 0
+	);
+}
+
 export function createConversationTaskAdmissionUseCaseV1(
 	dependencies: {
 		readonly authorization: ConversationTaskAdmissionAuthorizationPortV1;
@@ -310,25 +349,31 @@ export function createConversationTaskAdmissionUseCaseV1(
 						if (state.waitingCount >= policy.maximumWaitingTasksPerAgent)
 							return { outcome: "capacity_full" };
 						const model = state.modelConfiguration;
-						if (state.sourceKind !== "standard" || !model)
+						if (
+							state.sourceKind === "custom"
+								? model !== null ||
+									!customTaskCompatible(state, authority.agentId)
+								: state.sourceKind !== "standard" || !model
+						)
 							return { outcome: "denied", reason: "model_unavailable" };
 						const selection = conversation
-							? effectiveModelSelection(conversation, model)
+							? effectiveModelSelection(conversation, model ?? undefined)
 							: {
-									modelOptionId: model.defaultOptionId,
-									reasoningLevel: model.defaultReasoningLevel,
+									modelOptionId: model?.defaultOptionId ?? null,
+									reasoningLevel: model?.defaultReasoningLevel ?? null,
 									fallback: null,
 								};
 						const modelOptionId = selection.modelOptionId;
 						const reasoningLevel = selection.reasoningLevel;
 						if (
-							modelOptionId === null ||
-							reasoningLevel === null ||
-							!model.options.some(
-								(option) =>
-									option.optionId === modelOptionId &&
-									option.reasoningLevels.includes(reasoningLevel),
-							)
+							model &&
+							(modelOptionId === null ||
+								reasoningLevel === null ||
+								!model.options.some(
+									(option) =>
+										option.optionId === modelOptionId &&
+										option.reasoningLevels.includes(reasoningLevel),
+								))
 						)
 							return { outcome: "denied", reason: "model_unavailable" };
 						const acceptedAt = safeNow(now);
@@ -375,7 +420,7 @@ export function createConversationTaskAdmissionUseCaseV1(
 							executionId,
 							turnId,
 							messageId,
-							modelConfigurationRevision: model.configurationRevision,
+							modelConfigurationRevision: model?.configurationRevision ?? null,
 							modelOptionId,
 							reasoningLevel,
 							acceptedAt,
@@ -395,7 +440,8 @@ export function createConversationTaskAdmissionUseCaseV1(
 									messageId,
 									turnId,
 									sessionGeneration: conversation?.sessionGeneration ?? 1,
-									modelConfigurationRevision: model.configurationRevision,
+									modelConfigurationRevision:
+										model?.configurationRevision ?? null,
 									modelOptionId,
 									reasoningLevel,
 								},

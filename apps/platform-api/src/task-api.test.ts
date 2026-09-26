@@ -1,6 +1,9 @@
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import { TaskProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	TaskProjectionV1Schema,
+	TaskSseMessageV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { hashApiCredentialV1 } from "@agent-infra/platform-core";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import {
@@ -480,6 +483,78 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 			controller.abort();
 		}
 	}, 10_000);
+	it("reads and replays persisted V2 operation facts through the Store projection", async () => {
+		const task = await submit();
+		const outputId = await output(task, "synthetic operation output");
+		const fact = {
+			kind: "model",
+			operationRef: "synthetic-model-operation",
+			attemptRef: "synthetic-model-attempt",
+			phase: "intent",
+			model: {
+				configVersion: "revision-7",
+				modelOptionId: "option-1",
+				modelId: "model-1",
+				reasoningLevel: "medium",
+			},
+		};
+		const eventId = `operation_${task.executionId}`;
+		await db.unsafe(
+			"insert into platform.conversation_events(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source) select $1,$2,$3,$1,3,last_conversation_cursor+1,'execution.operation',$4::text::jsonb,$5,$1,now(),'runtime' from platform.conversations where id=$2",
+			[
+				eventId,
+				task.conversationId,
+				task.executionId,
+				JSON.stringify({ schemaVersion: 2, type: "execution.operation", fact }),
+				"b".repeat(64),
+			],
+		);
+		await db.unsafe(
+			"update platform.conversations set last_conversation_cursor=last_conversation_cursor+1 where id=$1",
+			[task.conversationId],
+		);
+		await db.unsafe(
+			"update platform.conversation_executions set status='completed' where execution_id=$1",
+			[task.executionId],
+		);
+		const read = await request(path(task));
+		expect(read.status).toBe(200);
+		const projection = TaskProjectionV1Schema.parse(await read.json());
+		expect(projection.output).toBe("synthetic operation output");
+		expect(projection.events.at(-1)).toMatchObject({
+			schemaVersion: 2,
+			type: "execution.operation",
+			eventId,
+			payload: fact,
+		});
+		const replay = await fetch(`${origin}/api/v1${path(task)}/events`, {
+			headers: {
+				authorization: `Bearer ${credentials.user}`,
+				"Last-Event-ID": outputId,
+			},
+			signal: AbortSignal.timeout(5000),
+		});
+		expect(replay.status).toBe(200);
+		const reader = replay.body?.getReader();
+		if (!reader) throw new Error("Task replay body is missing");
+		try {
+			let stream = "";
+			while (!stream.includes('"type":"heartbeat"')) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error("Task replay ended before heartbeat");
+				stream += new TextDecoder().decode(chunk.value);
+			}
+			const messages = stream
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) => TaskSseMessageV1Schema.parse(JSON.parse(line.slice(6))));
+			expect(messages).toContainEqual(projection.events.at(-1));
+			expect(stream).not.toContain("synthetic operation output");
+			expect(stream).not.toContain('"type":"task.stream.error"');
+		} finally {
+			await reader.cancel();
+		}
+	});
 	it("closes the stream as revoked when the credential loses its use scope", async () => {
 		const task = await submit();
 		const controller = new AbortController();

@@ -1001,6 +1001,16 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				// A rejected lookup cannot prove the original Turn had no side effects.
+				if (recoveringOriginalTurn && !failure.retryable)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						failure.code,
+						"unknown",
+						retryTransition(claim),
+					);
 				return failure.retryable
 					? retry(
 							dependencies.store,

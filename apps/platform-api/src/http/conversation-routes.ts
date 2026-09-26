@@ -4,12 +4,14 @@ import {
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
+	type ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	framePilotSseMessageV1,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
+	PersistedConversationEventV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
@@ -20,6 +22,7 @@ import {
 	ConversationExecutionError,
 	type ConversationExecutionUseCaseV1,
 	type ConversationStateResultV1,
+	parseConversationOperationFactV2,
 	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	projectConversationExecutionV1,
@@ -298,13 +301,9 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-export function eventProjection(input: ConversationQueryEventV1): SseMessage {
-	const persisted = parseConversationPersistedEventPayloadV1(
-		input.eventPayload,
-	);
-	if (persisted.type !== input.eventType) {
-		throw new Error("Invalid persisted event type");
-	}
+export function eventProjection(
+	input: ConversationQueryEventV1,
+): ReturnType<typeof ConversationSseMessageV2Schema.parse> {
 	const base = {
 		schemaVersion: 1,
 		kind: "event",
@@ -315,6 +314,24 @@ export function eventProjection(input: ConversationQueryEventV1): SseMessage {
 		conversationCursor: input.conversationCursor,
 		occurredAt: input.occurredAt.toISOString(),
 	};
+	if (input.eventType === "execution.operation") {
+		if (input.eventSchemaVersion !== 2)
+			throw new Error("Operation event schema is invalid");
+		return PersistedConversationEventV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "execution.operation",
+			payload: parseConversationOperationFactV2(input.eventPayload),
+		});
+	}
+	if (input.eventSchemaVersion !== undefined)
+		throw new Error("Persisted event schema is invalid");
+	const persisted = parseConversationPersistedEventPayloadV1(
+		input.eventPayload,
+	);
+	if (persisted.type !== input.eventType) {
+		throw new Error("Invalid persisted event type");
+	}
 	let projected: unknown;
 	if (persisted.type === "text.delta") {
 		projected = {
@@ -986,7 +1003,9 @@ export function registerConversationRoutes(
 								return;
 							}
 							const message = eventProjection(persisted);
-							await writeSseMessage(stream, message);
+							// V1 clients retain their original wire types; V2 facts stay durable.
+							if (message.schemaVersion === 1)
+								await writeSseMessage(stream, message);
 							cursor = persisted.conversationCursor;
 						}
 						await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);

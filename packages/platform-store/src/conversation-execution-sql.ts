@@ -45,6 +45,9 @@ export async function lockAgentConfiguration(
 	| {
 			readonly authorizationRevision: string | null;
 			readonly sourceKind: "standard" | "custom" | undefined;
+			readonly configuration?: ReturnType<
+				typeof decodeAgentConfigurationRecord
+			>;
 			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	  }
 	| undefined
@@ -82,6 +85,7 @@ export async function lockAgentConfiguration(
 		return {
 			authorizationRevision: row.authorization_revision,
 			sourceKind: configuration.source.kind,
+			configuration,
 			modelConfiguration: model
 				? {
 						configurationRevision: revision,

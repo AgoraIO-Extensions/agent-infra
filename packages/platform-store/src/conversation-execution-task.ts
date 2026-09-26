@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	ConversationTaskAdmissionStateV1,
 	ConversationTaskAdmissionTransactionPortV1,
@@ -24,6 +25,7 @@ import {
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type SubmitRequest = Parameters<
 	ConversationTaskAdmissionTransactionPortV1["submitTask"]
@@ -57,7 +59,7 @@ async function readAgent(
 ): Promise<
 	Pick<
 		ConversationTaskAdmissionStateV1,
-		"agent" | "modelConfiguration" | "sourceKind"
+		"agent" | "modelConfiguration" | "sourceKind" | "customCapability"
 	> & {
 		readonly authorizationRevision: string | null;
 	}
@@ -80,6 +82,31 @@ async function readAgent(
 		select status, desired_state, service_availability
 		from platform.agent_applications where agent_id = ${agentId} for share
 	`;
+	let customCapability: ConversationTaskAdmissionStateV1["customCapability"] =
+		null;
+	if (agent.configuration?.source.kind === "custom") {
+		const [row] = await transaction<{ state: unknown }[]>`
+			select state from platform.workload_reconciliations
+			where agent_id = ${agentId} for share
+		`;
+		const decoded = decodePersistedWorkloadStateV1(row?.state, agentId);
+		if (decoded && !decoded.legacy && decoded.state.verified) {
+			const deployment = validateAgentWorkloadDesiredV1(
+				decoded.state.verified.deployment,
+			);
+			customCapability = {
+				configuration: agent.configuration,
+				verified: decoded.state.verified,
+				deployment: {
+					agentId: deployment.agentId,
+					configurationRevision: deployment.configRevision,
+					interactionMode: deployment.runtimeManifest.interactionMode,
+					imageDigest: deployment.imageDigest,
+					resourceProfileRef: deployment.resourceProfileRef,
+				},
+			};
+		}
+	}
 	return {
 		authorizationRevision: agent.authorizationRevision,
 		agent: application
@@ -91,6 +118,7 @@ async function readAgent(
 			: null,
 		modelConfiguration: agent.modelConfiguration ?? null,
 		sourceKind: agent.sourceKind ?? null,
+		customCapability,
 	};
 }
 
