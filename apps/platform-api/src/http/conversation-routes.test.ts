@@ -566,6 +566,125 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	const operationEvent = {
+		...persistedEvent,
+		eventSchemaVersion: 2 as const,
+		eventId: "operation-event-2",
+		sequence: 2,
+		conversationCursor: "cursor-2",
+		eventType: "execution.operation",
+		eventPayload: {
+			kind: "model",
+			operationRef: "model-operation-1",
+			attemptRef: "model-attempt-1",
+			phase: "intent",
+			model: {
+				configVersion: "revision-1",
+				modelOptionId: "option-1",
+				modelId: "model-1",
+				reasoningLevel: "medium",
+			},
+		},
+	};
+	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
+		const query = dependencies().query;
+		query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent, operationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventId: "event-3",
+						sequence: 3,
+						conversationCursor: "cursor-3",
+						eventPayload: { type: "text.delta", text: "after operation" },
+					},
+				],
+				resumeCursor: "cursor-3",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-3",
+			});
+		const response = await testApp(dependencies({ query })).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(200);
+		const stream = await response.text();
+		const messages = stream
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+			);
+		expect(
+			messages
+				.filter((message) => message.kind === "event")
+				.map((message) => message.eventId),
+		).toEqual(["event-1", "event-3"]);
+		expect(stream).not.toContain("operation-event-2");
+		expect(query.replay).toHaveBeenNthCalledWith(
+			2,
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+			{ kind: "cursor", value: "cursor-2" },
+		);
+	});
+	it.each([
+		{ eventSchemaVersion: undefined },
+		{
+			eventPayload: { ...operationEvent.eventPayload, secret: "must-not-pass" },
+		},
+		{ eventId: "invalid\nevent" },
+		{ sequence: 0 },
+	])("rejects malformed V2 facts before V1 streaming: %j", async (change) => {
+		const query = dependencies().query;
+		query.replay = vi.fn().mockResolvedValue({
+			outcome: "events",
+			events: [{ ...operationEvent, ...change }],
+			resumeCursor: "cursor-2",
+		});
+		const response = await testApp(dependencies({ query })).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		expect(response.status).toBe(503);
+	});
+	it("projects a Platform waiting status from the persisted timeline", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventType: "task.status",
+						eventPayload: { type: "task.status", status: "waiting" },
+					},
+				],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+		expect(response.status).toBe(200);
+		expect(body).toContain('"type":"task.status"');
+		expect(body).toContain('"payload":{"status":"waiting"}');
+	});
+
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi

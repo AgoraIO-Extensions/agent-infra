@@ -91,6 +91,7 @@ export interface FileExecutionStateV1 extends FileScopeV1 {
 	readonly executionId: string;
 	readonly sessionGeneration: number;
 	readonly status:
+		| "waiting"
 		| "submitted"
 		| "processing"
 		| "unknown"

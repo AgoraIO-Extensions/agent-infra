@@ -6,6 +6,7 @@ import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
+	parseConversationPersistedEventPayloadV1,
 } from "./conversation-events.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 
@@ -247,6 +248,16 @@ describe("Conversation event ingestion", () => {
 			}),
 		).rejects.toMatchObject({ code: "invalid_input" });
 		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "execution.status",
+					status: "unknown",
+					reason: "STOP_CONFIRMATION_TIMEOUT",
+				} as never,
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
 			events.persist({ ...event, source: "platform" } as never),
 		).rejects.toMatchObject({ code: "invalid_input" });
 		await expect(
@@ -427,5 +438,41 @@ describe("Conversation event ingestion", () => {
 		await expect(events.persist(event)).rejects.toMatchObject({
 			code: "unavailable",
 		});
+	});
+});
+
+describe("platform-owned persisted stop reason", () => {
+	it("reads only the unknown timeout reason and rejects runtime or unbounded reason payloads", () => {
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		for (const payload of [
+			{
+				type: "task.status",
+				status: "processing",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+			{
+				type: "task.status",
+				status: "unknown",
+				reason: "private runtime text",
+			},
+			{
+				type: "execution.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+		])
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
 	});
 });

@@ -121,6 +121,10 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		modelOptionId: text("model_option_id"),
 		reasoningLevel: text("reasoning_level"),
+		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
+		taskWaitDeadline: timestamp("task_wait_deadline", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		foreignKey({
@@ -147,6 +151,10 @@ export const conversationExecutions = platformSchema.table(
 		check(
 			"conversation_execution_turn_id_non_empty",
 			sql`char_length(${table.turnId}) > 0`,
+		),
+		check(
+			"conversation_execution_task_wait_binding",
+			sql`(${table.taskWaitOrder} IS NULL AND ${table.taskWaitDeadline} IS NULL AND ${table.status}::text <> 'waiting') OR (${table.taskWaitOrder} IS NOT NULL AND ${table.taskWaitOrder} between 1 and 9007199254740991 AND ${table.taskWaitDeadline} IS NOT NULL)`,
 		),
 		check(
 			"conversation_execution_session_generation_safe",
@@ -198,6 +206,13 @@ export const conversationExecutions = platformSchema.table(
 		index("conversation_execution_conversation_idx").on(
 			table.conversationId,
 			table.createdAt,
+		),
+		uniqueIndex("conversation_execution_task_wait_order_unique")
+			.on(table.agentId, table.taskWaitOrder)
+			.where(sql`${table.taskWaitOrder} IS NOT NULL`),
+		index("conversation_execution_agent_wait_idx").on(
+			table.agentId,
+			table.taskWaitOrder,
 		),
 	],
 );
@@ -267,6 +282,14 @@ export const conversationStops = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		confirmationDeadline: timestamp("confirmation_deadline", {
+			withTimezone: true,
+		})
+			.default(sql`clock_timestamp() + interval '60 seconds'`)
+			.notNull(),
+		confirmationTimedOutAt: timestamp("confirmation_timed_out_at", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		foreignKey({
@@ -417,11 +440,11 @@ export const conversationEvents = platformSchema.table(
 					${table.source} = 'runtime'
 					AND ${table.runtimeCursor} IS NOT NULL
 					AND char_length(${table.runtimeCursor}) > 0
-					AND ${table.eventType} <> 'model.selection.fell_back'
+					AND ${table.eventType} NOT IN ('model.selection.fell_back', 'task.status')
 				) OR (
 					${table.source} = 'platform'
 					AND ${table.runtimeCursor} IS NULL
-					AND ${table.eventType} = 'model.selection.fell_back'
+					AND ${table.eventType} IN ('model.selection.fell_back', 'task.status')
 				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique")

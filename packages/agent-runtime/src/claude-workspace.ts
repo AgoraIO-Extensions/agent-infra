@@ -1,10 +1,17 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { workspacePathAllowed } from "./workspace-path.js";
 
+export type ClaudeToolRequestObserver = (request: {
+	name: string;
+	toolUseID: string;
+	permitted: boolean;
+}) => Promise<void>;
+
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
+	observer?: ClaudeToolRequestObserver,
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const permits = async (name: string, input: unknown) => {
 		if (
@@ -34,17 +41,37 @@ export function claudeWorkspaceTools(
 			PreToolUse: [
 				{
 					hooks: [
-						async (input) => ({
-							hookSpecificOutput: {
-								hookEventName: "PreToolUse",
-								permissionDecision:
-									input.hook_event_name === "PreToolUse" &&
-									(await permits(input.tool_name, input.tool_input))
-										? "allow"
-										: "deny",
-								permissionDecisionReason: "Conversation workspace policy",
-							},
-						}),
+						async (input) => {
+							if (input.hook_event_name !== "PreToolUse") return {};
+							const permitted = await permits(
+								input.tool_name,
+								input.tool_input,
+							);
+							try {
+								await observer?.({
+									name: input.tool_name,
+									toolUseID: input.tool_use_id,
+									permitted,
+								});
+							} catch {
+								return {
+									hookSpecificOutput: {
+										hookEventName: "PreToolUse" as const,
+										permissionDecision: "deny" as const,
+										permissionDecisionReason:
+											"Conversation workspace policy unavailable",
+									},
+								};
+							}
+							if (permitted) return {};
+							return {
+								hookSpecificOutput: {
+									hookEventName: "PreToolUse" as const,
+									permissionDecision: "deny" as const,
+									permissionDecisionReason: "Conversation workspace policy",
+								},
+							};
+						},
 					],
 				},
 			],

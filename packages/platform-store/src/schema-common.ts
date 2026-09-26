@@ -14,6 +14,7 @@ export const platformStatusValues = {
 	idempotencyStatus: ["reserved", "completed"],
 	conversationStatus: ["ready", "active", "unavailable"],
 	conversationExecutionStatus: [
+		"waiting",
 		"submitted",
 		"processing",
 		"unknown",
@@ -41,7 +42,7 @@ export const platformStatusValues = {
 		"workload_unavailable",
 		"reconciliation_failed",
 	],
-	agentAvailabilityTargetType: ["user", "organization"],
+	agentAvailabilityTargetType: ["user", "organization", "application"],
 	agentManagementSubjectType: ["agent_application", "agent"],
 	agentManagementOperation: [
 		"update_application",

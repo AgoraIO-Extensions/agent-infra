@@ -65,6 +65,137 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("accepts the reviewed task-status event without widening its payload", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV1;
+		previous.components.schemas.PersistedConversationEventV1.oneOf =
+			previous.components.schemas.PersistedConversationEventV1.oneOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV1",
+			);
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-task-sse-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV1.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the bounded V2 stop-timeout addition and rejects reason or route expansion", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV2;
+		previous.components.schemas.PersistedConversationEventV2.anyOf =
+			previous.components.schemas.PersistedConversationEventV2.anyOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV2",
+			);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-stop-reason-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV2.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRoute = structuredClone(current);
+			changedRoute.paths[
+				"/api/v2/conversations/{conversationId}"
+			].get.security = [];
+			await writeFile(currentPath, JSON.stringify(changedRoute));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRuntime = structuredClone(current);
+			changedRuntime.components.schemas.ExecutionOperationEventV2.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(changedRuntime));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the fixed task API addition and still rejects published route changes", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		for (const path of [
+			"/api/v1/agents/{agentId}/tasks",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
+		])
+			delete previous.paths[path];
+		for (const name of [
+			"CancelTaskRequestV1",
+			"SubmitTaskRequestV1",
+			"TaskAcceptedV1",
+			"TaskCancellationV1",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+			"TaskStreamErrorV1",
+		])
+			delete previous.components.schemas[name];
+		delete previous.components.securitySchemes;
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-task-api-"));
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const mutations = [
+				(value: typeof current) => {
+					delete value.paths["/api/v1/agents/{agentId}/tasks"].post.security;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SubmitTaskRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/session"].get.responses["200"].description =
+						"changed published route";
+				},
+				(value: typeof current) => {
+					value.components.securitySchemes.unreviewed = {
+						type: "http",
+						scheme: "basic",
+					};
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects every deviation from the fallback OpenAPI addition", async () => {
 		const previous = fixturePath("openapi-component-ref-base");
 		const additive = JSON.parse(
@@ -379,6 +510,7 @@ describe("contract compatibility command", () => {
 			"ConversationSseMessageV2",
 			"ExecutionDetailProjectionV2",
 			"ExecutionOperationEventV2",
+			"TaskStatusEventV2",
 			"HeartbeatSignalV1",
 			"ModelSelectionFallbackEventV1",
 			"PersistedConversationEventV1",

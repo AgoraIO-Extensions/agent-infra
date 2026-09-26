@@ -2,6 +2,7 @@
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 
 import { Readable, Writable } from "node:stream";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import {
 	client,
 	PROTOCOL_VERSION,
@@ -21,6 +22,23 @@ export interface AcpLaunch {
 	authorize?: (
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
+	onTurn?: (callbacks: {
+		modelRequestIntent?: () => Promise<void>;
+		modelRequestStarted?: () => Promise<void>;
+		modelRequestFinished?: (
+			state: "completed" | "failed" | "unknown",
+			usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
+		modelUsage?: (
+			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
+		}) => Promise<void>;
+	}) => void;
 }
 
 export async function openAcpSession(options: {
@@ -29,6 +47,12 @@ export async function openAcpSession(options: {
 	cwd: string;
 	nativeId?: string;
 	update: (notification: SessionNotification) => Promise<void>;
+	toolRequestStarted?: (tool: {
+		readonly toolCallId: string;
+		readonly name: string;
+		readonly permitted?: boolean;
+		readonly executionBoundary?: true;
+	}) => Promise<void>;
 }) {
 	const native = await spawnAcpProcess(
 		options.directory,
@@ -46,6 +70,7 @@ export async function openAcpSession(options: {
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
 	>();
 	let activeSessionId: string | undefined;
+	let currentToolRequestStarted = options.toolRequestStarted;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			if (loading || params.sessionId !== activeSessionId) return;
@@ -74,21 +99,37 @@ export async function openAcpSession(options: {
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
-			const allowed =
+			const activeTool = () =>
 				!loading &&
 				params.sessionId === activeSessionId &&
+				tools.has(params.toolCall.toolCallId);
+			const allowed =
+				activeTool() &&
 				tool &&
 				once &&
 				(await options.launch.authorize?.(tool).catch(() => false));
+			const admitted =
+				activeTool() && currentToolRequestStarted
+					? await currentToolRequestStarted({
+							toolCallId: params.toolCall.toolCallId,
+							name: tool?.kind ?? params.toolCall.kind ?? "unknown",
+							permitted: Boolean(allowed),
+							executionBoundary: true,
+						}).then(
+							() => Boolean(allowed),
+							() => false,
+						)
+					: false;
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
 			return {
-				outcome: allowed
-					? { outcome: "selected" as const, optionId: once.optionId }
-					: rejected
-						? { outcome: "selected" as const, optionId: rejected.optionId }
-						: { outcome: "cancelled" as const },
+				outcome:
+					admitted && once
+						? { outcome: "selected" as const, optionId: once.optionId }
+						: rejected
+							? { outcome: "selected" as const, optionId: rejected.optionId }
+							: { outcome: "cancelled" as const },
 			};
 		})
 		.connect(
@@ -142,6 +183,16 @@ export async function openAcpSession(options: {
 		loading = false;
 		return {
 			nativeId,
+			startTurn(next: {
+				toolRequestStarted?: (tool: {
+					readonly toolCallId: string;
+					readonly name: string;
+					readonly permitted?: boolean;
+					readonly executionBoundary?: true;
+				}) => Promise<void>;
+			}) {
+				currentToolRequestStarted = next.toolRequestStarted;
+			},
 			modelSelection: () => {
 				const model = configOptions.find(
 					(option) => option.category === "model" || option.id === "model",
@@ -200,10 +251,11 @@ export async function openAcpSession(options: {
 			},
 			async prompt(text: string) {
 				tools.clear();
-				const response = await connection.agent.request("session/prompt", {
+				const responsePromise = connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],
 				});
+				const response = await responsePromise;
 				await updates;
 				return response;
 			},

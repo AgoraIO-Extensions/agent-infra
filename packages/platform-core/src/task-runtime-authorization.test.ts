@@ -3,6 +3,7 @@ import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import type { ConversationDispatchClaimV1 } from "./conversation-dispatch.js";
 import type {
+	CurrentTaskApplicationV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
 } from "./task-authorization.js";
@@ -11,6 +12,7 @@ import {
 	isPlatformConversationChannelCurrentV1,
 	type LegacyTaskControlRecoveryV1,
 	type TaskRuntimeAuthorizationContextV1,
+	type TaskRuntimeAuthorizationRecordV1,
 	type TaskRuntimeRecoveryStateV1,
 } from "./task-runtime-authorization.js";
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
@@ -106,15 +108,7 @@ function harness() {
 		failureCode: null,
 		attempts: 0,
 	};
-	let record: {
-		authorizationRecordId: string;
-		executionId: string;
-		boundary: TaskAuthorizationBoundaryV1;
-		revokedAt: Date | null;
-		agent: AgentManagementStateV1;
-		configurationRevision: number;
-		workload: WorkloadReconciliationStateV1 | null;
-	} | null = {
+	let record: TaskRuntimeAuthorizationRecordV1 | null = {
 		authorizationRecordId: "original-authorization",
 		executionId: "execution",
 		boundary,
@@ -164,6 +158,84 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
+	it("uses recovery control from the first unknown API task query even when ready", async () => {
+		const h = harness();
+		Object.assign(h.state, { taskWaitOrder: 1, executionStatus: "unknown" });
+		Object.assign(h.claim, { taskWaitOrder: 1, executionStatus: "unknown" });
+		expect(await h.useCase.authorizeClaim(h.claim, signal())).toMatchObject({
+			outcome: "allowed",
+		});
+		const state = {
+			...h.state,
+			taskWaitOrder: 1,
+			executionStatus: "unknown" as const,
+		};
+		for (const command of [
+			"session.status",
+			"events.persist",
+			"events.ack",
+		] as const) {
+			const result = await h.useCase.current(
+				h.context,
+				state,
+				command,
+				signal(),
+			);
+			expect(result.authority).toEqual({
+				purpose: "control",
+				reason: "recovery",
+				controlRecordId: "control-recovery",
+			});
+		}
+		expect(h.ports.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "recovery" }),
+			expect.any(AbortSignal),
+		);
+		for (const unchanged of [
+			{
+				...h.state,
+				taskWaitOrder: undefined,
+				executionStatus: "unknown" as const,
+			},
+			{ ...h.state, taskWaitOrder: 1, executionStatus: "waiting" as const },
+		])
+			expect(
+				(
+					await h.useCase.current(
+						h.context,
+						unchanged,
+						"session.status",
+						signal(),
+					)
+				).authority.purpose,
+			).toBe("business");
+		expect(
+			(
+				await h.useCase.current(
+					h.context,
+					{ ...state, executionStatus: "processing" },
+					"session.status",
+					signal(),
+				)
+			).authority.purpose,
+		).toBe("control");
+		expect(
+			(
+				await h.useCase.current(
+					h.context,
+					{ ...state, executionStatus: "processing" },
+					"events.persist",
+					signal(),
+				)
+			).authority.purpose,
+		).toBe("business");
+		// Initial dispatch already reserves unknown in Store; it still requires fresh business authority.
+		expect(
+			(await h.useCase.current(h.context, state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("business");
+	});
+
 	it("intersects current organization membership with the original task without copying a new role", async () => {
 		const h = harness();
 		expect(
@@ -499,4 +571,119 @@ it("keeps original custom execution controls during an unverified platform adapt
 			([call]) => call.reason !== "authorization_revoked",
 		),
 	).toBe(true);
+});
+
+function applicationHarness() {
+	const h = harness();
+	const application: CurrentTaskApplicationV1 = {
+		schemaVersion: 1,
+		applicationId: "user",
+		accountStatus: "active",
+		authorizationRevision: "app-2",
+	};
+	Object.assign(h.boundary, {
+		principal: { kind: "application", id: "user" },
+		channelId: "api:application",
+		accessSources: [{ kind: "application", applicationId: "user" }],
+	});
+	Object.assign(h.claim, { channelId: "api:application" });
+	Object.assign(h.context, { principal: h.boundary.principal });
+	Object.assign(h.agent, {
+		principalGrants: [
+			{
+				principal: h.boundary.principal,
+				grantType: "use",
+				revokedAt: null,
+				authorizationRevision: "agent-7",
+			},
+		],
+	});
+	if (!h.record) throw Error();
+	h.setRecord({ ...h.record, application });
+	return { ...h, application };
+}
+
+it("renews application authority from current subject without resolving its responsible user or API credential", async () => {
+	const h = applicationHarness();
+	const authorization = await h.useCase.authorizeClaim(h.claim, signal());
+	expect(authorization).toMatchObject({ outcome: "allowed" });
+	const result = await h.useCase.current(
+		h.context,
+		h.state,
+		"execution.renew",
+		signal(),
+	);
+	expect(result.authority).toMatchObject({ purpose: "business" });
+	expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+});
+
+it.each(["disabled", "revoked-grant", "missing-subject"])(
+	"cancels application controlled operations after %s",
+	async (change) => {
+		const h = applicationHarness();
+		if (change === "disabled")
+			Object.assign(h.application, { accountStatus: "disabled" });
+		if (change === "revoked-grant")
+			Object.assign(h.agent, { principalGrants: [] });
+		if (change === "missing-subject") {
+			if (!h.record) throw Error();
+			h.setRecord({ ...h.record, application: undefined });
+		}
+		expect(
+			(await h.useCase.current(h.context, h.state, "execution.renew", signal()))
+				.authority,
+		).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
+		expect(h.ports.resolveCurrentUser).not.toHaveBeenCalled();
+	},
+);
+
+it("keeps application and user with the same stable ID in different API channels", async () => {
+	const h = applicationHarness();
+	Object.assign(h.claim, { channelId: "api:user" });
+	Object.assign(h.boundary, { channelId: "api:user" });
+	expect(await h.useCase.authorizeClaim(h.claim, signal())).toMatchObject({
+		outcome: "denied",
+	});
+});
+
+it.each([
+	["user", "api:user"],
+	["application", "api:application"],
+] as const)(
+	"allows %s fixed API channel through current platform capabilities",
+	(kind, channelId) => {
+		const h = harness();
+		if (!h.record) throw Error();
+		Object.assign(h.boundary, { principal: { kind, id: "user" }, channelId });
+		expect(isPlatformConversationChannelCurrentV1(h.record)).toBe(true);
+	},
+);
+
+it("revokes API user renewal when its explicit grant is removed despite unchanged Owner access", async () => {
+	const h = harness();
+	Object.assign(h.boundary, {
+		channelId: "api:user",
+		accessSources: [{ kind: "user", userId: "user" }],
+	});
+	Object.assign(h.claim, { channelId: "api:user" });
+	Object.assign(h.agent, {
+		ownerIds: ["user"],
+		principalGrants: [
+			{
+				principal: { kind: "user", id: "user" },
+				grantType: "use",
+				revokedAt: null,
+				authorizationRevision: "agent-7",
+			},
+		],
+	});
+	expect(
+		(await h.useCase.current(h.context, h.state, "execution.renew", signal()))
+			.authority.purpose,
+	).toBe("business");
+	Object.assign(h.agent, { principalGrants: [] });
+	expect(
+		(await h.useCase.current(h.context, h.state, "execution.renew", signal()))
+			.authority,
+	).toMatchObject({ purpose: "control", reason: "authorization_revoked" });
 });

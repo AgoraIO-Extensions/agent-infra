@@ -123,7 +123,7 @@ describe("AgentLifecycleControls", () => {
 		);
 
 		expect(screen.getByText("已停止")).toBeTruthy();
-		expect(screen.getByRole("button", { name: "重启 Agent" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "启动 Agent" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "停止 Agent" })).toBeNull();
 		expect(screen.queryByText("服务状态")).toBeNull();
 

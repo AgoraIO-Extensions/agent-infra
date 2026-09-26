@@ -213,6 +213,19 @@ it("allocates one result for the trusted execution and denies stale generation a
 	};
 	const access = await service.issueAccess(accessRequest, authorization);
 	expect(access.expiresAt).toBe("2026-09-15T00:00:05.000Z");
+	store.seedExecution({
+		...scope,
+		executionId: "execution",
+		sessionGeneration: 1,
+		status: "waiting",
+		stopPending: false,
+	});
+	await expect(
+		service.issueAccess(
+			{ ...accessRequest, idempotencyKey: "waiting-access" },
+			authorization,
+		),
+	).rejects.toMatchObject({ code: "denied" });
 	await expect(
 		service.issueAccess(accessRequest, {
 			authorize: async () => ({

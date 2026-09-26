@@ -63,25 +63,46 @@ async function fixture(mode = "normal") {
 it.each([false, true])(
 	"keeps ACK separate from completion and resumes the exact session (native exit: %s)",
 	async (exit) => {
-		const f = await fixture();
+		const f = await fixture("tool");
 		try {
 			const result = await f.driver.execute(command);
 			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
 			expect(
 				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
 			).toBe("running");
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(
-						result.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(
+							result.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 			const events = await f.driver.replayEvents(
 				result.nativeSessionRef,
 				command.executionId,
 			);
+			expect(
+				events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual(["intent", "completed"]);
+			expect(
+				events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "tool"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual([]);
+			expect(
+				events.flatMap((event) =>
+					event.type === "tool" ? [event.payload.phase] : [],
+				),
+			).toEqual(["completed"]);
 			expect(
 				events
 					.filter((event) => event.type === "text")
@@ -107,10 +128,12 @@ it.each([false, true])(
 				turnId: "turn-b",
 				operationId: "operation-b",
 			});
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(next.nativeSessionRef, "execution-b"),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(next.nativeSessionRef, "execution-b"),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 			const nextOwner = JSON.parse(await readFile(ownerFile, "utf8")).owner;
 			expect(nextOwner.pid === owner.pid).toBe(!exit);

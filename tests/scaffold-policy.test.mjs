@@ -14,7 +14,7 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
-test("Platform Worker typecheck builds dist-backed workspace dependencies through Turbo", async () => {
+test("typechecks wait for their own build and dist-backed workspace dependencies", async () => {
 	const manifest = JSON.parse(
 		await readFile("apps/platform-worker/package.json", "utf8"),
 	);
@@ -23,8 +23,8 @@ test("Platform Worker typecheck builds dist-backed workspace dependencies throug
 	assert.equal(manifest.scripts["check-types"], "tsc --noEmit");
 	assert.deepEqual(
 		turbo.tasks["check-types"].dependsOn,
-		["^build", "^check-types"],
-		"typechecks must build workspace dependencies before reading their dist exports",
+		["build", "^build", "^check-types"],
+		"typechecks must not read dist while their own build replaces it",
 	);
 });
 

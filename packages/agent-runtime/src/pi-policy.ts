@@ -11,7 +11,13 @@ import { workspacePathAllowed } from "./workspace-path.js";
 
 /** Keep Pi's own argument parsing, mutation queue and text handling. Enforce the
  * boundary in its supported filesystem operations, after all path transformations. */
-export function createPiWorkspaceTools(workspace: string): {
+export function createPiWorkspaceTools(
+	workspace: string,
+	permit: (
+		toolCallId: string,
+		name: string,
+	) => Promise<void> = requestToolPermit,
+): {
 	read: ReturnType<typeof createReadToolDefinition>;
 	write: ReturnType<typeof createWriteToolDefinition>;
 	edit: ReturnType<typeof createEditToolDefinition>;
@@ -33,7 +39,7 @@ export function createPiWorkspaceTools(workspace: string): {
 		await guard(path);
 		await access(path, constants.R_OK);
 	};
-	return {
+	const tools = {
 		read: createReadToolDefinition(workspace, {
 			operations: { readFile: read, access: check },
 		}),
@@ -50,6 +56,38 @@ export function createPiWorkspaceTools(workspace: string): {
 			operations: { readFile: read, writeFile: write, access: check },
 		}),
 	};
+	function withPermit<Args extends unknown[], Result>(
+		name: string,
+		execute: (toolCallId: string, ...args: Args) => Promise<Result>,
+	) {
+		return async (toolCallId: string, ...args: Args) => {
+			await permit(toolCallId, name);
+			return execute(toolCallId, ...args);
+		};
+	}
+	tools.read.execute = withPermit("read", tools.read.execute);
+	tools.write.execute = withPermit("write", tools.write.execute);
+	tools.edit.execute = withPermit("edit", tools.edit.execute);
+	return tools;
+}
+
+async function requestToolPermit(toolCallId: string, name: string) {
+	const endpoint = process.env.AGENT_INFRA_PI_TOOL_PERMIT_URL;
+	const token = process.env.AGENT_INFRA_PI_TOOL_PERMIT_TOKEN;
+	if (!endpoint || !token || !toolCallId)
+		throw new Error("RUNTIME_TOOL_INTENT_UNAVAILABLE");
+	try {
+		const response = await fetch(endpoint, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-api-key": token },
+			body: JSON.stringify({ toolCallId, name }),
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (response.ok) return;
+	} catch {
+		// Only the confirmed durable permit allows this execute invocation.
+	}
+	throw new Error("RUNTIME_TOOL_INTENT_UNAVAILABLE");
 }
 
 /** Loaded explicitly by the pinned Pi CLI; project and user extension discovery are disabled. */

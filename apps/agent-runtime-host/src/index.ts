@@ -12,6 +12,7 @@ import {
 	FileRuntimeStore,
 	openOpenCodeRuntime,
 	openPiRuntime,
+	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
 	verifyCodexPilotInstallation,
@@ -181,6 +182,17 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	const authorizeExternalAction = async (
+		action: RuntimeExternalActionAuthorization,
+	) => {
+		if (!assembledHost)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not ready",
+				403,
+			);
+		await assembledHost.authorizeExternalAction(action);
+	};
 	const close = async () => {
 		try {
 			await assembledHost?.close();
@@ -222,15 +234,7 @@ export async function assembleRuntimeHost(
 								}),
 							}
 						: {}),
-					authorizeExternalAction: async (action) => {
-						if (!assembledHost)
-							throw new RuntimeHostError(
-								"RUNTIME_GRANT_INVALID",
-								"Runtime authorization is not ready",
-								403,
-							);
-						await assembledHost.authorizeExternalAction(action);
-					},
+					authorizeExternalAction,
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
 					configVersion: configuration.configVersion,
@@ -242,6 +246,7 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							authorizeExternalAction,
 							path: join(dataDirectory, "acp-driver"),
 							executable:
 								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
@@ -250,10 +255,12 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "pi-driver"),
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								authorizeExternalAction,
 								path: join(dataDirectory, "claude-driver"),
 							})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));

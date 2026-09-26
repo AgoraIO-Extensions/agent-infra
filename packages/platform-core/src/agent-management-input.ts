@@ -8,6 +8,7 @@ import type {
 	AgentManagementStatusV1,
 	AgentServiceAvailabilityV1,
 } from "./agent-management.js";
+import type { ApiPrincipalV1 } from "./api-identity.js";
 
 export class AgentManagementError extends Error {
 	readonly code: "invalid_input" | "unavailable";
@@ -141,13 +142,21 @@ export function parseAgentManagementActorContext(
 	input: unknown,
 ): AgentManagementActorContextV1 {
 	const values = snapshotAgentManagementDataObject(input);
-	requireAgentManagementExactKeys(values, [
+	const requiredKeys = [
 		"schemaVersion",
 		"userId",
 		"accountStatus",
 		"organizationIds",
 		"isAdministrator",
-	]);
+	];
+	if (
+		Object.keys(values).length < requiredKeys.length ||
+		Object.keys(values).some(
+			(key) => !requiredKeys.includes(key) && key !== "principal",
+		) ||
+		(Object.hasOwn(values, "principal") && Object.keys(values).length !== 6)
+	)
+		invalidAgentManagementInput();
 	if (
 		values.schemaVersion !== 1 ||
 		!isAgentManagementText(values.userId) ||
@@ -156,6 +165,17 @@ export function parseAgentManagementActorContext(
 		typeof values.isAdministrator !== "boolean"
 	) {
 		invalidAgentManagementInput();
+	}
+	let principal: ApiPrincipalV1 | undefined;
+	if (Object.hasOwn(values, "principal")) {
+		const value = snapshotAgentManagementDataObject(values.principal);
+		requireAgentManagementExactKeys(value, ["kind", "id"]);
+		if (
+			(value.kind !== "user" && value.kind !== "application") ||
+			!isAgentManagementText(value.id)
+		)
+			invalidAgentManagementInput();
+		principal = { kind: value.kind, id: value.id };
 	}
 	return {
 		schemaVersion: 1,
@@ -166,6 +186,7 @@ export function parseAgentManagementActorContext(
 			true,
 		),
 		isAdministrator: values.isAdministrator,
+		...(principal === undefined ? {} : { principal }),
 	};
 }
 
@@ -174,7 +195,9 @@ type AgentAccessTargetV1 = AgentManagementStateV1["availability"][number];
 export function agentAccessTargetKey(target: AgentAccessTargetV1): string {
 	return target.kind === "user"
 		? `user:${target.userId}`
-		: `organization:${target.organizationId}`;
+		: target.kind === "organization"
+			? `organization:${target.organizationId}`
+			: `application:${target.applicationId}`;
 }
 
 export function parseAgentAccessTargets(
@@ -193,6 +216,13 @@ export function parseAgentAccessTargets(
 				invalidAgentManagementInput();
 			}
 			return { kind: "organization", organizationId: target.organizationId };
+		}
+		if (target.kind === "application") {
+			requireAgentManagementExactKeys(target, ["kind", "applicationId"]);
+			if (!isAgentManagementText(target.applicationId)) {
+				invalidAgentManagementInput();
+			}
+			return { kind: "application", applicationId: target.applicationId };
 		}
 		return invalidAgentManagementInput();
 	});
@@ -216,7 +246,7 @@ export function parseAgentManagementPortState(
 ): AgentManagementStateV1 {
 	try {
 		const values = snapshotAgentManagementDataObject(input);
-		requireAgentManagementExactKeys(values, [
+		const requiredKeys = [
 			"schemaVersion",
 			"applicationId",
 			"agentId",
@@ -232,7 +262,16 @@ export function parseAgentManagementPortState(
 			"ownerIds",
 			"availability",
 			"failureCode",
-		]);
+		];
+		if (
+			Object.keys(values).length < requiredKeys.length ||
+			Object.keys(values).some(
+				(key) => !requiredKeys.includes(key) && key !== "principalGrants",
+			) ||
+			(Object.hasOwn(values, "principalGrants") &&
+				Object.keys(values).length !== 16)
+		)
+			invalidAgentManagementInput();
 		const statuses: readonly AgentManagementStatusV1[] = [
 			"pending_approval",
 			"withdrawn",
@@ -290,8 +329,10 @@ export function parseAgentManagementPortState(
 					values.fence !== 0 ||
 					values.failureCode !== null)) ||
 			(!preApproval &&
-				(values.approvalRevision === null ||
-					(values.approvalRevision as number) > (values.revision as number) ||
+				((status !== "creating" && values.approvalRevision === null) ||
+					(values.approvalRevision !== null &&
+						(values.approvalRevision as number) >
+							(values.revision as number)) ||
 					(values.workloadRevision as number) < 1 ||
 					(values.fence as number) < 1)) ||
 			((status === "creating" || status === "creation_failed") &&
@@ -321,6 +362,44 @@ export function parseAgentManagementPortState(
 		) {
 			invalidAgentManagementInput();
 		}
+		let principalGrants: AgentManagementStateV1["principalGrants"];
+		if (Object.hasOwn(values, "principalGrants")) {
+			principalGrants = snapshotAgentManagementDenseArray(
+				values.principalGrants,
+			).map((grantInput) => {
+				const grant = snapshotAgentManagementDataObject(grantInput);
+				requireAgentManagementExactKeys(grant, [
+					"principal",
+					"grantType",
+					"authorizationRevision",
+					"revokedAt",
+				]);
+				const principal = snapshotAgentManagementDataObject(grant.principal);
+				requireAgentManagementExactKeys(principal, ["kind", "id"]);
+				if (
+					(principal.kind !== "user" && principal.kind !== "application") ||
+					!isAgentManagementText(principal.id) ||
+					(grant.grantType !== "manage" && grant.grantType !== "use") ||
+					!isAgentManagementText(grant.authorizationRevision) ||
+					(grant.revokedAt !== null &&
+						!Number.isFinite(Date.parse(String(grant.revokedAt))))
+				)
+					invalidAgentManagementInput();
+				const revokedAt =
+					grant.revokedAt === null ? null : new Date(String(grant.revokedAt));
+				if (revokedAt !== null && !Number.isFinite(revokedAt.getTime()))
+					invalidAgentManagementInput();
+				return {
+					principal: {
+						kind: principal.kind as "user" | "application",
+						id: principal.id as string,
+					},
+					grantType: grant.grantType as "manage" | "use",
+					authorizationRevision: grant.authorizationRevision as string,
+					revokedAt,
+				};
+			});
+		}
 		return {
 			schemaVersion: 1,
 			applicationId: values.applicationId,
@@ -337,6 +416,7 @@ export function parseAgentManagementPortState(
 			ownerIds,
 			availability,
 			failureCode: values.failureCode as AgentFailureCodeV1 | null,
+			...(principalGrants === undefined ? {} : { principalGrants }),
 		};
 	} catch {
 		throw new AgentManagementError("unavailable");

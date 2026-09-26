@@ -34,7 +34,7 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
-	RuntimeEventV1Schema,
+	RuntimeEventSchema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
@@ -235,10 +235,11 @@ async function* validatedDriverEventStream(
 				driverInvalid();
 			}
 			if (next.done) return;
-			const event = RuntimeEventV1Schema.safeParse(next.value);
+			const event = RuntimeEventSchema.safeParse(next.value);
 			if (!event.success || event.data.executionId !== executionId) {
 				driverInvalid();
 			}
+			if (event.data.type === "operation") continue;
 			yield event.data;
 		}
 	} finally {
@@ -783,7 +784,7 @@ export class RuntimeHost {
 		);
 		const nativeSessionRef =
 			session.nativeSessionRef ?? nativeSessionRequired();
-		const events = RuntimeEventV1Schema.array().safeParse(
+		const events = RuntimeEventSchema.array().safeParse(
 			await callDriver(() =>
 				this.options.driver.replayEvents(
 					nativeSessionRef,
@@ -800,7 +801,7 @@ export class RuntimeHost {
 		}
 		return {
 			schemaVersion: 1,
-			events: events.data,
+			events: events.data.filter((event) => event.type !== "operation"),
 		};
 	}
 
@@ -1119,6 +1120,21 @@ export class RuntimeHost {
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
+		if (
+			operation.kind === "submit-turn" &&
+			driverRecord.result.outcome === "accepted" &&
+			driverRecord.result.status === "running" &&
+			!this.options.store.nativeSessionRef(hostSessionRef)
+		) {
+			// Status observation can admit the first model request. Bind its
+			// validated native receipt before that request crosses Host authority.
+			await this.options.store.resolveOperation(
+				hostSessionRef,
+				operation.operationId,
+				driverRecord.result,
+				driverRecord.nativeSessionRef,
+			);
+		}
 		const result = await this.currentDriverResult(driverRecord, operation);
 		if (isInterruption(operation) && result.outcome === "unknown") {
 			return unknownOperationResponse(hostSessionRef, operation);

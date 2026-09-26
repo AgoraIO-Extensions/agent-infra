@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { ServerResponse } from "node:http";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { createParser } from "eventsource-parser";
 import { createCredentialMatcher } from "./model-credential-matcher.js";
 
@@ -27,7 +28,10 @@ export async function forwardClaudeMessages(
 	model: string,
 	protectedValues: readonly string[],
 	signal: AbortSignal,
-	verified: (stopReason: string) => Promise<void> = async () => {},
+	verified: (
+		stopReason: string,
+		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+	) => Promise<void> = async () => {},
 ) {
 	const matcher = createCredentialMatcher(protectedValues);
 	const channels = new Map<string, number>();
@@ -43,6 +47,28 @@ export async function forwardClaudeMessages(
 	let pending: string[] = [];
 	let queued: string[] = [];
 	let pendingBytes = 0;
+	let modelUsage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"];
+	const recordUsage = (value: unknown) => {
+		if (!record(value)) return;
+		const next = {
+			...(typeof value.input_tokens === "number" &&
+			Number.isSafeInteger(value.input_tokens) &&
+			value.input_tokens >= 0
+				? { inputTokens: value.input_tokens }
+				: {}),
+			...(typeof value.output_tokens === "number" &&
+			Number.isSafeInteger(value.output_tokens) &&
+			value.output_tokens >= 0
+				? { outputTokens: value.output_tokens }
+				: {}),
+			...(typeof value.cache_read_input_tokens === "number" &&
+			Number.isSafeInteger(value.cache_read_input_tokens) &&
+			value.cache_read_input_tokens >= 0
+				? { cachedInputTokens: value.cache_read_input_tokens }
+				: {}),
+		};
+		if (Object.keys(next).length) modelUsage = { ...modelUsage, ...next };
+	};
 	const scan = (value: unknown): void => {
 		if (typeof value === "string" && matcher.contains(value)) invalid();
 		if (Array.isArray(value)) for (const item of value) scan(item);
@@ -97,6 +123,7 @@ export async function forwardClaudeMessages(
 				)
 					invalid();
 				started = true;
+				recordUsage(message.usage);
 				projected = {
 					type: value.type,
 					message: {
@@ -225,6 +252,7 @@ export async function forwardClaudeMessages(
 						)
 							invalid();
 						stopReason = String(value.delta.stop_reason);
+						recordUsage(value.usage);
 						delta = true;
 						projected = {
 							type: value.type,
@@ -268,7 +296,7 @@ export async function forwardClaudeMessages(
 	parser.feed(decoder.decode());
 	if (ending.endsWith("\r")) parser.feed("\n");
 	if (!terminal || !ending.replace(/\r\n?/g, "\n").endsWith("\n\n")) invalid();
-	await verified(stopReason);
+	await verified(stopReason, modelUsage);
 	for (const encoded of [...queued, ...pending, terminal])
 		await write(response, encoded, signal);
 	response.end();

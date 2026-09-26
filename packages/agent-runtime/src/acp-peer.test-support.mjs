@@ -73,6 +73,8 @@ const connection = new AgentSideConnection(
 		},
 		prompt: async () => {
 			count++;
+			if (process.env.ACP_TEST_MODE === "prompt-reject")
+				throw new Error("synthetic prompt rejected before model send");
 			if (process.env.ACP_TEST_MODE === "foreign-notifications") {
 				for (const update of [
 					{
@@ -92,6 +94,35 @@ const connection = new AgentSideConnection(
 						update,
 					});
 			}
+			if (process.env.ACP_TEST_MODE === "foreign-permission") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "active-tool",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				const permission = await connection.requestPermission({
+					sessionId: "foreign-session",
+					toolCall: {
+						toolCallId: "active-tool",
+						kind: "read",
+						status: "pending",
+						title: "Foreign request",
+					},
+					options: [
+						{ optionId: "allow", name: "Allow", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+					],
+				});
+				if (
+					permission.outcome?.outcome === "selected" &&
+					permission.outcome.optionId === "allow"
+				)
+					throw new Error("foreign permission unexpectedly allowed");
+			}
 			if (process.env.ACP_TEST_MODE === "malformed") {
 				for (const frame of [
 					{ private: "synthetic-secret-marker" },
@@ -104,6 +135,62 @@ const connection = new AgentSideConnection(
 				])
 					process.stdout.write(`${JSON.stringify(frame)}\n`);
 			}
+			if (
+				[
+					"tool-permission",
+					"tool-permission-write",
+					"tool-status-before-permission",
+					"tool-permission-hold",
+					"tool-permission-completed-hold",
+				].includes(process.env.ACP_TEST_MODE)
+			) {
+				const kind =
+					process.env.ACP_TEST_MODE === "tool-permission-write"
+						? "edit"
+						: "read";
+				const updateTool = (status) =>
+					connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate:
+								status === "pending" ? "tool_call" : "tool_call_update",
+							toolCallId: "tool-permission",
+							kind,
+							status,
+						},
+					});
+				await updateTool("pending");
+				if (process.env.ACP_TEST_MODE === "tool-status-before-permission")
+					await updateTool("in_progress");
+				const permission = await connection.requestPermission({
+					sessionId,
+					toolCall: {
+						toolCallId: "tool-permission",
+						kind,
+						status: "pending",
+						title: "Read synthetic file",
+					},
+					options: [
+						{ optionId: "allow", name: "Allow", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject", kind: "reject_once" },
+					],
+				});
+				const allowed =
+					permission.outcome?.outcome === "selected" &&
+					permission.outcome.optionId === "allow";
+				if (allowed) await updateTool("in_progress");
+				if (allowed && process.env.ACP_TEST_MODE === "tool-permission-write")
+					await writeFile(process.env.ACP_TEST_EFFECT_PATH, "synthetic effect");
+				if (process.env.ACP_TEST_MODE === "tool-permission-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
+				await updateTool(allowed ? "completed" : "failed");
+				if (process.env.ACP_TEST_MODE === "tool-permission-completed-hold")
+					await new Promise((resolve) => {
+						finishPrompt = resolve;
+					});
+			}
 			await writeFile(
 				join(process.cwd(), "session.json"),
 				JSON.stringify({ sessionId, count }),
@@ -115,6 +202,35 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
+			if (process.env.ACP_TEST_MODE === "tool") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "pending",
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "in_progress",
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tool-1",
+						kind: "read",
+						status: "completed",
+					},
+				});
+			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(
 					process.env.ACP_TEST_MODE,

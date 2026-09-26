@@ -2,6 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { workspacePathAllowed } from "./workspace-path.js";
@@ -12,6 +13,9 @@ export interface OpenCodeRuntimeOptions {
 	configVersion: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
+	authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 	modelOptions: readonly {
 		modelOptionId: string;
 		model: string;
@@ -48,18 +52,43 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,
+			modelFactId: option.model,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit) => {
+		launch: async (
+			directory,
+			selection,
+			admit,
+			modelRequestIntent,
+			modelRequestStarted,
+			_modelUsage,
+			_toolRequestStarted,
+			modelRequestFinished,
+		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			let currentModelRequestIntent = modelRequestIntent;
+			let currentModelRequestStarted = modelRequestStarted;
+			let currentModelRequestFinished = modelRequestFinished;
+			let currentModelUsage = _modelUsage;
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
+				beforeSend: async (request) => {
+					await currentModelRequestIntent?.(request);
+				},
+				started: async () => {
+					await currentModelRequestStarted?.();
+				},
+				receipt: async (state, _endTurn, usage) => {
+					if (state !== "sent")
+						await currentModelRequestFinished?.(state, usage);
+					if (state === "completed" && usage) await currentModelUsage?.(usage);
+				},
 			});
 			try {
 				for (const name of [
@@ -152,6 +181,12 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						);
 					},
 					close: () => transport.close(),
+					onTurn: (callbacks) => {
+						currentModelRequestIntent = callbacks.modelRequestIntent;
+						currentModelRequestStarted = callbacks.modelRequestStarted;
+						currentModelRequestFinished = callbacks.modelRequestFinished;
+						currentModelUsage = callbacks.modelUsage;
+					},
 				};
 			} catch {
 				await transport.close();

@@ -827,7 +827,12 @@ describe("PostgreSQL Agent configuration transaction", () => {
 	it("commits the bounded access fragment and replays without duplicate effects", async () => {
 		await clearDatabase();
 		await seed();
-		const plan = await captureAccessPlan();
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_01', 'application', 'caller-app', 'use', 'authorization_9')
+		`;
+		const plan = await captureAccessPlan("authorization_10");
 		const adapter = openTransaction();
 		await expect(adapter.commit(plan)).resolves.toEqual({
 			outcome: "committed",
@@ -876,6 +881,12 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			outboxCount: 1,
 			auditCount: 1,
 		});
+		await expect(
+			adminClient`
+				select authorization_revision from platform.agent_principal_grants
+				where agent_id = 'agent_01' and principal_id = 'caller-app'
+			`,
+		).resolves.toEqual([{ authorization_revision: "authorization_10" }]);
 	});
 
 	it.each([
@@ -1930,6 +1941,31 @@ describe("PostgreSQL Agent configuration query", () => {
 		});
 		expect(forbidden).toEqual({ outcome: "unavailable" });
 		expect(missing).toEqual(forbidden);
+	});
+
+	it("allows a current management grant to read the configuration projection", async () => {
+		await clearDatabase();
+		await seed();
+		await adminClient`
+			insert into platform.agent_principal_grants
+				(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent_01', 'application', 'management-app', 'manage', 'authorization_9')
+		`;
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		await expect(
+			query.read({
+				agentId: "agent_01",
+				actorId: "owner_01",
+				organizationIds: [],
+				isAdministrator: false,
+				principal: { kind: "application", id: "management-app" },
+				intent: "discover",
+			}),
+		).resolves.toMatchObject({
+			outcome: "found",
+			configuration: { agentId: "agent_01" },
+		});
 	});
 
 	it("fails closed on legacy NULL and malicious configuration, authorization, or replay records", async () => {
