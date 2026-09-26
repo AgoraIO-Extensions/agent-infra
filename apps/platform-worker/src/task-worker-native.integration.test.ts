@@ -279,6 +279,7 @@ it.skipIf(!enabled)(
 			responseCode?: string;
 			originalOperationDigest?: string;
 			hostSessionRef?: string | null;
+			confirmedCursor?: string;
 			responseHostSessionRef?: string;
 			inputDigest?: string;
 			responseOutcome?: string;
@@ -298,6 +299,14 @@ it.skipIf(!enabled)(
 		let uncertaintyIds: string[] = [];
 		let responseLoss:
 			| { inputDigest: string; executionId?: string; dropped: number }
+			| undefined;
+		let blockedStop: { executionId: string; attempts: number } | undefined;
+		let stopSuccessorObservation:
+			| {
+					executionId: string;
+					closedAtDispatch?: number;
+					inspectClosure: () => Promise<number>;
+			  }
 			| undefined;
 		const fake = fakeKubernetesApi();
 		const kinds: Record<string, string> = {
@@ -366,6 +375,7 @@ it.skipIf(!enabled)(
 				deliveryFence: parsed.operation?.executionDeliveryFence,
 				originalOperationDigest: parsed.originalOperationDigest,
 				hostSessionRef: parsed.hostSessionRef,
+				confirmedCursor: parsed.confirmedCursor,
 				inputDigest:
 					typeof parsed.input?.text === "string"
 						? createHash("sha256").update(parsed.input.text).digest("hex")
@@ -378,6 +388,23 @@ it.skipIf(!enabled)(
 				responseLost: false,
 			};
 			requests.push(observed);
+			if (
+				blockedStop &&
+				blockedStop.executionId === parsed.executionId &&
+				req.url?.endsWith("/stops")
+			) {
+				blockedStop.attempts++;
+				observed.responseLost = true;
+				res.destroy();
+				return;
+			}
+			if (
+				stopSuccessorObservation &&
+				parsed.executionId === stopSuccessorObservation.executionId &&
+				req.url?.endsWith("/turns")
+			)
+				stopSuccessorObservation.closedAtDispatch =
+					await stopSuccessorObservation.inspectClosure();
 			if (
 				responseLoss &&
 				req.url?.endsWith("/turns") &&
@@ -2404,6 +2431,180 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				newNativeTurns: 0,
 			};
 			await control("/hold");
+			const unconfirmedStop = await submit(
+				replacementCredential.credential,
+				"unconfirmed-stop-native",
+			);
+			uncertaintyIds.push(unconfirmedStop.executionId);
+			await waitUntil(
+				async () => (await control()).pending === 1,
+				"actual native model request held before lost stop transport",
+			);
+			await status(unconfirmedStop.executionId, "processing");
+			const [originalStopBinding] =
+				await sql`select e.execution_id,e.conversation_id,e.turn_id,e.session_generation,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${unconfirmedStop.executionId}`;
+			blockedStop = { executionId: unconfirmedStop.executionId, attempts: 0 };
+			const cancelUnconfirmed = (key: string) =>
+				taskRequest(
+					`${taskPath(unconfirmedStop)}/cancel`,
+					replacementCredential.credential,
+					{ schemaVersion: 1 },
+					key,
+				);
+			await checkedJson(await cancelUnconfirmed("unconfirmed-stop-first"), 202);
+			const [firstStop] =
+				await sql`select stop_request_id,confirmation_deadline,created_at from platform.conversation_stops where execution_id=${unconfirmedStop.executionId}`;
+			expect(
+				new Date(firstStop?.confirmation_deadline).getTime() -
+					new Date(firstStop?.created_at).getTime(),
+			).toBe(60_000);
+			await waitUntil(
+				async () => (blockedStop?.attempts ?? 0) > 0,
+				"packaged Worker stop prevented by bounded transport fault",
+			);
+			const stopLiveWorkers = children.filter(
+				(child) => child.exitCode === null && !child.signalCode,
+			);
+			for (const child of stopLiveWorkers) child.kill("SIGKILL");
+			await Promise.all(stopLiveWorkers.map((child) => once(child, "exit")));
+			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${unconfirmedStop.executionId} and status='processing'`;
+			const stopRequestsBeforeRestart = blockedStop.attempts;
+			start();
+			start();
+			await checkedJson(
+				await cancelUnconfirmed("unconfirmed-stop-after-restart"),
+				202,
+			);
+			expect(
+				await sql`select stop_request_id,confirmation_deadline,created_at from platform.conversation_stops where execution_id=${unconfirmedStop.executionId}`,
+			).toEqual([firstStop]);
+			await waitUntil(
+				async () => (blockedStop?.attempts ?? 0) > stopRequestsBeforeRestart,
+				"restarted packaged Workers retain original stop and query running Host",
+			);
+			const modelsBeforeStopTimeout = (await control()).requests;
+			await new Promise((done) =>
+				setTimeout(
+					done,
+					Math.max(
+						0,
+						new Date(firstStop?.confirmation_deadline).getTime() - Date.now(),
+					),
+				),
+			);
+			await status(unconfirmedStop.executionId, "unknown");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.audit_events where target_id=${unconfirmedStop.executionId} and action='task.status.changed' and details->>'reason'='STOP_CONFIRMATION_TIMEOUT'`
+					).length === 1,
+				"real 60-second stop deadline produces one durable timeout audit",
+			);
+			expect(
+				await sql`select event_payload from platform.conversation_events where execution_id=${unconfirmedStop.executionId} and event_payload->>'reason'='STOP_CONFIRMATION_TIMEOUT'`,
+			).toEqual([
+				{
+					event_payload: {
+						type: "task.status",
+						status: "unknown",
+						reason: "STOP_CONFIRMATION_TIMEOUT",
+					},
+				},
+			]);
+			expect(
+				await sql`select e.execution_id,e.conversation_id,e.turn_id,e.session_generation,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${unconfirmedStop.executionId}`,
+			).toEqual([originalStopBinding]);
+			expect(
+				TaskProjectionV1Schema.parse(
+					await checkedJson(
+						await taskRequest(
+							taskPath(unconfirmedStop),
+							replacementCredential.credential,
+						),
+						200,
+					),
+				).status,
+			).toBe("unknown");
+			const stopSuccessor = await submit(
+				replacementCredential.credential,
+				"unconfirmed-stop-successor",
+				unconfirmedStop.conversationId,
+			);
+			await status(stopSuccessor.executionId, "waiting");
+			stopSuccessorObservation = {
+				executionId: stopSuccessor.executionId,
+				inspectClosure: async () => (await control()).closed,
+			};
+			expect((await control()).requests).toBe(modelsBeforeStopTimeout);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === stopSuccessor.executionId &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(0);
+			const blockedStopAttempts = blockedStop.attempts;
+			const closedBeforeStopRecovery = (await control()).closed;
+			blockedStop = undefined;
+			await status(unconfirmedStop.executionId, "cancelled");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_events where execution_id=${unconfirmedStop.executionId} and source='runtime' and event_type='execution.status' and event_payload->>'status'='cancelled'`
+					).length === 1,
+				"original native cancellation terminal proof committed after stop transport recovers",
+			);
+			await waitUntil(
+				async () => (await control()).closed > closedBeforeStopRecovery,
+				"original native model connection closed before successor release",
+			);
+			const [stopTerminal] =
+				await sql`select runtime_cursor from platform.conversation_events where execution_id=${unconfirmedStop.executionId} and source='runtime' and event_type='execution.status' and event_payload->>'status'='cancelled'`;
+			expect(typeof stopTerminal?.runtime_cursor).toBe("string");
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.executionId === unconfirmedStop.executionId &&
+							request.path.endsWith("/events/ack") &&
+							request.confirmedCursor === stopTerminal?.runtime_cursor &&
+							request.responseStatus === 200,
+					),
+				"original committed native cancellation terminal cursor acknowledged",
+			);
+			await control("/release");
+			await completed(stopSuccessor.executionId);
+			expect(stopSuccessorObservation.closedAtDispatch).toBeGreaterThan(
+				closedBeforeStopRecovery,
+			);
+			expect((await control()).requests).toBe(modelsBeforeStopTimeout + 1);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === unconfirmedStop.executionId &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(1);
+			expect(
+				await sql`select stop_request_id,confirmation_deadline,created_at from platform.conversation_stops where execution_id=${unconfirmedStop.executionId}`,
+			).toEqual([firstStop]);
+			checks.push(
+				"real-stop-confirmation-timeout-restart-repeat-cancel-retains-original-occupancy",
+				"original-native-stop-confirmation-releases-successor-without-repeat-turn",
+			);
+			const stopConfirmation = {
+				fault: "bounded-stop-request-transport-loss-before-host",
+				deadlineMs: 60_000,
+				workerRestart: "two-packaged-workers-sigkill-and-automatic-recovery",
+				repeatedCancellation: "same-original-stop-and-deadline",
+				blockedAttempts: blockedStopAttempts,
+				timeout: "unknown-original-session-and-occupancy-retained",
+				recovery: "actual-original-native-stop-confirmed-successor-completes",
+				newOriginalNativeTurns: 0,
+				originalConnectionClosedBeforeSuccessorDispatch: true,
+				originalTerminalCursorAcknowledged: true,
+			};
+			await control("/hold");
 			const restarted = await submit(
 				replacementCredential.credential,
 				"host-restart-user-native",
@@ -2496,6 +2697,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				legacyRecovery: legacyRecoveryMetadata,
 				nativeUpgrade,
 				responseLoss: responseLossMetadata,
+				stopConfirmation,
 				waiting: {
 					policy: {
 						maximumWaitingTasksPerAgent: 3,
@@ -2568,6 +2770,11 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 						exitCode: child.exitCode,
 						signalCode: child.signalCode,
 					})),
+					stopRequests: requests
+						.filter((request) => request.path.endsWith("/stops"))
+						.slice(-20),
+					stops:
+						await sql`select execution_id,status,confirmation_deadline,confirmation_timed_out_at from platform.conversation_stops`,
 					executions:
 						await sql`select status,delivery_fence::int as fence,model_configuration_revision from platform.conversation_executions`,
 					audit:

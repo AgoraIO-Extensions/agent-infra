@@ -1972,6 +1972,231 @@ describe("Runtime V3 durable authorization", () => {
 		}
 	});
 
+	it.each(["stop", "authorization_revoked"] as const)(
+		"acknowledges original events after an independently fenced %s stop at the current Execution fence",
+		async (reason) => {
+			const env = await setup();
+			let host = env.host;
+			let store = env.store;
+			let driver = env.driver;
+			const restart = async () => {
+				await host.close();
+				store = await FileRuntimeStore.open(env.storePath);
+				driver = await FakeRuntimeDriver.open(
+					join(env.directory, "driver.json"),
+				);
+				host = await RuntimeHost.open({ ...env.hostOptions, store, driver });
+			};
+			try {
+				const unsigned = {
+					...submitV3Fixture(),
+					operation: {
+						kind: "execution" as const,
+						id: "execution-fixture",
+						deliveryFence: 3,
+						executionDeliveryFence: 3,
+					},
+				};
+				const submitted = signV3Fixture(unsigned, "turn.submit");
+				const accepted = await host.submitTurnV3(
+					submitted,
+					verifyRuntimeV2Fixture(submitted.grant),
+				);
+				const eventBase = {
+					...base(accepted.hostSessionRef),
+					operation: unsigned.operation,
+					consumer: "platform_worker_persistence" as const,
+				};
+				const query = signV3Fixture(
+					{ ...eventBase, afterCursor: null },
+					"events.persist",
+				);
+				const stream = await host.streamEventsV3(
+					query,
+					verifyRuntimeV2Fixture(query.grant),
+				);
+				const iterator = stream[Symbol.asyncIterator]();
+				const delivered = await iterator.next();
+				await iterator.return?.();
+				if (delivered.done) throw Error("Original event missing");
+				const stop = signV3Fixture(
+					{
+						...base(accepted.hostSessionRef),
+						operation: {
+							kind: "stop" as const,
+							id: "independent-stop",
+							deliveryFence: 20,
+							executionDeliveryFence: 3,
+						},
+					},
+					"turn.stop",
+					{
+						purpose: "control",
+						reason,
+						claims: { controlRecordId: "stop-control" },
+					},
+				);
+				await expect(
+					host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+				).resolves.toMatchObject({ result: { status: "cancelled" } });
+				await restart();
+				const savedStop = JSON.parse(await readFile(env.storePath, "utf8"));
+				expect(
+					savedStop.sessions[accepted.hostSessionRef].executionAuthorities[
+						unsigned.executionId
+					],
+				).toMatchObject({
+					executionDeliveryFence: 3,
+					controlDeliveryFence: 20,
+					controlOperation: { kind: "stop", id: "independent-stop" },
+					control: { controlRecordId: "stop-control", reason },
+					stopped: true,
+				});
+				for (const invalid of [
+					{
+						operation: {
+							...unsigned.operation,
+							deliveryFence: 2,
+							executionDeliveryFence: 2,
+						},
+						claims: {},
+					},
+					{
+						operation: unsigned.operation,
+						claims: { workerId: "stale-worker" },
+					},
+					{
+						operation: {
+							kind: "generation" as const,
+							id: "unsafe-generation",
+							deliveryFence: 100,
+							executionDeliveryFence: 3,
+						},
+						claims: {},
+					},
+				]) {
+					const denied = signV3Fixture(
+						{
+							...eventBase,
+							operation: invalid.operation,
+							confirmedCursor: delivered.value.cursor,
+						},
+						"events.ack",
+						{
+							purpose: "control",
+							reason: "recovery",
+							claims: {
+								controlRecordId: "terminal-recovery",
+								...invalid.claims,
+							},
+						},
+					);
+					await expect(
+						host.acknowledgeEventsV3(
+							denied,
+							verifyRuntimeV2Fixture(denied.grant),
+						),
+					).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				}
+				const ack = signV3Fixture(
+					{ ...eventBase, confirmedCursor: delivered.value.cursor },
+					"events.ack",
+					{
+						purpose: "control",
+						reason: "recovery",
+						claims: { controlRecordId: "terminal-recovery" },
+					},
+				);
+				await expect(
+					host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+				).resolves.toMatchObject({ confirmedCursor: delivered.value.cursor });
+				await restart();
+				const recoveryQuery = signV3Fixture(
+					{ ...eventBase, afterCursor: delivered.value.cursor },
+					"events.persist",
+					{
+						purpose: "control",
+						reason: "recovery",
+						claims: { controlRecordId: "terminal-recovery" },
+					},
+				);
+				const recoveredStream = await host.streamEventsV3(
+					recoveryQuery,
+					verifyRuntimeV2Fixture(recoveryQuery.grant),
+				);
+				let terminalCursor: string | undefined;
+				for await (const event of recoveredStream) {
+					if (event.type === "completed") {
+						expect(event.payload.status).toBe("cancelled");
+						terminalCursor = event.cursor;
+						break;
+					}
+				}
+				if (!terminalCursor)
+					throw Error("Original cancellation terminal missing after restart");
+				const terminalAck = signV3Fixture(
+					{ ...eventBase, confirmedCursor: terminalCursor },
+					"events.ack",
+					{
+						purpose: "control",
+						reason: "recovery",
+						claims: { controlRecordId: "terminal-recovery" },
+					},
+				);
+				await expect(
+					host.acknowledgeEventsV3(
+						terminalAck,
+						verifyRuntimeV2Fixture(terminalAck.grant),
+					),
+				).resolves.toMatchObject({ confirmedCursor: terminalCursor });
+				const savedRecovery = JSON.parse(await readFile(env.storePath, "utf8"));
+				expect(
+					savedRecovery.sessions[accepted.hostSessionRef].executionAuthorities[
+						unsigned.executionId
+					],
+				).toMatchObject({
+					executionDeliveryFence: 3,
+					controlDeliveryFence: 3,
+					controlOperation: { kind: "execution", id: unsigned.executionId },
+					control: { controlRecordId: "terminal-recovery", reason: "recovery" },
+					stopped: true,
+					confirmedCursor: terminalCursor,
+				});
+				const conflictingAck = signV3Fixture(
+					{ ...eventBase, confirmedCursor: terminalCursor },
+					"events.ack",
+					{
+						purpose: "control",
+						reason: "recovery",
+						claims: { controlRecordId: "conflicting-recovery" },
+					},
+				);
+				await expect(
+					host.acknowledgeEventsV3(
+						conflictingAck,
+						verifyRuntimeV2Fixture(conflictingAck.grant),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				const renewal = signV3Fixture(
+					{ ...base(accepted.hostSessionRef), operation: unsigned.operation },
+					"execution.renew",
+				);
+				await expect(
+					host.renewAuthorizationV3(
+						renewal,
+						verifyRuntimeV2Fixture(renewal.grant),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				expect(await driver.sideEffectCount()).toBe(2);
+				await expect(
+					host.authorizeExternalAction(guard(accepted.hostSessionRef, store)),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			} finally {
+				await host.close();
+			}
+		},
+	);
+
 	it("clears a prior stop lock when applying trusted recovery authority", () => {
 		const authorities: Record<string, RuntimeExecutionAuthority> = {};
 		const stop = verifyRuntimeV2Fixture(
@@ -2589,6 +2814,88 @@ describe("Runtime V3 original evidence read contexts", () => {
 		await env.host.close();
 		expect(writes).toBe(0);
 	});
+	it("reads legacy control authority without inferring an operation namespace", () => {
+		const authorities: Record<string, RuntimeExecutionAuthority> = {
+			"execution-fixture": {
+				workerId: "worker-fixture",
+				executionDeliveryFence: 3,
+				controlDeliveryFence: 20,
+				control: { controlRecordId: "legacy-stop", reason: "stop" },
+				stopped: true,
+				issuedAt: fixtureNow,
+				expiresAt: 0,
+				deliveredCursors: [],
+			},
+		};
+		expect(
+			validStoredExecutionAuthority(
+				authorities["execution-fixture"] as RuntimeExecutionAuthority,
+			),
+		).toBe(true);
+		const recovery = verifyRuntimeV2Fixture(
+			signV3Fixture(
+				{
+					...base("host-fixture"),
+					operation: {
+						kind: "execution",
+						id: "execution-fixture",
+						deliveryFence: 3,
+						executionDeliveryFence: 3,
+					},
+				},
+				"session.status",
+				{
+					purpose: "control",
+					reason: "recovery",
+					claims: { controlRecordId: "new-recovery" },
+				},
+			).grant,
+		).claims;
+		expect(() =>
+			applyRuntimeAuthority(authorities, recovery, "query"),
+		).toThrow();
+		expect(authorities["execution-fixture"]).toMatchObject({
+			stopped: true,
+			control: { controlRecordId: "legacy-stop" },
+		});
+	});
+
+	it("strictly validates the persisted control operation namespace and its prerequisites", () => {
+		const authority: RuntimeExecutionAuthority = {
+			workerId: "worker",
+			executionDeliveryFence: 3,
+			controlDeliveryFence: 20,
+			controlOperation: { kind: "stop", id: "stop-record" },
+			control: { controlRecordId: "control", reason: "stop" },
+			stopped: true,
+			issuedAt: fixtureNow,
+			expiresAt: 0,
+			deliveredCursors: [],
+		};
+		expect(validStoredExecutionAuthority(authority)).toBe(true);
+		for (const malformed of [
+			null,
+			[],
+			{ kind: "unknown", id: "stop" },
+			{ kind: "stop", id: "" },
+			{ kind: "stop", id: 7 },
+			{ kind: "stop" },
+			{ kind: "stop", id: "stop", extra: true },
+		]) {
+			expect(
+				validStoredExecutionAuthority({
+					...authority,
+					controlOperation: malformed,
+				} as RuntimeExecutionAuthority),
+				JSON.stringify(malformed),
+			).toBe(false);
+		}
+		const { control: _control, ...withoutControl } = authority;
+		expect(validStoredExecutionAuthority(withoutControl)).toBe(false);
+		const { controlDeliveryFence: _fence, ...withoutFence } = authority;
+		expect(validStoredExecutionAuthority(withoutFence)).toBe(false);
+	});
+
 	it("rejects unknown persisted execution authority fields", () => {
 		const authority: RuntimeExecutionAuthority = {
 			workerId: "worker",

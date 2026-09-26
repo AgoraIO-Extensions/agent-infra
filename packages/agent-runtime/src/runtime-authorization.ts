@@ -28,6 +28,10 @@ export interface RuntimeExecutionAuthority {
 	executionDeliveryFence: number;
 	/** The latest operation fence that installed a control authority. */
 	controlDeliveryFence?: number;
+	controlOperation?: Pick<
+		RuntimeExecutionGrantClaimsV2["operation"],
+		"kind" | "id"
+	>;
 	authorizationRecordId?: string;
 	issuedAt: number;
 	expiresAt: number;
@@ -110,6 +114,7 @@ export function validStoredExecutionAuthority(
 		...(authority?.controlDeliveryFence === undefined
 			? []
 			: ["controlDeliveryFence"]),
+		...(authority?.controlOperation === undefined ? [] : ["controlOperation"]),
 		...(authority?.authorizationRecordId === undefined
 			? []
 			: ["authorizationRecordId"]),
@@ -136,6 +141,18 @@ export function validStoredExecutionAuthority(
 		(authority.controlDeliveryFence === undefined ||
 			(Number.isSafeInteger(authority.controlDeliveryFence) &&
 				authority.controlDeliveryFence > 0)) &&
+		(authority.controlOperation === undefined ||
+			(!!authority.control &&
+				authority.controlDeliveryFence !== undefined &&
+				!!authority.controlOperation &&
+				typeof authority.controlOperation === "object" &&
+				Object.keys(authority.controlOperation).sort().join(",") ===
+					"id,kind" &&
+				["execution", "message", "stop", "generation"].includes(
+					authority.controlOperation.kind,
+				) &&
+				typeof authority.controlOperation.id === "string" &&
+				authority.controlOperation.id.length > 0)) &&
 		Number.isSafeInteger(authority.issuedAt) &&
 		authority.issuedAt >= 0 &&
 		Number.isSafeInteger(authority.expiresAt) &&
@@ -200,12 +217,29 @@ export function applyRuntimeAuthority(
 	)
 		runtimeAuthorizationDenied();
 	const current = authorities[claims.executionId];
+	// Stop and Execution fences advance independently; terminal reads retain the stop latch.
+	const stoppedExecutionRead =
+		mode === "query" &&
+		current?.stopped === true &&
+		(current.control?.reason === "stop" ||
+			current.control?.reason === "authorization_revoked") &&
+		current.controlOperation?.kind === "stop" &&
+		claims.purpose === "control" &&
+		claims.reason === "recovery" &&
+		claims.operation.kind === "execution" &&
+		claims.operation.id === claims.executionId &&
+		claims.operation.executionDeliveryFence ===
+			current.executionDeliveryFence &&
+		claims.allowedCommands.every((command) =>
+			["session.status", "events.persist", "events.ack"].includes(command),
+		);
 	if (
 		current &&
 		(current.workerId !== claims.workerId ||
 			claims.operation.executionDeliveryFence <
 				current.executionDeliveryFence ||
 			(claims.purpose === "control" &&
+				!stoppedExecutionRead &&
 				current.control !== undefined &&
 				current.controlDeliveryFence !== undefined &&
 				claims.operation.executionDeliveryFence ===
@@ -261,11 +295,19 @@ export function applyRuntimeAuthority(
 			reason: claims.reason,
 		};
 		authority.controlDeliveryFence = claims.operation.deliveryFence;
+		authority.controlOperation = {
+			kind: claims.operation.kind,
+			id: claims.operation.id,
+		};
 		if (
 			claims.reason === "recovery" &&
 			claims.allowedCommands[0] !== "turn.stop"
 		) {
-			delete authority.stopped;
+			if (
+				!current?.stopped ||
+				claims.operation.executionDeliveryFence > current.executionDeliveryFence
+			)
+				delete authority.stopped;
 			authority.issuedAt = claims.issuedAt;
 			authority.expiresAt = claims.expiresAt;
 		} else {
@@ -281,6 +323,7 @@ export function applyRuntimeAuthority(
 		) {
 			delete authority.control;
 			delete authority.controlDeliveryFence;
+			delete authority.controlOperation;
 		}
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
