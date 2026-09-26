@@ -276,3 +276,40 @@
 		padding: 13px 6px;
 	}
 }
+
+.audit-backend {
+	border-block: 1px solid var(--border);
+	margin-bottom: 18px;
+	font-size: 12px;
+}
+.audit-backend summary {
+	cursor: pointer;
+	padding: 14px 0;
+	font-weight: 600;
+}
+.audit-backend summary > span {
+	float: right;
+	font-size: 11px;
+	color: var(--text-muted);
+	font-weight: 400;
+}
+.audit-backend-content {
+	padding-bottom: 14px;
+}
+.audit-diagnostic-group {
+	border-top: 1px solid var(--border);
+	padding-top: 14px;
+	margin-top: 12px;
+}
+.audit-http-request {
+	padding: 12px 0;
+	border-top: 1px solid var(--border);
+}
+.audit-http-request h4 {
+	margin: 0 0 8px;
+	font-size: 12px;
+}
+.audit-http-request small {
+	font-size: 10px;
+	overflow-wrap: anywhere;
+}

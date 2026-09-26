@@ -2,6 +2,7 @@ import {
 	ConnectionApplicationService,
 	ConnectionOAuthService,
 	ConnectionRecoveryService,
+	observeProviderFetch,
 	ProviderExecutorRouter,
 	portablePatConsumerId,
 	rehoboamAiConsumer,
@@ -136,22 +137,27 @@ export async function createConnectionRuntime(
 			)) as unknown as typeof fetch;
 	};
 	const githubPrimaryFetch = config.githubEgressProxyUrl
-		? proxyFetch(config.githubEgressProxyUrl)
-		: undefined;
+		? observeProviderFetch("github", proxyFetch(config.githubEgressProxyUrl))
+		: observeProviderFetch("github", fetch);
 	const githubFetch =
-		githubPrimaryFetch && config.githubReadFallbackProxyUrl
+		config.githubEgressProxyUrl && config.githubReadFallbackProxyUrl
 			? createReadFallbackFetch(
 					githubPrimaryFetch,
-					proxyFetch(config.githubReadFallbackProxyUrl),
+					observeProviderFetch(
+						"github-fallback",
+						proxyFetch(config.githubReadFallbackProxyUrl),
+					),
 				)
 			: githubPrimaryFetch;
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
 	const bitbucketFetch = createGuardedFetch({
+		fetch: observeProviderFetch("bitbucket", fetch),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
 	const jiraFetch = createGuardedFetch({
+		fetch: observeProviderFetch("atlassian", fetch),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
@@ -169,29 +175,46 @@ export async function createConnectionRuntime(
 			? createFixedOriginFetch(
 					jenkinsReleaseProfile.apiOrigin,
 					"http://10.80.1.129:8080",
+					observeProviderFetch("jenkins", fetch),
 				)
 			: undefined;
 	const jenkinsFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
-		...(jenkinsRouteFetch ? { fetch: jenkinsRouteFetch } : {}),
+		fetch: jenkinsRouteFetch ?? observeProviderFetch("jenkins", fetch),
 		maxRedirects: 0,
 	});
 	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jenkinsFetch);
 	const jenkinsCi = new JenkinsAdapter(
 		jenkinsCiProfile,
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("jenkins-ci", fetch),
+		}),
 		new JiraServerOAuthTokenProvider(jiraFetch, config.jenkinsCiToken),
 	);
 	const rehoboam = new RehoboamAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("rehoboam", fetch),
+		}),
 		config.rehoboamApiKey,
 	);
 	const manhattan = new ManhattanAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("manhattan", fetch),
+		}),
 		config.manhattanApiKey,
 	);
 	const datalego = new DataLegoAdapter(
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego", fetch),
+		}),
 	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,

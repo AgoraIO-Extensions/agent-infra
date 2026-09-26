@@ -91,10 +91,85 @@ describe("controlled audit queries", () => {
 			state: "REDACTED",
 		});
 		expect(
-			projectAuditDetail({ ...raw, action: "unknown.execute" }),
-		).toMatchObject({ input: [], output: [] });
+			projectAuditDetail({
+				...raw,
+				action: "unknown.execute",
+				requestInput: { opaque: "SECRET-CANARY" },
+				result: { opaque: "SECRET-CANARY" },
+			}),
+		).toMatchObject({
+			input: [],
+			output: [],
+			inputState: "UNSUPPORTED",
+			outputState: "UNSUPPORTED",
+		});
 		expect(projectAuditDetail({ ...raw, result: [raw.result] }).output).toEqual(
-			[],
+			[{ label: "结果条数", value: "1", state: "AVAILABLE" }],
 		);
+	});
+	it("repairs the exact Bitbucket identity case and distinguishes summary states", () => {
+		const identity = projectAuditDetail({
+			...raw,
+			action: "bitbucket.get_current_user",
+			requestInput: {},
+			inputSchema: { properties: {}, required: [] },
+			result: {
+				displayName: "郭贤哲",
+				externalAccount: "2588",
+				grantedScopes: ["bitbucket.server.pat"],
+				providerId: "bitbucket",
+			},
+		});
+		expect(identity.inputState).toBe("NO_PARAMETERS");
+		expect(identity.outputState).toBe("REDACTED");
+		expect(
+			projectAuditDetail({
+				...raw,
+				action: "github.get_current_user",
+				result: { data: { user: { login: "PRIVATE-BODY", id: 123 } } },
+			}).output,
+		).toEqual([
+			{ label: "账号名称", value: "已脱敏", state: "REDACTED" },
+			{ label: "对象编号", value: "已脱敏", state: "REDACTED" },
+		]);
+		expect(identity.output).toHaveLength(3);
+		expect(identity.output.map((field) => field.label)).toEqual([
+			"账号名称",
+			"外部账号指纹",
+			"授权范围数量",
+		]);
+		expect(JSON.stringify(identity.output)).not.toContain("郭贤哲");
+		for (const provider of [
+			"bitbucket",
+			"github",
+			"jira",
+			"confluence",
+			"jenkins",
+			"jenkins-ci",
+			"rehoboam",
+			"manhattan",
+			"datalego",
+		]) {
+			expect(
+				projectAuditDetail({
+					...raw,
+					action: `${provider}.list`,
+					result: { data: [{ body: "SECRET-CANARY" }] },
+				}).output,
+			).toEqual([{ label: "结果条数", value: "1", state: "AVAILABLE" }]);
+		}
+		expect(projectAuditDetail({ ...raw, result: null }).outputState).toBe(
+			"NOT_RECORDED",
+		);
+		expect(projectAuditDetail({ ...raw, result: {} }).outputState).toBe(
+			"EMPTY_OUTPUT",
+		);
+		expect(
+			projectAuditDetail({
+				...raw,
+				requestInput: {},
+				inputSchema: { properties: { limit: {} }, required: [] },
+			}).inputState,
+		).toBe("EMPTY_INPUT");
 	});
 });

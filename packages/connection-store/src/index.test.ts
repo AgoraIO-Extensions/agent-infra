@@ -69,6 +69,7 @@ describe("Connection store migrations", () => {
 			"0030_github_oauth_refresh",
 			"0031_provider_upgrade_campaigns",
 			"0033_audit_query_indexes",
+			"0034_call_diagnostics",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

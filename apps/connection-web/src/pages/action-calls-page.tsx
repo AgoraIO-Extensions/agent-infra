@@ -94,10 +94,21 @@ function Status({ status }: { status: AuditCall["status"] }) {
 function Payload({
 	title,
 	fields,
+	state,
 }: {
 	title: string;
 	fields: AuditDetail["input"];
+	state: AuditDetail["inputState"];
 }) {
+	const messages = {
+		AVAILABLE: "已记录",
+		REDACTED: "内容已脱敏",
+		NO_PARAMETERS: "此操作无需输入参数",
+		EMPTY_INPUT: "未传入可选参数",
+		EMPTY_OUTPUT: "此操作未返回内容",
+		UNSUPPORTED: "已记录，但摘要暂未适配",
+		NOT_RECORDED: "未记录",
+	};
 	return (
 		<section className="audit-payload">
 			<h3>
@@ -119,9 +130,170 @@ function Payload({
 					))}
 				</dl>
 			) : (
-				<p className="audit-muted">无可展示的摘要</p>
+				<p className="audit-muted">{messages[state] ?? "未记录"}</p>
 			)}
 		</section>
+	);
+}
+const diagnosticTime = (value: string) =>
+	new Intl.DateTimeFormat("zh-CN", {
+		timeZone: "Asia/Shanghai",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		fractionalSecondDigits: 3,
+		hour12: false,
+	}).format(new Date(value));
+function BackendDiagnostics({ record }: { record: AuditDetail }) {
+	const diagnostics = record.diagnostics ?? [];
+	const outcomes = {
+		STARTED: "已发起传输，完成情况未记录",
+		RESPONSE_HEADERS: "已收到响应头",
+		TRANSPORT_ERROR: "传输异常，对方是否执行未知",
+	};
+	const errors = {
+		TIMEOUT: "请求超时",
+		ABORTED: "请求中止",
+		TRANSPORT_ERROR: "网络或传输异常",
+	};
+	return (
+		<details className="audit-backend">
+			<summary>
+				后端排查信息
+				<span>
+					{diagnostics.length
+						? `${diagnostics.reduce((count, item) => count + item.requests.length, 0)} 次 HTTP 请求`
+						: "未记录"}
+				</span>
+			</summary>
+			<div className="audit-backend-content">
+				<dl>
+					<div>
+						<dt>调用编号</dt>
+						<dd>{record.callId}</dd>
+					</div>
+					<div>
+						<dt>时间基准</dt>
+						<dd>UTC+08:00</dd>
+					</div>
+				</dl>
+				{diagnostics.length === 0 ? (
+					<p className="audit-muted">
+						本次调用未采集 HTTP 排查信息，历史记录不会补造。
+					</p>
+				) : (
+					diagnostics.map((group) => (
+						<section className="audit-diagnostic-group" key={group.executionId}>
+							<h3>{group.phase === "EXECUTE" ? "操作执行" : "结果对账"}</h3>
+							<dl>
+								<div>
+									<dt>执行批次</dt>
+									<dd>{group.executionId}</dd>
+								</div>
+							</dl>
+							{group.requests.length === 0 && (
+								<p className="audit-muted">该执行批次未观测到 HTTP 请求。</p>
+							)}
+							{group.requests.map((request) => (
+								<section className="audit-http-request" key={request.sequence}>
+									<h4>
+										请求 {request.sequence} · {request.method}
+									</h4>
+									<dl>
+										<div>
+											<dt>目标服务</dt>
+											<dd>{request.service}</dd>
+										</div>
+										<div>
+											<dt>服务地址</dt>
+											<dd>{request.origin}</dd>
+										</div>
+										<div>
+											<dt>路径模板</dt>
+											<dd>{request.pathTemplate}</dd>
+										</div>
+										<div>
+											<dt>开始时间</dt>
+											<dd>{diagnosticTime(request.startedAt)}</dd>
+										</div>
+										<div>
+											<dt>
+												{request.outcome === "RESPONSE_HEADERS"
+													? "响应头时间"
+													: "异常 / 结束时间"}
+											</dt>
+											<dd>
+												{request.finishedAt
+													? diagnosticTime(request.finishedAt)
+													: "未记录"}
+											</dd>
+										</div>
+										<div>
+											<dt>
+												{request.outcome === "RESPONSE_HEADERS"
+													? "响应头耗时"
+													: "到异常耗时"}
+											</dt>
+											<dd>
+												{request.durationMs === null
+													? "未记录"
+													: `${request.durationMs} ms`}
+											</dd>
+										</div>
+										<div>
+											<dt>HTTP 状态</dt>
+											<dd>{request.status ?? "未收到响应头"}</dd>
+										</div>
+										<div>
+											<dt>请求结果</dt>
+											<dd>{outcomes[request.outcome]}</dd>
+										</div>
+										{request.errorCategory && (
+											<div>
+												<dt>异常类别</dt>
+												<dd>{errors[request.errorCategory]}</dd>
+											</div>
+										)}
+										{request.requestIds.length ? (
+											request.requestIds.map((id) => (
+												<div key={id.name}>
+													<dt title={id.name}>
+														对方请求编号
+														<br />
+														<small>{id.name}</small>
+													</dt>
+													<dd>{id.value}</dd>
+												</div>
+											))
+										) : (
+											<div>
+												<dt>对方请求编号</dt>
+												<dd>
+													{request.outcome === "RESPONSE_HEADERS"
+														? "未返回有效请求编号"
+														: "未收到响应头"}
+												</dd>
+											</div>
+										)}
+									</dl>
+								</section>
+							))}
+							{group.droppedRequests > 0 && (
+								<p className="audit-muted">
+									另有 {group.droppedRequests} 次请求超出采集上限，未保留详情。
+								</p>
+							)}
+						</section>
+					))
+				)}
+				{record.diagnosticsTruncated && (
+					<p className="audit-muted">仅展示最近 20 个执行批次。</p>
+				)}
+			</div>
+		</details>
 	);
 }
 function CallDetails({ record }: { record: AuditDetail }) {
@@ -138,8 +310,17 @@ function CallDetails({ record }: { record: AuditDetail }) {
 			<p className="audit-muted">
 				{record.consumer} · {dateTime(record.createdAt)}
 			</p>
-			<Payload title="操作输入" fields={record.input} />
-			<Payload title="操作输出" fields={record.output} />
+			<Payload
+				title="操作输入"
+				fields={record.input}
+				state={record.inputState}
+			/>
+			<Payload
+				title="操作输出"
+				fields={record.output}
+				state={record.outputState}
+			/>
+			<BackendDiagnostics key={record.callId} record={record} />
 			<section className="audit-section">
 				<h3>身份与来源</h3>
 				<dl>
