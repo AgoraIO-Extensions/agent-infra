@@ -277,6 +277,13 @@ it.skipIf(!enabled)(
 			deliveryFence?: number;
 			responseStatus?: number;
 			responseCode?: string;
+			originalOperationDigest?: string;
+			hostSessionRef?: string | null;
+			responseHostSessionRef?: string;
+			inputDigest?: string;
+			responseOutcome?: string;
+			responseRuntimeStatus?: string;
+			responseLost?: boolean;
 		}[] = [];
 		let ackCount = 0;
 		let runtimeOrigin = "";
@@ -288,6 +295,10 @@ it.skipIf(!enabled)(
 		let apiOrigin = "";
 		let outputBytes = 0;
 		let unsafeOutput = false;
+		let uncertaintyIds: string[] = [];
+		let responseLoss:
+			| { inputDigest: string; executionId?: string; dropped: number }
+			| undefined;
 		const fake = fakeKubernetesApi();
 		const kinds: Record<string, string> = {
 			pods: "Pod",
@@ -353,10 +364,26 @@ it.skipIf(!enabled)(
 				path: req.url ?? "",
 				executionId: parsed.executionId,
 				deliveryFence: parsed.operation?.executionDeliveryFence,
+				originalOperationDigest: parsed.originalOperationDigest,
+				hostSessionRef: parsed.hostSessionRef,
+				inputDigest:
+					typeof parsed.input?.text === "string"
+						? createHash("sha256").update(parsed.input.text).digest("hex")
+						: undefined,
 				responseStatus: 0,
 				responseCode: undefined as string | undefined,
+				responseHostSessionRef: undefined as string | undefined,
+				responseOutcome: undefined as string | undefined,
+				responseRuntimeStatus: undefined as string | undefined,
+				responseLost: false,
 			};
 			requests.push(observed);
+			if (
+				responseLoss &&
+				req.url?.endsWith("/turns") &&
+				observed.inputDigest === responseLoss.inputDigest
+			)
+				responseLoss.executionId = parsed.executionId;
 			const abort = new AbortController();
 			res.on("close", () => abort.abort());
 			try {
@@ -367,6 +394,35 @@ it.skipIf(!enabled)(
 					...(body ? { body } : {}),
 				});
 				observed.responseStatus = response.status;
+				if (
+					response.ok &&
+					["/turns", "/status"].some((path) => req.url?.endsWith(path))
+				) {
+					const outcome = (await response.clone().json()) as {
+						hostSessionRef?: unknown;
+						result?: { outcome?: unknown; status?: unknown };
+						outcome?: unknown;
+						status?: unknown;
+					};
+					if (typeof outcome.hostSessionRef === "string")
+						observed.responseHostSessionRef = outcome.hostSessionRef;
+					const resultOutcome = outcome.result?.outcome ?? outcome.outcome;
+					if (
+						typeof resultOutcome === "string" &&
+						/^(accepted|found|not_found|recovery_failed|unknown|busy|rejected)$/.test(
+							resultOutcome,
+						)
+					)
+						observed.responseOutcome = resultOutcome;
+					const runtimeStatus = outcome.result?.status ?? outcome.status;
+					if (
+						typeof runtimeStatus === "string" &&
+						/^(running|idle|completed|cancelled|failed|unknown|unavailable)$/.test(
+							runtimeStatus,
+						)
+					)
+						observed.responseRuntimeStatus = runtimeStatus;
+				}
 				if (!response.ok) {
 					const detail = (await response
 						.clone()
@@ -382,6 +438,19 @@ it.skipIf(!enabled)(
 				}
 				if (req.url?.endsWith("/ack") && response.ok) ackCount++;
 				traces.push(`runtime:${req.url}:${response.status}`);
+				if (
+					responseLoss &&
+					responseLoss.executionId === parsed.executionId &&
+					["/turns", "/status", "/events"].some((path) =>
+						req.url?.endsWith(path),
+					)
+				) {
+					responseLoss.dropped++;
+					observed.responseLost = true;
+					res.destroy();
+					await response.body?.cancel();
+					return;
+				}
 				res.writeHead(response.status, Object.fromEntries(response.headers));
 				if (response.body) {
 					const stream = Readable.fromWeb(response.body as never);
@@ -787,11 +856,17 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				},
 			};
 			setProductionDeploymentInput(input);
+			const taskWaitingTimeoutMs = 30_000;
+			const apiDeployment = join(directoryPath, "api-deployment.mjs");
+			await writeFile(
+				apiDeployment,
+				`import { createPlatformApiAssemblyInput as production } from ${JSON.stringify(new URL("../../../tests/fixtures/platform-api-production-deployment.ts", import.meta.url).href)};
+export function createPlatformApiAssemblyInput() { return { ...production(), taskAdmissionPolicy: { maximumWaitingTasksPerAgent: 3, waitingTimeoutMs: ${taskWaitingTimeoutMs} } }; }
+`,
+				{ mode: 0o600 },
+			);
 			running = await startPlatformApiFromDeployment({
-				moduleSpecifier: new URL(
-					"../../../tests/fixtures/platform-api-production-deployment.ts",
-					import.meta.url,
-				).href,
+				moduleSpecifier: pathToFileURL(apiDeployment).href,
 				port: 0,
 				log: () => {},
 			});
@@ -897,13 +972,22 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				conversationId: string;
 				executionId: string;
 			}) => `/conversations/${task.conversationId}/tasks/${task.executionId}`;
-			async function submit(credential: string, key: string) {
+			async function submit(
+				credential: string,
+				key: string,
+				conversationId?: string,
+				text = "synthetic native input",
+			) {
 				return TaskAcceptedV1Schema.parse(
 					await checkedJson(
 						await taskRequest(
 							`/agents/${desired.agentId}/tasks`,
 							credential,
-							{ schemaVersion: 1, text: "synthetic native input" },
+							{
+								schemaVersion: 1,
+								text,
+								...(conversationId ? { conversationId } : {}),
+							},
 							key,
 						),
 						202,
@@ -1393,6 +1477,22 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			checks.push(
 				"real-web-repeat-migration-preserves-history-and-automatic-native-resume",
 			);
+			await control("/hold");
+			const upgradeActive = await webSubmit("web-schema-upgrade-native");
+			await waitUntil(
+				async () => (await control()).pending === 1,
+				"actual Web native turn held before schema upgrade",
+			);
+			await waitUntil(
+				async () =>
+					requests.some(
+						(request) =>
+							request.executionId === upgradeActive.executionId &&
+							request.path.endsWith("/ack") &&
+							request.responseStatus === 200,
+					),
+				"actual upgrade turn running events committed before snapshot",
+			);
 			// A separate database has the actual pre-0021 schema. Its explicitly
 			// synthetic legacy references have no native Session in this Host.
 			// The upgrade must preserve them and recover by metadata, never submit
@@ -1448,6 +1548,84 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 						[JSON.stringify(row)],
 					);
 			}
+			const upgradeIds = [
+				historicalComplete.executionId,
+				upgradeActive.executionId,
+			];
+			const upgradeConversationIds = [
+				historicalComplete.conversationId,
+				upgradeActive.conversationId,
+			];
+			// This is a constructed old database populated from actual Web/Host
+			// history. json_populate_record copies only the pre-0021 columns; the
+			// original Host Session, authorization, input and native turn are untouched.
+			for (const [table, rows] of [
+				[
+					"conversations",
+					await sql`select * from platform.conversations where id in ${sql(upgradeConversationIds)}`,
+				],
+				[
+					"conversation_executions",
+					await sql`select * from platform.conversation_executions where execution_id in ${sql(upgradeIds)}`,
+				],
+				[
+					"conversation_messages",
+					await sql`select * from platform.conversation_messages where execution_id in ${sql(upgradeIds)}`,
+				],
+				[
+					"conversation_events",
+					await sql`select * from platform.conversation_events where execution_id in ${sql(upgradeIds)}`,
+				],
+				[
+					"outbox_items",
+					await sql`select * from platform.outbox_items where payload->>'executionId' in ${sql(upgradeIds)}`,
+				],
+				[
+					"idempotency_records",
+					await sql`select * from platform.idempotency_records where idempotency_key in ('web-complete-native','web-schema-upgrade-native')`,
+				],
+				[
+					"task_authorization_records",
+					await sql`select * from platform.task_authorization_records where execution_id in ${sql(upgradeIds)}`,
+				],
+			] as const) {
+				for (const row of rows)
+					await legacySql.unsafe(
+						`insert into platform.${table} select * from json_populate_record(null::platform.${table},$1::text::json)`,
+						[JSON.stringify(row)],
+					);
+			}
+			await legacySql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${upgradeActive.executionId} and status='processing'`;
+			async function upgradeSnapshot() {
+				return {
+					conversations:
+						await legacySql`select * from platform.conversations where id in ${legacySql(upgradeConversationIds)} order by id`,
+					executions:
+						await legacySql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline' as record from platform.conversation_executions e where execution_id in ${legacySql(upgradeIds)} order by execution_id`,
+					messages:
+						await legacySql`select * from platform.conversation_messages where execution_id in ${legacySql(upgradeIds)} order by message_id`,
+					events:
+						await legacySql`select * from platform.conversation_events where execution_id in ${legacySql(upgradeIds)} order by event_id`,
+					outboxes:
+						await legacySql`select * from platform.outbox_items where payload->>'executionId' in ${legacySql(upgradeIds)} order by id`,
+					idempotency:
+						await legacySql`select * from platform.idempotency_records where idempotency_key in ('web-complete-native','web-schema-upgrade-native') order by id`,
+					authorization:
+						await legacySql`select * from platform.task_authorization_records where execution_id in ${legacySql(upgradeIds)} order by id`,
+				};
+			}
+			const upgradeBefore = await upgradeSnapshot();
+			const originalUpgradeExecution = upgradeBefore.executions.find(
+				(row) => row.record.execution_id === upgradeActive.executionId,
+			)?.record;
+			const originalUpgradeConversation = upgradeBefore.conversations.find(
+				(row) => row.id === upgradeActive.conversationId,
+			);
+			expect(originalUpgradeExecution?.status).toBe("processing");
+			expect(originalUpgradeConversation?.status).toBe("active");
+			expect(originalUpgradeConversation?.host_session_ref).toEqual(
+				expect.any(String),
+			);
 			const [agentRevision] =
 				await legacySql`select authorization_revision from platform.agents where id=${desired.agentId}`;
 			const [webAuthorization] =
@@ -1506,15 +1684,15 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			async function legacySnapshot() {
 				return {
 					conversations:
-						await legacySql`select id,agent_id,actor_id,channel_id,status,session_generation,host_session_ref,authorization_revision,last_conversation_cursor,created_at from platform.conversations order by id`,
+						await legacySql`select id,agent_id,actor_id,channel_id,status,session_generation,host_session_ref,authorization_revision,last_conversation_cursor,created_at from platform.conversations where id like 'legacy_native_conversation_%' order by id`,
 					executions:
-						await legacySql`select execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,last_event_sequence,last_runtime_cursor,created_at from platform.conversation_executions order by execution_id`,
+						await legacySql`select execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,last_event_sequence,last_runtime_cursor,created_at from platform.conversation_executions where execution_id in ${legacySql(legacyIds)} order by execution_id`,
 					events:
-						await legacySql`select * from platform.conversation_events order by event_id`,
+						await legacySql`select * from platform.conversation_events where execution_id in ${legacySql(legacyIds)} order by event_id`,
 					outboxes:
-						await legacySql`select * from platform.outbox_items order by id`,
+						await legacySql`select * from platform.outbox_items where payload->>'executionId' in ${legacySql(legacyIds)} order by id`,
 					idempotency:
-						await legacySql`select * from platform.idempotency_records order by id`,
+						await legacySql`select * from platform.idempotency_records where id like 'legacy_native_idempotency_%' order by id`,
 				};
 			}
 			const legacyBefore = await legacySnapshot();
@@ -1524,6 +1702,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				databaseUrl: upgradeDatabase.databaseUrl,
 			});
 			expect(await legacySnapshot()).toEqual(legacyBefore);
+			expect(await upgradeSnapshot()).toEqual(upgradeBefore);
 			expect(
 				(
 					await legacySql`select * from platform_migrations.history order by id`
@@ -1536,6 +1715,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				databaseUrl: upgradeDatabase.databaseUrl,
 			});
 			expect(await legacySnapshot()).toEqual(legacyBefore);
+			expect(await upgradeSnapshot()).toEqual(upgradeBefore);
 			await writeFile(
 				join(moduleDirectory, "configuration.mjs"),
 				configSource.replace(
@@ -1579,12 +1759,12 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			const legacyRecoveryMetadata = {
 				classification: "binding-rejected-original-occupancy-preserved",
 				executions:
-					await legacySql`select execution_id,status,delivery_fence::int as fence from platform.conversation_executions order by execution_id`,
+					await legacySql`select execution_id,status,delivery_fence::int as fence from platform.conversation_executions where execution_id in ${legacySql(legacyIds)} order by execution_id`,
 				errors:
 					await legacySql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`,
 			};
 			expect(
-				await legacySql`select execution_id,status from platform.conversation_executions order by execution_id`,
+				await legacySql`select execution_id,status from platform.conversation_executions where execution_id in ${legacySql(legacyIds)} order by execution_id`,
 			).toEqual(
 				legacyBefore.executions.map((row) => ({
 					execution_id: row.execution_id,
@@ -1592,7 +1772,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				})),
 			);
 			expect(
-				await legacySql`select id,status from platform.conversations order by id`,
+				await legacySql`select id,status from platform.conversations where id like 'legacy_native_conversation_%' order by id`,
 			).toEqual(
 				legacyBefore.conversations.map((row) => ({
 					id: row.id,
@@ -1623,7 +1803,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					),
 			).toHaveLength(0);
 			expect(
-				await legacySql`select id,host_session_ref from platform.conversations order by id`,
+				await legacySql`select id,host_session_ref from platform.conversations where id like 'legacy_native_conversation_%' order by id`,
 			).toEqual(
 				legacyBefore.conversations.map((row) => ({
 					id: row.id,
@@ -1634,7 +1814,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				await legacySql`select * from platform.conversation_events where event_id like 'legacy_native_event_%' order by event_id`,
 			).toEqual(legacyBefore.events);
 			expect(
-				await legacySql`select * from platform.idempotency_records order by id`,
+				await legacySql`select * from platform.idempotency_records where id like 'legacy_native_idempotency_%' order by id`,
 			).toEqual(legacyBefore.idempotency);
 			expect(
 				await legacySql`select status from platform.conversation_executions where execution_id='legacy_native_execution_complete'`,
@@ -1646,6 +1826,120 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				"pre-0021-schema-upgrade-preserves-legacy-history",
 				"upgraded-legacy-binding-rejected-original-occupancy-preserved-no-replay",
 			);
+			await waitUntil(
+				async () =>
+					requests
+						.slice(priorLegacyRequests)
+						.some(
+							(request) =>
+								request.executionId === upgradeActive.executionId &&
+								request.path.endsWith("/status") &&
+								request.responseStatus === 200,
+						),
+				"upgraded packaged Workers query legal original Host Session",
+			);
+			const [upgradeRecovered] =
+				await legacySql`select c.host_session_ref,c.session_generation::int as session_generation,e.turn_id,e.actor_id,e.channel_id,e.authorization_revision,e.delivery_fence::int as fence from platform.conversations c join platform.conversation_executions e on e.conversation_id=c.id where e.execution_id=${upgradeActive.executionId}`;
+			expect(upgradeRecovered).toMatchObject({
+				host_session_ref: originalUpgradeConversation?.host_session_ref,
+				session_generation: originalUpgradeExecution?.session_generation,
+				turn_id: originalUpgradeExecution?.turn_id,
+				actor_id: originalUpgradeExecution?.actor_id,
+				channel_id: originalUpgradeExecution?.channel_id,
+				authorization_revision:
+					originalUpgradeExecution?.authorization_revision,
+			});
+			expect(upgradeRecovered?.fence).toBeGreaterThan(
+				Number(originalUpgradeExecution?.delivery_fence),
+			);
+			const originalOperationDigest = requests
+				.slice(priorLegacyRequests)
+				.find(
+					(request) =>
+						request.executionId === upgradeActive.executionId &&
+						request.path.endsWith("/status") &&
+						request.responseStatus === 200,
+				)?.originalOperationDigest;
+			expect(originalOperationDigest).toMatch(/^[A-Za-z0-9_-]{43}$/);
+			expect((await control()).pending).toBe(1);
+			expect((await control()).requests).toBe(modelsBeforeLegacy);
+			await control("/release");
+			await waitUntil(
+				async () =>
+					(
+						await legacySql`select 1 from platform.conversation_executions where execution_id=${upgradeActive.executionId} and status='completed'`
+					).length === 1,
+				"actual schema-upgraded original native turn completes automatically",
+			);
+			const upgradeAfter = await upgradeSnapshot();
+			expect(upgradeAfter.authorization).toEqual(upgradeBefore.authorization);
+			expect(upgradeAfter.idempotency).toEqual(upgradeBefore.idempotency);
+			expect(
+				upgradeAfter.messages.map(({ message_id, execution_id, text }) => ({
+					message_id,
+					execution_id,
+					text,
+				})),
+			).toEqual(
+				upgradeBefore.messages.map(({ message_id, execution_id, text }) => ({
+					message_id,
+					execution_id,
+					text,
+				})),
+			);
+			expect(
+				upgradeAfter.events.filter((row) =>
+					upgradeBefore.events.some((old) => old.event_id === row.event_id),
+				),
+			).toEqual(upgradeBefore.events);
+			expect(
+				upgradeAfter.executions.find(
+					(row) => row.record.execution_id === historicalComplete.executionId,
+				),
+			).toEqual(
+				upgradeBefore.executions.find(
+					(row) => row.record.execution_id === historicalComplete.executionId,
+				),
+			);
+			expect(
+				requests
+					.slice(priorLegacyRequests)
+					.filter(
+						(request) =>
+							upgradeIds.includes(request.executionId ?? "") &&
+							request.path.endsWith("/turns"),
+					),
+			).toHaveLength(0);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === upgradeActive.executionId &&
+						request.path.endsWith("/turns") &&
+						request.responseStatus === 200,
+				),
+			).toHaveLength(1);
+			expect((await control()).requests).toBe(modelsBeforeLegacy);
+			checks.push(
+				"pre-0021-schema-upgrade-real-original-host-session-automatic-completion-no-repeat-turn",
+			);
+			const nativeUpgrade = {
+				database: "constructed-pre-0021-with-actual-web-history",
+				nativeSession: "actual-original-session-untouched",
+				originalOperationDigest,
+				inputDigest: createHash("sha256")
+					.update(
+						String(
+							upgradeBefore.messages.find(
+								(row) => row.execution_id === upgradeActive.executionId,
+							)?.text,
+						),
+					)
+					.digest("hex"),
+				status: "completed",
+				fenceBefore: Number(originalUpgradeExecution?.delivery_fence),
+				fenceAfter: upgradeRecovered?.fence,
+				newNativeTurns: 0,
+			};
 			const legacyWorkers = children.slice(-2);
 			for (const child of legacyWorkers) child.kill("SIGKILL");
 			await Promise.all(legacyWorkers.map((child) => once(child, "exit")));
@@ -1654,8 +1948,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				configSource,
 				{ mode: 0o600 },
 			);
+			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${upgradeActive.executionId} and status='processing'`;
 			start();
 			start();
+			await completed(upgradeActive.executionId);
 			async function status(executionId: string, expected: string) {
 				await waitUntil(
 					async () =>
@@ -1665,6 +1961,201 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					`native execution ${expected}`,
 				);
 			}
+			const fifoRequestStart = requests.length;
+			await control("/hold");
+			const fifoA = await submit(
+				replacementCredential.credential,
+				"fifo-native-a",
+				undefined,
+				"synthetic FIFO native input A",
+			);
+			await waitUntil(
+				async () => (await control()).pending === 1,
+				"FIFO native A held",
+			);
+			await status(fifoA.executionId, "processing");
+			const [fifoSession] =
+				await sql`select host_session_ref from platform.conversations where id=${fifoA.conversationId}`;
+			expect(fifoSession?.host_session_ref).toEqual(expect.any(String));
+			const fifoB = await submit(
+				replacementCredential.credential,
+				"fifo-native-b",
+				fifoA.conversationId,
+				"synthetic FIFO native input B",
+			);
+			const waitingCancel = await submit(
+				replacementCredential.credential,
+				"fifo-native-cancel",
+				fifoA.conversationId,
+				"synthetic FIFO waiting input to cancel",
+			);
+			const fifoC = await submit(
+				replacementCredential.credential,
+				"fifo-native-c",
+				fifoA.conversationId,
+				"synthetic FIFO native input C",
+			);
+			const fifoWaitingIds = [
+				fifoB.executionId,
+				waitingCancel.executionId,
+				fifoC.executionId,
+			];
+			const fifoWaitingBefore =
+				await sql`select execution_id,status,task_wait_order,task_wait_deadline from platform.conversation_executions where execution_id in ${sql(fifoWaitingIds)} order by task_wait_order`;
+			expect(fifoWaitingBefore.map((row) => row.execution_id)).toEqual(
+				fifoWaitingIds,
+			);
+			expect(fifoWaitingBefore.map((row) => row.status)).toEqual([
+				"waiting",
+				"waiting",
+				"waiting",
+			]);
+			expect(
+				await sql`select (extract(epoch from (task_wait_deadline-created_at))*1000)::int as waiting_ms from platform.conversation_executions where execution_id in ${sql(fifoWaitingIds)}`,
+			).toEqual(
+				fifoWaitingIds.map(() => ({ waiting_ms: taskWaitingTimeoutMs })),
+			);
+			const [capacityBefore] =
+				await sql`select (select count(*) from platform.conversations)::int as conversations,(select count(*) from platform.conversation_executions)::int as executions,(select count(*) from platform.outbox_items)::int as outboxes,(select count(*) from platform.idempotency_records)::int as idempotency`;
+			const fullResponse = await taskRequest(
+				`/agents/${desired.agentId}/tasks`,
+				replacementCredential.credential,
+				{ schemaVersion: 1, text: "synthetic over-capacity input" },
+				"fifo-native-full",
+			);
+			expect(fullResponse.status).toBe(409);
+			expect(await fullResponse.json()).toMatchObject({ code: "AGENT_BUSY" });
+			expect(
+				(
+					await sql`select (select count(*) from platform.conversations)::int as conversations,(select count(*) from platform.conversation_executions)::int as executions,(select count(*) from platform.outbox_items)::int as outboxes,(select count(*) from platform.idempotency_records)::int as idempotency`
+				)[0],
+			).toEqual(capacityBefore);
+			checks.push(
+				"formal-waiting-capacity-full-no-orphan-task-or-conversation",
+			);
+			const fifoLiveWorkers = children.filter(
+				(child) => child.exitCode === null && !child.signalCode,
+			);
+			for (const child of fifoLiveWorkers) child.kill("SIGKILL");
+			await Promise.all(fifoLiveWorkers.map((child) => once(child, "exit")));
+			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${fifoA.executionId} and status='processing'`;
+			const fifoRecoveryStart = requests.length;
+			start();
+			start();
+			await waitUntil(
+				async () =>
+					requests
+						.slice(fifoRecoveryStart)
+						.some(
+							(request) =>
+								request.executionId === fifoA.executionId &&
+								request.path.endsWith("/status") &&
+								request.responseStatus === 200,
+						),
+				"FIFO active A recovered before waiting queue drains",
+			);
+			expect(
+				await sql`select execution_id,status,task_wait_order,task_wait_deadline from platform.conversation_executions where execution_id in ${sql(fifoWaitingIds)} order by task_wait_order`,
+			).toEqual(fifoWaitingBefore);
+			expect(
+				requests.filter(
+					(request) =>
+						fifoWaitingIds.includes(request.executionId ?? "") &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(0);
+			const cancelWaiting = () =>
+				taskRequest(
+					`${taskPath(waitingCancel)}/cancel`,
+					replacementCredential.credential,
+					{ schemaVersion: 1 },
+					"fifo-native-waiting-cancel",
+				);
+			const waitingCancellation = await checkedJson(await cancelWaiting(), 202);
+			expect(await checkedJson(await cancelWaiting(), 202)).toEqual(
+				waitingCancellation,
+			);
+			await status(waitingCancel.executionId, "cancelled");
+			expect(
+				TaskProjectionV1Schema.parse(
+					await checkedJson(
+						await taskRequest(
+							taskPath(waitingCancel),
+							replacementCredential.credential,
+						),
+						200,
+					),
+				).status,
+			).toBe("cancelled");
+			checks.push("formal-waiting-cancel-idempotent-no-native-turn");
+			await control("/release");
+			await completed(fifoA.executionId);
+			await completed(fifoB.executionId);
+			await completed(fifoC.executionId);
+			expect(
+				requests
+					.slice(fifoRequestStart)
+					.filter(
+						(request) =>
+							request.path.endsWith("/turns") && request.responseStatus === 200,
+					)
+					.map((request) => request.inputDigest),
+			).toEqual(
+				["A", "B", "C"].map((suffix) =>
+					createHash("sha256")
+						.update(`synthetic FIFO native input ${suffix}`)
+						.digest("hex"),
+				),
+			);
+			expect(
+				requests
+					.slice(fifoRequestStart)
+					.filter(
+						(request) =>
+							request.path.endsWith("/turns") && request.responseStatus === 200,
+					)
+					.map((request) => request.hostSessionRef),
+			).toEqual([
+				null,
+				fifoSession?.host_session_ref,
+				fifoSession?.host_session_ref,
+			]);
+			expect(
+				requests
+					.slice(fifoRequestStart)
+					.filter(
+						(request) =>
+							request.path.endsWith("/turns") && request.responseStatus === 200,
+					)
+					.map((request) => request.responseHostSessionRef),
+			).toEqual([
+				fifoSession?.host_session_ref,
+				fifoSession?.host_session_ref,
+				fifoSession?.host_session_ref,
+			]);
+			expect(
+				requests
+					.slice(fifoRequestStart)
+					.filter(
+						(request) =>
+							request.path.endsWith("/turns") && request.responseStatus === 200,
+					)
+					.map((request) => request.executionId),
+			).toEqual([fifoA.executionId, fifoB.executionId, fifoC.executionId]);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === waitingCancel.executionId &&
+						(request.path.endsWith("/turns") ||
+							request.path.endsWith("/stops")),
+				),
+			).toHaveLength(0);
+			expect(
+				await sql`select execution_id,task_wait_order,task_wait_deadline from platform.conversation_executions where execution_id in ${sql(fifoWaitingIds)} order by task_wait_order`,
+			).toEqual(fifoWaitingBefore.map(({ status: _status, ...row }) => row));
+			checks.push(
+				"same-conversation-native-fifo-restart-preserves-order-and-deadlines",
+			);
 			await control("/hold");
 			const grantRevoked = await submit(
 				applicationCredential.credential,
@@ -1735,10 +2226,189 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				"HTTP cancellation closes actual native model stream",
 			);
 			checks.push("http-cancel-confirmed-by-native-terminal-event");
+			await control("/hold");
+			const lostInput = "synthetic accepted native input with lost responses";
+			responseLoss = {
+				inputDigest: createHash("sha256").update(lostInput).digest("hex"),
+				dropped: 0,
+			};
+			const lostTask = await submit(
+				replacementCredential.credential,
+				"accepted-native-response-lost",
+				undefined,
+				lostInput,
+			);
+			uncertaintyIds = [lostTask.executionId];
+			await waitUntil(
+				async () =>
+					(await control()).pending === 1 &&
+					requests.some(
+						(request) =>
+							request.executionId === lostTask.executionId &&
+							request.path.endsWith("/turns") &&
+							request.responseLost &&
+							request.responseOutcome === "accepted",
+					),
+				"real accepted native turn response lost while model request held",
+			);
+			await status(lostTask.executionId, "unknown");
+			const acceptedLostResponse = requests.find(
+				(request) =>
+					request.executionId === lostTask.executionId &&
+					request.path.endsWith("/turns") &&
+					request.responseLost,
+			);
+			expect(acceptedLostResponse?.responseHostSessionRef).toEqual(
+				expect.any(String),
+			);
+			const [unknownSession] =
+				await sql`select host_session_ref from platform.conversations where id=${lostTask.conversationId}`;
+			const [lostOriginal] =
+				await sql`select execution_id,conversation_id,turn_id,session_generation,actor_id,channel_id,authorization_revision from platform.conversation_executions where execution_id=${lostTask.executionId}`;
+			const lostLiveWorkers = children.filter(
+				(child) => child.exitCode === null && !child.signalCode,
+			);
+			for (const child of lostLiveWorkers) child.kill("SIGKILL");
+			await Promise.all(lostLiveWorkers.map((child) => once(child, "exit")));
+			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${lostTask.executionId} and status='processing'`;
+			const responseLossRecoveryStart = requests.length;
+			start();
+			start();
+			await waitUntil(
+				async () =>
+					requests
+						.slice(responseLossRecoveryStart)
+						.some(
+							(request) =>
+								request.executionId === lostTask.executionId &&
+								request.path.endsWith("/status") &&
+								request.responseLost,
+						),
+				"restarted packaged Workers query actual original Host through transport loss",
+			);
+			const unknownWaiting = await submit(
+				replacementCredential.credential,
+				"unknown-successor-wait-expiry",
+				lostTask.conversationId,
+				"synthetic successor behind original unknown turn",
+			);
+			uncertaintyIds.push(unknownWaiting.executionId);
+			await status(unknownWaiting.executionId, "waiting");
+			const [unknownWaitingBefore] =
+				await sql`select task_wait_order,task_wait_deadline,created_at from platform.conversation_executions where execution_id=${unknownWaiting.executionId}`;
+			expect(
+				new Date(unknownWaitingBefore?.task_wait_deadline).getTime() -
+					new Date(unknownWaitingBefore?.created_at).getTime(),
+			).toBe(taskWaitingTimeoutMs);
+			const modelRequestsBeforeExpiry = (await control()).requests;
+			await new Promise((done) =>
+				setTimeout(
+					done,
+					Math.max(
+						0,
+						new Date(unknownWaitingBefore?.task_wait_deadline).getTime() -
+							Date.now(),
+					),
+				),
+			);
+			await status(unknownWaiting.executionId, "failed");
+			expect(
+				await sql`select task_wait_order,task_wait_deadline,created_at from platform.conversation_executions where execution_id=${unknownWaiting.executionId}`,
+			).toEqual([unknownWaitingBefore]);
+			expect(
+				await sql`select 1 from platform.audit_events where target_id=${unknownWaiting.executionId} and action='task.status.changed' and details->>'status'='failed' and details->>'reason'='TASK_WAIT_TIMEOUT'`,
+			).toHaveLength(1);
+			expect(
+				await sql`select e.status,c.status as conversation_status,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${lostTask.executionId} and e.task_wait_deadline<now()`,
+			).toEqual([
+				{
+					status: "unknown",
+					conversation_status: "active",
+					host_session_ref: unknownSession?.host_session_ref,
+				},
+			]);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === unknownWaiting.executionId &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(0);
+			expect((await control()).requests).toBe(modelRequestsBeforeExpiry);
+			expect(
+				TaskProjectionV1Schema.parse(
+					await checkedJson(
+						await taskRequest(
+							taskPath(lostTask),
+							replacementCredential.credential,
+						),
+						200,
+					),
+				).status,
+			).toBe("unknown");
+			checks.push(
+				"real-wait-deadline-expires-successor-without-releasing-original-unknown",
+			);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === lostTask.executionId &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(1);
+			const responseLossDropped = responseLoss.dropped;
+			responseLoss = undefined;
+			await control("/release");
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_executions where execution_id=${lostTask.executionId} and status in ('completed','cancelled','failed')`
+					).length === 1,
+				"actual original terminal proof recovered after bounded response loss",
+			);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.conversation_events where execution_id=${lostTask.executionId} and source='runtime' and event_type='execution.status' and event_payload->>'status' in ('completed','cancelled','failed')`
+					).length === 1,
+				"actual original native terminal event committed after response loss",
+			);
+			const [responseLossRecovered] =
+				await sql`select e.status,e.turn_id,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${lostTask.executionId}`;
+			expect(
+				(
+					await sql`select execution_id,conversation_id,turn_id,session_generation,actor_id,channel_id,authorization_revision from platform.conversation_executions where execution_id=${lostTask.executionId}`
+				)[0],
+			).toEqual(lostOriginal);
+			expect(responseLossRecovered?.host_session_ref).toBe(
+				acceptedLostResponse?.responseHostSessionRef,
+			);
+			expect(
+				requests.filter(
+					(request) =>
+						request.executionId === lostTask.executionId &&
+						request.path.endsWith("/turns"),
+				),
+			).toHaveLength(1);
+			expect((await control()).requests).toBe(modelRequestsBeforeExpiry);
+			checks.push(
+				"lost-accepted-response-automatic-original-terminal-recovery-no-repeat-turn",
+			);
+			const responseLossMetadata = {
+				fault: "bounded-real-host-response-transport-loss",
+				acceptedOutcome: acceptedLostResponse?.responseOutcome,
+				originalPlatformSessionBinding: unknownSession?.host_session_ref,
+				recoveredOriginalHostSession: responseLossRecovered?.host_session_ref,
+				recoveredStatus: responseLossRecovered?.status,
+				droppedResponses: responseLossDropped,
+				newNativeTurns: 0,
+			};
+			await control("/hold");
 			const restarted = await submit(
 				replacementCredential.credential,
 				"host-restart-user-native",
 			);
+			uncertaintyIds.push(restarted.executionId);
 			await waitUntil(
 				async () => (await control()).pending === 1,
 				"native turn held before Host child restart",
@@ -1813,10 +2483,36 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 						nativeSession: "absent",
 						recovery: "binding-rejected-original-occupancy-preserved",
 					},
+					{
+						kind: "pre-0021-to-current",
+						history: "actual-web-copied-to-constructed-old-database",
+						ddlChanged: true,
+						nativeSession: "actual-original-session-untouched",
+						recovery: "automatic-original-turn-completion-no-repeat-turn",
+					},
 				],
 				hostRestart: "child-process-retaining-container-tmpfs",
 				controlledAdapters: ["directory", "kubernetes-api", "model-endpoint"],
 				legacyRecovery: legacyRecoveryMetadata,
+				nativeUpgrade,
+				responseLoss: responseLossMetadata,
+				waiting: {
+					policy: {
+						maximumWaitingTasksPerAgent: 3,
+						waitingTimeoutMs: taskWaitingTimeoutMs,
+					},
+					restartPreserved: fifoWaitingBefore.map((row) => ({
+						order: row.task_wait_order,
+						deadline: new Date(row.task_wait_deadline).toISOString(),
+					})),
+					nativeOrder: ["A", "B", "C"],
+					sameOriginalHostSession: true,
+					waitingCancellationNativeTurns: 0,
+					expiredSuccessorDeadline: new Date(
+						unknownWaitingBefore?.task_wait_deadline,
+					).toISOString(),
+					originalAfterExpiry: "unknown-occupancy-retained",
+				},
 				checks,
 			};
 			const evidencePath = process.env.AGENT_INFRA_TASK_NATIVE_EVIDENCE;
@@ -1832,6 +2528,30 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			}
 			console.info(JSON.stringify(evidence));
 		} catch (error) {
+			const uncertainty = uncertaintyIds.length
+				? {
+						requests: requests
+							.filter((request) =>
+								uncertaintyIds.includes(request.executionId ?? ""),
+							)
+							.slice(-25),
+						executions:
+							await sql`select e.execution_id,e.conversation_id,e.turn_id,e.status,e.delivery_fence::int as fence,e.task_wait_deadline,c.status as conversation_status,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id in ${sql(uncertaintyIds)} order by e.created_at`,
+						events:
+							await sql`select execution_id,event_type,source,event_payload->>'status' as status,event_payload->>'reason' as reason from platform.conversation_events where execution_id in ${sql(uncertaintyIds)} order by conversation_cursor`,
+						controls:
+							await sql`select execution_id,reason,created_at from platform.task_control_records where execution_id in ${sql(uncertaintyIds)}`,
+						tombstones:
+							await sql`select execution_id,status,failure_code,confirmed_at from platform.conversation_generation_tombstones where execution_id in ${sql(uncertaintyIds)}`,
+					}
+				: undefined;
+			const diagnosticPath = process.env.AGENT_INFRA_TASK_NATIVE_EVIDENCE;
+			if (diagnosticPath && uncertainty)
+				await writeFile(
+					`${diagnosticPath}.uncertainty-observation.json`,
+					`${JSON.stringify(uncertainty, null, 2)}\n`,
+					{ mode: 0o600 },
+				);
 			let controlMetadata: unknown;
 			if (controlOrigin)
 				controlMetadata = await fetch(`${controlOrigin}/stats`, {
@@ -1841,6 +2561,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					.catch(() => ({ unavailable: true }));
 			throw new Error(
 				JSON.stringify({
+					uncertainty,
 					traces: traces.slice(-20),
 					control: controlMetadata,
 					processes: children.map((child) => ({

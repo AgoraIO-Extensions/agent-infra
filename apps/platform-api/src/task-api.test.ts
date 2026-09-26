@@ -5,7 +5,11 @@ import {
 	TaskSseMessageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { hashApiCredentialV1 } from "@agent-infra/platform-core";
-import { migratePlatformDatabase } from "@agent-infra/platform-store";
+import {
+	migratePlatformDatabase,
+	PostgresConversationDispatchStoreV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
 import {
 	afterAll,
 	afterEach,
@@ -483,6 +487,97 @@ describe("Public durable task API over real HTTP and PostgreSQL", () => {
 			controller.abort();
 		}
 	}, 10_000);
+	it("reads and streams the formal stop-timeout reason without exposing it across principals", async () => {
+		const task = await submit();
+		await db.unsafe(
+			"update platform.conversation_executions set status='processing' where execution_id=$1",
+			[task.executionId],
+		);
+		await db.unsafe(
+			"update platform.conversations set status='active',host_session_ref='original-timeout-session' where id=$1",
+			[task.conversationId],
+		);
+		await db.unsafe(
+			"update platform.outbox_items set available_at=now() where id=$1",
+			[`conversation:turn:${task.executionId}`],
+		);
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const controls = new PostgresTaskAuthorizationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		try {
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: `conversation:turn:${task.executionId}`,
+				workerId: "timeout-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(`Expected task claim: ${decision.outcome}`);
+			const [authorization] = await db.unsafe(
+				"select id from platform.task_authorization_records where execution_id=$1",
+				[task.executionId],
+			);
+			await controls.recordControl({
+				executionId: task.executionId,
+				authorizationRecordId: String(authorization?.id),
+				reason: "stop",
+				workerId: "timeout-worker",
+				traceId: "trace-stop-timeout",
+				requestId: "request-stop-timeout",
+			});
+			await db.unsafe(
+				"update platform.conversation_stops set confirmation_deadline=now()-interval '1 second' where execution_id=$1",
+				[task.executionId],
+			);
+			expect(
+				await store.renew({ claim: decision.claim, leaseDurationMs: 30_000 }),
+			).toBe(true);
+			const response = await request(path(task));
+			expect(response.status).toBe(200);
+			const projection = TaskProjectionV1Schema.parse(await response.json());
+			expect(projection.status).toBe("unknown");
+			expect(projection.events).toContainEqual(
+				expect.objectContaining({
+					schemaVersion: 2,
+					type: "task.status",
+					payload: { status: "unknown", reason: "STOP_CONFIRMATION_TIMEOUT" },
+				}),
+			);
+			expect((await request(path(task), credentials.application)).status).toBe(
+				404,
+			);
+			const controller = new AbortController();
+			try {
+				const stream = await request(
+					`${path(task)}/events`,
+					credentials.user,
+					undefined,
+					"timeout-stream",
+					controller.signal,
+				);
+				const reader = stream.body?.getReader();
+				let text = "";
+				while (!text.includes("STOP_CONFIRMATION_TIMEOUT")) {
+					const chunk = await reader?.read();
+					if (!chunk || chunk.done)
+						throw new Error("Stream closed without stop reason");
+					text += new TextDecoder().decode(chunk.value);
+				}
+				for (const line of text
+					.split("\n")
+					.filter((line) => line.startsWith("data: ")))
+					TaskSseMessageV1Schema.parse(JSON.parse(line.slice(6)));
+			} finally {
+				controller.abort();
+			}
+		} finally {
+			await Promise.all([store.close(), controls.close()]);
+		}
+	}, 10_000);
+
 	it("reads and replays persisted V2 operation facts through the Store projection", async () => {
 		const task = await submit();
 		const outputId = await output(task, "synthetic operation output");

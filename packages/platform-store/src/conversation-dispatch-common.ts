@@ -87,6 +87,8 @@ export interface StopRow {
 	execution_id: string;
 	stop_request_id: string;
 	status: "submitted" | "completed";
+	confirmation_deadline: Date;
+	confirmation_timed_out_at: Date | null;
 }
 
 export interface DispatchState {

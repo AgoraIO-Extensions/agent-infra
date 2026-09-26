@@ -5,6 +5,7 @@ import {
 	type CurrentTaskUserV1,
 	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
+	conversationStopConfirmationTimeoutMsV1,
 	isTaskPrincipalChannelV1,
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
@@ -390,7 +391,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					>`select stop_request_id from platform.conversation_stops where execution_id = ${input.executionId}`;
 					if (!stop) {
 						const stopRequestId = randomUUID();
-						await transaction`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at) values (${input.executionId}, ${stopRequestId}, 'submitted', now(), now())`;
+						await transaction`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at) values (${input.executionId}, ${stopRequestId}, 'submitted', now() + (${conversationStopConfirmationTimeoutMsV1}::bigint * interval '1 millisecond'), now(), now())`;
 						await transaction`
 							insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
 							values (${`conversation:stop:${stopRequestId}`}, 'conversation', ${execution.conversation_id}, 'conversation.turn.stop.v1', ${transaction.json({ schemaVersion: 1, conversationId: execution.conversation_id, executionId: input.executionId, sessionGeneration: Number(execution.session_generation), stopRequestId })}, ${input.traceId}, ${input.requestId})

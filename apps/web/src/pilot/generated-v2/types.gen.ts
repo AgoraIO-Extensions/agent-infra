@@ -541,7 +541,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1 | TaskStatusEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | TaskStatusEventV2;
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
@@ -650,6 +650,22 @@ export type TaskStatusEventV1 = {
         status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
     };
     schemaVersion: 1;
+    sequence: number;
+    type: 'task.status';
+};
+
+export type TaskStatusEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        reason: 'STOP_CONFIRMATION_TIMEOUT';
+        status: 'unknown';
+    };
+    schemaVersion: 2;
     sequence: number;
     type: 'task.status';
 };

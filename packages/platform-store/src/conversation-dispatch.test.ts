@@ -3379,6 +3379,359 @@ async function expireTask(executionId: string) {
 	await client`update platform.conversation_executions set task_wait_deadline = clock_timestamp() - interval '1 second' where execution_id = ${executionId}`;
 }
 
+describe("durable stop confirmation", () => {
+	it("discovers an expired stop before retry availability after restart, refuses a running ACK and confirms only a real terminal event", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "original-stop-session",
+		});
+		await client`update platform.outbox_items set status = 'retry_scheduled', available_at = clock_timestamp() + interval '1 day' where id = ${work.itemId}`;
+		await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${work.executionId}`;
+		const restarted = open();
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		try {
+			expect(await restarted.findDispatchable({ limit: 20 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.stop.v1",
+			});
+			const decision = await restarted.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "restarted-stop-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(`Expected stop claim: ${decision.outcome}`);
+			const owned = decision.claim;
+			expect(owned.executionStatus).toBe("unknown");
+			expect(owned.hostSessionRef).toBe("original-stop-session");
+			expect(
+				await restarted.finish({
+					claim: owned,
+					status: "succeeded",
+					transition: { executionStatus: "processing" },
+				}),
+			).toBe(false);
+			const [unconfirmed] =
+				await client`select status from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(unconfirmed?.status).toBe("submitted");
+			const events = createConversationEventUseCaseV1({
+				transaction: eventTransaction,
+			});
+			const command = {
+				schemaVersion: 1 as const,
+				conversationId: work.conversationId,
+				executionId: work.executionId,
+				sessionGeneration: owned.sessionGeneration,
+				deliveryFence: owned.executionDeliveryFence,
+				adapterEventKey: "late-running",
+				runtimeCursor: "late-running-cursor",
+				occurredAt: new Date().toISOString(),
+				event: {
+					type: "execution.status" as const,
+					status: "processing" as const,
+				},
+				transition: {
+					executionStatus: "processing" as const,
+					conversationStatus: "active" as const,
+				},
+			};
+			expect(await events.persist(command)).toMatchObject({
+				outcome: "accepted",
+			});
+			expect((await taskQueueState(work.executionId)).status).toBe("unknown");
+			expect(
+				await events.persist({
+					...command,
+					adapterEventKey: "late-completed",
+					runtimeCursor: "late-completed-cursor",
+					event: { type: "execution.status", status: "completed" },
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect((await taskQueueState(work.executionId)).status).toBe("completed");
+			const [confirmed] =
+				await client`select status from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(confirmed?.status).toBe("completed");
+			expect(
+				await restarted.finish({
+					claim: owned,
+					status: "succeeded",
+					transition: {},
+				}),
+			).toBe(true);
+		} finally {
+			await Promise.all([restarted.close(), eventTransaction.close()]);
+		}
+	});
+
+	it("keeps natural completion when it wins before the stop deadline and emits no timeout", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "original-stop-session",
+		});
+		const first = await claim(work.itemId);
+		try {
+			if (first.decision.outcome !== "claimed")
+				throw new Error("Expected stop claim");
+			expect(
+				await first.store.finish({
+					claim: first.decision.claim,
+					status: "succeeded",
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+				}),
+			).toBe(true);
+			await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${work.executionId}`;
+			expect(
+				await first.store.renew({
+					claim: first.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect((await taskQueueState(work.executionId)).status).toBe("completed");
+			const [stop] =
+				await client`select status, confirmation_timed_out_at from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(stop).toEqual({
+				status: "completed",
+				confirmation_timed_out_at: null,
+			});
+			const [timeout] =
+				await client`select count(*)::int as count from platform.conversation_events where execution_id = ${work.executionId} and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'`;
+			expect(timeout?.count).toBe(0);
+		} finally {
+			await first.store.close();
+		}
+	});
+
+	it("marks expired stop confirmation unknown while retaining its original binding and blocking the next task", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const first = await h.submit("stop-expired-first");
+			const owned = await h.own(first.itemId);
+			await h.store.prepareRuntimeDispatch({
+				claim: owned,
+				leaseDurationMs: 30_000,
+			});
+			await h.store.recordRuntimeResponse({
+				claim: owned,
+				hostSessionRef: "original-stop-session",
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			});
+			const second = await h.submit(
+				"stop-expired-second",
+				first.conversationId,
+			);
+			await h.control(first.executionId, "stop");
+			await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${first.executionId}`;
+			expect(
+				await h.store.renew({ claim: owned, leaseDurationMs: 30_000 }),
+			).toBe(true);
+			const [execution] =
+				await client`select status, session_generation::text, delivery_fence::text from platform.conversation_executions where execution_id = ${first.executionId}`;
+			expect(execution).toMatchObject({
+				status: "unknown",
+				session_generation: "1",
+				delivery_fence: String(owned.executionDeliveryFence),
+			});
+			const [conversation] =
+				await client`select status, host_session_ref from platform.conversations where id = ${first.conversationId}`;
+			expect(conversation).toEqual({
+				status: "active",
+				host_session_ref: "original-stop-session",
+			});
+			expect(
+				await h.store.claim({
+					schemaVersion: 1,
+					itemId: second.itemId,
+					workerId: "successor",
+					leaseDurationMs: 30_000,
+				}),
+			).toEqual({ outcome: "busy" });
+			const [event] =
+				await client`select event_payload from platform.conversation_events where execution_id = ${first.executionId} and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'`;
+			expect(event?.event_payload).toEqual({
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			});
+			expect(
+				await h.store.renew({ claim: owned, leaseDurationMs: 30_000 }),
+			).toBe(true);
+			const [count] =
+				await client`select count(*)::int as value from platform.conversation_events where execution_id = ${first.executionId} and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'`;
+			expect(count?.value).toBe(1);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("keeps a timed-out Execution unknown after a running response, then releases the queue on confirmed natural completion", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const first = await h.submit("stop-terminal-first");
+			const owned = await h.own(first.itemId);
+			await h.store.prepareRuntimeDispatch({
+				claim: owned,
+				leaseDurationMs: 30_000,
+			});
+			await h.store.recordRuntimeResponse({
+				claim: owned,
+				hostSessionRef: "original-stop-session",
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			});
+			const second = await h.submit(
+				"stop-terminal-second",
+				first.conversationId,
+			);
+			await h.control(first.executionId, "stop");
+			await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${first.executionId}`;
+			await h.store.renew({ claim: owned, leaseDurationMs: 30_000 });
+			expect(
+				await h.store.recordRuntimeResponse({
+					claim: { ...owned, stopPending: true },
+					hostSessionRef: "original-stop-session",
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			expect((await taskQueueState(first.executionId)).status).toBe("unknown");
+			expect(
+				await h.store.finish({
+					claim: owned,
+					status: "succeeded",
+					transition: {
+						executionStatus: "completed",
+						conversationStatus: "ready",
+					},
+				}),
+			).toBe(true);
+			const [stop] =
+				await client`select status from platform.conversation_stops where execution_id = ${first.executionId}`;
+			expect(stop?.status).toBe("completed");
+			const next = await h.own(second.itemId);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: next,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect((await taskQueueState(first.executionId)).status).toBe(
+				"completed",
+			);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("rolls back deadline observation, state, events and lease when required timeout audit fails", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const first = await h.submit("stop-audit-first");
+			const owned = await h.own(first.itemId);
+			await h.store.prepareRuntimeDispatch({
+				claim: owned,
+				leaseDurationMs: 30_000,
+			});
+			await h.store.recordRuntimeResponse({
+				claim: owned,
+				hostSessionRef: "original-stop-session",
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			});
+			await h.control(first.executionId, "stop");
+			await client`update platform.conversation_stops set confirmation_deadline = clock_timestamp() - interval '1 second' where execution_id = ${first.executionId}`;
+			const [before] =
+				await client`select lease_expires_at from platform.outbox_items where id = ${first.itemId}`;
+			await client.unsafe(
+				"create function platform.isolation_confirmation_failure() returns trigger language plpgsql as $$ begin if NEW.details->>'reason' = 'STOP_CONFIRMATION_TIMEOUT' then raise exception 'timeout audit failure'; end if; return NEW; end $$",
+			);
+			await client.unsafe(
+				"create trigger isolation_confirmation_failure before insert on platform.audit_events for each row execute function platform.isolation_confirmation_failure()",
+			);
+			await expect(
+				h.store.renew({ claim: owned, leaseDurationMs: 60_000 }),
+			).rejects.toMatchObject({ code: "CONVERSATION_DISPATCH_STORE_ERROR" });
+			expect((await taskQueueState(first.executionId)).status).toBe(
+				"processing",
+			);
+			const [stop] =
+				await client`select confirmation_timed_out_at from platform.conversation_stops where execution_id = ${first.executionId}`;
+			expect(stop?.confirmation_timed_out_at).toBeNull();
+			const [after] =
+				await client`select lease_expires_at from platform.outbox_items where id = ${first.itemId}`;
+			expect(after).toEqual(before);
+			const [events] =
+				await client`select count(*)::int as count from platform.conversation_events where execution_id = ${first.executionId} and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'`;
+			expect(events?.count).toBe(0);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it("fixes the first running cancellation deadline across repeated control and a reopened Worker", async () => {
+		const h = await waitingTaskHarness();
+		try {
+			const first = await h.submit("stop-deadline-first");
+			const owned = await h.own(first.itemId);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: owned,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect(
+				await h.store.recordRuntimeResponse({
+					claim: owned,
+					hostSessionRef: "original-stop-session",
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			await h.control(first.executionId, "stop");
+			const [initial] =
+				await client`select stop_request_id, confirmation_deadline, created_at from platform.conversation_stops where execution_id = ${first.executionId}`;
+			expect(
+				initial?.confirmation_deadline.getTime() -
+					initial?.created_at.getTime(),
+			).toBe(60_000);
+			await h.control(first.executionId, "authorization_revoked");
+			const restarted = open();
+			try {
+				expect(
+					await restarted.renew({ claim: owned, leaseDurationMs: 30_000 }),
+				).toBe(true);
+			} finally {
+				await restarted.close();
+			}
+			const [after] =
+				await client`select stop_request_id, confirmation_deadline, created_at from platform.conversation_stops where execution_id = ${first.executionId}`;
+			expect(after).toEqual(initial);
+		} finally {
+			await h.close();
+		}
+	});
+});
+
 describe("durable waiting task dispatch from real admission", () => {
 	it("promotes only the earliest same-Conversation task despite reversed discovery order and concurrent claims", async () => {
 		const h = await waitingTaskHarness(2);

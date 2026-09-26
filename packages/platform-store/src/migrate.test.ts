@@ -114,7 +114,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 		).toThrow("PLATFORM_DATABASE_URL must be a PostgreSQL URL");
 	});
 
-	it.each(["file-authority", "configuration-v2", "task-integrity"] as const)(
+	it.each([
+		"file-authority",
+		"configuration-v2",
+		"task-integrity",
+		"stop-ack",
+	] as const)(
 		"upgrades the existing %s migration history without losing either schema",
 		async (history) => {
 			const database = await startPostgresTestDatabase("migration-branches");
@@ -128,17 +133,51 @@ describe("Platform PostgreSQL migration foundation", () => {
 						? migrations.slice(0, 14)
 						: history === "configuration-v2"
 							? migrations.slice(0, 15)
-							: migrations.slice(0, 20);
+							: history === "task-integrity"
+								? migrations.slice(0, 20)
+								: migrations.slice(0, 24);
 				for (const migration of legacy) {
 					for (const statement of migration.sql) await client.unsafe(statement);
 					await client`insert into platform_migrations.history (hash, created_at)
 						values (${migration.hash}, ${migration.folderMillis})`;
+				}
+				if (history === "stop-ack") {
+					for (const status of ["processing", "completed"]) {
+						await client`insert into platform.conversations (id, agent_id, actor_id, channel_id, status, session_generation, host_session_ref, authorization_revision)
+							values (${`old-stop-${status}`}, 'old-agent', 'old-actor', 'web', 'active', 3, 'original-stop-host', 'old-authorization')`;
+						await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, created_at)
+							values (${`old-execution-${status}`}, ${`old-stop-${status}`}, 'old-agent', 'old-actor', 'web', ${`old-turn-${status}`}, ${status}, 3, 9, 'old-authorization', '2026-01-01T00:00:00Z')`;
+						await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at)
+							values (${`old-execution-${status}`}, ${`old-request-${status}`}, 'completed', '2026-01-01T00:00:00Z')`;
+						await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, status, delivery_fence, trace_id, request_id, available_at)
+							values (${`conversation:stop:old-request-${status}`}, 'conversation', ${`old-stop-${status}`}, 'conversation.turn.stop.v1', ${client.json({ schemaVersion: 1, conversationId: `old-stop-${status}`, executionId: `old-execution-${status}`, sessionGeneration: 3, stopRequestId: `old-request-${status}` })}, 'succeeded', 7, 'old-trace', 'old-request', '2026-01-01T00:00:00Z')`;
+					}
 				}
 				const previousHistory =
 					await client`select * from platform_migrations.history order by id`;
 				await builtStore.migratePlatformDatabase({
 					databaseUrl: database.databaseUrl,
 				});
+				if (history === "stop-ack") {
+					const stops =
+						await client`select s.stop_request_id, s.status, s.confirmation_deadline, s.confirmation_timed_out_at, e.status as execution_status, e.session_generation::int, e.delivery_fence::int as execution_fence, c.host_session_ref, o.status as outbox_status, o.delivery_fence::int as outbox_fence
+						from platform.conversation_stops s join platform.conversation_executions e using (execution_id) join platform.conversations c on c.id = e.conversation_id join platform.outbox_items o on o.id = 'conversation:stop:' || s.stop_request_id order by s.stop_request_id`;
+					expect(stops.map((row) => ({ ...row }))).toEqual(
+						["completed", "processing"].map((status) => ({
+							stop_request_id: `old-request-${status}`,
+							status: status === "processing" ? "submitted" : "completed",
+							confirmation_deadline: new Date("2026-01-01T00:01:00Z"),
+							confirmation_timed_out_at: null,
+							execution_status: status,
+							session_generation: 3,
+							execution_fence: 9,
+							host_session_ref: "original-stop-host",
+							outbox_status:
+								status === "processing" ? "retry_scheduled" : "succeeded",
+							outbox_fence: 7,
+						})),
+					);
+				}
 				const upgraded = await readPlatformCatalog(client);
 				expect(
 					upgraded.columns.filter((column) => column.table_name === "files"),

@@ -85,6 +85,9 @@ export {
 	type CreateConversationWritePlanV1,
 } from "./conversation-execution-types.js";
 
+/** Platform stop acknowledgement budget; callers cannot configure task runtime limits. */
+export const conversationStopConfirmationTimeoutMsV1 = 60_000;
+
 export function createConversationExecutionUseCaseV1(
 	dependencies: ConversationExecutionUseCaseDependenciesV1,
 	options: ConversationExecutionUseCaseOptionsV1 = {},
@@ -779,6 +782,10 @@ export function createConversationExecutionUseCaseV1(
 									actorId: authority.actorId,
 								},
 								stopRequestId,
+								confirmationDeadline: new Date(
+									occurredAt.getTime() +
+										conversationStopConfirmationTimeoutMsV1,
+								),
 								outboxIntent: {
 									operation: "conversation.turn.stop.v1",
 									conversationId: conversation.conversationId,

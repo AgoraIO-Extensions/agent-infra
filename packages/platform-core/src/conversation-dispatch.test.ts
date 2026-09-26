@@ -1035,7 +1035,68 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("unknown");
 	});
 
-	it("rejects a found recovery that introduces a Runtime Host reference", async () => {
+	it("recovers the original Session after its submit receipt was lost without creating another Turn", async () => {
+		const original = claim({ executionStatus: "unknown", taskWaitOrder: 1 });
+		const store = new MemoryDispatchStore(original);
+		const submit = vi.fn(async () => {
+			throw new Error("Unexpected submit");
+		});
+		const recoverOriginalStatus = vi.fn(
+			async (request: { executionId: string }) => ({
+				schemaVersion: 2 as const,
+				hostSessionRef: "host-original",
+				executionId: request.executionId,
+				outcome: "found" as const,
+				status: "completed" as const,
+			}),
+		);
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			dispatch: submit,
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			recoverOriginalStatus,
+			async *events(request) {
+				expect(request).toMatchObject({
+					conversationId: original.conversationId,
+					executionId: original.executionId,
+					turnId: original.turnId,
+					sessionGeneration: original.sessionGeneration,
+					hostSessionRef: "host-original",
+				});
+				yield runtimeEvent(1);
+			},
+		};
+		const { useCase, events } = setup({ store, runtimeHost });
+		expect(await dispatch(useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		expect(recoverOriginalStatus).toHaveBeenCalledWith(
+			expect.objectContaining({
+				conversationId: original.conversationId,
+				executionId: original.executionId,
+				turnId: original.turnId,
+				hostSessionRef: null,
+			}),
+			expect.any(AbortSignal),
+		);
+		expect(submit).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(store.current).toMatchObject({
+			conversationId: original.conversationId,
+			executionId: original.executionId,
+			turnId: original.turnId,
+			sessionGeneration: original.sessionGeneration,
+			hostSessionRef: "host-original",
+			executionStatus: "completed",
+		});
+		expect(events.persisted).toMatchObject([
+			{ event: { type: "execution.status", status: "completed" } },
+		]);
+	});
+
+	it("rejects a found recovery that replaces an already bound Runtime Host reference", async () => {
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch() {
 				throw new Error("Unexpected dispatch");
@@ -1058,12 +1119,13 @@ describe("Conversation Worker dispatch", () => {
 			},
 		};
 		const store = new MemoryDispatchStore(
-			claim({ executionStatus: "unknown", hostSessionRef: null }),
+			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
 		);
 		const { useCase, events } = setup({ store, runtimeHost });
 		expect(await dispatch(useCase)).toMatchObject({ outcome: "retry" });
 		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
 		expect(events.persisted).toHaveLength(0);
+		expect(store.current.hostSessionRef).toBe("host-original");
 	});
 
 	it("rejects metadata recovery when Runtime status contradicts the committed execution", async () => {
@@ -1700,7 +1762,88 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("ORIGINAL_RESPONSE_ALREADY_FINISHED");
 	});
 
-	it("completes a stop when Runtime reports the target already ended", async () => {
+	it("keeps an accepted running stop pending instead of treating its ACK as terminal", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({ outcome: "accepted", status: "running" });
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-request-1",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+				input: null,
+				stopPending: true,
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+		await expect(dispatch(useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.current).toMatchObject({
+			executionStatus: "processing",
+			stopPending: true,
+			hostSessionRef: "host-session-conversation-1",
+			stopRequestId: "stop-request-1",
+		});
+	});
+
+	it("queries the original Execution after a running stop ACK and completes only its confirmed terminal", async () => {
+		let confirmed = false;
+		let stopCalls = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch(request) {
+				expect(request.operation).toBe("turn.stop");
+				stopCalls += 1;
+				return {
+					schemaVersion: 1,
+					hostSessionRef: "host-session-conversation-1",
+					operationId: "stop-request-1",
+					result: { outcome: "accepted", status: "running" },
+				};
+			},
+			async recoverOriginalStatus(request) {
+				expect(request).toMatchObject({
+					executionId: "execution-1",
+					hostSessionRef: "host-session-conversation-1",
+					sessionGeneration: 1,
+				});
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-session-conversation-1",
+					executionId: request.executionId,
+					outcome: "found",
+					status: confirmed ? "cancelled" : "running",
+				};
+			},
+			async recoverStatus() {
+				throw new Error("Legacy status recovery is forbidden");
+			},
+			events() {
+				throw new Error("Stop does not create a new event stream");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-request-1",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+				input: null,
+				stopPending: true,
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+		expect(await dispatch(useCase)).toMatchObject({ outcome: "retry" });
+		confirmed = true;
+		expect(await dispatch(useCase)).toMatchObject({ outcome: "accepted" });
+		expect(store.current.executionStatus).toBe("cancelled");
+		expect(stopCalls).toBe(1);
+	});
+
+	it("keeps stop unconfirmed when Runtime rejects control without a terminal observation", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setResult({
 			outcome: "rejected",
@@ -1722,11 +1865,12 @@ describe("Conversation Worker dispatch", () => {
 
 		await expect(dispatch(useCase)).resolves.toEqual({
 			schemaVersion: 1,
-			outcome: "already_completed",
+			outcome: "unknown",
+			retryScheduled: true,
 		});
-		expect(store.outboxStatus).toBe("succeeded");
-		expect(store.errorCode).toBeUndefined();
-		expect(store.current.executionStatus).toBe("processing");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.errorCode).toBe("RUNTIME_ACCEPTANCE_UNKNOWN");
+		expect(store.current.executionStatus).toBe("unknown");
 	});
 
 	it("fails closed on cross-user, cross-Agent, stale, and raw-native result facts", async () => {
@@ -1879,6 +2023,7 @@ describe("Conversation Worker dispatch", () => {
 				input: null,
 			});
 		let stops = 0;
+		let runningConfirmed = false;
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch(request) {
 				expect(request.operation).toBe("turn.stop");
@@ -1900,7 +2045,7 @@ describe("Conversation Worker dispatch", () => {
 					hostSessionRef: "host-session-conversation-1",
 					executionId: request.executionId,
 					outcome: "found",
-					status: "running",
+					status: runningConfirmed ? "running" : "unknown",
 				};
 			},
 			async *events() {
@@ -1929,8 +2074,9 @@ describe("Conversation Worker dispatch", () => {
 		expect(
 			await dispatch(pending.useCase, "conversation:stop:stop-original"),
 		).toMatchObject({ outcome: "retry" });
-		expect(pending.store.errorCode).toBe("ORIGINAL_RESPONSE_NOT_STARTED");
+		expect(pending.store.errorCode).toBe("STOP_CONFIRMATION_PENDING");
 		expect(stops).toBe(0);
+		runningConfirmed = true;
 		const recovery = setup({
 			store: original,
 			runtimeHost,

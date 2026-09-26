@@ -3,7 +3,10 @@ import type {
 	ConversationDispatchStateTransitionV1,
 	ConversationGenerationIsolationV1,
 } from "@agent-infra/platform-core";
-import { isTaskPrincipalChannelV1 } from "@agent-infra/platform-core";
+import {
+	decideConversationStopConfirmationStatusV1,
+	isTaskPrincipalChannelV1,
+} from "@agent-infra/platform-core";
 import {
 	type Client,
 	type ConversationPayload,
@@ -20,6 +23,7 @@ import {
 	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
+import { observeStopConfirmationTimeout } from "./conversation-dispatch-task.js";
 import {
 	exactPayload,
 	operation,
@@ -134,7 +138,7 @@ export async function readStop(
 	executionId: string,
 ): Promise<StopRow | undefined> {
 	const rows = await transaction<StopRow[]>`
-		select execution_id, stop_request_id, status
+		select execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at
 		from platform.conversation_stops where execution_id = ${executionId}
 	`;
 	return rows[0];
@@ -408,6 +412,7 @@ export async function ownedState(
 	if (!conversation || !execution) return undefined;
 	const state = { outbox, conversation, execution };
 	if (!claimMatchesState(claim, state)) return undefined;
+	await observeStopConfirmationTimeout(transaction, state, claim.leaseOwner);
 	const stop = await readStop(transaction, claim.executionId);
 	return allowStopChange ||
 		claim.metadataRecovery !== undefined ||
@@ -455,11 +460,25 @@ export async function applyTransition(
 	claim: ConversationDispatchClaimV1,
 	transition: ConversationDispatchStateTransitionV1,
 ) {
-	if (!transitionAllowed(state, transition)) throw new StaleDispatchLease();
-	if (transition.executionStatus !== undefined) {
+	let effectiveTransition = transition;
+	if (!transitionAllowed(state, effectiveTransition))
+		throw new StaleDispatchLease();
+	if (effectiveTransition.executionStatus === "processing") {
+		const [stop] = await transaction<
+			{ timed_out: boolean }[]
+		>`select confirmation_timed_out_at is not null as timed_out from platform.conversation_stops where execution_id = ${claim.executionId}`;
+		effectiveTransition = {
+			...effectiveTransition,
+			executionStatus: decideConversationStopConfirmationStatusV1({
+				executionStatus: effectiveTransition.executionStatus,
+				confirmationTimedOut: stop?.timed_out === true,
+			}),
+		};
+	}
+	if (effectiveTransition.executionStatus !== undefined) {
 		const rows = await transaction<{ execution_id: string }[]>`
 			update platform.conversation_executions
-			set status = ${transition.executionStatus}, updated_at = clock_timestamp()
+			set status = ${effectiveTransition.executionStatus}, updated_at = clock_timestamp()
 			where execution_id = ${claim.executionId}
 				and conversation_id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
@@ -468,12 +487,19 @@ export async function applyTransition(
 			returning execution_id
 		`;
 		if (rows.length !== 1) throw new StaleDispatchLease();
-		state.execution.status = transition.executionStatus;
+		state.execution.status = effectiveTransition.executionStatus;
+		if (
+			["completed", "failed", "cancelled"].includes(
+				effectiveTransition.executionStatus,
+			)
+		) {
+			await transaction`update platform.conversation_stops set status = 'completed', updated_at = clock_timestamp() where execution_id = ${claim.executionId}`;
+		}
 	}
-	if (transition.conversationStatus !== undefined) {
+	if (effectiveTransition.conversationStatus !== undefined) {
 		const rows = await transaction<{ id: string }[]>`
 			update platform.conversations
-			set status = ${transition.conversationStatus}, updated_at = clock_timestamp()
+			set status = ${effectiveTransition.conversationStatus}, updated_at = clock_timestamp()
 			where id = ${claim.conversationId}
 				and session_generation = ${claim.sessionGeneration}
 				and authorization_revision = ${state.conversation.authorization_revision}
@@ -481,7 +507,7 @@ export async function applyTransition(
 			returning id
 		`;
 		if (rows.length !== 1) throw new StaleDispatchLease();
-		state.conversation.status = transition.conversationStatus;
+		state.conversation.status = effectiveTransition.conversationStatus;
 	}
 }
 

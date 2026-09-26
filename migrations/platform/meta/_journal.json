@@ -169,6 +169,13 @@
       "when": 1790403880724,
       "tag": "0023_application_generation_principal",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790415695881,
+      "tag": "0024_stop_confirmation_deadline",
+      "breakpoints": true
     }
   ]
 }

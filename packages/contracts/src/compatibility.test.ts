@@ -92,6 +92,51 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the bounded V2 stop-timeout addition and rejects reason or route expansion", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.TaskStatusEventV2;
+		previous.components.schemas.PersistedConversationEventV2.anyOf =
+			previous.components.schemas.PersistedConversationEventV2.anyOf.filter(
+				(option: { $ref?: string }) =>
+					option.$ref !== "#/components/schemas/TaskStatusEventV2",
+			);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-stop-reason-"),
+		);
+		try {
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const widened = structuredClone(current);
+			widened.components.schemas.TaskStatusEventV2.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(widened));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRoute = structuredClone(current);
+			changedRoute.paths[
+				"/api/v2/conversations/{conversationId}"
+			].get.security = [];
+			await writeFile(currentPath, JSON.stringify(changedRoute));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			const changedRuntime = structuredClone(current);
+			changedRuntime.components.schemas.ExecutionOperationEventV2.properties.payload.additionalProperties = true;
+			await writeFile(currentPath, JSON.stringify(changedRuntime));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the fixed task API addition and still rejects published route changes", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
@@ -465,6 +510,7 @@ describe("contract compatibility command", () => {
 			"ConversationSseMessageV2",
 			"ExecutionDetailProjectionV2",
 			"ExecutionOperationEventV2",
+			"TaskStatusEventV2",
 			"HeartbeatSignalV1",
 			"ModelSelectionFallbackEventV1",
 			"PersistedConversationEventV1",

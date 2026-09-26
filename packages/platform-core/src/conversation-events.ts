@@ -67,6 +67,7 @@ export interface ConversationTaskStatusEventV1 {
 		| "failed"
 		| "cancelled"
 		| "unknown";
+	readonly reason?: "STOP_CONFIRMATION_TIMEOUT";
 }
 
 export type ConversationPersistedEventPayloadV1 =
@@ -408,7 +409,13 @@ export function parseConversationPersistedEventPayloadV1(
 	input: unknown,
 ): ConversationPersistedEventPayloadV1 {
 	if (eventType(input) === "task.status") {
-		const values = snapshotObject(input, ["type", "status"]);
+		const values = snapshotObject(input, ["type", "status"], ["reason"]);
+		if (
+			values.reason !== undefined &&
+			(values.reason !== "STOP_CONFIRMATION_TIMEOUT" ||
+				values.status !== "unknown")
+		)
+			invalidInput();
 		if (
 			![
 				"waiting",
@@ -424,6 +431,9 @@ export function parseConversationPersistedEventPayloadV1(
 		return {
 			type: "task.status",
 			status: values.status as ConversationTaskStatusEventV1["status"],
+			...(values.reason === "STOP_CONFIRMATION_TIMEOUT"
+				? { reason: values.reason }
+				: {}),
 		};
 	}
 	if (eventType(input) !== "model.selection.fell_back")

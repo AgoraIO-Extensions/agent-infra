@@ -851,6 +851,20 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'execution.operation';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            reason: 'STOP_CONFIRMATION_TIMEOUT';
+            status: 'unknown';
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'task.status';
     }>;
     executionId: string;
     output: string;
@@ -912,6 +926,20 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'execution.operation';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        reason: 'STOP_CONFIRMATION_TIMEOUT';
+        status: 'unknown';
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'task.status';
 } | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1 | TaskStreamErrorV1;
 
 export type TaskStatusEventV1 = {

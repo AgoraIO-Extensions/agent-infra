@@ -853,10 +853,10 @@ export class PostgresConversationExecutionTransactionV1
 			}
 			await transaction`
 				insert into platform.conversation_stops
-					(execution_id, stop_request_id, status, created_at, updated_at)
+					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at)
 				values
 					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, ${waiting ? "completed" : "submitted"},
-					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
+					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			if (!waiting) {
 				await transaction`

@@ -22,6 +22,7 @@ import {
 	pilotBrowserSseOpenApiPathsV1,
 	pilotSseSchemasV1,
 	SseEventIdV1Schema,
+	TaskStatusEventV1Schema,
 	TimelineReloadSignalV1Schema,
 } from "./sse.ts";
 
@@ -39,10 +40,20 @@ export const ExecutionOperationEventV2Schema = z.strictObject({
 	payload: RuntimeOperationFactV2Schema,
 });
 
+/** Platform-owned stop confirmation reasons, separate from Runtime operation facts. */
+export const TaskStatusEventV2Schema = TaskStatusEventV1Schema.extend({
+	schemaVersion: z.literal(2),
+	payload: z.strictObject({
+		status: z.literal("unknown"),
+		reason: z.literal("STOP_CONFIRMATION_TIMEOUT"),
+	}),
+});
+
 /** Mixed history preserves each original event version and stable reference. */
 export const PersistedConversationEventV2Schema = z.union([
 	PersistedConversationEventV1Schema,
 	ExecutionOperationEventV2Schema,
+	TaskStatusEventV2Schema,
 ]);
 
 export const ConversationSseMessageV2Schema = z.union([
@@ -144,6 +155,7 @@ export const pilotOperationSseSchemasV2 = {
 	RuntimeOperationFailureV2: RuntimeOperationFailureV2Schema,
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	ExecutionOperationEventV2: ExecutionOperationEventV2Schema,
+	TaskStatusEventV2: TaskStatusEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };

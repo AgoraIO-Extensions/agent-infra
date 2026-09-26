@@ -1082,6 +1082,13 @@ describe("PostgreSQL Conversation command transaction", () => {
 				},
 			});
 
+			const [deadline] =
+				await client`select confirmation_deadline, created_at from platform.conversation_stops where execution_id = 'conversation_id_3'`;
+			expect(
+				deadline?.confirmation_deadline.getTime() -
+					deadline?.created_at.getTime(),
+			).toBe(60_000);
+
 			const [counts, stops, outbox, audit] = await Promise.all([
 				client`
 					select

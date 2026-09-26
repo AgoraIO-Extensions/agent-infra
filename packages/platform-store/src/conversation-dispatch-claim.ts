@@ -22,6 +22,7 @@ import {
 } from "./conversation-dispatch-sql.js";
 import {
 	finishWaitingTask,
+	observeStopConfirmationTimeout,
 	waitingDecision,
 } from "./conversation-dispatch-task.js";
 import {
@@ -78,9 +79,18 @@ export async function claimWork(
 		payload.conversationId,
 		payload.executionId,
 	);
+	const stop = execution
+		? await readStop(transaction, payload.executionId)
+		: undefined;
 	if (
 		outbox.status !== "processing" &&
 		!outbox.available_now &&
+		!(
+			selectedOperation === "conversation.turn.stop.v1" &&
+			stop &&
+			stop.confirmation_timed_out_at === null &&
+			stop.confirmation_deadline.getTime() <= decisionAt
+		) &&
 		!(
 			execution?.status === "waiting" &&
 			((outbox.status === "pending" && outbox.waiting_available) ||
@@ -167,7 +177,7 @@ export async function claimWork(
 	const message = payload.messageId
 		? await readMessage(transaction, payload.conversationId, payload.messageId)
 		: undefined;
-	const stop = await readStop(transaction, payload.executionId);
+
 	if (
 		(payload.messageId !== null) !== (message !== undefined) ||
 		(message &&
@@ -199,6 +209,11 @@ export async function claimWork(
 		);
 		return { outcome: "succeeded" };
 	}
+	await observeStopConfirmationTimeout(
+		transaction,
+		{ outbox, conversation, execution },
+		input.workerId,
+	);
 	const previousFence = safeCounter(outbox.delivery_fence);
 	const executionFence = safeCounter(execution.delivery_fence);
 	if (

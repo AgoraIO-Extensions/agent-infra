@@ -1231,6 +1231,42 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #482 / Runtime HLD 8.4: one versioned, bounded platform stop-timeout reason.
+function isStopConfirmationReasonOpenApiAddition(previous, current) {
+	const name = "TaskStatusEventV2";
+	const expectedHash =
+		"024502cf26b142f1e0aad4b8d2f7fb2ff388a80636c4f705a89993a81d8c507f";
+	if (previous.components?.schemas?.[name] !== undefined) return false;
+	const schema = current.components?.schemas?.[name];
+	const matchesReason = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex") ===
+		expectedHash;
+	if (schema && !matchesReason(schema)) return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name];
+	let removed = 0;
+	function removeVersionedBranch(value) {
+		if (!value || typeof value !== "object") return;
+		for (const keyword of ["oneOf", "anyOf"]) {
+			if (Array.isArray(value[keyword]))
+				value[keyword] = value[keyword].filter((branch) => {
+					if (
+						(schema &&
+							sameValue(branch, { $ref: `#/components/schemas/${name}` })) ||
+						matchesReason(branch)
+					) {
+						removed += 1;
+						return false;
+					}
+					return true;
+				});
+		}
+		for (const child of Object.values(value)) removeVersionedBranch(child);
+	}
+	removeVersionedBranch(normalized);
+	return removed > 0 && findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1238,6 +1274,7 @@ function findBreakingChanges(previous, current) {
 			!sameValue(previous, current) &&
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isTaskStatusOpenApiAddition(previous, current) &&
+			!isStopConfirmationReasonOpenApiAddition(previous, current) &&
 			!isTaskApiOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&

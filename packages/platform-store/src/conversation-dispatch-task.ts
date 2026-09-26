@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
 	type ConversationDispatchExecutionStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
 	decideConversationTaskWaitingV1,
 	parseTaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
@@ -66,7 +67,11 @@ export async function recordTaskStatus(
 	workerId: string,
 	reason?: string,
 ) {
-	if (state.execution.task_wait_order === null) return;
+	if (
+		state.execution.task_wait_order === null &&
+		reason !== "STOP_CONFIRMATION_TIMEOUT"
+	)
+		return;
 	const [execution] = await transaction<{ sequence: string }[]>`
 		update platform.conversation_executions
 		set last_event_sequence = last_event_sequence + 1
@@ -80,15 +85,24 @@ export async function recordTaskStatus(
 	`;
 	if (!execution || !conversation) throw new StaleDispatchLease();
 	const eventId = randomUUID();
-	const event = { type: "task.status", status };
+	const event = {
+		type: "task.status",
+		status,
+		...(reason === "STOP_CONFIRMATION_TIMEOUT" ? { reason } : {}),
+	};
 	const [authorization] = await transaction<{ boundary: unknown }[]>`
 		select boundary from platform.task_authorization_records where execution_id = ${state.execution.execution_id}
 	`;
-	const boundary = parseTaskAuthorizationBoundaryV1(authorization?.boundary);
+	const boundary = authorization
+		? parseTaskAuthorizationBoundaryV1(authorization.boundary)
+		: undefined;
+	if (!boundary && state.execution.task_wait_order !== null)
+		throw new StaleDispatchLease();
 	if (
-		boundary.principal.id !== state.execution.actor_id ||
-		boundary.agentId !== state.execution.agent_id ||
-		boundary.channelId !== state.execution.channel_id
+		boundary &&
+		(boundary.principal.id !== state.execution.actor_id ||
+			boundary.agentId !== state.execution.agent_id ||
+			boundary.channelId !== state.execution.channel_id)
 	)
 		throw new StaleDispatchLease();
 	await transaction`
@@ -115,10 +129,19 @@ export async function recordTaskStatus(
 			${state.execution.agent_id}, ${transaction.json({
 				status,
 				eventId,
-				originalPrincipal: {
-					kind: boundary.principal.kind,
-					id: boundary.principal.id,
-				},
+				...(boundary
+					? {
+							originalPrincipal: {
+								kind: boundary.principal.kind,
+								id: boundary.principal.id,
+							},
+						}
+					: {
+							originalExecution: {
+								actorId: state.execution.actor_id,
+								channelId: state.execution.channel_id,
+							},
+						}),
 				...(reason ? { reason } : {}),
 			})})
 	`;
@@ -157,4 +180,45 @@ export async function finishWaitingTask(
 	if (outboxes.length !== 1) throw new StaleDispatchLease();
 	await recordTaskStatus(transaction, state, status, workerId, reason);
 	state.execution.status = status;
+}
+
+/** Observe a durable deadline under the same locks as cancellation and terminal transitions. */
+export async function observeStopConfirmationTimeout(
+	transaction: Transaction,
+	state: DispatchState,
+	workerId: string,
+) {
+	const [stop] = await transaction<
+		{
+			confirmation_deadline: Date;
+			confirmation_timed_out_at: Date | null;
+			observed_at: Date;
+		}[]
+	>`select confirmation_deadline, confirmation_timed_out_at, clock_timestamp() as observed_at
+		from platform.conversation_stops where execution_id = ${state.execution.execution_id}`;
+	if (!stop) return;
+	const decision = decideConversationStopConfirmationTimeoutV1({
+		executionStatus: state.execution.status,
+		confirmationDeadline: stop.confirmation_deadline.getTime(),
+		observedAt: stop.observed_at.getTime(),
+		alreadyTimedOut: stop.confirmation_timed_out_at !== null,
+	});
+	if (!decision) return;
+	const rows = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_stops set confirmation_timed_out_at = clock_timestamp(), updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}
+			and confirmation_timed_out_at is null and confirmation_deadline <= clock_timestamp()
+		returning execution_id
+	`;
+	if (rows.length === 0) return;
+	await transaction`update platform.conversation_executions set status = ${decision.status}, updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}`;
+	state.execution.status = decision.status;
+	await recordTaskStatus(
+		transaction,
+		state,
+		decision.status,
+		workerId,
+		decision.reason,
+	);
 }

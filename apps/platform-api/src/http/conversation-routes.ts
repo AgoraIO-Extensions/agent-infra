@@ -4,7 +4,7 @@ import {
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
-	type ConversationSseMessageV2Schema,
+	ConversationSseMessageV2Schema,
 	CreateConversationRequestV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	framePilotSseMessageV1,
@@ -393,6 +393,13 @@ export function eventProjection(
 			},
 		};
 	} else if (persisted.type === "task.status") {
+		if (persisted.reason)
+			return ConversationSseMessageV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				type: "task.status",
+				payload: { status: persisted.status, reason: persisted.reason },
+			});
 		projected = {
 			...base,
 			type: "task.status",
@@ -1006,6 +1013,15 @@ export function registerConversationRoutes(
 							// V1 clients retain their original wire types; V2 facts stay durable.
 							if (message.schemaVersion === 1)
 								await writeSseMessage(stream, message);
+							else if (message.type === "task.status")
+								await writeSseMessage(
+									stream,
+									ConversationSseMessageV1Schema.parse({
+										...message,
+										schemaVersion: 1,
+										payload: { status: message.payload.status },
+									}),
+								);
 							cursor = persisted.conversationCursor;
 						}
 						await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);

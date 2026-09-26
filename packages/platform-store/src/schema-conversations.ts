@@ -282,6 +282,14 @@ export const conversationStops = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		confirmationDeadline: timestamp("confirmation_deadline", {
+			withTimezone: true,
+		})
+			.default(sql`clock_timestamp() + interval '60 seconds'`)
+			.notNull(),
+		confirmationTimedOutAt: timestamp("confirmation_timed_out_at", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		foreignKey({

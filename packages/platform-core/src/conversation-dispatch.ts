@@ -48,7 +48,11 @@ import type {
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
 export { parseConversationMetadataRecoveryV1 } from "./conversation-dispatch-input.js";
-export { decideConversationDispatchRetryTransitionV1 } from "./conversation-dispatch-transition.js";
+export {
+	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
+} from "./conversation-dispatch-transition.js";
 export {
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,
@@ -642,6 +646,10 @@ export function createConversationDispatchUseCaseV1(
 						: retryTransition(claim),
 				);
 			}
+			const recoveringStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				dependencies.runtimeHost.recoverOriginalStatus !== undefined &&
+				claim.hostSessionRef !== null;
 			if (claim.metadataRecovery) {
 				const recover = dependencies.runtimeHost.recoverOriginalStatus;
 				if (!recover || !claim.hostSessionRef)
@@ -762,7 +770,8 @@ export function createConversationDispatchUseCaseV1(
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
-				claim.executionStatus !== "processing"
+				claim.executionStatus !== "processing" &&
+				!recoveringStop
 			) {
 				return retry(
 					dependencies.store,
@@ -805,7 +814,7 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringOriginalTurn) {
+				if (recoveringOriginalTurn || recoveringStop) {
 					const status = parseRuntimeStatusResponse(
 						dependencies.runtimeHost.recoverOriginalStatus
 							? await dependencies.runtimeHost.recoverOriginalStatus(
@@ -859,6 +868,18 @@ export function createConversationDispatchUseCaseV1(
 								),
 						claim,
 					);
+					if (status.outcome === "recovery_failed" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							status.code,
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
+						);
+					}
 					if (status.outcome === "recovery_failed") {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
@@ -882,6 +903,18 @@ export function createConversationDispatchUseCaseV1(
 							"GENERATION_ISOLATION_PENDING",
 							"retry",
 							{},
+						);
+					}
+					if (status.outcome === "not_found" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
 						);
 					}
 					if (status.outcome === "not_found") {
@@ -935,15 +968,24 @@ export function createConversationDispatchUseCaseV1(
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
-					response = {
-						schemaVersion:
-							isTurnOperation(claim.operation) && claim.modelOptionId !== null
-								? 2
-								: 1,
-						hostSessionRef: status.hostSessionRef ?? unavailable(),
-						operationId: operationId(claim),
-						result: { outcome: "accepted", status: status.status },
-					};
+					if (recoveringStop && status.status === "running") {
+						response = parseRuntimeResponse(
+							await dependencies.runtimeHost.dispatch(
+								runtimeRequest(claim, authority),
+								dispatchHeartbeat.signal,
+							),
+							claim,
+						);
+					} else
+						response = {
+							schemaVersion:
+								isTurnOperation(claim.operation) && claim.modelOptionId !== null
+									? 2
+									: 1,
+							hostSessionRef: status.hostSessionRef ?? unavailable(),
+							operationId: operationId(claim),
+							result: { outcome: "accepted", status: status.status },
+						};
 				} else {
 					response = parseRuntimeResponse(
 						await dependencies.runtimeHost.dispatch(
@@ -1002,14 +1044,16 @@ export function createConversationDispatchUseCaseV1(
 				}
 				const failure = runtimeFailure(error);
 				// A rejected lookup cannot prove the original Turn had no side effects.
-				if (recoveringOriginalTurn && !failure.retryable)
+				if ((recoveringOriginalTurn || recoveringStop) && !failure.retryable)
 					return retry(
 						dependencies.store,
 						claim,
 						retryDelayMs,
 						failure.code,
 						"unknown",
-						retryTransition(claim),
+						recoveringStop
+							? { executionStatus: "unknown", conversationStatus: "active" }
+							: retryTransition(claim),
 					);
 				return failure.retryable
 					? retry(
@@ -1081,14 +1125,14 @@ export function createConversationDispatchUseCaseV1(
 					claim.operation === "conversation.turn.stop.v1" &&
 					response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
 				) {
-					const finished = await dependencies.store.finish({
+					return retry(
+						dependencies.store,
 						claim,
-						status: "succeeded",
-						transition: {},
-					});
-					return finished
-						? { schemaVersion: 1, outcome: "already_completed" }
-						: { schemaVersion: 1, outcome: "stale" };
+						retryDelayMs,
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						"unknown",
+						{ executionStatus: "unknown", conversationStatus: "active" },
+					);
 				}
 				return reject(
 					dependencies.store,
@@ -1097,6 +1141,19 @@ export function createConversationDispatchUseCaseV1(
 						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
 						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
 						: response.result.code,
+				);
+			}
+			if (
+				claim.operation === "conversation.turn.stop.v1" &&
+				!["completed", "failed", "cancelled"].includes(response.result.status)
+			) {
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"STOP_CONFIRMATION_PENDING",
+					"retry",
+					{},
 				);
 			}
 			if (

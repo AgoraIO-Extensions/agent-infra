@@ -440,6 +440,7 @@ export interface ConversationStopWritePlanV1 {
 		readonly actorId: string;
 	};
 	readonly stopRequestId: string;
+	readonly confirmationDeadline: Date;
 	readonly outboxIntent: {
 		readonly operation: "conversation.turn.stop.v1";
 		readonly conversationId: string;
