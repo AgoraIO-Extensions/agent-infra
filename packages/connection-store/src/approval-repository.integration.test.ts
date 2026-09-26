@@ -1967,6 +1967,134 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						SET comment = 'tampered' WHERE id = ${decisionId}
 					`,
 				).rejects.toMatchObject({ code: "23514" });
+				const quorumTemplate = await repository.getPolicyDraft(
+					`incomplete-approvers-${suffix}`,
+				);
+				for (const quorumType of ["ALL", "AT_LEAST_N"] as const) {
+					const quorumProfileId = `quorum-profile-${quorumType}-${suffix}`;
+					const quorumPolicyId = `quorum-policy-${quorumType}-${suffix}`;
+					const quorumRequestId = `quorum-request-${quorumType}-${suffix}`;
+					const voters = [0, 1, 2].map(
+						(index) => `quorum-reviewer-${quorumType}-${index}-${suffix}`,
+					);
+					for (const voter of voters)
+						await sql`INSERT INTO connection_principals (id, display_name) VALUES (${voter}, 'Quorum reviewer')`;
+					await repository.createCapabilityProfileDraft({
+						id: quorumProfileId,
+						name: `Quorum ${quorumType}`,
+						providerReleaseId: releaseId,
+						actionVersionIds: [actionId],
+					});
+					await repository.publishCapabilityProfile({
+						actorPrincipalId: adminId,
+						capabilityProfileId: quorumProfileId,
+					});
+					await repository.createPolicyDraft({
+						...quorumTemplate,
+						id: quorumPolicyId,
+						capabilityProfileId: quorumProfileId,
+						durations: [
+							{
+								id: `quorum-duration-${quorumType}-${suffix}`,
+								kind: "FINITE",
+								days: 90,
+							},
+						],
+						stages: [
+							{
+								id: `quorum-stage-${quorumType}-${suffix}`,
+								name: "Review",
+								quorumType,
+								...(quorumType === "AT_LEAST_N" ? { quorumCount: 2 } : {}),
+								timeoutSeconds: 86400,
+								approvers: voters.map((principalId) => ({
+									principalId,
+									displaySnapshot: { displayName: "Quorum reviewer" },
+								})),
+							},
+						],
+					});
+					await repository.publishPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: quorumPolicyId,
+					});
+					const quorumOption = (
+						await requestRepository.listAccessOptions(applicantId)
+					).find((item) => item.policyVersionId === quorumPolicyId);
+					if (!quorumOption) throw new Error("Quorum option is missing");
+					await requestRepository.createRequest({
+						id: quorumRequestId,
+						applicantPrincipalId: applicantId,
+						providerReleaseId: releaseId,
+						capabilityProfileId: quorumProfileId,
+						policyVersionId: quorumPolicyId,
+						presentationId: quorumOption.presentationId,
+						purpose: "Verify multi-reviewer quorum",
+						duration: { kind: "FINITE", days: 90 },
+						disclaimerConfirmations: quorumOption.disclaimers.map((item) => ({
+							disclaimerVersionId: item.id,
+							contentSha256: item.contentSha256,
+							locale: item.locale,
+						})),
+					});
+					const required = quorumType === "ALL" ? 3 : 2;
+					for (let index = 0; index < required; index++) {
+						const current = await requestRepository.getRequest(
+							applicantId,
+							quorumRequestId,
+						);
+						const stage = current.stages[0];
+						const voter = voters[index];
+						if (!stage || !voter) throw new Error("Quorum stage is missing");
+						await requestRepository.decide({
+							id: `quorum-decision-${quorumType}-${index}-${suffix}`,
+							requestId: quorumRequestId,
+							actorPrincipalId: voter,
+							approverPrincipalId: voter,
+							decision: "APPROVE",
+							expectedRequestRevision: current.revision,
+							expectedStageRevision: stage.revision,
+							expectedRoutingRevision: stage.routingRevision,
+						});
+						const pending = await sql<{ recipient_principal_id: string }[]>`
+							SELECT recipient_principal_id FROM connection_work_items WHERE business_id = ${quorumRequestId} AND action_type = 'REVIEW' AND status = 'OPEN'
+						`;
+						const [permits] = await sql<
+							{ count: number }[]
+						>`SELECT count(*)::int AS count FROM connection_connect_permits WHERE request_id = ${quorumRequestId}`;
+						if (index + 1 < required) {
+							expect(
+								(
+									await requestRepository.getRequest(
+										applicantId,
+										quorumRequestId,
+									)
+								).state,
+							).toBe("IN_REVIEW");
+							expect(
+								pending.map((item) => item.recipient_principal_id).sort(),
+							).toEqual(voters.slice(index + 1).sort());
+							expect(permits?.count).toBe(0);
+							for (const remaining of voters.slice(index + 1))
+								expect(
+									(await requestRepository.listApprovalQueue(remaining)).some(
+										(item) => item.id === quorumRequestId,
+									),
+								).toBe(true);
+						} else {
+							expect(
+								(
+									await requestRepository.getRequest(
+										applicantId,
+										quorumRequestId,
+									)
+								).state,
+							).toBe("APPROVED_PENDING_CONNECTION");
+							expect(pending).toHaveLength(0);
+							expect(permits?.count).toBe(1);
+						}
+					}
+				}
 			} finally {
 				await connections.close();
 				await dispatcher.close();
