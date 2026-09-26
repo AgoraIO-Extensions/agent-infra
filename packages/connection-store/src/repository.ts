@@ -8,6 +8,9 @@ import {
 import {
 	type ActionDefinition,
 	type ActionName,
+	type AuditCall,
+	type AuditFilter,
+	type AuditRawDetail,
 	authorizationSnapshotMatches,
 	type CallStatus,
 	ConnectionError,
@@ -731,6 +734,76 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		if (await this.isConnectionAdministrator(principalId)) return true;
 		await this.recordConnectionAdministratorDenial(principalId);
 		return false;
+	}
+
+	async listAuditCalls(principalId: string, filter: AuditFilter) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			const query = filter.query ?? "";
+			const rows = await sql<AuditCall[]>`
+				SELECT call.id AS "callId", to_char(call.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
+					call.principal_id AS "principalId", principal.display_name AS person, principal.email,
+					call.consumer_id AS "consumerId", consumer.display_name AS consumer, call.instance_id AS "instanceId", call.actor_key AS "actorKey",
+					call.connection_id AS "connectionId", account.provider_id AS "providerId", action.name AS action,
+					call.action_version_id AS "actionVersionId", call.status
+				FROM connection_calls call
+				JOIN connection_principals principal ON principal.id = call.principal_id
+				JOIN connection_consumers consumer ON consumer.id = call.consumer_id
+				JOIN connection_accounts account ON account.id = call.connection_id
+				JOIN connection_action_versions action ON action.id = call.action_version_id
+				WHERE call.created_at >= ${filter.from}::text::timestamptz AND call.created_at < ${filter.to}::text::timestamptz
+					AND (${filter.status ?? null}::text IS NULL OR call.status = ${filter.status ?? ""})
+					AND (${query} = '' OR strpos(lower(principal.display_name), lower(${query})) > 0
+						OR strpos(lower(coalesce(principal.email, '')), lower(${query})) > 0
+						OR strpos(lower(action.name), lower(${query})) > 0
+						OR strpos(lower(call.id), lower(${query})) > 0)
+					AND (${filter.after?.createdAt ?? null}::text IS NULL OR
+						(call.created_at, call.id) < (${filter.after?.createdAt ?? null}::text::timestamptz, ${filter.after?.callId ?? ""}))
+				ORDER BY call.created_at DESC, call.id DESC LIMIT 51
+			`;
+			await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'AUDIT_CALLS_QUERIED', ${sql.json({ filterHash: filter.binding, from: filter.from, to: filter.to, returned: Math.min(rows.length, 50) })})`;
+			return rows;
+		});
+	}
+
+	async getAuditCall(
+		principalId: string,
+		callId: string,
+	): Promise<AuditRawDetail> {
+		return this.sql
+			.begin(async (sql) => {
+				await this.requireConnectionAdministrator(sql, principalId);
+				const [row] = await sql<Omit<AuditRawDetail, "timeline">[]>`
+				SELECT call.id AS "callId", to_char(call.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
+					call.principal_id AS "principalId", principal.display_name AS person, principal.email,
+					call.consumer_id AS "consumerId", consumer.display_name AS consumer, call.instance_id AS "instanceId", call.actor_key AS "actorKey",
+					call.connection_id AS "connectionId", account.provider_id AS "providerId", action.name AS action,
+					call.action_version_id AS "actionVersionId", call.status, call.request_input AS "requestInput", call.result
+				FROM connection_calls call
+				JOIN connection_principals principal ON principal.id = call.principal_id
+				JOIN connection_consumers consumer ON consumer.id = call.consumer_id
+				JOIN connection_accounts account ON account.id = call.connection_id
+				JOIN connection_action_versions action ON action.id = call.action_version_id
+				WHERE call.id = ${callId}
+			`;
+				const timeline = row
+					? await sql<{ event: string; occurredAt: string }[]>`
+				SELECT event, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt"
+				FROM connection_audit_records WHERE call_id = ${callId}
+					AND event IN ('CALL_AUTHORIZED', 'CALL_DENIED_LOCAL', 'CALL_SUCCEEDED', 'CALL_FAILED', 'CALL_UNCERTAIN')
+				ORDER BY created_at, id LIMIT 100
+			`
+					: [];
+				await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'AUDIT_CALL_DETAIL_QUERIED', ${sql.json({ callIdHash: createHash("sha256").update(callId).digest("hex"), found: Boolean(row) })})`;
+				return row ? { ...row, timeline } : undefined;
+			})
+			.then((row) => {
+				if (!row)
+					throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
+				return row;
+			});
 	}
 
 	private async recordConnectionAdministratorDenial(principalId: string) {

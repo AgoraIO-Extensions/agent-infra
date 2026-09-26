@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate } from "@tanstack/react-router";
 import {
 	Bot,
 	Cable,
+	FileClock,
 	KeyRound,
 	LogOut,
 	ShieldCheck,
@@ -58,6 +59,12 @@ export function ConsoleShell(props: { children: ReactNode }) {
 					{session.data.isAdministrator ? (
 						<>
 							<div className="nav-separator" />
+							<NavLink
+								to="/connection/admin/action-calls"
+								icon={<FileClock size={18} />}
+							>
+								操作记录
+							</NavLink>
 							<NavLink to="/connection/admin/agents" icon={<Bot size={18} />}>
 								Agent 接入
 							</NavLink>
@@ -103,6 +110,7 @@ function NavLink(props: {
 	children: ReactNode;
 	icon: ReactNode;
 	to:
+		| "/connection/admin/action-calls"
 		| "/connection/connections"
 		| "/connection/tokens"
 		| "/connection/admin/agents"
