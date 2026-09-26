@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
 	ConversationProjectionV1Schema,
@@ -520,6 +521,20 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(
 			AgentProjectionV1Schema.safeParse(await agentDetail.json()).success,
 		).toBe(true);
+		const agentsV2 = await app.request("/api/v2/agents", {
+			headers: requestHeaders("owner"),
+		});
+		const detailV2 = await app.request("/api/v2/agents/agent-run", {
+			headers: requestHeaders("owner"),
+		});
+		expect([agentsV2.status, detailV2.status]).toEqual([200, 200]);
+		const projectionV2 = AgentProjectionV2Schema.parse(await detailV2.json());
+		expect(projectionV2.agentId).toBe("agent-run");
+		expect(projectionV2.configuration).not.toHaveProperty("actions");
+		expect(await agentsV2.json()).toEqual({
+			items: [projectionV2],
+			nextCursor: null,
+		});
 		expect(
 			(
 				await app.request("/api/v1/agents/agent-run/configuration", {
@@ -723,6 +738,9 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			await app.request("/api/v1/agents/agent-run", {
 				headers: requestHeaders("attacker"),
 			}),
+			await app.request("/api/v2/agents/agent-run", {
+				headers: requestHeaders("attacker"),
+			}),
 			await app.request("/api/v1/admin/audit", {
 				headers: requestHeaders("attacker"),
 			}),
@@ -732,5 +750,25 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		]) {
 			expect([403, 404]).toContain(response.status);
 		}
+		const invisibleList = await app.request("/api/v2/agents", {
+			headers: requestHeaders("attacker"),
+		});
+		expect(invisibleList.status).toBe(200);
+		expect(await invisibleList.json()).toEqual({ items: [], nextCursor: null });
+		const invisibleOwned = await app.request("/api/v2/agents?scope=owner", {
+			headers: requestHeaders("attacker"),
+		});
+		expect(invisibleOwned.status).toBe(200);
+		expect(await invisibleOwned.json()).toEqual({
+			items: [],
+			nextCursor: null,
+		});
+		expect(
+			(
+				await app.request("/api/v2/agents/nonexistent", {
+					headers: requestHeaders("attacker"),
+				})
+			).status,
+		).toBe(404);
 	});
 });

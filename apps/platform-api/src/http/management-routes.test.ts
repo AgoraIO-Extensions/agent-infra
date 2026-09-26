@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { Hono } from "hono";
@@ -184,15 +185,16 @@ function createApp(
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
+	const resolve = vi.fn().mockResolvedValue({
+		...identity,
+		roles: options.administrator
+			? (["employee", "system_admin"] as const)
+			: identity.roles,
+	});
 
 	registerManagementRoutes(app, {
 		identity: {
-			resolve: vi.fn().mockResolvedValue({
-				...identity,
-				roles: options.administrator
-					? (["employee", "system_admin"] as const)
-					: identity.roles,
-			}),
+			resolve,
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 		},
 		foundation: { submit },
@@ -207,6 +209,7 @@ function createApp(
 	});
 	return {
 		app,
+		resolve,
 		submit,
 		revise,
 		executeManagementCommand,
@@ -349,6 +352,8 @@ describe("management routes", () => {
 			],
 			[user.app, "/api/v1/agents?cursor=agent-0", AgentProjectionV1Schema],
 			[user.app, "/api/v1/agents/agent-1", AgentProjectionV1Schema],
+			[user.app, "/api/v2/agents?cursor=agent-0", AgentProjectionV2Schema],
+			[user.app, "/api/v2/agents/agent-1", AgentProjectionV2Schema],
 			[
 				admin.app,
 				"/api/v1/admin/agent-applications",
@@ -374,6 +379,29 @@ describe("management routes", () => {
 			{ kind: "administrator" },
 			{ limit: 50 },
 		);
+	});
+
+	it("resolves V2 owner scope from the current identity and rejects invalid scopes", async () => {
+		const owner = createApp();
+		const response = await owner.app.request(
+			"/api/v2/agents?scope=owner&limit=10&cursor=agent-0",
+		);
+		expect(response.status).toBe(200);
+		expect(owner.listAgents).toHaveBeenCalledWith(
+			{ kind: "owner", ownerId: "user-1" },
+			{ limit: 10, afterId: "agent-0" },
+		);
+		for (const query of [
+			"scope=administrator",
+			"scope=owner&scope=owner",
+			"scope=owner&ownerId=other",
+		]) {
+			const invalid = createApp();
+			expect(
+				(await invalid.app.request(`/api/v2/agents?${query}`)).status,
+			).toBe(400);
+			expect(invalid.listAgents).not.toHaveBeenCalled();
+		}
 	});
 
 	it("preserves omitted application fields and routes mutations through Core once", async () => {
@@ -455,7 +483,9 @@ describe("management routes", () => {
 		for (const response of [
 			await missing.app.request("/api/v1/agent-applications/unknown"),
 			await missing.app.request("/api/v1/agents/unknown"),
+			await missing.app.request("/api/v2/agents/unknown"),
 			await ordinary.app.request("/api/v1/agents?userId=other"),
+			await ordinary.app.request("/api/v2/agents?userId=other"),
 		]) {
 			expect([400, 404]).toContain(response.status);
 			expect(
@@ -553,6 +583,8 @@ describe("management routes", () => {
 			["getApplication", "/api/v1/agent-applications/application-1"],
 			["listAgents", "/api/v1/agents"],
 			["getAgent", "/api/v1/agents/agent-1"],
+			["listAgents", "/api/v2/agents"],
+			["getAgent", "/api/v2/agents/agent-1"],
 		] as const) {
 			const failed = createApp();
 			failed[method].mockRejectedValue(new Error("private database failure"));
@@ -576,6 +608,49 @@ describe("management routes", () => {
 		expect((await closed.app.request("/api/v1/agents/agent-1")).status).toBe(
 			503,
 		);
+	});
+
+	it("fails closed for V2 identity and projection failures without leaking sensitive data", async () => {
+		for (const path of ["/api/v2/agents", "/api/v2/agents/agent-1"]) {
+			const unavailable = createApp();
+			unavailable.resolve.mockRejectedValue(
+				new Error("private-identity-secret"),
+			);
+			const response = await unavailable.app.request(path);
+			expect(response.status).toBe(503);
+			expect(JSON.stringify(await response.json())).not.toContain(
+				"private-identity-secret",
+			);
+			expect(unavailable.listAgents).not.toHaveBeenCalled();
+			expect(unavailable.getAgent).not.toHaveBeenCalled();
+
+			for (const projection of [
+				{ agentId: "agent-1" },
+				{ ...agentProjection, grant: "private-grant-secret" },
+				{
+					...agentProjection,
+					configuration: {
+						...configuration,
+						secrets: [
+							{
+								...configuration.secrets[0],
+								value: "private-projection-secret",
+							},
+						],
+					},
+				},
+			]) {
+				const malformed = createApp();
+				malformed.readAgentProjection.mockResolvedValue(projection);
+				const rejected = await malformed.app.request(path);
+				expect(rejected.status).toBe(503);
+				const error = PilotProtocolErrorV1Schema.parse(await rejected.json());
+				expect(error.code).toBe("DEPENDENCY_UNAVAILABLE");
+				expect(JSON.stringify(error)).not.toMatch(
+					/private-(grant|projection)-secret/,
+				);
+			}
+		}
 	});
 
 	it("redacts Secret preparation failures and never calls Core", async () => {
