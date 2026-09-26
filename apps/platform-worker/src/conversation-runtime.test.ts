@@ -764,7 +764,12 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.sent().body).not.toHaveProperty("input");
 		h.runtime.close();
 	});
-	it.each(["error", "eof"] as const)(
+	it.each([
+		"error",
+		"eof",
+		"grant-denied-terminal",
+		"grant-denied-pending",
+	] as const)(
 		"recovers the original event cursor immediately after concurrent stop closes the business stream with %s",
 		async (ending) => {
 			vi.useFakeTimers();
@@ -774,6 +779,8 @@ describe("Trusted conversation Runtime adapter", () => {
 				h.store.readRuntimeState.mockImplementation(async () =>
 					structuredClone(h.state),
 				);
+				const grantDenied = ending.startsWith("grant-denied");
+				if (grantDenied) Object.assign(h.state, { runtimeCursor: "started" });
 				const context = await h.authorize();
 				const started = {
 					schemaVersion: 2,
@@ -827,6 +834,23 @@ describe("Trusted conversation Runtime adapter", () => {
 					if (!String(url).endsWith("/events/stream"))
 						throw new Error("Recovery must not submit another Turn");
 					eventRequests += 1;
+					if (eventRequests === 1 && grantDenied) {
+						Object.assign(h.state, {
+							executionStatus:
+								ending === "grant-denied-pending" ? "processing" : "cancelled",
+							stopPending: ending === "grant-denied-pending",
+						});
+						return new Response(
+							JSON.stringify({
+								schemaVersion: 1,
+								code: "RUNTIME_GRANT_INVALID",
+								message: "Runtime Grant rejected",
+								retryable: false,
+								traceId: "trace",
+							}),
+							{ status: 403 },
+						);
+					}
 					return new Response(
 						eventRequests === 1
 							? new ReadableStream<Uint8Array>({
@@ -844,16 +868,18 @@ describe("Trusted conversation Runtime adapter", () => {
 				const stream = h.runtime.runtimeHost
 					.events(h.events(context))
 					[Symbol.asyncIterator]();
-				expect((await stream.next()).value).toEqual(started);
-				Object.assign(h.state, {
-					runtimeCursor: "started",
-					executionStatus: "cancelled",
-					stopPending: false,
-				});
-				if (!oldPipe) throw new Error("Expected the business event stream");
-				if (ending === "error")
-					oldPipe.error(new Error("old business grant stream closed"));
-				else oldPipe.close();
+				if (!grantDenied) {
+					expect((await stream.next()).value).toEqual(started);
+					Object.assign(h.state, {
+						runtimeCursor: "started",
+						executionStatus: "cancelled",
+						stopPending: false,
+					});
+					if (!oldPipe) throw new Error("Expected the business event stream");
+					if (ending === "error")
+						oldPipe.error(new Error("old business grant stream closed"));
+					else oldPipe.close();
+				}
 				const next = stream.next().then(
 					(value) => ({ value }),
 					(error: unknown) => ({ error }),
@@ -863,13 +889,22 @@ describe("Trusted conversation Runtime adapter", () => {
 					value: { done: false, value: interrupted },
 				});
 				expect(timers.mock.calls.some((call) => call[1] === 1_000)).toBe(false);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(context),
+					confirmedCursor: "interrupted",
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(2);
 				Object.assign(h.state, { runtimeCursor: "interrupted" });
 				await h.runtime.runtimeHost.acknowledge?.({
 					...h.events(context),
 					confirmedCursor: "interrupted",
 				});
 				expect((await stream.next()).value).toEqual(terminal);
-				Object.assign(h.state, { runtimeCursor: "cancelled" });
+				Object.assign(h.state, {
+					runtimeCursor: "cancelled",
+					executionStatus: "cancelled",
+					stopPending: false,
+				});
 				await h.runtime.runtimeHost.acknowledge?.({
 					...h.events(context),
 					confirmedCursor: "cancelled",
@@ -882,12 +917,23 @@ describe("Trusted conversation Runtime adapter", () => {
 					bodies.map(
 						(body) => body.afterCursor ?? body.confirmedCursor ?? null,
 					),
-				).toEqual([null, "started", "interrupted", "cancelled"]);
+				).toEqual([
+					grantDenied ? "started" : null,
+					"started",
+					"interrupted",
+					"cancelled",
+				]);
 				expect(verify(bodies[0].grant).claims.purpose).toBe("business");
 				for (const body of bodies.slice(1)) {
+					const reason =
+						ending === "grant-denied-pending" &&
+						body.confirmedCursor !== "cancelled"
+							? "stop"
+							: "recovery";
 					expect(verify(body.grant).claims).toMatchObject({
 						purpose: "control",
-						reason: "recovery",
+						reason,
+						controlRecordId: `control-${reason}`,
 						executionId: "execution",
 						turnId: "turn",
 						sessionGeneration: 1,
@@ -901,6 +947,60 @@ describe("Trusted conversation Runtime adapter", () => {
 				h.runtime.close();
 				timers.mockRestore();
 				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		["RUNTIME_GRANT_INVALID", "none", 1],
+		["RUNTIME_SERVICE_UNAUTHORIZED", "concurrent", 1],
+		["RUNTIME_GRANT_INVALID", "existing", 1],
+		["RUNTIME_GRANT_INVALID", "concurrent", 2],
+	] as const)(
+		"rejects fatal %s with %s stop after %i event requests",
+		async (code, stop, expectedRequests) => {
+			const h = harness();
+			try {
+				h.store.readRuntimeState.mockImplementation(async () =>
+					structuredClone(h.state),
+				);
+				if (stop === "existing") Object.assign(h.state, { stopPending: true });
+				const context = await h.authorize();
+				h.fetcher.mockImplementation(async () => {
+					if (stop === "concurrent")
+						Object.assign(h.state, { stopPending: true });
+					if (h.fetcher.mock.calls.length > expectedRequests)
+						throw new Error("Fatal stream must not be retried");
+					return new Response(
+						JSON.stringify({
+							schemaVersion: 1,
+							code,
+							message: "Runtime request rejected",
+							retryable: false,
+							traceId: "trace",
+						}),
+						{ status: 403 },
+					);
+				});
+				const stream = h.runtime.runtimeHost.events(h.events(context));
+				await expect(
+					stream[Symbol.asyncIterator]().next(),
+				).rejects.toMatchObject({
+					code,
+					retryable: false,
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(expectedRequests);
+				const purposes = h.fetcher.mock.calls.map((call) => {
+					const body = JSON.parse(call[1]?.body as string);
+					return verify(body.grant).claims.purpose;
+				});
+				expect(purposes).toEqual(
+					expectedRequests === 2
+						? ["business", "control"]
+						: [stop === "existing" ? "control" : "business"],
+				);
+			} finally {
+				h.runtime.close();
 			}
 		},
 	);

@@ -684,7 +684,12 @@ export function createConversationRuntimeV2(
 				} catch (error) {
 					if (
 						!(error instanceof ConversationRuntimeHostError) ||
-						!error.retryable
+						(!error.retryable &&
+							!(
+								authority.purpose === "business" &&
+								!terminal &&
+								error.code === "RUNTIME_GRANT_INVALID"
+							))
 					)
 						throw error;
 					streamFailure = error;
