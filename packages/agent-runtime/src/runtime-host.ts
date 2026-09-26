@@ -406,6 +406,7 @@ export class RuntimeHost {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)
 			runtimeAuthorizationDenied();
+		await this.bindOriginalNativeSession(action);
 		await this.options.store.authorizeExternalAction(
 			action,
 			this.options.grantValidationV2?.now ?? Date.now,
@@ -419,6 +420,76 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		this.trustedHost();
+	}
+
+	private async bindOriginalNativeSession(action: {
+		nativeSessionRef: string;
+		executionId: string;
+		runtimeOperationId: string;
+	}) {
+		const candidates = this.options.store
+			.listRecoverableOperations()
+			.filter(
+				({ operation }) =>
+					operation.kind === "submit-turn" &&
+					operation.operationId === action.runtimeOperationId &&
+					operation.executionId === action.executionId,
+			);
+		const candidate = candidates[0];
+		if (
+			candidates.length !== 1 ||
+			!candidate ||
+			candidate.session.nativeSessionRef !== undefined ||
+			candidate.operation.state !== "prepared" ||
+			candidate.operation.result !== undefined ||
+			action.runtimeOperationId !== action.executionId
+		)
+			return;
+		const { session, operation } = candidate;
+		const reference = {
+			agentId: session.agentId,
+			conversationId: session.conversationId,
+			sessionGeneration: session.sessionGeneration,
+			executionId: action.executionId,
+		};
+		const readNow = this.options.grantValidationV2?.now ?? Date.now;
+		// The first native action can arrive while execute still awaits its result.
+		// Use the original durable command, never the callback ref, as lookup authority.
+		await this.options.store.resolveOriginalExecutionBinding(
+			reference,
+			readNow,
+		);
+		const lookup = parseDriverLookup(
+			await this.options.driver.lookupOperation(operation.command),
+			operation,
+			action.nativeSessionRef,
+		);
+		this.trustedHost();
+		await this.options.store.resolveOriginalExecutionBinding(
+			reference,
+			readNow,
+		);
+		if (
+			lookup.state !== "found" ||
+			lookup.record.result.outcome !== "accepted" ||
+			lookup.record.result.status !== "running"
+		)
+			runtimeAuthorizationDenied();
+		this.trustedHost();
+		const resolved = await this.options.store.resolveOperation(
+			session.hostSessionRef,
+			operation.operationId,
+			lookup.record.result,
+			lookup.record.nativeSessionRef,
+			true,
+		);
+		this.trustedHost();
+		if (
+			resolved.operation.result?.outcome !== "accepted" ||
+			resolved.operation.result.status !== "running" ||
+			resolved.session.nativeSessionRef !== lookup.record.nativeSessionRef
+		)
+			runtimeAuthorizationDenied();
 	}
 
 	/** Resolve the accepted original principal; this is not a Connection grant. */

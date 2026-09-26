@@ -711,10 +711,23 @@ export class FileRuntimeStore {
 		operationId: string,
 		result: RuntimeOperationResultV1 | RuntimeOperationResultV2,
 		nativeSessionRef?: string,
+		onlyIfUnboundPrepared = false,
 	) {
 		return this.file.update((state) => {
 			const session = state.sessions[hostSessionRef] ?? storeCorrupted();
 			const operation = session.operations[operationId] ?? storeCorrupted();
+			// The dispatch can commit a newer receipt while its first external
+			// callback awaits lookup. Decide from this mutation's queued state.
+			if (
+				onlyIfUnboundPrepared &&
+				(operation.state !== "prepared" ||
+					operation.result !== undefined ||
+					session.nativeSessionRef !== undefined)
+			)
+				return {
+					session: structuredClone(session),
+					operation: structuredClone(operation),
+				};
 			if (
 				nativeSessionRef &&
 				session.nativeSessionRef &&
