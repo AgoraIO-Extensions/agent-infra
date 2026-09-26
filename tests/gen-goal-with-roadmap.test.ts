@@ -115,6 +115,8 @@ describe("Roadmap frontier", () => {
 			"$gen-goal-with-roadmap #10 #23",
 			"$gen-goal-with-roadmap #10 #22",
 		]);
+		for (const candidate of result.candidates)
+			expect(candidate.evidence).toContain(issueUrl(90));
 		expect(
 			result.excluded.find((item) => item.issue === 20)?.reasons,
 		).toContain("active assignee, PR, branch or worktree conflict");
@@ -161,6 +163,15 @@ describe("Roadmap frontier", () => {
 		expect(JSON.stringify(generateRoadmapGoal(input))).toContain(
 			"references do not resolve to one Map",
 		);
+	});
+
+	it("rejects closed and unsupported explicit references instead of silently dropping them", () => {
+		const input = fixture([10, 21, 90]);
+		expect(generateRoadmapGoal(input).kind).toBe("rejected");
+		Object.assign(findIssue(input, 90), { kind: "dependency" });
+		const result = generateRoadmapGoal(input);
+		expect(result.kind).toBe("rejected");
+		expect(JSON.stringify(result)).toContain("unsupported reference kind: #90");
 	});
 
 	it("Map-only invocation freezes only eligible children and rejects overlapping lane scope", () => {

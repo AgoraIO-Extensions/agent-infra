@@ -328,18 +328,27 @@ export function generateRoadmapGoal(input: FrontierInput): FrontierResult {
 				map: issue.mapNumber as number,
 				priority: issue.priority as Priority,
 				invocation: `$gen-goal-with-roadmap #${issue.mapNumber} #${issue.number}`,
-				evidence: evidenceFor([issue, byNumber.get(issue.mapNumber as number) as IssueObservation], input.repository),
+				evidence: distinct([
+					...evidenceFor([issue, byNumber.get(issue.mapNumber as number) as IssueObservation], input.repository),
+					...[...issue.blockers, ...(byNumber.get(issue.mapNumber as number) as IssueObservation).blockers]
+						.map((number) => (byNumber.get(number) as IssueObservation).evidence.issue),
+				]).sort(),
 			})),
 			excluded: excluded.sort((a, b) => a.issue - b.issue),
 		};
 	}
 	const unknown = refs.filter((number) => !byNumber.has(number));
+	const unsupported = refs.filter((number) => {
+		const issue = byNumber.get(number);
+		return issue && issue.kind !== "map" && issue.kind !== "implementation";
+	});
 	const maps = refs.filter((number) => byNumber.get(number)?.kind === "map");
 	const explicit = refs.filter((number) => byNumber.get(number)?.kind === "implementation");
 	const inferredMaps = distinct(explicit.map((number) => byNumber.get(number)?.mapNumber));
 	const mapNumber = maps[0] ?? inferredMaps[0];
 	const reasons: string[] = [];
 	if (unknown.length) reasons.push(`unobserved references: ${unknown.map((number) => `#${number}`).join(", ")}`);
+	if (unsupported.length) reasons.push(`unsupported reference kind: ${unsupported.map((number) => `#${number}`).join(", ")}`);
 	if (maps.length > 1 || (explicit.length > 0 && inferredMaps.length !== 1) || !issueNumber(mapNumber) ||
 		(maps.length === 1 && inferredMaps[0] !== undefined && inferredMaps[0] !== mapNumber))
 		reasons.push("references do not resolve to one Map");
