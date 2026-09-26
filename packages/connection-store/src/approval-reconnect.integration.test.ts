@@ -117,6 +117,75 @@ describe("approved personal Connection reconnect", () => {
 						expectedCredentialVersionId: currentCredential?.id,
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const nextReleaseId = `github-approval-upgrade-${randomUUID()}`;
+				await repository.publishProviderCatalog({
+					...githubConnectionCatalog,
+					providerReleaseId: nextReleaseId,
+					actions: githubConnectionCatalog.actions.map((action) => ({
+						...action,
+						id: `${action.id}-${nextReleaseId}`,
+					})),
+				});
+				const [beforeUpgrade] = await sql`
+					SELECT account.provider_release_id, account.revision, account.execution_fence,
+						credential.id AS credential_id, access.id AS access_id, access.state AS access_state,
+						access.provider_release_id AS approved_release_id
+					FROM connection_accounts account
+					JOIN connection_credential_versions credential ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
+					JOIN connection_access_authorizations access ON access.connection_id = account.id
+					WHERE account.id = ${connected.connectionId}
+				`;
+				await expect(
+					repository.storeProviderCredential({
+						accessToken: "fixture-unapproved-upgrade",
+						displayName: "Existing GitHub",
+						externalAccount: "stable-github-uid",
+						grantedScopes: ["repo"],
+						principalId,
+						providerId: "github",
+						providerReleaseId: nextReleaseId,
+						expectedConnectionId: connected.connectionId,
+						expectedCredentialVersionId: currentCredential?.id,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const [afterUpgrade] = await sql`
+					SELECT account.provider_release_id, account.revision, account.execution_fence,
+						credential.id AS credential_id, access.id AS access_id, access.state AS access_state,
+						access.provider_release_id AS approved_release_id
+					FROM connection_accounts account
+					JOIN connection_credential_versions credential ON credential.connection_id = account.id AND credential.status = 'ACTIVE'
+					JOIN connection_access_authorizations access ON access.connection_id = account.id
+					WHERE account.id = ${connected.connectionId}
+				`;
+				expect(afterUpgrade).toEqual(beforeUpgrade);
+				await repository.storeProviderCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: nextReleaseId,
+						scopes: ["repo"],
+					}),
+					accessToken: "fixture-approved-upgrade",
+					displayName: "Existing GitHub",
+					externalAccount: "stable-github-uid",
+					grantedScopes: ["repo"],
+					principalId,
+					providerId: "github",
+					providerReleaseId: nextReleaseId,
+					expectedConnectionId: connected.connectionId,
+					expectedCredentialVersionId: currentCredential?.id,
+				});
+				const [approvedUpgrade] = await sql`
+					SELECT account.provider_release_id, access.provider_release_id AS approved_release_id,
+						(SELECT state FROM connection_access_authorizations WHERE id = ${beforeUpgrade?.access_id}) AS prior_state
+					FROM connection_accounts account
+					JOIN connection_access_authorizations access ON access.connection_id = account.id AND access.state = 'ACTIVE'
+					WHERE account.id = ${connected.connectionId}
+				`;
+				expect(approvedUpgrade).toEqual({
+					provider_release_id: nextReleaseId,
+					approved_release_id: nextReleaseId,
+					prior_state: "REVOKED",
+				});
 				const [accounts] = await sql<{ count: number }[]>`
 				SELECT count(*)::int AS count FROM connection_accounts
 				WHERE owner_principal_id = ${principalId}

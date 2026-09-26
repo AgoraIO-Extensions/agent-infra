@@ -475,6 +475,8 @@ describe("PostgreSQL Connection access approval catalog", () => {
 			const repository = new PostgresConnectionApprovalRepository(databaseUrl);
 			const requestRepository = new PostgresConnectionAccessRequestRepository(
 				databaseUrl,
+				(sql, connectionId) =>
+					connections.restoreGrantsAfterRenewal(sql, connectionId),
 			);
 			const dispatcher = new PostgresConnectionNotificationDispatcher(
 				databaseUrl,
@@ -1161,6 +1163,28 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					)
 				`;
 				const accessAuthorizationId = `access-authorization-${suffix}`;
+				await sql`UPDATE connection_provider_releases SET status = 'DISABLED' WHERE id = ${releaseId}`;
+				await expect(
+					requestRepository.consumeConnectPermit({
+						accessAuthorizationId,
+						connectionId,
+						grantedScopes: ["approval.read"],
+						principalId: applicantId,
+						requestId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const [blockedConsumption] = await sql<
+					{ consumed_at: Date | null; authorizations: number }[]
+				>`
+					SELECT consumed_at,
+						(SELECT count(*)::int FROM connection_access_authorizations WHERE id = ${accessAuthorizationId}) AS authorizations
+					FROM connection_connect_permits WHERE request_id = ${requestId}
+				`;
+				expect(blockedConsumption).toEqual({
+					consumed_at: null,
+					authorizations: 0,
+				});
+				await sql`UPDATE connection_provider_releases SET status = 'PUBLISHED' WHERE id = ${releaseId}`;
 				expect(
 					await requestRepository.consumeConnectPermit({
 						accessAuthorizationId,
@@ -1390,6 +1414,19 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				expect(renewed?.valid_until.getTime()).toBeLessThan(
 					Date.now() + 101 * 86_400_000,
 				);
+				const beforeLatePreview =
+					await connections.createCurrentConsumerAuthorizationPreview({
+						connectionId,
+						consumerId,
+						principalId: applicantId,
+					});
+				const beforeLateGrant =
+					await connections.confirmCurrentConsumerAuthorization({
+						confirmationToken: beforeLatePreview.confirmationToken,
+						idempotencyKey: `before-late-renewal-${suffix}`,
+						previewId: beforeLatePreview.previewId,
+						principalId: applicantId,
+					});
 				await sql`
 					UPDATE connection_access_authorizations
 					SET valid_until = now() + interval '4 seconds'
@@ -1506,6 +1543,29 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				expect(resumed?.valid_until.getTime()).toBeGreaterThan(
 					Date.now() + 89 * 86_400_000,
 				);
+				const [renewedGrant] = await sql<
+					{
+						old_status: string;
+						current_id: string;
+						current_status: string;
+						current_fence: string;
+						account_fence: string;
+					}[]
+				>`
+					SELECT prior.status AS old_status, current.id AS current_id, current.status AS current_status,
+						current.connection_execution_fence::text AS current_fence, account.execution_fence::text AS account_fence
+					FROM connection_grants prior
+					JOIN connection_authorization_roots root ON root.id = prior.root_id
+					JOIN connection_grants current ON current.id = root.current_grant_id
+					JOIN connection_accounts account ON account.id = current.connection_id
+					WHERE prior.id = ${beforeLateGrant.grantId}
+				`;
+				expect(renewedGrant).toMatchObject({
+					old_status: "REPLACED",
+					current_status: "ACTIVE",
+				});
+				expect(renewedGrant?.current_id).not.toBe(beforeLateGrant.grantId);
+				expect(renewedGrant?.current_fence).toBe(renewedGrant?.account_fence);
 				const expiringRequestId = `approval-expiring-${suffix}`;
 				const renewalOption = (
 					await requestRepository.listAccessOptions(applicantId)
@@ -1708,10 +1768,10 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					FROM connection_accounts account
 					JOIN connection_access_authorizations access ON access.connection_id = account.id
 					JOIN connection_grants grant_version ON grant_version.connection_id = account.id
+					JOIN connection_authorization_roots current_root ON current_root.current_grant_id = grant_version.id
 					JOIN connection_access_requests request ON request.id = ${revokedRequestId}
 					JOIN connection_connect_permits permit ON permit.request_id = request.id
 					WHERE account.id = ${connectionId}
-					ORDER BY grant_version.id DESC LIMIT 1
 				`;
 				expect(revokedState).toEqual({
 					access_state: "SUSPENDED",

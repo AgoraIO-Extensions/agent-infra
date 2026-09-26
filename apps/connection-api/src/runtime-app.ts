@@ -83,6 +83,8 @@ export async function createConnectionRuntime(
 	);
 	const approvalRepository = new PostgresConnectionAccessRequestRepository(
 		config.databaseUrl,
+		(sql, connectionId) =>
+			repository.restoreGrantsAfterRenewal(sql, connectionId),
 	);
 	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
 		config.databaseUrl,

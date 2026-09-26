@@ -1447,9 +1447,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		});
 	}
 
+	async restoreGrantsAfterRenewal(
+		sql: postgres.TransactionSql,
+		connectionId: string,
+	) {
+		await this.restoreGrantsAfterReconnect(sql, connectionId, true);
+	}
+
 	private async restoreGrantsAfterReconnect(
 		sql: postgres.TransactionSql,
 		connectionId: string,
+		renewal = false,
 	) {
 		const currentGrants = await sql<
 			{
@@ -1494,7 +1502,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON active_grant.id = root.current_grant_id
 				AND active_grant.root_id = root.id
 				AND active_grant.actor_key = root.actor_key
-				AND active_grant.status = 'ACTIVE'
+				AND (active_grant.status = 'ACTIVE' OR (${renewal} AND active_grant.status = 'PAUSED_CONNECTION'))
 			WHERE active_grant.connection_id = ${connectionId}
 			ORDER BY active_grant.principal_id, root.id
 			FOR UPDATE OF root, active_grant
@@ -1507,10 +1515,17 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					consumerId: grant.consumer_id,
 					principalId: grant.principal_id,
 				});
+				if (renewal)
+					target = selectAuthorizationActions(target, grant.action_version_ids);
 			} catch (error) {
-				if (!(error instanceof ConnectionError) || error.code !== "FORBIDDEN") {
+				if (
+					!(error instanceof ConnectionError) ||
+					(error.code !== "FORBIDDEN" &&
+						!(renewal && error.code === "INVALID_REQUEST"))
+				) {
 					throw error;
 				}
+				target = undefined;
 			}
 			const decision = decideReconnectAuthorization({
 				current: {
@@ -1572,7 +1587,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				}
 				await sql`
 					UPDATE connection_grants SET status = 'REPLACED'
-					WHERE id = ${grant.id} AND status = 'ACTIVE'
+					WHERE id = ${grant.id} AND (status = 'ACTIVE' OR (${renewal} AND status = 'PAUSED_CONNECTION'))
 				`;
 				const updatedRoots = await sql`
 					UPDATE connection_authorization_roots
@@ -1588,7 +1603,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				await sql`
 					INSERT INTO connection_audit_records (principal_id, event, detail)
 					VALUES (
-						${grant.principal_id}, 'GRANT_RESTORED_AFTER_RECONNECT',
+						${grant.principal_id}, ${renewal ? "GRANT_RESTORED_AFTER_RENEWAL" : "GRANT_RESTORED_AFTER_RECONNECT"},
 						${sql.json({
 							connectionId,
 							consumerId: grant.consumer_id,

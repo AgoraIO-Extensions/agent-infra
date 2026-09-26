@@ -146,7 +146,13 @@ export class PostgresConnectionAccessRequestRepository
 {
 	private readonly sql: Sql;
 
-	constructor(databaseUrl: string) {
+	constructor(
+		databaseUrl: string,
+		private readonly restoreRenewedGrants?: (
+			sql: postgres.TransactionSql,
+			connectionId: string,
+		) => Promise<void>,
+	) {
 		this.sql = postgres(databaseUrl, { max: 10 });
 	}
 
@@ -1909,6 +1915,7 @@ export class PostgresConnectionAccessRequestRepository
 							sql,
 							input.requestId,
 							input.actorPrincipalId,
+							this.restoreRenewedGrants,
 						);
 						if (!renewed) {
 							const permitId = `connect-permit-${randomUUID()}`;
@@ -2101,6 +2108,10 @@ async function completeRenewalInTransaction(
 	sql: postgres.TransactionSql,
 	requestId: string,
 	actorPrincipalId: string,
+	restoreRenewedGrants?: (
+		sql: postgres.TransactionSql,
+		connectionId: string,
+	) => Promise<void>,
 ) {
 	const [renewal] = await sql<
 		{
@@ -2199,6 +2210,12 @@ async function completeRenewalInTransaction(
 			SET revision = revision + 1, execution_fence = execution_fence + 1
 			WHERE id = ${target.connection_id}
 		`;
+		if (!restoreRenewedGrants)
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Renewal grant restoration is unavailable",
+			);
+		await restoreRenewedGrants(sql, target.connection_id);
 	}
 	await sql`
 		UPDATE connection_authorization_renewals
@@ -2239,6 +2256,7 @@ export async function consumeConnectPermitInTransaction(
 			request.duration_days, account.external_account, profile.required_scopes
 		FROM connection_connect_permits permit
 		JOIN connection_access_requests request ON request.id = permit.request_id
+		JOIN connection_provider_releases release ON release.id = request.provider_release_id
 		JOIN connection_capability_profiles profile
 			ON profile.id = request.capability_profile_id
 		JOIN connection_access_policy_versions policy
@@ -2247,6 +2265,7 @@ export async function consumeConnectPermitInTransaction(
 		WHERE request.id = ${input.requestId}
 			AND request.applicant_principal_id = ${input.principalId}
 			AND request.state = 'APPROVED_PENDING_CONNECTION'
+			AND release.status = 'PUBLISHED'
 			AND profile.status IN ('PUBLISHED', 'SUPERSEDED')
 			AND policy.status IN ('PUBLISHED', 'SUPERSEDED')
 			AND request.connect_expires_at > now()
@@ -2255,6 +2274,7 @@ export async function consumeConnectPermitInTransaction(
 			AND account.owner_principal_id = request.applicant_principal_id
 			AND account.provider_release_id = request.provider_release_id
 		FOR UPDATE OF permit, request, account
+		FOR SHARE OF release, profile, policy
 	`;
 	if (!target) forbidden();
 	const approvedScopes = target.required_scopes;

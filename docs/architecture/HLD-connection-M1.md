@@ -1183,6 +1183,8 @@ ApprovalDecision 只接受 current Stage 的合格审批人，以 Request、Stag
 
 有限期 Access Authorization 的 Renewal Request 是例外：仅在已发布 PolicyVersion 的续期窗口内，固定同一 Principal、外部账号、ProviderRelease 和 Capability Profile，且原资格尚未自然到期时发起。它复用顺序 Stage 和免责声明确认，但最终通过时不生成 Connect Permit、不收集 Provider Credential，而是在同一事务将原 `validUntil` 从 `GREATEST(validUntil, now())` 起延长所选有限时长，记录 Renewal 和 Authorization revision。待审不产生宽限；原期限先到时仍阻断调用并暂停 Grant，之后审批通过才恢复同一资格。`PERMANENT`、换号、扩权或不兼容 ProviderRelease 不进入续期路径。
 
+续期跨越原到期时间时，沿用 15 节同账号恢复的 replacement Grant 规则：只对仍为 current 且原 Consent、账号证明、scope 与 Action 集合一致的 Grant 创建冻结新 fence 的替代版本；旧 Grant 标记 REPLACED，禁止暂停版本原地恢复 ACTIVE。续期与替代 Grant 必须同事务提交，不恢复撤销、终结或需要重新同意的授权。
+
 所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
 
 Access Authorization 冻结 Principal、Connection、稳定外部账号指纹、ProviderRelease、Capability Profile、有效期和 revision。Invocation 建立与 Provider submission admission 都必须验证 current ACTIVE Authorization 及数据库时间；后台 expiry worker 只推进状态和通知，不是唯一门禁。到期、撤销和暂停提升 account/authorization revision 与 execution fence，并暂停相关 Grant；`SUBMISSION_STARTED` 调用仍按 Effect/UNCERTAIN 语义收敛。

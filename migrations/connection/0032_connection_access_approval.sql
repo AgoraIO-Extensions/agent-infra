@@ -674,3 +674,21 @@ FOR EACH ROW EXECUTE FUNCTION connection_enforce_approval_child_mutation();
 CREATE TRIGGER connection_approval_stage_approvers_immutable
 BEFORE INSERT OR UPDATE OR DELETE ON connection_approval_stage_approvers
 FOR EACH ROW EXECUTE FUNCTION connection_enforce_approval_child_mutation();
+
+CREATE OR REPLACE FUNCTION connection_enforce_grant_status_transition()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD.status = NEW.status
+    OR (OLD.status = 'ACTIVE' AND NEW.status IN (
+      'PAUSED_CONNECTION', 'PAUSED_CREDENTIAL', 'REPLACED', 'REVOKED', 'TERMINATED'
+    ))
+    OR (OLD.status = 'PAUSED_CONNECTION' AND NEW.status IN ('REPLACED', 'TERMINATED'))
+    OR (OLD.status = 'PAUSED_CREDENTIAL' AND NEW.status = 'TERMINATED') THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'invalid Connection grant status transition: % -> %', OLD.status, NEW.status
+    USING ERRCODE = 'check_violation';
+END;
+$$;
