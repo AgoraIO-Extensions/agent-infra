@@ -820,10 +820,43 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						 WHERE aggregate_id = ${policyId}) AS outbox_count
 				`;
 				expect(evidence).toEqual({ audit_count: 1, outbox_count: 1 });
-				const selfReviewOption = (
+				const parallelOptions = await Promise.all(
+					[0, 1, 2].map(() => requestRepository.listAccessOptions(approverId)),
+				);
+				const selfReviewOption = parallelOptions[0]?.find(
+					(item) => item.policyVersionId === policyId,
+				);
+				if (!selfReviewOption) throw new Error("Self-review option is missing");
+				expect(
+					parallelOptions.map(
+						(options) =>
+							options.find((item) => item.policyVersionId === policyId)
+								?.presentationId,
+					),
+				).toEqual(Array(3).fill(selfReviewOption.presentationId));
+				const [presentationBefore] = await sql<
+					{ expires_at: Date }[]
+				>`SELECT expires_at FROM connection_disclaimer_presentations WHERE id = ${selfReviewOption.presentationId}`;
+				const repeatedOption = (
 					await requestRepository.listAccessOptions(approverId)
 				).find((item) => item.policyVersionId === policyId);
-				if (!selfReviewOption) throw new Error("Self-review option is missing");
+				expect(repeatedOption?.presentationId).toBe(
+					selfReviewOption.presentationId,
+				);
+				const [presentationAfter] = await sql<
+					{ expires_at: Date }[]
+				>`SELECT expires_at FROM connection_disclaimer_presentations WHERE id = ${selfReviewOption.presentationId}`;
+				expect(presentationAfter).toEqual(presentationBefore);
+				const [unconsumedCount] = await sql<
+					{ count: number }[]
+				>`SELECT count(*)::int AS count FROM connection_disclaimer_presentations WHERE principal_id = ${approverId} AND policy_version_id = ${policyId} AND consumed_request_id IS NULL`;
+				expect(unconsumedCount?.count).toBe(1);
+				const otherPrincipalOption = (
+					await requestRepository.listAccessOptions(applicantId)
+				).find((item) => item.policyVersionId === policyId);
+				expect(otherPrincipalOption?.presentationId).not.toBe(
+					selfReviewOption.presentationId,
+				);
 				const blockedRequestId = `approval-blocked-${suffix}`;
 				await requestRepository.createRequest({
 					applicantPrincipalId: approverId,
@@ -842,6 +875,16 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					providerReleaseId: releaseId,
 					purpose: "Self-review must be rerouted",
 				});
+				const afterConsumption = (
+					await requestRepository.listAccessOptions(approverId)
+				).find((item) => item.policyVersionId === policyId);
+				expect(afterConsumption?.presentationId).not.toBe(
+					selfReviewOption.presentationId,
+				);
+				const [retainedProof] = await sql<
+					{ consumed_request_id: string }[]
+				>`SELECT consumed_request_id FROM connection_disclaimer_presentations WHERE id = ${selfReviewOption.presentationId}`;
+				expect(retainedProof?.consumed_request_id).toBe(blockedRequestId);
 				const [blocked] = await requestRepository.listRoutingBlocked(adminId);
 				expect(blocked).toMatchObject({
 					id: blockedRequestId,

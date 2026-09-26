@@ -301,6 +301,11 @@ export class PostgresConnectionAccessRequestRepository
 	): Promise<readonly AccessOption[]> {
 		await this.requireActivePrincipal(principalId);
 		return this.sql.begin(async (sql) => {
+			const [principal] = await sql<{ id: string }[]>`
+				SELECT id FROM connection_principals WHERE id = ${principalId} AND status = 'ACTIVE'
+				FOR NO KEY UPDATE
+			`;
+			if (!principal) forbidden();
 			const policies = await sql<
 				{
 					capability_profile_id: string;
@@ -358,19 +363,29 @@ export class PostgresConnectionAccessRequestRepository
 				`;
 					if (disclaimers.length === 0)
 						invalid("Approval disclaimers are unavailable");
-					const presentationId = `disclaimer-presentation-${randomUUID()}`;
-					await sql`
+					const bundleDigest = canonicalHash(
+						disclaimers.map((item) => ({
+							id: item.id,
+							sha256: item.content_sha256,
+							locale: item.locale,
+						})),
+					);
+					const [existing] = await sql<{ id: string }[]>`
+						SELECT id FROM connection_disclaimer_presentations
+						WHERE principal_id = ${principalId} AND policy_version_id = ${policy.policy_version_id}
+							AND disclaimer_bundle_digest = ${bundleDigest}
+							AND expires_at > now() AND consumed_request_id IS NULL
+						ORDER BY presented_at DESC, id LIMIT 1
+					`;
+					const presentationId =
+						existing?.id ?? `disclaimer-presentation-${randomUUID()}`;
+					if (!existing)
+						await sql`
 					INSERT INTO connection_disclaimer_presentations (
 						id, principal_id, policy_version_id, disclaimer_bundle_digest
 					) VALUES (
 						${presentationId}, ${principalId}, ${policy.policy_version_id},
-						${canonicalHash(
-							disclaimers.map((item) => ({
-								id: item.id,
-								sha256: item.content_sha256,
-								locale: item.locale,
-							})),
-						)}
+						${bundleDigest}
 					)
 				`;
 					return {

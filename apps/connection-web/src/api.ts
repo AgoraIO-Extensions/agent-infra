@@ -536,11 +536,10 @@ export const connectionApi = {
 			startGithubOAuth({
 				body: parseClientInput(
 					oauthTransactionRequestSchema,
-					sharedScopeId
-						? { sharedScopeId }
-						: accessRequestId
-							? { accessRequestId }
-							: {},
+					{
+						...(sharedScopeId ? { sharedScopeId } : {}),
+						...(accessRequestId ? { accessRequestId } : {}),
+					},
 					"共享组信息无效，请刷新后重试",
 				),
 				headers: commandHeaders(),
