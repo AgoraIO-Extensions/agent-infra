@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
+import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
 import { PostgresConnectionApprovalRepository } from "./approval-repository";
 import { seedApprovedConnectPermit } from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
@@ -31,6 +32,7 @@ describe("approved personal Connection reconnect", () => {
 				Buffer.alloc(32, 23),
 			);
 			const approval = new PostgresConnectionApprovalRepository(databaseUrl);
+			const access = new PostgresConnectionAccessRequestRepository(databaseUrl);
 			const sql = postgres(databaseUrl);
 			try {
 				await repository.publishProviderCatalog(githubConnectionCatalog);
@@ -200,6 +202,20 @@ describe("approved personal Connection reconnect", () => {
 				SET validity_kind = 'FINITE', valid_until = now() - interval '1 second'
 				WHERE connection_id = ${connected.connectionId}
 			`;
+				expect(await access.expireDueAuthorizations()).toBe(1);
+				expect(await access.expireDueAuthorizations()).toBe(0);
+				const [expiry] = await sql`
+					SELECT access_record.state, account.status,
+						(SELECT count(*)::int FROM connection_notifications WHERE business_id = access_record.id AND event_type = 'EXPIRED') AS notifications
+					FROM connection_access_authorizations access_record
+					JOIN connection_accounts account ON account.id = access_record.connection_id
+					WHERE account.id = ${connected.connectionId} AND access_record.provider_release_id = ${nextReleaseId}
+				`;
+				expect(expiry).toEqual({
+					state: "EXPIRED",
+					status: "DISCONNECTED",
+					notifications: 1,
+				});
 				await expect(
 					repository.validatePersonalReconnect({
 						connectionId: connected.connectionId,
@@ -277,6 +293,7 @@ describe("approved personal Connection reconnect", () => {
 			} finally {
 				await repository.close();
 				await approval.close();
+				await access.close();
 				await sql.end();
 			}
 		},

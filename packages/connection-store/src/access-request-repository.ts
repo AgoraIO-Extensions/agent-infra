@@ -894,7 +894,7 @@ export class PostgresConnectionAccessRequestRepository
 	async expireDueAuthorizations(limit = 50) {
 		const candidates = await this.sql<{ connection_id: string; id: string }[]>`
 			SELECT id, connection_id FROM connection_access_authorizations
-			WHERE state IN ('ACTIVE', 'REAPPROVAL_REQUIRED')
+			WHERE state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
 				AND (valid_until <= now() OR (
 					state = 'REAPPROVAL_REQUIRED' AND reapproval_deadline_at <= now()
 				))
@@ -919,7 +919,7 @@ export class PostgresConnectionAccessRequestRepository
 						ELSE 'SUSPENDED' END,
 						revision = revision + 1, updated_at = now()
 					WHERE id = ${candidate.id} AND connection_id = ${account.id}
-						AND state IN ('ACTIVE', 'REAPPROVAL_REQUIRED')
+						AND state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
 						AND (valid_until <= now() OR (
 							state = 'REAPPROVAL_REQUIRED' AND reapproval_deadline_at <= now()
 						))
