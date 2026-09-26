@@ -175,6 +175,41 @@ describe("Roadmap frontier", () => {
 		);
 	});
 
+	it("offers only candidates whose complete invocation passes the Map boundary check", () => {
+		const input = fixture();
+		findIssue(input, 21).scope.paths = ["apps/outside-map"];
+		const candidates = generateRoadmapGoal(input);
+		expect(candidates.kind).toBe("candidates");
+		if (candidates.kind !== "candidates") return;
+		expect(candidates.candidates.map((item) => item.issue)).toEqual([
+			23, 22, 24,
+		]);
+		expect(
+			candidates.excluded.find((item) => item.issue === 21)?.reasons,
+		).toContain("outside Map file scope");
+		input.references = [10, 21];
+		expect(generateRoadmapGoal(input).kind).toBe("rejected");
+		for (const candidate of candidates.candidates) {
+			input.references = [candidate.map, candidate.issue];
+			expect(generateRoadmapGoal(input).kind).toBe("goal");
+		}
+	});
+
+	it("rejects Maps without file boundaries in discovery and explicit modes", () => {
+		const input = fixture();
+		findIssue(input, 10).scope.paths = [];
+		const candidates = generateRoadmapGoal(input);
+		expect(candidates.kind).toBe("candidates");
+		if (candidates.kind !== "candidates") return;
+		expect(candidates.candidates).toEqual([]);
+		input.references = [10, 21];
+		const result = generateRoadmapGoal(input);
+		expect(result.kind).toBe("rejected");
+		expect(JSON.stringify(result)).toContain(
+			"Map state or evidence incomplete",
+		);
+	});
+
 	it("snapshot hash is stable under observation ordering and changes with relevant facts", () => {
 		const input = fixture([10, 21]);
 		const first = mustGoal(input);

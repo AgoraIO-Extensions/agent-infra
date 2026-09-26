@@ -216,7 +216,7 @@ function completeMap(
 			return issueNumber(number) && blocker?.state === "closed" && blocker.revision &&
 				sameRepoUrl(blocker.evidence?.issue, repositoryUrl);
 		}) &&
-		issue.scope && Array.isArray(issue.scope.paths) &&
+		issue.scope && Array.isArray(issue.scope.paths) && issue.scope.paths.length > 0 &&
 		issue.scope.paths.every(repoPath) && validationEntry(issue.scope.validation),
 	);
 }
@@ -277,6 +277,9 @@ function eligibility(
 	const map = byNumber.get(issue.mapNumber ?? -1);
 	if (map && map.milestone !== issue.milestone)
 		reasons.push("Map milestone scope mismatch");
+	if (map?.scope?.paths?.length && issue.scope?.paths?.some((path) =>
+		!map.scope.paths.some((root) => path === root || path.startsWith(`${root}/`))))
+		reasons.push("outside Map file scope");
 	return reasons;
 }
 
@@ -350,9 +353,6 @@ export function generateRoadmapGoal(input: FrontierInput): FrontierResult {
 	for (const issue of selected) {
 		for (const reason of eligibility(issue, byNumber, input.repository.url)) reasons.push(`#${issue.number}: ${reason}`);
 		if (issue.mapNumber !== mapNumber) reasons.push(`#${issue.number}: belongs to another Map`);
-		if (map?.scope?.paths?.length && issue.scope?.paths?.some((path) =>
-			!map.scope.paths.some((root) => path === root || path.startsWith(`${root}/`))))
-			reasons.push(`#${issue.number}: outside Map file scope`);
 	}
 	for (let left = 0; left < selected.length; left++) {
 		for (let right = left + 1; right < selected.length; right++) {
