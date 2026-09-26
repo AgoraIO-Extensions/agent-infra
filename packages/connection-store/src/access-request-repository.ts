@@ -912,7 +912,7 @@ export class PostgresConnectionAccessRequestRepository
 				`;
 				if (!account) return false;
 				const [authorization] = await sql<
-					{ id: string; state: "EXPIRED" | "SUSPENDED" }[]
+					{ id: string; revision: string; state: "EXPIRED" | "SUSPENDED" }[]
 				>`
 					UPDATE connection_access_authorizations
 					SET state = CASE WHEN valid_until <= now() THEN 'EXPIRED'
@@ -923,7 +923,7 @@ export class PostgresConnectionAccessRequestRepository
 						AND (valid_until <= now() OR (
 							state = 'REAPPROVAL_REQUIRED' AND reapproval_deadline_at <= now()
 						))
-					RETURNING id, state
+					RETURNING id, revision::text, state
 				`;
 				if (!authorization) return false;
 				await sql`
@@ -956,7 +956,7 @@ export class PostgresConnectionAccessRequestRepository
 						) VALUES (
 							${`approval-notification-${randomUUID()}`},
 							${account.owner_principal_id}, 'CONNECTION_ACCESS_AUTHORIZATION',
-							${authorization.id}, 1, ${authorization.state},
+							${authorization.id}, ${authorization.revision}, ${authorization.state},
 							${sql.json({ providerId: account.provider_id, state: authorization.state })}
 						)
 						ON CONFLICT DO NOTHING
@@ -970,6 +970,7 @@ export class PostgresConnectionAccessRequestRepository
 				await auditAndEnqueue(sql, {
 					actorPrincipalId: account.owner_principal_id,
 					aggregateId: authorization.id,
+					aggregateRevision: authorization.revision,
 					event: `connection.access-authorization.${authorization.state.toLowerCase()}`,
 				});
 				return true;
@@ -2563,21 +2564,31 @@ async function auditAndEnqueue(
 	input: {
 		actorPrincipalId: string;
 		aggregateId: string;
+		aggregateRevision?: string;
 		event: string;
 	},
 ) {
+	const eventAggregateId = input.aggregateRevision
+		? `${input.aggregateId}:${input.aggregateRevision}`
+		: input.aggregateId;
+	const detail = {
+		aggregateId: input.aggregateId,
+		...(input.aggregateRevision
+			? { aggregateRevision: input.aggregateRevision }
+			: {}),
+	};
 	await sql`
 		INSERT INTO connection_audit_records (principal_id, event, detail)
 		VALUES (
 			${input.actorPrincipalId}, ${input.event},
-			${sql.json({ aggregateId: input.aggregateId })}
+			${sql.json(detail)}
 		)
 	`;
 	await sql`
 		INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
 		VALUES (
-			${`${input.aggregateId}:${input.event}`}, ${input.event},
-			${input.aggregateId}, ${sql.json({ aggregateId: input.aggregateId })}
+			${`${eventAggregateId}:${input.event}`}, ${input.event},
+			${eventAggregateId}, ${sql.json(detail)}
 		)
 	`;
 }

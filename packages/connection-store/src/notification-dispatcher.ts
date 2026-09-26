@@ -156,21 +156,22 @@ export class PostgresConnectionNotificationDispatcher {
 				if (!event) return false;
 				eventId = event.id;
 				if (approvalTopics.some((topic) => topic === event.topic)) {
-					const draftUpdate =
-						event.topic === "connection.access-policy.draft-updated";
+					const versionedEvent =
+						event.topic === "connection.access-policy.draft-updated" ||
+						event.aggregate_revision !== null;
 					if (
-						draftUpdate &&
+						versionedEvent &&
 						(!event.source_aggregate_id ||
 							!event.aggregate_revision ||
 							event.aggregate_id !==
 								`${event.source_aggregate_id}:${event.aggregate_revision}`)
 					)
-						throw new Error("Draft update outbox identity is invalid");
+						throw new Error("Versioned approval outbox identity is invalid");
 					const [audit] = await sql<{ id: string }[]>`
 						SELECT id FROM connection_audit_records
 						WHERE event = ${event.topic}
-							AND detail->>'aggregateId' = ${draftUpdate ? event.source_aggregate_id : event.aggregate_id}
-							AND (NOT ${draftUpdate} OR detail->>'aggregateRevision' = ${event.aggregate_revision})
+							AND detail->>'aggregateId' = ${versionedEvent ? event.source_aggregate_id : event.aggregate_id}
+							AND (NOT ${versionedEvent} OR detail->>'aggregateRevision' = ${event.aggregate_revision})
 						LIMIT 1
 					`;
 					if (!audit) throw new Error("Approval outbox audit fact is missing");

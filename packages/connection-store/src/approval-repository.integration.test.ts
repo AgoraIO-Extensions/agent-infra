@@ -1316,6 +1316,8 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					SELECT status, attempt_count FROM connection_outbox_events WHERE id = ${unauditedDraftEvent}
 				`;
 				expect(notDelivered).toEqual({ status: "PENDING", attempt_count: 1 });
+				// Keep this intentional poison event out of subsequent delivery checks.
+				await sql`UPDATE connection_outbox_events SET available_at = now() + interval '1 day' WHERE id = ${unauditedDraftEvent}`;
 				const [approved] = await sql<{ permit_count: number; state: string }[]>`
 					SELECT request.state,
 						(SELECT count(*)::int FROM connection_connect_permits permit
@@ -1405,6 +1407,22 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					authorization_state: "ACTIVE",
 					request_state: "CONSUMED",
 				});
+				await sql`
+					INSERT INTO connection_access_authorizations (
+						id, principal_id, connection_id, provider_release_id, capability_profile_id,
+						source, source_request_id, external_account_fingerprint, state,
+						validity_kind, valid_until, created_at, updated_at
+					)
+					SELECT ${`zzz-revoked-${suffix}`}, principal_id, connection_id, provider_release_id,
+						capability_profile_id, source, source_request_id, external_account_fingerprint,
+						'REVOKED', validity_kind, valid_until, created_at - interval '1 day', updated_at
+					FROM connection_access_authorizations WHERE id = ${accessAuthorizationId}
+				`;
+				expect(
+					(await connections.getOverview(applicantId)).connections.find(
+						(connection) => connection.id === connectionId,
+					)?.accessAuthorization,
+				).toMatchObject({ id: accessAuthorizationId, state: "ACTIVE" });
 				await sql`
 					INSERT INTO connection_consumers (id, display_name, status)
 					VALUES (${consumerId}, 'Approval test Consumer', 'ACTIVE')
@@ -1611,7 +1629,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				expect(renewed?.valid_until.getTime()).toBeLessThan(
 					Date.now() + 101 * 86_400_000,
 				);
-				for (const maintainExpiry of [false, true]) {
+				for (const [cycle, maintainExpiry] of [false, true, true].entries()) {
 					const beforeLatePreview =
 						await connections.createCurrentConsumerAuthorizationPreview({
 							connectionId,
@@ -1621,7 +1639,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					const beforeLateGrant =
 						await connections.confirmCurrentConsumerAuthorization({
 							confirmationToken: beforeLatePreview.confirmationToken,
-							idempotencyKey: `before-late-renewal-${suffix}-${maintainExpiry}`,
+							idempotencyKey: `before-late-renewal-${suffix}-${cycle}`,
 							previewId: beforeLatePreview.previewId,
 							principalId: applicantId,
 						});
@@ -1634,7 +1652,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						await requestRepository.listAccessOptions(applicantId)
 					).find((item) => item.policyVersionId === policyId);
 					if (!lateOption) throw new Error("Late renewal option is missing");
-					const lateRequestId = `late-renewal-${suffix}-${maintainExpiry}`;
+					const lateRequestId = `late-renewal-${suffix}-${cycle}`;
 					await requestRepository.createRenewalRequest({
 						applicantPrincipalId: applicantId,
 						authorizationId: accessAuthorizationId,
@@ -1726,7 +1744,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						expectedRequestRevision: lateRequest.revision,
 						expectedRoutingRevision: lateStage.routingRevision,
 						expectedStageRevision: lateStage.revision,
-						id: `late-renewal-decision-${suffix}-${maintainExpiry}`,
+						id: `late-renewal-decision-${suffix}-${cycle}`,
 						requestId: lateRequestId,
 					});
 					const [resumed] = await sql<
@@ -1769,6 +1787,33 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					expect(renewedGrant?.current_id).not.toBe(beforeLateGrant.grantId);
 					expect(renewedGrant?.current_fence).toBe(renewedGrant?.account_fence);
 				}
+				let expiryDrained = 0;
+				while (expiryDrained < 100 && (await dispatcher.runOnce()))
+					expiryDrained++;
+				const repeatedExpiryEvents = await sql<
+					{ status: string; revision: string }[]
+				>`
+					SELECT status, payload->>'aggregateRevision' AS revision
+					FROM connection_outbox_events
+					WHERE topic = 'connection.access-authorization.expired'
+						AND payload->>'aggregateId' = ${accessAuthorizationId}
+				`;
+				expect(repeatedExpiryEvents).toHaveLength(2);
+				expect(
+					new Set(repeatedExpiryEvents.map((event) => event.revision)).size,
+				).toBe(2);
+				expect(
+					repeatedExpiryEvents.every((event) => event.status === "DELIVERED"),
+				).toBe(true);
+				const expiryNotifications = await sql<{ business_revision: string }[]>`
+					SELECT business_revision::text FROM connection_notifications
+					WHERE business_id = ${accessAuthorizationId} AND event_type = 'EXPIRED'
+				`;
+				expect(expiryNotifications).toHaveLength(2);
+				expect(
+					new Set(expiryNotifications.map((item) => item.business_revision))
+						.size,
+				).toBe(2);
 				const expiringRequestId = `approval-expiring-${suffix}`;
 				const renewalOption = (
 					await requestRepository.listAccessOptions(applicantId)
@@ -1975,6 +2020,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					JOIN connection_access_requests request ON request.id = ${revokedRequestId}
 					JOIN connection_connect_permits permit ON permit.request_id = request.id
 					WHERE account.id = ${connectionId}
+						AND access.id = ${accessAuthorizationId}
 				`;
 				expect(revokedState).toEqual({
 					access_state: "SUSPENDED",

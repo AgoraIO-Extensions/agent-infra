@@ -3815,7 +3815,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							state, validity_kind, valid_until
 						FROM connection_access_authorizations
 						WHERE connection_id = account.id
-						ORDER BY updated_at DESC, id DESC LIMIT 1
+						ORDER BY (state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED')) DESC,
+							created_at DESC, updated_at DESC, id DESC LIMIT 1
 					) access ON account.owner_type = 'PERSONAL'
 					LEFT JOIN connection_access_policy_versions renewal_policy
 						ON renewal_policy.capability_profile_id = access.capability_profile_id
