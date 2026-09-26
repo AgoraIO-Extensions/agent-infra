@@ -52,6 +52,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Connection approval protocol monotonicity
+        if: github.event_name == 'pull_request' && github.base_ref == 'connection'
+        run: node .github/scripts/connection-release-guard.mjs --approval-baseline origin/connection
+
       - name: Check formatting and lint
         run: pnpm check
 
@@ -62,7 +66,21 @@ jobs:
         env:
           CONNECTION_TEST_DATABASE_URL: >-
             postgres://connection_test:connection_test@127.0.0.1:5432/connection_test
-        run: pnpm test
+          CONNECTION_BOOTSTRAP_TEST_DATABASE_URL: >-
+            postgres://connection_test:connection_test@127.0.0.1:5432/connection_bootstrap_test
+          CONNECTION_APPROVAL_TEST_DATABASE_URL: >-
+            postgres://connection_test:connection_test@127.0.0.1:5432/connection_approval_test
+          CONNECTION_POLICY_LIFECYCLE_TEST_DATABASE_URL: >-
+            postgres://connection_test:connection_test@127.0.0.1:5432/connection_policy_lifecycle_test
+          CONNECTION_CUTOVER_TEST_DATABASE_URL: >-
+            postgres://connection_test:connection_test@127.0.0.1:5432/connection_cutover_test
+          CONNECTION_RECONNECT_TEST_DATABASE_URL: >-
+            postgres://connection_test:connection_test@127.0.0.1:5432/connection_reconnect_test
+        run: |
+          for database in connection_bootstrap_test connection_approval_test connection_policy_lifecycle_test connection_cutover_test connection_reconnect_test; do
+            PGPASSWORD=connection_test psql -h 127.0.0.1 -U connection_test -d connection_test -v ON_ERROR_STOP=1 -c "CREATE DATABASE $database"
+          done
+          pnpm test
 
       - name: Build applications
         run: pnpm build

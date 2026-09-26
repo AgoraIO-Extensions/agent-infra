@@ -18,6 +18,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						providerId: { const: "datalego", type: "string" },
 					},
 					required: ["providerId"],
@@ -26,6 +27,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["bitbucket", "rehoboam"],
@@ -38,6 +40,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						password: { maxLength: 1024, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["confluence", "jira", "manhattan"],
@@ -51,6 +54,7 @@ describe("Connection Browser OpenAPI", () => {
 				{
 					additionalProperties: false,
 					properties: {
+						accessRequestId: { type: "string" },
 						apiToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: {
 							enum: ["jenkins-ci", "jenkins-release"],

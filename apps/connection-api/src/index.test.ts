@@ -55,4 +55,147 @@ describe("connection-api recovery lifecycle", () => {
 		expect(attempts).toBe(2);
 		server.close();
 	});
+
+	it("runs approval expiry maintenance sequentially and stops with the server", async () => {
+		vi.useFakeTimers();
+		const calls: string[] = [];
+		let finish: (() => void) | undefined;
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			approvalMaintenance: {
+				expireDueAuthorizations: () => {
+					calls.push("authorization");
+					return new Promise<number>((resolve) => {
+						finish = () => resolve(1);
+					});
+				},
+				expireDueRequests: async () => {
+					calls.push("request");
+					return 1;
+				},
+			},
+			approvalMaintenanceIntervalMs: 100,
+			log: () => undefined,
+			port: 0,
+		});
+		await vi.advanceTimersByTimeAsync(300);
+		expect(calls).toEqual(["authorization"]);
+		finish?.();
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(calls).toEqual(["authorization", "request", "authorization"]);
+		server.close();
+		finish?.();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(calls).toEqual([
+			"authorization",
+			"request",
+			"authorization",
+			"request",
+		]);
+	});
+
+	it.each(["authorization", "request"])(
+		"isolates %s expiry failure and retries next interval",
+		async (failedOperation) => {
+			vi.useFakeTimers();
+			const calls: string[] = [];
+			const log = vi.fn();
+			let failing = true;
+			const run = async (operation: string) => {
+				calls.push(operation);
+				if (failing && operation === failedOperation)
+					throw new Error("private database diagnostic");
+				return 1;
+			};
+			const server = startConnectionApi({
+				app: { fetch: () => new Response("ok") },
+				approvalMaintenance: {
+					expireDueAuthorizations: () => run("authorization"),
+					expireDueRequests: () => run("request"),
+				},
+				approvalMaintenanceIntervalMs: 100,
+				log,
+				port: 0,
+			});
+			try {
+				await vi.advanceTimersByTimeAsync(100);
+				expect(calls).toEqual(["authorization", "request"]);
+				expect(log.mock.calls.flat().join(" ")).not.toContain(
+					"private database diagnostic",
+				);
+				expect(
+					log.mock.calls
+						.flat()
+						.some((line) =>
+							line.includes('"status":"approval_maintenance_failed"'),
+						),
+				).toBe(true);
+				failing = false;
+				await vi.advanceTimersByTimeAsync(100);
+				expect(calls).toEqual([
+					"authorization",
+					"request",
+					"authorization",
+					"request",
+				]);
+			} finally {
+				server.close();
+			}
+		},
+	);
+
+	it("sanitizes notification failures and continues on the next interval", async () => {
+		vi.useFakeTimers();
+		const log = vi.fn();
+		const runOnce = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("private database diagnostic"))
+			.mockResolvedValue(true);
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			log,
+			notificationDispatcher: { runOnce },
+			notificationDispatchIntervalMs: 100,
+			port: 0,
+		});
+		try {
+			await vi.advanceTimersByTimeAsync(200);
+			expect(runOnce).toHaveBeenCalledTimes(2);
+			expect(log.mock.calls.flat().join(" ")).not.toContain(
+				"private database diagnostic",
+			);
+			expect(
+				log.mock.calls
+					.flat()
+					.some((line) =>
+						line.includes('"error":"Notification dispatch failed"'),
+					),
+			).toBe(true);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("runs a bounded notification dispatcher independently of recovery", async () => {
+		vi.useFakeTimers();
+		let deliveries = 0;
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			log: () => undefined,
+			notificationDispatcher: {
+				runOnce: async () => {
+					deliveries++;
+					return true;
+				},
+			},
+			notificationDispatchIntervalMs: 100,
+			port: 0,
+		});
+		await vi.advanceTimersByTimeAsync(300);
+		expect(deliveries).toBe(3);
+		server.close();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(deliveries).toBe(3);
+	});
 });

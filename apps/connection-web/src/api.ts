@@ -1,23 +1,63 @@
 import {
+	type AccessConnectReady,
+	type AccessOptionsResponse,
+	type AccessPolicyDraft,
+	type AccessRequest,
+	type AccessRequestSubmit,
+	type AccessRequestsResponse,
+	type AdminAccessAuthorizationsResponse,
 	type AdministratorsResponse,
 	type Error as ApiError,
+	type ApprovalAuthorizationRevoke,
+	type ApprovalDecisionRequest,
+	type ApprovalDelegationDraft,
+	type ApprovalDelegationsResponse,
+	type ApprovalNotificationsResponse,
+	type ApprovalPolicyCatalog,
+	type ApprovalPolicyPublishRequest,
+	type ApprovalPolicyRevokeRequest,
+	type ApprovalPolicyRevokeResult,
+	type ApprovalPolicyStages,
+	type ApprovalQueueResponse,
+	type ApprovalRerouteRequest,
+	type ApprovalRoutingBlockedResponse,
 	type AuditDetail,
 	type AuditPage,
 	type AuthorizationConsentRequest,
 	type AuthorizationPreviewRequest,
 	type AuthorizationPreviewResponse,
+	accessPolicyDraftSchema,
+	accessRequestSubmitSchema,
+	approvalPolicyPublishSchema,
+	approvalPolicyRevokeSchema,
+	archiveConnectionNotifications,
 	authorizationConsentRequestSchema,
 	authorizationPreviewRequestSchema,
+	type CapabilityProfileDraft,
 	type ConnectionCreated,
 	type ConnectionsResponse,
+	type ConnectionWorkItemsResponse,
+	cancelConnectionAccessRequest,
+	capabilityProfileDraftSchema,
 	client,
 	confirmAuthorization,
 	connectProviderCredential,
+	createApprovalCapabilityProfile,
+	createApprovalDelegation,
+	createApprovalDisclaimer,
 	createAuthorizationPreview,
+	createConnectionAccessPolicy,
+	createReapprovalCampaign,
 	createSharedScope,
+	type DisclaimerDraft,
+	decideConnectionAccessRequest,
+	disclaimerDraftSchema,
 	disconnectConnection,
 	disconnectSharedConnection,
+	getApprovalPolicyStages,
 	getAuditCall,
+	getConnectionAccessPolicyDraft,
+	getConnectionAccessRequest,
 	getConnections,
 	getSession,
 	getSharedConnections,
@@ -29,29 +69,60 @@ import {
 	issueTokenRequestSchema,
 	type ListAuditCallsData,
 	type LoginRequest,
+	listAdminAccessAuthorizations,
 	listAdministrators,
+	listApprovalDelegations,
+	listApprovalPolicyCatalog,
+	listApprovalRoutingBlocked,
 	listAuditCalls,
+	listConnectionAccessOptions,
+	listConnectionAccessRequests,
+	listConnectionApprovalQueue,
+	listConnectionNotifications,
+	listConnectionOutboxFailures,
+	listConnectionWorkItems,
 	listProviderUpgradeCampaigns,
 	listTokens,
 	login,
 	loginRequestSchema,
 	logout,
+	notificationBatchSchema,
 	type OAuthTransaction,
+	type OutboxFailuresResponse,
 	oauthTransactionRequestSchema,
 	type ProviderCredentialRequest,
+	type ProviderReconnectRequest,
 	type ProviderUpgradeCampaignsResponse,
+	prepareConnectionAccess,
 	providerCredentialRequestSchema,
+	providerReconnectRequestSchema,
+	publishApprovalCapabilityProfile,
+	publishApprovalDisclaimer,
+	publishConnectionAccessPolicy,
+	type ReapprovalCampaignDraft,
+	readConnectionNotifications,
+	reapprovalCampaignDraftSchema,
+	reauthorizeProviderConnection,
 	renameSharedScope,
+	rerouteApprovalRequest,
+	retryConnectionOutboxFailure,
+	revokeAdminAccessAuthorization,
 	revokeAdministrator,
+	revokeApprovalDelegation,
+	revokeConnectionAccessPolicy,
 	revokeGrant,
 	revokeSharedScopePrincipal,
 	revokeToken,
 	type Session,
 	type SharedConnectionsResponse,
 	type SharedScopeCreated,
+	searchApprovalEmployeeCandidates,
 	sharedScopeNameSchema,
 	startGithubOAuth,
+	submitConnectionAccessRenewal,
+	submitConnectionAccessRequest,
 	type TokenList,
+	updateConnectionAccessPolicy,
 	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
 
@@ -181,6 +252,230 @@ function toApiError(error: unknown): ApiError {
 }
 
 export const connectionApi = {
+	prepareConnectionAccess: (requestId: string) =>
+		unwrap<AccessConnectReady>(
+			prepareConnectionAccess({
+				headers: commandHeaders(),
+				path: { requestId },
+			}),
+		),
+	createReapprovalCampaign: (body: ReapprovalCampaignDraft) =>
+		unwrap(
+			createReapprovalCampaign({
+				body: parseClientInput(
+					reapprovalCampaignDraftSchema,
+					body,
+					"重审活动无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	listAdminAccessAuthorizations: () =>
+		unwrap<AdminAccessAuthorizationsResponse>(listAdminAccessAuthorizations()),
+	revokeAdminAccessAuthorization: (input: {
+		authorizationId: string;
+		body: ApprovalAuthorizationRevoke;
+	}) =>
+		unwrap(
+			revokeAdminAccessAuthorization({
+				body: input.body,
+				headers: commandHeaders(),
+				path: { authorizationId: input.authorizationId },
+			}),
+		),
+	listApprovalRoutingBlocked: () =>
+		unwrap<ApprovalRoutingBlockedResponse>(listApprovalRoutingBlocked()),
+	rerouteApprovalRequest: (input: {
+		requestId: string;
+		body: ApprovalRerouteRequest;
+	}) =>
+		unwrap(
+			rerouteApprovalRequest({
+				body: input.body,
+				headers: commandHeaders(),
+				path: { requestId: input.requestId },
+			}),
+		),
+	getConnectionAccessRequest: (requestId: string) =>
+		unwrap<AccessRequest>(getConnectionAccessRequest({ path: { requestId } })),
+	listConnectionNotifications: () =>
+		unwrap<ApprovalNotificationsResponse>(listConnectionNotifications()),
+	listConnectionWorkItems: () =>
+		unwrap<ConnectionWorkItemsResponse>(listConnectionWorkItems()),
+	updateApprovalNotification: (input: {
+		notificationId: string;
+		body: { action: "READ" | "ARCHIVE" };
+	}) =>
+		unwrap<void>(
+			(input.body.action === "READ"
+				? readConnectionNotifications
+				: archiveConnectionNotifications)({
+				body: parseClientInput(
+					notificationBatchSchema,
+					{ notificationIds: [input.notificationId] },
+					"通知标识无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	getConnectionAccessOptions: () =>
+		unwrap<AccessOptionsResponse>(listConnectionAccessOptions()),
+	listConnectionAccessRequests: () =>
+		unwrap<AccessRequestsResponse>(listConnectionAccessRequests()),
+	cancelConnectionAccessRequest: (requestId: string) =>
+		unwrap<void>(
+			cancelConnectionAccessRequest({
+				headers: commandHeaders(),
+				path: { requestId },
+			}),
+		),
+	submitConnectionAccessRequest: (body: AccessRequestSubmit) =>
+		unwrap(submitConnectionAccessRequest({ body, headers: commandHeaders() })),
+	submitConnectionAccessRenewal: (input: {
+		authorizationId: string;
+		body: AccessRequestSubmit;
+	}) =>
+		unwrap(
+			submitConnectionAccessRenewal({
+				body: parseClientInput(
+					accessRequestSubmitSchema,
+					input.body,
+					"续期申请无效",
+				),
+				headers: commandHeaders(),
+				path: { authorizationId: input.authorizationId },
+			}),
+		),
+	listConnectionApprovalQueue: () =>
+		unwrap<ApprovalQueueResponse>(listConnectionApprovalQueue()),
+	decideConnectionAccessRequest: (input: {
+		requestId: string;
+		body: ApprovalDecisionRequest;
+	}) =>
+		unwrap(
+			decideConnectionAccessRequest({
+				body: input.body,
+				headers: commandHeaders(),
+				path: { requestId: input.requestId },
+			}),
+		),
+	listApprovalPolicyCatalog: () =>
+		unwrap<ApprovalPolicyCatalog>(listApprovalPolicyCatalog()),
+	listApprovalDelegations: () =>
+		unwrap<ApprovalDelegationsResponse>(listApprovalDelegations()),
+	listOutboxFailures: () =>
+		unwrap<OutboxFailuresResponse>(listConnectionOutboxFailures()),
+	retryOutboxFailure: (eventId: string, expectedAttempts: number) =>
+		unwrap(
+			retryConnectionOutboxFailure({
+				body: { expectedAttempts },
+				headers: commandHeaders(),
+				path: { eventId },
+			}),
+		),
+	createApprovalDelegation: (body: ApprovalDelegationDraft) =>
+		unwrap(createApprovalDelegation({ body, headers: commandHeaders() })),
+	revokeApprovalDelegation: (delegationId: string, expectedRevision: string) =>
+		unwrap(
+			revokeApprovalDelegation({
+				body: { expectedRevision },
+				headers: commandHeaders(),
+				path: { delegationId },
+			}),
+		),
+	getApprovalPolicyStages: (policyId: string) =>
+		unwrap<ApprovalPolicyStages>(
+			getApprovalPolicyStages({ path: { policyId } }),
+		),
+	searchApprovalEmployees: (query: string) =>
+		unwrap(searchApprovalEmployeeCandidates({ query: { query } })),
+	createApprovalCapabilityProfile: (body: CapabilityProfileDraft) =>
+		unwrap(
+			createApprovalCapabilityProfile({
+				body: parseClientInput(
+					capabilityProfileDraftSchema,
+					body,
+					"能力包无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
+	publishApprovalCapabilityProfile: (profileId: string) =>
+		unwrap<void>(
+			publishApprovalCapabilityProfile({
+				headers: commandHeaders(),
+				path: { profileId },
+			}),
+		),
+	createApprovalDisclaimer: (body: DisclaimerDraft) =>
+		unwrap(
+			createApprovalDisclaimer({
+				body: parseClientInput(disclaimerDraftSchema, body, "免责声明无效"),
+				headers: commandHeaders(),
+			}),
+		),
+	publishApprovalDisclaimer: (disclaimerId: string) =>
+		unwrap<void>(
+			publishApprovalDisclaimer({
+				headers: commandHeaders(),
+				path: { disclaimerId },
+			}),
+		),
+	getConnectionAccessPolicyDraft: (policyId: string) =>
+		unwrap(getConnectionAccessPolicyDraft({ path: { policyId } })),
+	createConnectionAccessPolicy: (body: AccessPolicyDraft) =>
+		unwrap(
+			createConnectionAccessPolicy({
+				body: parseClientInput(accessPolicyDraftSchema, body, "审批策略无效"),
+				headers: commandHeaders(),
+			}),
+		),
+	updateConnectionAccessPolicy: (input: {
+		policyId: string;
+		revision: string;
+		body: AccessPolicyDraft;
+	}) =>
+		unwrap(
+			updateConnectionAccessPolicy({
+				body: parseClientInput(
+					accessPolicyDraftSchema,
+					input.body,
+					"审批策略无效",
+				),
+				headers: { ...commandHeaders(), "If-Match": `"${input.revision}"` },
+				path: { policyId: input.policyId },
+			}),
+		),
+	publishConnectionAccessPolicy: (input: {
+		policyId: string;
+		body: ApprovalPolicyPublishRequest;
+	}) =>
+		unwrap<void>(
+			publishConnectionAccessPolicy({
+				body: parseClientInput(
+					approvalPolicyPublishSchema,
+					input.body,
+					"策略发布参数无效",
+				),
+				headers: commandHeaders(),
+				path: { policyId: input.policyId },
+			}),
+		),
+	revokeConnectionAccessPolicy: (input: {
+		policyId: string;
+		body: ApprovalPolicyRevokeRequest;
+	}) =>
+		unwrap<ApprovalPolicyRevokeResult>(
+			revokeConnectionAccessPolicy({
+				body: parseClientInput(
+					approvalPolicyRevokeSchema,
+					input.body,
+					"策略撤销参数无效",
+				),
+				headers: commandHeaders(),
+				path: { policyId: input.policyId },
+			}),
+		),
 	listPatConsumers: () =>
 		patConsumerRequest<{ consumers: PatConsumerProfile[] }>(
 			"/api/v1/connection/admin/pat-consumers",
@@ -241,12 +536,15 @@ export const connectionApi = {
 	revokeToken: (tokenId: string) =>
 		unwrap<void>(revokeToken({ headers: commandHeaders(), path: { tokenId } })),
 	getConnections: () => unwrap<ConnectionsResponse>(getConnections()),
-	startGithubOAuth: (sharedScopeId?: string) =>
+	startGithubOAuth: (sharedScopeId?: string, accessRequestId?: string) =>
 		unwrap<OAuthTransaction>(
 			startGithubOAuth({
 				body: parseClientInput(
 					oauthTransactionRequestSchema,
-					sharedScopeId ? { sharedScopeId } : {},
+					{
+						...(sharedScopeId ? { sharedScopeId } : {}),
+						...(accessRequestId ? { accessRequestId } : {}),
+					},
 					"共享组信息无效，请刷新后重试",
 				),
 				headers: commandHeaders(),
@@ -261,6 +559,21 @@ export const connectionApi = {
 					"请填写有效的外部平台凭证",
 				),
 				headers: commandHeaders(),
+			}),
+		),
+	reauthorizeProviderConnection: (input: {
+		connectionId: string;
+		body: ProviderReconnectRequest;
+	}) =>
+		unwrap<ConnectionCreated | OAuthTransaction>(
+			reauthorizeProviderConnection({
+				body: parseClientInput(
+					providerReconnectRequestSchema,
+					input.body,
+					"重连凭证无效",
+				),
+				headers: commandHeaders(),
+				path: { connectionId: input.connectionId },
 			}),
 		),
 	createAuthorizationPreview: (body: AuthorizationPreviewRequest) =>

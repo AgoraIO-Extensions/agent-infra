@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ldapEvents = vi.hoisted(() => [] as string[]);
 const ldapSearches = vi.hoisted(
-	() => [] as Array<{ attributes: string[]; filter: string }>,
+	() =>
+		[] as Array<{
+			attributes: string[];
+			filter: string;
+			paged?: unknown;
+			sizeLimit?: number;
+		}>,
 );
 const ldapDelays = vi.hoisted(() => ({ bindMs: 0, searchMs: 0, unbindMs: 0 }));
 
@@ -39,6 +45,33 @@ vi.mock("ldapts", () => ({
 						displayName: "Alice",
 						dn: "cn=alice,ou=users,dc=example,dc=com",
 						employeeStatus: "active",
+						mail: "alice@example.com",
+						uid: "alice-id",
+					},
+				],
+			};
+		}
+
+		async *searchPaginated(
+			_baseDn: string,
+			options: {
+				attributes: string[];
+				filter: string;
+				paged: unknown;
+				sizeLimit: number;
+			},
+		) {
+			ldapSearches.push({
+				attributes: options.attributes,
+				filter: options.filter,
+				paged: options.paged,
+				sizeLimit: options.sizeLimit,
+			});
+			yield {
+				searchEntries: [
+					{
+						alias: "alice",
+						displayName: "Alice",
 						mail: "alice@example.com",
 						uid: "alice-id",
 					},
@@ -222,5 +255,40 @@ describe("LDAP directory boundary", () => {
 				filter: "(uid=alice-id\\2a\\29\\28uid=\\2a\\29)",
 			},
 		]);
+	});
+
+	it("searches a bounded active employee projection without exposing LDAP filters", async () => {
+		const authenticator = new LdapDirectoryAuthenticator({
+			...validOptions,
+			aliasAttribute: "alias",
+		});
+		await expect(
+			authenticator.searchEmployees("ali*)(uid=*)"),
+		).resolves.toEqual([
+			{
+				alias: "alice",
+				displayName: "Alice",
+				email: "alice@example.com",
+				issuer: validOptions.issuer,
+				subject: "alice-id",
+			},
+		]);
+		expect(ldapSearches[0]).toEqual({
+			attributes: ["uid", "displayName", "mail", "alias"],
+			filter:
+				"(&(employeeStatus=active)(|(displayName=*ali\\2a\\29\\28uid=\\2a\\29*)(mail=*ali\\2a\\29\\28uid=\\2a\\29*)(alias=*ali\\2a\\29\\28uid=\\2a\\29*)))",
+			paged: { pageSize: 10 },
+			sizeLimit: 21,
+		});
+	});
+
+	it("does not search employees without a confirmed active-state mapping", async () => {
+		const authenticator = new LdapDirectoryAuthenticator(
+			validOptionsWithoutActiveState,
+		);
+		await expect(authenticator.searchEmployees("alice")).rejects.toThrow(
+			"Directory authentication failed",
+		);
+		expect(ldapSearches).toHaveLength(0);
 	});
 });

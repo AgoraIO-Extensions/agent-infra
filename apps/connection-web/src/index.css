@@ -223,6 +223,109 @@ p {
 	width: min(1180px, 100%);
 	padding: 28px clamp(20px, 4vw, 52px) 64px;
 }
+.shell-notification {
+	position: relative;
+	display: flex;
+	justify-content: flex-end;
+	height: 24px;
+	margin-bottom: 8px;
+}
+.notification-link {
+	position: relative;
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: pointer;
+	color: var(--text-muted);
+}
+.notification-link:hover {
+	color: var(--accent);
+}
+.notification-link span {
+	position: absolute;
+	top: -7px;
+	right: -9px;
+	min-width: 18px;
+	padding: 1px 4px;
+	border-radius: 9px;
+	background: var(--danger);
+	color: white;
+	text-align: center;
+	font-size: 10px;
+}
+.notification-panel {
+	position: absolute;
+	z-index: 20;
+	top: 34px;
+	right: 0;
+	width: min(360px, calc(100vw - 40px));
+	max-height: min(520px, 75dvh);
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-raised);
+	box-shadow: 0 8px 24px #0002;
+}
+.notification-panel header,
+.notification-panel li,
+.notification-tasks {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 12px 14px;
+	border-bottom: 1px solid var(--border);
+}
+.notification-panel header button,
+.notification-panel li button {
+	display: grid;
+	place-items: center;
+	width: 26px;
+	height: 26px;
+	flex: none;
+	border: 0;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.notification-panel a {
+	color: var(--text);
+	text-decoration: none;
+}
+.notification-panel a:hover {
+	color: var(--accent);
+}
+.notification-panel ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.notification-panel li.unread {
+	background: var(--accent-soft);
+}
+.notification-panel li > div {
+	min-width: 0;
+	display: grid;
+	gap: 4px;
+	overflow-wrap: anywhere;
+	font-size: 13px;
+}
+.notification-panel small {
+	color: var(--text-muted);
+}
+.notification-panel p {
+	padding: 16px;
+}
+.connection-access-validity {
+	margin-top: 5px;
+}
+.connection-access-validity a {
+	color: var(--accent);
+}
 .page-header {
 	min-height: 46px;
 	display: flex;

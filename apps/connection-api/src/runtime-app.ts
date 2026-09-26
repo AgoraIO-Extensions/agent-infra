@@ -1,4 +1,5 @@
 import {
+	ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionOAuthService,
 	ConnectionRecoveryService,
@@ -9,6 +10,9 @@ import {
 import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
 import {
 	PostgresBrowserCommandIdempotency,
+	PostgresConnectionAccessRequestRepository,
+	PostgresConnectionApprovalRepository,
+	PostgresConnectionNotificationDispatcher,
 	PostgresConnectionOAuthRepository,
 	PostgresConnectionPatBindingRepository,
 	PostgresConnectionRepository,
@@ -76,6 +80,20 @@ export async function createConnectionRuntime(
 	const browserCommands = new PostgresBrowserCommandIdempotency(
 		config.databaseUrl,
 		config.credentialKey,
+	);
+	const approvalRepository = new PostgresConnectionAccessRequestRepository(
+		config.databaseUrl,
+		(sql, connectionId) =>
+			repository.restoreGrantsAfterRenewal(sql, connectionId),
+	);
+	const notificationDispatcher = new PostgresConnectionNotificationDispatcher(
+		config.databaseUrl,
+	);
+	const approvalService = new ConnectionAccessApprovalService(
+		approvalRepository,
+	);
+	const approvalCatalog = new PostgresConnectionApprovalRepository(
+		config.databaseUrl,
 	);
 	for (const catalog of [
 		githubConnectionCatalog,
@@ -237,6 +255,10 @@ export async function createConnectionRuntime(
 			},
 			issuer: config.publicBaseUrl,
 			management: {
+				approvalCatalog,
+				approvalService,
+				notificationDispatcher,
+				approvalDirectoryEnabled: config.approvalDirectoryEnabled,
 				catalogs: [
 					githubConnectionCatalog,
 					bitbucketServerConnectionCatalog,
@@ -279,6 +301,8 @@ export async function createConnectionRuntime(
 	});
 	return {
 		app,
+		approvalMaintenance: approvalRepository,
+		notificationDispatcher,
 		recovery: new ConnectionRecoveryService(repository, executors),
 	};
 }

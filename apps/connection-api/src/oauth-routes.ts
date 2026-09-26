@@ -1,24 +1,65 @@
 import { randomUUID } from "node:crypto";
 import {
+	accessPolicyDraftSchema,
+	accessRequestSubmitSchema,
+	approvalAuthorizationRevokeSchema,
+	approvalDecisionRequestSchema,
+	approvalDelegationDraftSchema,
+	approvalDelegationRevokeSchema,
+	approvalPolicyPublishSchema,
+	approvalPolicyRevokeSchema,
+	approvalRerouteRequestSchema,
 	auditQuerySchema,
 	authorizationConsentRequestSchema,
 	authorizationPreviewRequestSchema,
+	capabilityProfileDraftSchema,
 	connectionBrowserOpenApi,
+	disclaimerDraftSchema,
 	idempotencyKeySchema,
 	issueTokenRequestSchema,
 	loginRequestSchema,
+	notificationBatchSchema,
 	oauthTransactionRequestSchema,
+	outboxRetrySchema,
+	type ProviderCredentialRequest,
 	providerCredentialRequestSchema,
+	providerReconnectRequestSchema,
+	reapprovalCampaignDraftSchema,
 	sharedScopeNameSchema,
 } from "@agent-infra/connection-contracts";
 import {
+	type ConnectionAccessApprovalService,
 	type ConnectionApplicationService,
 	ConnectionError,
 	type ConnectionOAuthService,
 	OAuthProtocolError,
 } from "@agent-infra/connection-core";
+import type {
+	PostgresConnectionApprovalRepository,
+	PostgresConnectionNotificationDispatcher,
+} from "@agent-infra/connection-store";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+
+function providerCredentialValue(
+	body: ProviderCredentialRequest,
+	email?: string | null,
+	hciSession?: string,
+) {
+	if (body.providerId === "datalego") {
+		if (!hciSession)
+			throw new ConnectionError(
+				"AUTHENTICATION_FAILED",
+				"Company HCI login is required",
+			);
+		return JSON.stringify({ email, sessionToken: hciSession });
+	}
+	return "accessToken" in body
+		? body.accessToken
+		: "apiToken" in body
+			? JSON.stringify({ apiToken: body.apiToken, username: body.username })
+			: JSON.stringify({ password: body.password, username: body.username });
+}
 
 export type ConnectionOAuthServerOptions = {
 	browserCommands?: {
@@ -36,6 +77,8 @@ export type ConnectionOAuthServerOptions = {
 	dynamicClientRegistration?: { clientName: string };
 	issuer: string;
 	management?: {
+		approvalCatalog?: PostgresConnectionApprovalRepository;
+		approvalDirectoryEnabled?: boolean;
 		catalogs?: readonly {
 			actions: readonly {
 				description: string;
@@ -48,6 +91,8 @@ export type ConnectionOAuthServerOptions = {
 			providerReleaseId: string;
 		}[];
 		githubRedirectUri: string;
+		approvalService?: ConnectionAccessApprovalService;
+		notificationDispatcher?: PostgresConnectionNotificationDispatcher;
 		service: ConnectionApplicationService;
 	};
 	resource: string;
@@ -317,6 +362,14 @@ async function browserApiOperation<T>(
 			return browserConnectionError(context, error);
 		}
 		if (error instanceof OAuthProtocolError) {
+			if (error.status === 503)
+				return browserConnectionError(
+					context,
+					new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Identity service is unavailable",
+					),
+				);
 			return browserApiError(context, {
 				code:
 					error.error === "invalid_token"
@@ -447,6 +500,14 @@ export function createConnectionOAuthApp(
 				return browserConnectionError(context, error);
 			}
 			if (error instanceof OAuthProtocolError) {
+				if (error.status === 503)
+					return browserConnectionError(
+						context,
+						new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Identity service is unavailable",
+						),
+					);
 				return browserApiError(context, {
 					code:
 						error.error === "invalid_token"
@@ -890,6 +951,839 @@ export function createConnectionOAuthApp(
 			}
 			return session;
 		};
+		const verifyPolicyApprovers = async (policyVersionId: string) => {
+			if (!management.approvalDirectoryEnabled || !management.approvalCatalog) {
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Employee directory approval gate is unavailable",
+				);
+			}
+			const ids =
+				await management.approvalCatalog.listPolicyApproverPrincipalIds(
+					policyVersionId,
+				);
+			for (let index = 0; index < ids.length; index += 10) {
+				await Promise.all(
+					ids
+						.slice(index, index + 10)
+						.map((id) => options.service.ensureActiveEmployeePrincipal(id)),
+				);
+			}
+		};
+
+		app.get("/api/v1/connection/admin/employee-candidates", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			if (!management.approvalDirectoryEnabled) {
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Employee directory approval gate is unavailable",
+				);
+			}
+			const query = context.req.query("query")?.trim() ?? "";
+			if (query.length < 2 || query.length > 64) {
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Employee search query is invalid",
+				);
+			}
+			context.header("cache-control", "no-store");
+			return context.json({
+				candidates: await options.service.searchEmployeeCandidates(
+					session.account.principalId,
+					query,
+				),
+			});
+		});
+
+		app.get("/api/v1/connection/admin/access-policies", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json({
+				...(await catalog.listCatalog()),
+				providers: management.catalogs ?? [],
+			});
+		});
+
+		app.get(
+			"/api/v1/connection/admin/access-policies/:policyId/stages",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				context.header("cache-control", "no-store");
+				return context.json({
+					stages: await catalog.getPolicyStages(context.req.param("policyId")),
+				});
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/capability-profiles",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const body = parseJsonBody(
+					capabilityProfileDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.capability-profile.create",
+							request: body,
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.createCapabilityProfileDraft({
+								...body,
+								id: `capability-profile-${randomUUID()}`,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 201);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/capability-profiles/:profileId/publish",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const capabilityProfileId = context.req.param("profileId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.capability-profile.publish",
+							request: { capabilityProfileId },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.publishCapabilityProfile({
+								actorPrincipalId: session.account.principalId,
+								capabilityProfileId,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				return context.body(null, 204);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/disclaimers", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json({
+				disclaimers: (await catalog.listCatalog()).disclaimers,
+			});
+		});
+
+		app.post("/api/v1/connection/admin/disclaimers", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			const body = parseJsonBody(
+				disclaimerDraftSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const result = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.disclaimer.create",
+						request: body,
+						subject: session.account.principalId,
+					},
+					() =>
+						catalog.createDisclaimerDraft({
+							...body,
+							id: `disclaimer-${randomUUID()}`,
+							ownerMetadata: {
+								createdByPrincipalId: session.account.principalId,
+							},
+						}),
+				),
+			);
+			if (result instanceof Response) return result;
+			context.header("cache-control", "no-store");
+			return context.json(result, 201);
+		});
+
+		app.post(
+			"/api/v1/connection/admin/disclaimers/:disclaimerId/publish",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const disclaimerVersionId = context.req.param("disclaimerId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.disclaimer.publish",
+							request: { disclaimerVersionId },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.publishDisclaimer({
+								actorPrincipalId: session.account.principalId,
+								disclaimerVersionId,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				return context.body(null, 204);
+			},
+		);
+
+		app.get(
+			"/api/v1/connection/admin/access-policies/:policyId",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const result = await browserApiOperation(context, async () => {
+					const policy = await catalog.getPolicyDraft(
+						context.req.param("policyId"),
+					);
+					const candidates =
+						await options.service.prepareEmployeeCandidatesForPrincipals(
+							session.account.principalId,
+							policy.stages.flatMap((stage) =>
+								stage.approvers.map((approver) => approver.principalId),
+							),
+						);
+					const candidateIds = new Map(
+						candidates.map((candidate) => [
+							candidate.principalId,
+							candidate.candidateId,
+						]),
+					);
+					return {
+						policyId: policy.id,
+						revision: policy.revision,
+						candidates: candidates.map(
+							({ candidateId, displayName, email, alias }) => ({
+								candidateId,
+								displayName,
+								email,
+								alias,
+							}),
+						),
+						draft: {
+							allowPermanent: policy.allowPermanent,
+							capabilityProfileId: policy.capabilityProfileId,
+							connectTtlSeconds: policy.connectTtlSeconds,
+							defaultDurationDays: policy.defaultDurationDays,
+							disclaimerVersionIds: policy.disclaimerVersionIds,
+							durations: policy.durations.map((duration) =>
+								duration.kind === "FINITE"
+									? { kind: duration.kind, days: duration.days }
+									: { kind: duration.kind },
+							),
+							priority: policy.priority,
+							providerReleaseId: policy.providerReleaseId,
+							renewalLeadSeconds: policy.renewalLeadSeconds,
+							requestTtlSeconds: policy.requestTtlSeconds,
+							stages: policy.stages.map((stage) => ({
+								name: stage.name,
+								quorumType: stage.quorumType,
+								quorumCount: stage.quorumCount,
+								timeoutSeconds: stage.timeoutSeconds,
+								approverCandidateIds: stage.approvers.map((approver) => {
+									const candidateId = candidateIds.get(approver.principalId);
+									if (!candidateId)
+										throw new ConnectionError(
+											"PROVIDER_UNAVAILABLE",
+											"Approver candidate is unavailable",
+										);
+									return candidateId;
+								}),
+							})),
+						},
+					};
+				});
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		const saveAccessPolicyDraft = async (context: Context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const policyVersionId = context.req.param("policyId");
+			const ifMatch = context.req.header("if-match");
+			if (policyVersionId && (!ifMatch || !/^"[1-9][0-9]*"$/.test(ifMatch)))
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"A current draft revision is required",
+				);
+			const expectedRevision = policyVersionId
+				? ifMatch?.slice(1, -1)
+				: undefined;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			const body = parseJsonBody(
+				accessPolicyDraftSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			if (
+				!management.approvalDirectoryEnabled &&
+				body.stages.some((stage) => stage.approverCandidateIds.length > 0)
+			)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Employee directory approval gate is unavailable",
+				);
+			const result = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: policyVersionId
+							? "connection.access-policy.update"
+							: "connection.access-policy.create",
+						request: policyVersionId
+							? { ...body, policyVersionId, expectedRevision }
+							: body,
+						subject: session.account.principalId,
+					},
+					async () => {
+						const stages = [];
+						for (const stage of body.stages) {
+							const approvers = [];
+							for (const candidateId of stage.approverCandidateIds) {
+								approvers.push(
+									await options.service.resolveEmployeeCandidate(
+										session.account.principalId,
+										candidateId,
+									),
+								);
+							}
+							stages.push({
+								name: stage.name,
+								quorumType: stage.quorumType,
+								...(stage.quorumCount
+									? { quorumCount: stage.quorumCount }
+									: {}),
+								timeoutSeconds: stage.timeoutSeconds,
+								id: `approval-stage-${randomUUID()}`,
+								approvers,
+							});
+						}
+						const draft = {
+							...body,
+							createdByPrincipalId: session.account.principalId,
+							id: policyVersionId ?? `access-policy-${randomUUID()}`,
+							durations: body.durations.map((duration) => ({
+								...duration,
+								id: `duration-${randomUUID()}`,
+							})),
+							stages,
+						};
+						return expectedRevision
+							? catalog.updatePolicyDraft({ ...draft, expectedRevision })
+							: catalog.createPolicyDraft(draft);
+					},
+				),
+			);
+			if (result instanceof Response) return result;
+			context.header("cache-control", "no-store");
+			return context.json(result, policyVersionId ? 200 : 201);
+		};
+		app.post("/api/v1/connection/admin/access-policies", saveAccessPolicyDraft);
+		app.put(
+			"/api/v1/connection/admin/access-policies/:policyId",
+			saveAccessPolicyDraft,
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/publish",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				if (!management.approvalDirectoryEnabled)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Employee directory approval gate is unavailable",
+					);
+				const policyVersionId = context.req.param("policyId");
+				const body = parseJsonBody(
+					approvalPolicyPublishSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.publish",
+							request: { policyVersionId, ...body },
+							subject: session.account.principalId,
+						},
+						async () => {
+							await verifyPolicyApprovers(policyVersionId);
+							return catalog.publishPolicy({
+								actorPrincipalId: session.account.principalId,
+								...body,
+								policyVersionId,
+							});
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				return context.body(null, 204);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-policies/:policyId/revoke",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const body = parseJsonBody(
+					approvalPolicyRevokeSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const policyVersionId = context.req.param("policyId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-policy.revoke",
+							request: { policyVersionId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.revokePolicy({
+								actorPrincipalId: session.account.principalId,
+								policyVersionId,
+								...body,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/routing-blocked", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			if (!management.approvalService)
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json({
+				requests: await management.approvalService.listRoutingBlocked(
+					session.account.principalId,
+				),
+			});
+		});
+
+		app.get(
+			"/api/v1/connection/admin/access-authorizations",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				if (!management.approvalService)
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				context.header("cache-control", "no-store");
+				return context.json({
+					authorizations:
+						await management.approvalService.listCurrentAuthorizations(
+							session.account.principalId,
+						),
+				});
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-authorizations/:authorizationId/revoke",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService)
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				const body = parseJsonBody(
+					approvalAuthorizationRevokeSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const authorizationId = context.req.param("authorizationId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-authorization.revoke",
+							request: { authorizationId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							approvalService.revokeAuthorization(
+								session.account.principalId,
+								authorizationId,
+								body.expectedRevision,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/reapproval-campaigns",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService)
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				const body = parseJsonBody(
+					reapprovalCampaignDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.reapproval-campaign.create",
+							request: body,
+							subject: session.account.principalId,
+						},
+						() =>
+							approvalService.createReapprovalCampaign(
+								session.account.principalId,
+								{
+									...body,
+									id: `reapproval-campaign-${randomUUID()}`,
+								},
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 201);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/access-requests/:requestId/reroute",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService || !management.approvalDirectoryEnabled) {
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Employee directory approval gate is unavailable",
+					);
+				}
+				const body = parseJsonBody(
+					approvalRerouteRequestSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const requestId = context.req.param("requestId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-request.reroute",
+							request: { requestId, ...body },
+							subject: session.account.principalId,
+						},
+						async () => {
+							const approvers = [];
+							for (const candidateId of body.approverCandidateIds) {
+								approvers.push(
+									await options.service.resolveEmployeeCandidate(
+										session.account.principalId,
+										candidateId,
+									),
+								);
+							}
+							return approvalService.reroute(session.account.principalId, {
+								approvers,
+								expectedRequestRevision: body.expectedRequestRevision,
+								expectedRoutingRevision: body.expectedRoutingRevision,
+								expectedStageRevision: body.expectedStageRevision,
+								reason: body.reason,
+								requestId,
+							});
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
+
+		app.get("/api/v1/connection/admin/outbox-failures", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const dispatcher = management.notificationDispatcher;
+			if (!dispatcher)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Notification dispatcher is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json({
+				events: await dispatcher.listFailures(session.account.principalId),
+			});
+		});
+
+		app.post(
+			"/api/v1/connection/admin/outbox-failures/:eventId/retry",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const dispatcher = management.notificationDispatcher;
+				if (!dispatcher)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Notification dispatcher is unavailable",
+					);
+				const body = parseJsonBody(
+					outboxRetrySchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const eventId = context.req.param("eventId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.outbox.retry",
+							request: { eventId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							dispatcher.retryFailure(
+								session.account.principalId,
+								eventId,
+								body.expectedAttempts,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
+
+		app.get(
+			"/api/v1/connection/admin/approval-delegations",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				if (!management.approvalService)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Connection access approval is unavailable",
+					);
+				context.header("cache-control", "no-store");
+				return context.json({
+					delegations: await management.approvalService.listDelegations(
+						session.account.principalId,
+					),
+				});
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/approval-delegations",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService || !management.approvalDirectoryEnabled)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Employee directory approval gate is unavailable",
+					);
+				const body = parseJsonBody(
+					approvalDelegationDraftSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.approval-delegation.create",
+							request: body,
+							subject: session.account.principalId,
+						},
+						async () => {
+							const approver = await options.service.resolveEmployeeCandidate(
+								session.account.principalId,
+								body.principalCandidateId,
+							);
+							const delegate = await options.service.resolveEmployeeCandidate(
+								session.account.principalId,
+								body.delegateCandidateId,
+							);
+							return approvalService.createDelegation(
+								session.account.principalId,
+								{
+									id: `approval-delegation-${randomUUID()}`,
+									principalId: approver.principalId,
+									delegatePrincipalId: delegate.principalId,
+									startsAt: body.startsAt,
+									endsAt: body.endsAt,
+								},
+							);
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 201);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/admin/approval-delegations/:delegationId/revoke",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Connection access approval is unavailable",
+					);
+				const body = parseJsonBody(
+					approvalDelegationRevokeSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const delegationId = context.req.param("delegationId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.approval-delegation.revoke",
+							request: { delegationId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							approvalService.revokeDelegation(
+								session.account.principalId,
+								delegationId,
+								body.expectedRevision,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
 
 		app.get("/api/v1/connection/admin/action-calls", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
@@ -935,6 +1829,363 @@ export function createConnectionOAuthApp(
 			});
 		});
 
+		app.get("/api/v1/connection/access-options", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			}
+			context.header("cache-control", "no-store");
+			return context.json({
+				options: await approvalService.listAccessOptions(
+					session.account.principalId,
+				),
+			});
+		});
+
+		app.get("/api/v1/connection/access-requests", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			}
+			context.header("cache-control", "no-store");
+			return context.json({
+				requests: await approvalService.listRequests(
+					session.account.principalId,
+				),
+			});
+		});
+
+		app.get(
+			"/api/v1/connection/access-requests/:requestId",
+			async (context) => {
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService) {
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				}
+				context.header("cache-control", "no-store");
+				return context.json(
+					await approvalService.getRequest(
+						session.account.principalId,
+						context.req.param("requestId"),
+					),
+				);
+			},
+		);
+
+		app.post(
+			"/api/v1/connection/access-requests/:requestId/connect",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService)
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				const requestId = context.req.param("requestId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-request.prepare-connect",
+							replayable: false,
+							request: { requestId },
+							subject: session.account.principalId,
+						},
+						() =>
+							approvalService.prepareConnect(
+								session.account.principalId,
+								requestId,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 200);
+			},
+		);
+
+		app.post("/api/v1/connection/access-requests", async (context) => {
+			requireSameOrigin(context.req.raw.headers, options.issuer);
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			}
+			const body = parseJsonBody(
+				accessRequestSubmitSchema,
+				await context.req.json().catch(() => undefined),
+			);
+			const result = await browserApiOperation(context, () =>
+				browserCommand(
+					options,
+					context,
+					{
+						operation: "connection.access-request.submit",
+						request: body,
+						subject: session.account.principalId,
+					},
+					async () => {
+						await verifyPolicyApprovers(body.policyVersionId);
+						return approvalService.submitRequest(session.account.principalId, {
+							...body,
+							id: `access-request-${randomUUID()}`,
+						});
+					},
+				),
+			);
+			if (result instanceof Response) return result;
+			context.header("cache-control", "no-store");
+			return context.json(result, 201);
+		});
+
+		app.post(
+			"/api/v1/connection/access-authorizations/:authorizationId/renewals",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService)
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				const body = parseJsonBody(
+					accessRequestSubmitSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const authorizationId = context.req.param("authorizationId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-authorization.renew",
+							request: { authorizationId, ...body },
+							subject: session.account.principalId,
+						},
+						async () => {
+							await verifyPolicyApprovers(body.policyVersionId);
+							return approvalService.submitRenewal(
+								session.account.principalId,
+								authorizationId,
+								{
+									...body,
+									id: `access-renewal-request-${randomUUID()}`,
+								},
+							);
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 201);
+			},
+		);
+
+		app.delete(
+			"/api/v1/connection/access-requests/:requestId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService) {
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				}
+				const requestId = context.req.param("requestId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-request.cancel",
+							request: { requestId },
+							subject: session.account.principalId,
+						},
+						() =>
+							approvalService.cancelRequest(
+								session.account.principalId,
+								requestId,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.body(null, 204);
+			},
+		);
+
+		app.get("/api/v1/connection/work-items", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService)
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json({
+				items: await approvalService.listWorkItems(session.account.principalId),
+			});
+		});
+
+		app.get("/api/v1/connection/notifications", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService)
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			context.header("cache-control", "no-store");
+			return context.json(
+				await approvalService.listNotifications(session.account.principalId),
+			);
+		});
+
+		for (const action of ["read", "archive"] as const) {
+			app.post(
+				`/api/v1/connection/notifications/${action}`,
+				async (context) => {
+					requireSameOrigin(context.req.raw.headers, options.issuer);
+					const session = await currentBrowserApiAccount(context);
+					if (session instanceof Response) return session;
+					const approvalService = management.approvalService;
+					if (!approvalService)
+						throw new ConnectionError(
+							"PROVIDER_FAILED",
+							"Connection access approval is unavailable",
+						);
+					const body = parseJsonBody(
+						notificationBatchSchema,
+						await context.req.json().catch(() => undefined),
+					);
+					const result = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: `connection.notifications.${action}`,
+								request: body,
+								subject: session.account.principalId,
+							},
+							() =>
+								approvalService.markNotifications(
+									session.account.principalId,
+									body.notificationIds,
+									action === "archive",
+								),
+						),
+					);
+					if (result instanceof Response) return result;
+					context.header("cache-control", "no-store");
+					return context.body(null, 204);
+				},
+			);
+		}
+
+		app.get("/api/v1/connection/approval-queue", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const approvalService = management.approvalService;
+			if (!approvalService) {
+				throw new ConnectionError(
+					"PROVIDER_FAILED",
+					"Connection access approval is unavailable",
+				);
+			}
+			context.header("cache-control", "no-store");
+			return context.json({
+				requests: await approvalService.listApprovalQueue(
+					session.account.principalId,
+				),
+			});
+		});
+
+		app.post(
+			"/api/v1/connection/approval-requests/:requestId/decisions",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const approvalService = management.approvalService;
+				if (!approvalService) {
+					throw new ConnectionError(
+						"PROVIDER_FAILED",
+						"Connection access approval is unavailable",
+					);
+				}
+				const body = parseJsonBody(
+					approvalDecisionRequestSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.access-request.decide",
+							request: { ...body, requestId: context.req.param("requestId") },
+							subject: session.account.principalId,
+						},
+						async () => {
+							if (!management.approvalDirectoryEnabled) {
+								throw new ConnectionError(
+									"PROVIDER_UNAVAILABLE",
+									"Employee directory approval gate is unavailable",
+								);
+							}
+							await options.service.ensureActiveEmployeePrincipal(
+								body.approverPrincipalId,
+							);
+							if (body.approverPrincipalId !== session.account.principalId) {
+								await options.service.ensureActiveEmployeePrincipal(
+									session.account.principalId,
+								);
+							}
+							return approvalService.decide(session.account.principalId, {
+								...body,
+								id: `approval-decision-${randomUUID()}`,
+								requestId: context.req.param("requestId"),
+							});
+						},
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result, 201);
+			},
+		);
+
 		app.post("/api/v1/connection/oauth-transactions", async (context) => {
 			requireSameOrigin(context.req.raw.headers, options.issuer);
 			const body = parseJsonBody(
@@ -966,6 +2217,7 @@ export function createConnectionOAuthApp(
 							: management.service.startGithubOAuth(
 									session.account.principalId,
 									management.githubRedirectUri,
+									body.accessRequestId,
 								),
 				),
 			);
@@ -993,44 +2245,15 @@ export function createConnectionOAuthApp(
 						subject: session.account.principalId,
 					},
 					() => {
-						const hciSession =
-							body.providerId === "datalego"
-								? getCookie(context, "HCIAuthToken")
-								: undefined;
-						if (body.providerId === "datalego" && !hciSession) {
-							throw new ConnectionError(
-								"AUTHENTICATION_FAILED",
-								"Company HCI login is required",
-							);
-						}
-						let credential: string;
-						if (body.providerId === "datalego") {
-							credential = JSON.stringify({
-								email: session.account.email,
-								sessionToken: hciSession,
-							});
-						} else if ("accessToken" in body) {
-							credential = body.accessToken;
-						} else if ("apiToken" in body) {
-							credential = JSON.stringify({
-								apiToken: body.apiToken,
-								username: body.username,
-							});
-						} else if ("password" in body) {
-							credential = JSON.stringify({
-								password: body.password,
-								username: body.username,
-							});
-						} else {
-							throw new ConnectionError(
-								"INVALID_REQUEST",
-								"Provider credential is invalid",
-							);
-						}
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,
-							credential,
+							providerCredentialValue(
+								body,
+								session.account.email,
+								getCookie(context, "HCIAuthToken"),
+							),
+							body.accessRequestId,
 						);
 					},
 				),
@@ -1039,6 +2262,70 @@ export function createConnectionOAuthApp(
 			context.header("cache-control", "no-store");
 			return context.json(connected, 201);
 		});
+
+		app.post(
+			"/api/v1/connection/connections/:connectionId/reauthorize",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const body = parseJsonBody(
+					providerReconnectRequestSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const connectionId = context.req.param("connectionId");
+				if ("mode" in body) {
+					const authorization = await browserApiOperation(context, () =>
+						browserCommand(
+							options,
+							context,
+							{
+								operation: "connection.github-oauth.reauthorize",
+								replayable: false,
+								request: { connectionId },
+								subject: session.account.principalId,
+							},
+							() =>
+								management.service.startGithubOAuth(
+									session.account.principalId,
+									management.githubRedirectUri,
+									undefined,
+									connectionId,
+								),
+						),
+					);
+					if (authorization instanceof Response) return authorization;
+					context.header("cache-control", "no-store");
+					return context.json(authorization, 200);
+				}
+				const connected = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.provider-credential.reauthorize",
+							replayable: false,
+							request: { connectionId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.reconnectProviderCredential(
+								session.account.principalId,
+								connectionId,
+								body.providerId,
+								providerCredentialValue(
+									body,
+									session.account.email,
+									getCookie(context, "HCIAuthToken"),
+								),
+							),
+					),
+				);
+				if (connected instanceof Response) return connected;
+				context.header("cache-control", "no-store");
+				return context.json(connected, 201);
+			},
+		);
 
 		app.post("/api/v1/connection/authorization-previews", async (context) => {
 			requireSameOrigin(context.req.raw.headers, options.issuer);

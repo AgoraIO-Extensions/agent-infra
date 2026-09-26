@@ -133,6 +133,15 @@ export type Connection = {
     status: 'ACTIVE' | 'DISCONNECTED';
     requiresReconnect: boolean;
     actionVersionIds: Array<string>;
+    accessAuthorization?: null | {
+        id: string;
+        capabilityProfileId: string;
+        providerReleaseId: string;
+        renewalOpensAt: string | null;
+        state: string;
+        validityKind: 'FINITE' | 'PERMANENT';
+        validUntil: string | null;
+    };
 };
 
 export type ConnectionAccountSummary = {
@@ -191,23 +200,432 @@ export type ConnectionsResponse = {
 };
 
 export type OAuthTransactionRequest = {
+    accessRequestId?: string;
     sharedScopeId?: string;
 };
 
+export type AccessDuration = {
+    kind: 'FINITE';
+    days: number;
+} | {
+    kind: 'PERMANENT';
+};
+
+export type DisclaimerConfirmation = {
+    disclaimerVersionId: string;
+    contentSha256: string;
+    locale: string;
+};
+
+export type AccessRequestSubmit = {
+    providerReleaseId: string;
+    capabilityProfileId: string;
+    policyVersionId: string;
+    presentationId: string;
+    purpose: string;
+    duration: AccessDuration;
+    disclaimerConfirmations: Array<DisclaimerConfirmation>;
+};
+
+export type AccessConnectReady = {
+    requestId: string;
+    providerId: string;
+    providerReleaseId: string;
+    connectExpiresAt: string;
+};
+
+export type AccessOption = {
+    providerId: string;
+    providerReleaseId: string;
+    capabilityProfileId: string;
+    capabilityProfileName: string;
+    policyVersionId: string;
+    presentationId: string;
+    effectCeiling: 'READ' | 'WRITE';
+    requiredScopes: Array<string>;
+    durations: Array<AccessDuration>;
+    disclaimers: Array<{
+        id: string;
+        locale: string;
+        content: string;
+        contentSha256: string;
+    }>;
+};
+
+export type AccessOptionsResponse = {
+    options: Array<AccessOption>;
+};
+
+export type AccessRequestStage = {
+    ordinal: number;
+    name: string;
+    state: string;
+    revision: string;
+    routingRevision: string;
+    openedAt: string | null;
+    completedAt: string | null;
+    decisions: Array<{
+        approverName: string;
+        actorName: string;
+        decision: 'APPROVE' | 'REJECT';
+        comment: string | null;
+        decidedAt: string;
+    }>;
+};
+
+export type AccessRequest = {
+    id: string;
+    providerId: string;
+    providerReleaseId: string;
+    capabilityProfileName: string;
+    purpose: string;
+    renewal: boolean;
+    duration: AccessDuration;
+    state: string;
+    currentStageOrdinal: number | null;
+    revision: string;
+    expiresAt: string;
+    connectExpiresAt: string | null;
+    createdAt: string;
+    stages: Array<AccessRequestStage>;
+};
+
+export type AccessRequestsResponse = {
+    requests: Array<AccessRequest>;
+};
+
+export type AccessRequestCreated = {
+    requestId: string;
+};
+
+export type ApprovalQueueItem = AccessRequest & {
+    applicantDisplayName: string;
+    approverPrincipalId: string;
+    currentRequestStageId: string;
+};
+
+export type NotificationBatch = {
+    notificationIds: Array<string>;
+};
+
+export type ConnectionWorkItemsResponse = {
+    items: Array<{
+        id: string;
+        businessId: string;
+        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK';
+        actionType: string;
+        status: string;
+        revision: string;
+        dueAt: string | null;
+        createdAt: string;
+    }>;
+};
+
+export type ApprovalNotificationsResponse = {
+    adminWorkItems: number;
+    openWorkItems: number;
+    reapprovalWorkItems: number;
+    upgradeWorkItems: number;
+    unreadCount: number;
+    items: Array<{
+        id: string;
+        businessId: string;
+        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK';
+        providerId: string;
+        state: string;
+        eventType: string;
+        createdAt: string;
+        readAt: string | null;
+        archivedAt: string | null;
+    }>;
+};
+
+export type ApprovalQueueResponse = {
+    requests: Array<ApprovalQueueItem>;
+};
+
+export type ApprovalAuthorizationRevoke = {
+    expectedRevision: string;
+};
+
+export type ApprovalAuthorizationRevoked = {
+    authorizationId: string;
+};
+
+export type ReapprovalCampaignDraft = {
+    providerReleaseId: string;
+    capabilityProfileId: string;
+    triggerKind: 'DISCLAIMER' | 'POLICY' | 'PROVIDER_RELEASE';
+    triggerVersionId: string;
+    reason: string;
+    deadlineAt: string;
+};
+
+export type ReapprovalCampaignCreated = {
+    campaignId: string;
+    affectedConnections: number;
+};
+
+export type AdminAccessAuthorizationsResponse = {
+    authorizations: Array<{
+        id: string;
+        connectionId: string;
+        providerId: string;
+        ownerDisplayName: string;
+        state: string;
+        revision: string;
+        validUntil: string | null;
+    }>;
+};
+
+export type ApprovalRoutingBlockedResponse = {
+    requests: Array<AccessRequest & {
+        applicantDisplayName: string;
+    }>;
+};
+
+export type OutboxFailuresResponse = {
+    events: Array<{
+        id: string;
+        topic: string;
+        attemptCount: number;
+        createdAt: string;
+    }>;
+};
+
+export type OutboxRetryRequest = {
+    expectedAttempts: number;
+};
+
+export type OutboxRetryResult = {
+    eventId: string;
+};
+
+export type ApprovalDelegationDraft = {
+    principalCandidateId: string;
+    delegateCandidateId: string;
+    startsAt: string;
+    endsAt: string;
+};
+
+export type ApprovalDelegationRevoke = {
+    expectedRevision: string;
+};
+
+export type ApprovalDelegationResult = {
+    delegationId: string;
+};
+
+export type ApprovalDelegationsResponse = {
+    delegations: Array<ApprovalDelegation>;
+};
+
+export type ApprovalDelegation = {
+    id: string;
+    principalId: string;
+    principalName: string;
+    delegatePrincipalId: string;
+    delegateName: string;
+    startsAt: string;
+    endsAt: string;
+    revision: string;
+    status: 'ACTIVE' | 'REVOKED' | 'EXPIRED';
+};
+
+export type ApprovalRerouteRequest = {
+    approverCandidateIds: Array<string>;
+    expectedRequestRevision: string;
+    expectedStageRevision: string;
+    expectedRoutingRevision: string;
+    reason: string;
+};
+
+export type ApprovalDecisionRequest = {
+    approverPrincipalId: string;
+    decision: 'APPROVE' | 'REJECT';
+    comment?: string;
+    expectedRequestRevision: string;
+    expectedStageRevision: string;
+    expectedRoutingRevision: string;
+};
+
+export type ApprovalDecisionResponse = {
+    requestId: string;
+    replayed: boolean;
+};
+
+export type EmployeeCandidatesResponse = {
+    candidates: Array<{
+        candidateId: string;
+        displayName: string;
+        email: string | null;
+        alias: string | null;
+    }>;
+};
+
+export type CapabilityProfileDraft = {
+    providerReleaseId: string;
+    name: string;
+    actionVersionIds: Array<string>;
+};
+
+export type CapabilityProfileCreated = {
+    capabilityProfileId: string;
+};
+
+export type DisclaimerDraft = {
+    kind: 'GLOBAL' | 'PROVIDER' | 'POLICY';
+    locale: string;
+    content: string;
+    materialChange: boolean;
+    providerId?: string;
+};
+
+export type DisclaimerCreated = {
+    disclaimerVersionId: string;
+};
+
+export type ApprovalPolicyStageDraft = {
+    name: string;
+    quorumType: 'ANY' | 'ALL' | 'AT_LEAST_N';
+    quorumCount?: number;
+    timeoutSeconds: number;
+    approverCandidateIds: Array<string>;
+};
+
+export type AccessPolicyDraft = {
+    providerReleaseId: string;
+    capabilityProfileId: string;
+    priority: number;
+    defaultDurationDays?: number;
+    allowPermanent: boolean;
+    requestTtlSeconds: number;
+    connectTtlSeconds: number;
+    renewalLeadSeconds: number;
+    durations: Array<AccessDuration>;
+    disclaimerVersionIds: Array<string>;
+    stages: Array<ApprovalPolicyStageDraft>;
+};
+
+export type AccessPolicyDraftResponse = {
+    policyId: string;
+    revision: string;
+    draft: AccessPolicyDraft;
+    candidates: Array<{
+        candidateId: string;
+        displayName: string;
+        email: string | null;
+        alias: string | null;
+    }>;
+};
+
+export type AccessPolicyCreated = {
+    policyVersionId: string;
+};
+
+export type AdminDisclaimersResponse = {
+    disclaimers: Array<{
+        id: string;
+        kind: string;
+        locale: string;
+        content: string;
+        materialChange: boolean;
+        providerId: string | null;
+        status: string;
+    }>;
+};
+
+export type ApprovalPolicyPublishRequest = {
+    materialChange: boolean;
+    reapprovalDeadlineAt?: string;
+    reason?: string;
+};
+
+export type ApprovalPolicyRevokeRequest = {
+    expectedRevision: string;
+    reason: string;
+};
+
+export type ApprovalPolicyRevokeResult = {
+    policyVersionId: string;
+    canceledRequests: number;
+    suspendedConnections: number;
+};
+
+export type ApprovalPolicyCatalog = {
+    profiles: Array<{
+        id: string;
+        providerReleaseId: string;
+        name: string;
+        effectCeiling: 'READ' | 'WRITE';
+        status: string;
+    }>;
+    policies: Array<{
+        id: string;
+        providerReleaseId: string;
+        capabilityProfileId: string;
+        materialChange: boolean;
+        status: string;
+        revision: string;
+    }>;
+    disclaimers: Array<{
+        id: string;
+        kind: string;
+        locale: string;
+        content: string;
+        materialChange: boolean;
+        providerId: string | null;
+        status: string;
+    }>;
+    providers: Array<{
+        provider: string;
+        providerReleaseId: string;
+        actions: Array<{
+            id: string;
+            name: string;
+            effect: 'READ' | 'WRITE';
+            [key: string]: unknown;
+        }>;
+    }>;
+};
+
+export type ApprovalPolicyStages = {
+    stages: Array<{
+        id: string;
+        ordinal: number;
+        name: string;
+        quorumType: 'ANY' | 'ALL' | 'AT_LEAST_N';
+        quorumCount: number | null;
+        timeoutSeconds: number;
+        approvers: Array<{
+            displayName: string;
+            email?: string | null;
+        }>;
+    }>;
+};
+
 export type ProviderCredentialRequest = {
+    accessRequestId?: string;
     providerId: 'datalego';
 } | {
+    accessRequestId?: string;
     providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {
+    accessRequestId?: string;
     providerId: 'confluence' | 'jira' | 'manhattan';
     username: string;
     password: string;
 } | {
+    accessRequestId?: string;
     providerId: 'jenkins-ci' | 'jenkins-release';
     username: string;
     apiToken: string;
 };
+
+export type ProviderReconnectRequest = {
+    mode: 'OAUTH';
+} | (ProviderCredentialRequest & unknown);
 
 export type ConnectionCreated = {
     connectionId: string;
@@ -772,6 +1190,52 @@ export type ConnectProviderCredentialResponses = {
 
 export type ConnectProviderCredentialResponse = ConnectProviderCredentialResponses[keyof ConnectProviderCredentialResponses];
 
+export type ReauthorizeProviderConnectionData = {
+    body: ProviderReconnectRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        connectionId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/connections/{connectionId}/reauthorize';
+};
+
+export type ReauthorizeProviderConnectionErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type ReauthorizeProviderConnectionError = ReauthorizeProviderConnectionErrors[keyof ReauthorizeProviderConnectionErrors];
+
+export type ReauthorizeProviderConnectionResponses = {
+    /**
+     * Authorization URL
+     */
+    200: OAuthTransaction;
+    /**
+     * Connected provider account
+     */
+    201: ConnectionCreated;
+};
+
+export type ReauthorizeProviderConnectionResponse = ReauthorizeProviderConnectionResponses[keyof ReauthorizeProviderConnectionResponses];
+
 export type StartGithubOAuthData = {
     body?: OAuthTransactionRequest;
     headers: {
@@ -807,6 +1271,1252 @@ export type StartGithubOAuthResponses = {
 };
 
 export type StartGithubOAuthResponse = StartGithubOAuthResponses[keyof StartGithubOAuthResponses];
+
+export type ListConnectionAccessOptionsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/access-options';
+};
+
+export type ListConnectionAccessOptionsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type ListConnectionAccessOptionsError = ListConnectionAccessOptionsErrors[keyof ListConnectionAccessOptionsErrors];
+
+export type ListConnectionAccessOptionsResponses = {
+    /**
+     * Published access options
+     */
+    200: AccessOptionsResponse;
+};
+
+export type ListConnectionAccessOptionsResponse = ListConnectionAccessOptionsResponses[keyof ListConnectionAccessOptionsResponses];
+
+export type ListConnectionAccessRequestsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/access-requests';
+};
+
+export type ListConnectionAccessRequestsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListConnectionAccessRequestsError = ListConnectionAccessRequestsErrors[keyof ListConnectionAccessRequestsErrors];
+
+export type ListConnectionAccessRequestsResponses = {
+    /**
+     * Current principal access requests
+     */
+    200: AccessRequestsResponse;
+};
+
+export type ListConnectionAccessRequestsResponse = ListConnectionAccessRequestsResponses[keyof ListConnectionAccessRequestsResponses];
+
+export type SubmitConnectionAccessRequestData = {
+    body: AccessRequestSubmit;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/access-requests';
+};
+
+export type SubmitConnectionAccessRequestErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type SubmitConnectionAccessRequestError = SubmitConnectionAccessRequestErrors[keyof SubmitConnectionAccessRequestErrors];
+
+export type SubmitConnectionAccessRequestResponses = {
+    /**
+     * Created access request
+     */
+    201: AccessRequestCreated;
+};
+
+export type SubmitConnectionAccessRequestResponse = SubmitConnectionAccessRequestResponses[keyof SubmitConnectionAccessRequestResponses];
+
+export type SubmitConnectionAccessRenewalData = {
+    body: AccessRequestSubmit;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        authorizationId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/access-authorizations/{authorizationId}/renewals';
+};
+
+export type SubmitConnectionAccessRenewalErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type SubmitConnectionAccessRenewalError = SubmitConnectionAccessRenewalErrors[keyof SubmitConnectionAccessRenewalErrors];
+
+export type SubmitConnectionAccessRenewalResponses = {
+    /**
+     * Renewal request created
+     */
+    201: AccessRequestCreated;
+};
+
+export type SubmitConnectionAccessRenewalResponse = SubmitConnectionAccessRenewalResponses[keyof SubmitConnectionAccessRenewalResponses];
+
+export type CancelConnectionAccessRequestData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        requestId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/access-requests/{requestId}';
+};
+
+export type CancelConnectionAccessRequestErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type CancelConnectionAccessRequestError = CancelConnectionAccessRequestErrors[keyof CancelConnectionAccessRequestErrors];
+
+export type CancelConnectionAccessRequestResponses = {
+    /**
+     * Canceled access request
+     */
+    204: void;
+};
+
+export type CancelConnectionAccessRequestResponse = CancelConnectionAccessRequestResponses[keyof CancelConnectionAccessRequestResponses];
+
+export type GetConnectionAccessRequestData = {
+    body?: never;
+    path: {
+        requestId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/access-requests/{requestId}';
+};
+
+export type GetConnectionAccessRequestErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type GetConnectionAccessRequestError = GetConnectionAccessRequestErrors[keyof GetConnectionAccessRequestErrors];
+
+export type GetConnectionAccessRequestResponses = {
+    /**
+     * Access request
+     */
+    200: AccessRequest;
+};
+
+export type GetConnectionAccessRequestResponse = GetConnectionAccessRequestResponses[keyof GetConnectionAccessRequestResponses];
+
+export type ListApprovalRoutingBlockedData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/routing-blocked';
+};
+
+export type ListApprovalRoutingBlockedErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListApprovalRoutingBlockedError = ListApprovalRoutingBlockedErrors[keyof ListApprovalRoutingBlockedErrors];
+
+export type ListApprovalRoutingBlockedResponses = {
+    /**
+     * Current blocked approval requests
+     */
+    200: ApprovalRoutingBlockedResponse;
+};
+
+export type ListApprovalRoutingBlockedResponse = ListApprovalRoutingBlockedResponses[keyof ListApprovalRoutingBlockedResponses];
+
+export type PrepareConnectionAccessData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        requestId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/access-requests/{requestId}/connect';
+};
+
+export type PrepareConnectionAccessErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type PrepareConnectionAccessError = PrepareConnectionAccessErrors[keyof PrepareConnectionAccessErrors];
+
+export type PrepareConnectionAccessResponses = {
+    /**
+     * Approved Connect Permit remains available
+     */
+    200: AccessConnectReady;
+};
+
+export type PrepareConnectionAccessResponse = PrepareConnectionAccessResponses[keyof PrepareConnectionAccessResponses];
+
+export type ListAdminAccessAuthorizationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/access-authorizations';
+};
+
+export type ListAdminAccessAuthorizationsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListAdminAccessAuthorizationsError = ListAdminAccessAuthorizationsErrors[keyof ListAdminAccessAuthorizationsErrors];
+
+export type ListAdminAccessAuthorizationsResponses = {
+    /**
+     * Current personal access authorizations
+     */
+    200: AdminAccessAuthorizationsResponse;
+};
+
+export type ListAdminAccessAuthorizationsResponse = ListAdminAccessAuthorizationsResponses[keyof ListAdminAccessAuthorizationsResponses];
+
+export type RevokeAdminAccessAuthorizationData = {
+    body: ApprovalAuthorizationRevoke;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        authorizationId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-authorizations/{authorizationId}/revoke';
+};
+
+export type RevokeAdminAccessAuthorizationErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevokeAdminAccessAuthorizationError = RevokeAdminAccessAuthorizationErrors[keyof RevokeAdminAccessAuthorizationErrors];
+
+export type RevokeAdminAccessAuthorizationResponses = {
+    /**
+     * Authorization revoked
+     */
+    200: ApprovalAuthorizationRevoked;
+};
+
+export type RevokeAdminAccessAuthorizationResponse = RevokeAdminAccessAuthorizationResponses[keyof RevokeAdminAccessAuthorizationResponses];
+
+export type CreateReapprovalCampaignData = {
+    body: ReapprovalCampaignDraft;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/reapproval-campaigns';
+};
+
+export type CreateReapprovalCampaignErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type CreateReapprovalCampaignError = CreateReapprovalCampaignErrors[keyof CreateReapprovalCampaignErrors];
+
+export type CreateReapprovalCampaignResponses = {
+    /**
+     * Reapproval campaign created
+     */
+    201: ReapprovalCampaignCreated;
+};
+
+export type CreateReapprovalCampaignResponse = CreateReapprovalCampaignResponses[keyof CreateReapprovalCampaignResponses];
+
+export type RerouteApprovalRequestData = {
+    body: ApprovalRerouteRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        requestId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-requests/{requestId}/reroute';
+};
+
+export type RerouteApprovalRequestErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RerouteApprovalRequestError = RerouteApprovalRequestErrors[keyof RerouteApprovalRequestErrors];
+
+export type RerouteApprovalRequestResponses = {
+    /**
+     * Rerouted current stage
+     */
+    200: AccessRequestCreated;
+};
+
+export type RerouteApprovalRequestResponse = RerouteApprovalRequestResponses[keyof RerouteApprovalRequestResponses];
+
+export type ListApprovalDelegationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/approval-delegations';
+};
+
+export type ListApprovalDelegationsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListApprovalDelegationsError = ListApprovalDelegationsErrors[keyof ListApprovalDelegationsErrors];
+
+export type ListApprovalDelegationsResponses = {
+    /**
+     * Approval delegations
+     */
+    200: ApprovalDelegationsResponse;
+};
+
+export type ListApprovalDelegationsResponse = ListApprovalDelegationsResponses[keyof ListApprovalDelegationsResponses];
+
+export type CreateApprovalDelegationData = {
+    body: ApprovalDelegationDraft;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/approval-delegations';
+};
+
+export type CreateApprovalDelegationErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type CreateApprovalDelegationError = CreateApprovalDelegationErrors[keyof CreateApprovalDelegationErrors];
+
+export type CreateApprovalDelegationResponses = {
+    /**
+     * Delegation created
+     */
+    201: ApprovalDelegationResult;
+};
+
+export type CreateApprovalDelegationResponse = CreateApprovalDelegationResponses[keyof CreateApprovalDelegationResponses];
+
+export type RevokeApprovalDelegationData = {
+    body: ApprovalDelegationRevoke;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        delegationId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/approval-delegations/{delegationId}/revoke';
+};
+
+export type RevokeApprovalDelegationErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevokeApprovalDelegationError = RevokeApprovalDelegationErrors[keyof RevokeApprovalDelegationErrors];
+
+export type RevokeApprovalDelegationResponses = {
+    /**
+     * Delegation revoked
+     */
+    200: ApprovalDelegationResult;
+};
+
+export type RevokeApprovalDelegationResponse = RevokeApprovalDelegationResponses[keyof RevokeApprovalDelegationResponses];
+
+export type ListConnectionOutboxFailuresData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/outbox-failures';
+};
+
+export type ListConnectionOutboxFailuresErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListConnectionOutboxFailuresError = ListConnectionOutboxFailuresErrors[keyof ListConnectionOutboxFailuresErrors];
+
+export type ListConnectionOutboxFailuresResponses = {
+    /**
+     * Failed projection events
+     */
+    200: OutboxFailuresResponse;
+};
+
+export type ListConnectionOutboxFailuresResponse = ListConnectionOutboxFailuresResponses[keyof ListConnectionOutboxFailuresResponses];
+
+export type RetryConnectionOutboxFailureData = {
+    body: OutboxRetryRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        eventId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/outbox-failures/{eventId}/retry';
+};
+
+export type RetryConnectionOutboxFailureErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RetryConnectionOutboxFailureError = RetryConnectionOutboxFailureErrors[keyof RetryConnectionOutboxFailureErrors];
+
+export type RetryConnectionOutboxFailureResponses = {
+    /**
+     * Projection event queued
+     */
+    200: OutboxRetryResult;
+};
+
+export type RetryConnectionOutboxFailureResponse = RetryConnectionOutboxFailureResponses[keyof RetryConnectionOutboxFailureResponses];
+
+export type ListConnectionWorkItemsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/work-items';
+};
+
+export type ListConnectionWorkItemsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListConnectionWorkItemsError = ListConnectionWorkItemsErrors[keyof ListConnectionWorkItemsErrors];
+
+export type ListConnectionWorkItemsResponses = {
+    /**
+     * Current principal work items
+     */
+    200: ConnectionWorkItemsResponse;
+};
+
+export type ListConnectionWorkItemsResponse = ListConnectionWorkItemsResponses[keyof ListConnectionWorkItemsResponses];
+
+export type ListConnectionNotificationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/notifications';
+};
+
+export type ListConnectionNotificationsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListConnectionNotificationsError = ListConnectionNotificationsErrors[keyof ListConnectionNotificationsErrors];
+
+export type ListConnectionNotificationsResponses = {
+    /**
+     * Current principal notifications
+     */
+    200: ApprovalNotificationsResponse;
+};
+
+export type ListConnectionNotificationsResponse = ListConnectionNotificationsResponses[keyof ListConnectionNotificationsResponses];
+
+export type ReadConnectionNotificationsData = {
+    body: NotificationBatch;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/notifications/read';
+};
+
+export type ReadConnectionNotificationsErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ReadConnectionNotificationsError = ReadConnectionNotificationsErrors[keyof ReadConnectionNotificationsErrors];
+
+export type ReadConnectionNotificationsResponses = {
+    /**
+     * Notifications marked read
+     */
+    204: void;
+};
+
+export type ReadConnectionNotificationsResponse = ReadConnectionNotificationsResponses[keyof ReadConnectionNotificationsResponses];
+
+export type ArchiveConnectionNotificationsData = {
+    body: NotificationBatch;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/notifications/archive';
+};
+
+export type ArchiveConnectionNotificationsErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ArchiveConnectionNotificationsError = ArchiveConnectionNotificationsErrors[keyof ArchiveConnectionNotificationsErrors];
+
+export type ArchiveConnectionNotificationsResponses = {
+    /**
+     * Notifications archived
+     */
+    204: void;
+};
+
+export type ArchiveConnectionNotificationsResponse = ArchiveConnectionNotificationsResponses[keyof ArchiveConnectionNotificationsResponses];
+
+export type ListConnectionApprovalQueueData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/approval-queue';
+};
+
+export type ListConnectionApprovalQueueErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type ListConnectionApprovalQueueError = ListConnectionApprovalQueueErrors[keyof ListConnectionApprovalQueueErrors];
+
+export type ListConnectionApprovalQueueResponses = {
+    /**
+     * Assigned approval requests
+     */
+    200: ApprovalQueueResponse;
+};
+
+export type ListConnectionApprovalQueueResponse = ListConnectionApprovalQueueResponses[keyof ListConnectionApprovalQueueResponses];
+
+export type SearchApprovalEmployeeCandidatesData = {
+    body?: never;
+    path?: never;
+    query: {
+        query: string;
+    };
+    url: '/api/v1/connection/admin/employee-candidates';
+};
+
+export type SearchApprovalEmployeeCandidatesErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type SearchApprovalEmployeeCandidatesError = SearchApprovalEmployeeCandidatesErrors[keyof SearchApprovalEmployeeCandidatesErrors];
+
+export type SearchApprovalEmployeeCandidatesResponses = {
+    /**
+     * Bounded active employee candidates
+     */
+    200: EmployeeCandidatesResponse;
+};
+
+export type SearchApprovalEmployeeCandidatesResponse = SearchApprovalEmployeeCandidatesResponses[keyof SearchApprovalEmployeeCandidatesResponses];
+
+export type CreateApprovalCapabilityProfileData = {
+    body: CapabilityProfileDraft;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles';
+};
+
+export type CreateApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type CreateApprovalCapabilityProfileError = CreateApprovalCapabilityProfileErrors[keyof CreateApprovalCapabilityProfileErrors];
+
+export type CreateApprovalCapabilityProfileResponses = {
+    /**
+     * Profile draft created
+     */
+    201: CapabilityProfileCreated;
+};
+
+export type CreateApprovalCapabilityProfileResponse = CreateApprovalCapabilityProfileResponses[keyof CreateApprovalCapabilityProfileResponses];
+
+export type PublishApprovalCapabilityProfileData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        profileId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/publish';
+};
+
+export type PublishApprovalCapabilityProfileErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type PublishApprovalCapabilityProfileError = PublishApprovalCapabilityProfileErrors[keyof PublishApprovalCapabilityProfileErrors];
+
+export type PublishApprovalCapabilityProfileResponses = {
+    /**
+     * Profile published
+     */
+    204: void;
+};
+
+export type PublishApprovalCapabilityProfileResponse = PublishApprovalCapabilityProfileResponses[keyof PublishApprovalCapabilityProfileResponses];
+
+export type ListApprovalDisclaimersData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers';
+};
+
+export type ListApprovalDisclaimersErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListApprovalDisclaimersError = ListApprovalDisclaimersErrors[keyof ListApprovalDisclaimersErrors];
+
+export type ListApprovalDisclaimersResponses = {
+    /**
+     * Versioned disclaimer catalog
+     */
+    200: AdminDisclaimersResponse;
+};
+
+export type ListApprovalDisclaimersResponse = ListApprovalDisclaimersResponses[keyof ListApprovalDisclaimersResponses];
+
+export type CreateApprovalDisclaimerData = {
+    body: DisclaimerDraft;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers';
+};
+
+export type CreateApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type CreateApprovalDisclaimerError = CreateApprovalDisclaimerErrors[keyof CreateApprovalDisclaimerErrors];
+
+export type CreateApprovalDisclaimerResponses = {
+    /**
+     * Disclaimer draft created
+     */
+    201: DisclaimerCreated;
+};
+
+export type CreateApprovalDisclaimerResponse = CreateApprovalDisclaimerResponses[keyof CreateApprovalDisclaimerResponses];
+
+export type PublishApprovalDisclaimerData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        disclaimerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/publish';
+};
+
+export type PublishApprovalDisclaimerErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type PublishApprovalDisclaimerError = PublishApprovalDisclaimerErrors[keyof PublishApprovalDisclaimerErrors];
+
+export type PublishApprovalDisclaimerResponses = {
+    /**
+     * Disclaimer published
+     */
+    204: void;
+};
+
+export type PublishApprovalDisclaimerResponse = PublishApprovalDisclaimerResponses[keyof PublishApprovalDisclaimerResponses];
+
+export type ListApprovalPolicyCatalogData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies';
+};
+
+export type ListApprovalPolicyCatalogErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListApprovalPolicyCatalogError = ListApprovalPolicyCatalogErrors[keyof ListApprovalPolicyCatalogErrors];
+
+export type ListApprovalPolicyCatalogResponses = {
+    /**
+     * Approval policy catalog
+     */
+    200: ApprovalPolicyCatalog;
+};
+
+export type ListApprovalPolicyCatalogResponse = ListApprovalPolicyCatalogResponses[keyof ListApprovalPolicyCatalogResponses];
+
+export type CreateConnectionAccessPolicyData = {
+    body: AccessPolicyDraft;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies';
+};
+
+export type CreateConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type CreateConnectionAccessPolicyError = CreateConnectionAccessPolicyErrors[keyof CreateConnectionAccessPolicyErrors];
+
+export type CreateConnectionAccessPolicyResponses = {
+    /**
+     * Policy draft created
+     */
+    201: AccessPolicyCreated;
+};
+
+export type CreateConnectionAccessPolicyResponse = CreateConnectionAccessPolicyResponses[keyof CreateConnectionAccessPolicyResponses];
+
+export type GetConnectionAccessPolicyDraftData = {
+    body?: never;
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}';
+};
+
+export type GetConnectionAccessPolicyDraftErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type GetConnectionAccessPolicyDraftError = GetConnectionAccessPolicyDraftErrors[keyof GetConnectionAccessPolicyDraftErrors];
+
+export type GetConnectionAccessPolicyDraftResponses = {
+    /**
+     * Editable policy draft with administrator-bound employee candidates
+     */
+    200: AccessPolicyDraftResponse;
+};
+
+export type GetConnectionAccessPolicyDraftResponse = GetConnectionAccessPolicyDraftResponses[keyof GetConnectionAccessPolicyDraftResponses];
+
+export type UpdateConnectionAccessPolicyData = {
+    body: AccessPolicyDraft;
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}';
+};
+
+export type UpdateConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type UpdateConnectionAccessPolicyError = UpdateConnectionAccessPolicyErrors[keyof UpdateConnectionAccessPolicyErrors];
+
+export type UpdateConnectionAccessPolicyResponses = {
+    /**
+     * Policy draft updated
+     */
+    200: AccessPolicyCreated;
+};
+
+export type UpdateConnectionAccessPolicyResponse = UpdateConnectionAccessPolicyResponses[keyof UpdateConnectionAccessPolicyResponses];
+
+export type GetApprovalPolicyStagesData = {
+    body?: never;
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/stages';
+};
+
+export type GetApprovalPolicyStagesErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type GetApprovalPolicyStagesError = GetApprovalPolicyStagesErrors[keyof GetApprovalPolicyStagesErrors];
+
+export type GetApprovalPolicyStagesResponses = {
+    /**
+     * Policy approval stages
+     */
+    200: ApprovalPolicyStages;
+};
+
+export type GetApprovalPolicyStagesResponse = GetApprovalPolicyStagesResponses[keyof GetApprovalPolicyStagesResponses];
+
+export type PublishConnectionAccessPolicyData = {
+    body: ApprovalPolicyPublishRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/publish';
+};
+
+export type PublishConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type PublishConnectionAccessPolicyError = PublishConnectionAccessPolicyErrors[keyof PublishConnectionAccessPolicyErrors];
+
+export type PublishConnectionAccessPolicyResponses = {
+    /**
+     * Policy published
+     */
+    204: void;
+};
+
+export type PublishConnectionAccessPolicyResponse = PublishConnectionAccessPolicyResponses[keyof PublishConnectionAccessPolicyResponses];
+
+export type RevokeConnectionAccessPolicyData = {
+    body: ApprovalPolicyRevokeRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        policyId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revoke';
+};
+
+export type RevokeConnectionAccessPolicyErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type RevokeConnectionAccessPolicyError = RevokeConnectionAccessPolicyErrors[keyof RevokeConnectionAccessPolicyErrors];
+
+export type RevokeConnectionAccessPolicyResponses = {
+    /**
+     * Policy and affected access suspended
+     */
+    200: ApprovalPolicyRevokeResult;
+};
+
+export type RevokeConnectionAccessPolicyResponse = RevokeConnectionAccessPolicyResponses[keyof RevokeConnectionAccessPolicyResponses];
+
+export type DecideConnectionAccessRequestData = {
+    body: ApprovalDecisionRequest;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        requestId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/approval-requests/{requestId}/decisions';
+};
+
+export type DecideConnectionAccessRequestErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type DecideConnectionAccessRequestError = DecideConnectionAccessRequestErrors[keyof DecideConnectionAccessRequestErrors];
+
+export type DecideConnectionAccessRequestResponses = {
+    /**
+     * Recorded decision
+     */
+    201: ApprovalDecisionResponse;
+};
+
+export type DecideConnectionAccessRequestResponse = DecideConnectionAccessRequestResponses[keyof DecideConnectionAccessRequestResponses];
 
 export type CreateAuthorizationPreviewData = {
     body: AuthorizationPreviewRequest;
