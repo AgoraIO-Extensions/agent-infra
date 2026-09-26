@@ -681,7 +681,16 @@ export class ConnectionOAuthService {
 				503,
 			);
 		}
-		const identities = await search.call(this.options.directory, query);
+		let identities: Awaited<ReturnType<typeof search>>;
+		try {
+			identities = await search.call(this.options.directory, query);
+		} catch {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory search is unavailable",
+				503,
+			);
+		}
 		const candidates = identities.map((identity) => ({
 			alias: identity.alias,
 			displayName: identity.displayName,

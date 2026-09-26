@@ -361,6 +361,14 @@ async function browserApiOperation<T>(
 			return browserConnectionError(context, error);
 		}
 		if (error instanceof OAuthProtocolError) {
+			if (error.status === 503)
+				return browserConnectionError(
+					context,
+					new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Identity service is unavailable",
+					),
+				);
 			return browserApiError(context, {
 				code:
 					error.error === "invalid_token"
@@ -491,6 +499,14 @@ export function createConnectionOAuthApp(
 				return browserConnectionError(context, error);
 			}
 			if (error instanceof OAuthProtocolError) {
+				if (error.status === 503)
+					return browserConnectionError(
+						context,
+						new ConnectionError(
+							"PROVIDER_UNAVAILABLE",
+							"Identity service is unavailable",
+						),
+					);
 				return browserApiError(context, {
 					code:
 						error.error === "invalid_token"

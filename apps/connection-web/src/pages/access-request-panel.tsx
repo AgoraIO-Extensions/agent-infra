@@ -56,7 +56,7 @@ export function AccessRequestPanel(props: {
 	});
 	const [showNew, setShowNew] = useState(false);
 	const [selectedRequestId, setSelectedRequestId] = useState("");
-	const [optionIndex, setOptionIndex] = useState<number | null>(null);
+	const [optionPolicyId, setOptionPolicyId] = useState<string | null>(null);
 	const [purpose, setPurpose] = useState("");
 	const [durationIndex, setDurationIndex] = useState(0);
 	const [confirmed, setConfirmed] = useState<string[]>([]);
@@ -105,8 +105,9 @@ export function AccessRequestPanel(props: {
 							? "已连接"
 							: "等待审批"))
 		: "";
-	const selectedOption =
-		optionIndex === null ? null : providerOptions[optionIndex];
+	const selectedOption = providerOptions.find(
+		(item) => item.policyVersionId === optionPolicyId,
+	);
 	const durations = props.renewalTarget
 		? selectedOption?.durations.filter((item) => item.kind === "FINITE")
 		: selectedOption?.durations;
@@ -121,7 +122,7 @@ export function AccessRequestPanel(props: {
 		onSuccess: async (created) => {
 			setShowNew(false);
 			setSelectedRequestId(created.requestId);
-			setOptionIndex(null);
+			setOptionPolicyId(null);
 			setPurpose("");
 			setConfirmed([]);
 			props.onSubmitted();
@@ -139,12 +140,12 @@ export function AccessRequestPanel(props: {
 		if (!props.startSignal || props.startProviderId !== props.providerId)
 			return;
 		setShowNew(true);
-		setOptionIndex(null);
+		setOptionPolicyId(null);
 	}, [props.providerId, props.startProviderId, props.startSignal]);
 
 	function start(index: number) {
 		setShowNew(true);
-		setOptionIndex(index);
+		setOptionPolicyId(providerOptions[index]?.policyVersionId ?? null);
 		setDurationIndex(0);
 		setPurpose("");
 		setConfirmed([]);
@@ -156,7 +157,7 @@ export function AccessRequestPanel(props: {
 			!selectedOption ||
 			!duration ||
 			!purpose.trim() ||
-			confirmed.length !== selectedOption.disclaimers.length
+			!selectedOption.disclaimers.every((item) => confirmed.includes(item.id))
 		)
 			return;
 		submit.mutate({
@@ -299,7 +300,7 @@ export function AccessRequestPanel(props: {
 								variant="secondary"
 								onClick={() => {
 									setShowNew(true);
-									setOptionIndex(null);
+									setOptionPolicyId(null);
 								}}
 							>
 								<Plus size={15} />
@@ -370,7 +371,10 @@ export function AccessRequestPanel(props: {
 							))}
 						</fieldset>
 						<div className="approval-panel-actions">
-							<Button variant="secondary" onClick={() => setOptionIndex(null)}>
+							<Button
+								variant="secondary"
+								onClick={() => setOptionPolicyId(null)}
+							>
 								<X size={15} />
 								返回
 							</Button>
@@ -378,7 +382,9 @@ export function AccessRequestPanel(props: {
 								disabled={
 									submit.isPending ||
 									!purpose.trim() ||
-									confirmed.length !== selectedOption.disclaimers.length
+									!selectedOption.disclaimers.every((item) =>
+										confirmed.includes(item.id),
+									)
 								}
 								onClick={apply}
 							>

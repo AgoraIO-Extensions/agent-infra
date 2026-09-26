@@ -11,6 +11,8 @@ describe("approval employee candidate identity", () => {
 		let requestedBy = "";
 		let isActive = true;
 		let directoryFailure = false;
+		let searchFailure = false;
+		let candidateWrites = 0;
 		const service = new ConnectionOAuthService({
 			consumer: { id: "consumer-test", name: "Test" },
 			directory: {
@@ -21,15 +23,18 @@ describe("approval employee candidate identity", () => {
 					if (directoryFailure) throw new Error("directory unavailable");
 					return isActive;
 				},
-				searchEmployees: async () => [
-					{
-						alias: "alice",
-						displayName: "Alice",
-						email: "alice@example.invalid",
-						issuer: "urn:test:ldap",
-						subject: "secret-stable-uid",
-					},
-				],
+				searchEmployees: async () => {
+					if (searchFailure) throw new Error("LDAP transport failure");
+					return [
+						{
+							alias: "alice",
+							displayName: "Alice",
+							email: "alice@example.invalid",
+							issuer: "urn:test:ldap",
+							subject: "secret-stable-uid",
+						},
+					];
+				},
 			},
 			identityKey: Buffer.alloc(32, 17),
 			identityRealm: "urn:test:approval",
@@ -39,6 +44,7 @@ describe("approval employee candidate identity", () => {
 						NonNullable<ConnectionOAuthRepository["storeEmployeeCandidates"]>
 					>[0],
 				) => {
+					candidateWrites++;
 					requestedBy = input.requestedByPrincipalId;
 					protectedIdentity = input.candidates[0]?.identityReference ?? "";
 				},
@@ -79,6 +85,15 @@ describe("approval employee candidate identity", () => {
 		]);
 		expect(JSON.stringify(candidates)).not.toContain("secret-stable-uid");
 		expect(protectedIdentity).not.toContain("secret-stable-uid");
+		searchFailure = true;
+		await expect(
+			service.searchEmployeeCandidates("admin", "alice"),
+		).rejects.toMatchObject({
+			status: 503,
+			message: "Employee directory search is unavailable",
+		});
+		expect(candidateWrites).toBe(1);
+		searchFailure = false;
 		const candidateId = candidates[0]?.candidateId ?? "";
 		await expect(
 			service.resolveEmployeeCandidate("other-admin", candidateId),

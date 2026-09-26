@@ -910,6 +910,69 @@ describe("Connection API", () => {
 		expect(published.status).toBe(503);
 	});
 
+	it("preserves retryable directory unavailability in direct and wrapped browser routes", async () => {
+		const unavailable = async () => {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"private-directory-diagnostic",
+				503,
+			);
+		};
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			management: {
+				approvalDirectoryEnabled: true,
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					authorizeConnectionAdministration: async () => true,
+				} as unknown as ConnectionApplicationService,
+				approvalCatalog: {
+					listPolicyApproverPrincipalIds: async () => ["approver-1"],
+				} as never,
+			},
+			service: {
+				getBrowserAccount: async () => ({
+					displayName: "Admin",
+					email: null,
+					principalId: "admin-1",
+				}),
+				searchEmployeeCandidates: unavailable,
+				ensureActiveEmployeePrincipal: unavailable,
+			} as unknown as ConnectionOAuthService,
+		});
+		const headers = {
+			cookie: "connection_session=test",
+			origin: "https://connection.example",
+			"content-type": "application/json",
+			"idempotency-key": "directory-unavailable",
+		};
+		const responses = [
+			await app.request(
+				"/api/v1/connection/admin/employee-candidates?query=alice",
+				{ headers },
+			),
+			await app.request(
+				"/api/v1/connection/admin/access-policies/policy-1/publish",
+				{
+					method: "POST",
+					headers,
+					body: JSON.stringify({ materialChange: false }),
+				},
+			),
+		];
+		for (const response of responses) {
+			expect(response.status).toBe(503);
+			const body = await response.json();
+			expect(body).toMatchObject({
+				error: { code: "PROVIDER_UNAVAILABLE", retryable: true },
+			});
+			expect(JSON.stringify(body)).not.toContain(
+				"private-directory-diagnostic",
+			);
+		}
+	});
+
 	it("hides employee search and policy management from non-administrators", async () => {
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
