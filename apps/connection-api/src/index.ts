@@ -108,13 +108,10 @@ export function startConnectionApi(options: StartOptions) {
 			running = true;
 			void options.notificationDispatcher
 				?.runOnce()
-				.catch((error: unknown) =>
+				.catch(() =>
 					log(
 						JSON.stringify({
-							error:
-								error instanceof Error
-									? error.message
-									: "Notification dispatch failed",
+							error: "Notification dispatch failed",
 							service: connectionApiService,
 							status: "notification_dispatch_failed",
 						}),

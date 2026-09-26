@@ -145,6 +145,38 @@ describe("connection-api recovery lifecycle", () => {
 		},
 	);
 
+	it("sanitizes notification failures and continues on the next interval", async () => {
+		vi.useFakeTimers();
+		const log = vi.fn();
+		const runOnce = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("private database diagnostic"))
+			.mockResolvedValue(true);
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			log,
+			notificationDispatcher: { runOnce },
+			notificationDispatchIntervalMs: 100,
+			port: 0,
+		});
+		try {
+			await vi.advanceTimersByTimeAsync(200);
+			expect(runOnce).toHaveBeenCalledTimes(2);
+			expect(log.mock.calls.flat().join(" ")).not.toContain(
+				"private database diagnostic",
+			);
+			expect(
+				log.mock.calls
+					.flat()
+					.some((line) =>
+						line.includes('"error":"Notification dispatch failed"'),
+					),
+			).toBe(true);
+		} finally {
+			server.close();
+		}
+	});
+
 	it("runs a bounded notification dispatcher independently of recovery", async () => {
 		vi.useFakeTimers();
 		let deliveries = 0;
