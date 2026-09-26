@@ -1,26 +1,26 @@
 import type {
 	Client,
 	RequestResult,
-} from "../../pilot/generated/client/index.js";
+} from "../../pilot/generated-v2/client/index.js";
 import {
-	createAgentApplication,
-	getAgentApplication,
-	listAgentApplications,
-	updateAgentApplication,
-	withdrawAgentApplication,
-} from "../../pilot/generated/sdk.gen.js";
+	createAgentApplicationV2,
+	getAgentApplicationV2,
+	listAgentApplicationsV2,
+	updateAgentApplicationV2,
+	withdrawAgentApplicationV2,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	AgentApplicationCreateRequestV1Writable,
-	AgentApplicationProjectionV1,
-	AgentApplicationUpdateRequestV1Writable,
-	CreateAgentApplicationErrors,
-	CreateAgentApplicationResponses,
-	ListAgentApplicationsData,
-	ListAgentApplicationsErrors,
-	ListAgentApplicationsResponses,
-	UpdateAgentApplicationErrors,
-	UpdateAgentApplicationResponses,
-} from "../../pilot/generated/types.gen.js";
+	AgentApplicationCreateRequestV2Writable,
+	AgentApplicationProjectionV2,
+	AgentApplicationUpdateRequestV2Writable,
+	CreateAgentApplicationV2Errors,
+	CreateAgentApplicationV2Responses,
+	ListAgentApplicationsV2Data,
+	ListAgentApplicationsV2Errors,
+	ListAgentApplicationsV2Responses,
+	UpdateAgentApplicationV2Errors,
+	UpdateAgentApplicationV2Responses,
+} from "../../pilot/generated-v2/types.gen.js";
 
 type UnavailableState = {
 	kind: "unavailable";
@@ -30,18 +30,18 @@ type UnavailableState = {
 export type MyAgentApplicationsState =
 	| {
 			kind: "ready";
-			applications: AgentApplicationProjectionV1[];
+			applications: AgentApplicationProjectionV2[];
 	  }
 	| UnavailableState;
 
 export type MyAgentApplicationState =
-	| { kind: "ready"; application: AgentApplicationProjectionV1 }
+	| { kind: "ready"; application: AgentApplicationProjectionV2 }
 	| UnavailableState;
 
 export type AgentApplicationEditAction = "edit" | "resubmit";
 
 const agentApplicationEditActionByStatus: Partial<
-	Record<AgentApplicationProjectionV1["status"], AgentApplicationEditAction>
+	Record<AgentApplicationProjectionV2["status"], AgentApplicationEditAction>
 > = {
 	pending_approval: "edit",
 	rejected: "resubmit",
@@ -51,23 +51,38 @@ export const agentApplicationEditActionLabels: Record<
 	AgentApplicationEditAction,
 	string
 > = {
-	edit: "Edit application",
-	resubmit: "Resubmit application",
+	edit: "修改申请",
+	resubmit: "修改并重新提交",
 };
 
 export function getAgentApplicationEditAction(
-	application: AgentApplicationProjectionV1,
+	application: AgentApplicationProjectionV2,
 ) {
 	return agentApplicationEditActionByStatus[application.status];
 }
 
-function requestError(retryable: boolean) {
+export function hasCreatedAgent(
+	application: AgentApplicationProjectionV2,
+): application is AgentApplicationProjectionV2 & { agentId: string } {
+	// An application can reserve an Agent ID before approval starts creation.
+	return (
+		application.agentId !== null &&
+		(application.status === "creating" ||
+			application.status === "available" ||
+			application.status === "stopped" ||
+			application.status === "creation_failed" ||
+			application.status === "disabled")
+	);
+}
+
+function requestError(input: { retryable?: boolean; code?: string } = {}) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
-		retryable,
+		code: input.code,
+		retryable: input.retryable !== false,
 	});
 }
 
-const retryableError = () => requestError(true);
+const retryableError = () => requestError();
 const maximumMyAgentApplicationPages = 100;
 
 function unavailable(error: { retryable?: boolean } | undefined) {
@@ -79,7 +94,7 @@ function unavailable(error: { retryable?: boolean } | undefined) {
 export async function loadMyAgentApplications(
 	client?: Client,
 ): Promise<MyAgentApplicationsState> {
-	const applications: AgentApplicationProjectionV1[] = [];
+	const applications: AgentApplicationProjectionV2[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
 	let pages = 0;
@@ -87,15 +102,15 @@ export async function loadMyAgentApplications(
 	do {
 		if (pages >= maximumMyAgentApplicationPages) throw retryableError();
 		pages += 1;
-		const query: ListAgentApplicationsData["query"] =
+		const query: ListAgentApplicationsV2Data["query"] =
 			cursor === null ? undefined : { cursor };
 		const result: Awaited<
 			RequestResult<
-				ListAgentApplicationsResponses,
-				ListAgentApplicationsErrors,
+				ListAgentApplicationsV2Responses,
+				ListAgentApplicationsV2Errors,
 				false
 			>
-		> = await listAgentApplications<false>({
+		> = await listAgentApplicationsV2<false>({
 			client,
 			query,
 			responseStyle: "fields",
@@ -116,7 +131,7 @@ export async function loadMyAgentApplication(
 	applicationId: string,
 	client?: Client,
 ): Promise<MyAgentApplicationState> {
-	const result = await getAgentApplication({
+	const result = await getAgentApplicationV2({
 		client,
 		path: { applicationId },
 		responseStyle: "fields",
@@ -128,41 +143,46 @@ export async function loadMyAgentApplication(
 }
 
 export async function createMyAgentApplication(
-	body: AgentApplicationCreateRequestV1Writable,
+	body: AgentApplicationCreateRequestV2Writable,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentApplicationProjectionV1> {
+): Promise<AgentApplicationProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			CreateAgentApplicationResponses,
-			CreateAgentApplicationErrors,
+			CreateAgentApplicationV2Responses,
+			CreateAgentApplicationV2Errors,
 			false
 		>
-	> = await createAgentApplication<false>({
+	> = await createAgentApplicationV2<false>({
 		body,
 		client,
 		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
 
 	return result.data;
 }
 
 export async function updateMyAgentApplication(
 	applicationId: string,
-	body: AgentApplicationUpdateRequestV1Writable,
+	body: AgentApplicationUpdateRequestV2Writable,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentApplicationProjectionV1> {
+): Promise<AgentApplicationProjectionV2> {
 	const result: Awaited<
 		RequestResult<
-			UpdateAgentApplicationResponses,
-			UpdateAgentApplicationErrors,
+			UpdateAgentApplicationV2Responses,
+			UpdateAgentApplicationV2Errors,
 			false
 		>
-	> = await updateAgentApplication<false>({
+	> = await updateAgentApplicationV2<false>({
 		body,
 		client,
 		headers: { "Idempotency-Key": idempotencyKey },
@@ -170,8 +190,14 @@ export async function updateMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
-	if (result.data.applicationId !== applicationId) throw requestError(false);
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
+	if (result.data.applicationId !== applicationId)
+		throw requestError({ retryable: false });
 
 	return result.data;
 }
@@ -180,15 +206,15 @@ export async function withdrawMyAgentApplication(
 	applicationId: string,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentApplicationProjectionV1> {
-	const result = await withdrawAgentApplication({
+): Promise<AgentApplicationProjectionV2> {
+	const result = await withdrawAgentApplicationV2({
 		client,
 		headers: { "Idempotency-Key": idempotencyKey },
 		path: { applicationId },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data) throw requestError(result.error ?? {});
 
 	return result.data;
 }

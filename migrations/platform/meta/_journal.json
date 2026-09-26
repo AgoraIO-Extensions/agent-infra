@@ -99,6 +99,55 @@
       "when": 1789460914953,
       "tag": "0013_file_authority",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789460914954,
+      "tag": "0014_configuration_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789460914955,
+      "tag": "0015_trusted_task_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789460914956,
+      "tag": "0016_conversation_generation_tombstones",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789460914957,
+      "tag": "0017_wecom_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789460914958,
+      "tag": "0018_wecom_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789819160039,
+      "tag": "0019_trusted_task_authorization_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790158201320,
+      "tag": "0020_task_boundary_generation_binding",
+      "breakpoints": true
     }
   ]
 }

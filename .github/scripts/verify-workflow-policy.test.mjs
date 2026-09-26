@@ -975,9 +975,9 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.deepEqual(workflow.on.pull_request_target.types, [
     "opened",
     "reopened",
-    "synchronize",
     "ready_for_review",
     "review_requested",
+    "edited",
   ]);
   assert.deepEqual(workflow.jobs.analyze.permissions, {
     contents: "read",
@@ -1019,6 +1019,18 @@ test("uses pinned PR-Agent official inline publishing", async () => {
   assert.equal(reviewAction.env["github_action_config.auto_improve"], "false");
   assert.equal(suggestionsAction.env["github_action_config.auto_review"], "false");
   assert.equal(suggestionsAction.env["github_action_config.auto_improve"], "true");
+  assert.deepEqual(
+    JSON.parse(reviewAction.env["github_action_config.pr_actions"]),
+    ["opened", "reopened", "ready_for_review", "review_requested", "edited"],
+  );
+  assert.deepEqual(
+    JSON.parse(suggestionsAction.env["github_action_config.pr_actions"]),
+    ["opened", "reopened", "ready_for_review", "review_requested", "edited"],
+  );
+  assert.equal(
+    reviewAction.env["pr_reviewer.extra_instructions"],
+    "Return exactly one YAML object with the top-level key review. Nest key_issues_to_review under review, including when it is an empty list. Never return key_issues_to_review at the top level. Report only verifiable failures of the primary Issue's stable AC-N acceptance criteria or regressions introduced by this pull request. Do not report pre-existing problems or optional improvements as blocking findings.",
+  );
   assert.equal(
     reviewAction.env["config.max_model_tokens"],
     "${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}",

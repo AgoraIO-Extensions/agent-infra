@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ import {
 	ModelConfigurationErrorV1,
 } from "@agent-infra/model-catalog";
 import {
-	type AgentConfigurationRecordV1,
+	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
@@ -47,6 +47,7 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
+import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
 	workloadRegistryFixture,
@@ -59,16 +60,17 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 import {
 	createWorkloadRuntimeV1,
+	isWorkloadExecutionCapacityCurrentV1,
+	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
+	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
 function configurationFixture(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return {
-		schemaVersion: 1,
-		actions: [],
-		actionSetRevision: "actions-a",
+		schemaVersion: 2,
 		channels: [],
 		channelRevision: "channels-a",
 		agentId: "agent-a",
@@ -290,7 +292,7 @@ function fixture(
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
-	const configuration = inputOverrides.configuration ?? configurationFixture();
+	let configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
 		schemaVersion: 1,
@@ -353,6 +355,9 @@ function fixture(
 		get management() {
 			return structuredClone(management);
 		},
+		setConfiguration(next: AgentConfigurationRecordV2) {
+			configuration = structuredClone(next);
+		},
 		setManagement(next: WorkloadReconciliationInputV1["management"]) {
 			management = structuredClone(next);
 		},
@@ -401,8 +406,8 @@ function rejectedRegistry(): WorkloadRuntimeOptionsV1["registry"] {
 }
 
 function secretConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		secrets: [
 			{
@@ -420,8 +425,8 @@ const modelCredentialEnvironmentKey =
 	"MODEL_CREDENTIAL_8797B0599D5943E951FFB4D92C441B669B051F3EC38058B37737816D5C061E52";
 
 function standardModelConfiguration(
-	overrides: Partial<AgentConfigurationRecordV1> = {},
-): AgentConfigurationRecordV1 {
+	overrides: Partial<AgentConfigurationRecordV2> = {},
+): AgentConfigurationRecordV2 {
 	return configurationFixture({
 		source: {
 			kind: "standard",
@@ -1080,6 +1085,66 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.state?.phase).toBe("cleaning");
 		expect(f.state?.candidate.deployment).toBeNull();
 		expect(f.resources.size).toBe(0);
+	});
+
+	it.each([
+		"LD_PRELOAD",
+		"LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES",
+		"DYLD_FRAMEWORK_PATH",
+		"NODE_OPTIONS",
+		"NODE_DEBUG",
+		"NODE_DEBUG_NATIVE",
+		"NODE_V8_COVERAGE",
+		"NODE_PATH",
+		"PATH",
+	])(
+		"rejects loader key %s in environment or a Secret before registry admission",
+		async (name) => {
+			for (const secret of [false, true]) {
+				const record = pendingSecretRecord({ name });
+				const cleanup = secretCleanupStore(record);
+				const admit = vi.fn();
+				const f = fixture(
+					{ registry: { admit } },
+					{
+						configuration: configurationFixture({
+							environment: secret ? [] : [{ name, value: "synthetic-loader" }],
+							secrets: secret
+								? [
+										{
+											name,
+											secretId: record.secretId,
+											version: record.secretVersion,
+											isSet: true,
+										},
+									]
+								: [],
+						}),
+						...(secret ? { secrets: cleanupSecrets(cleanup) } : {}),
+					},
+				);
+				await f.tick(2);
+				expect(f.state?.phase).toBe("cleaning");
+				expect(f.state?.candidate.deployment).toBeNull();
+				expect(admit).not.toHaveBeenCalled();
+				expect(f.resources.size).toBe(0);
+			}
+		},
+	);
+
+	it("allows ordinary NODE_ENV configuration", async () => {
+		const f = fixture(
+			{},
+			{
+				configuration: configurationFixture({
+					environment: [{ name: "NODE_ENV", value: "production" }],
+				}),
+			},
+		);
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.resources.size).toBeGreaterThan(0);
 	});
 
 	it("rejects preflight when environment shadows a generated model credential key", async () => {
@@ -2515,4 +2580,252 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(probe).not.toHaveBeenCalled();
 		expect(f.state?.phase).toBe("cleaning");
 	});
+});
+
+it("persists exact capacity and binds readiness to fence/image while preserving original controls after capacity withdrawal", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const policy = {
+		...workloadTestPolicy,
+		runtimeAuth: {
+			workerId: signing.workerId,
+			grantIssuer: signing.issuer,
+			grantKeyId: signing.keyId,
+			grantPublicKey: keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			serviceTokenSecret: { name: "transport", key: "token" },
+		},
+	};
+	const capacity = {
+		schemaVersion: 1 as const,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+		resourceProfileRef: policy.resourceProfileRef,
+		resourceConfigurationHash: workloadResourceConfigurationHashV1(policy),
+		conformanceEvidenceHash: "c".repeat(64),
+		maximumConcurrentExecutions: 2,
+	};
+	const probeRuntime = vi.fn(async () => ({
+		core: "passed" as "passed" | "failed",
+		capabilities: {},
+	}));
+	const f = fixture({
+		policy,
+		executionCapacityProfiles: [capacity],
+		probeRuntime,
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (ready?.phase !== "ready") throw Error("Expected ready fixture");
+	expect(ready.verified?.executionCapacity).toEqual(capacity);
+	expect(probeRuntime).toHaveBeenCalledWith(
+		expect.objectContaining({
+			fence: ready.fence,
+			imageDigest: capacity.imageDigest,
+		}),
+	);
+	expect(isWorkloadExecutionCapacityCurrentV1(f.options, ready)).toBe(true);
+	expect(() =>
+		resolveWorkloadExecutionCapacityV1(
+			{ policy, executionCapacityProfiles: [capacity, capacity] },
+			capacity.imageDigest,
+		),
+	).toThrow("ambiguous");
+	expect(
+		resolveWorkloadExecutionCapacityV1(
+			{
+				policy: {
+					...policy,
+					resources: {
+						...policy.resources,
+						limits: { cpu: "1", memory: "256Mi" },
+					},
+				},
+				executionCapacityProfiles: [capacity],
+			},
+			capacity.imageDigest,
+		),
+	).toBeUndefined();
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	const request = {
+		agentId: ready.agentId,
+		workload: ready,
+		signal: new AbortController().signal,
+		purpose: "business" as const,
+		command: "turn.submit" as const,
+	};
+	expect((await resolver(request)).baseUrl).not.toContain("-probe");
+	await expect(
+		resolver({ ...request, agentId: "other" }),
+	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	await expect(
+		resolver({
+			...request,
+			workload: { ...ready, identity: { uid: "other", generation: 1 } },
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	Object.assign(f.options, { executionCapacityProfiles: [] });
+	await expect(resolver(request)).rejects.toMatchObject({
+		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+	});
+	expect(
+		(await resolver({ ...request, purpose: "control", command: "turn.stop" }))
+			.baseUrl,
+	).toContain("-probe");
+	f.setConfiguration(configurationFixture({ revision: 2 }));
+	for (const phase of ["preflight", "closing", "applying"]) {
+		await f.tick(1);
+		const upgrading = f.state;
+		if (!upgrading) throw Error("Expected upgrading fixture");
+		expect(upgrading.phase).toBe(phase);
+		const control = {
+			...request,
+			workload: upgrading,
+			purpose: "control" as const,
+			command: "turn.stop" as const,
+		};
+		const writes = f.writes.length;
+		expect(
+			(
+				await resolver(control).catch((error) => {
+					throw new Error(`Control rejected in ${phase}`, { cause: error });
+				})
+			).baseUrl,
+		).toContain("-probe");
+		expect(f.writes).toHaveLength(writes);
+		await expect(
+			resolver({ ...request, workload: upgrading }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+		await expect(
+			resolver({
+				...control,
+				workload: {
+					...upgrading,
+					identity: { uid: "replacement", generation: 1 },
+				},
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+	}
+	const upgrading = f.state;
+	if (!upgrading?.verified) throw Error("Expected verified fixture");
+	const control = {
+		...request,
+		workload: upgrading,
+		purpose: "control" as const,
+		command: "session.status" as const,
+	};
+	for (const invalid of [
+		{ ...upgrading, verified: null },
+		{
+			...upgrading,
+			identity: { uid: upgrading.identity?.uid ?? "missing", generation: 99 },
+		},
+		{ ...upgrading, verifiedRevision: 99 },
+		{
+			...upgrading,
+			verified: {
+				...upgrading.verified,
+				configuration: {
+					...upgrading.verified.configuration,
+					agentId: "foreign",
+				},
+			},
+		},
+	]) {
+		await expect(
+			resolver({ ...control, workload: invalid }),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+	}
+	const routeKey = `Service/${workloadResourceNameV1(ready.agentId)}`;
+	const service = f.resources.get(routeKey) as V1Service;
+	if (!service) throw Error("Missing business Service");
+	const unsafeService: V1Service = {
+		...service,
+		spec: { ...service.spec, selector: { foreign: "pod" } },
+	};
+	f.resources.set(routeKey, unsafeService);
+	await expect(resolver(control)).rejects.toMatchObject({
+		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+	});
+	f.resources.set(routeKey, service);
+	probeRuntime.mockResolvedValue({ core: "failed", capabilities: {} });
+	await expect(
+		resolver({
+			...request,
+			workload: f.state,
+			purpose: "control",
+			command: "session.status",
+		}),
+	).rejects.toMatchObject({
+		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+	});
+});
+
+it("preserves cancellation and only reopens a closing verified route", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (!ready?.identity || !ready.verified)
+		throw Error("Expected ready fixture");
+	const runtime = createWorkloadRuntimeV1(f.options);
+	await expect(runtime.observeVerifiedControl(ready)).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "preflight" }),
+	).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "closing" }),
+	).resolves.toBe("healthy");
+	await expect(
+		runtime.observeVerifiedControl({ ...ready, phase: "applying" }),
+	).resolves.toBe("drifted");
+
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	const controller = new AbortController();
+	controller.abort();
+	await expect(
+		resolver({
+			agentId: ready.agentId,
+			workload: ready,
+			signal: controller.signal,
+			purpose: "business",
+			command: "turn.submit",
+		}),
+	).rejects.toMatchObject({ name: "AbortError" });
 });

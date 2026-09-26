@@ -1,1973 +1,98 @@
-import { Buffer } from "node:buffer";
-import { createHash, randomUUID } from "node:crypto";
-
+import { randomUUID } from "node:crypto";
 import {
 	bindInputFileV1,
 	type ConversationCommandDecisionV1,
-	type ConversationExecutionAuthorityV1,
-	type ConversationExecutionConversationStateV1,
 	ConversationExecutionError,
-	type ConversationExecutionStateV1,
 	type ConversationExecutionTransactionPortV1,
-	type ConversationMessageWritePlanV1,
-	type ConversationModelConfigurationV1,
+	type ConversationMetadataRecoveryStateV1,
 	type ConversationModelSelectionDecisionV1,
-	type ConversationModelSelectionFallbackWriteV1,
-	type ConversationModelSelectionWritePlanV1,
-	type ConversationRegenerationWritePlanV1,
 	type ConversationStateDecisionV1,
 	type ConversationStopDecisionV1,
-	type ConversationStopWritePlanV1,
 	type CreateConversationDecisionV1,
-	type CreateConversationWritePlanV1,
 	type FileRecordV1,
+	parseConversationOperationEventV2,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import {
+	type ConversationQueryProject,
+	type ConversationQueryRequest,
+	type CreateDecide,
+	type CreateRequest,
+	type JsonValue,
+	type MessageDecide,
+	type MessageRequest,
+	type ModelSelectionDecide,
+	type ModelSelectionRequest,
+	type RegenerationDecide,
+	type RegenerationRequest,
+	type StopDecide,
+	type StopRequest,
+	safeInteger,
+	type Transaction,
+	text,
+	unavailable,
+} from "./conversation-execution-common.js";
+import {
+	validateCreatePlan,
+	validateMessagePlan,
+	validateModelSelectionPlan,
+	validateRegenerationPlan,
+	validateStopNoop,
+	validateStopPlan,
+} from "./conversation-execution-plans.js";
+import {
+	matchesBinding,
+	parseAuthority,
+	parseCreatedResult,
+	parseMessageResult,
+	parseModelSelectionResult,
+	parseRegenerationResult,
+	parseStopResult,
+} from "./conversation-execution-records.js";
+import {
+	completeIdempotency,
+	createIdempotencyScopeId,
+	insertModelSelectionFallback,
+	isMessagePlan,
+	isModelSelectionPlan,
+	isRegenerationPlan,
+	isStopPlan,
+	lockConversation,
+	lockConversationForRead,
+	outboxId,
+	readIdempotency,
+	readMessageState,
+	readModelSelectionState,
+	readRegenerationState,
+	readStopState,
+	requireCreateReplay,
+	requireMessageReplay,
+	requireRegenerationReplay,
+	requireStopReplay,
+	reserveIdempotency,
+} from "./conversation-execution-sql.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
-
-const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/;
-const requestDigestPattern = /^[a-f0-9]{64}$/;
-const activeExecutionStatuses = new Set(["submitted", "processing", "unknown"]);
-
-type Transaction = postgres.TransactionSql;
-type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
-type CreateRequest = Parameters<
-	ConversationExecutionTransactionPortV1["createConversation"]
->[0];
-type CreateDecide = Parameters<
-	ConversationExecutionTransactionPortV1["createConversation"]
->[1];
-type ConversationQueryRequest = Parameters<
-	ConversationExecutionTransactionPortV1["readConversation"]
->[0];
-type ConversationQueryProject = Parameters<
-	ConversationExecutionTransactionPortV1["readConversation"]
->[1];
-type MessageRequest = Parameters<
-	ConversationExecutionTransactionPortV1["executeMessage"]
->[0];
-type MessageDecide = Parameters<
-	ConversationExecutionTransactionPortV1["executeMessage"]
->[1];
-type ModelSelectionRequest = Parameters<
-	ConversationExecutionTransactionPortV1["executeModelSelection"]
->[0];
-type ModelSelectionDecide = Parameters<
-	ConversationExecutionTransactionPortV1["executeModelSelection"]
->[1];
-type RegenerationRequest = Parameters<
-	ConversationExecutionTransactionPortV1["executeRegeneration"]
->[0];
-type RegenerationDecide = Parameters<
-	ConversationExecutionTransactionPortV1["executeRegeneration"]
->[1];
-type StopRequest = Parameters<
-	ConversationExecutionTransactionPortV1["executeStop"]
->[0];
-type StopDecide = Parameters<
-	ConversationExecutionTransactionPortV1["executeStop"]
->[1];
-
-interface IdempotencyRow {
-	readonly request_digest: string;
-	readonly status: "reserved" | "completed";
-	readonly result: unknown;
-}
-
-interface ConversationRow {
-	readonly id: string;
-	readonly agent_id: string;
-	readonly actor_id: string;
-	readonly channel_id: string;
-	readonly status: string;
-	readonly session_generation: string | number;
-	readonly host_session_ref: string | null;
-	readonly authorization_revision: string;
-	readonly last_conversation_cursor: string | number;
-	readonly selected_model_option_id: string | null;
-	readonly selected_reasoning_level: string | null;
-	readonly created_at: Date;
-	readonly updated_at: Date;
-}
-
-interface ExecutionRow {
-	readonly execution_id: string;
-	readonly conversation_id: string;
-	readonly actor_id: string;
-	readonly turn_id: string;
-	readonly session_generation: string | number;
-	readonly model_configuration_revision: string | number | null;
-	readonly model_option_id: string | null;
-	readonly reasoning_level: string | null;
-	readonly last_event_sequence: string | number;
-	readonly status: string;
-}
-
-interface AgentConfigurationRow {
-	readonly current_configuration_revision: string | number;
-	readonly authorization_revision: string | null;
-	readonly configuration: unknown;
-}
-
-interface StopRow {
-	readonly execution_id: string;
-	readonly stop_request_id: string;
-	readonly status: string;
-}
+import { insertTaskAuthorization } from "./task-authorization.js";
 
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
 }
 
-function unavailable(): never {
-	throw new ConversationExecutionError("unavailable");
-}
-
-function exactRecord(
-	value: unknown,
-	keys: readonly string[],
-): Record<string, unknown> {
-	try {
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			Array.isArray(value) ||
-			Reflect.ownKeys(value).length !== keys.length ||
-			keys.some((key) => !Object.hasOwn(value, key))
-		) {
-			return unavailable();
-		}
-		const result: Record<string, unknown> = {};
-		for (const key of keys) {
-			const descriptor = Object.getOwnPropertyDescriptor(value, key);
-			if (
-				descriptor?.enumerable !== true ||
-				!Object.hasOwn(descriptor, "value") ||
-				Object.hasOwn(descriptor, "get") ||
-				Object.hasOwn(descriptor, "set")
-			) {
-				return unavailable();
-			}
-			result[key] = descriptor.value;
-		}
-		return result;
-	} catch {
-		return unavailable();
-	}
-}
-
-function text(value: unknown, maximum = 1024): string {
-	if (
-		typeof value !== "string" ||
-		value.length === 0 ||
-		value.includes("\0") ||
-		!String.prototype.isWellFormed.call(value) ||
-		Buffer.byteLength(value, "utf8") > maximum
-	) {
-		return unavailable();
-	}
-	return value;
-}
-
-function safeInteger(value: unknown, minimum: number): number {
-	const number = typeof value === "string" ? Number(value) : value;
-	if (
-		typeof number !== "number" ||
-		!Number.isSafeInteger(number) ||
-		number < minimum
-	) {
-		return unavailable();
-	}
-	return number;
-}
-
-function date(value: unknown): Date {
-	try {
-		if (!Number.isFinite(Date.prototype.getTime.call(value))) unavailable();
-		return new Date(Date.prototype.getTime.call(value));
-	} catch {
-		return unavailable();
-	}
-}
-
-function sameDate(left: Date, right: Date): boolean {
-	return left.getTime() === right.getTime();
-}
-
-function timestamp(value: unknown): string {
-	if (typeof value !== "string") unavailable();
-	const milliseconds = Date.parse(value);
-	if (!Number.isFinite(milliseconds)) unavailable();
-	return new Date(milliseconds).toISOString();
-}
-
-function parseAuthority(value: unknown): ConversationExecutionAuthorityV1 {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"actorId",
-		"agentId",
-		"channelId",
-		"authorizationRevision",
-		"supportsSupplementaryInstruction",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		typeof input.supportsSupplementaryInstruction !== "boolean"
-	) {
-		return unavailable();
-	}
-	return {
-		schemaVersion: 1,
-		actorId: text(input.actorId),
-		agentId: text(input.agentId),
-		channelId: text(input.channelId),
-		authorizationRevision: text(input.authorizationRevision),
-		supportsSupplementaryInstruction: input.supportsSupplementaryInstruction,
-	};
-}
-
-function parseConversation(
-	value: unknown,
-): ConversationExecutionConversationStateV1 {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversationId",
-		"agentId",
-		"actorId",
-		"channelId",
-		"status",
-		"sessionGeneration",
-		"hostSessionRef",
-		"authorizationRevision",
-		"lastConversationCursor",
-		"selectedModelOptionId",
-		"selectedReasoningLevel",
-		"createdAt",
-		"updatedAt",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		(input.status !== "ready" &&
-			input.status !== "active" &&
-			input.status !== "unavailable") ||
-		(input.hostSessionRef !== null &&
-			typeof input.hostSessionRef !== "string") ||
-		(input.selectedModelOptionId !== null &&
-			typeof input.selectedModelOptionId !== "string") ||
-		(input.selectedReasoningLevel !== null &&
-			typeof input.selectedReasoningLevel !== "string") ||
-		(input.selectedModelOptionId === null) !==
-			(input.selectedReasoningLevel === null)
-	) {
-		return unavailable();
-	}
-	const createdAt = date(input.createdAt);
-	const updatedAt = date(input.updatedAt);
-	if (updatedAt.getTime() < createdAt.getTime()) unavailable();
-	return {
-		schemaVersion: 1,
-		conversationId: text(input.conversationId),
-		agentId: text(input.agentId),
-		actorId: text(input.actorId),
-		channelId: text(input.channelId),
-		status: input.status,
-		sessionGeneration: safeInteger(input.sessionGeneration, 1),
-		hostSessionRef:
-			input.hostSessionRef === null ? null : text(input.hostSessionRef),
-		authorizationRevision: text(input.authorizationRevision),
-		lastConversationCursor: safeInteger(input.lastConversationCursor, 0),
-		selectedModelOptionId:
-			input.selectedModelOptionId === null
-				? null
-				: text(input.selectedModelOptionId),
-		selectedReasoningLevel:
-			input.selectedReasoningLevel === null
-				? null
-				: text(input.selectedReasoningLevel),
-		createdAt,
-		updatedAt,
-	};
-}
-
-function conversationFromRow(
-	row: ConversationRow,
-): ConversationExecutionConversationStateV1 {
-	return parseConversation({
-		schemaVersion: 1,
-		conversationId: row.id,
-		agentId: row.agent_id,
-		actorId: row.actor_id,
-		channelId: row.channel_id,
-		status: row.status,
-		sessionGeneration: row.session_generation,
-		hostSessionRef: row.host_session_ref,
-		authorizationRevision: row.authorization_revision,
-		lastConversationCursor: row.last_conversation_cursor,
-		selectedModelOptionId: row.selected_model_option_id,
-		selectedReasoningLevel: row.selected_reasoning_level,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-	});
-}
-
-function matchesBinding(
-	conversation: ConversationExecutionConversationStateV1,
-	authority: ConversationExecutionAuthorityV1,
-): boolean {
-	return (
-		conversation.agentId === authority.agentId &&
-		conversation.actorId === authority.actorId &&
-		conversation.channelId === authority.channelId
-	);
-}
-
-async function lockAgentConfiguration(
-	transaction: Transaction,
-	agentId: string,
-): Promise<
-	| {
-			readonly authorizationRevision: string | null;
-			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
-	  }
-	| undefined
-> {
-	const rows = await transaction<AgentConfigurationRow[]>`
-		select agent.current_configuration_revision, agent.authorization_revision,
-			configuration.configuration
-		from platform.agents as agent
-		left join platform.agent_configuration_revisions as configuration
-			on configuration.agent_id = agent.id
-			and configuration.revision = agent.current_configuration_revision
-		where agent.id = ${agentId}
-		limit 1
-		for share of agent
-	`;
-	const row = rows[0];
-	if (!row) return undefined;
-	if (row.configuration === null) {
-		return {
-			authorizationRevision: row.authorization_revision,
-			modelConfiguration: undefined,
-		};
-	}
-	try {
-		const revision = safeInteger(row.current_configuration_revision, 1);
-		const configuration = decodeAgentConfigurationRecord(row.configuration);
-		if (
-			configuration.agentId !== agentId ||
-			configuration.revision !== revision
-		) {
-			return unavailable();
-		}
-		const model = configuration.modelConfiguration;
-		return {
-			authorizationRevision: row.authorization_revision,
-			modelConfiguration: model
-				? {
-						configurationRevision: revision,
-						options: model.options.map(({ optionId, reasoningLevels }) => ({
-							optionId,
-							reasoningLevels,
-						})),
-						defaultOptionId: model.defaultOptionId,
-						defaultReasoningLevel: model.defaultReasoningLevel,
-					}
-				: undefined,
-		};
-	} catch {
-		return unavailable();
-	}
-}
-
-function parseCreatedResult(value: unknown) {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversationId",
-		"agentId",
-		"status",
-	]);
-	if (input.schemaVersion !== 1 || input.status !== "ready") unavailable();
-	return {
-		schemaVersion: 1 as const,
-		conversationId: text(input.conversationId),
-		agentId: text(input.agentId),
-		status: "ready" as const,
-	};
-}
-
-function parseMessageResult(value: unknown) {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"status",
-		"messageId",
-		"executionId",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		input.status !== "submitted" ||
-		input.messageId === null
-	) {
-		return unavailable();
-	}
-	return {
-		schemaVersion: 1 as const,
-		status: "submitted" as const,
-		messageId: text(input.messageId),
-		executionId: text(input.executionId),
-	};
-}
-
-function parseRegenerationResult(value: unknown) {
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"status",
-		"messageId",
-		"executionId",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		input.status !== "submitted" ||
-		input.messageId !== null
-	) {
-		return unavailable();
-	}
-	return {
-		schemaVersion: 1 as const,
-		status: "submitted" as const,
-		messageId: null,
-		executionId: text(input.executionId),
-	};
-}
-
-function parseStopResult(value: unknown) {
-	const input = exactRecord(value, ["schemaVersion", "status", "executionId"]);
-	if (
-		input.schemaVersion !== 1 ||
-		(input.status !== "submitted" && input.status !== "already_finished")
-	) {
-		return unavailable();
-	}
-	return {
-		schemaVersion: 1 as const,
-		status: input.status as "submitted" | "already_finished",
-		executionId: text(input.executionId),
-	};
-}
-
-function parseModelSelectionResult(value: unknown) {
-	const input = exactRecord(value, ["schemaVersion", "conversationId"]);
-	if (input.schemaVersion !== 1) unavailable();
-	return {
-		schemaVersion: 1 as const,
-		conversationId: text(input.conversationId),
-	};
-}
-
-function modelSelectionMatchesConfigurationRevision(
-	selection: {
-		readonly modelConfigurationRevision: number | null;
-		readonly modelOptionId: string | null;
-		readonly reasoningLevel: string | null;
-	},
-	configuration: ConversationModelConfigurationV1 | undefined,
-): boolean {
-	return configuration
-		? selection.modelConfigurationRevision ===
-				configuration.configurationRevision &&
-				selection.modelOptionId !== null &&
-				selection.reasoningLevel !== null
-		: selection.modelConfigurationRevision === null &&
-				selection.modelOptionId === null &&
-				selection.reasoningLevel === null;
-}
-
-function conversationSelectionMatchesConfigurationShape(
-	conversation: ConversationExecutionConversationStateV1,
-	configuration: ConversationModelConfigurationV1 | undefined,
-): boolean {
-	return configuration
-		? conversation.selectedModelOptionId !== null &&
-				conversation.selectedReasoningLevel !== null
-		: conversation.selectedModelOptionId === null &&
-				conversation.selectedReasoningLevel === null;
-}
-
-function sameModelSelection(
-	left: {
-		readonly modelConfigurationRevision: number | null;
-		readonly modelOptionId: string | null;
-		readonly reasoningLevel: string | null;
-	},
-	right: {
-		readonly modelConfigurationRevision: number | null;
-		readonly modelOptionId: string | null;
-		readonly reasoningLevel: string | null;
-	},
-): boolean {
-	return (
-		left.modelConfigurationRevision === right.modelConfigurationRevision &&
-		left.modelOptionId === right.modelOptionId &&
-		left.reasoningLevel === right.reasoningLevel
-	);
-}
-
-function parseIdempotency(
-	value: unknown,
-	includeChannel: boolean,
-): {
-	readonly scopeType: "agent" | "conversation";
-	readonly scopeId: string;
-	readonly actorId: string;
-	readonly channelId?: string;
-	readonly commandType:
-		| "conversation.create"
-		| "message"
-		| "model.select"
-		| "regenerate"
-		| "stop";
-	readonly key: string;
-	readonly requestDigest: string;
-} {
-	const input = exactRecord(
-		value,
-		includeChannel
-			? [
-					"scopeType",
-					"scopeId",
-					"actorId",
-					"channelId",
-					"commandType",
-					"key",
-					"requestDigest",
-				]
-			: [
-					"scopeType",
-					"scopeId",
-					"actorId",
-					"commandType",
-					"key",
-					"requestDigest",
-				],
-	);
-	if (
-		(input.scopeType !== "agent" && input.scopeType !== "conversation") ||
-		(input.commandType !== "conversation.create" &&
-			input.commandType !== "message" &&
-			input.commandType !== "model.select" &&
-			input.commandType !== "regenerate" &&
-			input.commandType !== "stop") ||
-		typeof input.key !== "string" ||
-		!idempotencyKeyPattern.test(input.key) ||
-		typeof input.requestDigest !== "string" ||
-		!requestDigestPattern.test(input.requestDigest)
-	) {
-		return unavailable();
-	}
-	return {
-		scopeType: input.scopeType,
-		scopeId: text(input.scopeId),
-		actorId: text(input.actorId),
-		...(includeChannel ? { channelId: text(input.channelId) } : {}),
-		commandType: input.commandType,
-		key: input.key,
-		requestDigest: input.requestDigest,
-	};
-}
-
-function parseExecution(value: unknown) {
-	const input = exactRecord(value, [
-		"executionId",
-		"conversationId",
-		"agentId",
-		"actorId",
-		"channelId",
-		"turnId",
-		"status",
-		"sessionGeneration",
-		"deliveryFence",
-		"authorizationRevision",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"createdAt",
-	]);
-	if (input.status !== "submitted") unavailable();
-	return {
-		executionId: text(input.executionId),
-		conversationId: text(input.conversationId),
-		agentId: text(input.agentId),
-		actorId: text(input.actorId),
-		channelId: text(input.channelId),
-		turnId: text(input.turnId),
-		status: "submitted" as const,
-		sessionGeneration: safeInteger(input.sessionGeneration, 1),
-		deliveryFence: safeInteger(input.deliveryFence, 0),
-		authorizationRevision: text(input.authorizationRevision),
-		modelConfigurationRevision:
-			input.modelConfigurationRevision === null
-				? null
-				: safeInteger(input.modelConfigurationRevision, 1),
-		modelOptionId:
-			input.modelOptionId === null ? null : text(input.modelOptionId),
-		reasoningLevel:
-			input.reasoningLevel === null ? null : text(input.reasoningLevel),
-		createdAt: date(input.createdAt),
-	};
-}
-
-function parseMessage(value: unknown) {
-	const input = exactRecord(value, [
-		"messageId",
-		"conversationId",
-		"actorId",
-		"text",
-		"executionId",
-		"status",
-		"createdAt",
-	]);
-	if (input.status !== "submitted") unavailable();
-	return {
-		messageId: text(input.messageId),
-		conversationId: text(input.conversationId),
-		actorId: text(input.actorId),
-		text: text(input.text, 65_536),
-		executionId: text(input.executionId),
-		status: "submitted" as const,
-		createdAt: date(input.createdAt),
-	};
-}
-
-function parseMessageOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (
-		input.operation !== "conversation.turn.submit.v1" &&
-		input.operation !== "conversation.turn.supplement.v1"
-	) {
-		return unavailable();
-	}
-	return {
-		operation: input.operation,
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		messageId: text(input.messageId),
-		turnId: text(input.turnId),
-		sessionGeneration: safeInteger(input.sessionGeneration, 1),
-		modelConfigurationRevision:
-			input.modelConfigurationRevision === null
-				? null
-				: safeInteger(input.modelConfigurationRevision, 1),
-		modelOptionId:
-			input.modelOptionId === null ? null : text(input.modelOptionId),
-		reasoningLevel:
-			input.reasoningLevel === null ? null : text(input.reasoningLevel),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseMessageAudit(value: unknown) {
-	const input = exactRecord(value, [
-		"action",
-		"actorId",
-		"agentId",
-		"conversationId",
-		"executionId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (
-		input.action !== "conversation.message.accepted" &&
-		input.action !== "conversation.message.supplemented"
-	) {
-		return unavailable();
-	}
-	return {
-		action: input.action,
-		actorId: text(input.actorId),
-		agentId: text(input.agentId),
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseRegenerationOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (input.operation !== "conversation.turn.regenerate.v1") unavailable();
-	return {
-		operation: "conversation.turn.regenerate.v1" as const,
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		messageId: text(input.messageId),
-		turnId: text(input.turnId),
-		sessionGeneration: safeInteger(input.sessionGeneration, 1),
-		modelConfigurationRevision:
-			input.modelConfigurationRevision === null
-				? null
-				: safeInteger(input.modelConfigurationRevision, 1),
-		modelOptionId:
-			input.modelOptionId === null ? null : text(input.modelOptionId),
-		reasoningLevel:
-			input.reasoningLevel === null ? null : text(input.reasoningLevel),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseRegenerationAudit(value: unknown) {
-	const input = exactRecord(value, [
-		"action",
-		"actorId",
-		"agentId",
-		"conversationId",
-		"executionId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (input.action !== "conversation.regeneration.accepted") unavailable();
-	return {
-		action: "conversation.regeneration.accepted" as const,
-		actorId: text(input.actorId),
-		agentId: text(input.agentId),
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseStopOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"stopRequestId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (input.operation !== "conversation.turn.stop.v1") unavailable();
-	return {
-		operation: "conversation.turn.stop.v1" as const,
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		sessionGeneration: safeInteger(input.sessionGeneration, 1),
-		stopRequestId: text(input.stopRequestId),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseStopAudit(value: unknown) {
-	const input = exactRecord(value, [
-		"action",
-		"actorId",
-		"agentId",
-		"conversationId",
-		"executionId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (input.action !== "conversation.stop.accepted") unavailable();
-	return {
-		action: "conversation.stop.accepted" as const,
-		actorId: text(input.actorId),
-		agentId: text(input.agentId),
-		conversationId: text(input.conversationId),
-		executionId: text(input.executionId),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-	};
-}
-
-function parseModelSelectionAudit(value: unknown) {
-	const input = exactRecord(value, [
-		"action",
-		"actorId",
-		"agentId",
-		"conversationId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-	]);
-	if (input.action !== "conversation.model_selection.updated") unavailable();
-	return {
-		action: "conversation.model_selection.updated" as const,
-		actorId: text(input.actorId),
-		agentId: text(input.agentId),
-		conversationId: text(input.conversationId),
-		traceId: text(input.traceId),
-		requestId: text(input.requestId),
-		occurredAt: date(input.occurredAt),
-		modelConfigurationRevision: safeInteger(
-			input.modelConfigurationRevision,
-			1,
-		),
-		modelOptionId: text(input.modelOptionId),
-		reasoningLevel: text(input.reasoningLevel),
-	};
-}
-
-function parseModelSelectionFallback(
-	value: unknown,
-): ConversationModelSelectionFallbackWriteV1 | null {
-	if (value === null) return null;
-	const input = exactRecord(value, [
-		"previousModelOptionId",
-		"previousReasoningLevel",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"timelineEvent",
-		"auditEvent",
-	]);
-	const timeline = exactRecord(input.timelineEvent, [
-		"schemaVersion",
-		"eventId",
-		"conversationId",
-		"executionId",
-		"sequence",
-		"conversationCursor",
-		"occurredAt",
-		"event",
-	]);
-	const payload = exactRecord(timeline.event, [
-		"type",
-		"modelOptionId",
-		"reasoningLevel",
-		"reason",
-	]);
-	const audit = exactRecord(input.auditEvent, [
-		"action",
-		"executionId",
-		"actorId",
-		"agentId",
-		"conversationId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
-	if (
-		timeline.schemaVersion !== 1 ||
-		payload.type !== "model.selection.fell_back" ||
-		payload.reason !== "selection_unavailable" ||
-		audit.action !== "conversation.model_selection.fell_back"
-	) {
-		unavailable();
-	}
-	return {
-		previousModelOptionId: text(input.previousModelOptionId),
-		previousReasoningLevel: text(input.previousReasoningLevel),
-		modelConfigurationRevision: safeInteger(
-			input.modelConfigurationRevision,
-			1,
-		),
-		modelOptionId: text(input.modelOptionId),
-		reasoningLevel: text(input.reasoningLevel),
-		timelineEvent: {
-			schemaVersion: 1,
-			eventId: text(timeline.eventId),
-			conversationId: text(timeline.conversationId),
-			executionId: text(timeline.executionId),
-			sequence: safeInteger(timeline.sequence, 1),
-			conversationCursor: safeInteger(timeline.conversationCursor, 1),
-			occurredAt: timestamp(timeline.occurredAt),
-			event: {
-				type: "model.selection.fell_back",
-				modelOptionId: text(payload.modelOptionId),
-				reasoningLevel: text(payload.reasoningLevel),
-				reason: "selection_unavailable",
-			},
-		},
-		auditEvent: {
-			action: "conversation.model_selection.fell_back",
-			executionId: text(audit.executionId),
-			actorId: text(audit.actorId),
-			agentId: text(audit.agentId),
-			conversationId: text(audit.conversationId),
-			traceId: text(audit.traceId),
-			requestId: text(audit.requestId),
-			occurredAt: date(audit.occurredAt),
-		},
-	};
-}
-
-function validateModelSelectionFallback(
-	fallback: ConversationModelSelectionFallbackWriteV1 | null,
-	input: {
-		readonly state: ConversationExecutionStateV1;
-		readonly conversation: ConversationExecutionConversationStateV1;
-		readonly authority: ConversationExecutionAuthorityV1;
-		readonly requestId: string;
-		readonly traceId: string;
-		readonly occurredAt: Date;
-		readonly executionId: string;
-		readonly lastEventSequence: number;
-	},
-): void {
-	const current = input.state.conversation;
-	if (
-		!current ||
-		input.conversation.lastConversationCursor !==
-			current.lastConversationCursor + (fallback ? 1 : 0)
-	) {
-		unavailable();
-	}
-	if (!fallback) return;
-	const configuration = input.state.modelConfiguration;
-	if (
-		!configuration ||
-		fallback.previousModelOptionId !== current.selectedModelOptionId ||
-		fallback.previousReasoningLevel !== current.selectedReasoningLevel ||
-		fallback.modelConfigurationRevision !==
-			configuration.configurationRevision ||
-		fallback.modelOptionId !== input.conversation.selectedModelOptionId ||
-		fallback.reasoningLevel !== input.conversation.selectedReasoningLevel ||
-		fallback.timelineEvent.conversationId !== current.conversationId ||
-		fallback.timelineEvent.executionId !== input.executionId ||
-		fallback.timelineEvent.sequence !== input.lastEventSequence + 1 ||
-		fallback.timelineEvent.conversationCursor !==
-			input.conversation.lastConversationCursor ||
-		fallback.timelineEvent.occurredAt !== input.occurredAt.toISOString() ||
-		fallback.timelineEvent.event.modelOptionId !== fallback.modelOptionId ||
-		fallback.timelineEvent.event.reasoningLevel !== fallback.reasoningLevel ||
-		fallback.auditEvent.actorId !== input.authority.actorId ||
-		fallback.auditEvent.agentId !== input.authority.agentId ||
-		fallback.auditEvent.conversationId !== current.conversationId ||
-		fallback.auditEvent.executionId !== input.executionId ||
-		fallback.auditEvent.requestId !== input.requestId ||
-		fallback.auditEvent.traceId !== input.traceId ||
-		!sameDate(fallback.auditEvent.occurredAt, input.occurredAt)
-	) {
-		unavailable();
-	}
-}
-
-function validateCreatePlan(
-	value: unknown,
-	request: CreateRequest,
-): CreateConversationWritePlanV1 {
-	const authority = parseAuthority(request.authority);
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversation",
-		"result",
-		"idempotency",
-	]);
-	if (input.schemaVersion !== 1) unavailable();
-	const conversation = parseConversation(input.conversation);
-	const result = parseCreatedResult(input.result);
-	const idempotency = parseIdempotency(input.idempotency, true);
-	if (
-		request.command.agentId !== authority.agentId ||
-		conversation.conversationId !== result.conversationId ||
-		conversation.agentId !== authority.agentId ||
-		conversation.actorId !== authority.actorId ||
-		conversation.channelId !== authority.channelId ||
-		conversation.status !== "ready" ||
-		conversation.sessionGeneration !== 1 ||
-		conversation.hostSessionRef !== null ||
-		conversation.authorizationRevision !== authority.authorizationRevision ||
-		conversation.lastConversationCursor !== 0 ||
-		conversation.selectedModelOptionId !== null ||
-		conversation.selectedReasoningLevel !== null ||
-		!sameDate(conversation.createdAt, conversation.updatedAt) ||
-		result.agentId !== authority.agentId ||
-		idempotency.scopeType !== "agent" ||
-		idempotency.scopeId !== authority.agentId ||
-		idempotency.actorId !== authority.actorId ||
-		idempotency.channelId !== authority.channelId ||
-		idempotency.commandType !== "conversation.create" ||
-		idempotency.key !== request.command.idempotencyKey ||
-		idempotency.requestDigest !== request.requestDigest
-	) {
-		return unavailable();
-	}
-	return value as CreateConversationWritePlanV1;
-}
-
-function validateMessagePlan(
-	value: unknown,
-	request: MessageRequest,
-	state: ConversationExecutionStateV1,
-): ConversationMessageWritePlanV1 {
-	const authority = parseAuthority(request.authority);
-	const input = exactRecord(
-		value,
-		value && typeof value === "object" && Object.hasOwn(value, "execution")
-			? [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"execution",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				]
-			: [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				],
-	);
-	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
-	const conversation = parseConversation(input.conversation);
-	const message = parseMessage(input.message);
-	const outbox = parseMessageOutbox(input.outboxIntent);
-	const audit = parseMessageAudit(input.auditEvent);
-	const modelSelectionFallback = parseModelSelectionFallback(
-		input.modelSelectionFallback,
-	);
-	const result = parseMessageResult(input.result);
-	const idempotency = parseIdempotency(input.idempotency, false);
-	const current = state.conversation;
-	if (
-		current.status === "unavailable" ||
-		conversation.conversationId !== current.conversationId ||
-		conversation.agentId !== current.agentId ||
-		conversation.actorId !== current.actorId ||
-		conversation.channelId !== current.channelId ||
-		conversation.sessionGeneration !== current.sessionGeneration ||
-		conversation.hostSessionRef !== current.hostSessionRef ||
-		conversation.authorizationRevision !== authority.authorizationRevision ||
-		!sameDate(conversation.createdAt, current.createdAt) ||
-		!sameDate(conversation.updatedAt, message.createdAt) ||
-		!conversationSelectionMatchesConfigurationShape(
-			conversation,
-			state.modelConfiguration,
-		) ||
-		message.conversationId !== current.conversationId ||
-		message.actorId !== authority.actorId ||
-		message.text !== request.command.text ||
-		result.messageId !== message.messageId ||
-		outbox.conversationId !== current.conversationId ||
-		outbox.messageId !== message.messageId ||
-		outbox.executionId !== message.executionId ||
-		outbox.traceId !== request.command.traceId ||
-		outbox.requestId !== request.command.requestId ||
-		audit.actorId !== authority.actorId ||
-		audit.agentId !== authority.agentId ||
-		audit.conversationId !== current.conversationId ||
-		audit.executionId !== message.executionId ||
-		audit.traceId !== request.command.traceId ||
-		audit.requestId !== request.command.requestId ||
-		idempotency.scopeType !== "conversation" ||
-		idempotency.scopeId !== current.conversationId ||
-		idempotency.actorId !== authority.actorId ||
-		idempotency.commandType !== "message" ||
-		idempotency.key !== request.command.idempotencyKey ||
-		idempotency.requestDigest !== request.requestDigest ||
-		!sameDate(message.createdAt, outbox.occurredAt) ||
-		!sameDate(message.createdAt, audit.occurredAt)
-	) {
-		return unavailable();
-	}
-	if (input.kind === "initial") {
-		if (state.activeExecution || conversation.status !== "active")
-			unavailable();
-		const execution = parseExecution(input.execution);
-		if (
-			execution.executionId !== message.executionId ||
-			execution.executionId !== result.executionId ||
-			execution.conversationId !== current.conversationId ||
-			execution.agentId !== authority.agentId ||
-			execution.actorId !== authority.actorId ||
-			execution.channelId !== authority.channelId ||
-			execution.sessionGeneration !== current.sessionGeneration ||
-			execution.deliveryFence !== 0 ||
-			execution.authorizationRevision !== authority.authorizationRevision ||
-			!modelSelectionMatchesConfigurationRevision(
-				execution,
-				state.modelConfiguration,
-			) ||
-			conversation.selectedModelOptionId !== execution.modelOptionId ||
-			conversation.selectedReasoningLevel !== execution.reasoningLevel ||
-			!sameModelSelection(outbox, execution) ||
-			outbox.operation !== "conversation.turn.submit.v1" ||
-			outbox.executionId !== execution.executionId ||
-			outbox.turnId !== execution.turnId ||
-			outbox.sessionGeneration !== execution.sessionGeneration ||
-			!sameDate(message.createdAt, execution.createdAt) ||
-			audit.action !== "conversation.message.accepted"
-		) {
-			return unavailable();
-		}
-		validateModelSelectionFallback(modelSelectionFallback, {
-			state,
-			conversation,
-			authority,
-			requestId: request.command.requestId,
-			traceId: request.command.traceId,
-			occurredAt: message.createdAt,
-			executionId: execution.executionId,
-			lastEventSequence: 0,
-		});
-	} else if (input.kind === "supplement") {
-		const active = state.activeExecution;
-		if (
-			!active ||
-			current.status !== "active" ||
-			conversation.status !== "active" ||
-			message.executionId !== active.executionId ||
-			result.executionId !== active.executionId ||
-			outbox.operation !== "conversation.turn.supplement.v1" ||
-			outbox.turnId !== active.turnId ||
-			outbox.sessionGeneration !== active.sessionGeneration ||
-			!sameModelSelection(outbox, active) ||
-			audit.action !== "conversation.message.supplemented"
-		) {
-			return unavailable();
-		}
-		validateModelSelectionFallback(modelSelectionFallback, {
-			state,
-			conversation,
-			authority,
-			requestId: request.command.requestId,
-			traceId: request.command.traceId,
-			occurredAt: message.createdAt,
-			executionId: active.executionId,
-			lastEventSequence: active.lastEventSequence,
-		});
-	} else {
-		return unavailable();
-	}
-	return value as ConversationMessageWritePlanV1;
-}
-
-function validateModelSelectionPlan(
-	value: unknown,
-	request: ModelSelectionRequest,
-	state: ConversationExecutionStateV1,
-): ConversationModelSelectionWritePlanV1 {
-	const authority = parseAuthority(request.authority);
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"conversation",
-		"auditEvent",
-		"result",
-		"idempotency",
-	]);
-	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
-	const current = state.conversation;
-	const configuration = state.modelConfiguration;
-	const conversation = parseConversation(input.conversation);
-	const audit = parseModelSelectionAudit(input.auditEvent);
-	const result = parseModelSelectionResult(input.result);
-	const idempotency = parseIdempotency(input.idempotency, false);
-	if (
-		current.status === "unavailable" ||
-		!configuration ||
-		conversation.conversationId !== current.conversationId ||
-		conversation.agentId !== current.agentId ||
-		conversation.actorId !== current.actorId ||
-		conversation.channelId !== current.channelId ||
-		conversation.status !== current.status ||
-		conversation.sessionGeneration !== current.sessionGeneration ||
-		conversation.hostSessionRef !== current.hostSessionRef ||
-		conversation.lastConversationCursor !== current.lastConversationCursor ||
-		conversation.authorizationRevision !== authority.authorizationRevision ||
-		!sameDate(conversation.createdAt, current.createdAt) ||
-		!sameDate(conversation.updatedAt, audit.occurredAt) ||
-		conversation.selectedModelOptionId !== request.command.modelOptionId ||
-		conversation.selectedReasoningLevel !== request.command.reasoningLevel ||
-		result.conversationId !== current.conversationId ||
-		audit.actorId !== authority.actorId ||
-		audit.agentId !== authority.agentId ||
-		audit.conversationId !== current.conversationId ||
-		audit.traceId !== request.command.traceId ||
-		audit.requestId !== request.command.requestId ||
-		audit.modelConfigurationRevision !== configuration.configurationRevision ||
-		audit.modelOptionId !== request.command.modelOptionId ||
-		audit.reasoningLevel !== request.command.reasoningLevel ||
-		idempotency.scopeType !== "conversation" ||
-		idempotency.scopeId !== current.conversationId ||
-		idempotency.actorId !== authority.actorId ||
-		idempotency.commandType !== "model.select" ||
-		idempotency.key !== request.command.idempotencyKey ||
-		idempotency.requestDigest !== request.requestDigest
-	) {
-		return unavailable();
-	}
-	return value as ConversationModelSelectionWritePlanV1;
-}
-
-function validateRegenerationPlan(
-	value: unknown,
-	request: RegenerationRequest,
-	state: ConversationExecutionStateV1,
-): ConversationRegenerationWritePlanV1 {
-	const authority = parseAuthority(request.authority);
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"kind",
-		"conversation",
-		"execution",
-		"outboxIntent",
-		"auditEvent",
-		"modelSelectionFallback",
-		"result",
-		"idempotency",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		input.kind !== "regenerate" ||
-		!state.conversation ||
-		!state.sourceMessage ||
-		state.activeExecution
-	) {
-		return unavailable();
-	}
-	const current = state.conversation;
-	const conversation = parseConversation(input.conversation);
-	const execution = parseExecution(input.execution);
-	const outbox = parseRegenerationOutbox(input.outboxIntent);
-	const audit = parseRegenerationAudit(input.auditEvent);
-	const modelSelectionFallback = parseModelSelectionFallback(
-		input.modelSelectionFallback,
-	);
-	const result = parseRegenerationResult(input.result);
-	const idempotency = parseIdempotency(input.idempotency, false);
-	if (
-		conversation.conversationId !== current.conversationId ||
-		conversation.agentId !== current.agentId ||
-		conversation.actorId !== current.actorId ||
-		conversation.channelId !== current.channelId ||
-		current.status !== "active" ||
-		conversation.status !== "active" ||
-		conversation.sessionGeneration !== current.sessionGeneration ||
-		conversation.hostSessionRef !== current.hostSessionRef ||
-		conversation.authorizationRevision !== authority.authorizationRevision ||
-		!sameDate(conversation.createdAt, current.createdAt) ||
-		!sameDate(conversation.updatedAt, execution.createdAt) ||
-		!conversationSelectionMatchesConfigurationShape(
-			conversation,
-			state.modelConfiguration,
-		) ||
-		execution.executionId !== result.executionId ||
-		execution.conversationId !== current.conversationId ||
-		execution.agentId !== authority.agentId ||
-		execution.actorId !== authority.actorId ||
-		execution.channelId !== authority.channelId ||
-		execution.sessionGeneration !== current.sessionGeneration ||
-		execution.deliveryFence !== 0 ||
-		execution.authorizationRevision !== authority.authorizationRevision ||
-		!modelSelectionMatchesConfigurationRevision(
-			execution,
-			state.modelConfiguration,
-		) ||
-		conversation.selectedModelOptionId !== execution.modelOptionId ||
-		conversation.selectedReasoningLevel !== execution.reasoningLevel ||
-		!sameModelSelection(outbox, execution) ||
-		outbox.conversationId !== current.conversationId ||
-		outbox.executionId !== execution.executionId ||
-		outbox.messageId !== state.sourceMessage.messageId ||
-		outbox.turnId !== execution.turnId ||
-		outbox.sessionGeneration !== execution.sessionGeneration ||
-		outbox.traceId !== request.command.traceId ||
-		outbox.requestId !== request.command.requestId ||
-		audit.actorId !== authority.actorId ||
-		audit.agentId !== authority.agentId ||
-		audit.conversationId !== current.conversationId ||
-		audit.executionId !== execution.executionId ||
-		audit.traceId !== request.command.traceId ||
-		audit.requestId !== request.command.requestId ||
-		idempotency.scopeType !== "conversation" ||
-		idempotency.scopeId !== current.conversationId ||
-		idempotency.actorId !== authority.actorId ||
-		idempotency.commandType !== "regenerate" ||
-		idempotency.key !== request.command.idempotencyKey ||
-		idempotency.requestDigest !== request.requestDigest ||
-		!sameDate(execution.createdAt, outbox.occurredAt) ||
-		!sameDate(execution.createdAt, audit.occurredAt)
-	) {
-		return unavailable();
-	}
-	validateModelSelectionFallback(modelSelectionFallback, {
-		state,
-		conversation,
-		authority,
-		requestId: request.command.requestId,
-		traceId: request.command.traceId,
-		occurredAt: execution.createdAt,
-		executionId: execution.executionId,
-		lastEventSequence: 0,
-	});
-	return value as ConversationRegenerationWritePlanV1;
-}
-
-function executionIsTerminal(status: string): boolean {
-	return (
-		status === "completed" || status === "failed" || status === "cancelled"
-	);
-}
-
-function validateStopPlan(
-	value: unknown,
-	request: StopRequest,
-	state: ConversationExecutionStateV1,
-): ConversationStopWritePlanV1 {
-	const authority = parseAuthority(request.authority);
-	const input = exactRecord(value, [
-		"schemaVersion",
-		"targetExecution",
-		"stopRequestId",
-		"outboxIntent",
-		"auditEvent",
-		"result",
-		"idempotency",
-	]);
-	if (
-		input.schemaVersion !== 1 ||
-		!state.conversation ||
-		!state.targetExecution ||
-		state.existingStop
-	) {
-		return unavailable();
-	}
-	const target = exactRecord(input.targetExecution, [
-		"executionId",
-		"conversationId",
-		"actorId",
-	]);
-	const executionId = text(target.executionId);
-	const conversationId = text(target.conversationId);
-	const actorId = text(target.actorId);
-	const stopRequestId = text(input.stopRequestId);
-	const outbox = parseStopOutbox(input.outboxIntent);
-	const audit = parseStopAudit(input.auditEvent);
-	const result = parseStopResult(input.result);
-	const idempotency = parseIdempotency(input.idempotency, false);
-	const current = state.conversation;
-	const persistedTarget = state.targetExecution;
-	if (
-		executionIsTerminal(persistedTarget.status) ||
-		executionId !== persistedTarget.executionId ||
-		executionId !== request.command.targetExecutionId ||
-		conversationId !== current.conversationId ||
-		actorId !== authority.actorId ||
-		result.status !== "submitted" ||
-		result.executionId !== executionId ||
-		outbox.conversationId !== current.conversationId ||
-		outbox.executionId !== executionId ||
-		outbox.sessionGeneration !== persistedTarget.sessionGeneration ||
-		outbox.stopRequestId !== stopRequestId ||
-		outbox.traceId !== request.command.traceId ||
-		outbox.requestId !== request.command.requestId ||
-		audit.actorId !== authority.actorId ||
-		audit.agentId !== authority.agentId ||
-		audit.conversationId !== current.conversationId ||
-		audit.executionId !== executionId ||
-		audit.traceId !== request.command.traceId ||
-		audit.requestId !== request.command.requestId ||
-		idempotency.scopeType !== "conversation" ||
-		idempotency.scopeId !== current.conversationId ||
-		idempotency.actorId !== authority.actorId ||
-		idempotency.commandType !== "stop" ||
-		idempotency.key !== request.command.idempotencyKey ||
-		idempotency.requestDigest !== request.requestDigest ||
-		!sameDate(outbox.occurredAt, audit.occurredAt)
-	) {
-		return unavailable();
-	}
-	return value as ConversationStopWritePlanV1;
-}
-
-function validateStopNoop(
-	value: unknown,
-	request: StopRequest,
-	state: ConversationExecutionStateV1,
-): Extract<
-	ConversationStopDecisionV1,
-	{ readonly outcome: "accepted" | "replayed" | "denied" }
-> {
-	const input = exactRecord(
-		value,
-		value && typeof value === "object" && Object.hasOwn(value, "result")
-			? ["outcome", "result"]
-			: ["outcome"],
-	);
-	if (input.outcome === "denied") return { outcome: "denied" };
-	if (
-		(input.outcome !== "accepted" && input.outcome !== "replayed") ||
-		!state.targetExecution
-	) {
-		return unavailable();
-	}
-	const result = parseStopResult(input.result);
-	if (result.executionId !== request.command.targetExecutionId) unavailable();
-	if (
-		input.outcome === "accepted" &&
-		(!executionIsTerminal(state.targetExecution.status) ||
-			result.status !== "already_finished")
-	) {
-		return unavailable();
-	}
-	if (
-		input.outcome === "replayed" &&
-		(!state.existingStop ||
-			result.status !==
-				(state.existingStop.status === "completed"
-					? "already_finished"
-					: "submitted"))
-	) {
-		return unavailable();
-	}
-	return { outcome: input.outcome, result };
-}
-
-function createIdempotencyScopeId(agentId: string, channelId: string): string {
-	return JSON.stringify([agentId, channelId]);
-}
-
-function outboxId(
-	operation: "conversation.turn.submit.v1" | "conversation.turn.supplement.v1",
-	messageId: string,
-	executionId: string,
-): string {
-	return operation === "conversation.turn.submit.v1"
-		? `conversation:turn:${executionId}`
-		: `conversation:supplement:${messageId}`;
-}
-
-function isMessagePlan(
-	decision: Awaited<ReturnType<MessageDecide>>,
-): decision is ConversationMessageWritePlanV1 {
-	return !Object.hasOwn(decision, "outcome");
-}
-
-function isModelSelectionPlan(
-	decision: Awaited<ReturnType<ModelSelectionDecide>>,
-): decision is ConversationModelSelectionWritePlanV1 {
-	return !Object.hasOwn(decision, "outcome");
-}
-
-function isRegenerationPlan(
-	decision: Awaited<ReturnType<RegenerationDecide>>,
-): decision is ConversationRegenerationWritePlanV1 {
-	return !Object.hasOwn(decision, "outcome");
-}
-
-function isStopPlan(
-	decision: Awaited<ReturnType<StopDecide>>,
-): decision is ConversationStopWritePlanV1 {
-	return !Object.hasOwn(decision, "outcome");
-}
-
-async function readIdempotency(
-	transaction: Transaction,
-	input: {
-		readonly scopeType: string;
-		readonly scopeId: string;
-		readonly actorId: string;
-		readonly commandType: string;
-		readonly key: string;
-	},
-): Promise<IdempotencyRow | undefined> {
-	const rows = await transaction<IdempotencyRow[]>`
-		select request_digest, status, result
-		from platform.idempotency_records
-		where scope_type = ${input.scopeType}
-			and scope_id = ${input.scopeId}
-			and actor_id = ${input.actorId}
-			and command_type = ${input.commandType}
-			and idempotency_key = ${input.key}
-		limit 1
-	`;
-	return rows[0];
-}
-
-async function reserveIdempotency(
-	transaction: Transaction,
-	input: {
-		readonly scopeType: string;
-		readonly scopeId: string;
-		readonly actorId: string;
-		readonly commandType: string;
-		readonly key: string;
-		readonly requestDigest: string;
-		readonly occurredAt: Date;
-	},
-): Promise<string | undefined> {
-	const id = randomUUID();
-	const inserted = await transaction<{ id: string }[]>`
-		insert into platform.idempotency_records
-			(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
-			 request_digest, status, created_at, updated_at)
-		values
-			(${id}, ${input.scopeType}, ${input.scopeId}, ${input.actorId},
-			 ${input.commandType}, ${input.key}, ${input.requestDigest}, 'reserved',
-			 ${input.occurredAt}, ${input.occurredAt})
-		on conflict (scope_type, scope_id, actor_id, command_type, idempotency_key)
-		do nothing
-		returning id
-	`;
-	return inserted[0]?.id;
-}
-
-async function completeIdempotency(
-	transaction: Transaction,
-	id: string,
-	result: unknown,
-	occurredAt: Date,
-): Promise<void> {
-	const completed = await transaction<{ id: string }[]>`
-		update platform.idempotency_records
-		set status = 'completed', result = ${transaction.json(result as JsonValue)},
-			updated_at = ${occurredAt}
-		where id = ${id} and status = 'reserved'
-		returning id
-	`;
-	if (completed.length !== 1) unavailable();
-}
-
-async function lockConversation(
-	transaction: Transaction,
-	conversationId: string,
-): Promise<ConversationExecutionConversationStateV1 | undefined> {
-	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
-			host_session_ref, authorization_revision, last_conversation_cursor,
-			selected_model_option_id, selected_reasoning_level, created_at, updated_at
-		from platform.conversations where id = ${conversationId} for update
-	`;
-	return rows[0] ? conversationFromRow(rows[0]) : undefined;
-}
-
-async function lockConversationForRead(
-	transaction: Transaction,
-	conversationId: string,
-): Promise<ConversationExecutionConversationStateV1 | undefined> {
-	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
-			host_session_ref, authorization_revision, last_conversation_cursor,
-			selected_model_option_id, selected_reasoning_level, created_at, updated_at
-		from platform.conversations where id = ${conversationId} for share
-	`;
-	return rows[0] ? conversationFromRow(rows[0]) : undefined;
-}
-
-async function readMessageState(
-	transaction: Transaction,
-	conversation: ConversationExecutionConversationStateV1,
-): Promise<ConversationExecutionStateV1> {
-	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
-	const activeRows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, actor_id, turn_id, session_generation,
-			model_configuration_revision, model_option_id, reasoning_level,
-			last_event_sequence, status
-		from platform.conversation_executions
-		where conversation_id = ${conversation.conversationId}
-			and status in ('submitted', 'processing', 'unknown')
-		limit 2
-		for update
-	`;
-	if (activeRows.length > 1) unavailable();
-	const active = activeRows[0];
-	if (!active) {
-		return {
-			conversation,
-			modelConfiguration: agent?.modelConfiguration,
-			sourceMessage: undefined,
-			targetExecution: undefined,
-			existingStop: undefined,
-			activeExecution: undefined,
-		};
-	}
-	const status = text(active.status);
-	if (!activeExecutionStatuses.has(status)) unavailable();
-	const stopRows = await transaction<StopRow[]>`
-		select execution_id, stop_request_id, status
-		from platform.conversation_stops
-		where execution_id = ${active.execution_id}
-		limit 1
-	`;
-	const stop = stopRows[0];
-	if (stop && stop.status !== "submitted" && stop.status !== "completed")
-		unavailable();
-	return {
-		conversation,
-		modelConfiguration: agent?.modelConfiguration,
-		sourceMessage: undefined,
-		targetExecution: undefined,
-		existingStop: undefined,
-		activeExecution: {
-			executionId: text(active.execution_id),
-			conversationId: text(active.conversation_id),
-			actorId: text(active.actor_id),
-			turnId: text(active.turn_id),
-			sessionGeneration: safeInteger(active.session_generation, 1),
-			modelConfigurationRevision:
-				active.model_configuration_revision === null
-					? null
-					: safeInteger(active.model_configuration_revision, 1),
-			modelOptionId:
-				active.model_option_id === null ? null : text(active.model_option_id),
-			reasoningLevel:
-				active.reasoning_level === null ? null : text(active.reasoning_level),
-			lastEventSequence: safeInteger(active.last_event_sequence, 0),
-			stopPending: stop?.status === "submitted",
-			status: status as "submitted" | "processing" | "unknown",
-		},
-	};
-}
-
-async function readModelSelectionState(
-	transaction: Transaction,
-	conversation: ConversationExecutionConversationStateV1,
-): Promise<
-	ConversationExecutionStateV1 & {
-		readonly currentAuthorizationRevision: string | null | undefined;
-	}
-> {
-	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
-	return {
-		conversation,
-		modelConfiguration: agent?.modelConfiguration,
-		sourceMessage: undefined,
-		targetExecution: undefined,
-		existingStop: undefined,
-		activeExecution: undefined,
-		currentAuthorizationRevision: agent?.authorizationRevision,
-	};
-}
-
-async function readRegenerationState(
-	transaction: Transaction,
-	conversation: ConversationExecutionConversationStateV1,
-	sourceMessageId: string,
-): Promise<ConversationExecutionStateV1> {
-	const state = await readMessageState(transaction, conversation);
-	const rows = await transaction<
-		{
-			readonly message_id: string;
-			readonly conversation_id: string;
-			readonly actor_id: string;
-			readonly role: string;
-		}[]
-	>`
-		select message_id, conversation_id, actor_id, role
-		from platform.conversation_messages
-		where conversation_id = ${conversation.conversationId}
-			and message_id = ${sourceMessageId}
-		limit 1
-	`;
-	const source = rows[0];
-	if (!source) return state;
-	if (source.role !== "user") unavailable();
-	return {
-		...state,
-		sourceMessage: {
-			messageId: text(source.message_id),
-			conversationId: text(source.conversation_id),
-			actorId: text(source.actor_id),
-			role: "user",
-		},
-	};
-}
-
-async function readStopState(
-	transaction: Transaction,
-	conversation: ConversationExecutionConversationStateV1,
-	targetExecutionId: string,
-): Promise<ConversationExecutionStateV1> {
-	const state = await readMessageState(transaction, conversation);
-	const rows = await transaction<
-		{
-			readonly execution_id: string;
-			readonly conversation_id: string;
-			readonly actor_id: string;
-			readonly session_generation: string | number;
-			readonly model_configuration_revision: string | number | null;
-			readonly model_option_id: string | null;
-			readonly reasoning_level: string | null;
-			readonly status: string;
-		}[]
-	>`
-		select execution_id, conversation_id, actor_id, session_generation,
-			model_configuration_revision, model_option_id, reasoning_level, status
-		from platform.conversation_executions
-		where conversation_id = ${conversation.conversationId}
-			and execution_id = ${targetExecutionId}
-		limit 1
-		for update
-	`;
-	const target = rows[0];
-	if (!target) return state;
-	const status = text(target.status);
-	if (!activeExecutionStatuses.has(status) && !executionIsTerminal(status)) {
-		unavailable();
-	}
-	const stops = await transaction<StopRow[]>`
-		select execution_id, stop_request_id, status
-		from platform.conversation_stops
-		where execution_id = ${target.execution_id}
-		limit 1
-	`;
-	const stop = stops[0];
-	if (stop && stop.status !== "submitted" && stop.status !== "completed") {
-		unavailable();
-	}
-	return {
-		...state,
-		targetExecution: {
-			executionId: text(target.execution_id),
-			conversationId: text(target.conversation_id),
-			actorId: text(target.actor_id),
-			sessionGeneration: safeInteger(target.session_generation, 1),
-			modelConfigurationRevision:
-				target.model_configuration_revision === null
-					? null
-					: safeInteger(target.model_configuration_revision, 1),
-			modelOptionId:
-				target.model_option_id === null ? null : text(target.model_option_id),
-			reasoningLevel:
-				target.reasoning_level === null ? null : text(target.reasoning_level),
-			status: status as
-				| "submitted"
-				| "processing"
-				| "unknown"
-				| "completed"
-				| "failed"
-				| "cancelled",
-		},
-		existingStop: stop
-			? {
-					executionId: text(stop.execution_id),
-					stopRequestId: text(stop.stop_request_id),
-					status: stop.status as "submitted" | "completed",
-				}
-			: undefined,
-	};
-}
-
-async function requireCreateReplay(
-	transaction: Transaction,
-	result: ReturnType<typeof parseCreatedResult>,
-	authority: ConversationExecutionAuthorityV1,
-): Promise<void> {
-	const rows = await transaction<ConversationRow[]>`
-		select id, agent_id, actor_id, channel_id, status, session_generation,
-			host_session_ref, authorization_revision, last_conversation_cursor,
-			selected_model_option_id, selected_reasoning_level, created_at, updated_at
-		from platform.conversations where id = ${result.conversationId} limit 1
-	`;
-	const conversation = rows[0] && conversationFromRow(rows[0]);
-	if (
-		!conversation ||
-		result.agentId !== authority.agentId ||
-		!matchesBinding(conversation, authority)
-	) {
-		unavailable();
-	}
-}
-
-async function requireMessageReplay(
-	transaction: Transaction,
-	result: ReturnType<typeof parseMessageResult>,
-	conversationId: string,
-	authority: ConversationExecutionAuthorityV1,
-): Promise<void> {
-	const rows = await transaction<
-		{
-			readonly message_id: string;
-			readonly message_conversation_id: string;
-			readonly message_actor_id: string;
-			readonly execution_id: string;
-			readonly execution_conversation_id: string;
-			readonly execution_actor_id: string;
-		}[]
-	>`
-		select message.message_id, message.conversation_id as message_conversation_id,
-			message.actor_id as message_actor_id, execution.execution_id,
-			execution.conversation_id as execution_conversation_id,
-			execution.actor_id as execution_actor_id
-		from platform.conversation_messages as message
-		join platform.conversation_executions as execution
-			on execution.execution_id = message.execution_id
-		where message.message_id = ${result.messageId}
-		limit 1
-	`;
-	const row = rows[0];
-	if (
-		!row ||
-		row.message_conversation_id !== conversationId ||
-		row.execution_conversation_id !== conversationId ||
-		row.message_actor_id !== authority.actorId ||
-		row.execution_actor_id !== authority.actorId ||
-		row.execution_id !== result.executionId
-	) {
-		unavailable();
-	}
-}
-
-async function requireRegenerationReplay(
-	transaction: Transaction,
-	result: ReturnType<typeof parseRegenerationResult>,
-	conversationId: string,
-	authority: ConversationExecutionAuthorityV1,
-): Promise<void> {
-	const rows = await transaction<
-		{
-			readonly execution_id: string;
-			readonly conversation_id: string;
-			readonly actor_id: string;
-		}[]
-	>`
-		select execution_id, conversation_id, actor_id
-		from platform.conversation_executions
-		where execution_id = ${result.executionId}
-		limit 1
-	`;
-	const execution = rows[0];
-	if (
-		!execution ||
-		execution.conversation_id !== conversationId ||
-		execution.actor_id !== authority.actorId
-	) {
-		unavailable();
-	}
-}
-
-async function requireStopReplay(
-	transaction: Transaction,
-	result: ReturnType<typeof parseStopResult>,
-	conversationId: string,
-	authority: ConversationExecutionAuthorityV1,
-): Promise<void> {
-	const rows = await transaction<
-		{
-			readonly execution_id: string;
-			readonly conversation_id: string;
-			readonly actor_id: string;
-			readonly status: string;
-			readonly stop_request_id: string | null;
-		}[]
-	>`
-		select execution.execution_id, execution.conversation_id, execution.actor_id,
-			execution.status, stop.stop_request_id
-		from platform.conversation_executions as execution
-		left join platform.conversation_stops as stop
-			on stop.execution_id = execution.execution_id
-		where execution.execution_id = ${result.executionId}
-		limit 1
-	`;
-	const execution = rows[0];
-	if (
-		!execution ||
-		execution.conversation_id !== conversationId ||
-		execution.actor_id !== authority.actorId ||
-		(result.status === "submitted" && execution.stop_request_id === null) ||
-		(result.status === "already_finished" &&
-			!executionIsTerminal(execution.status))
-	) {
-		unavailable();
-	}
-}
-
-async function insertModelSelectionFallback(
-	transaction: Transaction,
-	fallback: ConversationModelSelectionFallbackWriteV1 | null,
-): Promise<void> {
-	if (!fallback) return;
-	const timeline = fallback.timelineEvent;
-	await transaction`
-		insert into platform.conversation_events
-			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
-			 conversation_cursor, event_type, event_payload, event_digest, source,
-			 runtime_cursor, occurred_at)
-		values
-			(${timeline.eventId}, ${timeline.conversationId}, ${timeline.executionId},
-			 ${`platform:${timeline.eventId}`}, ${timeline.sequence},
-			 ${timeline.conversationCursor}, ${timeline.event.type},
-			 ${transaction.json(timeline.event as unknown as JsonValue)},
-			 ${createHash("sha256").update(JSON.stringify(timeline.event)).digest("hex")},
-			 'platform', null, ${timeline.occurredAt})
-	`;
-	const updated = await transaction<{ execution_id: string }[]>`
-		update platform.conversation_executions
-		set last_event_sequence = ${timeline.sequence}, updated_at = now()
-		where execution_id = ${timeline.executionId}
-			and conversation_id = ${timeline.conversationId}
-			and last_event_sequence = ${timeline.sequence - 1}
-		returning execution_id
-	`;
-	if (updated.length !== 1) unavailable();
-	await transaction`
-		insert into platform.conversation_audit_events
-			(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
-			 request_id, occurred_at, details)
-		values
-			(${randomUUID()}, ${fallback.auditEvent.conversationId},
-			 ${fallback.auditEvent.executionId},
-			 ${fallback.auditEvent.agentId}, ${fallback.auditEvent.actorId},
-			 ${fallback.auditEvent.action}, ${fallback.auditEvent.traceId},
-			 ${fallback.auditEvent.requestId}, ${fallback.auditEvent.occurredAt},
-			 ${transaction.json({
-					previousModelOptionId: fallback.previousModelOptionId,
-					previousReasoningLevel: fallback.previousReasoningLevel,
-					modelConfigurationRevision: fallback.modelConfigurationRevision,
-					modelOptionId: fallback.modelOptionId,
-					reasoningLevel: fallback.reasoningLevel,
-				} as JsonValue)})
-	`;
-}
-
 export class PostgresConversationExecutionTransactionV1
 	implements ConversationExecutionTransactionPortV1
 {
-	readonly #client: ReturnType<typeof postgres>;
+	readonly #client: ReturnType<typeof postgres> | undefined;
+	readonly #existingTransaction: Transaction | undefined;
 
-	constructor(options: PostgresConversationExecutionOptionsV1) {
+	constructor(
+		options:
+			| PostgresConversationExecutionOptionsV1
+			| { readonly transaction: Transaction },
+	) {
+		if ("transaction" in options) {
+			this.#existingTransaction = options.transaction;
+			return;
+		}
 		try {
 			this.#client = postgres(
 				platformDatabaseUrlFromEnvironment({
@@ -1978,6 +103,131 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async requestMetadataRecovery(
+		request: Parameters<
+			ConversationExecutionTransactionPortV1["requestMetadataRecovery"]
+		>[0],
+		decide: Parameters<
+			ConversationExecutionTransactionPortV1["requestMetadataRecovery"]
+		>[1],
+	) {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			const conversation = await lockConversation(
+				transaction,
+				text(request.query.conversationId),
+			);
+			if (!conversation) return decide({ conversation, candidates: [] }).result;
+			// Lock order matches dispatch: Conversation, original outbox, Execution.
+			const candidates = await transaction<
+				{
+					id: string;
+					payload: Record<string, unknown>;
+					status: string;
+					execution_id: string;
+					authorization_revision: string;
+				}[]
+			>`
+				select o.id, o.payload, o.status, e.execution_id, e.authorization_revision
+				from platform.outbox_items o join platform.conversation_executions e on e.execution_id = o.payload->>'executionId'
+				where o.scope_type = 'conversation' and o.scope_id = ${conversation.conversationId}
+					and o.operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+					and o.id in ('conversation:turn:' || e.execution_id, 'conversation:regenerate:' || e.execution_id)
+					and e.conversation_id = ${conversation.conversationId} and e.agent_id = ${authority.agentId}
+					and e.actor_id = ${authority.actorId} and e.channel_id = ${authority.channelId}
+					and e.session_generation = ${conversation.sessionGeneration}
+					and o.payload->>'sessionGeneration' = ${String(conversation.sessionGeneration)}
+					and o.payload->>'turnId' = e.turn_id and e.delivery_fence > 0 and e.last_runtime_cursor is not null
+					and e.status in ('completed', 'failed', 'cancelled')
+					and (o.status in ('succeeded', 'failed') or o.payload ? 'metadataRecovery')
+					and (${request.query.executionId ?? null}::text is null or e.execution_id = ${request.query.executionId ?? null})
+					and exists (select 1 from platform.conversation_events ev where ev.execution_id = e.execution_id
+						and ev.source = 'runtime' and ev.event_type = 'execution.operation'
+						and ev.event_payload->'fact'->>'kind' = 'tool'
+						and ev.event_payload->'fact'->'connection'->>'verification' = 'unverified'
+						and not exists (select 1 from platform.conversation_events newer where newer.execution_id = e.execution_id
+							and newer.event_type = 'execution.operation' and newer.sequence > ev.sequence
+							and newer.event_payload->'fact'->>'operationRef' = ev.event_payload->'fact'->>'operationRef'
+							and newer.event_payload->'fact'->>'attemptRef' = ev.event_payload->'fact'->>'attemptRef'))
+				order by (o.payload->'metadataRecovery'->>'requestedAt')::bigint nulls first, o.id limit 16
+				for update of o
+			`;
+			const recoveryCandidates: ConversationMetadataRecoveryStateV1["candidates"][number][] =
+				[];
+			const originalPayloads = new Map<string, unknown>();
+			for (const candidate of candidates) {
+				const [execution] = await transaction<
+					{
+						execution_id: string;
+						conversation_id: string;
+						agent_id: string;
+						actor_id: string;
+						channel_id: string;
+						turn_id: string;
+						session_generation: number | string;
+						delivery_fence: number | string;
+						last_runtime_cursor: string | null;
+						authorization_revision: string;
+						status: string;
+					}[]
+				>`select execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, session_generation,
+					delivery_fence, last_runtime_cursor, authorization_revision, status from platform.conversation_executions
+					where execution_id = ${candidate.execution_id} for update`;
+				if (!execution) continue;
+				const origins = await transaction<
+					{ id: string; operation: string; status: string; payload: unknown }[]
+				>`
+					select id, operation, status, payload from platform.outbox_items
+					where id in (${`conversation:turn:${candidate.execution_id}`}, ${`conversation:regenerate:${candidate.execution_id}`})`;
+				for (const origin of origins)
+					originalPayloads.set(origin.id, origin.payload);
+				const [record] = await transaction<
+					{ boundary: unknown }[]
+				>`select boundary from platform.task_authorization_records where execution_id = ${candidate.execution_id}`;
+				const facts = await transaction<{ event_payload: unknown }[]>`
+					select distinct on (event_payload->'fact'->>'operationRef', event_payload->'fact'->>'attemptRef') event_payload
+					from platform.conversation_events where execution_id = ${candidate.execution_id} and source = 'runtime'
+						and event_type = 'execution.operation' and event_payload->'fact'->>'kind' = 'tool'
+					order by event_payload->'fact'->>'operationRef', event_payload->'fact'->>'attemptRef', sequence desc`;
+				recoveryCandidates.push({
+					execution: {
+						executionId: execution.execution_id,
+						conversationId: execution.conversation_id,
+						agentId: execution.agent_id,
+						actorId: execution.actor_id,
+						channelId: execution.channel_id,
+						turnId: execution.turn_id,
+						sessionGeneration: safeInteger(execution.session_generation, 1),
+						deliveryFence: safeInteger(execution.delivery_fence, 0),
+						runtimeCursor: execution.last_runtime_cursor,
+						authorizationRevision: execution.authorization_revision,
+						status: execution.status,
+					},
+					originalOutboxes: origins.map((origin) => ({
+						itemId: origin.id,
+						operation: origin.operation,
+						status: origin.status,
+						payload: origin.payload,
+					})),
+					boundary: record?.boundary ?? null,
+					latestToolFacts: facts.map(
+						(row) => parseConversationOperationEventV2(row.event_payload).fact,
+					),
+				});
+			}
+			const plan = decide({ conversation, candidates: recoveryCandidates });
+			for (const update of plan.updates) {
+				const payload = originalPayloads.get(update.itemId);
+				if (!payload || typeof payload !== "object" || Array.isArray(payload))
+					unavailable();
+				await transaction`update platform.outbox_items set status = 'pending', available_at = clock_timestamp(), lease_owner = null,
+					lease_expires_at = null, payload = ${transaction.json({ ...payload, metadataRecovery: { ...update.metadataRecovery } })}, updated_at = clock_timestamp()
+					where id = ${update.itemId}`;
+			}
+			return plan.result;
+		});
 	}
 
 	async readConversation(
@@ -2159,6 +409,12 @@ export class PostgresConversationExecutionTransactionV1
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`;
+				await insertTaskAuthorization(transaction, {
+					executionId: plan.execution.executionId,
+					boundary: authority.taskBoundary,
+					traceId: request.command.traceId,
+					requestId: request.command.requestId,
+				});
 			}
 			for (const fileId of request.command.attachments ?? []) {
 				const [row] = await transaction<{ record: FileRecordV1 }[]>`
@@ -2404,6 +660,12 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.execution.createdAt},
 					 ${plan.execution.createdAt})
 			`;
+			await insertTaskAuthorization(transaction, {
+				executionId: plan.execution.executionId,
+				boundary: authority.taskBoundary,
+				traceId: request.command.traceId,
+				requestId: request.command.requestId,
+			});
 			await transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
@@ -2564,7 +826,7 @@ export class PostgresConversationExecutionTransactionV1
 
 	async close(): Promise<void> {
 		try {
-			await this.#client.end();
+			await this.#client?.end();
 		} catch {
 			unavailable();
 		}
@@ -2574,6 +836,9 @@ export class PostgresConversationExecutionTransactionV1
 		work: (transaction: Transaction) => Promise<T>,
 	): Promise<T> {
 		try {
+			if (this.#existingTransaction)
+				return await work(this.#existingTransaction);
+			if (!this.#client) return unavailable();
 			return (await this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;
 				return work(transaction);

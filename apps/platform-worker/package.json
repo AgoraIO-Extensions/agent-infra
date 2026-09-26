@@ -8,6 +8,7 @@
 	],
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
@@ -29,6 +30,10 @@
 		"tsdown": "^0.22.14",
 		"tsx": "^4.23.1",
 		"typescript": "catalog:",
-		"vitest": "catalog:"
+		"vitest": "catalog:",
+		"postgres": "catalog:"
+	},
+	"exports": {
+		".": "./dist/index.mjs"
 	}
 }

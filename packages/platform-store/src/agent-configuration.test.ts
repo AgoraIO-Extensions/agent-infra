@@ -1,13 +1,17 @@
+import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationAccessAuthorityV1,
+	AgentConfigurationRecordV2,
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationUseCaseDependenciesV1,
 	AgentConfigurationWritePlanV1,
 	AgentManagementStateV1,
+	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import {
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
+	immutableSecretNameV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
@@ -21,6 +25,7 @@ import {
 	vi,
 } from "vitest";
 
+import { workloadDesiredFixture } from "../../../apps/platform-worker/src/kubernetes.fixture.js";
 import {
 	agentConfigurationConformanceAdmissionsV1,
 	agentConfigurationConformanceRecordV1,
@@ -43,6 +48,8 @@ import {
 	createSecretRecordFixtureResolver,
 	materializeSecretRecordFixtureAttachments,
 } from "./secret-record-fixture.ts";
+
+import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -122,7 +129,6 @@ function dependencies(
 		imageAdmission: admission,
 		modelAdmission: admission,
 		secretAdmission: admission,
-		actionAdmission: admission,
 		channelAdmission: admission,
 	};
 }
@@ -258,6 +264,94 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL Agent configuration transaction", () => {
+	it("replays original V1 Action results without rewriting configuration, digest, history or effects", async () => {
+		await clearDatabase();
+		await seed();
+		const actions = [
+			{ providerId: "github", actionId: "issues.read", actionVersion: "v3" },
+		];
+		const legacy = {
+			...agentConfigurationConformanceRecordV1,
+			schemaVersion: 1,
+			actions,
+			actionSetRevision: "original-action-policy",
+		};
+		await adminClient`update platform.agent_configuration_revisions set configuration = ${adminClient.json(legacy as unknown as postgres.JSONValue)} where agent_id = 'agent_01' and revision = 7`;
+		const result = {
+			schemaVersion: 1,
+			agentId: "agent_01",
+			revision: 7,
+			changedFields: ["actions"],
+		};
+		// Captured using the pre-retirement V1 digest formula, including the Actions.
+		const digest =
+			"d526cd4b79ed7c1eba491bef15abc9c50f0c61d218b1cf040a430e976dc39f45";
+		await adminClient`insert into platform.idempotency_records (id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest, status, result, created_at, updated_at) values ('legacy-action-result', 'agent', 'agent_01', 'owner_01', 'agent.configuration.update.v1', 'legacy-action-key', ${digest}, 'completed', ${adminClient.json(result)}, ${occurredAt}, ${occurredAt})`;
+		const before =
+			await adminClient`select configuration, (select row_to_json(i) from platform.idempotency_records i where id = 'legacy-action-result') idempotency from platform.agent_configuration_revisions where agent_id = 'agent_01' and revision = 7`;
+		const command = {
+			schemaVersion: 1,
+			agentId: "agent_01",
+			idempotencyKey: "legacy-action-key",
+			requestId: "legacy-request",
+			traceId: "legacy-trace",
+			changes: { actions },
+		};
+		const configuration = useCase(openTransaction());
+		await expect(configuration.replayLegacyV1(command, actor)).resolves.toEqual(
+			result,
+		);
+		await expect(
+			configuration.update(command as never, actor),
+		).rejects.toMatchObject({ code: "invalid_command" });
+		await expect(
+			configuration.replayLegacyV1(
+				{ ...command, idempotencyKey: "new-legacy-key" },
+				actor,
+			),
+		).rejects.toMatchObject({ code: "invalid_command" });
+		await expect(
+			configuration.replayLegacyV1(
+				{ ...command, changes: { actions: [] } },
+				actor,
+			),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		await expect(
+			configuration.replayLegacyV1(command, { ...actor, actorId: "owner_02" }),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(
+			await adminClient`select configuration, (select row_to_json(i) from platform.idempotency_records i where id = 'legacy-action-result') idempotency from platform.agent_configuration_revisions where agent_id = 'agent_01' and revision = 7`,
+		).toEqual(before);
+		const [effects] =
+			await adminClient`select (select count(*) from platform.agent_configuration_revisions) configurations, (select count(*) from platform.idempotency_records) idempotency, (select count(*) from platform.outbox_items) outbox, (select count(*) from platform.audit_events) audit`;
+		expect(effects).toEqual({
+			configurations: "1",
+			idempotency: "1",
+			outbox: "0",
+			audit: "0",
+		});
+		await expect(
+			configuration.update(
+				{
+					...command,
+					schemaVersion: 2,
+					idempotencyKey: "v2-environment",
+					changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+				},
+				actor,
+			),
+		).resolves.toMatchObject({ revision: 8, changedFields: ["environment"] });
+		const rows =
+			await adminClient`select revision::text, configuration from platform.agent_configuration_revisions order by revision`;
+		expect(rows[0]?.configuration).toEqual(legacy);
+		expect(rows[1]?.configuration).toMatchObject({
+			schemaVersion: 2,
+			revision: 8,
+		});
+		expect(rows[1]?.configuration).not.toHaveProperty("actions");
+		expect(rows[1]?.configuration).not.toHaveProperty("actionSetRevision");
+	});
+
 	agentConfigurationUseCaseConformance(async () => {
 		await clearDatabase();
 		await seed();
@@ -318,7 +412,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await seed();
 		const adapter = openTransaction();
 		const input = {
-			schemaVersion: 1 as const,
+			schemaVersion: 2 as const,
 			agentId: "agent_01",
 			idempotencyKey: "configuration-secret-sidecar",
 			requestId: "request_01",
@@ -375,7 +469,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await expect(
 			useCase(transaction).update(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					agentId: "agent_01",
 					idempotencyKey: "configuration-secret-stale",
 					requestId: "request_01",
@@ -398,7 +492,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		const adapter = openTransaction();
 		await useCase(adapter).update(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: "agent_01",
 				idempotencyKey: "configuration-secret-first",
 				requestId: "request_01",
@@ -430,7 +524,6 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				imageAdmission: admissions,
 				modelAdmission: admissions,
 				secretAdmission: admissions,
-				actionAdmission: admissions,
 				channelAdmission: admissions,
 			},
 			{ now: () => new Date(occurredAt) },
@@ -439,7 +532,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await expect(
 			collisionUseCase.update(
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					agentId: "agent_01",
 					idempotencyKey: "configuration-secret-collision",
 					requestId: "request_collision",
@@ -489,7 +582,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			await expect(
 				useCase(openTransaction()).update(
 					{
-						schemaVersion: 1,
+						schemaVersion: 2,
 						agentId: "agent_01",
 						idempotencyKey: "configuration-secret-rollback",
 						requestId: "request_01",
@@ -621,62 +714,67 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		});
 	});
 
-	it("rolls back every write and the deferred commit boundary", async () => {
-		const plan = await captureAccessPlan("authorization_10");
-		const points = [
-			[
-				"configuration",
-				"platform.agent_configuration_revisions",
-				"insert",
-				"before",
-			],
-			["pointer", "platform.agents", "update", "before"],
-			["access", "platform.agent_applications", "update", "before"],
-			["owners_delete", "platform.agent_owners", "delete", "before"],
-			["owners", "platform.agent_owners", "insert", "before"],
-			[
-				"availability_delete",
-				"platform.agent_availability",
-				"delete",
-				"before",
-			],
-			["availability", "platform.agent_availability", "insert", "before"],
-			["idempotency", "platform.idempotency_records", "insert", "before"],
-			["outbox", "platform.outbox_items", "insert", "before"],
-			["audit", "platform.audit_events", "insert", "before"],
-			["commit", "platform.audit_events", "insert", "after"],
-		] as const;
-		for (const [point, table, operation, timing] of points) {
-			await clearDatabase();
-			await seed();
-			if (point === "availability_delete") {
-				await adminClient`
+	it.each([true, false])(
+		"rolls back every write and the deferred commit boundary (runtime=%s)",
+		async (runtimeChange) => {
+			const plan = await captureAccessPlan("authorization_10", runtimeChange);
+			const points = [
+				[
+					"configuration",
+					"platform.agent_configuration_revisions",
+					"insert",
+					"before",
+				],
+				["pointer", "platform.agents", "update", "before"],
+				["access", "platform.agent_applications", "update", "before"],
+				["owners_delete", "platform.agent_owners", "delete", "before"],
+				["owners", "platform.agent_owners", "insert", "before"],
+				[
+					"availability_delete",
+					"platform.agent_availability",
+					"delete",
+					"before",
+				],
+				["availability", "platform.agent_availability", "insert", "before"],
+				["idempotency", "platform.idempotency_records", "insert", "before"],
+				["outbox", "platform.outbox_items", "insert", "before"],
+				["audit", "platform.audit_events", "insert", "before"],
+				["commit", "platform.audit_events", "insert", "after"],
+			] as const;
+			for (const [point, table, operation, timing] of points) {
+				if (!runtimeChange && (point === "configuration" || point === "outbox"))
+					continue;
+				await clearDatabase();
+				await seed();
+				if (point === "availability_delete") {
+					await adminClient`
 					insert into platform.agent_availability
 						(agent_id, target_type, target_id)
 					values ('agent_01', 'user', 'member_previous')
 				`;
+				}
+				await armFailure(point, table, operation, timing === "after");
+				const adapter = openTransaction();
+				await expect(adapter.commit(plan)).rejects.toEqual(
+					expect.objectContaining({
+						name: "AgentConfigurationStoreError",
+						code: "unavailable",
+					}),
+				);
+				await disarmFailure(point, table);
+				const stored = await snapshot();
+				expect(stored).toMatchObject({
+					currentRevision: 7,
+					authorizationRevision: "authorization_9",
+					managementRevision: 11,
+					configurationCount: 1,
+					idempotencyCount: 0,
+					outboxCount: 0,
+					auditCount: 0,
+				});
 			}
-			await armFailure(point, table, operation, timing === "after");
-			const adapter = openTransaction();
-			await expect(adapter.commit(plan)).rejects.toEqual(
-				expect.objectContaining({
-					name: "AgentConfigurationStoreError",
-					code: "unavailable",
-				}),
-			);
-			await disarmFailure(point, table);
-			const stored = await snapshot();
-			expect(stored).toMatchObject({
-				currentRevision: 7,
-				authorizationRevision: "authorization_9",
-				managementRevision: 11,
-				configurationCount: 1,
-				idempotencyCount: 0,
-				outboxCount: 0,
-				auditCount: 0,
-			});
-		}
-	});
+		},
+	);
 
 	it("rejects non-canonical payloads and bounded access inputs before writes", async () => {
 		await clearDatabase();
@@ -688,7 +786,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				outboxIntent: {
 					...plan.outboxIntent,
 					payload: {
-						...plan.outboxIntent.payload,
+						...plan.outboxIntent?.payload,
 						plaintext: "database-secret",
 					},
 				},
@@ -767,7 +865,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		]);
 		expect(effects[0]).toMatchObject({
 			result: plan.result,
-			payload: plan.outboxIntent.payload,
+			payload: plan.outboxIntent?.payload,
 			details: { changedFields: plan.auditEvent.changedFields },
 		});
 		expect(await snapshot()).toMatchObject({
@@ -777,6 +875,62 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			idempotencyCount: 1,
 			outboxCount: 1,
 			auditCount: 1,
+		});
+	});
+
+	it.each([
+		{ coOwnerIds: ["owner_02"] },
+		{ availability: [{ kind: "user" as const, userId: "owner_02" }] },
+	])("preserves runtime only for availability changes: %j", async (changes) => {
+		const revision = changes.coOwnerIds ? 8 : 7;
+		const expectedConfiguration = {
+			...agentConfigurationConformanceRecordV1,
+			revision,
+		};
+		await clearDatabase();
+		await seed();
+		const configuration = useCase(openTransaction(), true, "authorization_10");
+		const command = {
+			schemaVersion: 2 as const,
+			agentId: "agent_01",
+			idempotencyKey: "access-only",
+			requestId: "request_access",
+			traceId: "trace_access",
+			changes: {
+				...changes,
+				environment: [{ name: "LOG_LEVEL", value: "info" }],
+			},
+		};
+		const result = await configuration.update(command, actor);
+		expect(result).toMatchObject({ revision });
+		await expect(configuration.update(command, actor)).resolves.toEqual(result);
+		expect(await snapshot()).toMatchObject({
+			configuration: expectedConfiguration,
+			currentRevision: revision,
+			configurationCount: changes.coOwnerIds ? 2 : 1,
+			managementRevision: 12,
+			authorizationRevision: "authorization_10",
+			idempotencyCount: 1,
+			outboxCount: changes.coOwnerIds ? 1 : 0,
+			auditCount: 1,
+		});
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		await expect(
+			query.readAuthority({
+				agentId: "agent_01",
+				actorId: "owner_01",
+				organizationIds: [],
+				isAdministrator: false,
+			}),
+		).resolves.toMatchObject({
+			outcome: "found",
+			configuration: expectedConfiguration,
+			management: {
+				revision: 12,
+				ownerIds: changes.coOwnerIds ? ["owner_01", "owner_02"] : ["owner_01"],
+				availability: changes.availability ?? [],
+			},
 		});
 	});
 
@@ -808,7 +962,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			"authorization_10",
 		).update(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: "agent_01",
 				idempotencyKey: "configuration-concurrent",
 				requestId: "request_configuration",
@@ -823,7 +977,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			"authorization_11",
 		).update(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: "agent_01",
 				idempotencyKey: "owner-concurrent",
 				requestId: "request_owner",
@@ -856,6 +1010,143 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			idempotencyCount: 1,
 			outboxCount: 1,
 			auditCount: 1,
+		});
+	});
+
+	it.each(["Owner removal", "availability shrink"] as const)(
+		"rejects a pending runtime write after concurrent %s",
+		async (change) => {
+			const removesOwner = change === "Owner removal";
+			await clearDatabase();
+			await seed();
+			await adminClient`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent_01', 'owner_02', ${occurredAt})`;
+			const availability = removesOwner
+				? []
+				: [{ kind: "user" as const, userId: "owner_02" }];
+			if (!removesOwner)
+				await adminClient`insert into platform.agent_availability (agent_id,target_type,target_id) values ('agent_01','user','owner_02')`;
+			const state = {
+				...accessState,
+				ownerIds: ["owner_01", "owner_02"],
+				availability,
+			};
+			const currentAdmissions = (actorId: string) =>
+				new FakeAgentConfigurationAdmissionsV1({
+					...agentConfigurationConformanceAdmissionsV1,
+					authorizations: [
+						{
+							agentId: "agent_01",
+							actorId,
+							authorizationRevision: "authorization_9",
+							accessAuthority: {
+								...accessAuthority,
+								state,
+								actorContext: {
+									...accessAuthority.actorContext,
+									userId: actorId,
+								},
+							},
+						},
+					],
+				});
+			const pendingAdapter = openTransaction();
+			let captured: (() => void) | undefined;
+			const prepared = new Promise<void>((resolve) => {
+				captured = resolve;
+			});
+			let release: (() => void) | undefined;
+			const continueCommit = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const pending = createAgentConfigurationUseCaseV1({
+				...dependencies(pendingAdapter),
+				authorizationAdmission: currentAdmissions("owner_02"),
+				transaction: {
+					read: pendingAdapter.read.bind(pendingAdapter),
+					async commit(plan, attachments) {
+						captured?.();
+						await continueCommit;
+						return pendingAdapter.commit(plan, attachments);
+					},
+				},
+			}).update(
+				{
+					schemaVersion: 2,
+					agentId: "agent_01",
+					idempotencyKey: "removed-owner-runtime",
+					requestId: "pending-runtime",
+					traceId: "pending-runtime",
+					changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+				},
+				{ ...actor, actorId: "owner_02" },
+			);
+			const outcome = Promise.allSettled([pending]);
+			await prepared;
+			try {
+				const removalAdapter = openTransaction();
+				await createAgentConfigurationUseCaseV1({
+					...dependencies(removalAdapter),
+					authorizationAdmission: currentAdmissions("owner_01"),
+				}).update(
+					{
+						schemaVersion: 2,
+						agentId: "agent_01",
+						idempotencyKey: "remove-owner",
+						requestId: "remove-owner",
+						traceId: "remove-owner",
+						changes: removesOwner ? { coOwnerIds: [] } : { availability: [] },
+					},
+					actor,
+				);
+			} finally {
+				release?.();
+			}
+			expect(await outcome).toEqual([
+				expect.objectContaining({
+					status: "rejected",
+					reason: expect.objectContaining({ code: "stale_revision" }),
+				}),
+			]);
+			expect(await snapshot()).toMatchObject({
+				configuration: {
+					...agentConfigurationConformanceRecordV1,
+					revision: removesOwner ? 8 : 7,
+				},
+				currentRevision: removesOwner ? 8 : 7,
+				configurationCount: removesOwner ? 2 : 1,
+				managementRevision: 12,
+				authorizationRevision: "authorization_9",
+				idempotencyCount: 1,
+				outboxCount: removesOwner ? 1 : 0,
+				auditCount: 1,
+			});
+			expect(
+				await adminClient`select count(*) from platform.secret_records`,
+			).toMatchObject([{ count: "0" }]);
+		},
+	);
+
+	it("rejects a runtime mutation disguised as an availability-only plan", async () => {
+		await clearDatabase();
+		await seed();
+		const plan = await captureAccessPlan("authorization_9", false);
+		await expect(
+			openTransaction().commit({
+				...plan,
+				configuration: {
+					...plan.configuration,
+					environment: [{ name: "LOG_LEVEL", value: "debug" }],
+				},
+			}),
+		).rejects.toMatchObject({ name: "AgentConfigurationStoreError" });
+		expect(await snapshot()).toMatchObject({
+			configuration: agentConfigurationConformanceRecordV1,
+			currentRevision: 7,
+			configurationCount: 1,
+			managementRevision: 11,
+			idempotencyCount: 0,
+			outboxCount: 0,
+			auditCount: 0,
 		});
 	});
 
@@ -968,7 +1259,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 			commit: adapter.commit.bind(adapter),
 		});
 		const command = {
-			schemaVersion: 1 as const,
+			schemaVersion: 2 as const,
 			agentId: "agent_01",
 			idempotencyKey: "same-key-concurrent",
 			requestId: "request_same_key",
@@ -1041,7 +1332,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		await seed("agent_02");
 		const adapter = openTransaction();
 		const command = {
-			schemaVersion: 1 as const,
+			schemaVersion: 2 as const,
 			agentId: "agent_01",
 			idempotencyKey: "scope-key",
 			requestId: "request_scope",
@@ -1091,7 +1382,508 @@ describe("PostgreSQL Agent configuration transaction", () => {
 	});
 });
 
+async function runtimeExpectation(query: PostgresAgentConfigurationQueryV1) {
+	const authority = await query.readAuthority({
+		agentId: "agent_01",
+		actorId: "owner_01",
+		organizationIds: [],
+		isAdministrator: false,
+	});
+	if (authority.outcome !== "found")
+		throw new Error("Expected fixture Owner authority");
+	return {
+		configurationRevision: authority.configuration.revision,
+		management: authority.management,
+	};
+}
+
+async function runtimePresentationFixture(record?: AgentConfigurationRecordV2) {
+	await clearDatabase();
+	const deployment = {
+		...workloadDesiredFixture(1, "agent_01", "internal-only"),
+		configRevision: 7,
+	};
+	const configuration = record ?? {
+		...agentConfigurationConformanceRecordV1,
+		source: {
+			kind: "custom" as const,
+			imageDigest: deployment.imageDigest,
+			admissionRevision: "verified-image",
+			interactionMode: "platform-adapter" as const,
+			connectionEnabled: true,
+		},
+		modelConfiguration: null,
+	};
+	await seed("agent_01", configuration);
+	const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+	adapters.push(query);
+	const input = {
+		expected: await runtimeExpectation(query),
+		agentId: "agent_01",
+		actorId: "owner_01",
+		accountStatus: "active" as const,
+		organizationIds: [],
+		isAdministrator: false,
+	};
+	const version = {
+		configuration,
+		deployment,
+	} as unknown as import("@agent-infra/platform-core").WorkloadVersionV1;
+	const state = {
+		schemaVersion: 1,
+		agentId: "agent_01",
+		sourceConfigurationRevision: 7,
+		sourceLifecycleRevision: 1,
+		revision: 1,
+		fence: 1,
+		phase: "ready",
+		candidate: version,
+		verified: version,
+		verifiedRevision: 1,
+		identity: { uid: "observed-uid", generation: 1 },
+		rollback: false,
+		failureCode: null,
+		attempts: 0,
+		capabilities: { conversation: true, connection: false },
+	} satisfies WorkloadReconciliationStateV1;
+	const persist = async (value: unknown) => {
+		await adminClient`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values ('agent_01', 1, ${adminClient.json(value as postgres.JSONValue)}, now()) on conflict (agent_id) do update set state = excluded.state`;
+	};
+	return { query, input, configuration, deployment, version, state, persist };
+}
+
+async function seedActiveCoOwnerSecrets() {
+	const records = await createSecretRecordFixtureResolver().resolve({
+		schemaVersion: 1,
+		expected: [
+			{ name: "BOT_TOKEN", secretId: "secret_bot_token" },
+			{ name: "model:model_primary", secretId: "secret_model_primary" },
+		].map((reference) => ({
+			schemaVersion: 1,
+			...reference,
+			ownerType: "agent-owner",
+			ownerId: "owner_02",
+			agentId: "agent_01",
+			secretVersion: 1,
+			configurationRevision: 7,
+			occurredAt: occurredAt.toISOString(),
+		})),
+	});
+	if (!Array.isArray(records))
+		throw new Error("Expected fixture Secret records");
+	for (const value of records) {
+		const pending = validatePlatformSecretRecordV1(value);
+		const name = immutableSecretNameV1({
+			schemaVersion: 1,
+			agentId: pending.agentId,
+			secretId: pending.secretId,
+			secretVersion: pending.secretVersion,
+			configRevision: pending.configRevision,
+			ownerType: pending.ownerType,
+			ownerId: pending.ownerId,
+			name: pending.name,
+			wrappingKeyVersion: pending.crypto.wrappingKeyVersion,
+			lifecycleState: "active",
+			failureRetryable: null,
+			encryptedRecord: pending,
+		});
+		const record = validatePlatformSecretRecordV1({
+			...pending,
+			lifecycleState: "active",
+			kubernetesSecretRef: {
+				schemaVersion: 1,
+				ownerType: pending.ownerType,
+				ownerId: pending.ownerId,
+				agentId: pending.agentId,
+				secretId: pending.secretId,
+				secretVersion: pending.secretVersion,
+				configRevision: pending.configRevision,
+				algorithmVersion: pending.crypto.algorithmVersion,
+				wrappingAlgorithmVersion: pending.crypto.wrappingAlgorithmVersion,
+				wrappingKeyVersion: pending.crypto.wrappingKeyVersion,
+				name,
+			},
+			activationFence: {
+				schemaVersion: 1,
+				agentId: pending.agentId,
+				secretId: pending.secretId,
+				secretVersion: pending.secretVersion,
+				configRevision: pending.configRevision,
+				kubernetesSecretName: name,
+				workloadUid: "observed-uid",
+				workloadGeneration: 1,
+				fence: 1,
+			},
+		});
+		await adminClient`insert into platform.secret_records
+			(agent_id,secret_id,secret_version,configuration_revision,owner_type,owner_id,name,lifecycle_state,dek_fingerprint,wrapping_key_version,record,created_at,updated_at)
+			values (${record.agentId},${record.secretId},${record.secretVersion},${record.configRevision},${record.ownerType},${record.ownerId},${record.name},${record.lifecycleState},${record.crypto.dekFingerprint},${record.crypto.wrappingKeyVersion},${adminClient.json(record)},now(),now())`;
+	}
+}
+
 describe("PostgreSQL Agent configuration query", () => {
+	it.each(["availability", "owners", "owners+availability"] as const)(
+		"gates the old runtime with active coOwner env/model Secrets after %s changes",
+		async (change) => {
+			const record: AgentConfigurationRecordV2 = {
+				...agentConfigurationConformanceRecordV1,
+				source: {
+					...agentConfigurationConformanceRecordV1.source,
+					imageDigest: `sha256:${"1".repeat(64)}`,
+				},
+				secrets: [
+					{
+						name: "BOT_TOKEN",
+						secretId: "secret_bot_token",
+						isSet: true,
+						version: 1,
+					},
+				],
+			};
+			const { query, input, state, persist } =
+				await runtimePresentationFixture(record);
+			await adminClient`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent_01','owner_02',${occurredAt})`;
+			await seedActiveCoOwnerSecrets();
+			await persist(state);
+			const store = openPostgresWorkloadReconciliationStoreV1({
+				databaseUrl,
+				retryDelayMs: 0,
+				monitorDelayMs: 0,
+			});
+			adapters.push(store);
+			const observeCurrent = async () =>
+				store.runNext("test-worker", async (current) => {
+					expect(
+						current.secrets?.bindings.map(({ record: secret }) => {
+							const decoded = validatePlatformSecretRecordV1(secret);
+							return {
+								name: decoded.name,
+								ownerId: decoded.ownerId,
+								lifecycleState: decoded.lifecycleState,
+							};
+						}),
+					).toEqual([
+						{
+							name: "BOT_TOKEN",
+							ownerId: "owner_02",
+							lifecycleState: "active",
+						},
+						{
+							name: "model:model_primary",
+							ownerId: "owner_02",
+							lifecycleState: "active",
+						},
+					]);
+					if (!current.state) throw new Error("Expected a verified runtime");
+					return current.state;
+				});
+			await observeCurrent();
+			await expect(
+				query.readRuntimePresentation({
+					...input,
+					expected: await runtimeExpectation(query),
+				}),
+			).resolves.toMatchObject({ capabilities: state.capabilities });
+			const admission = new FakeAgentConfigurationAdmissionsV1({
+				...agentConfigurationConformanceAdmissionsV1,
+				authorizations: [
+					{
+						agentId: "agent_01",
+						actorId: "owner_01",
+						authorizationRevision: "authorization_9",
+						accessAuthority: {
+							...accessAuthority,
+							state: { ...accessState, ownerIds: ["owner_01", "owner_02"] },
+						},
+					},
+				],
+			});
+			const removesOwner = change !== "availability";
+			await createAgentConfigurationUseCaseV1(
+				{
+					...dependencies(openTransaction()),
+					authorizationAdmission: admission,
+				},
+				{ now: () => new Date(occurredAt) },
+			).update(
+				{
+					schemaVersion: 2,
+					agentId: "agent_01",
+					idempotencyKey: "active-secret-access",
+					requestId: "active-secret-access",
+					traceId: "active-secret-access",
+					changes: {
+						...(removesOwner ? { coOwnerIds: [] } : {}),
+						...(change !== "owners"
+							? {
+									availability: [{ kind: "user" as const, userId: "owner_02" }],
+								}
+							: {}),
+					},
+				},
+				actor,
+			);
+			if (removesOwner) {
+				const step = vi.fn();
+				await expect(
+					store.runNext("test-worker", async () => {
+						step();
+						throw new Error("Removed Secret owner reached reconciliation");
+					}),
+				).rejects.toThrow("Workload reconciliation persistence failed");
+				expect(step).not.toHaveBeenCalled();
+			} else {
+				await observeCurrent();
+			}
+			// Refresh management and configuration expectations: the remaining Owner
+			// must not see persisted ready state as current after Secret ownership changed.
+			await expect(
+				query.readRuntimePresentation({
+					...input,
+					expected: await runtimeExpectation(query),
+				}),
+			).resolves.toMatchObject({
+				capabilities: removesOwner ? null : state.capabilities,
+			});
+			expect(await snapshot()).toMatchObject({
+				currentRevision: removesOwner ? 8 : 7,
+				configurationCount: removesOwner ? 2 : 1,
+				outboxCount: removesOwner ? 1 : 0,
+			});
+			expect(
+				await adminClient`select state from platform.workload_reconciliations where agent_id='agent_01'`,
+			).toMatchObject([
+				{ state: { phase: "ready", sourceConfigurationRevision: 7 } },
+			]);
+			expect(
+				await adminClient`select name,owner_id,lifecycle_state from platform.secret_records order by name`,
+			).toEqual([
+				{ name: "BOT_TOKEN", owner_id: "owner_02", lifecycle_state: "active" },
+				{
+					name: "model:model_primary",
+					owner_id: "owner_02",
+					lifecycle_state: "active",
+				},
+			]);
+			expect(
+				await adminClient`select action from platform.audit_events where action like 'agent.%'`,
+			).toMatchObject([{ action: "agent.access.updated" }]);
+		},
+	);
+
+	it("presents only current subject-scoped verified runtime capabilities and never invents an interaction URL", async () => {
+		const { query, input, configuration, deployment, version, state, persist } =
+			await runtimePresentationFixture();
+		const withoutRuntime = {
+			outcome: "found",
+			sourceReference: deployment.imageDigest,
+			capabilities: null,
+			interactionUrl: null,
+		};
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual(
+			withoutRuntime,
+		);
+		await persist(state);
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+			...withoutRuntime,
+			capabilities: state.capabilities,
+		});
+		for (const accountStatus of ["disabled", "revoked"] as const) {
+			await expect(
+				query.readRuntimePresentation({ ...input, accountStatus }),
+			).resolves.toEqual({ outcome: "unavailable" });
+		}
+		await expect(
+			query.readRuntimePresentation({ ...input, actorId: "unrelated" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		const { capabilities: _capabilities, ...noCapabilities } = state;
+		for (const invalid of [
+			noCapabilities,
+			{ ...state, phase: "promoting" },
+			{ ...state, fence: 2 },
+			{ ...state, sourceLifecycleRevision: 2 },
+			{ ...state, sourceConfigurationRevision: 8 },
+			{ ...state, verifiedRevision: null },
+			{ ...state, identity: null },
+			{
+				...state,
+				candidate: {
+					...version,
+					deployment: {
+						...deployment,
+						route: { ...deployment.route, exposure: "self-managed" },
+					},
+				},
+			},
+			{
+				...state,
+				candidate: {
+					...version,
+					configuration: { ...configuration, revision: 99 },
+				},
+			},
+		]) {
+			await persist(invalid);
+			await expect(query.readRuntimePresentation(input)).resolves.toEqual(
+				withoutRuntime,
+			);
+		}
+		await persist(state);
+		await adminClient`update platform.agent_applications set status = 'stopped', service_availability = null, desired_state = 'stopped' where agent_id = 'agent_01'`;
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+			outcome: "stale",
+		});
+		input.expected = await runtimeExpectation(query);
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual(
+			withoutRuntime,
+		);
+		await adminClient`update platform.agent_applications set status = 'available', service_availability = 'ready', desired_state = 'running' where agent_id = 'agent_01'`;
+		await adminClient`insert into platform.agent_availability (agent_id, target_type, target_id) values ('agent_01', 'user', 'viewer')`;
+		input.expected = await runtimeExpectation(query);
+		await expect(
+			query.readRuntimePresentation({ ...input, actorId: "viewer" }),
+		).resolves.toEqual({ ...withoutRuntime, capabilities: state.capabilities });
+		await adminClient`delete from platform.agent_availability where agent_id = 'agent_01'`;
+		await expect(
+			query.readRuntimePresentation({ ...input, actorId: "viewer" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
+	it("rejects a newer configuration and runtime instead of mixing them into an earlier projection", async () => {
+		const { query, input, configuration, state, persist } =
+			await runtimePresentationFixture();
+		await persist(state);
+		const upstream = await query.read({ ...input, intent: "discover" });
+		expect(upstream).toMatchObject({
+			outcome: "found",
+			configuration: { revision: 7 },
+		});
+		await expect(query.readRuntimePresentation(input)).resolves.toMatchObject({
+			outcome: "found",
+			capabilities: state.capabilities,
+		});
+		const nextDeployment = {
+			...workloadDesiredFixture(2, "agent_01", "internal-only"),
+			configRevision: 8,
+			fence: 1,
+		};
+		const nextDigest = nextDeployment.imageDigest;
+		const nextConfiguration = {
+			...configuration,
+			revision: 8,
+			source: { ...configuration.source, imageDigest: nextDigest },
+		};
+		const nextVersion = {
+			configuration: nextConfiguration,
+			deployment: nextDeployment,
+		};
+		const nextState = {
+			...state,
+			revision: 2,
+			sourceConfigurationRevision: 8,
+			verifiedRevision: 2,
+			candidate: nextVersion,
+			verified: nextVersion,
+			capabilities: {
+				conversation: true,
+				modelSelection: true,
+				connection: true,
+			},
+		};
+		await adminClient.begin(async (transaction) => {
+			await transaction`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values ('agent_01', 8, ${nextDigest}, ${occurredAt}, ${transaction.json(nextConfiguration as postgres.JSONValue)})`;
+			await transaction`update platform.agents set current_configuration_revision = 8 where id = 'agent_01'`;
+			await transaction`update platform.workload_reconciliations set revision = 2, state = ${transaction.json(nextState as postgres.JSONValue)} where agent_id = 'agent_01'`;
+		});
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+			outcome: "stale",
+		});
+		input.expected = await runtimeExpectation(query);
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+			outcome: "found",
+			sourceReference: nextDigest,
+			capabilities: nextState.capabilities,
+			interactionUrl: null,
+		});
+	});
+
+	it("rejects same-revision management changes and hides revoked access before reporting staleness", async () => {
+		const { query, input, state, persist } = await runtimePresentationFixture();
+		await persist(state);
+		await adminClient`insert into platform.agent_availability (agent_id, target_type, target_id) values ('agent_01', 'user', 'viewer')`;
+		input.expected = await runtimeExpectation(query);
+		const viewer = { ...input, actorId: "viewer" };
+		await expect(query.readRuntimePresentation(viewer)).resolves.toMatchObject({
+			outcome: "found",
+			capabilities: state.capabilities,
+		});
+		await adminClient`update platform.agent_applications set service_availability = 'updating' where agent_id = 'agent_01'`;
+		const current = await runtimeExpectation(query);
+		expect(current.configurationRevision).toBe(
+			input.expected.configurationRevision,
+		);
+		expect(current.management.revision).toBe(
+			input.expected.management.revision,
+		);
+		await expect(query.readRuntimePresentation(viewer)).resolves.toEqual({
+			outcome: "stale",
+		});
+		await expect(
+			query.readRuntimePresentation({ ...input, expected: current }),
+		).resolves.toEqual({
+			outcome: "found",
+			sourceReference: state.verified.configuration.source.imageDigest,
+			capabilities: null,
+			interactionUrl: null,
+		});
+		await adminClient`delete from platform.agent_availability where agent_id = 'agent_01'`;
+		await expect(query.readRuntimePresentation(viewer)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+	});
+
+	it("returns current admission authority only to an Owner, including historical configurations", async () => {
+		await clearDatabase();
+		await seed();
+		const legacy = {
+			...agentConfigurationConformanceRecordV1,
+			schemaVersion: 1,
+			actions: [],
+			actionSetRevision: "old-policy",
+		};
+		await adminClient`update platform.agent_configuration_revisions set configuration = ${adminClient.json(legacy as unknown as postgres.JSONValue)} where agent_id = 'agent_01'`;
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		const input = {
+			agentId: "agent_01",
+			actorId: "owner_01",
+			organizationIds: [],
+			isAdministrator: false,
+		};
+		await expect(query.readAuthority(input)).resolves.toMatchObject({
+			outcome: "found",
+			configuration: agentConfigurationConformanceRecordV1,
+			management: { agentId: "agent_01", ownerIds: ["owner_01"] },
+			authorizationRevision: "authorization_9",
+		});
+		for (const changes of [
+			{ actorId: "administrator", isAdministrator: true },
+			{ actorId: "user_03", organizationIds: ["org_platform"] },
+			{ agentId: "agent_missing" },
+		]) {
+			await expect(
+				query.readAuthority({ ...input, ...changes }),
+			).resolves.toEqual({ outcome: "unavailable" });
+		}
+		await adminClient`delete from platform.agent_owners where agent_id = 'agent_01' and owner_id = 'owner_01'`;
+		await expect(
+			query.readAuthority({ ...input, isAdministrator: true }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		await expect(
+			query.readAuthority({ ...input, organizationIds: [""] }),
+		).rejects.toThrow(AgentConfigurationStoreError);
+	});
+
 	it("returns one redacted domain projection and hides missing or forbidden Agents", async () => {
 		await clearDatabase();
 		await seed();
@@ -1382,6 +2174,7 @@ describe("PostgreSQL Agent configuration query", () => {
 
 async function captureAccessPlan(
 	nextAuthorizationRevision = "authorization_9",
+	runtimeChange = true,
 ): Promise<AgentConfigurationWritePlanV1> {
 	let captured: AgentConfigurationWritePlanV1 | undefined;
 	const transaction: AgentConfigurationTransactionPortV1 = {
@@ -1403,17 +2196,19 @@ async function captureAccessPlan(
 	await expect(
 		useCase(transaction, true, nextAuthorizationRevision).update(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				agentId: "agent_01",
 				idempotencyKey: "access-plan",
 				requestId: "request_access",
 				traceId: "trace_access",
 				changes: {
-					coOwnerIds: ["owner_02"],
+					...(runtimeChange ? { coOwnerIds: ["owner_02"] } : {}),
 					availability: [
 						{ kind: "organization", organizationId: "org_platform" },
 					],
-					environment: [{ name: "LOG_LEVEL", value: "debug" }],
+					...(runtimeChange
+						? { environment: [{ name: "LOG_LEVEL", value: "debug" }] }
+						: {}),
 				},
 			},
 			actor,

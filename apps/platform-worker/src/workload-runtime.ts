@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -22,8 +23,10 @@ import {
 	cleanupUnactivatedSecretCandidateV1,
 	createSecretActivationUseCaseV1,
 	immutableSecretNameV1,
+	parseWorkloadExecutionCapacityV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
+	type WorkloadExecutionCapacityV1,
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
@@ -51,17 +54,85 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly modelAccess?: ModelAccessValidatorV1;
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
+	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
 		readonly baseUrl: string;
+		readonly fence: number;
+		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
 		readonly signal: AbortSignal;
 	}) => Promise<{
 		readonly core: "passed" | "failed";
 		readonly capabilities: unknown;
 	}>;
+}
+
+export function workloadResourceConfigurationHashV1(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				resourceProfileRef: policy.resourceProfileRef,
+				requests: {
+					cpu: policy.resources.requests.cpu,
+					memory: policy.resources.requests.memory,
+				},
+				limits: {
+					cpu: policy.resources.limits.cpu,
+					memory: policy.resources.limits.memory,
+				},
+			}),
+		)
+		.digest("hex");
+}
+
+export function resolveWorkloadExecutionCapacityV1(
+	options: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "executionCapacityProfiles"
+	>,
+	imageDigest: string,
+): WorkloadExecutionCapacityV1 | undefined {
+	const profiles = options.executionCapacityProfiles ?? [];
+	if (!Array.isArray(profiles))
+		throw new TypeError("Workload execution capacity is invalid");
+	const matches = profiles
+		.map(parseWorkloadExecutionCapacityV1)
+		.filter(
+			(profile) =>
+				profile.imageDigest === imageDigest &&
+				profile.resourceProfileRef === options.policy.resourceProfileRef &&
+				profile.resourceConfigurationHash ===
+					workloadResourceConfigurationHashV1(options.policy),
+		);
+	if (matches.length > 1)
+		throw new TypeError("Workload execution capacity is ambiguous");
+	return matches[0];
+}
+
+/** Capacity approval can be withdrawn without preventing the original execution's controls. */
+export function isWorkloadExecutionCapacityCurrentV1(
+	options: Pick<
+		WorkloadRuntimeOptionsV1,
+		"policy" | "executionCapacityProfiles"
+	>,
+	state: WorkloadReconciliationStateV1,
+): boolean {
+	const persisted = state.verified?.executionCapacity;
+	return (
+		!!persisted &&
+		isDeepStrictEqual(
+			persisted,
+			resolveWorkloadExecutionCapacityV1(
+				options,
+				state.verified?.configuration.source.imageDigest ?? "",
+			),
+		)
+	);
 }
 
 function recordReference(
@@ -188,6 +259,29 @@ function validateSecretDataKeys(
 	configuration: WorkloadReconciliationStateV1["candidate"]["configuration"],
 	bindings: readonly ResolvedWorkloadSecretBindingV1[],
 ): void {
+	// Owner-supplied environment, including Secret-backed names, must not alter
+	// the native loader before the trusted Runtime launcher can run. NODE_ENV is
+	// an ordinary application setting and remains allowed.
+	if (
+		[
+			...configuration.environment,
+			...configuration.secrets,
+			...bindings.map(({ record }) => record),
+		].some(
+			({ name }) =>
+				name.startsWith("LD_") ||
+				name.startsWith("DYLD_") ||
+				[
+					"NODE_OPTIONS",
+					"NODE_DEBUG",
+					"NODE_DEBUG_NATIVE",
+					"NODE_V8_COVERAGE",
+					"NODE_PATH",
+					"PATH",
+				].includes(name),
+		)
+	)
+		throw new WorkloadPreflightRejectedErrorV1();
 	const environmentNames = new Set(
 		configuration.environment.map(({ name }) => name),
 	);
@@ -246,7 +340,11 @@ function bindingsFor(
 
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
-): WorkloadRuntimePortV1 {
+): WorkloadRuntimePortV1 & {
+	observeVerifiedControl(
+		state: WorkloadReconciliationStateV1,
+	): ReturnType<WorkloadRuntimePortV1["observe"]>;
+} {
 	if (!Array.isArray(options.templateModelBindings))
 		throw new TypeError("Template model bindings are required");
 	const fetcher = options.fetch ?? globalThis.fetch;
@@ -256,7 +354,7 @@ export function createWorkloadRuntimeV1(
 	>();
 	function createAdapter(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
-		state?: WorkloadReconciliationStateV1,
+		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
 	) {
 		return createKubernetesRuntimeAdapterV1({
 			client: options.client,
@@ -290,6 +388,8 @@ export function createWorkloadRuntimeV1(
 						options.probeRuntime({
 							agentId: desired.agentId,
 							workloadRevision: desired.workloadRevision,
+							fence: desired.fence,
+							imageDigest: desired.imageDigest,
 							baseUrl,
 							manifest: desired.runtimeManifest,
 							signal: controller.signal,
@@ -500,6 +600,8 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
+			const secretBindings = bindingsFor(state, input);
+			validateSecretDataKeys(configuration, secretBindings);
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
@@ -549,8 +651,6 @@ export function createWorkloadRuntimeV1(
 					: configuration.source.interactionMode;
 			if (admission.runtimeManifest.interactionMode !== mode)
 				throw new WorkloadPreflightRejectedErrorV1();
-			const secretBindings = bindingsFor(state, input);
-			validateSecretDataKeys(configuration, secretBindings);
 			let modelProjection: unknown;
 			if (configuration.source.kind === "standard") {
 				if (!options.modelCatalog || !options.modelAccess)
@@ -685,9 +785,14 @@ export function createWorkloadRuntimeV1(
 					desiredState: "running",
 					replicas: 1,
 				});
+				const executionCapacity = resolveWorkloadExecutionCapacityV1(
+					options,
+					configuration.source.imageDigest,
+				);
 				return {
 					configuration,
 					deployment,
+					...(executionCapacity ? { executionCapacity } : {}),
 					...(modelProjection ? { modelProjection } : {}),
 				};
 			} catch {
@@ -796,6 +901,51 @@ export function createWorkloadRuntimeV1(
 				);
 			}
 			return identity;
+		},
+		async observeVerifiedControl(state) {
+			if (!state.identity || !state.verified || state.verifiedRevision === null)
+				return "pending";
+			const deployment = validateAgentWorkloadDesiredV1(
+				state.verified.deployment,
+			);
+			if (
+				deployment.agentId !== state.agentId ||
+				state.verified.configuration.agentId !== state.agentId ||
+				deployment.configRevision !== state.verified.configuration.revision ||
+				deployment.imageDigest !==
+					state.verified.configuration.source.imageDigest
+			)
+				return "drifted";
+			const observation = createAdapter(undefined, {
+				candidate: state.verified,
+			});
+			const original = validateAgentWorkloadDesiredV1({
+				...deployment,
+				workloadRevision: state.verifiedRevision,
+				expectedWorkload: {
+					state: "present",
+					workloadUid: state.identity.uid,
+					workloadGeneration: state.identity.generation,
+				},
+			});
+			// Before route closure, controls use the verified business route directly.
+			if (state.phase === "ready" || state.phase === "preflight")
+				return observation.observe(
+					original,
+					state.identity,
+					"open",
+					"required",
+				);
+			const health = await observation.observe(
+				original,
+				state.identity,
+				"closed",
+				"required",
+				{ workloadRevision: state.revision, fence: state.fence },
+			);
+			return state.phase === "closing" && health === "drifted"
+				? observation.observe(original, state.identity, "open", "required")
+				: health;
 		},
 		async observe(state) {
 			observedCapabilities.delete(state);

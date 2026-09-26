@@ -870,6 +870,42 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #796 exposes deployment-owned, credential-free choices to the Web client.
+function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/deployment/configuration";
+	const schemas = [
+		"DeploymentConfigurationProjectionV2",
+		"DeploymentConfigurationStatusV2",
+		"DeploymentModelCatalogProjectionV2",
+		"DeploymentModelEndpointProjectionV2",
+		"DeploymentModelProjectionV2",
+		"DeploymentTemplateProjectionV2",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"488d119343f8fec88d022b85688e1661619dc4bf9e74839bf171d8b6de817f20"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return (
+		sameValue(previous, normalized) ||
+		isAgentLifecycleV2OpenApiAddition(previous, normalized)
+	);
+}
+
 // Only the reviewed #442 additive file surface may differ; every old contract remains exact.
 function isFileAuthorityOpenApiAddition(previous, current) {
 	const paths = [
@@ -1007,6 +1043,7 @@ function findBreakingChanges(previous, current) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
+			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&

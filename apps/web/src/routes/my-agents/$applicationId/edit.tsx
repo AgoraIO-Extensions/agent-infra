@@ -1,9 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
+import { unavailableDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import { getAgentApplicationEditAction } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
+import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
@@ -14,25 +17,26 @@ function EditAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
+	const deployment = useDeploymentConfiguration();
 	if (query.isPending) {
-		return <p aria-live="polite">Loading application...</p>;
+		return <p aria-live="polite">正在读取申请…</p>;
 	}
 	if (query.isError || !query.data || query.data.kind !== "ready") {
 		return (
-			<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+			<main className="platform-content management-content">
 				<section
 					aria-labelledby="agent-application-edit-heading"
 					className="space-y-4"
 				>
 					<h1
 						id="agent-application-edit-heading"
-						className="font-semibold text-2xl text-slate-950"
+						className="font-semibold text-2xl text-foreground"
 					>
-						Application is unavailable
+						申请暂不可用
 					</h1>
-					<p className="text-slate-600" role="alert">
-						Please try again shortly.
-					</p>
+					<Alert>
+						<AlertDescription>请稍后重试。</AlertDescription>
+					</Alert>
 				</section>
 			</main>
 		);
@@ -41,23 +45,23 @@ function EditAgentApplicationRoute() {
 	const action = getAgentApplicationEditAction(application);
 	if (!action) {
 		return (
-			<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+			<main className="platform-content management-content">
 				<section
 					aria-labelledby="agent-application-edit-heading"
 					className="space-y-4"
 				>
 					<h1
 						id="agent-application-edit-heading"
-						className="font-semibold text-2xl text-slate-950"
+						className="font-semibold text-2xl text-foreground"
 					>
-						Application is not editable
+						当前申请不可修改
 					</h1>
 					<Link
 						className={buttonVariants({ variant: "link", className: "px-0" })}
 						params={{ applicationId }}
 						to="/my-agents/$applicationId"
 					>
-						Back to application
+						返回申请详情
 					</Link>
 				</section>
 			</main>
@@ -67,9 +71,13 @@ function EditAgentApplicationRoute() {
 		submission.isError && submission.error instanceof Error
 			? submission.error
 			: null;
+	const deploymentConfiguration =
+		deployment.data?.kind === "ready"
+			? deployment.data.configuration
+			: unavailableDeploymentConfiguration;
 
 	return (
-		<main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
 				action={action}
 				application={application}
@@ -78,6 +86,9 @@ function EditAgentApplicationRoute() {
 				onSubmit={(body) => submission.update(applicationId, body)}
 				result={submission.data}
 				submitting={submission.isPending}
+				deploymentConfiguration={deploymentConfiguration}
+				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
+				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>
 		</main>
 	);

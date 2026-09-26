@@ -1,9 +1,6 @@
-import { createHash } from "node:crypto";
-import { isIP } from "node:net";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
-	validateAgentWorkloadDesiredV1,
 	validateKubernetesReconcileResultV1,
 	validateWorkloadCleanupResultV1,
 	validateWorkloadRouteSwitchRequestV1,
@@ -18,11 +15,9 @@ import {
 import type {
 	KubernetesObject,
 	V1Ingress,
-	V1LabelSelector,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
-	V1PodSpec,
 	V1Secret,
 	V1Service,
 	V1ServiceAccount,
@@ -33,293 +28,45 @@ import {
 	WorkloadKubernetesError,
 	type WorkloadResourceKind,
 } from "./kubernetes-client.js";
+import { createKubernetesWorkloadCleanupV1 } from "./kubernetes-runtime-cleanup.js";
+import {
+	agentAnnotation,
+	agentContainerSecurityContext,
+	containsDesired,
+	controllerAnnotationPrefix,
+	desiredAnnotation,
+	fingerprintAnnotation,
+	hasClosedSelectorCollision,
+	hasSameStructure,
+	matchesIngress,
+	matchesNetworkPolicySpec,
+	matchesServiceSpec,
+	modelFingerprintAnnotation,
+	ownerLabel,
+	type RouteSelectorMode,
+	resourceFingerprint,
+	revisionLabel,
+	routeSelector,
+	secretConfigRevisionAnnotation,
+	secretFenceAnnotation,
+	secretIdAnnotation,
+	secretUidAnnotation,
+	secretVersionAnnotation,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-comparison.js";
+import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
+import {
+	type WorkloadEgressPolicyV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
+import {
+	validateWorkloadRuntimeAuthV1,
+	type WorkloadRuntimeAuthV1,
+} from "./workload-runtime-auth.js";
 
-const ownerLabel = "agent-infra.agora.io/agent";
-const revisionLabel = "agent-infra.agora.io/revision";
-const agentAnnotation = "agent-infra.agora.io/agent-id";
-const fingerprintAnnotation = "agent-infra.agora.io/spec-hash";
-const desiredAnnotation = "agent-infra.agora.io/desired";
-const modelFingerprintAnnotation = "agent-infra.agora.io/model-config-hash";
-const controllerAnnotationPrefix = "agent-infra.agora.io/";
-const secretIdAnnotation = "agent-infra.agora.io/secret-id";
-const secretVersionAnnotation = "agent-infra.agora.io/secret-version";
-const secretConfigRevisionAnnotation = "agent-infra.agora.io/config-revision";
+export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 
-function secretFenceAnnotation(secretName: string) {
-	return `agent-infra.agora.io/secret-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
-}
-
-function secretUidAnnotation(secretName: string) {
-	return `agent-infra.agora.io/secret-uid-${createHash("sha256").update(secretName).digest("hex").slice(0, 32)}`;
-}
-
-type RouteSelectorMode = "closed" | "open";
-
-function hasSameStructure(actual: unknown, expected: unknown): boolean {
-	if (Object.is(actual, expected)) return true;
-	if (Array.isArray(actual) || Array.isArray(expected))
-		return (
-			Array.isArray(actual) &&
-			Array.isArray(expected) &&
-			actual.length === expected.length &&
-			actual.every((entry, index) => hasSameStructure(entry, expected[index]))
-		);
-	if (
-		actual === null ||
-		expected === null ||
-		typeof actual !== "object" ||
-		typeof expected !== "object"
-	)
-		return false;
-	const actualEntries = Object.entries(actual);
-	const expectedRecord = expected as Record<string, unknown>;
-	return (
-		actualEntries.length === Object.keys(expectedRecord).length &&
-		actualEntries.every(
-			([key, value]) =>
-				Object.hasOwn(expectedRecord, key) &&
-				hasSameStructure(value, expectedRecord[key]),
-		)
-	);
-}
-
-// Compare quantities without float rounding or rejecting API-server canonical units.
-function quantityRatio(value: string): readonly [bigint, bigint] | undefined {
-	if (value.length > 128) return undefined;
-	const match =
-		/^([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))(n|u|m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei|[eE][+-]?[0-9]+)?$/.exec(
-			value,
-		);
-	if (!match?.[1]) return undefined;
-	const [integer, fraction = ""] = match[1].replace(/^\+/, "").split(".");
-	let numerator = BigInt(`${integer || "0"}${fraction}`);
-	let denominator = 10n ** BigInt(fraction.length);
-	const suffix = match[2] ?? "";
-	if (suffix.endsWith("i")) {
-		numerator *=
-			1024n ** BigInt(["Ki", "Mi", "Gi", "Ti", "Pi", "Ei"].indexOf(suffix) + 1);
-	} else {
-		const powers: Readonly<Record<string, number>> = {
-			"": 0,
-			n: -9,
-			u: -6,
-			m: -3,
-			k: 3,
-			M: 6,
-			G: 9,
-			T: 12,
-			P: 15,
-			E: 18,
-		};
-		const exponent = powers[suffix] ?? Number(suffix.slice(1));
-		if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 30)
-			return undefined;
-		if (exponent < 0) denominator *= 10n ** BigInt(-exponent);
-		else numerator *= 10n ** BigInt(exponent);
-	}
-	return [numerator, denominator];
-}
-
-function matchesResources(
-	actual: V1PodSpec["containers"][number]["resources"],
-	expected: KubernetesWorkloadPolicyV1["resources"],
-) {
-	if (
-		!actual ||
-		!hasSameStructure(Object.keys(actual).sort(), ["limits", "requests"])
-	)
-		return false;
-	return (["limits", "requests"] as const).every((kind) => {
-		const values = actual[kind];
-		if (
-			!values ||
-			!hasSameStructure(
-				Object.keys(values).sort(),
-				Object.keys(expected[kind]).sort(),
-			)
-		)
-			return false;
-		return Object.entries(expected[kind]).every(([key, value]) => {
-			const observed = values[key];
-			if (typeof observed !== "string") return false;
-			const a = quantityRatio(observed);
-			const b = quantityRatio(value);
-			return a !== undefined && b !== undefined && a[0] * b[1] === b[0] * a[1];
-		});
-	});
-}
-
-function containsDesired(actual: unknown, expected: unknown): boolean {
-	if (Array.isArray(expected) && expected.length === 0 && actual === undefined)
-		return true;
-	if (Array.isArray(expected))
-		return (
-			Array.isArray(actual) &&
-			actual.length === expected.length &&
-			expected.every((entry, index) => containsDesired(actual[index], entry))
-		);
-	if (expected !== null && typeof expected === "object")
-		return (
-			actual !== null &&
-			typeof actual === "object" &&
-			Object.entries(expected).every(([key, value]) =>
-				containsDesired((actual as Record<string, unknown>)[key], value),
-			)
-		);
-	return actual === expected;
-}
-
-function resourceFingerprint(object: KubernetesObject) {
-	const { [fingerprintAnnotation]: _fingerprint, ...annotations } =
-		object.metadata?.annotations ?? {};
-	return createHash("sha256")
-		.update(
-			JSON.stringify({
-				...object,
-				metadata: { ...object.metadata, annotations },
-			}),
-		)
-		.digest("hex");
-}
-
-function agentContainerSecurityContext() {
-	return {
-		allowPrivilegeEscalation: false,
-		readOnlyRootFilesystem: true,
-		capabilities: { drop: ["ALL"] },
-		runAsNonRoot: true,
-		runAsUser: 1000,
-		runAsGroup: 1000,
-		seccompProfile: { type: "RuntimeDefault" },
-		procMount: "Default",
-	};
-}
-
-function agentPodSecurityContext() {
-	return {
-		runAsNonRoot: true,
-		runAsUser: 1000,
-		runAsGroup: 1000,
-		fsGroup: 1000,
-		seccompProfile: { type: "RuntimeDefault" },
-	};
-}
-
-function matchesNetworkPolicySpec(
-	actual: V1NetworkPolicy["spec"] | undefined,
-	expected: V1NetworkPolicy["spec"] | undefined,
-) {
-	const matchesPodSelector = (
-		actualSelector: V1LabelSelector | undefined,
-		expectedSelector: V1LabelSelector | undefined,
-	) => {
-		if (!actualSelector || !expectedSelector)
-			return actualSelector === expectedSelector;
-		return (
-			Object.keys(actualSelector).every(
-				(key) => key === "matchLabels" || key === "matchExpressions",
-			) &&
-			hasSameStructure(
-				actualSelector.matchLabels,
-				expectedSelector.matchLabels,
-			) &&
-			(actualSelector.matchExpressions?.length ?? 0) === 0 &&
-			(expectedSelector.matchExpressions?.length ?? 0) === 0
-		);
-	};
-	return (
-		containsDesired(actual, expected) &&
-		matchesPodSelector(actual?.podSelector, expected?.podSelector) &&
-		![actual?.ingress, actual?.egress].some((rules) =>
-			rules?.some((rule) =>
-				rule.ports?.some(
-					(port) =>
-						typeof port.port === "number" &&
-						port.endPort !== undefined &&
-						port.endPort > port.port,
-				),
-			),
-		)
-	);
-}
-
-function matchesServiceSpec(
-	actual: V1Service["spec"] | undefined,
-	expected: V1Service["spec"] | undefined,
-) {
-	if (!actual || !expected) return actual === expected;
-	const allowedSpecFields = new Set([
-		"clusterIP",
-		"clusterIPs",
-		"internalTrafficPolicy",
-		"ipFamilies",
-		"ipFamilyPolicy",
-		"ports",
-		"selector",
-		"sessionAffinity",
-		"type",
-	]);
-	const allowedPortFields = new Set(["name", "port", "protocol", "targetPort"]);
-	const actualPort = actual.ports?.[0];
-	const expectedPort = expected.ports?.[0];
-	return (
-		Object.keys(actual).every((key) => allowedSpecFields.has(key)) &&
-		actual.type === expected.type &&
-		hasSameStructure(actual.selector, expected.selector) &&
-		actual.ports?.length === 1 &&
-		expected.ports?.length === 1 &&
-		actualPort !== undefined &&
-		expectedPort !== undefined &&
-		Object.keys(actualPort).every((key) => allowedPortFields.has(key)) &&
-		actualPort.name === expectedPort.name &&
-		actualPort.port === expectedPort.port &&
-		actualPort.targetPort === expectedPort.targetPort &&
-		(actualPort.protocol === undefined || actualPort.protocol === "TCP") &&
-		(actual.sessionAffinity === undefined ||
-			actual.sessionAffinity === "None") &&
-		(actual.internalTrafficPolicy === undefined ||
-			actual.internalTrafficPolicy === "Cluster") &&
-		actual.clusterIP !== "None" &&
-		!actual.clusterIPs?.includes("None")
-	);
-}
-
-function matchesIngress(current: V1Ingress, expected: V1Ingress) {
-	const hash = resourceFingerprint(expected);
-	return (
-		hasSameStructure(current.metadata?.labels, expected.metadata?.labels) &&
-		hasSameStructure(current.metadata?.annotations, {
-			...expected.metadata?.annotations,
-			[fingerprintAnnotation]: hash,
-		}) &&
-		hasSameStructure(current.spec, expected.spec)
-	);
-}
-
-function routeSelector(
-	name: string,
-	workloadRevision: number,
-	mode: RouteSelectorMode,
-) {
-	return {
-		[ownerLabel]: name,
-		[revisionLabel]: mode === "closed" ? "closed" : String(workloadRevision),
-	};
-}
-
-function hasClosedSelectorCollision(pods: readonly V1Pod[], name: string) {
-	return pods.some(
-		(pod) =>
-			pod.metadata?.labels?.[ownerLabel] === name &&
-			pod.metadata?.labels?.[revisionLabel] === "closed",
-	);
-}
-
-export function workloadResourceNameV1(agentId: string): string {
-	return `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
-}
-
-export interface KubernetesWorkloadPolicyV1 {
+export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -340,6 +87,7 @@ export interface KubernetesWorkloadPolicyV1 {
 	readonly tlsSecretName: string;
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
+	readonly runtimeAuth?: WorkloadRuntimeAuthV1;
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
@@ -353,6 +101,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const egress = workloadEgressRulesV1(policy);
+	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
@@ -360,87 +110,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const modelInjection = modelProjection
 		? runtimeModelInjectionV1(modelProjection)
 		: undefined;
-	function modelBindings(value: AgentWorkloadDesiredV1) {
-		if (!modelProjection || !modelInjection) return undefined;
-		if (
-			value.agentId !== modelProjection.agentId ||
-			value.configRevision !== modelProjection.configurationRevision ||
-			Object.keys(value.env).some((name) => name.startsWith("AGENT_INFRA_")) ||
-			modelProjection.options.some(
-				(option) =>
-					!value.secretRefs.some(
-						(ref) =>
-							ref.name === option.secretRef.name &&
-							ref.secretId === option.secretRef.secretId &&
-							ref.secretVersion === option.secretRef.secretVersion &&
-							ref.configRevision === option.secretRef.configRevision,
-					),
-			)
-		)
-			throw new WorkloadKubernetesError("policy");
-		return modelInjection;
-	}
-	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
-		const injection = modelBindings(value);
-		return [
-			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
-			...(injection?.env ?? []),
-		];
-	}
-	function environmentSecrets(value: AgentWorkloadDesiredV1) {
-		modelBindings(value);
-		return value.secretRefs.filter(
-			(ref) =>
-				!modelProjection?.options.some(
-					(option) => option.secretRef.name === ref.name,
-				),
-		);
-	}
-	function podReferencesSecret(
-		pod: V1PodSpec | undefined,
-		name: string,
-	): boolean {
-		return (
-			!!pod &&
-			([
-				...pod.containers,
-				...(pod.initContainers ?? []),
-				...(pod.ephemeralContainers ?? []),
-			].some(
-				(container) =>
-					container.env?.some(
-						(entry) => entry.valueFrom?.secretKeyRef?.name === name,
-					) ||
-					container.envFrom?.some((entry) => entry.secretRef?.name === name),
-			) ||
-				(pod.volumes ?? []).some(
-					(volume) =>
-						volume.secret?.secretName === name ||
-						volume.projected?.sources?.some(
-							(source) => source.secret?.name === name,
-						),
-				) ||
-				(pod.imagePullSecrets ?? []).some((secret) => secret.name === name))
-		);
-	}
-	function matchesModelSecret(
-		value: AgentWorkloadDesiredV1,
-		secret: V1Secret | null,
-	) {
-		const injection = modelBindings(value);
-		if (!injection) return true;
-		if (!secret) return false;
-		own(secret, value.agentId, value.workloadRevision, value.fence);
-		return (
-			!secret.metadata?.deletionTimestamp &&
-			secret.immutable === true &&
-			secret.type === "Opaque" &&
-			secret.stringData === undefined &&
-			hasSameStructure(secret.data, {
-				configuration: Buffer.from(injection.configuration).toString("base64"),
-			})
-		);
-	}
 	if (
 		client.namespace !== policy.namespace ||
 		!Object.keys(policy.workerSelector).length ||
@@ -450,711 +119,42 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	const selector = (agentId: string) =>
-		`${ownerLabel}=${workloadResourceNameV1(agentId)}`;
-	const isOwnedSecret = (
-		secret: V1Secret,
-		value: AgentWorkloadDesiredV1,
-		ref: AgentWorkloadDesiredV1["secretRefs"][number],
-	) =>
-		secret.metadata?.name === ref.name &&
-		secret.metadata?.annotations?.[agentAnnotation] === value.agentId &&
-		secret.metadata?.labels?.[ownerLabel] ===
-			workloadResourceNameV1(value.agentId) &&
-		secret.metadata?.annotations?.[secretIdAnnotation] === ref.secretId &&
-		secret.metadata?.annotations?.[secretVersionAnnotation] ===
-			String(ref.secretVersion) &&
-		secret.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
-			String(ref.configRevision);
-	const isLiveOwnedImmutableSecret = (
-		secret: V1Secret,
-		value: AgentWorkloadDesiredV1,
-		ref: AgentWorkloadDesiredV1["secretRefs"][number],
-	) =>
-		!secret.metadata?.deletionTimestamp &&
-		isOwnedSecret(secret, value, ref) &&
-		secret.immutable === true &&
-		secret.type === "Opaque";
-	function desired(input: unknown) {
-		const value = validateAgentWorkloadDesiredV1(input);
-		const name = workloadResourceNameV1(value.agentId);
-		if (
-			value.namespaceRef !== policy.namespaceRef ||
-			value.resourceProfileRef !== policy.resourceProfileRef ||
-			value.persistentVolume.storageProfileRef !== policy.storageProfileRef ||
-			value.networkPolicy.deploymentPolicyRef !== policy.networkPolicyRef ||
-			value.service.name !== name ||
-			value.serviceAccount.name !== name ||
-			value.persistentVolume.name !== `${name}-data` ||
-			value.route.name !== name ||
-			(value.route.exposure === "platform-auth" &&
-				!Object.keys(policy.platformAuthAnnotations).length)
-		)
-			throw new WorkloadKubernetesError("policy");
-		return value;
-	}
-	function metadata(
-		value: AgentWorkloadDesiredV1,
-		name = workloadResourceNameV1(value.agentId),
-	) {
-		return {
-			name,
-			namespace: policy.namespace,
-			labels: {
-				[ownerLabel]: workloadResourceNameV1(value.agentId),
-				[revisionLabel]: String(value.workloadRevision),
-			},
-			annotations: {
-				[agentAnnotation]: value.agentId,
-				"agent-infra.agora.io/config-revision": String(value.configRevision),
-				"agent-infra.agora.io/fence": String(value.fence),
-			},
-		};
-	}
-	function own(
-		object: KubernetesObject,
-		agentId: string,
-		revision: number,
-		fence: number,
-	) {
-		if (
-			object.metadata?.annotations?.[agentAnnotation] !== agentId ||
-			object.metadata.labels?.[ownerLabel] !== workloadResourceNameV1(agentId)
-		)
-			throw new WorkloadKubernetesError("policy");
-		const revisionValue = object.metadata.labels[revisionLabel];
-		const fenceValue =
-			object.metadata.annotations["agent-infra.agora.io/fence"];
-		if (
-			!/^[1-9][0-9]*$/.test(revisionValue ?? "") ||
-			!/^[1-9][0-9]*$/.test(fenceValue ?? "")
-		)
-			throw new WorkloadKubernetesError("conflict");
-		const currentRevision = Number(object.metadata.labels[revisionLabel]);
-		const currentFence = Number(
-			object.metadata.annotations["agent-infra.agora.io/fence"],
-		);
-		if (
-			!Number.isSafeInteger(currentRevision) ||
-			currentRevision < 1 ||
-			currentRevision > revision ||
-			!Number.isSafeInteger(currentFence) ||
-			currentFence < 1 ||
-			currentFence > fence
-		)
-			throw new WorkloadKubernetesError("conflict");
-	}
-	function hasCurrentMetadata(
-		object: KubernetesObject,
-		value: AgentWorkloadDesiredV1,
-	) {
-		return (
-			object.metadata?.labels?.[revisionLabel] ===
-				String(value.workloadRevision) &&
-			object.metadata?.annotations?.[secretConfigRevisionAnnotation] ===
-				String(value.configRevision) &&
-			object.metadata?.annotations?.["agent-infra.agora.io/fence"] ===
-				String(value.fence)
-		);
-	}
-	function hasSafeRoutingMetadata(
-		value: AgentWorkloadDesiredV1,
-		object: KubernetesObject,
-	) {
-		const expected = metadata(value);
-		return (
-			hasSameStructure(object.metadata?.labels, expected.labels) &&
-			containsDesired(object.metadata?.annotations, expected.annotations) &&
-			Object.keys(object.metadata?.annotations ?? {}).every(
-				(key) =>
-					key === fingerprintAnnotation ||
-					Object.hasOwn(expected.annotations, key),
-			)
-		);
-	}
-	function hasSafeServiceAccount(
-		value: AgentWorkloadDesiredV1,
-		account: V1ServiceAccount,
-	) {
-		const expected = metadata(value);
-		return (
-			Object.keys(account).every((key) =>
-				[
-					"apiVersion",
-					"kind",
-					"metadata",
-					"automountServiceAccountToken",
-					"secrets",
-					"imagePullSecrets",
-				].includes(key),
-			) &&
-			account.apiVersion === "v1" &&
-			account.kind === "ServiceAccount" &&
-			account.automountServiceAccountToken === false &&
-			(account.secrets?.length ?? 0) === 0 &&
-			(account.imagePullSecrets?.length ?? 0) === 0 &&
-			hasSameStructure(account.metadata?.labels, expected.labels) &&
-			containsDesired(account.metadata?.annotations, expected.annotations) &&
-			Object.keys(account.metadata?.annotations ?? {}).every(
-				(key) =>
-					key === fingerprintAnnotation ||
-					Object.hasOwn(expected.annotations, key),
-			)
-		);
-	}
+	const {
+		modelBindings,
+		workloadEnvironment,
+		environmentSecrets,
+		podReferencesSecret,
+		matchesModelSecret,
+		selector,
+		isOwnedSecret,
+		isLiveOwnedImmutableSecret,
+		desired,
+		metadata,
+		own,
+		hasCurrentMetadata,
+		hasRecoveryMetadata,
+		hasSafeRoutingMetadata,
+		hasSafeServiceAccount,
+		hasControllingWorkloadOwner,
+		hasSafePodMetadata,
+		hasUnsafePodSpec,
+		hasDriftedImmutableStatefulSetSpec,
+		hasDriftedStatefulSetSpec,
+		normalizeStatefulSetSpecRevision,
+		canResumeScaledDownStatefulSet,
+		serviceSpec,
+		persistentVolumeClaimSpec,
+		matchesPersistentVolumeClaimSpec,
+		ingress,
+		hasDriftedPodSpec,
+		networkPolicy,
+	} = createKubernetesWorkloadPolicyHelpersV1({
+		policy,
+		modelProjection,
+		modelInjection,
+		egress,
+	});
 
-	function hasControllingWorkloadOwner(
-		pod: V1Pod,
-		workload: V1StatefulSet,
-	): boolean {
-		return Boolean(
-			workload.metadata?.uid &&
-				workload.metadata.name &&
-				pod.metadata?.ownerReferences?.some(
-					(owner) =>
-						owner.apiVersion === "apps/v1" &&
-						owner.kind === "StatefulSet" &&
-						owner.name === workload.metadata?.name &&
-						owner.uid === workload.metadata?.uid &&
-						owner.controller === true,
-				),
-		);
-	}
-	function hasSafePodMetadata(
-		value: AgentWorkloadDesiredV1,
-		actual: V1Pod["metadata"],
-		live?: { pod: V1Pod; workload: V1StatefulSet },
-	) {
-		const name = workloadResourceNameV1(value.agentId);
-		const expectedLabels: Record<string, string> = {
-			[ownerLabel]: name,
-			[revisionLabel]: String(value.workloadRevision),
-		};
-		if (live) {
-			const injected = {
-				"statefulset.kubernetes.io/pod-name": `${name}-0`,
-				"apps.kubernetes.io/pod-index": "0",
-				"controller-revision-hash":
-					live.workload.status?.updateRevision ??
-					live.workload.status?.currentRevision,
-			};
-			for (const [key, expected] of Object.entries(injected)) {
-				if (actual?.labels?.[key] !== undefined) {
-					if (expected === undefined || actual.labels[key] !== expected)
-						return false;
-					expectedLabels[key] = expected;
-				}
-			}
-		}
-		if (!hasSameStructure(actual?.labels, expectedLabels)) return false;
-		const annotations = Object.entries(actual?.annotations ?? {});
-		if (!live) return annotations.length === 0;
-		const podIPs =
-			live.pod.status?.podIPs?.map((entry) => entry.ip) ??
-			(live.pod.status?.podIP ? [live.pod.status.podIP] : []);
-		const cidrs = podIPs.map((ip) => `${ip}/${isIP(ip) === 6 ? 128 : 32}`);
-		const validCidr = (value: string) => {
-			const parts = value.split("/");
-			if (parts.length !== 2) return false;
-			const [ip = "", prefix] = parts;
-			return (
-				value.length <= 48 &&
-				((isIP(ip) === 4 && prefix === "32") ||
-					(isIP(ip) === 6 && prefix === "128"))
-			);
-		};
-		return annotations.every(([key, content]) => {
-			if (key === "cni.projectcalico.org/containerID")
-				return /^[a-f0-9]{64}$/.test(content);
-			if (key === "cni.projectcalico.org/podIP")
-				return (
-					content === "" ||
-					(validCidr(content) &&
-						(cidrs.length === 0 || cidrs.includes(content)))
-				);
-			if (key === "cni.projectcalico.org/podIPs")
-				return (
-					content === "" ||
-					(content.length <= 97 &&
-						content.split(",").every(validCidr) &&
-						(cidrs.length === 0 || content === cidrs.join(",")))
-				);
-			return false;
-		});
-	}
-
-	function hasUnsafePodSpec(
-		pod: V1PodSpec | undefined,
-		expectedIdentity?: {
-			readonly hostname: string;
-			readonly subdomain: string;
-		},
-	) {
-		const hasUnexpectedIdentity = expectedIdentity
-			? pod?.hostname !== expectedIdentity.hostname ||
-				pod?.subdomain !== expectedIdentity.subdomain
-			: pod?.hostname !== undefined || pod?.subdomain !== undefined;
-		return (
-			Object.entries(pod ?? {}).some(
-				([key, value]) =>
-					value !== undefined &&
-					![
-						"containers",
-						"volumes",
-						"serviceAccountName",
-						"serviceAccount",
-						"automountServiceAccountToken",
-						"securityContext",
-						"restartPolicy",
-						"terminationGracePeriodSeconds",
-						"enableServiceLinks",
-						"dnsPolicy",
-						"schedulerName",
-						"priorityClassName",
-						"priority",
-						"preemptionPolicy",
-						"nodeSelector",
-						"nodeName",
-						"hostname",
-						"subdomain",
-						"tolerations",
-						"hostNetwork",
-						"hostPID",
-						"hostIPC",
-						"shareProcessNamespace",
-						"hostAliases",
-						"imagePullSecrets",
-						"initContainers",
-						"ephemeralContainers",
-						"overhead",
-						"resourceClaims",
-						"schedulingGates",
-						"topologySpreadConstraints",
-					].includes(key),
-			) ||
-			(pod?.restartPolicy !== undefined && pod.restartPolicy !== "Always") ||
-			(pod?.terminationGracePeriodSeconds !== undefined &&
-				pod.terminationGracePeriodSeconds !== 30) ||
-			(pod?.enableServiceLinks !== undefined &&
-				pod.enableServiceLinks !== true) ||
-			(pod?.serviceAccount !== undefined &&
-				pod.serviceAccount !== pod.serviceAccountName) ||
-			(pod?.containers.length ?? 0) !== 1 ||
-			pod?.containers[0]?.name !== "agent" ||
-			pod?.hostNetwork === true ||
-			pod?.hostPID === true ||
-			pod?.hostIPC === true ||
-			pod?.shareProcessNamespace === true ||
-			(pod?.hostAliases?.length ?? 0) > 0 ||
-			pod?.dnsConfig !== undefined ||
-			(pod?.dnsPolicy !== undefined && pod.dnsPolicy !== "ClusterFirst") ||
-			(pod?.schedulerName !== undefined &&
-				pod.schedulerName !== "default-scheduler") ||
-			(pod?.priorityClassName !== undefined && pod.priorityClassName !== "") ||
-			(pod?.priority !== undefined && pod.priority !== 0) ||
-			(pod?.preemptionPolicy !== undefined &&
-				pod.preemptionPolicy !== "PreemptLowerPriority") ||
-			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
-			pod?.affinity !== undefined ||
-			pod?.runtimeClassName !== undefined ||
-			Object.keys(pod?.overhead ?? {}).length > 0 ||
-			(pod?.resourceClaims?.length ?? 0) > 0 ||
-			(pod?.schedulingGates?.length ?? 0) > 0 ||
-			(pod?.topologySpreadConstraints?.length ?? 0) > 0 ||
-			(pod?.tolerations ?? []).some(
-				(toleration) =>
-					!expectedIdentity ||
-					![
-						{
-							key: "node.kubernetes.io/memory-pressure",
-							operator: "Exists",
-							effect: "NoSchedule",
-						},
-						{
-							key: "node.kubernetes.io/not-ready",
-							operator: "Exists",
-							effect: "NoExecute",
-							tolerationSeconds: 300,
-						},
-						{
-							key: "node.kubernetes.io/unreachable",
-							operator: "Exists",
-							effect: "NoExecute",
-							tolerationSeconds: 300,
-						},
-					].some((expected) => hasSameStructure(toleration, expected)),
-			) ||
-			hasUnexpectedIdentity ||
-			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
-			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
-			(pod?.initContainers?.length ?? 0) > 0 ||
-			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
-			pod?.containers.some((container) => {
-				const securityContext = container.securityContext;
-				return (
-					Object.entries(container).some(
-						([key, value]) =>
-							value !== undefined &&
-							![
-								"name",
-								"image",
-								"imagePullPolicy",
-								"ports",
-								"env",
-								"envFrom",
-								"resources",
-								"readinessProbe",
-								"securityContext",
-								"volumeMounts",
-								"terminationMessagePath",
-								"terminationMessagePolicy",
-								"command",
-								"args",
-								"lifecycle",
-								"workingDir",
-								"stdin",
-								"stdinOnce",
-								"tty",
-								"volumeDevices",
-							].includes(key),
-					) ||
-					(container.imagePullPolicy !== undefined &&
-						container.imagePullPolicy !== "IfNotPresent") ||
-					(container.terminationMessagePath !== undefined &&
-						container.terminationMessagePath !== "/dev/termination-log") ||
-					(container.terminationMessagePolicy !== undefined &&
-						container.terminationMessagePolicy !== "File") ||
-					(container.command?.length ?? 0) > 0 ||
-					(container.args?.length ?? 0) > 0 ||
-					Object.keys(container.lifecycle ?? {}).length > 0 ||
-					container.workingDir !== undefined ||
-					container.stdin === true ||
-					container.stdinOnce === true ||
-					container.tty === true ||
-					(container.volumeDevices?.length ?? 0) > 0 ||
-					!hasSameStructure(securityContext, agentContainerSecurityContext()) ||
-					securityContext?.privileged === true ||
-					(securityContext?.capabilities?.add?.length ?? 0) > 0
-				);
-			}) === true
-		);
-	}
-	function hasDriftedImmutableStatefulSetSpec(
-		value: AgentWorkloadDesiredV1,
-		spec: V1StatefulSet["spec"],
-	) {
-		return (
-			!spec ||
-			spec.serviceName !== workloadResourceNameV1(value.agentId) ||
-			(spec.podManagementPolicy ?? "OrderedReady") !== "OrderedReady" ||
-			!hasSameStructure(spec.volumeClaimTemplates ?? [], []) ||
-			!hasSameStructure(
-				{ matchExpressions: [], ...spec.selector },
-				{
-					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },
-					matchExpressions: [],
-				},
-			)
-		);
-	}
-	function hasDriftedStatefulSetSpec(
-		value: AgentWorkloadDesiredV1,
-		spec: V1StatefulSet["spec"],
-	) {
-		if (!spec) return true;
-		const { template, ...controller } = spec;
-		return (
-			hasDriftedStatefulSetTemplate(value, template) ||
-			!hasSameStructure(
-				{
-					...controller,
-					podManagementPolicy: controller.podManagementPolicy ?? "OrderedReady",
-					revisionHistoryLimit: controller.revisionHistoryLimit ?? 10,
-					minReadySeconds: controller.minReadySeconds ?? 0,
-					ordinals: { start: 0, ...controller.ordinals },
-					volumeClaimTemplates: controller.volumeClaimTemplates ?? [],
-					persistentVolumeClaimRetentionPolicy: {
-						whenDeleted: "Retain",
-						whenScaled: "Retain",
-						...controller.persistentVolumeClaimRetentionPolicy,
-					},
-					selector: { matchExpressions: [], ...controller.selector },
-					updateStrategy: {
-						...controller.updateStrategy,
-						rollingUpdate: {
-							partition: 0,
-							maxUnavailable: 1,
-							...controller.updateStrategy?.rollingUpdate,
-						},
-					},
-				},
-				{
-					serviceName: workloadResourceNameV1(value.agentId),
-					replicas: value.replicas,
-					selector: {
-						matchLabels: {
-							[ownerLabel]: workloadResourceNameV1(value.agentId),
-						},
-						matchExpressions: [],
-					},
-					podManagementPolicy: "OrderedReady",
-					revisionHistoryLimit: 10,
-					minReadySeconds: 0,
-					ordinals: { start: 0 },
-					volumeClaimTemplates: [],
-					persistentVolumeClaimRetentionPolicy: {
-						whenDeleted: "Retain",
-						whenScaled: "Retain",
-					},
-					updateStrategy: {
-						type: "RollingUpdate",
-						rollingUpdate: { partition: 0, maxUnavailable: 1 },
-					},
-				},
-			)
-		);
-	}
-	function hasDriftedStatefulSetTemplate(
-		value: AgentWorkloadDesiredV1,
-		template: NonNullable<V1StatefulSet["spec"]>["template"] | undefined,
-	) {
-		const pod = template?.spec;
-		const container = pod?.containers.find((entry) => entry.name === "agent");
-		return (
-			!hasSafePodMetadata(value, template?.metadata) ||
-			hasDriftedPodSpec(value, pod) ||
-			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
-			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
-			(pod?.tolerations?.length ?? 0) > 0 ||
-			pod?.affinity !== undefined ||
-			pod?.runtimeClassName !== undefined ||
-			pod?.nodeName !== undefined ||
-			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
-			pod?.automountServiceAccountToken !== false
-		);
-	}
-	function serviceSpec(
-		value: AgentWorkloadDesiredV1,
-		selector: Readonly<Record<string, string>>,
-	): NonNullable<V1Service["spec"]> {
-		return {
-			type: "ClusterIP",
-			selector,
-			ports: [
-				{
-					name: "runtime",
-					port: value.service.port,
-					targetPort: value.service.port,
-				},
-			],
-		};
-	}
-	function persistentVolumeClaimSpec(): NonNullable<
-		V1PersistentVolumeClaim["spec"]
-	> {
-		return {
-			accessModes: ["ReadWriteOnce"],
-			...(policy.storageClassName
-				? { storageClassName: policy.storageClassName }
-				: {}),
-			resources: { requests: { storage: policy.storageSize } },
-		};
-	}
-	function matchesPersistentVolumeClaimSpec(
-		actual: V1PersistentVolumeClaim["spec"] | undefined,
-	): boolean {
-		const allowedFields = [
-			"accessModes",
-			"resources",
-			"storageClassName",
-			"volumeMode",
-			"volumeName",
-		];
-		if (
-			!actual ||
-			Object.entries(actual).some(
-				([key, value]) => value !== undefined && !allowedFields.includes(key),
-			)
-		)
-			return false;
-		const storage = actual?.resources?.requests?.storage;
-		const observed =
-			typeof storage === "string" ? quantityRatio(storage) : undefined;
-		const expected = quantityRatio(policy.storageSize);
-		return (
-			observed !== undefined &&
-			expected !== undefined &&
-			observed[0] * expected[1] === expected[0] * observed[1] &&
-			containsDesired(
-				{
-					...actual,
-					resources: {
-						...actual?.resources,
-						requests: {
-							...actual?.resources?.requests,
-							storage: policy.storageSize,
-						},
-					},
-				},
-				persistentVolumeClaimSpec(),
-			) &&
-			(actual?.volumeMode === undefined ||
-				actual.volumeMode === "Filesystem") &&
-			actual?.selector === undefined &&
-			actual?.dataSource === undefined &&
-			actual?.dataSourceRef === undefined
-		);
-	}
-	function ingress(value: AgentWorkloadDesiredV1): V1Ingress {
-		const name = workloadResourceNameV1(value.agentId);
-		const host = `${name}.${policy.routeHostSuffix}`;
-		return {
-			apiVersion: "networking.k8s.io/v1",
-			kind: "Ingress",
-			metadata: {
-				...metadata(value),
-				annotations: {
-					...metadata(value).annotations,
-					...(value.route.exposure === "platform-auth"
-						? policy.platformAuthAnnotations
-						: {}),
-				},
-			},
-			spec: {
-				ingressClassName: policy.ingressClassName,
-				tls: [{ hosts: [host], secretName: policy.tlsSecretName }],
-				rules: [
-					{
-						host,
-						http: {
-							paths: [
-								{
-									path: "/",
-									pathType: "Prefix",
-									backend: {
-										service: {
-											name,
-											port: { number: value.service.port },
-										},
-									},
-								},
-							],
-						},
-					},
-				],
-			},
-		};
-	}
-	function hasDriftedPodSpec(
-		value: AgentWorkloadDesiredV1,
-		pod: V1PodSpec | undefined,
-		expectedIdentity?: {
-			readonly hostname: string;
-			readonly subdomain: string;
-		},
-	) {
-		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
-		const container = pod?.containers.find((entry) => entry.name === "agent");
-		const probe = container?.readinessProbe;
-		const ports = container?.ports?.map((port) => ({
-			...port,
-			protocol: port.protocol ?? "TCP",
-		}));
-		// API-server defaults are allowed; additional handlers and HTTP overrides are not.
-		const expectedProbe = {
-			httpGet: {
-				path: value.health.path,
-				port: value.service.port,
-				scheme: "HTTP",
-			},
-			timeoutSeconds: value.health.timeoutSeconds,
-			failureThreshold: value.health.failureThreshold,
-			initialDelaySeconds: 0,
-			periodSeconds: 10,
-			successThreshold: 1,
-		};
-		return (
-			!hasSameStructure(ports, [
-				{ name: "runtime", containerPort: value.service.port, protocol: "TCP" },
-			]) ||
-			!matchesResources(container?.resources, policy.resources) ||
-			!hasSameStructure(
-				{
-					...probe,
-					initialDelaySeconds: probe?.initialDelaySeconds ?? 0,
-					periodSeconds: probe?.periodSeconds ?? 10,
-					successThreshold: probe?.successThreshold ?? 1,
-					httpGet: {
-						...probe?.httpGet,
-						scheme: probe?.httpGet?.scheme ?? "HTTP",
-					},
-				},
-				expectedProbe,
-			) ||
-			!hasSameStructure(
-				(container?.env ?? []).map((entry) => ({
-					...entry,
-					value: entry.value ?? "",
-				})),
-				workloadEnvironment(value).map((entry) => ({
-					...entry,
-					value: "value" in entry ? entry.value : "",
-				})),
-			) ||
-			!hasSameStructure(
-				(container?.envFrom ?? []).map((entry) => ({
-					...entry,
-					prefix: entry.prefix ?? "",
-					secretRef: {
-						...entry.secretRef,
-						optional: entry.secretRef?.optional ?? false,
-					},
-				})),
-				environmentSecrets(value).map((ref) => ({
-					prefix: "",
-					secretRef: { name: ref.name, optional: false },
-				})),
-			) ||
-			!hasSameStructure(
-				container?.volumeMounts?.map((mount) => ({
-					...mount,
-					readOnly: mount.readOnly ?? false,
-					subPath: mount.subPath ?? "",
-					subPathExpr: mount.subPathExpr ?? "",
-					mountPropagation: mount.mountPropagation ?? "None",
-				})),
-				[
-					{
-						name: "data",
-						mountPath: value.persistentVolume.mountPath,
-						readOnly: false,
-						subPath: "",
-						subPathExpr: "",
-						mountPropagation: "None",
-					},
-				],
-			) ||
-			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
-			!hasSameStructure(
-				pod?.volumes?.map((volume) => ({
-					...volume,
-					persistentVolumeClaim: {
-						...volume.persistentVolumeClaim,
-						readOnly: volume.persistentVolumeClaim?.readOnly ?? false,
-					},
-				})),
-				[
-					{
-						name: "data",
-						persistentVolumeClaim: {
-							claimName: value.persistentVolume.name,
-							readOnly: false,
-						},
-					},
-				],
-			)
-		);
-	}
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: AgentWorkloadDesiredV1,
@@ -1260,303 +260,47 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			};
 		return client.replace(next);
 	}
-	async function remove(
-		kind: WorkloadResourceKind,
-		name: string,
-		value: { agentId: string; workloadRevision: number; fence: number },
-	): Promise<boolean> {
-		const current = await client.read(kind, name);
-		if (!current) return true;
-		own(current, value.agentId, value.workloadRevision, value.fence);
-		if (!current.metadata?.deletionTimestamp) await client.delete(current);
-		return (await client.read(kind, name)) === null;
-	}
-	async function closeRoute(input: unknown): Promise<boolean> {
-		const value = desired(input);
-		const current = await client.read<V1StatefulSet>(
-			"StatefulSet",
-			workloadResourceNameV1(value.agentId),
-		);
-		if (current)
-			own(current, value.agentId, value.workloadRevision, value.fence);
-		return closeAgentAtFence(value);
-	}
-	function hasOnlyControllerRoutingMetadata(resource: KubernetesObject) {
-		return (
-			Object.keys(resource.metadata?.labels ?? {}).every(
-				(key) => key === ownerLabel || key === revisionLabel,
-			) &&
-			Object.keys(resource.metadata?.annotations ?? {}).every((key) =>
-				[
-					agentAnnotation,
-					secretConfigRevisionAnnotation,
-					"agent-infra.agora.io/fence",
-					fingerprintAnnotation,
-				].includes(key),
-			)
-		);
-	}
-	async function closeAgentAtFence(value: {
-		agentId: string;
-		workloadRevision: number;
-		fence: number;
-	}): Promise<boolean> {
-		const name = workloadResourceNameV1(value.agentId);
-		// Probe Services must never retain an alternate externally reachable route.
-		const probeName = `${name}-probe`;
-		const [probe, service, routeIngress] = await Promise.all([
-			client.read<V1Service>("Service", probeName),
-			client.read<V1Service>("Service", name),
-			client.read<V1Ingress>("Ingress", name),
-		]);
-		for (const resource of [probe, service, routeIngress]) {
-			if (resource)
-				own(resource, value.agentId, value.workloadRevision, value.fence);
-		}
-		const outcomes = await Promise.allSettled([
-			(async () => {
-				let resourcesClosed = true;
-				if (probe) {
-					own(probe, value.agentId, value.workloadRevision, value.fence);
-					const expectedProbeSpec = {
-						type: "ClusterIP",
-						selector: {
-							[ownerLabel]: name,
-							[revisionLabel]:
-								probe.metadata?.labels?.[revisionLabel] ?? "closed",
-						},
-						ports: probe.spec?.ports?.map((port) => ({
-							name: port.name,
-							port: port.port,
-							targetPort: port.targetPort,
-						})),
-					};
-					if (
-						(!matchesServiceSpec(probe.spec, expectedProbeSpec) ||
-							!hasOnlyControllerRoutingMetadata(probe)) &&
-						!(await remove("Service", probeName, value))
-					)
-						resourcesClosed = false;
-				}
-				return resourcesClosed;
-			})(),
-			(async () => {
-				let resourcesClosed = true;
-				// Remove the selected route's backend before any candidate Pod can start.
-				if (service) {
-					own(service, value.agentId, value.workloadRevision, value.fence);
-					const safeServiceSpec = {
-						type: "ClusterIP",
-						selector: service.spec?.selector,
-						ports: service.spec?.ports?.map((port) => ({
-							name: port.name,
-							port: port.port,
-							targetPort: port.targetPort,
-						})),
-					};
-					if (
-						!matchesServiceSpec(service.spec, safeServiceSpec) ||
-						!hasOnlyControllerRoutingMetadata(service)
-					) {
-						return remove("Service", name, value);
-					}
-					const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
-					if (hasClosedSelectorCollision(pods, name))
-						return remove("Service", name, value);
-					if (
-						!hasSameStructure(service.spec?.selector, {
-							[ownerLabel]: name,
-							[revisionLabel]: "closed",
-						}) ||
-						service.metadata?.labels?.[revisionLabel] !==
-							String(value.workloadRevision) ||
-						service.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-							String(value.fence)
-					) {
-						await client.replace({
-							...service,
-							metadata: {
-								...service.metadata,
-								labels: {
-									...service.metadata?.labels,
-									[revisionLabel]: String(value.workloadRevision),
-								},
-								annotations: {
-									...service.metadata?.annotations,
-									"agent-infra.agora.io/fence": String(value.fence),
-									[fingerprintAnnotation]: "",
-								},
-							},
-							spec: {
-								...service.spec,
-								selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
-							},
-						});
-					}
-					const closed = await client.read<V1Service>("Service", name);
-					if (closed) {
-						own(closed, value.agentId, value.workloadRevision, value.fence);
-						if (
-							!hasOnlyControllerRoutingMetadata(closed) ||
-							closed.metadata?.labels?.[revisionLabel] !==
-								String(value.workloadRevision) ||
-							closed.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-								String(value.fence) ||
-							!matchesServiceSpec(closed.spec, {
-								...safeServiceSpec,
-								selector: { [ownerLabel]: name, [revisionLabel]: "closed" },
-							})
-						)
-							resourcesClosed = false;
-					}
-				}
-				return resourcesClosed;
-			})(),
-			remove("Ingress", name, value),
-		]);
-		const failure = outcomes.find(
-			(outcome): outcome is PromiseRejectedResult =>
-				outcome.status === "rejected",
-		);
-		if (failure) throw failure.reason;
-		return outcomes.every(
-			(outcome) => outcome.status === "fulfilled" && outcome.value,
-		);
-	}
-	async function closeAgent(
-		agentId: string,
-		workloadRevision: number,
-		fence: number,
-	): Promise<boolean> {
-		return closeAgentAtFence({ agentId, workloadRevision, fence });
-	}
-	async function cleanupAgentAtFence(
-		value: { agentId: string; workloadRevision: number; fence: number },
-		deleteNewVolume: boolean,
-	) {
-		const name = workloadResourceNameV1(value.agentId);
-		const pvc = await client.read<V1PersistentVolumeClaim>(
-			"PersistentVolumeClaim",
-			`${name}-data`,
-		);
-		// Reject a stale cleanup before advancing even the durable PVC fence.
-		const existingResources = await Promise.all([
-			client.read("StatefulSet", name),
-			client.read("Service", name),
-			client.read("Service", `${name}-probe`),
-			client.read("ServiceAccount", name),
-			client.read("NetworkPolicy", name),
-			client.read("Ingress", name),
-		]);
-		for (const resource of [pvc, ...existingResources]) {
-			if (resource)
-				own(resource, value.agentId, value.workloadRevision, value.fence);
-		}
-		if (pvc) {
-			own(pvc, value.agentId, value.workloadRevision, value.fence);
-			if (
-				!pvc.metadata?.deletionTimestamp &&
-				(pvc.metadata?.labels?.[revisionLabel] !==
-					String(value.workloadRevision) ||
-					pvc.metadata?.annotations?.["agent-infra.agora.io/fence"] !==
-						String(value.fence))
-			)
-				await client.replace({
-					...pvc,
-					metadata: {
-						...pvc.metadata,
-						labels: {
-							...pvc.metadata?.labels,
-							[revisionLabel]: String(value.workloadRevision),
-						},
-						annotations: {
-							...pvc.metadata?.annotations,
-							"agent-infra.agora.io/fence": String(value.fence),
-							[fingerprintAnnotation]: "",
-						},
-					},
-				});
-		}
-		if (!(await closeAgentAtFence(value))) return false;
-		if (
-			!(await remove("StatefulSet", name, value)) ||
-			(await client.list("Pod", selector(value.agentId))).length > 0
-		)
-			return false;
-		for (const kind of ["Service", "ServiceAccount", "NetworkPolicy"] as const)
-			if (!(await remove(kind, name, value))) return false;
-		// Secret reclamation requires the Platform binding and rollback-retention
-		// decision. This adapter only owns Kubernetes state, so it must retain
-		// Agent-labelled immutable material rather than bulk-delete it.
-		if (!(await remove("Service", `${name}-probe`, value))) return false;
-		if (
-			deleteNewVolume &&
-			!(await remove("PersistentVolumeClaim", `${name}-data`, value))
-		)
-			return false;
-		return true;
-	}
-	async function statefulSet(value: AgentWorkloadDesiredV1) {
-		const current = await client.read<V1StatefulSet>(
-			"StatefulSet",
-			workloadResourceNameV1(value.agentId),
-		);
-		if (current) {
-			own(current, value.agentId, value.workloadRevision, value.fence);
-			if (
-				value.expectedWorkload.state === "present" &&
-				current.metadata?.uid !== value.expectedWorkload.workloadUid
-			)
-				throw new WorkloadKubernetesError("conflict");
-		}
-		return current;
-	}
-	function networkPolicy(value: AgentWorkloadDesiredV1): V1NetworkPolicy {
-		const peer = (
-			namespace: string,
-			labels: Readonly<Record<string, string>>,
-		) => ({
-			namespaceSelector: {
-				matchLabels: { "kubernetes.io/metadata.name": namespace },
-			},
-			podSelector: { matchLabels: { ...labels } },
-		});
-		return {
-			apiVersion: "networking.k8s.io/v1",
-			kind: "NetworkPolicy",
-			metadata: metadata(value),
-			spec: {
-				podSelector: {
-					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },
-				},
-				policyTypes: ["Ingress", "Egress"],
-				ingress: [
-					{
-						_from: [
-							{ podSelector: { matchLabels: { ...policy.workerSelector } } },
-						],
-						ports: [{ protocol: "TCP", port: value.service.port }],
-					},
-					...(value.route.exposure === "internal-only"
-						? []
-						: [
-								{
-									_from: [peer(policy.routeNamespace, policy.routeSelector)],
-									ports: [{ protocol: "TCP", port: value.service.port }],
-								},
-							]),
-				],
-				egress: [],
-			},
-		};
-	}
+	const {
+		remove,
+		closeRoute,
+		closeAgentAtFence,
+		closeAgent,
+		cleanupAgentAtFence,
+		validateRecoveryCreation,
+		recoveryManagementResources,
+		recoveryCleanupIsClosed,
+		statefulSet,
+	} = createKubernetesWorkloadCleanupV1({
+		client,
+		own,
+		desired,
+		selector,
+		serviceSpec,
+	});
+
 	async function observe(
 		input: unknown,
 		identity: { uid: string; generation: number },
 		routeMode: RouteSelectorMode = "closed",
 		secretBindingMode: "activation" | "required" = "required",
+		closedRouteFence?: {
+			readonly workloadRevision: number;
+			readonly fence: number;
+		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
+		if (
+			closedRouteFence &&
+			(routeMode !== "closed" ||
+				closedRouteFence.workloadRevision < value.workloadRevision ||
+				closedRouteFence.fence < value.fence)
+		)
+			return "drifted";
+		// Closing an upgrade fences the business Service before replacing the old Pod.
+		// Control observation still binds all serving resources to the verified deployment.
+		const routeValue = closedRouteFence
+			? desired({ ...value, ...closedRouteFence })
+			: value;
 		const current = await statefulSet(value);
 		const injection = modelBindings(value);
 		if (
@@ -1633,13 +377,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				return "drifted";
 		}
 		for (const resource of [serviceAccount, network, probe, service]) {
-			own(resource, value.agentId, value.workloadRevision, value.fence);
-			if (!hasCurrentMetadata(resource, value)) return "drifted";
+			const binding = resource === service ? routeValue : value;
+			own(resource, binding.agentId, binding.workloadRevision, binding.fence);
+			if (!hasCurrentMetadata(resource, binding)) return "drifted";
 		}
 		if (
-			[network, probe, service].some(
+			[network, probe].some(
 				(resource) => !hasSafeRoutingMetadata(value, resource),
-			)
+			) ||
+			!hasSafeRoutingMetadata(routeValue, service) ||
+			(closedRouteFence &&
+				service.metadata?.annotations?.[fingerprintAnnotation] !== "")
 		)
 			return "drifted";
 		if (
@@ -1772,6 +520,146 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		closeRoute,
 		closeAgent,
 		observe,
+		/** Adoption verifies the persisted creation, independently of readiness. */
+		async observeRecoveryWorkload(
+			input: unknown,
+			identity: { uid: string; generation: number } | null,
+			management?: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			const managementValue = management
+				? desired({
+						...value,
+						workloadRevision: management.revision,
+						fence: management.fence,
+					})
+				: value;
+			validateRecoveryCreation(managementValue, {
+				revision: value.workloadRevision,
+				fence: value.fence,
+			});
+			await recoveryManagementResources(managementValue);
+			const current = await statefulSet(value);
+			const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+			if (!current) {
+				if (pods.length) throw new WorkloadKubernetesError("conflict");
+				return null;
+			}
+			if (!current.metadata?.uid || !current.metadata.resourceVersion)
+				throw new WorkloadKubernetesError("conflict");
+			const recoveryInvalid =
+				!Number.isSafeInteger(current.metadata.generation) ||
+				(current.metadata.generation ?? 0) < 1 ||
+				current.metadata.deletionTimestamp ||
+				(!hasCurrentMetadata(current, value) &&
+					(!management || !hasRecoveryMetadata(current, value))) ||
+				hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
+				(!canResumeScaledDownStatefulSet(value, current.spec) &&
+					hasDriftedStatefulSetSpec(value, {
+						...normalizeStatefulSetSpecRevision(
+							current.spec,
+							value.workloadRevision,
+						),
+						replicas: value.replicas,
+					} as V1StatefulSet["spec"])) ||
+				(identity &&
+					(!identity.uid ||
+						!Number.isSafeInteger(identity.generation) ||
+						identity.generation < 1 ||
+						current.metadata.uid !== identity.uid ||
+						(current.metadata.generation ?? 0) < identity.generation)) ||
+				pods.some((pod) => !hasControllingWorkloadOwner(pod, current));
+			if (recoveryInvalid) throw new WorkloadKubernetesError("conflict");
+			return {
+				uid: current.metadata.uid,
+				generation: current.metadata.generation ?? 1,
+			};
+		},
+		async removeRecoveryWorkload(
+			input: unknown,
+			identity: { uid: string; generation: number } | null,
+			creation: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			validateRecoveryCreation(value, creation);
+			if (!(await recoveryCleanupIsClosed(value))) return false;
+			const name = workloadResourceNameV1(value.agentId);
+			const current = await client.read<V1StatefulSet>("StatefulSet", name);
+			if (current) {
+				// The persisted recovery creation may predate a newer management fence;
+				// ownership accepts both while the exact creation labels below protect deletion.
+				const ownershipRevision = Math.max(
+					value.workloadRevision,
+					creation.revision,
+				);
+				const ownershipFence = Math.max(value.fence, creation.fence);
+				own(current, value.agentId, ownershipRevision, ownershipFence);
+				if (
+					!identity?.uid ||
+					!Number.isSafeInteger(identity.generation) ||
+					identity.generation < 1 ||
+					current.metadata?.uid !== identity.uid ||
+					!current.metadata.resourceVersion ||
+					current.metadata.labels?.[revisionLabel] !==
+						String(creation.revision) ||
+					current.metadata.annotations?.["agent-infra.agora.io/fence"] !==
+						String(creation.fence) ||
+					!Number.isSafeInteger(current.metadata.generation) ||
+					(current.metadata.generation ?? 0) < identity.generation ||
+					hasDriftedImmutableStatefulSetSpec(value, current.spec) ||
+					(current.spec?.persistentVolumeClaimRetentionPolicy?.whenDeleted ??
+						"Retain") !== "Retain" ||
+					(current.spec?.persistentVolumeClaimRetentionPolicy?.whenScaled ??
+						"Retain") !== "Retain"
+				)
+					return false;
+				const pods = await client.list<V1Pod>("Pod", selector(value.agentId));
+				if (pods.some((pod) => !hasControllingWorkloadOwner(pod, current)))
+					return false;
+				// The client sends both the observed UID and resourceVersion as
+				// Kubernetes deletion preconditions; PVCs are never deleted here.
+				await client.delete(current);
+			}
+			return (
+				(await client.read("StatefulSet", name)) === null &&
+				(await client.list("Pod", selector(value.agentId))).length === 0
+			);
+		},
+		async removeRecoverySecret(
+			input: unknown,
+			reference: AgentWorkloadDesiredV1["secretRefs"][number],
+			secretUid: string,
+			creation: { revision: number; fence: number },
+		) {
+			const value = desired(input);
+			validateRecoveryCreation(value, creation);
+			if (
+				!value.secretRefs.some((ref) => hasSameStructure(ref, reference)) ||
+				!secretUid
+			)
+				throw new WorkloadKubernetesError("policy");
+			if (!(await recoveryCleanupIsClosed(value))) return false;
+			if (
+				await client.read("StatefulSet", workloadResourceNameV1(value.agentId))
+			)
+				return false;
+			if ((await client.list("Pod", selector(value.agentId))).length)
+				return false;
+			const secret = await client.read<V1Secret>("Secret", reference.name);
+			if (!secret) return true;
+			own(secret, value.agentId, value.workloadRevision, value.fence);
+			if (
+				secret.metadata?.uid !== secretUid ||
+				!secret.metadata.resourceVersion ||
+				secret.metadata.labels?.[revisionLabel] !== String(creation.revision) ||
+				secret.metadata.annotations?.["agent-infra.agora.io/fence"] !==
+					String(creation.fence) ||
+				!isLiveOwnedImmutableSecret(secret, value, reference)
+			)
+				return false;
+			await client.delete(secret);
+			return (await client.read("Secret", reference.name)) === null;
+		},
 		async scaleDownAgent(
 			agentId: string,
 			workloadRevision: number,
@@ -2460,6 +1348,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
 										},
+										{ name: "runtime-tmp", mountPath: "/tmp" },
 									],
 								},
 							],
@@ -2469,6 +1358,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									persistentVolumeClaim: {
 										claimName: value.persistentVolume.name,
 									},
+								},
+								{
+									name: "runtime-tmp",
+									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
 							],
 						},

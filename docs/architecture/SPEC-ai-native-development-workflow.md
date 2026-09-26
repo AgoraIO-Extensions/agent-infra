@@ -370,7 +370,12 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   运行 Claude；变量未设置或为其他值时默认运行 PR-Agent。`CLAUDE_REVIEW_ENABLED` 和
   `PR_AGENT_ENABLED` 不再参与选择。
 - 每个适用的 PR 只运行选定 Reviewer；较新的 head 取消同一 PR 的 stale run。Claude 在确定性
-  CI 成功后启动，PR-Agent 在适用的 PR head 事件上启动。
+  CI 成功后启动，PR-Agent 在下列适用的 PR 事件上启动。
+- PR-Agent 只在 PR `opened`、`reopened`、`ready_for_review`、`review_requested` 或 `edited` 事件启动；
+  非 Bot 编辑 PR 元数据可对当前 head 显式重跑 Analysis、Suggestions 和 Coverage。
+  `synchronize` 不启动 Analysis 或 Suggestions，连续提交不会产生新的 PR-Agent Review/thread。
+- PR-Agent 评审指令只允许报告 primary Issue 的稳定 `AC-N` 验收不符合，或本 PR 引入的可证明
+  回归；既有问题和可选改进不作为阻塞 finding。
 - 需要阻塞合并的问题必须发布为 Review thread，并通过 GitHub required conversation resolution
   闭环；Review 摘要不阻塞合并。
 - provider-aware 的 `Automated Review Coverage` 是 default branch required Gate。它只接受所选

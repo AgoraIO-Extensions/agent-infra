@@ -295,15 +295,23 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 
 #### 8.5.1 Codex 原生执行屏障
 
-Codex 派生构建的来源、语言例外、发布和回滚以工程 Spec 的
+Codex 官方 release 的来源、协议/schema、sandbox、能力声明和安装校验以工程 Spec 的
 [10.11](SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)为准。
-屏障复用每个 Conversation 代次的原 native 进程、hook 关联及实际工具执行路径，在执行
-边界增加强制、可等待且失败关闭的回调。现有 session/turn/tool-use 关联可直接复用，
-每个真实新尝试补充稳定 attempt identity；不另建公开 RPC、capability 协商或业务调度循环。
-Driver 向 native 继承专用私有文件描述符，native 接管后立即设置 close-on-exec；通道随原
-进程生命周期关闭。工具子进程不能继承或重开控制端，模型/Owner 不能改写部署配置或构造
-许可；不能用同 UID 可读取的环境变量 Token 或普通 socket 路径替代该隔离。普通用户 hook
-与强制回调分别处理，原 app-server stdio 继续承担既有业务协议。
+普通官方路径不假设存在私有 callback 或 barrier；没有可验证的每次尝试接缝时，不宣称该路径
+通过原生屏障 conformance，也不以日志、普通 approval 或缓存补足隐藏尝试。无论路径如何，
+每次实际外部动作仍须先保存 intent、重验当前授权并可靠保存结果或 unknown；官方路径无法
+可靠控制该边界的操作必须拒绝或标记未支持，不能进入正式 conformance。
+
+以下屏障契约只适用于明确启用私有 FD callback、Connection bootstrap/recovery 或等价 native
+lane 的发布 target。部署 provenance 必须声明 lane、协议/schema 与工具覆盖，且在任何业务
+副作用前验证不可由模型/Owner 关闭的 native barrier；缺失、错配、断连、过期或配置被关闭
+时 fail closed。该 lane 复用每个 Conversation 代次的原 native 进程、hook 关联及实际工具
+执行路径，在执行边界增加强制、可等待且失败关闭的回调。现有 session/turn/tool-use 关联可
+直接复用，每个真实新尝试补充稳定 attempt identity；不另建公开 RPC、capability 协商或业务
+调度循环。Driver 向 native 继承专用私有文件描述符，native 接管后立即设置 close-on-exec；
+通道随原进程生命周期关闭。工具子进程不能继承或重开控制端，模型/Owner 不能改写部署配置
+或构造许可；不能用同 UID 可读取的环境变量 Token 或普通 socket 路径替代该隔离。普通用户
+hook 与强制回调分别处理，原 app-server stdio 继续承担既有业务协议。
 
 - Driver 把已验证的 thread/Turn/callId/attempt identity 映射到原 Execution 的稳定
   operationRef/attemptRef；每次真实重试单独建 attempt，重复协议请求复用原映射与决定。
@@ -407,7 +415,15 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 ### 9.1 Codex 独立 Connection consumer profile
 
-客户端使用 [Connection HLD 第 7 节](HLD-connection-M1.md#7-独立客户端身份与调用关联)的固定 HTTPS origin、主体映射、回执与核实契约。RuntimeHost 已验证的原 Execution principal、Agent、Conversation 和 generation 只用于选取私有客户端 slot；Connection 仍在每次请求及其 Dispatch 边界独立鉴权。控制命令、Owner、应用责任人或 workload 身份不能替换原主体。子 Agent 和 hook 继续绑定原 source owner。
+本节的 Runtime callback/client 准备层只消费受信 bootstrap/provenance 投影，按原 Execution
+校验调用证据；它不实现 ConsumerInstance 注册、安装私钥持有证明、DPoP/mTLS 请求证明或
+PAT 安装绑定。投影内的 clientId、token 或内部 slot 不能替代 ConsumerInstance 或发送者证明。
+真实 HTTP/MCP 客户端必须按 Connection HLD 完成安装注册和请求证明，Connection 服务端在
+签发、刷新和每次调用时独立校验。callback/client prep 的通过不构成 Connection conformance。普通官方 Codex release 没有可验证私有 callback 时，不得
+把该能力降级为 bearer token、Owner 或平台服务身份；需要私有 FD3 bootstrap/recovery 时，
+必须先满足 8.5.1 的 native barrier，否则 fail closed。
+
+客户端使用 Connection HLD 的固定 HTTPS origin、主体映射、回执与核实契约；安装绑定和发送者约束以 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 和 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 为准。RuntimeHost 已验证的原 Execution principal、Agent、Conversation 和 generation 只用于选取私有客户端 slot；Connection 仍在每次请求及其 Dispatch 边界独立鉴权。控制命令、Owner、应用责任人或 workload 身份不能替换原主体。子 Agent 和 hook 继续绑定原 source owner。
 
 客户端访问 token 由 Connection 独立授权流程交付，经版本化私有 FD3 bootstrap 输入原 native 进程的 HTTP 客户端内存，不经过公开 app-server RPC。slot 绑定原主体、Agent、issuer/resource 和凭据 revision/期限；每次真实传输重新核对绑定。token 不进入普通配置、env、argv、模型内容、工具子进程、持久 journal 或日志；缺失/失效时拒绝，不使用存储 OAuth、ChatGPT、匿名或其他主体 fallback。FD3 在任何子进程前关闭继承。首次凭据交付前必须已建立覆盖 native 与 Node Bridge 的同 UID 进程读取隔离；Linux profile 在进程启动时叠加会被后代继承的进程内存访问 syscall 过滤，保留现有文件隔离和 HTTP 能力。该保护与 Darwin Seatbelt 均须通过各自最终二进制的实际工具负例，不能以配置存在代替验证。
 
@@ -415,7 +431,7 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 核实恢复复用原执行的查询/恢复入口，只查询原记录，不建立第二调度循环或 Platform Connection 代理。完整丢失原调用回执时保持 unknown/unverified；模型转交、相同参数或查询到另一真实引用不能补齐原响应证据。关联状态更新保留原 operation/attempt、工具终态与计数，不能触发工具重发。
 
-原业务 native 进程退出后，受保护的原 journal 可将调用前保存的非秘密主体/Agent/Execution/generation/客户端绑定、原实际请求以及同次认证响应证据，经私有 FD3 交给同一派生 binary 的原执行只读恢复进程。该进程适用相同的进程内存、FD 与文件隔离，只使用原主体当前独立凭据访问固定 identity 与原调用记录，不创建业务 Session/Turn、MCP session 或工具调用。恢复由已有授权的原执行查询/恢复工作触发，公共关联仍沿原 outbox、事件游标、持久事务和 ACK 交付；受第 7.3 节代次屏障确认限制。缺失调用前绑定或原响应不得以当前身份或其他真实引用补造。
+原业务 native 进程退出后，受保护的原 journal 可将调用前保存的非秘密主体/Agent/Execution/generation/客户端绑定、原实际请求以及同次认证响应证据，经私有 FD3 交给同一经验证具备该 lane 的 binary 的原执行只读恢复进程。该进程适用相同的进程内存、FD 与文件隔离，只使用原主体当前独立凭据访问固定 identity 与原调用记录，不创建业务 Session/Turn、MCP session 或工具调用。恢复由已有授权的原执行查询/恢复工作触发，公共关联仍沿原 outbox、事件游标、持久事务和 ACK 交付；受第 7.3 节代次屏障确认限制。缺失调用前绑定或原响应不得以当前身份或其他真实引用补造。
 执行期文件访问由可信 Worker 经 Platform 文件服务签发独立对象级授权，RuntimeHost 消费 `FileAccessGrantV1` 并通过平台认证数据面传输；旧 Execution Grant 仅保留输入附件读取范围。结果必须在对象确认和文件记录提交后才能引用。签发、audience、当前授权、代次、重放及撤权以 [工程 Spec 文件条款](SPEC-agent-infra-M1-engineering-architecture.md#154-文件) 为唯一权威；Driver 不持有对象存储凭证。
 
 ## 10. Runtime 安全约束
@@ -425,6 +441,11 @@ Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运
 只读根文件系统下的可写临时卷与生产、探针装配一致性遵循工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)。临时卷可写不替代原生 readiness 和 Conversation 隔离验证。
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
+
+历史迁移的部署入口使用独立的[一次性迁移 Job](../../deploy/helm/runtime-legacy-migration/README.md)，
+由既有 CLI 消费原 PVC 及独立只读信任文件。部署方先完成正常停机和 PVC 清退；提交模式还须
+维持全部 Platform API/Worker 入口的隔离维护窗口。该 Job 不属于主应用升级 hook，不改变
+第 8.1 节的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
 
 ### 10.1 Codex Linux sandbox 启动准入
 
@@ -440,6 +461,8 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 
 ## 11. 验证
 
+### 11.1 通用 Runtime 与 Driver 验证
+
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。
 - 取消故障注入覆盖等待与认领并发、API/Web 同时受理、Agent 启动/更新/停止/停用/故障与准入/实际发送竞态、投递前后崩溃、旧 Worker 迟到提交、unknown、停止未确认与自然完成竞态、停止确认超时及重启/重复取消不延长期限、代次隔离和等待任务收敛；必须证明旧 Turn 无剩余副作用才启动下一任务，不能用超时/换 executionId/新 Session 掩盖不确定结果。
@@ -449,8 +472,8 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 - Eval 以获授权固定集执行回答及受控工具样本，基线/候选保留实际执行引用与版本，取消/恢复复用任务路径；数据撤权阻止后续投递/读取，评分器故障不重放业务任务。自定义未验证能力和 self-managed 声明不能开放任务/观测/Eval。
 - Codex Linux 启动准入覆盖可信工具缺失、权限能力不足、安装失败、异常退出和超时，验证拒绝发生在 `app-server` 启动及向子进程注入模型凭证之前。正式镜像在工程 Spec 规定的容器安全约束下，通过真实 Host/Driver/Bridge 验证工具执行的退出码、stdout 与受限写入结果，并以预先存在的兄弟 Conversation 目录验证读取、列举与写入被拒绝而本人 workspace 写入成功；该兼容性检查不替代多用户隔离验收。
 - Codex 多用户隔离验收使用真实 pinned Codex 与正式 Host/Driver/Bridge，为同一 Agent 的两个用户建立各自 Conversation，验证本人文件与运行上下文访问成功，而跨 Conversation 的读取、列举、搜索、修改、历史扫描与模型输入/结果均被该平台的文件边界拒绝；覆盖并发、进程重启与原 Session 恢复。工具普遍不可用或平台能力关闭都不构成通过。
-- Codex 屏障在每个发布 target 的真实派生 binary/最终镜像上验证：每个实际 spawn/write/dispatch 前能读回 intent，内部 retry 各有 attempt；intent/授权/协议失败时实际动作数为零，结果持久化失败不交付虚假完成。覆盖 hook crash/timeout、approval cache、非空 stdin、后台退出、MCP 内部重试与 catalog 覆盖缺失，保留全部原 built-ins 的正向行为。
-- Codex 屏障故障注入覆盖双方在 permit 与结果确认前后重启、跨会话/重复/迟到 response、等待期间撤权/stop/fence、ACK 丢失和并发状态查询。证明原 Session/Turn/attempt 不重建、不重执行；旧终态仍可读，不兼容 active/unknown 及回滚目标拒绝准入，原 PVC 与核实证据保留。
+- 启用私有 native lane 的 Codex target 在真实最终镜像上验证：每个实际 spawn/write/dispatch 前能读回 intent，内部 retry 各有 attempt；intent/授权/协议失败时实际动作数为零，结果持久化失败不交付虚假完成。验证 provenance、协议/schema、私有 callback 和不可关闭的 barrier，覆盖 hook crash/timeout、approval cache、非空 stdin、后台退出、MCP 内部重试与 catalog 覆盖缺失，保留全部原 built-ins 的正向行为。普通官方 target 只按其已声明能力验收，不宣称私有 barrier conformance。
+- 启用私有 native lane 的 Codex 屏障故障注入覆盖双方在 permit 与结果确认前后重启、跨会话/重复/迟到 response、等待期间撤权/stop/fence、ACK 丢失和并发状态查询。证明原 Session/Turn/attempt 不重建、不重执行；旧终态仍可读，不兼容 active/unknown 及回滚目标拒绝准入，原 PVC 与核实证据保留。
 - Codex 模型切换压缩使用生产 Driver、真实 pinned native 和受控 provider，分别触发
   CompHashChanged 与 ModelDownshift，核对 A 正常请求 → B 实际压缩 → B 回答、精确
   B endpoint/credential/reasoning、意图/attempt/用量和同一 Session。覆盖 A 从当前清单删除、
@@ -472,6 +495,12 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 - 控制用途 Grant 覆盖主体已撤权仍能停止并核实原执行，Worker 接管后按原 Execution/代次/fence/游标归档未确认事件且用户访问仍被拒绝；伪造撤权、过期或跨主体/Execution/代次的控制 Grant，以及用其提交/补充 Turn、调用模型/工具、读取附件或通过用户路径回放正文均须拒绝。平台状态事件验证同一转换重试不重复写入，而同一任务的受理、等待、取消和终态均能各自持久保存。
 - `kind` 覆盖 Pod 重启恢复原 Session；用两个 Conversation 验证恢复失败不新建 Session，且不影响另一会话。
 - SSE 覆盖持久化后推送、批量事务重试、重复事件、`Last-Event-ID` 到 `conversationCursor` 的会话内映射、显式游标、窗口内补发、建连后账号权限、Agent 可用范围、渠道绑定或 Conversation 访问范围变化时停止推送并在恢复前重新鉴权，以及未知、属于其他 Conversation 或超出窗口的事件和游标重载时间线。任务订阅还须验证：同一 Conversation 中目标 Execution 的事件可连续补发，误用另一已获授权 Execution 的 `Last-Event-ID` 或显式游标时返回重载信号，不能静默跳过目标任务事件。
+
+### 11.2 Codex 与 Connection 接缝验收
+
+- 官方 Codex release 与启用私有 native lane 的 target 分别记录 provenance、协议/schema、sandbox、能力覆盖和准入结果；官方路径不把不存在的 vendor barrier 当作验收前置，私有 lane 缺少 barrier 或验证不可回读时 fail closed。
+- callback/client 准备层按 [§9.1](#91-codex-独立-connection-consumer-profile) 验证受信投影及原调用关联。真实 HTTP/MCP 接入另按 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证安装绑定、发送者证明、PAT、跨实例隔离和撤权；准备层通过不替代该验收。
+- 私有 FD callback、bootstrap 或 recovery 的 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致，均不得产生 Provider/工具副作用；普通官方路径在没有该接缝时应明确能力不可用，而不是降级到 bearer token、Owner 或平台服务身份。
 
 ## 12. RuntimeHost 未来抽取与维护标准
 
@@ -508,7 +537,7 @@ M1 参考以下社区项目的 Runtime Registry、Protocol Adapter、Session 生
 - [Paseo](https://github.com/getpaseo/paseo)
 - [Open Design](https://github.com/nexu-io/open-design)
 
-Codex 上游原生补丁另须满足工程 Spec [10.11](SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)；本节的叶子模块复用许可不扩张该例外。
+Codex 官方 release 与私有 native lane 遵循工程 Spec [10.11](SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)；本节的叶子模块复用许可不授权维护第三方原生源码补丁或 vendor builder。
 
 优先使用官方 SDK、协议客户端和成熟上游已实现的生命周期与事件处理。允许按所选版本的
 许可证直接引入或移植当前交付所需的叶子模块与回归场景；上游没有独立可安装库，不构成

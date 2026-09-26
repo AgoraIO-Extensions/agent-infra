@@ -118,6 +118,11 @@ export class FakeConversationEventsV1 implements ConversationEventUseCaseV1 {
 
 	#state(existing: StoredEvent | undefined): ConversationEventStateV1 {
 		return {
+			operationHistory: this.#events.flatMap(({ event }) =>
+				event.event.type === "execution.operation"
+					? [structuredClone(event.event.fact)]
+					: [],
+			),
 			conversation: {
 				conversationId: this.options.conversationId,
 				sessionGeneration: this.options.sessionGeneration,

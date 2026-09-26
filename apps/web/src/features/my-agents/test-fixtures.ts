@@ -1,7 +1,36 @@
-import { AgentApplicationProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApplicationProjectionV2Schema,
+	DeploymentConfigurationProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
 
-export const pendingApplication = AgentApplicationProjectionV1Schema.parse({
-	schemaVersion: 1,
+export const deploymentConfiguration =
+	DeploymentConfigurationProjectionV2Schema.parse({
+		schemaVersion: 2,
+		status: "populated",
+		templates: [
+			{
+				templateId: "codex",
+				displayName: "Codex",
+				connectionEnabled: false,
+				allowedEnvironmentKeys: ["LOG_LEVEL"],
+				allowedSecretKeys: ["MODEL_API_KEY"],
+			},
+		],
+		modelCatalog: {
+			status: "populated",
+			revision: "revision-primary",
+			endpoints: [
+				{
+					endpointId: "endpoint-primary",
+					displayName: "Primary endpoint",
+					models: [{ modelId: "gpt-5", reasoningLevels: ["medium", "high"] }],
+				},
+			],
+		},
+	});
+
+export const pendingApplication = AgentApplicationProjectionV2Schema.parse({
+	schemaVersion: 2,
 	applicationId: "application:tenant/01?draft#one%",
 	agentId: null,
 	name: "Release assistant request",
@@ -29,7 +58,7 @@ export const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 		modelOptions: [],
 		defaultModelOptionId: null,
 		defaultReasoningLevel: null,
-		actions: [],
+
 		environment: [],
 		channels: [],
 		secrets: [],
@@ -38,7 +67,7 @@ export const pendingApplication = AgentApplicationProjectionV1Schema.parse({
 	decision: null,
 });
 
-export const creatingApplication = AgentApplicationProjectionV1Schema.parse({
+export const creatingApplication = AgentApplicationProjectionV2Schema.parse({
 	...pendingApplication,
 	applicationId: "application-pilot-2",
 	agentId: "agent-pilot-2",

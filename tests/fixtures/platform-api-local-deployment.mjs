@@ -22,26 +22,28 @@ const admissions = new FakeAgentConfigurationAdmissionsV1({
 	modelCredentials: [],
 });
 
+const identity = {
+	async resolve() {
+		return structuredClone(localAdmin);
+	},
+	async hydrateUsers(userIds) {
+		return userIds.map((userId) => {
+			if (userId !== localAdmin.userId) {
+				throw new Error("Unknown local topology user");
+			}
+			return {
+				userId: localAdmin.userId,
+				displayName: localAdmin.displayName,
+				roles: [...localAdmin.roles],
+			};
+		});
+	},
+};
+
 export function createPlatformApiAssemblyInput() {
 	return {
 		databaseUrl: platformDatabaseUrlFromEnvironment(),
-		identity: {
-			async resolve() {
-				return structuredClone(localAdmin);
-			},
-			async hydrateUsers(userIds) {
-				return userIds.map((userId) => {
-					if (userId !== localAdmin.userId) {
-						throw new Error("Unknown local topology user");
-					}
-					return {
-						userId: localAdmin.userId,
-						displayName: localAdmin.displayName,
-						roles: [...localAdmin.roles],
-					};
-				});
-			},
-		},
+		identity,
 		admissions: {
 			authorizationAdmission: admissions,
 			imageAdmission: admissions,
@@ -49,6 +51,15 @@ export function createPlatformApiAssemblyInput() {
 			secretAdmission: admissions,
 			actionAdmission: admissions,
 			channelAdmission: admissions,
+		},
+		deploymentConfiguration: {
+			identity,
+			read: async () => ({
+				schemaVersion: 2,
+				status: "empty",
+				templates: [],
+				modelCatalog: { status: "empty", revision: null, endpoints: [] },
+			}),
 		},
 		allocateApplicationIds: unavailable,
 		prepareApplicationSecrets: unavailable,

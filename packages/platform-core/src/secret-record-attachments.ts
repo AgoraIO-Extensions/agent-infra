@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 
-import type { AgentConfigurationRecordV1 } from "./agent-configuration.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 
 const maximumAttachments = 160;
 
@@ -58,7 +58,7 @@ function referenceKey(reference: SecretReference): string {
 }
 
 function referencesForConfiguration(
-	configuration: AgentConfigurationRecordV1,
+	configuration: AgentConfigurationRecordV2,
 ): SecretReference[] {
 	const references: SecretReference[] = [
 		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
@@ -114,8 +114,8 @@ function timestamp(value: Date): string {
 
 export async function resolvePendingSecretRecordAttachmentsV1(input: {
 	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
-	readonly previousConfiguration?: AgentConfigurationRecordV1;
-	readonly configuration: AgentConfigurationRecordV1;
+	readonly previousConfiguration?: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecordV2;
 	readonly ownerId: string;
 	readonly occurredAt: Date;
 }): Promise<PendingSecretRecordAttachmentsV1 | undefined> {

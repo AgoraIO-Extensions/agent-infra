@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	createAgentConfigurationUseCaseV1,
@@ -16,6 +17,7 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPlatformAuditQueryV1,
+	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import type { PlatformAppDependencies } from "./app.js";
 import {
@@ -24,7 +26,11 @@ import {
 } from "./file-assembly.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
-import type { IdentityAdapter } from "./http/identity.js";
+import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
+import {
+	type IdentityAdapter,
+	resolveCurrentTaskUser,
+} from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/management-routes.js";
 import {
 	createPlatformProjectionReaders,
@@ -33,17 +39,25 @@ import {
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
+interface AssemblyQueries {
+	readonly configurationQuery: PostgresAgentConfigurationQueryV1;
+}
+
 export interface PlatformApiAssemblyInput {
+	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
-	readonly admissions: Admissions;
+	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
+	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
-	readonly presentAgent: PresentPlatformAgent;
+	readonly presentAgent:
+		| PresentPlatformAgent
+		| { readonly create: (queries: AssemblyQueries) => PresentPlatformAgent };
 }
 
 export interface PlatformApiAssembly {
@@ -75,6 +89,9 @@ export function assemblePlatformApi(
 	const auditQuery = new PostgresPlatformAuditQueryV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
+		databaseUrl: input.databaseUrl,
+	});
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
@@ -88,27 +105,42 @@ export function assemblePlatformApi(
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
 	});
+	const admissions =
+		typeof input.admissions === "function"
+			? input.admissions({ configurationQuery })
+			: input.admissions;
+	const presentAgent =
+		typeof input.presentAgent === "function"
+			? input.presentAgent
+			: input.presentAgent.create({ configurationQuery });
 	const foundation = createApplicationFoundationUseCaseV1({
 		transaction: foundationTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const management = createAgentManagementV1(managementTransaction);
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
-		...input.admissions,
+		...admissions,
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,
 		managementQuery,
 		configurationQuery,
-		presentAgent: input.presentAgent,
+		presentAgent,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
+			const currentUser = await resolveCurrentTaskUser(
+				input.identity,
+				identity.userId,
+				randomUUID(),
+			);
+			if (currentUser === null) return { outcome: "unavailable" };
+			if (currentUser.accountStatus !== "active") return { outcome: "revoked" };
 			let agentId = request.agentId;
 			if (request.conversationId !== undefined) {
 				const target = await conversationQuery.getAuthorizationTarget(
@@ -125,7 +157,7 @@ export function assemblePlatformApi(
 				{
 					kind: "user",
 					userId: identity.userId,
-					organizationIds: identity.organizationIds,
+					organizationIds: currentUser.organizationIds,
 				},
 				agentId,
 			);
@@ -147,19 +179,33 @@ export function assemblePlatformApi(
 				const configuration = await configurationQuery.read({
 					agentId,
 					actorId: identity.userId,
-					organizationIds: identity.organizationIds,
+					organizationIds: currentUser.organizationIds,
 					isAdministrator: identity.roles.includes("system_admin"),
 					intent: "discover",
 				});
 				if (configuration.outcome !== "found") return { outcome: "denied" };
-				supportsSupplementaryInstruction = (
-					await input.presentAgent({
-						agentId,
-						configuration: configuration.configuration,
+				const runtime = await configurationQuery.readRuntimePresentation({
+					agentId,
+					actorId: currentUser.userId,
+					organizationIds: currentUser.organizationIds,
+					accountStatus: currentUser.accountStatus,
+					isAdministrator: identity.roles.includes("system_admin"),
+					expected: {
+						configurationRevision: configuration.configuration.revision,
 						management: agent.management,
-					})
-				).capabilities.supplementaryInstruction;
+					},
+				});
+				if (runtime.outcome !== "found")
+					throw new Error("Current Runtime capability is unavailable");
+				supportsSupplementaryInstruction =
+					runtime.capabilities?.supplementaryInstruction === true;
 			}
+			const taskBoundary = await taskAuthorization.captureUserBoundary({
+				user: currentUser,
+				agentId,
+				channelId: "web",
+			});
+			if (!taskBoundary) return { outcome: "denied" };
 			return {
 				outcome: "allowed",
 				authority: {
@@ -167,7 +213,8 @@ export function assemblePlatformApi(
 					actorId: identity.userId,
 					agentId,
 					channelId: "web",
-					authorizationRevision: identity.authorizationRevision,
+					authorizationRevision: taskBoundary.agentAuthorizationRevision,
+					taskBoundary,
 					supportsSupplementaryInstruction,
 				},
 			};
@@ -197,7 +244,7 @@ export function assemblePlatformApi(
 						scope.agentId,
 					);
 					if (!agent) return null;
-					const projection = await input.presentAgent({
+					const projection = await presentAgent({
 						agentId: scope.agentId,
 						configuration: configuration.configuration,
 						management: agent.management,
@@ -222,6 +269,7 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
 		management: {
 			identity: input.identity,
@@ -242,6 +290,9 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
+		...(input.deploymentConfiguration === undefined
+			? {}
+			: { deploymentConfiguration: input.deploymentConfiguration }),
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,
@@ -254,7 +305,8 @@ export function assemblePlatformApi(
 								identity,
 								request,
 							);
-							return decision.outcome === "unavailable"
+							return decision.outcome === "unavailable" ||
+								decision.outcome === "revoked"
 								? { outcome: "denied" }
 								: decision;
 						},
@@ -275,6 +327,7 @@ export function assemblePlatformApi(
 		conversationTransaction,
 		conversationQuery,
 		auditQuery,
+		taskAuthorization,
 	];
 	return {
 		dependencies,
