@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+	auditQuerySchema,
 	authorizationConsentRequestSchema,
 	authorizationPreviewRequestSchema,
 	connectionBrowserOpenApi,
@@ -889,6 +890,33 @@ export function createConnectionOAuthApp(
 			}
 			return session;
 		};
+
+		app.get("/api/v1/connection/admin/action-calls", async (context) => {
+			const session = await currentBrowserApiAdministrator(context);
+			if (session instanceof Response) return session;
+			const query = parseJsonBody(auditQuerySchema, context.req.query());
+			context.header("cache-control", "no-store");
+			return context.json(
+				await management.service.listAuditCalls(
+					session.account.principalId,
+					query,
+				),
+			);
+		});
+		app.get(
+			"/api/v1/connection/admin/action-calls/:callId",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				context.header("cache-control", "no-store");
+				return context.json(
+					await management.service.getAuditCall(
+						session.account.principalId,
+						context.req.param("callId"),
+					),
+				);
+			},
+		);
 
 		app.get("/api/v1/connection/connections", async (context) => {
 			const session = await currentBrowserApiAccount(context);

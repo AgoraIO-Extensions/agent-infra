@@ -8,6 +8,129 @@
 	"servers": [{ "url": "/" }],
 	"security": [{ "browserSession": [] }],
 	"paths": {
+		"/api/v1/connection/admin/action-calls": {
+			"get": {
+				"operationId": "listAuditCalls",
+				"parameters": [
+					{
+						"name": "from",
+						"in": "query",
+						"required": true,
+						"schema": {
+							"type": "string",
+							"format": "date-time"
+						}
+					},
+					{
+						"name": "to",
+						"in": "query",
+						"required": true,
+						"schema": {
+							"type": "string",
+							"format": "date-time"
+						}
+					},
+					{
+						"name": "query",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "string",
+							"maxLength": 120
+						}
+					},
+					{
+						"name": "status",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "string",
+							"enum": [
+								"AUTHORIZED",
+								"DENIED_LOCAL",
+								"SUCCEEDED",
+								"FAILED",
+								"UNCERTAIN"
+							]
+						}
+					},
+					{
+						"name": "cursor",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "string",
+							"maxLength": 2048
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Controlled administrator audit projection",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuditPage"
+								}
+							}
+						}
+					},
+					"400": {
+						"$ref": "#/components/responses/Error"
+					},
+					"401": {
+						"$ref": "#/components/responses/Error"
+					},
+					"404": {
+						"$ref": "#/components/responses/Error"
+					},
+					"500": {
+						"$ref": "#/components/responses/Error"
+					}
+				}
+			}
+		},
+		"/api/v1/connection/admin/action-calls/{callId}": {
+			"get": {
+				"operationId": "getAuditCall",
+				"parameters": [
+					{
+						"name": "callId",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 512
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Controlled administrator audit projection",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuditDetail"
+								}
+							}
+						}
+					},
+					"400": {
+						"$ref": "#/components/responses/Error"
+					},
+					"401": {
+						"$ref": "#/components/responses/Error"
+					},
+					"404": {
+						"$ref": "#/components/responses/Error"
+					},
+					"500": {
+						"$ref": "#/components/responses/Error"
+					}
+				}
+			}
+		},
 		"/api/v1/connection/openapi.json": {
 			"get": {
 				"operationId": "getConnectionBrowserOpenApi",
@@ -544,6 +667,223 @@
 			}
 		},
 		"schemas": {
+			"AuditCall": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"callId",
+					"createdAt",
+					"principalId",
+					"person",
+					"consumerId",
+					"consumer",
+					"instanceId",
+					"connectionId",
+					"providerId",
+					"action",
+					"actionVersionId",
+					"email",
+					"actorKey",
+					"status"
+				],
+				"properties": {
+					"callId": {
+						"type": "string"
+					},
+					"createdAt": {
+						"type": "string"
+					},
+					"principalId": {
+						"type": "string"
+					},
+					"person": {
+						"type": "string"
+					},
+					"consumerId": {
+						"type": "string"
+					},
+					"consumer": {
+						"type": "string"
+					},
+					"instanceId": {
+						"type": "string"
+					},
+					"connectionId": {
+						"type": "string"
+					},
+					"providerId": {
+						"type": "string"
+					},
+					"action": {
+						"type": "string"
+					},
+					"actionVersionId": {
+						"type": "string"
+					},
+					"email": {
+						"type": ["string", "null"]
+					},
+					"actorKey": {
+						"type": ["string", "null"]
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"AUTHORIZED",
+							"DENIED_LOCAL",
+							"SUCCEEDED",
+							"FAILED",
+							"UNCERTAIN"
+						]
+					}
+				}
+			},
+			"AuditPage": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["items", "nextCursor"],
+				"properties": {
+					"items": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/AuditCall"
+						}
+					},
+					"nextCursor": {
+						"type": ["string", "null"]
+					}
+				}
+			},
+			"AuditDetail": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"callId",
+					"createdAt",
+					"principalId",
+					"person",
+					"consumerId",
+					"consumer",
+					"instanceId",
+					"connectionId",
+					"providerId",
+					"action",
+					"actionVersionId",
+					"email",
+					"actorKey",
+					"status",
+					"input",
+					"output",
+					"timeline"
+				],
+				"properties": {
+					"callId": {
+						"type": "string"
+					},
+					"createdAt": {
+						"type": "string"
+					},
+					"principalId": {
+						"type": "string"
+					},
+					"person": {
+						"type": "string"
+					},
+					"consumerId": {
+						"type": "string"
+					},
+					"consumer": {
+						"type": "string"
+					},
+					"instanceId": {
+						"type": "string"
+					},
+					"connectionId": {
+						"type": "string"
+					},
+					"providerId": {
+						"type": "string"
+					},
+					"action": {
+						"type": "string"
+					},
+					"actionVersionId": {
+						"type": "string"
+					},
+					"email": {
+						"type": ["string", "null"]
+					},
+					"actorKey": {
+						"type": ["string", "null"]
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"AUTHORIZED",
+							"DENIED_LOCAL",
+							"SUCCEEDED",
+							"FAILED",
+							"UNCERTAIN"
+						]
+					},
+					"input": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["label", "value", "state"],
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"value": {
+									"type": "string"
+								},
+								"state": {
+									"type": "string",
+									"enum": ["AVAILABLE", "REDACTED"]
+								}
+							}
+						}
+					},
+					"output": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["label", "value", "state"],
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"value": {
+									"type": "string"
+								},
+								"state": {
+									"type": "string",
+									"enum": ["AVAILABLE", "REDACTED"]
+								}
+							}
+						}
+					},
+					"timeline": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["event", "occurredAt"],
+							"properties": {
+								"event": {
+									"type": "string"
+								},
+								"occurredAt": {
+									"type": "string"
+								}
+							}
+						}
+					}
+				}
+			},
 			"Error": {
 				"type": "object",
 				"additionalProperties": false,

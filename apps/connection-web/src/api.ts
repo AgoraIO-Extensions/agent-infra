@@ -1,6 +1,8 @@
 import {
 	type AdministratorsResponse,
 	type Error as ApiError,
+	type AuditDetail,
+	type AuditPage,
 	type AuthorizationConsentRequest,
 	type AuthorizationPreviewRequest,
 	type AuthorizationPreviewResponse,
@@ -15,6 +17,7 @@ import {
 	createSharedScope,
 	disconnectConnection,
 	disconnectSharedConnection,
+	getAuditCall,
 	getConnections,
 	getSession,
 	getSharedConnections,
@@ -24,8 +27,10 @@ import {
 	idempotencyKeySchema,
 	issueToken,
 	issueTokenRequestSchema,
+	type ListAuditCallsData,
 	type LoginRequest,
 	listAdministrators,
+	listAuditCalls,
 	listProviderUpgradeCampaigns,
 	listTokens,
 	login,
@@ -302,6 +307,10 @@ export const connectionApi = {
 		),
 	listAdministrators: () =>
 		unwrap<AdministratorsResponse>(listAdministrators()),
+	listAuditCalls: (query: ListAuditCallsData["query"]) =>
+		unwrap<AuditPage>(listAuditCalls({ query })),
+	getAuditCall: (callId: string) =>
+		unwrap<AuditDetail>(getAuditCall({ path: { callId } })),
 	listProviderUpgradeCampaigns: () =>
 		unwrap<ProviderUpgradeCampaignsResponse>(listProviderUpgradeCampaigns()),
 	grantAdministrator: (principalId: string) =>

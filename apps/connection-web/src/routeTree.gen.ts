@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConnectionConnectionsRouteImport } from './routes/connection.connections'
 import { Route as ConnectionLoginRouteImport } from './routes/connection.login'
 import { Route as ConnectionTokensRouteImport } from './routes/connection.tokens'
+import { Route as ConnectionAdminActionCallsRouteImport } from './routes/connection.admin.action-calls'
 import { Route as ConnectionAdminAdministratorsRouteImport } from './routes/connection.admin.administrators'
 import { Route as ConnectionAdminAgentsRouteImport } from './routes/connection.admin.agents'
 import { Route as ConnectionAdminSharedConnectionsRouteImport } from './routes/connection.admin.shared-connections'
@@ -37,6 +38,12 @@ const ConnectionTokensRoute = ConnectionTokensRouteImport.update({
   path: '/connection/tokens',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConnectionAdminActionCallsRoute =
+  ConnectionAdminActionCallsRouteImport.update({
+    id: '/connection/admin/action-calls',
+    path: '/connection/admin/action-calls',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ConnectionAdminAdministratorsRoute =
   ConnectionAdminAdministratorsRouteImport.update({
     id: '/connection/admin/administrators',
@@ -60,6 +67,7 @@ export interface FileRoutesByFullPath {
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
+  '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
@@ -69,6 +77,7 @@ export interface FileRoutesByTo {
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
+  '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
@@ -79,6 +88,7 @@ export interface FileRoutesById {
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
+  '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
@@ -90,6 +100,7 @@ export interface FileRouteTypes {
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
+    | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
@@ -99,6 +110,7 @@ export interface FileRouteTypes {
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
+    | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
@@ -108,6 +120,7 @@ export interface FileRouteTypes {
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
+    | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
     | '/connection/admin/shared-connections'
@@ -118,6 +131,7 @@ export interface RootRouteChildren {
   ConnectionConnectionsRoute: typeof ConnectionConnectionsRoute
   ConnectionLoginRoute: typeof ConnectionLoginRoute
   ConnectionTokensRoute: typeof ConnectionTokensRoute
+  ConnectionAdminActionCallsRoute: typeof ConnectionAdminActionCallsRoute
   ConnectionAdminAdministratorsRoute: typeof ConnectionAdminAdministratorsRoute
   ConnectionAdminAgentsRoute: typeof ConnectionAdminAgentsRoute
   ConnectionAdminSharedConnectionsRoute: typeof ConnectionAdminSharedConnectionsRoute
@@ -153,6 +167,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectionTokensRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/connection/admin/action-calls': {
+      id: '/connection/admin/action-calls'
+      path: '/connection/admin/action-calls'
+      fullPath: '/connection/admin/action-calls'
+      preLoaderRoute: typeof ConnectionAdminActionCallsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connection/admin/administrators': {
       id: '/connection/admin/administrators'
       path: '/connection/admin/administrators'
@@ -182,6 +203,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectionConnectionsRoute: ConnectionConnectionsRoute,
   ConnectionLoginRoute: ConnectionLoginRoute,
   ConnectionTokensRoute: ConnectionTokensRoute,
+  ConnectionAdminActionCallsRoute: ConnectionAdminActionCallsRoute,
   ConnectionAdminAdministratorsRoute: ConnectionAdminAdministratorsRoute,
   ConnectionAdminAgentsRoute: ConnectionAdminAgentsRoute,
   ConnectionAdminSharedConnectionsRoute: ConnectionAdminSharedConnectionsRoute,

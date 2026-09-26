@@ -1,7 +1,17 @@
 import { createHash } from "node:crypto";
 import type { Schema } from "@cfworker/json-schema";
 import { Validator } from "@cfworker/json-schema";
+import {
+	type AuditCall,
+	type AuditFilter,
+	type AuditQuery,
+	type AuditRawDetail,
+	auditFilter,
+	auditPage,
+	projectAuditDetail,
+} from "./audit";
 
+export * from "./audit";
 export * from "./oauth";
 
 export const forbiddenSelectorNames = new Set([
@@ -592,6 +602,11 @@ export type ReconciliationJob = {
 };
 
 export interface ConnectionRepository {
+	listAuditCalls?(
+		principalId: string,
+		filter: AuditFilter,
+	): Promise<AuditCall[]>;
+	getAuditCall?(principalId: string, callId: string): Promise<AuditRawDetail>;
 	ensurePrincipal(input: { principalId: string }): Promise<void>;
 	authorizeConnectionAdministration(principalId: string): Promise<boolean>;
 	isConnectionAdministrator(principalId: string): Promise<boolean>;
@@ -1136,6 +1151,32 @@ export class ConnectionApplicationService {
 
 	isConnectionAdministrator(principalId: string) {
 		return this.repository.isConnectionAdministrator(principalId);
+	}
+
+	async listAuditCalls(principalId: string, query: AuditQuery) {
+		if (!this.repository.listAuditCalls)
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Audit query unavailable",
+			);
+		const filter = auditFilter(principalId, query);
+		return auditPage(
+			await this.repository.listAuditCalls(principalId, filter),
+			filter.binding,
+		);
+	}
+
+	async getAuditCall(principalId: string, callId: string) {
+		if (!callId || callId.length > 512)
+			throw new ConnectionError("INVALID_REQUEST", "Invalid call ID");
+		if (!this.repository.getAuditCall)
+			throw new ConnectionError(
+				"PROVIDER_UNAVAILABLE",
+				"Audit query unavailable",
+			);
+		return projectAuditDetail(
+			await this.repository.getAuditCall(principalId, callId),
+		);
 	}
 
 	authorizeConnectionAdministration(principalId: string) {
