@@ -35,6 +35,8 @@ import {
 	pilotOperationSchemasV2,
 	pilotOperationSseSchemasV2,
 	pilotSseSchemasV1,
+	pilotTaskOpenApiPathsV1,
+	pilotTaskSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import {
@@ -535,12 +537,17 @@ function buildArtifacts() {
 			...pilotBrowserOpenApiPathsV1,
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
+			...pilotTaskOpenApiPathsV1,
 		},
 		components: {
+			securitySchemes: {
+				platformApiCredential: { type: "http", scheme: "bearer" },
+			},
 			schemas: {
 				...pilotBrowserSchemasV1,
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
+				...pilotTaskSchemasV1,
 			},
 		},
 	});

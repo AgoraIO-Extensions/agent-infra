@@ -315,7 +315,7 @@ async function seedRevisionState(
 			insert into platform.agent_availability
 				(agent_id, target_type, target_id)
 			values (${state.application.agentId}, ${target.kind},
-				${target.kind === "user" ? target.userId : target.organizationId})
+				${target.kind === "user" ? target.userId : target.kind === "organization" ? target.organizationId : target.applicationId})
 		`;
 	}
 }

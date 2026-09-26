@@ -724,7 +724,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return this.file(binding);
 	}
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
-		if (this.closed || action.kind !== "tool" || action.purpose) unavailable();
+		if (
+			this.closed ||
+			!["model", "tool"].includes(action.kind) ||
+			action.purpose
+		)
+			unavailable();
 		const file = await this.forReference(action.nativeSessionRef);
 		const state = await file.readCommitted();
 		const turn = state.turns.find(
@@ -737,7 +742,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.filter(
 				(event) =>
 					event.type === "operation" &&
-					event.payload.kind === "tool" &&
+					event.payload.kind === action.kind &&
 					event.payload.operationRef === action.operationRef &&
 					event.payload.attemptRef === action.attemptRef,
 			)
@@ -746,6 +751,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.closed ||
 			state.cancelled ||
 			turn?.status !== "running" ||
+			(action.kind === "model" &&
+				(turn.nativeResult || state.turns.at(-1) !== turn)) ||
 			!record ||
 			record.operationId !== action.runtimeOperationId ||
 			fact?.type !== "operation" ||
@@ -1279,27 +1286,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && generationFact(turn);
 		if (previous?.kind !== "model") unavailable();
+		let intent: RuntimeOperationFactV2;
 		if (request === "count_tokens") {
-			const operationRef = randomUUID();
-			await this.appendOperationFact(
-				file,
-				executionId,
-				{
-					kind: "model",
-					operationRef,
-					attemptRef: randomUUID(),
-					phase: "intent",
-					model: previous.model,
-				},
-				true,
-			);
-			return operationRef;
-		}
-		if (previous.phase === "intent") {
-			await this.appendOperationFact(file, executionId, previous, true);
-			return previous.operationRef;
-		}
-		if (previous.phase === "completed") {
+			intent = {
+				kind: "model",
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent",
+				model: previous.model,
+			};
+		} else if (previous.phase === "intent") {
+			intent = previous;
+		} else if (previous.phase === "completed") {
 			const {
 				phase: _phase,
 				startedAt: _startedAt,
@@ -1309,19 +1307,50 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				usage: _usage,
 				...base
 			} = previous;
-			await this.appendOperationFact(
+			intent = { ...base, attemptRef: randomUUID(), phase: "intent" };
+		} else unavailable();
+		await this.appendOperationFact(file, executionId, intent, true);
+		try {
+			if (!this.options.authorizeExternalAction) unavailable();
+			const state = file.read();
+			const record = state.operations.find(
+				(entry) => entry.key === turn?.operationKey,
+			)?.record;
+			if (!record) unavailable();
+			const action = {
+				nativeSessionRef: state.binding.ref,
+				executionId,
+				runtimeOperationId: record.operationId,
+				operationRef: intent.operationRef,
+				attemptRef: intent.attemptRef,
+				kind: "model" as const,
+			};
+			// Host inspection reads this journal. Release the durable mutation queue
+			// before waiting, then keep current authority last before transport dispatch.
+			await this.validateExternalAction(action);
+			await this.options.authorizeExternalAction(action);
+		} catch (error) {
+			// This callback has not returned to transport, so dispatch cannot have begun.
+			await this.modelPhase(
 				file,
 				executionId,
-				{
-					...base,
-					attemptRef: randomUUID(),
-					phase: "intent",
-				},
-				true,
+				"failed",
+				"authorization_denied",
+				undefined,
+				intent.operationRef,
+			).catch(() =>
+				this.modelPhase(
+					file,
+					executionId,
+					"unknown",
+					"recovery_unconfirmed",
+					undefined,
+					intent.operationRef,
+				),
 			);
-			return previous.operationRef;
+			throw error;
 		}
-		unavailable();
+		return intent.operationRef;
 	}
 	private async modelRequestStarted(
 		file: DurableJsonFile<Session>,
@@ -1453,29 +1482,39 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			return created;
 		});
 		if (value.executionBoundary) {
-			if (!created || !this.options.authorizeExternalAction) unavailable();
-			const state = file.read();
-			const turn = state.turns.find(
-				(entry) => entry.executionId === executionId,
-			);
-			const record = state.operations.find(
-				(entry) => entry.key === turn?.operationKey,
-			)?.record;
-			if (!record) unavailable();
-			const action = {
-				nativeSessionRef: ref,
-				executionId,
-				runtimeOperationId: record.operationId,
-				operationRef: created.operationRef,
-				attemptRef: created.attemptRef,
-				kind: "tool" as const,
-			};
-			// Host authorization may read the same durable file. Never hold its
-			// mutation/tool queue while waiting for the current business authority.
-			await this.validateExternalAction(action);
-			// The Host rechecks current authority after its Driver inspection. No
-			// queued durable read may separate that final gate from this permit.
-			await this.options.authorizeExternalAction(action);
+			try {
+				if (!created || !this.options.authorizeExternalAction) unavailable();
+				const state = file.read();
+				const turn = state.turns.find(
+					(entry) => entry.executionId === executionId,
+				);
+				const record = state.operations.find(
+					(entry) => entry.key === turn?.operationKey,
+				)?.record;
+				if (!record) unavailable();
+				const action = {
+					nativeSessionRef: ref,
+					executionId,
+					runtimeOperationId: record.operationId,
+					operationRef: created.operationRef,
+					attemptRef: created.attemptRef,
+					kind: "tool" as const,
+				};
+				// Host authorization may read the same durable file. Never hold its
+				// mutation/tool queue while waiting for the current business authority.
+				await this.validateExternalAction(action);
+				// The Host rechecks current authority after its Driver inspection. No
+				// queued durable read may separate that final gate from this permit.
+				await this.options.authorizeExternalAction(action);
+			} catch (error) {
+				await this.toolPhase(file, executionId, {
+					toolCallId: value.toolCallId,
+					name: value.name,
+					phase: "failed",
+					failureCode: "authorization_denied",
+				});
+				throw error;
+			}
 		}
 	}
 	private async toolPhase(

@@ -19,7 +19,7 @@ export interface GenerationTombstoneRow {
 	item_id: string;
 	control_record_id: string;
 	control_source_id: string;
-	original_principal: { kind: "user"; id: string };
+	original_principal: { kind: "user" | "application"; id: string };
 	host_session_ref: string;
 	status: "pending" | "confirmed";
 }
@@ -33,6 +33,8 @@ export interface OutboxRow {
 	status: "pending" | "processing" | "retry_scheduled" | "succeeded" | "failed";
 	attempt_count: number;
 	available_at: Date;
+	available_now: boolean;
+	waiting_available: boolean;
 	lease_owner: string | null;
 	lease_expires_at: Date | null;
 	delivery_fence: string | number;
@@ -67,6 +69,8 @@ export interface ExecutionRow {
 	model_configuration_revision: string | number | null;
 	model_option_id: string | null;
 	reasoning_level: string | null;
+	task_wait_order: string | number | null;
+	task_wait_deadline: Date | null;
 }
 
 export interface MessageRow {
@@ -83,6 +87,8 @@ export interface StopRow {
 	execution_id: string;
 	stop_request_id: string;
 	status: "submitted" | "completed";
+	confirmation_deadline: Date;
+	confirmation_timed_out_at: Date | null;
 }
 
 export interface DispatchState {

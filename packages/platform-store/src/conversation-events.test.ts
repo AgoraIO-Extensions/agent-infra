@@ -1241,6 +1241,16 @@ describe("PostgreSQL Conversation event transaction", () => {
 			constraint_name: "conversation_event_source_binding",
 		});
 		await expect(
+			insert(
+				"event_runtime_task_status_forgery",
+				"runtime",
+				"task.status",
+				"runtime_forged",
+			),
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_source_binding",
+		});
+		await expect(
 			insert("event_platform_runtime_cursor", "platform", "text.delta", null),
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_source_binding",

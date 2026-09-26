@@ -36,6 +36,7 @@ export interface AcpLaunch {
 			readonly toolCallId: string;
 			readonly name: string;
 			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
 		}) => Promise<void>;
 	}) => void;
 }
@@ -50,6 +51,7 @@ export async function openAcpSession(options: {
 		readonly toolCallId: string;
 		readonly name: string;
 		readonly permitted?: boolean;
+		readonly executionBoundary?: true;
 	}) => Promise<void>;
 }) {
 	const native = await spawnAcpProcess(
@@ -112,6 +114,7 @@ export async function openAcpSession(options: {
 							toolCallId: params.toolCall.toolCallId,
 							name: tool?.kind ?? params.toolCall.kind ?? "unknown",
 							permitted: Boolean(allowed),
+							executionBoundary: true,
 						}).then(
 							() => Boolean(allowed),
 							() => false,
@@ -185,6 +188,7 @@ export async function openAcpSession(options: {
 					readonly toolCallId: string;
 					readonly name: string;
 					readonly permitted?: boolean;
+					readonly executionBoundary?: true;
 				}) => Promise<void>;
 			}) {
 				currentToolRequestStarted = next.toolRequestStarted;

@@ -436,6 +436,41 @@ describe("PostgreSQL application foundation transaction", () => {
 		}
 	});
 
+	it("marks API-created applications eligible for workload reconciliation", async () => {
+		await resetDatabase();
+		const submission =
+			new builtStore.PostgresApplicationFoundationTransactionV1({
+				databaseUrl,
+			});
+		try {
+			const foundation = createApplicationFoundationUseCaseV1({
+				transaction: submission,
+				...applicationFoundationAdmissionDependenciesV1(),
+			});
+			await foundation.submit(
+				applicationFoundationCommandV1,
+				{
+					...applicationFoundationActorContextV1,
+					principal: { kind: "application", id: "application-caller" },
+					creationMode: "api",
+				},
+				createSecretRecordFixtureResolver(),
+			);
+			const [application] = await adminClient`
+				select status, management_revision, approval_revision
+				from platform.agent_applications
+				where id = ${applicationFoundationCommandV1.applicationId}
+			`;
+			expect(application).toMatchObject({
+				status: "creating",
+				management_revision: "1",
+				approval_revision: "1",
+			});
+		} finally {
+			await submission.close();
+		}
+	});
+
 	it("serializes concurrent exact submissions into one commit and one replay", async () => {
 		await resetDatabase();
 		const first = new builtStore.PostgresApplicationFoundationTransactionV1({

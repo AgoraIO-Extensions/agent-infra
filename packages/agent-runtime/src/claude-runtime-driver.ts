@@ -29,6 +29,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -53,6 +54,9 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
+	readonly authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 }
 interface Binding {
 	ref: string;
@@ -662,6 +666,69 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		if (!binding) unavailable();
 		return this.file(binding);
 	}
+	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
+		if (
+			this.closed ||
+			!["model", "tool"].includes(action.kind) ||
+			action.purpose
+		)
+			unavailable();
+		const file = await this.forReference(action.nativeSessionRef);
+		const state = await file.readCommitted();
+		const turn = state.turns.find(
+			(entry) => entry.executionId === action.executionId,
+		);
+		const record = state.operations.find(
+			(entry) => entry.key === turn?.operationKey,
+		)?.record;
+		const fact = turn && latestFact(turn, action.kind, action.operationRef);
+		const toolBinding =
+			action.kind !== "tool" ||
+			Object.values(turn?.toolOperations ?? {}).some(
+				(entry) =>
+					entry.operationRef === action.operationRef &&
+					entry.attemptRef === action.attemptRef,
+			);
+		if (
+			this.closed ||
+			state.cancelled ||
+			turn?.status !== "running" ||
+			turn.nativeResult ||
+			state.turns.at(-1) !== turn ||
+			!record ||
+			record.kind !== "submit-turn" ||
+			record.operationId !== action.runtimeOperationId ||
+			fact?.phase !== "intent" ||
+			fact.attemptRef !== action.attemptRef ||
+			!toolBinding
+		)
+			unavailable();
+	}
+	private async authorizeOperation(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		intent: RuntimeOperationFactV2,
+	) {
+		if (!this.options.authorizeExternalAction) unavailable();
+		const state = file.read();
+		const turn = state.turns.find((entry) => entry.executionId === executionId);
+		const record = state.operations.find(
+			(entry) => entry.key === turn?.operationKey,
+		)?.record;
+		if (!record) unavailable();
+		const action = {
+			nativeSessionRef: state.binding.ref,
+			executionId,
+			runtimeOperationId: record.operationId,
+			operationRef: intent.operationRef,
+			attemptRef: intent.attemptRef,
+			kind: intent.kind,
+		};
+		// Host inspection reads this journal. Release its mutation queue first,
+		// and do not queue another durable read after the current authority gate.
+		await this.validateExternalAction(action);
+		await this.options.authorizeExternalAction(action);
+	}
 	private exclusive<T>(ref: string, action: () => Promise<T>): Promise<T> {
 		const task = (this.locks.get(ref) ?? Promise.resolve())
 			.catch(() => {})
@@ -870,13 +937,25 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					request,
 				);
 			},
-			started: () =>
-				this.modelRequestStarted(
+			started: async (request) => {
+				await this.modelRequestStarted(
 					file,
 					command.executionId,
 					currentModelOperationRef,
-				),
+				);
+				if (request !== "count_tokens")
+					await file.update((state) => {
+						const turn =
+							state.turns.find(
+								(entry) => entry.executionId === command.executionId,
+							) ?? unavailable();
+						turn.modelResponse = { state: "sent", endTurn: false };
+					});
+			},
 			receipt: async (response, endTurn, usage, request) => {
+				// Transport invokes sent before fetch. Never wait on a durable write
+				// between the final Host gate and the actual outbound request.
+				if (response === "sent") return;
 				if (response === "completed")
 					await this.modelPhase(
 						file,
@@ -935,17 +1014,34 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				permitted: boolean,
 			) => {
 				const toolCallId = createHash("sha256").update(toolUseID).digest("hex");
-				await this.toolRequestStarted(file, command.executionId, {
-					toolCallId,
-					name,
-				});
-				if (!permitted)
+				const intent = await this.toolRequestStarted(
+					file,
+					command.executionId,
+					{
+						toolCallId,
+						name,
+					},
+				);
+				if (!permitted) {
 					await this.toolPhase(file, command.executionId, {
 						toolCallId,
 						name,
 						phase: "failed",
 						failureCode: "authorization_denied",
 					});
+					return;
+				}
+				try {
+					await this.authorizeOperation(file, command.executionId, intent);
+				} catch (error) {
+					await this.toolPhase(file, command.executionId, {
+						toolCallId,
+						name,
+						phase: "failed",
+						failureCode: "authorization_denied",
+					});
+					throw error;
+				}
 			};
 			const workspaceTools = claudeWorkspaceTools(
 				join(directory, "workspace"),
@@ -976,11 +1072,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							behavior: "deny" as const,
 							message: "Tool access is unavailable",
 						};
-						await observeToolRequest(
-							name,
-							toolOptions.toolUseID,
-							permission.behavior === "allow",
-						);
+						try {
+							await observeToolRequest(
+								name,
+								toolOptions.toolUseID,
+								permission.behavior === "allow",
+							);
+						} catch {
+							return {
+								behavior: "deny" as const,
+								message: "Tool access is unavailable",
+							};
+						}
 						return permission;
 					},
 					strictMcpConfig: true,
@@ -1337,27 +1440,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && generationFact(turn);
 		if (previous?.kind !== "model") unavailable();
+		let intent: RuntimeOperationFactV2;
 		if (request === "count_tokens") {
-			const operationRef = randomUUID();
-			await this.appendOperationFact(
-				file,
-				executionId,
-				{
-					kind: "model",
-					operationRef,
-					attemptRef: randomUUID(),
-					phase: "intent",
-					model: previous.model,
-				},
-				true,
-			);
-			return operationRef;
-		}
-		if (previous.phase === "intent") {
-			await this.appendOperationFact(file, executionId, previous, true);
-			return previous.operationRef;
-		}
-		if (previous.phase === "completed") {
+			intent = {
+				kind: "model",
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent",
+				model: previous.model,
+			};
+		} else if (previous.phase === "intent") {
+			intent = previous;
+		} else if (previous.phase === "completed") {
 			const {
 				phase: _phase,
 				startedAt: _startedAt,
@@ -1367,19 +1461,33 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				usage: _usage,
 				...base
 			} = previous;
-			await this.appendOperationFact(
+			intent = { ...base, attemptRef: randomUUID(), phase: "intent" };
+		} else unavailable();
+		await this.appendOperationFact(file, executionId, intent, true);
+		try {
+			await this.authorizeOperation(file, executionId, intent);
+		} catch (error) {
+			// This callback has not returned to transport, so dispatch cannot have begun.
+			await this.modelPhase(
 				file,
 				executionId,
-				{
-					...base,
-					attemptRef: randomUUID(),
-					phase: "intent",
-				},
-				true,
+				"failed",
+				"authorization_denied",
+				undefined,
+				intent.operationRef,
+			).catch(() =>
+				this.modelPhase(
+					file,
+					executionId,
+					"unknown",
+					"recovery_unconfirmed",
+					undefined,
+					intent.operationRef,
+				),
 			);
-			return previous.operationRef;
+			throw error;
 		}
-		unavailable();
+		return intent.operationRef;
 	}
 	private async modelRequestStarted(
 		file: DurableJsonFile<Session>,
@@ -1432,7 +1540,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			previousEvent.payload.kind === "tool"
 				? previousEvent.payload
 				: undefined;
-		if (previous && ["intent", "started"].includes(previous.phase)) return;
+		if (previous?.phase === "intent") return previous;
+		// A late permission callback cannot rewrite an already observed start
+		// as a new denied attempt or authorize its replay.
+		if (previous?.phase === "started") unavailable();
 		const model = generationFact(turn);
 		const created = {
 			kind: "tool" as const,
@@ -1454,6 +1565,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			};
 		});
 		await this.appendOperationFact(file, executionId, created);
+		return created;
 	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,

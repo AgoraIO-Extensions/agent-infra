@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { vi } from "vitest";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 
 export const claudeCommand = (id = "one") => ({
 	schemaVersion: 2 as const,
@@ -147,6 +148,12 @@ export async function claudeNativeFixture(
 		);
 	const options = {
 		path,
+		// Direct native/source conformance validates committed actions; Host authority is tested separately.
+		authorizeExternalAction: async (
+			action: RuntimeExternalActionAuthorization,
+		) => {
+			await driver.validateExternalAction(action);
+		},
 		configVersion: "config-one",
 		defaultModelOptionId: "option-one",
 		defaultReasoningLevel: "high",

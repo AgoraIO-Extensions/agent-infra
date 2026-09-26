@@ -1,9 +1,13 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import {
+	GenericAcpRuntimeDriver,
+	type GenericAcpRuntimeDriverOptions,
+} from "./acp-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 
 it.each(["prompt-reject", "prompt-no-model"])(
 	"does not record a model start when ACP %s sends no model request",
@@ -200,6 +204,8 @@ it.each([
 		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
 		const driver = await GenericAcpRuntimeDriver.open({
 			path,
+			authorizeExternalAction: (action) =>
+				driver.validateExternalAction(action),
 			configVersion: "configuration-a",
 			defaultModelOptionId: "primary",
 			defaultReasoningLevel: "high",
@@ -210,7 +216,7 @@ it.each([
 					reasoningLevels: ["high"],
 				},
 			],
-			launch: async () => ({
+			launch: async (_directory, _selection, admit) => ({
 				command: process.execPath,
 				args: [
 					fileURLToPath(
@@ -218,7 +224,10 @@ it.each([
 					),
 				],
 				env: { ACP_TEST_MODE: mode },
-				authorize: async () => permitted,
+				authorize: async () => {
+					await admit();
+					return permitted;
+				},
 			}),
 		});
 		try {
@@ -258,15 +267,108 @@ it.each([
 					: [],
 			);
 			expect(tools.map((fact) => fact.phase)).toEqual(
-				!permitted
-					? ["intent", "failed"]
-					: mode === "tool-status-before-permission"
-						? ["intent", "completed"]
-						: ["intent", "started", "completed"],
+				!permitted ? ["intent", "failed"] : ["intent", "started", "completed"],
 			);
 			if (!permitted)
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
 			if (mode === "tool-status-before-permission") {
+				expect(tools.at(-1)?.startedAt).toEqual(expect.any(String));
+				expect(tools.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
+			}
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
+it.each(["permitted", "revoked", "missing"] as const)(
+	"ACP checks %s current authority before permitting a file write",
+	async (authority) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-write-authority-"));
+		let effectPath = "";
+		let revoked = false;
+		const authorize = vi.fn(
+			async (action: RuntimeExternalActionAuthorization) => {
+				await driver.validateExternalAction(action);
+				if (revoked) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+			},
+		);
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			authorizeExternalAction: authority === "missing" ? undefined : authorize,
+			launch: async (directory, _selection, admit) => {
+				effectPath = join(directory, "workspace", "effect.txt");
+				await writeFile(effectPath, "unchanged");
+				return {
+					command: process.execPath,
+					args: [
+						fileURLToPath(
+							new URL("./acp-peer.test-support.mjs", import.meta.url),
+						),
+					],
+					env: {
+						ACP_TEST_MODE: "tool-permission-write",
+						ACP_TEST_EFFECT_PATH: effectPath,
+					},
+					authorize: async () => {
+						await admit();
+						revoked = authority === "revoked";
+						return true;
+					},
+				};
+			},
+		});
+		try {
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-write",
+				turnId: "turn-write",
+				operationId: "operation-write",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(async () =>
+				expect(
+					await driver.getStatus(accepted.nativeSessionRef, "execution-write"),
+				).toBe("completed"),
+			);
+			expect(await readFile(effectPath, "utf8")).toBe(
+				authority === "permitted" ? "synthetic effect" : "unchanged",
+			);
+			expect(authorize).toHaveBeenCalledTimes(authority === "missing" ? 0 : 1);
+			const tools = (
+				await driver.replayEvents(accepted.nativeSessionRef, "execution-write")
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(tools.map((fact) => fact.phase)).toEqual(
+				authority === "permitted"
+					? ["intent", "started", "completed"]
+					: ["intent", "failed"],
+			);
+			if (authority !== "permitted") {
+				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
 				expect(tools.at(-1)?.startedAt).toBeUndefined();
 				expect(tools.at(-1)?.durationMs).toBeUndefined();
 			}
@@ -292,8 +394,10 @@ it.each([
 	"keeps a lost active turn unknown after restart with $mode",
 	async ({ mode, phase, expected }) => {
 		const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
-		const options = {
+		const options: GenericAcpRuntimeDriverOptions = {
 			path,
+			authorizeExternalAction: (action: RuntimeExternalActionAuthorization) =>
+				driver.validateExternalAction(action),
 			configVersion: "configuration-a",
 			defaultModelOptionId: "primary",
 			defaultReasoningLevel: "high",
@@ -304,7 +408,7 @@ it.each([
 					reasoningLevels: ["high"],
 				},
 			],
-			launch: async () => ({
+			launch: async (_directory, _selection, admit) => ({
 				command: process.execPath,
 				args: [
 					fileURLToPath(
@@ -312,7 +416,10 @@ it.each([
 					),
 				],
 				env: { ACP_TEST_MODE: mode },
-				authorize: async () => true,
+				authorize: async () => {
+					await admit();
+					return true;
+				},
 			}),
 		};
 		let driver = await GenericAcpRuntimeDriver.open(options);

@@ -138,11 +138,16 @@ const connection = new AgentSideConnection(
 			if (
 				[
 					"tool-permission",
+					"tool-permission-write",
 					"tool-status-before-permission",
 					"tool-permission-hold",
 					"tool-permission-completed-hold",
 				].includes(process.env.ACP_TEST_MODE)
 			) {
+				const kind =
+					process.env.ACP_TEST_MODE === "tool-permission-write"
+						? "edit"
+						: "read";
 				const updateTool = (status) =>
 					connection.sessionUpdate({
 						sessionId,
@@ -150,7 +155,7 @@ const connection = new AgentSideConnection(
 							sessionUpdate:
 								status === "pending" ? "tool_call" : "tool_call_update",
 							toolCallId: "tool-permission",
-							kind: "read",
+							kind,
 							status,
 						},
 					});
@@ -161,7 +166,7 @@ const connection = new AgentSideConnection(
 					sessionId,
 					toolCall: {
 						toolCallId: "tool-permission",
-						kind: "read",
+						kind,
 						status: "pending",
 						title: "Read synthetic file",
 					},
@@ -174,6 +179,8 @@ const connection = new AgentSideConnection(
 					permission.outcome?.outcome === "selected" &&
 					permission.outcome.optionId === "allow";
 				if (allowed) await updateTool("in_progress");
+				if (allowed && process.env.ACP_TEST_MODE === "tool-permission-write")
+					await writeFile(process.env.ACP_TEST_EFFECT_PATH, "synthetic effect");
 				if (process.env.ACP_TEST_MODE === "tool-permission-hold")
 					await new Promise((resolve) => {
 						finishPrompt = resolve;

@@ -498,6 +498,7 @@ describe("Runtime Driver shared conformance", () => {
 						},
 					}),
 				).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+				await fixture.emitRunningEvent();
 				expect(fixture.turnSelections()).toEqual([first.selection]);
 
 				fixture.completeStopAsCancelled();
@@ -532,6 +533,7 @@ describe("Runtime Driver shared conformance", () => {
 				expect((await host.submitTurnV2(second)).result).toMatchObject({
 					outcome: "accepted",
 				});
+				await fixture.emitRunningEvent();
 				expect(fixture.turnSelections()).toEqual([
 					first.selection,
 					second.selection,

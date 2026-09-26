@@ -36,6 +36,19 @@ jobs:
         with:
           node-version: 24
 
+      - name: Enable OCI image storage for native task evidence
+        run: |
+          node --input-type=module -e '
+            import { existsSync, readFileSync } from "node:fs";
+            const path = "/etc/docker/daemon.json";
+            const config = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+            config.features = { ...config.features, "containerd-snapshotter": true };
+            process.stdout.write(JSON.stringify(config));
+          ' > "$RUNNER_TEMP/task-native-daemon.json"
+          sudo install -m 0644 "$RUNNER_TEMP/task-native-daemon.json" /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info
+
       - name: Install pnpm
         run: npm install --global pnpm@11.20.0
 
@@ -136,6 +149,28 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node .github/scripts/vulnerability-scan.mjs build
+
+      - name: Verify native durable task API and Worker recovery
+        id: task_native
+        env:
+          AGENT_INFRA_TASK_NATIVE_TEST: "1"
+          AGENT_INFRA_TASK_NATIVE_IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          AGENT_INFRA_TASK_NATIVE_EVIDENCE: ${{ runner.temp }}/task-native.json
+        run: |
+          export AGENT_INFRA_TASK_NATIVE_IMAGE="agent-infra-ci/agent-runtime-host:$SCAN_COMMIT"
+          AGENT_INFRA_TASK_NATIVE_SOURCE_TREE=$(git rev-parse "$SCAN_COMMIT^{tree}")
+          export AGENT_INFRA_TASK_NATIVE_SOURCE_TREE
+          pnpm --filter @agent-infra/platform-worker exec vitest run \
+            src/task-worker-native.integration.test.ts --maxWorkers=1 --cache=false
+
+      - name: Preserve native task evidence
+        if: ${{ !cancelled() && (steps.task_native.outcome == 'success' || steps.task_native.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: task-native-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/task-native.json*
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Probe native Codex runtime image
         id: runtime_probe

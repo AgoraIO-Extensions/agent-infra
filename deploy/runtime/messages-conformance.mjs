@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile, realpath, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +14,9 @@ const { values } = parseArgs({ options: {
 } });
 if (!values.settings || !values.model || !values.output) throw Error("Supply --settings, --model and --output");
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
-const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation } = await import(pathToFileURL(runtimeEntry).href);
+const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FileRuntimeStore, RuntimeHost, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
+const contractsEntry = await realpath(resolve("node_modules/@agent-infra/contracts/dist/runtime/index.mjs"));
+const { RuntimeExecutionGrantClaimsV2Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
 if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
 const isPi = values.runtime === "pi";
@@ -38,9 +40,11 @@ if (typeof credential !== "string" || !credential) throw Error("Model credential
 const path = await realpath(await mkdtemp(join(tmpdir(), "messages-conformance-")));
 const configVersion = `conformance-${randomUUID()}`;
 const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
-let driver;
-const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, turn: 0 }));
-const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
+let driver, host, hostStore;
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const verifyGrant = createRuntimeExecutionGrantVerifierV2(new Map([["synthetic-key", publicKey]]));
+const users = ["a", "b"].map(id => ({ id, canary: randomUUID(), contextCanary: randomUUID(), ref: undefined, hostRef: null, turn: 0 }));
+const report = { schemaVersion: 1, runtime: values.runtime, sourceCommit, dirty, imageDigest: values["image-digest"] ?? null, configVersion, sdkVersion: provenance.sdkVersion, nativeVersion: provenance.nativeVersion, ...(isPi ? { bundleSha256: provenance.bundleSha256, upstreamCommit: provenance.upstreamCommit } : { executableSha256: provenance.executableSha256 }), model: values.model, authority: "synthetic-runtime-host-v3", modelAuthorizationChecks: 0, toolAuthorizationChecks: 0, negativeVector: "symlink-escape", negativeTargets: separateNegative ? [values["negative-target"]] : ["workspace", "memory"], checks: [], passed: false };
 const keepAlive = setTimeout(() => {}, 600_000);
 // Inspect only this synthetic Turn through the pinned SDK; never emit transcript content.
 const historyProbe = `
@@ -91,7 +95,40 @@ async function claudeReadEvidence(user, other) {
  return {ownWorkspaceRead: values[0] === true, ownMemoryRead: values[1] === true, persistedFiles: files.every(Boolean), ...(other ? {otherWorkspaceDenied: values[2] === true, otherMemoryDenied: values[3] === true} : {})};
 }
 const memoryPath = separateNegative ? "workspace/.memory/MEMORY.md" : "memory/MEMORY.md";
-const openDriver = () => isPi ? openPiRuntime(options) : isOpenCode ? openOpenCodeRuntime(options) : ClaudeRuntimeDriver.open(options);
+function signedRequest(request, command) {
+ const issuedAt = Date.now();
+ const claims = RuntimeExecutionGrantClaimsV2Schema.parse({
+  schemaVersion: 2, issuer: "synthetic-platform", audience: "runtime_host", workerId: "synthetic-worker",
+  issuedAt, expiresAt: issuedAt + RuntimeExecutionGrantMaximumLifetimeMsV2, grantId: randomUUID(),
+  principal: request.principal, agentId: request.agentId, channelId: request.channelId,
+  conversationId: request.conversationId, executionId: request.executionId, turnId: request.turnId,
+  sessionGeneration: request.sessionGeneration, traceId: request.traceId, hostSessionRef: request.hostSessionRef,
+  operation: request.operation, allowedCommands: [command], purpose: "business",
+  authorizationRecordId: `authorization-${request.executionId}`, attachments: [],
+  requestDigest: createHash("sha256").update(runtimeRequestSigningPayloadV3(request)).digest("hex"),
+  ...(command === "events.persist" ? { eventAccess: { command, consumer: request.consumer, afterCursor: request.afterCursor } } : {}),
+ });
+ const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "synthetic-key", typ: "runtime-execution+jws" })).toString("base64url");
+ const input = `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+ return { ...request, grant: { schemaVersion: 2, format: "runtime-execution-jws", token: `${input}.${sign(null, Buffer.from(input), privateKey).toString("base64url")}` } };
+}
+async function openRuntime() {
+ const authorizedOptions = { ...options, authorizeExternalAction: async action => {
+  if (!host) throw Error("Synthetic Host authorization is unavailable");
+  await host.authorizeExternalAction(action);
+  if (action.kind === "model") report.modelAuthorizationChecks++;
+  if (action.kind === "tool") report.toolAuthorizationChecks++;
+ } };
+ driver = isPi ? await openPiRuntime(authorizedOptions) : isOpenCode ? await openOpenCodeRuntime(authorizedOptions) : await ClaudeRuntimeDriver.open(authorizedOptions);
+ hostStore = await FileRuntimeStore.open(join(path, "host.json"));
+ host = await RuntimeHost.open({ driver, store: hostStore, grantValidation: { expectedIssuer: "synthetic-platform" }, grantValidationV2: { expectedIssuer: "synthetic-platform", expectedWorkerId: "synthetic-worker" } });
+}
+async function closeRuntime() {
+ const currentHost = host, currentDriver = driver;
+ host = undefined;
+ driver = undefined;
+ try { await currentHost?.close(); } finally { await currentDriver?.close(); }
+}
 async function piReadEvidence(user, other, negative) {
  const directory = join(path, user.ref), workspace = join(directory, "workspace");
  const state = JSON.parse(await readFile(join(directory, "state.json"), "utf8"));
@@ -129,7 +166,7 @@ async function readEvidence(user, other, negative) {
  if (messages.some(message => message.info.sessionID !== state.nativeId)) throw Error("Mismatched synthetic session");
  const nativeTools = messages.flatMap(message => message.parts).filter(part => part.type === "tool");
  report.diagnostics ??= [];
- report.diagnostics.push({ user: user.id, turn: user.turn, tools: nativeTools.map(part => ({ name: ["read", "write", "edit", "bash", "glob", "grep", "todowrite", "task"].includes(part.tool) ? part.tool : "other", status: part.state.status })) });
+ report.diagnostics.push({ user: user.id, turn: user.turn, tools: nativeTools.map(part => ({ name: ["read", "write", "edit", "bash", "glob", "grep", "todowrite", "task"].includes(part.tool) ? part.tool : "other", status: ["pending", "running", "completed", "error"].includes(part.state?.status) ? part.state.status : "unknown" })) });
  const tools = nativeTools.filter(part => part.tool === "read");
  const expected = negative ? [{ path: join(workspace, negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md"), canary: other.canary, denied: true }] : [{ path: join(workspace, "canary.txt"), canary: user.canary }, { path: join(directory, memoryPath), canary: user.canary }];
  const checks = expected.map(expected => {
@@ -144,23 +181,53 @@ async function readEvidence(user, other, negative) {
 }
 async function turn(user, text) {
  user.turn++;
- const command = { schemaVersion: 2, kind: "submit-turn", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId: `execution-${user.id}-${user.turn}`, turnId: `turn-${user.id}-${user.turn}`, operationId: `operation-${user.id}-${user.turn}`, selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" }, input: { text, attachments: [] }, ...(user.ref ? { nativeSessionRef: user.ref } : {}) };
- const accepted = await driver.execute(command); user.ref = accepted.nativeSessionRef;
- let answer = "", tools = 0, denied = 0;
- for await (const event of await driver.subscribeEvents(user.ref, command.executionId, undefined, AbortSignal.timeout(120_000))) {
-  if (event.type === "text") answer += event.payload.delta;
-  if (event.type === "tool" && event.payload.phase === "completed") tools++;
-  if (event.type === "tool" && event.payload.phase === "failed") denied++;
+ const executionId = `execution-${user.id}-${user.turn}`;
+ const binding = { schemaVersion: 3, requestId: randomUUID(), traceId: randomUUID(), principal: { kind: "user", id: `synthetic-user-${user.id}` }, channelId: "web", agentId: "synthetic-agent", conversationId: `conversation-${user.id}`, sessionGeneration: 1, executionId, turnId: `turn-${user.id}-${user.turn}`, hostSessionRef: user.hostRef, operation: { kind: "execution", id: executionId, deliveryFence: 1, executionDeliveryFence: 1 } };
+ const submission = { ...binding, selection: { schemaVersion: 1, modelOptionId: "primary", reasoningLevel: "medium" }, input: { text, attachments: [] } };
+ const request = signedRequest(submission, "turn.submit");
+ const accepted = await host.submitTurnV3(request, verifyGrant(request.grant));
+ if (accepted.result.outcome !== "accepted") throw Error("Synthetic task was not accepted");
+ user.hostRef = accepted.hostSessionRef;
+ const nativeRef = hostStore.nativeSessionRef(user.hostRef);
+ if (!nativeRef || (user.ref && user.ref !== nativeRef)) throw Error("Synthetic Session binding changed");
+ user.ref = nativeRef;
+ const current = { ...binding, hostSessionRef: user.hostRef };
+ const originalOperationDigest = requestDigest({ kind: "submit-turn", agentId: binding.agentId, conversationId: binding.conversationId, executionId, turnId: binding.turnId, sessionGeneration: 1, input: submission.input, selection: submission.selection });
+ const deadline = Date.now() + 120_000;
+ let answer = "", tools = 0, denied = 0, afterCursor = null;
+ while (Date.now() < deadline) {
+  const query = signedRequest({ ...current, requestId: randomUUID(), originalOperationDigest }, "session.status");
+  const result = await host.recoverStatusV3(query, verifyGrant(query.grant), AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+  if (result.outcome !== "found") throw Error("Original synthetic task could not be recovered");
+  const status = result.status;
+  const terminal = ["completed", "failed", "cancelled"].includes(status);
+  if (!terminal) {
+   const renewal = signedRequest({ ...current, requestId: randomUUID() }, "execution.renew");
+   await host.renewAuthorizationV3(renewal, verifyGrant(renewal.grant));
+  }
+  const events = signedRequest({ ...current, requestId: randomUUID(), consumer: "platform_worker_persistence", afterCursor }, "events.persist");
+  const signal = AbortSignal.timeout(Math.min(10_000, Math.max(1, deadline - Date.now())));
+  let drained = false;
+  try {
+   for await (const event of await host.streamEventsV3(events, verifyGrant(events.grant), signal)) {
+    afterCursor = event.cursor;
+    if (event.type === "text") answer += event.payload.delta;
+    if (event.type === "tool" && event.payload.phase === "completed") tools++;
+    if (event.type === "tool" && event.payload.phase === "failed") denied++;
+   }
+   drained = !signal.aborted;
+  } catch (error) { if (!signal.aborted || error !== signal.reason) throw error; }
+  if (terminal && drained) return { answer, tools, denied, status };
  }
- return { answer, tools, denied, status: await driver.getStatus(user.ref, command.executionId) };
+ throw Error("Synthetic task timed out without confirmed completion");
 }
 try {
- driver = await openDriver();
+ await openRuntime();
  await Promise.all(users.map(async user => {
   const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Save it in workspace file canary.txt and your private memory file ${separateNegative ? ".memory/MEMORY.md" : "../memory/MEMORY.md"} using the write tool. Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
   report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 });
  }));
- await driver.close();
+ await closeRuntime();
  for (const user of users) {
   const check = report.checks.find(check => check.user === user.id);
   check.readEvidence = await readEvidence(user);
@@ -176,13 +243,13 @@ try {
    if (await realpath(link) !== peerFile || !(await readFile(peerFile, "utf8")).includes(other.canary)) throw Error("Invalid synthetic isolation target");
   }
  }
- driver = await openDriver();
+ await openRuntime();
  await Promise.all(users.map(async user => {
   const other = users.find(value => value !== user);
   const result = await turn(user, separateNegative ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
   report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2)) });
  }));
- await driver.close();
+ await closeRuntime();
  for (const user of users) {
   const check = report.checks.find(check => check.user === user.id && check.phase === (separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative"));
   check.readEvidence = await readEvidence(user, users.find(other => other !== user));
@@ -190,7 +257,7 @@ try {
  }
  if (separateNegative) {
   for (const negative of [values["negative-target"]]) {
-   driver = await openDriver();
+   await openRuntime();
    await Promise.all(users.map(async user => {
     const other = users.find(value => value !== user);
     const alias = negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md";
@@ -198,12 +265,16 @@ try {
     const evidence = await readEvidence(user, other, negative);
     report.checks.push({ user: user.id, phase: `restart-other-${negative}-negative`, status: result.status, denied: result.denied, readEvidence: evidence, passed: result.denied >= 1 && !result.answer.includes(other.canary) && Object.values(evidence).every(Boolean) });
    }));
-   await driver.close();
+   await closeRuntime();
   }
  }
- report.passed = report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
+ report.passed = report.modelAuthorizationChecks > 0 && report.toolAuthorizationChecks > 0 && report.checks.length === (separateNegative ? 6 : 4) && report.checks.every(check => check.passed);
 } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_FAILED"; }
-finally { await driver?.close(); clearTimeout(keepAlive); await rm(path, { recursive: true, force: true }); }
+finally {
+ clearTimeout(keepAlive);
+ try { await closeRuntime(); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
+ try { await rm(path, { recursive: true, force: true }); } catch { report.passed = false; report.error = "MESSAGES_CONFORMANCE_CLEANUP_FAILED"; }
+}
 await writeFile(values.output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });
 console.log(JSON.stringify({ passed: report.passed, dirty, checks: report.checks.length, reportSha256: createHash("sha256").update(JSON.stringify(report)).digest("hex") }));
 if (!report.passed) process.exitCode = 1;

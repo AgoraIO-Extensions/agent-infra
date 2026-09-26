@@ -48,7 +48,11 @@ import type {
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
 export { parseConversationMetadataRecoveryV1 } from "./conversation-dispatch-input.js";
-export { decideConversationDispatchRetryTransitionV1 } from "./conversation-dispatch-transition.js";
+export {
+	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
+} from "./conversation-dispatch-transition.js";
 export {
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,
@@ -129,6 +133,11 @@ export function createConversationDispatchUseCaseV1(
 		let terminalCommitPossible =
 			executionTerminal(claim.executionStatus) ||
 			responseFinalStatus !== undefined;
+		const recoveringApiTask =
+			claim.taskWaitOrder !== undefined &&
+			["processing", "unknown"].includes(claim.executionStatus);
+		const runningConfirmed = responseStatus === "running";
+		let businessResumed = false;
 		const eventRequest: ConversationRuntimeEventRequestV1 = {
 			schemaVersion: 1,
 			requestId: claim.metadataRecovery?.id ?? claim.requestId,
@@ -153,7 +162,10 @@ export function createConversationDispatchUseCaseV1(
 				!authority.controlOnly &&
 				dependencies.runtimeHost.renewAuthorization
 				? async (signal) => {
-						if (!terminalCommitPossible)
+						if (
+							!terminalCommitPossible &&
+							(!recoveringApiTask || businessResumed)
+						)
 							await dependencies.runtimeHost.renewAuthorization?.(
 								eventRequest,
 								signal,
@@ -175,6 +187,25 @@ export function createConversationDispatchUseCaseV1(
 				{},
 			);
 		try {
+			if (
+				recoveringApiTask &&
+				runningConfirmed &&
+				!claim.stopPending &&
+				!terminalCommitPossible &&
+				!authority.controlOnly &&
+				dependencies.runtimeHost.renewAuthorization
+			) {
+				try {
+					await dependencies.runtimeHost.renewAuthorization(
+						eventRequest,
+						eventHeartbeat.signal,
+					);
+					businessResumed = true;
+				} catch {
+					// Fresh route/authorization may permit only recovery controls.
+					// Event and ACK adapters recheck that authority before querying.
+				}
+			}
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
 			if (claim.runtimeCursor)
@@ -188,7 +219,15 @@ export function createConversationDispatchUseCaseV1(
 			)) {
 				const runtimeEvent = parseRuntimeEvent(eventInput, claim);
 				const event = normalizedEvent(runtimeEvent);
-				const transition = transitionFromEvent(event);
+				// Replayed running frames cannot override the latest unknown lookup.
+				// Keep the real event while retaining the current occupied projection.
+				const transition =
+					recoveringApiTask &&
+					responseStatus === "unknown" &&
+					event.type === "execution.status" &&
+					event.status === "processing"
+						? undefined
+						: transitionFromEvent(event);
 				const eventFinalStatus = terminalStatus(event);
 				const connectionMetadata =
 					event.type === "execution.operation" &&
@@ -258,6 +297,15 @@ export function createConversationDispatchUseCaseV1(
 			const current = await eventHeartbeat.stop();
 			if (!current) return retryInterruptedDrain();
 			const failure = runtimeFailure(error);
+			if (recoveringApiTask && !businessResumed)
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					failure.code,
+					"retry",
+					{},
+				);
 			return failure.retryable
 				? retry(
 						dependencies.store,
@@ -547,6 +595,7 @@ export function createConversationDispatchUseCaseV1(
 			if (
 				authority.controlOnly &&
 				(claim.operation === "conversation.turn.supplement.v1" ||
+					claim.executionStatus === "waiting" ||
 					claim.executionStatus === "submitted" ||
 					(!executionTerminal(claim.executionStatus) &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
@@ -580,7 +629,8 @@ export function createConversationDispatchUseCaseV1(
 					claim.operation === "conversation.turn.regenerate.v1");
 			if (
 				recoveringOriginalTurn &&
-				(claim.executionStatus === "submitted" ||
+				(claim.executionStatus === "waiting" ||
+					claim.executionStatus === "submitted" ||
 					(claim.hostSessionRef === null &&
 						!dependencies.runtimeHost.recoverOriginalStatus))
 			) {
@@ -589,10 +639,17 @@ export function createConversationDispatchUseCaseV1(
 					claim,
 					retryDelayMs,
 					"RUNTIME_ACCEPTANCE_UNKNOWN",
-					"unknown",
-					claim.executionStatus === "submitted" ? {} : retryTransition(claim),
+					claim.executionStatus === "waiting" ? "retry" : "unknown",
+					claim.executionStatus === "waiting" ||
+						claim.executionStatus === "submitted"
+						? {}
+						: retryTransition(claim),
 				);
 			}
+			const recoveringStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				dependencies.runtimeHost.recoverOriginalStatus !== undefined &&
+				claim.hostSessionRef !== null;
 			if (claim.metadataRecovery) {
 				const recover = dependencies.runtimeHost.recoverOriginalStatus;
 				if (!recover || !claim.hostSessionRef)
@@ -713,7 +770,8 @@ export function createConversationDispatchUseCaseV1(
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
-				claim.executionStatus !== "processing"
+				claim.executionStatus !== "processing" &&
+				!recoveringStop
 			) {
 				return retry(
 					dependencies.store,
@@ -756,7 +814,7 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringOriginalTurn) {
+				if (recoveringOriginalTurn || recoveringStop) {
 					const status = parseRuntimeStatusResponse(
 						dependencies.runtimeHost.recoverOriginalStatus
 							? await dependencies.runtimeHost.recoverOriginalStatus(
@@ -810,6 +868,18 @@ export function createConversationDispatchUseCaseV1(
 								),
 						claim,
 					);
+					if (status.outcome === "recovery_failed" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							status.code,
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
+						);
+					}
 					if (status.outcome === "recovery_failed") {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
@@ -835,9 +905,49 @@ export function createConversationDispatchUseCaseV1(
 							{},
 						);
 					}
+					if (status.outcome === "not_found" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
+						);
+					}
 					if (status.outcome === "not_found") {
 						if (!(await dispatchHeartbeat.stop())) {
 							return { schemaVersion: 1, outcome: "stale" };
+						}
+						if (
+							claim.taskWaitOrder !== undefined &&
+							claim.operation === "conversation.turn.submit.v1" &&
+							claim.executionStatus === "unknown" &&
+							status.hostSessionRef !== null &&
+							dependencies.runtimeHost.recoverOriginalStatus &&
+							dependencies.store.reconcileUnacceptedTask
+						) {
+							const reconciled =
+								await dependencies.store.reconcileUnacceptedTask({
+									claim,
+									hostSessionRef: status.hostSessionRef,
+								});
+							switch (reconciled) {
+								case "waiting":
+									return {
+										schemaVersion: 1,
+										outcome: "retry",
+										retryScheduled: true,
+									};
+								case "failed":
+									return { schemaVersion: 1, outcome: "rejected" };
+								case "cancelled":
+									return { schemaVersion: 1, outcome: "already_completed" };
+								case "stale":
+									return { schemaVersion: 1, outcome: "stale" };
+							}
 						}
 						if (!claim.stopPending)
 							return retry(
@@ -858,15 +968,24 @@ export function createConversationDispatchUseCaseV1(
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
-					response = {
-						schemaVersion:
-							isTurnOperation(claim.operation) && claim.modelOptionId !== null
-								? 2
-								: 1,
-						hostSessionRef: status.hostSessionRef ?? unavailable(),
-						operationId: operationId(claim),
-						result: { outcome: "accepted", status: status.status },
-					};
+					if (recoveringStop && status.status === "running") {
+						response = parseRuntimeResponse(
+							await dependencies.runtimeHost.dispatch(
+								runtimeRequest(claim, authority),
+								dispatchHeartbeat.signal,
+							),
+							claim,
+						);
+					} else
+						response = {
+							schemaVersion:
+								isTurnOperation(claim.operation) && claim.modelOptionId !== null
+									? 2
+									: 1,
+							hostSessionRef: status.hostSessionRef ?? unavailable(),
+							operationId: operationId(claim),
+							result: { outcome: "accepted", status: status.status },
+						};
 				} else {
 					response = parseRuntimeResponse(
 						await dependencies.runtimeHost.dispatch(
@@ -924,6 +1043,18 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				// A rejected lookup cannot prove the original Turn had no side effects.
+				if ((recoveringOriginalTurn || recoveringStop) && !failure.retryable)
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						failure.code,
+						"unknown",
+						recoveringStop
+							? { executionStatus: "unknown", conversationStatus: "active" }
+							: retryTransition(claim),
+					);
 				return failure.retryable
 					? retry(
 							dependencies.store,
@@ -967,6 +1098,11 @@ export function createConversationDispatchUseCaseV1(
 			}
 
 			if (response.result.outcome === "busy") {
+				if (
+					isTurnOperation(claim.operation) &&
+					claim.taskWaitOrder !== undefined
+				)
+					return reject(dependencies.store, claim, "RUNTIME_BUSY");
 				return retry(
 					dependencies.store,
 					claim,
@@ -989,14 +1125,14 @@ export function createConversationDispatchUseCaseV1(
 					claim.operation === "conversation.turn.stop.v1" &&
 					response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
 				) {
-					const finished = await dependencies.store.finish({
+					return retry(
+						dependencies.store,
 						claim,
-						status: "succeeded",
-						transition: {},
-					});
-					return finished
-						? { schemaVersion: 1, outcome: "already_completed" }
-						: { schemaVersion: 1, outcome: "stale" };
+						retryDelayMs,
+						"RUNTIME_ACCEPTANCE_UNKNOWN",
+						"unknown",
+						{ executionStatus: "unknown", conversationStatus: "active" },
+					);
 				}
 				return reject(
 					dependencies.store,
@@ -1005,6 +1141,19 @@ export function createConversationDispatchUseCaseV1(
 						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
 						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
 						: response.result.code,
+				);
+			}
+			if (
+				claim.operation === "conversation.turn.stop.v1" &&
+				!["completed", "failed", "cancelled"].includes(response.result.status)
+			) {
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"STOP_CONFIRMATION_PENDING",
+					"retry",
+					{},
 				);
 			}
 			if (

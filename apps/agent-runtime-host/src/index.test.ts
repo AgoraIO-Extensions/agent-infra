@@ -17,6 +17,8 @@ const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
 	openPiRuntime: vi.fn(),
+	openOpenCodeRuntime: vi.fn(),
+	openClaudeRuntimeDriver: vi.fn(),
 	assertRuntimeProcessProtection: vi.fn(),
 }));
 
@@ -32,15 +34,28 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	Object.defineProperty(MockCodexRuntimeDriver, "open", {
 		value: runtimeAssemblyMocks.openCodexRuntimeDriver,
 	});
+	const MockClaudeRuntimeDriver = {
+		open: (...args: Parameters<typeof actual.ClaudeRuntimeDriver.open>) =>
+			runtimeAssemblyMocks.openClaudeRuntimeDriver.getMockImplementation()
+				? runtimeAssemblyMocks.openClaudeRuntimeDriver(...args)
+				: actual.ClaudeRuntimeDriver.open(...args),
+	};
 	return {
 		...actual,
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
+		ClaudeRuntimeDriver: MockClaudeRuntimeDriver,
 		verifyCodexPilotInstallation:
 			runtimeAssemblyMocks.verifyCodexPilotInstallation,
 		openPiRuntime: (...args: Parameters<typeof actual.openPiRuntime>) => {
 			runtimeAssemblyMocks.openPiRuntime(...args);
 			return actual.openPiRuntime(...args);
 		},
+		openOpenCodeRuntime: (
+			...args: Parameters<typeof actual.openOpenCodeRuntime>
+		) =>
+			runtimeAssemblyMocks.openOpenCodeRuntime.getMockImplementation()
+				? runtimeAssemblyMocks.openOpenCodeRuntime(...args)
+				: actual.openOpenCodeRuntime(...args),
 	};
 });
 
@@ -78,6 +93,8 @@ afterEach(async () => {
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.verifyCodexPilotInstallation.mockReset();
 	runtimeAssemblyMocks.openPiRuntime.mockReset();
+	runtimeAssemblyMocks.openOpenCodeRuntime.mockReset();
+	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockReset();
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -332,6 +349,73 @@ describe("RuntimeHost environment assembly", () => {
 			} finally {
 				await runtime.close();
 			}
+		},
+	);
+	it.each(["claude", "acp"])(
+		"binds the %s external-action callback to the current Host before and after startup",
+		async (driver) => {
+			const values = await environment();
+			const unboundAction = {
+				nativeSessionRef: "unbound",
+				executionId: "unbound",
+				runtimeOperationId: "unbound",
+				operationRef: "unbound",
+				attemptRef: "unbound",
+				kind: "model" as const,
+			};
+			let authorize:
+				| ((action: typeof unboundAction) => Promise<void>)
+				| undefined;
+			const open =
+				driver === "claude"
+					? runtimeAssemblyMocks.openClaudeRuntimeDriver
+					: runtimeAssemblyMocks.openOpenCodeRuntime;
+			open.mockImplementation(async (options) => {
+				authorize = options.authorizeExternalAction;
+				expect(authorize).toBeTypeOf("function");
+				await expect(authorize?.(unboundAction)).rejects.toMatchObject({
+					code: "RUNTIME_GRANT_INVALID",
+				});
+				return FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "assembly-driver.json"),
+				);
+			});
+			const runtime = await assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_DRIVER: driver,
+				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 3,
+					configVersion: "messages-authority-1",
+					defaultModelOptionId: "primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							protocol: "anthropic-messages-v1",
+							authentication: "bearer",
+							model: "claude-opus-5",
+							endpoint: "https://models.example.test",
+							reasoningLevels: ["high"],
+							credentialEnvironmentVariable:
+								"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+						},
+					],
+				}),
+			});
+			try {
+				const authorization = vi.spyOn(runtime.host, "authorizeExternalAction");
+				await expect(authorize?.(unboundAction)).rejects.toMatchObject({
+					code: "RUNTIME_GRANT_INVALID",
+				});
+				expect(authorization).toHaveBeenCalledWith(unboundAction);
+			} finally {
+				await runtime.close();
+			}
+			await expect(authorize?.(unboundAction)).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
 		},
 	);
 	it("reports the consumed configuration revision in readiness metadata", async () => {

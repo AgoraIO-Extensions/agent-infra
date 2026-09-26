@@ -2,6 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { workspacePathAllowed } from "./workspace-path.js";
@@ -12,6 +13,9 @@ export interface OpenCodeRuntimeOptions {
 	configVersion: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
+	authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 	modelOptions: readonly {
 		modelOptionId: string;
 		model: string;

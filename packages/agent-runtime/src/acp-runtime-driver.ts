@@ -6,6 +6,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import {
 	type NativeSessionOptions,
 	SessionRuntimeDriver,
@@ -21,6 +22,9 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
+	readonly authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
 	readonly launch: (
 		directory: string,
@@ -35,6 +39,7 @@ export interface GenericAcpRuntimeDriverOptions {
 			readonly toolCallId: string;
 			readonly name: string;
 			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
 		}) => Promise<void>,
 		modelRequestFinished?: NativeSessionOptions["modelRequestFinished"],
 	) => Promise<AcpLaunch>;
@@ -77,13 +82,23 @@ export const GenericAcpRuntimeDriver = {
 								readonly toolCallId: string;
 								readonly name: string;
 								readonly permitted?: boolean;
-							}) =>
-								callback({
+								readonly executionBoundary?: true;
+							}) => {
+								await callback({
 									...tool,
 									toolCallId: createHash("sha256")
 										.update(tool.toolCallId)
 										.digest("hex"),
-								})
+								});
+								// A waiting-for-permission status is not an actual start.
+								// Permit the native post-authorization start to be recorded.
+								if (
+									tool.executionBoundary &&
+									tool.permitted !== false &&
+									phases.get(tool.toolCallId) === "started"
+								)
+									phases.delete(tool.toolCallId);
+							}
 						: undefined;
 				const normalizedToolRequestStarted =
 					normalizeToolRequestStarted(toolRequestStarted);

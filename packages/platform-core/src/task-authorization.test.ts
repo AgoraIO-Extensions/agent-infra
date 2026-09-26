@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
+	captureApplicationTaskAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
 	isTaskAuthorizationCurrentV1,
 	parseCurrentTaskUserV1,
@@ -73,13 +75,90 @@ describe("task authorization boundary", () => {
 		expect(boundary?.identityRevision).toBe("directory-7");
 	});
 
-	it("rejects application principals until the #481 grant slice supplies them", () => {
+	it("captures an independently authorized application principal", () => {
+		const application: CurrentTaskApplicationV1 = {
+			schemaVersion: 1,
+			applicationId: "application-a",
+			accountStatus: "active",
+			authorizationRevision: "application-access-2",
+		};
+		const boundary = captureApplicationTaskAuthorizationBoundaryV1({
+			application,
+			agent: {
+				...agent,
+				principalGrants: [
+					{
+						principal: {
+							kind: "application",
+							id: application.applicationId,
+						},
+						grantType: "use",
+						authorizationRevision: "agent-access-4",
+						revokedAt: null,
+					},
+				],
+			},
+			channelId: "api:application",
+			agentAuthorizationRevision: "agent-access-4",
+		});
+		expect(boundary).toMatchObject({
+			principal: { kind: "application", id: "application-a" },
+			identityRevision: "application-access-2",
+			accessSources: [{ kind: "application", applicationId: "application-a" }],
+		});
+	});
+
+	it("rejects an application after its use grant is revoked", () => {
+		const application: CurrentTaskApplicationV1 = {
+			schemaVersion: 1,
+			applicationId: "application-a",
+			accountStatus: "active",
+			authorizationRevision: "application-access-2",
+		};
+		const grant = {
+			principal: {
+				kind: "application" as const,
+				id: application.applicationId,
+			},
+			grantType: "use" as const,
+			authorizationRevision: "agent-access-4",
+			revokedAt: null,
+		};
+		const grantedAgent = {
+			...agent,
+			principalGrants: [grant],
+		};
+		const boundary = captureApplicationTaskAuthorizationBoundaryV1({
+			application,
+			agent: grantedAgent,
+			channelId: "api:application",
+			agentAuthorizationRevision: "agent-access-4",
+		});
+		if (!boundary) throw new Error("Expected an admitted task boundary");
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				application,
+				agent: {
+					...grantedAgent,
+					principalGrants: [
+						{
+							...grant,
+							revokedAt: new Date("2026-09-24T00:00:00.000Z"),
+						},
+					],
+				},
+			}),
+		).toBe(false);
+	});
+
+	it("rejects an application source bound to a user principal", () => {
 		expect(() =>
 			parseTaskAuthorizationBoundaryV1({
 				...requiredBoundary(),
-				principal: { kind: "application", id: user.userId },
+				accessSources: [{ kind: "application", applicationId: user.userId }],
 			}),
-		).toThrow("Task principal is invalid");
+		).toThrow("Task access source is invalid");
 	});
 
 	it.each([
@@ -211,6 +290,7 @@ describe("task authorization boundary", () => {
 
 describe("system control transaction plan", () => {
 	it.each([
+		["waiting", false],
 		["submitted", true],
 		["processing", true],
 		["unknown", true],
@@ -273,7 +353,7 @@ describe("system control transaction plan", () => {
 				},
 			});
 			expect(plan).toMatchObject({
-				ensureStop: false,
+				ensureStop: reason === "stop",
 				revokeAuthorization: false,
 				audit: { reason },
 			});
@@ -337,3 +417,61 @@ describe("system control transaction plan", () => {
 		).toThrow("Task system control is invalid");
 	});
 });
+
+it("requires current API user use grant even while its Owner and organization access remain", () => {
+	const principal = { kind: "user" as const, id: user.userId };
+	const granted = {
+		...agent,
+		ownerIds: [user.userId],
+		principalGrants: [
+			{
+				principal,
+				grantType: "use" as const,
+				revokedAt: null,
+				authorizationRevision: "agent-access-4",
+			},
+		],
+	};
+	const boundary = capture({ agent: granted, channelId: "api:user" });
+	if (!boundary) throw Error();
+	expect(boundary.accessSources).toEqual([
+		{ kind: "user", userId: user.userId },
+	]);
+	expect(
+		isTaskAuthorizationCurrentV1({
+			boundary,
+			user,
+			agent: { ...granted, principalGrants: [] },
+		}),
+	).toBe(false);
+	expect(
+		capture({
+			agent: { ...granted, principalGrants: [] },
+			channelId: "api:user",
+		}),
+	).toBeNull();
+	expect(
+		capture({
+			agent: granted,
+			principal: { kind: "application", id: user.userId },
+			channelId: "api:application",
+		}),
+	).toBeNull();
+});
+
+it.each(["owner", "user", "organization"] as const)(
+	"rejects application boundary with borrowed %s authorization",
+	(kind) => {
+		expect(() =>
+			parseTaskAuthorizationBoundaryV1({
+				...requiredBoundary(),
+				principal: { kind: "application", id: user.userId },
+				accessSources: [
+					kind === "organization"
+						? { kind, organizationId: "team-a" }
+						: { kind, userId: user.userId },
+				],
+			}),
+		).toThrow("Task access source is invalid");
+	},
+);

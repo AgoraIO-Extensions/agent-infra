@@ -209,3 +209,34 @@ describe("Pilot mixed-version operation contracts", () => {
 		expect(document.components?.schemas?.RuntimeOperationFactV2).toBeDefined();
 	});
 });
+
+describe("stop confirmation reason contract", () => {
+	it("carries only a bounded V2 timeout reason while keeping V1 strict", () => {
+		const timeout = {
+			...original,
+			schemaVersion: 2,
+			type: "task.status",
+			payload: { status: "unknown", reason: "STOP_CONFIRMATION_TIMEOUT" },
+		};
+		expect(ConversationSseMessageV2Schema.safeParse(timeout).success).toBe(
+			true,
+		);
+		expect(ConversationSseMessageV1Schema.safeParse(timeout).success).toBe(
+			false,
+		);
+		for (const payload of [
+			{ status: "cancelled", reason: "STOP_CONFIRMATION_TIMEOUT" },
+			{ status: "unknown", reason: "arbitrary internal error" },
+			{
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+				body: "private output",
+			},
+		]) {
+			expect(
+				ConversationSseMessageV2Schema.safeParse({ ...timeout, payload })
+					.success,
+			).toBe(false);
+		}
+	});
+});

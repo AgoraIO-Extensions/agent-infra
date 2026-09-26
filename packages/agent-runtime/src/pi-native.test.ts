@@ -244,12 +244,26 @@ async function nativeToolsFixture(
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error();
+	let host: RuntimeHost | undefined;
 	const driver = await openPiRuntime({
 		path,
 		configVersion: "pi-tools-test",
 		defaultModelOptionId: "primary",
 		defaultReasoningLevel: "high",
-		authorizeExternalAction: guard,
+		authorizeExternalAction: async (action) => {
+			if (action.kind === "model") {
+				if (hostClock) {
+					if (!host) throw new Error("Missing real Host model authority");
+					await host.authorizeExternalAction(action);
+				} else {
+					// Direct native tool cases validate model journal admission separately from tool policy.
+					await driver.validateExternalAction(action);
+				}
+			} else {
+				if (!guard) throw new Error("Missing tool business authority");
+				await guard(action);
+			}
+		},
 		modelOptions: [
 			{
 				modelOptionId: "primary",
@@ -277,7 +291,6 @@ async function nativeToolsFixture(
 			reasoningLevel: "high",
 		},
 	};
-	let host: RuntimeHost | undefined;
 	let record: RuntimeDriverOperationRecord;
 	if (hostClock) {
 		host = await RuntimeHost.open({
@@ -325,15 +338,16 @@ async function nativeToolsFixture(
 		async start() {
 			reply(await first.promise, tools[next++]);
 		},
-		async complete() {
+		async complete(outcome: "completed" | "blocked" = "completed") {
 			await vi.waitFor(
-				async () =>
-					expect(
-						await driver.getStatus(
-							record.nativeSessionRef,
-							command.executionId,
-						),
-					).toBe("completed"),
+				async () => {
+					const status = await driver.getStatus(
+						record.nativeSessionRef,
+						command.executionId,
+					);
+					if (outcome === "completed") expect(status).toBe("completed");
+					else expect(["failed", "unknown"]).toContain(status);
+				},
 				{ timeout: 10_000 },
 			);
 		},
@@ -553,11 +567,35 @@ it.each(["write", "edit"])(
 			await queued.promise;
 			clock.now += 30_001;
 			release.resolve();
-			await fixture.complete();
+			await fixture.complete("blocked");
+			expect(fixture.requests).toHaveLength(1);
 			expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
 				"prefix SYNTHETIC_OWNER_CANARY",
 			);
 			expect(authorizationResults).toEqual(["RUNTIME_GRANT_INVALID"]);
+			const facts = (await fixture.facts()).flatMap((event) =>
+				event.type === "operation" ? [event.payload] : [],
+			);
+			const models = facts.filter((fact) => fact.kind === "model");
+			const intents = models.filter((fact) => fact.phase === "intent");
+			expect(intents).toHaveLength(2);
+			expect(intents[1]?.operationRef).toBe(intents[0]?.operationRef);
+			expect(intents[1]?.attemptRef).not.toBe(intents[0]?.attemptRef);
+			expect(models.filter((fact) => fact.phase === "started")).toHaveLength(1);
+			expect(models).toContainEqual(
+				expect.objectContaining({
+					attemptRef: intents[0]?.attemptRef,
+					phase: "completed",
+				}),
+			);
+			expect(
+				models
+					.filter((fact) => fact.attemptRef === intents[1]?.attemptRef)
+					.every((fact) => fact.startedAt === undefined),
+			).toBe(true);
+			expect(
+				facts.filter((fact) => fact.kind === "tool").map((fact) => fact.phase),
+			).toEqual(["intent", "failed"]);
 		} finally {
 			release.resolve();
 			await pendingWrite;
@@ -617,7 +655,7 @@ it.each(["read", "write", "edit"])(
 	30_000,
 );
 
-it("fails closed for a pinned Pi tool with no Host business authorization callback", async () => {
+it("fails closed for a pinned Pi tool with no business authorization callback", async () => {
 	const fixture = await nativeToolsFixture([
 		{
 			id: "unguarded",

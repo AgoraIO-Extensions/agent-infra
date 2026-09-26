@@ -18,6 +18,9 @@ export type AgentApplicationCreateRequestV1 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -37,6 +40,53 @@ export type AgentApplicationCreateRequestV1 = {
     };
     name: string;
     schemaVersion: 1;
+    secrets: Array<{
+        name: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
+export type AgentApplicationCreateRequestV2 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
     secrets: Array<{
         name: string;
     }>;
@@ -92,6 +142,9 @@ export type AgentApplicationUpdateRequestV1 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -137,6 +190,9 @@ export type AgentConfigurationProjectionV1 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels: Array<ChannelBindingProjectionV1>;
     defaultModelOptionId: string | null;
@@ -171,6 +227,9 @@ export type AgentConfigurationUpdateRequestV1 = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels?: Array<ChannelBindingInputV1>;
     coOwnerIds?: Array<string>;
@@ -194,8 +253,15 @@ export type AgentConfigurationUpdateRequestV1 = {
     }>;
 };
 
+export type AgentDirectCreationProjectionV1 = {
+    agentId: string;
+    applicationId: string;
+    schemaVersion: 1;
+    status: 'creating';
+};
+
 export type AgentLifecycleCommandRequestV1 = {
-    command: 'stop' | 'restart' | 'retry_creation' | 'disable';
+    command: 'start' | 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
 } | {
     command: 'upgrade_custom_image';
@@ -244,6 +310,68 @@ export type AgentResourceProfileProjectionV1 = {
     profileId: string;
 };
 
+export type ApiAgentGrantProjectionV1 = {
+    agentId: string;
+    authorizationRevision: string;
+    grantType: 'manage' | 'use';
+    principal: ApiPrincipalV1;
+    revokedAt: string | null;
+    schemaVersion: 1;
+};
+
+export type ApiAgentGrantRequestV1 = {
+    grantType: 'manage' | 'use';
+    principal: ApiPrincipalV1;
+    schemaVersion: 1;
+};
+
+export type ApiApplicationCreateRequestV1 = {
+    name: string;
+    schemaVersion: 1;
+};
+
+export type ApiApplicationCredentialIssueProjectionV1 = ApiCredentialIssueProjectionV1 | {
+    metadata: ApiCredentialMetadataProjectionV1;
+};
+
+export type ApiApplicationProjectionV1 = {
+    applicationId: string;
+    authorizationRevision: string;
+    name: string;
+    responsibleUserId: string;
+    schemaVersion: 1;
+    status: 'active' | 'disabled';
+};
+
+export type ApiCredentialIssueProjectionV1 = {
+    credential: string;
+    metadata: ApiCredentialMetadataProjectionV1;
+};
+
+export type ApiCredentialIssueRequestV1 = {
+    expiresAt: string | null;
+    recipient?: ApiPrincipalV1;
+    schemaVersion: 1;
+    scopes: Array<ApiCredentialScopeV1>;
+};
+
+export type ApiCredentialMetadataProjectionV1 = {
+    createdAt: string;
+    credentialId: string;
+    expiresAt: string | null;
+    principal: ApiPrincipalV1;
+    revokedAt: string | null;
+    schemaVersion: 1;
+    scopes: Array<ApiCredentialScopeV1>;
+};
+
+export type ApiCredentialScopeV1 = 'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read';
+
+export type ApiPrincipalV1 = {
+    id: string;
+    kind: 'user' | 'application';
+};
+
 export type ApprovalDecisionRequestV1 = {
     decision: 'approve';
     schemaVersion: 1;
@@ -273,6 +401,10 @@ export type BrowserSessionProjectionV1 = {
         roles: Array<'employee' | 'system_admin'>;
         userId: string;
     };
+};
+
+export type CancelTaskRequestV1 = {
+    schemaVersion: 1;
 };
 
 export type ChannelBindingInputV1 = {
@@ -587,7 +719,7 @@ export type PersistedConversationEventV1 = {
     schemaVersion: 1;
     sequence: number;
     type: 'conversation.error';
-} | ModelSelectionFallbackEventV1;
+} | ModelSelectionFallbackEventV1 | TaskStatusEventV1;
 
 export type PilotInternalErrorV1 = {
     code: 'INTERNAL_ERROR';
@@ -617,6 +749,9 @@ export type PlatformAuditProjectionV1 = {
         displayName: string;
         roles: Array<'employee' | 'system_admin'>;
         userId: string;
+    } | {
+        actorId: string;
+        kind: 'application';
     };
     auditId: string;
     occurredAt: string;
@@ -640,6 +775,195 @@ export type StopCommandRequestV1 = {
     targetExecutionId: string;
 };
 
+export type SubmitTaskRequestV1 = {
+    conversationId?: string;
+    schemaVersion: 1;
+    text: string;
+};
+
+export type TaskAcceptedV1 = {
+    conversationId: string;
+    executionId: string;
+    messageId: string;
+    schemaVersion: 1;
+    status: 'accepted';
+};
+
+export type TaskCancellationV1 = {
+    executionId: string;
+    schemaVersion: 1;
+    status: 'submitted' | 'already_finished';
+};
+
+export type TaskProjectionV1 = {
+    conversationId: string;
+    events: Array<PersistedConversationEventV1 | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            attemptRef: string;
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'model';
+            model: {
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel?: string;
+            };
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            startedAt?: string;
+            usage?: {
+                cachedInputTokens?: number;
+                inputTokens?: number;
+                outputTokens?: number;
+            };
+        } | {
+            attemptRef: string;
+            connection?: {
+                callRef: string;
+                serviceRef: string;
+                verification: 'verified';
+            } | {
+                callRef?: string;
+                reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+                serviceRef: string;
+                verification: 'unverified';
+            };
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'tool';
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            resultRef?: string;
+            startedAt?: string;
+            toolId: string;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'execution.operation';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            reason: 'STOP_CONFIRMATION_TIMEOUT';
+            status: 'unknown';
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'task.status';
+    }>;
+    executionId: string;
+    output: string;
+    schemaVersion: 1;
+    status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+};
+
+export type TaskSseMessageV1 = PersistedConversationEventV1 | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        attemptRef: string;
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'model';
+        model: {
+            configVersion: string;
+            modelId: string;
+            modelOptionId: string;
+            reasoningLevel?: string;
+        };
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        startedAt?: string;
+        usage?: {
+            cachedInputTokens?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+        };
+    } | {
+        attemptRef: string;
+        connection?: {
+            callRef: string;
+            serviceRef: string;
+            verification: 'verified';
+        } | {
+            callRef?: string;
+            reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+            serviceRef: string;
+            verification: 'unverified';
+        };
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'tool';
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        resultRef?: string;
+        startedAt?: string;
+        toolId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'execution.operation';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        reason: 'STOP_CONFIRMATION_TIMEOUT';
+        status: 'unknown';
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'task.status';
+} | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1 | TaskStreamErrorV1;
+
+export type TaskStatusEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'task.status';
+};
+
+export type TaskStreamErrorV1 = {
+    error: PilotProtocolErrorV1;
+    kind: 'control';
+    schemaVersion: 1;
+    type: 'task.stream.error';
+};
+
 export type TimelineReloadSignalV1 = {
     kind: 'control';
     reason: 'unknown_event_id' | 'cross_conversation_cursor' | 'cross_conversation_event_id' | 'cursor_expired';
@@ -656,6 +980,9 @@ export type AgentApplicationCreateRequestV1Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -695,6 +1022,55 @@ export type AgentApplicationCreateRequestV1Writable = {
     };
 };
 
+export type AgentApplicationCreateRequestV2Writable = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 2;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+};
+
 export type AgentApplicationUpdateRequestV1Writable = {
     actions: Array<ActionSelectionV1>;
     availability: Array<{
@@ -703,6 +1079,9 @@ export type AgentApplicationUpdateRequestV1Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     coOwnerIds: Array<string>;
     description: string;
@@ -750,6 +1129,9 @@ export type AgentConfigurationUpdateRequestV1Writable = {
     } | {
         kind: 'organization';
         organizationId: string;
+    } | {
+        applicationId: string;
+        kind: 'application';
     }>;
     channels?: Array<ChannelBindingInputV1>;
     coOwnerIds?: Array<string>;
@@ -1260,6 +1642,58 @@ export type ListAgentsResponses = {
 
 export type ListAgentsResponse = ListAgentsResponses[keyof ListAgentsResponses];
 
+export type CreateAgentDirectlyData = {
+    body: AgentApplicationCreateRequestV2Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/agents';
+};
+
+export type CreateAgentDirectlyErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateAgentDirectlyError = CreateAgentDirectlyErrors[keyof CreateAgentDirectlyErrors];
+
+export type CreateAgentDirectlyResponses = {
+    /**
+     * Agent creation accepted
+     */
+    201: AgentDirectCreationProjectionV1;
+};
+
+export type CreateAgentDirectlyResponse = CreateAgentDirectlyResponses[keyof CreateAgentDirectlyResponses];
+
 export type GetAgentData = {
     body?: never;
     path: {
@@ -1478,6 +1912,108 @@ export type CreateConversationResponses = {
 
 export type CreateConversationResponse = CreateConversationResponses[keyof CreateConversationResponses];
 
+export type RevokeAgentPrincipalGrantData = {
+    body: ApiAgentGrantRequestV1;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/grants';
+};
+
+export type RevokeAgentPrincipalGrantErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeAgentPrincipalGrantError = RevokeAgentPrincipalGrantErrors[keyof RevokeAgentPrincipalGrantErrors];
+
+export type RevokeAgentPrincipalGrantResponses = {
+    /**
+     * Agent principal grant revoked
+     */
+    204: void;
+};
+
+export type RevokeAgentPrincipalGrantResponse = RevokeAgentPrincipalGrantResponses[keyof RevokeAgentPrincipalGrantResponses];
+
+export type GrantAgentPrincipalData = {
+    body: ApiAgentGrantRequestV1;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/grants';
+};
+
+export type GrantAgentPrincipalErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentPrincipalError = GrantAgentPrincipalErrors[keyof GrantAgentPrincipalErrors];
+
+export type GrantAgentPrincipalResponses = {
+    /**
+     * Agent principal grant
+     */
+    200: ApiAgentGrantProjectionV1;
+};
+
+export type GrantAgentPrincipalResponse = GrantAgentPrincipalResponses[keyof GrantAgentPrincipalResponses];
+
 export type CommandAgentLifecycleData = {
     body: AgentLifecycleCommandRequestV1;
     headers: {
@@ -1531,6 +2067,60 @@ export type CommandAgentLifecycleResponses = {
 };
 
 export type CommandAgentLifecycleResponse = CommandAgentLifecycleResponses[keyof CommandAgentLifecycleResponses];
+
+export type SubmitAgentTaskData = {
+    body: SubmitTaskRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v1/agents/{agentId}/tasks';
+};
+
+export type SubmitAgentTaskErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SubmitAgentTaskError = SubmitAgentTaskErrors[keyof SubmitAgentTaskErrors];
+
+export type SubmitAgentTaskResponses = {
+    /**
+     * Durably accepted task
+     */
+    202: TaskAcceptedV1;
+};
+
+export type SubmitAgentTaskResponse = SubmitAgentTaskResponses[keyof SubmitAgentTaskResponses];
 
 export type GetWecomBotConnectionData = {
     body?: never;
@@ -1823,6 +2413,527 @@ export type SubmitWecomCredentialsResponses = {
 };
 
 export type SubmitWecomCredentialsResponse = SubmitWecomCredentialsResponses[keyof SubmitWecomCredentialsResponses];
+
+export type ListApiCredentialsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v1/api-credentials';
+};
+
+export type ListApiCredentialsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListApiCredentialsError = ListApiCredentialsErrors[keyof ListApiCredentialsErrors];
+
+export type ListApiCredentialsResponses = {
+    /**
+     * API credentials
+     */
+    200: {
+        items: Array<ApiCredentialMetadataProjectionV1>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListApiCredentialsResponse = ListApiCredentialsResponses[keyof ListApiCredentialsResponses];
+
+export type IssueApiCredentialData = {
+    body: ApiCredentialIssueRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v1/api-credentials';
+};
+
+export type IssueApiCredentialErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueApiCredentialError = IssueApiCredentialErrors[keyof IssueApiCredentialErrors];
+
+export type IssueApiCredentialResponses = {
+    /**
+     * Issued API credential
+     */
+    201: ApiCredentialIssueProjectionV1;
+};
+
+export type IssueApiCredentialResponse = IssueApiCredentialResponses[keyof IssueApiCredentialResponses];
+
+export type RevokeApiCredentialData = {
+    body?: never;
+    path: {
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v1/api-credentials/{credentialId}';
+};
+
+export type RevokeApiCredentialErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApiCredentialError = RevokeApiCredentialErrors[keyof RevokeApiCredentialErrors];
+
+export type RevokeApiCredentialResponses = {
+    /**
+     * API credential revoked
+     */
+    204: void;
+};
+
+export type RevokeApiCredentialResponse = RevokeApiCredentialResponses[keyof RevokeApiCredentialResponses];
+
+export type ListApiApplicationsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v1/applications';
+};
+
+export type ListApiApplicationsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListApiApplicationsError = ListApiApplicationsErrors[keyof ListApiApplicationsErrors];
+
+export type ListApiApplicationsResponses = {
+    /**
+     * API applications
+     */
+    200: {
+        items: Array<ApiApplicationProjectionV1>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListApiApplicationsResponse = ListApiApplicationsResponses[keyof ListApiApplicationsResponses];
+
+export type CreateApiApplicationData = {
+    body: ApiApplicationCreateRequestV1;
+    path?: never;
+    query?: never;
+    url: '/api/v1/applications';
+};
+
+export type CreateApiApplicationErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateApiApplicationError = CreateApiApplicationErrors[keyof CreateApiApplicationErrors];
+
+export type CreateApiApplicationResponses = {
+    /**
+     * API application
+     */
+    201: ApiApplicationProjectionV1;
+};
+
+export type CreateApiApplicationResponse = CreateApiApplicationResponses[keyof CreateApiApplicationResponses];
+
+export type RevokeApplicationCredentialDeliveryData = {
+    body: ApiPrincipalV1;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v1/applications/{applicationId}/credential-delivery';
+};
+
+export type RevokeApplicationCredentialDeliveryErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApplicationCredentialDeliveryError = RevokeApplicationCredentialDeliveryErrors[keyof RevokeApplicationCredentialDeliveryErrors];
+
+export type RevokeApplicationCredentialDeliveryResponses = {
+    /**
+     * Credential delivery revoked
+     */
+    204: void;
+};
+
+export type RevokeApplicationCredentialDeliveryResponse = RevokeApplicationCredentialDeliveryResponses[keyof RevokeApplicationCredentialDeliveryResponses];
+
+export type GrantApplicationCredentialDeliveryData = {
+    body: ApiPrincipalV1;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v1/applications/{applicationId}/credential-delivery';
+};
+
+export type GrantApplicationCredentialDeliveryErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantApplicationCredentialDeliveryError = GrantApplicationCredentialDeliveryErrors[keyof GrantApplicationCredentialDeliveryErrors];
+
+export type GrantApplicationCredentialDeliveryResponses = {
+    /**
+     * Credential delivery granted
+     */
+    204: void;
+};
+
+export type GrantApplicationCredentialDeliveryResponse = GrantApplicationCredentialDeliveryResponses[keyof GrantApplicationCredentialDeliveryResponses];
+
+export type ListApplicationCredentialsData = {
+    body?: never;
+    path: {
+        applicationId: string;
+    };
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v1/applications/{applicationId}/credentials';
+};
+
+export type ListApplicationCredentialsErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListApplicationCredentialsError = ListApplicationCredentialsErrors[keyof ListApplicationCredentialsErrors];
+
+export type ListApplicationCredentialsResponses = {
+    /**
+     * Application credential metadata
+     */
+    200: {
+        items: Array<ApiCredentialMetadataProjectionV1>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListApplicationCredentialsResponse = ListApplicationCredentialsResponses[keyof ListApplicationCredentialsResponses];
+
+export type IssueApplicationCredentialData = {
+    body: ApiCredentialIssueRequestV1;
+    path: {
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v1/applications/{applicationId}/credentials';
+};
+
+export type IssueApplicationCredentialErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type IssueApplicationCredentialError = IssueApplicationCredentialErrors[keyof IssueApplicationCredentialErrors];
+
+export type IssueApplicationCredentialResponses = {
+    /**
+     * Issued application credential
+     */
+    201: ApiApplicationCredentialIssueProjectionV1;
+};
+
+export type IssueApplicationCredentialResponse = IssueApplicationCredentialResponses[keyof IssueApplicationCredentialResponses];
+
+export type RevokeApplicationCredentialData = {
+    body?: never;
+    path: {
+        applicationId: string;
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v1/applications/{applicationId}/credentials/{credentialId}';
+};
+
+export type RevokeApplicationCredentialErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApplicationCredentialError = RevokeApplicationCredentialErrors[keyof RevokeApplicationCredentialErrors];
+
+export type RevokeApplicationCredentialResponses = {
+    /**
+     * Application credential revoked
+     */
+    204: void;
+};
+
+export type RevokeApplicationCredentialResponse = RevokeApplicationCredentialResponses[keyof RevokeApplicationCredentialResponses];
 
 export type GetConversationData = {
     body?: never;
@@ -2318,6 +3429,170 @@ export type StopExecutionResponses = {
 };
 
 export type StopExecutionResponse = StopExecutionResponses[keyof StopExecutionResponses];
+
+export type GetAgentTaskData = {
+    body?: never;
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/tasks/{executionId}';
+};
+
+export type GetAgentTaskErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentTaskError = GetAgentTaskErrors[keyof GetAgentTaskErrors];
+
+export type GetAgentTaskResponses = {
+    /**
+     * This execution's output and original events
+     */
+    200: TaskProjectionV1;
+};
+
+export type GetAgentTaskResponse = GetAgentTaskResponses[keyof GetAgentTaskResponses];
+
+export type CancelAgentTaskData = {
+    body: CancelTaskRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel';
+};
+
+export type CancelAgentTaskErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CancelAgentTaskError = CancelAgentTaskErrors[keyof CancelAgentTaskErrors];
+
+export type CancelAgentTaskResponses = {
+    /**
+     * Cancellation requested; stopping is confirmed by task status
+     */
+    202: TaskCancellationV1;
+};
+
+export type CancelAgentTaskResponse = CancelAgentTaskResponses[keyof CancelAgentTaskResponses];
+
+export type StreamAgentTaskEventsData = {
+    body?: never;
+    headers?: {
+        'Last-Event-ID'?: SseEventIdV1;
+    };
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v1/conversations/{conversationId}/tasks/{executionId}/events';
+};
+
+export type StreamAgentTaskEventsErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type StreamAgentTaskEventsError = StreamAgentTaskEventsErrors[keyof StreamAgentTaskEventsErrors];
+
+export type StreamAgentTaskEventsResponses = {
+    /**
+     * Only this execution's persisted events and bounded controls
+     */
+    200: TaskSseMessageV1;
+};
+
+export type StreamAgentTaskEventsResponse = StreamAgentTaskEventsResponses[keyof StreamAgentTaskEventsResponses];
 
 export type GetCurrentSessionData = {
     body?: never;

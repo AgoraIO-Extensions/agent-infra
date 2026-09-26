@@ -170,6 +170,7 @@ export interface ConversationModelSelectionFallbackV1 {
 }
 
 export interface ConversationExecutionStateV1 {
+	readonly hasWaitingTask?: boolean;
 	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
 	readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	readonly sourceMessage:
@@ -190,6 +191,7 @@ export interface ConversationExecutionStateV1 {
 				readonly modelOptionId: string | null;
 				readonly reasoningLevel: string | null;
 				readonly status:
+					| "waiting"
 					| "submitted"
 					| "processing"
 					| "unknown"
@@ -438,6 +440,7 @@ export interface ConversationStopWritePlanV1 {
 		readonly actorId: string;
 	};
 	readonly stopRequestId: string;
+	readonly confirmationDeadline: Date;
 	readonly outboxIntent: {
 		readonly operation: "conversation.turn.stop.v1";
 		readonly conversationId: string;

@@ -78,6 +78,11 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 				path,
 				executable: process.env.OPENCODE_EXECUTABLE ?? "",
 				configVersion: "configuration-a",
+				authorizeExternalAction: async (
+					action: RuntimeExternalActionAuthorization,
+				) => {
+					await driver.validateExternalAction(action);
+				},
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
 				modelOptions: [
@@ -294,17 +299,13 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 				if (!address || typeof address === "string") throw new Error();
 				const driver = await openNative({
 					path: join(path, "driver"),
-					// This path-isolation fixture explicitly authorizes durable Pi tool
-					// attempts; real Host Grant negatives remain in pi-native.test.ts.
-					...(runtime === "Pi"
-						? {
-								authorizeExternalAction: async (
-									action: RuntimeExternalActionAuthorization,
-								): Promise<void> => {
-									await driver.validateExternalAction(action);
-								},
-							}
-						: {}),
+					// This source/path fixture checks durable attempts for both native Drivers.
+					// Real Host current-authority negatives remain in pi-native.test.ts.
+					authorizeExternalAction: async (
+						action: RuntimeExternalActionAuthorization,
+					) => {
+						await driver.validateExternalAction(action);
+					},
 					executable: process.env.OPENCODE_EXECUTABLE ?? "",
 					configVersion: "configuration-a",
 					defaultModelOptionId: "primary",

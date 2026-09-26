@@ -11,6 +11,7 @@ import {
 	completeClaudeResponse,
 } from "./claude-native.test-support.js";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
@@ -130,43 +131,53 @@ it.each(["claude", "shared"] as const)(
 			await request(false);
 			await request(true);
 		};
-		const open = async () =>
-			kind === "claude"
-				? ClaudeRuntimeDriver.open(base)
-				: SessionRuntimeDriver.open({
-						...base,
-						cursorPrefix: "count-test",
-						modelLifecycleAtTransport: true,
-						retireSession: async () => {},
-						completionStatus: () => "completed",
-						openSession: async (callbacks) => {
-							stateFile = join(callbacks.directory, "state.json");
-							const transport = await openRuntimeMessagesTransport({
-								...modelOptions[0],
-								effort: "high",
-								admit: callbacks.admit,
-								beforeSend: callbacks.modelRequestIntent,
-								started: callbacks.modelRequestStarted,
-								receipt: async (state, _endTurn, usage) => {
-									if (state !== "sent")
-										await callbacks.modelRequestFinished?.(state, usage);
-								},
-							});
-							return {
-								nativeId: callbacks.nativeId ?? randomUUID(),
-								select: async () => {},
-								prompt: async () => {
-									await program(
-										transport.modelAccess.endpoint,
-										transport.modelAccess.credential,
-									);
-									return { stopReason: "end_turn" };
-								},
-								cancel: async () => {},
-								close: () => transport.close(),
-							};
+		const open = async () => {
+			if (kind === "claude") {
+				const driver = await ClaudeRuntimeDriver.open({
+					...base,
+					authorizeExternalAction: (action) =>
+						driver.validateExternalAction(action),
+				});
+				return driver;
+			}
+			const sharedDriver = await SessionRuntimeDriver.open({
+				...base,
+				authorizeExternalAction: (action) =>
+					sharedDriver.validateExternalAction(action),
+				cursorPrefix: "count-test",
+				modelLifecycleAtTransport: true,
+				retireSession: async () => {},
+				completionStatus: () => "completed",
+				openSession: async (callbacks) => {
+					stateFile = join(callbacks.directory, "state.json");
+					const transport = await openRuntimeMessagesTransport({
+						...modelOptions[0],
+						effort: "high",
+						admit: callbacks.admit,
+						beforeSend: callbacks.modelRequestIntent,
+						started: callbacks.modelRequestStarted,
+						receipt: async (state, _endTurn, usage) => {
+							if (state !== "sent")
+								await callbacks.modelRequestFinished?.(state, usage);
 						},
 					});
+					return {
+						nativeId: callbacks.nativeId ?? randomUUID(),
+						select: async () => {},
+						prompt: async () => {
+							await program(
+								transport.modelAccess.endpoint,
+								transport.modelAccess.credential,
+							);
+							return { stopReason: "end_turn" };
+						},
+						cancel: async () => {},
+						close: () => transport.close(),
+					};
+				},
+			});
+			return sharedDriver;
+		};
 		source.run = async (options) => {
 			// The production Query cwd is in the same durable Session directory.
 			stateFile = join(String(options.cwd), "..", "state.json");
@@ -442,6 +453,12 @@ async function withCountDriver(
 	holdResponse = false,
 	checkpointed = true,
 	upstreamStatus = 200,
+	authorize?:
+		| false
+		| ((
+				action: RuntimeExternalActionAuthorization,
+				driver: ClaudeRuntimeDriver | SessionRuntimeDriver,
+		  ) => Promise<void>),
 ) {
 	const path = await mkdtemp(join(tmpdir(), "count-admission-"));
 	let requests = 0;
@@ -512,49 +529,70 @@ async function withCountDriver(
 			String(options.env?.ANTHROPIC_AUTH_TOKEN),
 			join(String(options.cwd), "..", "state.json"),
 		);
-	const open = async () =>
-		kind === "claude"
-			? await ClaudeRuntimeDriver.open(base)
-			: await SessionRuntimeDriver.open({
-					...base,
-					cursorPrefix: "count-admission",
-					modelLifecycleAtTransport: true,
-					retireSession: async () => {},
-					completionStatus: () => "completed",
-					openSession: async (callbacks) => {
-						let checkpoint = callbacks.history?.checkpoint ?? "count-before";
-						const transport = await openRuntimeMessagesTransport({
-							...option,
-							effort: "high",
-							admit: callbacks.admit,
-							beforeSend: callbacks.modelRequestIntent,
-							started: callbacks.modelRequestStarted,
-							receipt: async (state, _endTurn, usage) => {
-								if (state !== "sent")
-									await callbacks.modelRequestFinished?.(state, usage);
+	const open = async () => {
+		if (kind === "claude") {
+			const driver = await ClaudeRuntimeDriver.open({
+				...base,
+				authorizeExternalAction:
+					authorize === false
+						? undefined
+						: async (action) => {
+								await driver.validateExternalAction(action);
+								await authorize?.(action, driver);
 							},
-						});
-						return {
-							nativeId: callbacks.nativeId ?? randomUUID(),
-							select: async () => {},
-							...(checkpointed ? { checkpoint: async () => checkpoint } : {}),
-							prompt: async () => {
-								await run(
-									transport.modelAccess.endpoint,
-									transport.modelAccess.credential,
-									join(callbacks.directory, "state.json"),
-								);
-								checkpoint = "count-after";
-								return {
-									stopReason: "end_turn",
-									...(checkpointed ? { checkpoint } : {}),
-								};
-							},
-							cancel: async () => {},
-							close: () => transport.close(),
-						};
+			});
+			return driver;
+		}
+		const sharedDriver = await SessionRuntimeDriver.open({
+			...base,
+			// This controlled fixture validates the durable action; production uses Host authority.
+			authorizeExternalAction:
+				authorize === false
+					? undefined
+					: async (action) => {
+							await sharedDriver.validateExternalAction(action);
+							await authorize?.(action, sharedDriver);
+						},
+			cursorPrefix: "count-admission",
+			modelLifecycleAtTransport: true,
+			retireSession: async () => {},
+			completionStatus: () => "completed",
+			openSession: async (callbacks) => {
+				let checkpoint = callbacks.history?.checkpoint ?? "count-before";
+				const transport = await openRuntimeMessagesTransport({
+					...option,
+					effort: "high",
+					admit: callbacks.admit,
+					beforeSend: callbacks.modelRequestIntent,
+					started: callbacks.modelRequestStarted,
+					receipt: async (state, _endTurn, usage) => {
+						if (state !== "sent")
+							await callbacks.modelRequestFinished?.(state, usage);
 					},
 				});
+				return {
+					nativeId: callbacks.nativeId ?? randomUUID(),
+					select: async () => {},
+					...(checkpointed ? { checkpoint: async () => checkpoint } : {}),
+					prompt: async () => {
+						await run(
+							transport.modelAccess.endpoint,
+							transport.modelAccess.credential,
+							join(callbacks.directory, "state.json"),
+						);
+						checkpoint = "count-after";
+						return {
+							stopReason: "end_turn",
+							...(checkpointed ? { checkpoint } : {}),
+						};
+					},
+					cancel: async () => {},
+					close: () => transport.close(),
+				};
+			},
+		});
+		return sharedDriver;
+	};
 	const driver = await open();
 	const command = claudeCommand();
 	try {
@@ -892,3 +930,326 @@ it.each([
 		);
 	},
 );
+
+it.each([
+	["claude", false],
+	["shared", false],
+	["claude", true],
+	["shared", true],
+] as const)(
+	"%s settles an unsent denied count with receipt failure %s before native completion, stop, close and restart",
+	async (kind, receiptFailure) => {
+		let responseStatus = 0;
+		let allowTerminal = false;
+		let releaseNative = () => {};
+		const nativeGate = new Promise<void>((resolve) => {
+			releaseNative = resolve;
+		});
+		let gateCalls = 0;
+		let injectFailure = false;
+		const update = DurableJsonFile.prototype.update;
+		const spy = vi.spyOn(DurableJsonFile.prototype, "update");
+		spy.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+			if (injectFailure && new Error().stack?.includes("modelPhase")) {
+				injectFailure = false;
+				return Promise.reject(
+					new Error("Synthetic denied receipt save failure"),
+				);
+			}
+			return update.call(this, change);
+		});
+		try {
+			await withCountDriver(
+				kind,
+				async (request) => {
+					const generated = await request(false);
+					expect(generated.ok).toBe(true);
+					await generated.text();
+					const denied = await request();
+					responseStatus = denied.status;
+					await denied.text();
+					await nativeGate;
+					// On a red verdict, leave through the source error path so cleanup cannot hang.
+					if (!allowTerminal) throw new Error("Synthetic test cleanup");
+				},
+				async ({
+					driver,
+					command,
+					ref,
+					stateFile,
+					requests,
+					dispatches,
+					reopen,
+				}) => {
+					try {
+						await vi.waitFor(() => expect(responseStatus).toBe(400));
+						const facts = (
+							await driver.replayEvents(ref, command.executionId)
+						).flatMap((event) =>
+							event.type === "operation" ? [event.payload] : [],
+						);
+						const generation = facts[0]?.operationRef;
+						const counts = facts.filter(
+							(fact) => fact.operationRef !== generation,
+						);
+						expect(counts.map((fact) => fact.phase)).toEqual([
+							"intent",
+							receiptFailure ? "unknown" : "failed",
+						]);
+						expect(counts.at(-1)).toMatchObject({
+							failureCode: receiptFailure
+								? "recovery_unconfirmed"
+								: "authorization_denied",
+						});
+						expect(counts.at(-1)?.startedAt).toBeUndefined();
+						expect(counts.at(-1)?.durationMs).toBeUndefined();
+						expect(new Set(counts.map((fact) => fact.attemptRef)).size).toBe(1);
+						expect(gateCalls).toBe(2);
+						expect(requests()).toBe(1);
+						expect(dispatches()).toBe(1);
+						allowTerminal = true;
+						releaseNative();
+						await vi.waitFor(async () => {
+							const state = JSON.parse(await readFile(stateFile, "utf8"));
+							expect(state.turns[0].nativeResult?.status).toBe("completed");
+						});
+						await vi.waitFor(async () =>
+							expect(await driver.getStatus(ref, command.executionId)).toBe(
+								receiptFailure ? "unknown" : "completed",
+							),
+						);
+						const liveEvents = await driver.replayEvents(
+							ref,
+							command.executionId,
+						);
+						expect(
+							liveEvents.filter((event) => event.type === "completed"),
+						).toHaveLength(receiptFailure ? 0 : 1);
+						if (!receiptFailure) {
+							const stopped = await driver.execute({
+								schemaVersion: 1,
+								kind: "stop",
+								agentId: command.agentId,
+								conversationId: command.conversationId,
+								executionId: command.executionId,
+								turnId: command.turnId,
+								sessionGeneration: command.sessionGeneration,
+								nativeSessionRef: ref,
+								operationId: "stop-after-denied-count",
+							});
+							expect(stopped.result).toMatchObject({
+								outcome: "accepted",
+								status: "completed",
+							});
+						}
+						let closed = false;
+						const closing = driver.close().then(() => {
+							closed = true;
+						});
+						await vi.waitFor(() => expect(closed).toBe(true));
+						await closing;
+						const events = await driver.replayEvents(ref, command.executionId);
+						expect(
+							events.filter((event) => event.type === "operation"),
+						).toEqual(liveEvents.filter((event) => event.type === "operation"));
+						const recovered = await reopen();
+						try {
+							expect(await recovered.execute(command)).toMatchObject({
+								nativeSessionRef: ref,
+								result: { outcome: "accepted" },
+							});
+							expect(await recovered.getStatus(ref, command.executionId)).toBe(
+								receiptFailure ? "unknown" : "completed",
+							);
+							expect(
+								await recovered.replayEvents(ref, command.executionId),
+							).toEqual(events);
+							expect(requests()).toBe(1);
+							expect(dispatches()).toBe(1);
+						} finally {
+							await recovered.close();
+						}
+					} finally {
+						releaseNative();
+					}
+				},
+				false,
+				true,
+				200,
+				async () => {
+					gateCalls++;
+					if (gateCalls > 1) {
+						injectFailure = receiptFailure;
+						throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+					}
+				},
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	},
+);
+
+it.each([
+	["first", "revoked"],
+	["continuation", "revoked"],
+	["count_tokens", "revoked"],
+	["first", "missing"],
+	["count_tokens", "missing"],
+] as const)(
+	"shared prevents %s model dispatch with %s current authority",
+	async (requestKind, authority) => {
+		let responseStatus = 0;
+		let gateCalls = 0;
+		let receiptReturned = false;
+		const actions: RuntimeExternalActionAuthorization[] = [];
+		await withCountDriver(
+			"shared",
+			async (request) => {
+				if (requestKind === "continuation") {
+					const first = await request(false);
+					expect(first.ok).toBe(true);
+					await first.text();
+				}
+				const denied = await request(requestKind === "count_tokens");
+				responseStatus = denied.status;
+				await denied.text();
+				throw new Error("Native request denied");
+			},
+			async ({ command, ref, stateFile, requests, dispatches }) => {
+				receiptReturned = true;
+				await vi.waitFor(() => expect(responseStatus).not.toBe(0));
+				expect(responseStatus).toBe(400);
+				const permittedRequests = requestKind === "continuation" ? 1 : 0;
+				expect(requests()).toBe(permittedRequests);
+				expect(dispatches()).toBe(permittedRequests);
+				expect(gateCalls).toBe(
+					authority === "missing" ? 0 : permittedRequests + 1,
+				);
+				const state = JSON.parse(await readFile(stateFile, "utf8"));
+				expect(state.binding.ref).toBe(ref);
+				expect(state.operations[0].record.operationId).toBe(
+					command.operationId,
+				);
+				const facts: RuntimeOperationFactV2[] = state.turns[0].events.flatMap(
+					(event: { type: string; payload: RuntimeOperationFactV2 }) =>
+						event.type === "operation" ? [event.payload] : [],
+				);
+				const deniedIntent = facts.findLast((fact) => fact.phase === "intent");
+				expect(deniedIntent).toMatchObject({ kind: "model", phase: "intent" });
+				expect(deniedIntent?.startedAt).toBeUndefined();
+				expect(
+					facts
+						.filter(
+							(fact) =>
+								fact.operationRef === deniedIntent?.operationRef &&
+								fact.attemptRef === deniedIntent?.attemptRef,
+						)
+						.map((fact) => fact.phase),
+				).not.toContain("started");
+				expect(deniedIntent?.operationRef === facts[0]?.operationRef).toBe(
+					requestKind !== "count_tokens",
+				);
+				if (requestKind === "continuation")
+					expect(deniedIntent?.attemptRef).not.toBe(facts[0]?.attemptRef);
+				if (authority !== "missing") {
+					const action = actions.at(-1);
+					expect(action).toEqual({
+						nativeSessionRef: ref,
+						executionId: command.executionId,
+						runtimeOperationId: command.operationId,
+						operationRef: deniedIntent?.operationRef,
+						attemptRef: deniedIntent?.attemptRef,
+						kind: "model",
+					});
+				}
+			},
+			false,
+			true,
+			200,
+			authority === "missing"
+				? false
+				: async (action, driver) => {
+						gateCalls++;
+						expect(receiptReturned).toBe(true);
+						await expect(
+							driver.validateExternalAction(action),
+						).resolves.toBeUndefined();
+						for (const changed of [
+							{ nativeSessionRef: randomUUID() },
+							{ executionId: randomUUID() },
+							{ attemptRef: randomUUID() },
+							{ operationRef: randomUUID() },
+							{ runtimeOperationId: randomUUID() },
+							{ kind: "tool" as const },
+							{ purpose: "source-reserve" as const },
+							{ purpose: "source-bind" as const },
+						])
+							await expect(
+								driver.validateExternalAction({ ...action, ...changed }),
+							).rejects.toThrow();
+						actions.push(action);
+						if (requestKind !== "continuation" || gateCalls > 1)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+					},
+		);
+	},
+);
+
+it("shared prevents model dispatch and authority checks when durable request intent fails", async () => {
+	let injectFailure = false;
+	let responseStatus = 0;
+	let gateCalls = 0;
+	const update = DurableJsonFile.prototype.update;
+	const spy = vi.spyOn(DurableJsonFile.prototype, "update");
+	spy.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+		if (injectFailure && new Error().stack?.includes("modelRequestIntent")) {
+			injectFailure = false;
+			return Promise.reject(new Error("Synthetic durable intent failure"));
+		}
+		return update.call(this, change);
+	});
+	try {
+		await withCountDriver(
+			"shared",
+			async (request) => {
+				injectFailure = true;
+				const denied = await request();
+				responseStatus = denied.status;
+				await denied.text();
+				throw new Error("Native request denied");
+			},
+			async ({ driver, command, ref, stateFile, requests, dispatches }) => {
+				await vi.waitFor(() => expect(responseStatus).not.toBe(0));
+				expect(responseStatus).toBe(400);
+				expect(requests()).toBe(0);
+				expect(dispatches()).toBe(0);
+				expect(gateCalls).toBe(0);
+				await vi.waitFor(async () => {
+					const events = await driver.replayEvents(ref, command.executionId);
+					expect(
+						events.filter((event) => event.type === "operation").at(-1)?.payload
+							.phase,
+					).toBe("unknown");
+				});
+				const state = JSON.parse(await readFile(stateFile, "utf8"));
+				const facts: RuntimeOperationFactV2[] = state.turns[0].events.flatMap(
+					(event: { type: string; payload: RuntimeOperationFactV2 }) =>
+						event.type === "operation" ? [event.payload] : [],
+				);
+				expect(
+					facts.every((fact) => fact.operationRef === facts[0]?.operationRef),
+				).toBe(true);
+				expect(facts.map((fact) => fact.phase)).toEqual(["intent", "unknown"]);
+			},
+			false,
+			true,
+			200,
+			async () => {
+				gateCalls++;
+			},
+		);
+	} finally {
+		spy.mockRestore();
+	}
+});

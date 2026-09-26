@@ -30,6 +30,7 @@ const requiredOperations = [
 	"listPendingAgentApplications",
 	"decideAgentApplication",
 	"listAgents",
+	"createAgentDirectly",
 	"getAgent",
 	"updateAgentConfiguration",
 	"commandAgentLifecycle",
@@ -50,6 +51,18 @@ const requiredOperations = [
 	"getWecomSetup",
 	"submitWecomCredentials",
 	"cancelWecomSetup",
+	"listApiCredentials",
+	"issueApiCredential",
+	"revokeApiCredential",
+	"listApiApplications",
+	"createApiApplication",
+	"issueApplicationCredential",
+	"listApplicationCredentials",
+	"revokeApplicationCredential",
+	"grantApplicationCredentialDelivery",
+	"revokeApplicationCredentialDelivery",
+	"grantAgentPrincipal",
+	"revokeAgentPrincipalGrant",
 ];
 
 const validApplication = {
