@@ -4034,3 +4034,368 @@ describe("durable waiting task dispatch from real admission", () => {
 		},
 	);
 });
+
+async function unknownTaskFixture() {
+	const h = await waitingTaskHarness();
+	try {
+		const work = await h.submit("unsent-proof");
+		const claim = await h.own(work.itemId, "unsent-proof-worker");
+		expect(
+			await h.store.prepareRuntimeDispatch({ claim, leaseDurationMs: 30_000 }),
+		).toBe(true);
+		const hostSessionRef = `unsent-host-${work.conversationId}`;
+		return { ...h, work, claim, hostSessionRef };
+	} catch (error) {
+		await h.close();
+		throw error;
+	}
+}
+
+async function originalTaskBinding(executionId: string) {
+	const [row] =
+		await client`select execution_id, conversation_id, turn_id, actor_id, channel_id,
+		session_generation::text, delivery_fence::text, task_wait_order::text, task_wait_deadline,
+		model_configuration_revision::text, model_option_id, reasoning_level,
+		(select message_id from platform.conversation_messages m where m.execution_id = e.execution_id and role = 'user') as message_id,
+		(select id from platform.outbox_items o where o.payload->>'executionId' = e.execution_id and operation = 'conversation.turn.submit.v1') as item_id
+		from platform.conversation_executions e where execution_id = ${executionId}`;
+	if (!row) throw new Error("Missing original task binding");
+	return row;
+}
+
+async function taskStatusEvents(executionId: string) {
+	return client`select event_payload from platform.conversation_events
+		where execution_id = ${executionId} and event_type = 'task.status' order by sequence`;
+}
+
+describe("confirmed unsent task reconciliation", () => {
+	it.each(["ready", "starting", "updating"])(
+		"restores %s unsent work with its original queue and identity, then reserves a later fence",
+		async (availability) => {
+			const h = await unknownTaskFixture();
+			try {
+				const binding = await originalTaskBinding(h.work.executionId);
+				await client`update platform.agent_applications set service_availability = ${availability} where agent_id = ${h.agentId}`;
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim: h.claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("waiting");
+				expect((await taskQueueState(h.work.executionId)).status).toBe(
+					"waiting",
+				);
+				expect(await originalTaskBinding(h.work.executionId)).toEqual(binding);
+				const [outbox] =
+					await client`select status, lease_owner, lease_expires_at from platform.outbox_items where id = ${h.work.itemId}`;
+				expect(outbox).toMatchObject({
+					status: "retry_scheduled",
+					lease_owner: null,
+					lease_expires_at: null,
+				});
+				const [conversation] =
+					await client`select status, session_generation::text as generation, host_session_ref from platform.conversations where id = ${h.work.conversationId}`;
+				expect(conversation).toEqual({
+					status: "ready",
+					generation: binding.session_generation,
+					host_session_ref: h.hostSessionRef,
+				});
+				expect(
+					(await taskStatusEvents(h.work.executionId)).map(
+						(event) => event.event_payload.status,
+					),
+				).toEqual(["waiting", "unknown", "waiting"]);
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim: h.claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("stale");
+				if (availability !== "ready") {
+					expect(
+						await h.store.claim({
+							schemaVersion: 1,
+							itemId: h.work.itemId,
+							workerId: "still-starting-worker",
+							leaseDurationMs: 30_000,
+						}),
+					).toEqual({ outcome: "busy" });
+					await client`update platform.agent_applications set service_availability = 'ready' where agent_id = ${h.agentId}`;
+				}
+				const next = await h.own(h.work.itemId, "unsent-next-worker");
+				expect(next.executionDeliveryFence).toBeGreaterThan(
+					h.claim.executionDeliveryFence,
+				);
+				expect(next.deliveryFence).toBeGreaterThan(h.claim.deliveryFence);
+				expect(
+					await h.store.prepareRuntimeDispatch({
+						claim: next,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect((await taskQueueState(h.work.executionId)).status).toBe(
+					"unknown",
+				);
+				expect(h.runtimeHost.sideEffectCount()).toBe(0);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it("retains unknown occupancy past its queue deadline until typed absence proof permits failure", async () => {
+		const h = await unknownTaskFixture();
+		try {
+			const binding = await originalTaskBinding(h.work.executionId);
+			await expireTask(h.work.executionId);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: h.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect((await taskQueueState(h.work.executionId)).status).toBe("unknown");
+			const other = await h.submit("deadline-other");
+			const otherClaim = await h.own(other.itemId, "deadline-other-worker");
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: otherClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe("capacity_wait");
+			expect(
+				await h.store.reconcileUnacceptedTask({
+					claim: h.claim,
+					hostSessionRef: h.hostSessionRef,
+				}),
+			).toBe("failed");
+			expect((await taskQueueState(h.work.executionId)).status).toBe("failed");
+			expect(
+				(await originalTaskBinding(h.work.executionId)).task_wait_order,
+			).toBe(binding.task_wait_order);
+			expect(
+				(await taskStatusEvents(h.work.executionId)).map(
+					(event) => event.event_payload.status,
+				),
+			).toEqual(["waiting", "unknown", "failed"]);
+			expect(
+				await client`select details from platform.audit_events where target_id = ${h.work.executionId} and action = 'task.status.changed' and details->>'status' = 'failed'`,
+			).toEqual([
+				expect.objectContaining({
+					details: expect.objectContaining({
+						reason: "TASK_WAIT_TIMEOUT",
+						originalPrincipal: { kind: "user", id: "waiting-user" },
+					}),
+				}),
+			]);
+			expect(
+				await h.store.prepareRuntimeDispatch({
+					claim: otherClaim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await h.close();
+		}
+	});
+
+	it.each(["stopped", "fault"])(
+		"fails %s work after absence proof without replacing the original task",
+		async (lifecycle) => {
+			const h = await unknownTaskFixture();
+			try {
+				const binding = await originalTaskBinding(h.work.executionId);
+				if (lifecycle === "stopped")
+					await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = ${h.agentId}`;
+				else
+					await client`update platform.agent_applications set service_availability = 'unavailable', failure_code = 'workload_unavailable' where agent_id = ${h.agentId}`;
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim: h.claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("failed");
+				expect((await taskQueueState(h.work.executionId)).status).toBe(
+					"failed",
+				);
+				expect(await originalTaskBinding(h.work.executionId)).toEqual(binding);
+				expect((await dispatchState(h.work))?.status).toBe("failed");
+				expect(
+					await client`select status from platform.conversations where id = ${h.work.conversationId}`,
+				).toEqual([{ status: "ready" }]);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each(["stop", "revoked-without-stop"])(
+		"converges %s to one cancellation on the original task and stop",
+		async (control) => {
+			const h = await unknownTaskFixture();
+			try {
+				if (control === "stop") await h.control(h.work.executionId, "stop");
+				else
+					await client`update platform.task_authorization_records set revoked_at = clock_timestamp() where execution_id = ${h.work.executionId}`;
+				await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${h.work.itemId}`;
+				const claim = await h.own(h.work.itemId, "unsent-control-worker");
+				expect(claim.stopPending).toBe(control === "stop");
+				const binding = await originalTaskBinding(h.work.executionId);
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("cancelled");
+				expect((await taskQueueState(h.work.executionId)).status).toBe(
+					"cancelled",
+				);
+				expect(await originalTaskBinding(h.work.executionId)).toEqual(binding);
+				expect(
+					(await taskStatusEvents(h.work.executionId)).map(
+						(event) => event.event_payload.status,
+					),
+				).toEqual(["waiting", "unknown", "cancelled"]);
+				const stops =
+					await client`select status from platform.conversation_stops where execution_id = ${h.work.executionId}`;
+				expect(stops).toEqual(
+					control === "stop" ? [{ status: "completed" }] : [],
+				);
+				if (control === "stop") {
+					expect(
+						await client`select status from platform.outbox_items where payload->>'executionId' = ${h.work.executionId} and operation = 'conversation.turn.stop.v1'`,
+					).toEqual([{ status: "succeeded" }]);
+				}
+				const before =
+					await client`select last_conversation_cursor from platform.conversations where id = ${h.work.conversationId}`;
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("stale");
+				expect(
+					await client`select last_conversation_cursor from platform.conversations where id = ${h.work.conversationId}`,
+				).toEqual(before);
+				expect(
+					(await taskStatusEvents(h.work.executionId)).filter(
+						(event) => event.event_payload.status === "cancelled",
+					),
+				).toHaveLength(1);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it.each([
+		"lease",
+		"fence",
+		"session",
+		"cursor",
+		"host-reference",
+		"isolation",
+		"found",
+	])(
+		"retains occupied state for %s that cannot prove absence of the original operation",
+		async (mismatch) => {
+			const h = await unknownTaskFixture();
+			try {
+				if (mismatch === "lease")
+					await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${h.work.itemId}`;
+				if (mismatch === "fence") {
+					await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${h.work.itemId}`;
+					await h.own(h.work.itemId, "unsent-fence-takeover-worker");
+				}
+				if (mismatch === "session")
+					await client`update platform.conversations set session_generation = session_generation + 1 where id = ${h.work.conversationId}`;
+				if (mismatch === "cursor")
+					await client`update platform.conversation_executions set last_runtime_cursor = 'observed-runtime-cursor' where execution_id = ${h.work.executionId}`;
+				if (mismatch === "host-reference")
+					await client`update platform.conversations set host_session_ref = 'actual-original-host' where id = ${h.work.conversationId}`;
+				if (mismatch === "isolation") {
+					await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${h.work.itemId}`;
+					h.claim = await h.own(h.work.itemId, "unsent-isolation-worker");
+					expect(
+						await h.store.beginGenerationIsolation({
+							claim: h.claim,
+							hostSessionRef: h.hostSessionRef,
+							failureCode: "RUNTIME_SESSION_RECOVERY_FAILED",
+						}),
+					).toBe(true);
+				}
+				if (mismatch === "found")
+					expect(
+						await h.store.recordRuntimeResponse({
+							claim: h.claim,
+							hostSessionRef: h.hostSessionRef,
+							transition: {
+								executionStatus: "processing",
+								conversationStatus: "active",
+							},
+						}),
+					).toBe(true);
+				const before = await taskQueueState(h.work.executionId);
+				const events = await taskStatusEvents(h.work.executionId);
+				expect(
+					await h.store.reconcileUnacceptedTask({
+						claim: h.claim,
+						hostSessionRef: h.hostSessionRef,
+					}),
+				).toBe("stale");
+				expect(await taskQueueState(h.work.executionId)).toEqual(before);
+				expect(await taskStatusEvents(h.work.executionId)).toEqual(events);
+				expect((await taskQueueState(h.work.executionId)).status).toBe(
+					mismatch === "found" ? "processing" : "unknown",
+				);
+			} finally {
+				await h.close();
+			}
+		},
+	);
+
+	it("rolls back original task and pending stop convergence when the required reconciliation audit fails", async () => {
+		const h = await unknownTaskFixture();
+		try {
+			await h.control(h.work.executionId, "stop");
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${h.work.itemId}`;
+			const claim = await h.own(h.work.itemId, "unsent-rollback-worker");
+			const before = await taskQueueState(h.work.executionId);
+			const events = await taskStatusEvents(h.work.executionId);
+			const cursor =
+				await client`select last_conversation_cursor from platform.conversations where id = ${h.work.conversationId}`;
+			await client`create function platform.unsent_task_audit_failure() returns trigger language plpgsql as $$
+				begin if NEW.action = 'task.status.changed' then raise exception 'unsent status audit unavailable'; end if; return NEW; end $$`;
+			await client`create trigger unsent_task_audit_failure before insert on platform.audit_events for each row execute function platform.unsent_task_audit_failure()`;
+			await expect(
+				h.store.reconcileUnacceptedTask({
+					claim,
+					hostSessionRef: h.hostSessionRef,
+				}),
+			).rejects.toThrow("Conversation dispatch store is unavailable");
+			expect(await taskQueueState(h.work.executionId)).toEqual(before);
+			expect(await taskStatusEvents(h.work.executionId)).toEqual(events);
+			expect(
+				await client`select last_conversation_cursor from platform.conversations where id = ${h.work.conversationId}`,
+			).toEqual(cursor);
+			expect(
+				await client`select status from platform.conversation_stops where execution_id = ${h.work.executionId}`,
+			).toEqual([{ status: "submitted" }]);
+			expect(
+				await client`select status from platform.outbox_items where payload->>'executionId' = ${h.work.executionId} and operation = 'conversation.turn.stop.v1'`,
+			).toEqual([{ status: "pending" }]);
+			await client`drop trigger unsent_task_audit_failure on platform.audit_events`;
+			await client`drop function platform.unsent_task_audit_failure()`;
+			expect(
+				await h.store.reconcileUnacceptedTask({
+					claim,
+					hostSessionRef: h.hostSessionRef,
+				}),
+			).toBe("cancelled");
+		} finally {
+			await client`drop trigger if exists unsent_task_audit_failure on platform.audit_events`;
+			await client`drop function if exists platform.unsent_task_audit_failure()`;
+			await h.close();
+		}
+	});
+});

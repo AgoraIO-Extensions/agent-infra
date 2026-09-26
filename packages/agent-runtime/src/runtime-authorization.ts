@@ -206,6 +206,7 @@ export function applyRuntimeAuthority(
 			claims.operation.executionDeliveryFence <
 				current.executionDeliveryFence ||
 			(claims.purpose === "control" &&
+				current.control !== undefined &&
 				current.controlDeliveryFence !== undefined &&
 				claims.operation.executionDeliveryFence ===
 					current.executionDeliveryFence &&
@@ -279,6 +280,7 @@ export function applyRuntimeAuthority(
 				mode === "renew")
 		) {
 			delete authority.control;
+			delete authority.controlDeliveryFence;
 		}
 		authority.authorizationRecordId ??= claims.authorizationRecordId;
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;

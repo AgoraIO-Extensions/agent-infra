@@ -17,6 +17,8 @@ import {
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 export interface TaskRuntimeRecoveryStateV1 {
+	/** Derived from the original API acceptance row, never from Runtime output. */
+	readonly taskWaitOrder?: number;
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly hostSessionRef: string | null;
@@ -388,6 +390,17 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		if (state.stopPending || command === "turn.stop")
 			return {
 				authority: await control(context, "stop", signal),
+				record: latest,
+			};
+		if (
+			state.taskWaitOrder !== undefined &&
+			((command === "session.status" &&
+				["processing", "unknown"].includes(state.executionStatus)) ||
+				(state.executionStatus === "unknown" &&
+					["events.persist", "events.ack"].includes(command)))
+		)
+			return {
+				authority: await control(context, "recovery", signal),
 				record: latest,
 			};
 		const workload = latest.workload;

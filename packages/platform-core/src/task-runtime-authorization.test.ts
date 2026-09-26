@@ -164,6 +164,84 @@ function harness() {
 const signal = () => new AbortController().signal;
 
 describe("task Runtime authorization Core use case", () => {
+	it("uses recovery control from the first unknown API task query even when ready", async () => {
+		const h = harness();
+		Object.assign(h.state, { taskWaitOrder: 1, executionStatus: "unknown" });
+		Object.assign(h.claim, { taskWaitOrder: 1, executionStatus: "unknown" });
+		expect(await h.useCase.authorizeClaim(h.claim, signal())).toMatchObject({
+			outcome: "allowed",
+		});
+		const state = {
+			...h.state,
+			taskWaitOrder: 1,
+			executionStatus: "unknown" as const,
+		};
+		for (const command of [
+			"session.status",
+			"events.persist",
+			"events.ack",
+		] as const) {
+			const result = await h.useCase.current(
+				h.context,
+				state,
+				command,
+				signal(),
+			);
+			expect(result.authority).toEqual({
+				purpose: "control",
+				reason: "recovery",
+				controlRecordId: "control-recovery",
+			});
+		}
+		expect(h.ports.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "recovery" }),
+			expect.any(AbortSignal),
+		);
+		for (const unchanged of [
+			{
+				...h.state,
+				taskWaitOrder: undefined,
+				executionStatus: "unknown" as const,
+			},
+			{ ...h.state, taskWaitOrder: 1, executionStatus: "waiting" as const },
+		])
+			expect(
+				(
+					await h.useCase.current(
+						h.context,
+						unchanged,
+						"session.status",
+						signal(),
+					)
+				).authority.purpose,
+			).toBe("business");
+		expect(
+			(
+				await h.useCase.current(
+					h.context,
+					{ ...state, executionStatus: "processing" },
+					"session.status",
+					signal(),
+				)
+			).authority.purpose,
+		).toBe("control");
+		expect(
+			(
+				await h.useCase.current(
+					h.context,
+					{ ...state, executionStatus: "processing" },
+					"events.persist",
+					signal(),
+				)
+			).authority.purpose,
+		).toBe("business");
+		// Initial dispatch already reserves unknown in Store; it still requires fresh business authority.
+		expect(
+			(await h.useCase.current(h.context, state, "turn.submit", signal()))
+				.authority.purpose,
+		).toBe("business");
+	});
+
 	it("intersects current organization membership with the original task without copying a new role", async () => {
 		const h = harness();
 		expect(

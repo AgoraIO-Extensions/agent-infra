@@ -569,6 +569,85 @@ describe("Runtime V3 durable authorization", () => {
 		).resolves.toMatchObject({ result: { outcome: "accepted" } });
 	});
 
+	it("archives terminal evidence at the same fence after recovery and business renewal", async () => {
+		const env = await setup();
+		try {
+			const accepted = await submit(env.host);
+			const recovery = signV3Fixture(
+				{
+					...base(accepted.hostSessionRef),
+					originalOperationDigest: originalDigest(),
+				},
+				"session.status",
+				{ purpose: "control", reason: "recovery" },
+			);
+			await expect(
+				env.host.recoverStatusV3(
+					recovery,
+					verifyRuntimeV2Fixture(recovery.grant),
+				),
+			).resolves.toMatchObject({ outcome: "found", status: "running" });
+			const renewal = signV3Fixture(
+				base(accepted.hostSessionRef),
+				"execution.renew",
+			);
+			await env.host.renewAuthorizationV3(
+				renewal,
+				verifyRuntimeV2Fixture(renewal.grant),
+			);
+			await env.driver.setOperationStatus("execution-fixture", "completed");
+			await expect(
+				env.host.recoverStatusV3(
+					recovery,
+					verifyRuntimeV2Fixture(recovery.grant),
+				),
+			).resolves.toMatchObject({ outcome: "found", status: "completed" });
+			const eventBase = {
+				...base(accepted.hostSessionRef),
+				hostSessionRef: accepted.hostSessionRef,
+				consumer: "platform_worker_persistence" as const,
+			};
+			const request = signV3Fixture(
+				{ ...eventBase, afterCursor: null },
+				"events.persist",
+				{
+					purpose: "control",
+					reason: "recovery",
+				},
+			);
+			const stream = await env.host.streamEventsV3(
+				request,
+				verifyRuntimeV2Fixture(request.grant),
+			);
+			const iterator = stream[Symbol.asyncIterator]();
+			try {
+				const first = await iterator.next();
+				if (first.done) throw new Error("Missing original persisted event");
+				const ack = signV3Fixture(
+					{ ...eventBase, confirmedCursor: first.value.cursor },
+					"events.ack",
+					{
+						purpose: "control",
+						reason: "recovery",
+					},
+				);
+				await expect(
+					env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+				).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
+			} finally {
+				await iterator.return?.();
+			}
+			expect(await env.driver.sideEffectCount()).toBe(1);
+			await expect(
+				env.host.authorizeExternalAction(
+					guard(accepted.hostSessionRef, env.store),
+				),
+			).rejects.toThrow();
+		} finally {
+			await env.host.close();
+		}
+	});
+
 	it("does not execute prepared business work at startup or through control recovery", async () => {
 		const env = await setup({
 			afterOperationPrepared: () => {

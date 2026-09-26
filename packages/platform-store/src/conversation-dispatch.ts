@@ -188,6 +188,14 @@ export class PostgresConversationDispatchStoreV1
 				)
 					return null;
 				return {
+					...(state.execution.task_wait_order === null
+						? {}
+						: {
+								taskWaitOrder: requireSafeCounter(
+									state.execution.task_wait_order,
+									1,
+								),
+							}),
 					hostSessionRef: state.conversation.host_session_ref,
 					...(isolation
 						? { generationIsolation: isolationProjection(isolation) }
@@ -718,6 +726,148 @@ export class PostgresConversationDispatchStoreV1
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;
 		}
+	}
+
+	/** Only the typed Host absence response may release a possibly sent API task. */
+	async reconcileUnacceptedTask(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly hostSessionRef: string;
+	}): Promise<"waiting" | "failed" | "cancelled" | "stale"> {
+		requireClaim(input.claim);
+		if (!validText(input.hostSessionRef))
+			throw new TypeError("RuntimeHost Session reference is invalid");
+		let outcome: "waiting" | "failed" | "cancelled" | "stale" = "stale";
+		const committed = await transactionResult(
+			this.#client,
+			async (transaction) => {
+				const claim = input.claim;
+				await transaction`select id from platform.agents where id = ${claim.agentId} for update`;
+				const state = await ownedState(transaction, claim, true);
+				if (
+					!state ||
+					claim.operation !== "conversation.turn.submit.v1" ||
+					claim.taskWaitOrder === undefined ||
+					claim.metadataRecovery ||
+					state.execution.status !== "unknown" ||
+					state.execution.last_runtime_cursor !== null ||
+					(state.conversation.host_session_ref !== null &&
+						state.conversation.host_session_ref !== input.hostSessionRef) ||
+					(await readGenerationIsolation(
+						transaction,
+						claim.conversationId,
+						claim.sessionGeneration,
+					))
+				)
+					throw new StaleDispatchLease();
+				const [runtimeEvent] = await transaction<{ event_id: string }[]>`
+				select event_id from platform.conversation_events
+				where execution_id = ${claim.executionId} and source = 'runtime' limit 1
+			`;
+				if (runtimeEvent) throw new StaleDispatchLease();
+				const payload = exactPayload(state.outbox.payload, claim.operation);
+				if (!payload) throw new StaleDispatchLease();
+				const refs = await transaction<{ id: string }[]>`
+				update platform.conversations set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
+				where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
+					and (host_session_ref is null or host_session_ref = ${input.hostSessionRef}) returning id
+			`;
+				if (refs.length !== 1) throw new StaleDispatchLease();
+				const [authorization] = await transaction<{ revoked: boolean }[]>`
+				select revoked_at is not null as revoked from platform.task_authorization_records
+				where execution_id = ${claim.executionId}
+			`;
+				const stop = await readStop(transaction, claim.executionId);
+				if (stop?.status === "submitted") {
+					await cancelStoppedTurn(
+						transaction,
+						state.outbox,
+						state.conversation,
+						state.execution,
+						stop,
+						payload,
+					);
+					await recordTaskStatus(
+						transaction,
+						state,
+						"cancelled",
+						claim.leaseOwner,
+						authorization?.revoked ? "AUTHORIZATION_REVOKED" : "TASK_CANCELLED",
+					);
+					outcome = "cancelled";
+					return;
+				}
+				const restored = await transaction<{ execution_id: string }[]>`
+				update platform.conversation_executions set status = 'waiting', updated_at = clock_timestamp()
+				where execution_id = ${claim.executionId} and status = 'unknown'
+					and delivery_fence = ${claim.executionDeliveryFence} and last_runtime_cursor is null
+				returning execution_id
+			`;
+				if (restored.length !== 1) throw new StaleDispatchLease();
+				state.execution.status = "waiting";
+				if (authorization?.revoked) {
+					await finishWaitingTask(
+						transaction,
+						state,
+						"cancelled",
+						"AUTHORIZATION_REVOKED",
+						claim.leaseOwner,
+					);
+					outcome = "cancelled";
+				} else {
+					const [agent] = await transaction<
+						{
+							status: string | null;
+							desired_state: string | null;
+							service_availability: string | null;
+						}[]
+					>`select status, desired_state, service_availability from platform.agent_applications where agent_id = ${claim.agentId}`;
+					const decision = await waitingDecision(
+						transaction,
+						state,
+						agent,
+						false,
+					);
+					if (decision.outcome === "fail") {
+						await finishWaitingTask(
+							transaction,
+							state,
+							"failed",
+							decision.reason,
+							claim.leaseOwner,
+						);
+						outcome = "failed";
+					} else {
+						await recordTaskStatus(
+							transaction,
+							state,
+							"waiting",
+							claim.leaseOwner,
+							"RUNTIME_UNACCEPTED",
+						);
+						await retryOutbox(
+							transaction,
+							state,
+							claim,
+							0,
+							"RUNTIME_UNACCEPTED",
+						);
+						outcome = "waiting";
+					}
+				}
+				await transaction`
+				update platform.conversations set status = 'ready', updated_at = clock_timestamp()
+				where id = ${claim.conversationId} and status = 'active'
+					and not exists (select 1 from platform.conversation_executions e
+						where e.conversation_id = ${claim.conversationId} and e.status in ('submitted', 'processing', 'unknown'))
+					and not exists (select 1 from platform.conversation_stops s
+						join platform.conversation_executions e on e.execution_id = s.execution_id
+						where e.conversation_id = ${claim.conversationId} and s.status = 'submitted')
+					and not exists (select 1 from platform.conversation_generation_tombstones t
+						where t.conversation_id = ${claim.conversationId} and t.status = 'pending')
+			`;
+			},
+		);
+		return committed ? outcome : "stale";
 	}
 
 	async cancelUnaccepted(input: {

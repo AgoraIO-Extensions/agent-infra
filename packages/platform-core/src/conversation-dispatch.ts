@@ -129,6 +129,11 @@ export function createConversationDispatchUseCaseV1(
 		let terminalCommitPossible =
 			executionTerminal(claim.executionStatus) ||
 			responseFinalStatus !== undefined;
+		const recoveringApiTask =
+			claim.taskWaitOrder !== undefined &&
+			["processing", "unknown"].includes(claim.executionStatus);
+		const runningConfirmed = responseStatus === "running";
+		let businessResumed = false;
 		const eventRequest: ConversationRuntimeEventRequestV1 = {
 			schemaVersion: 1,
 			requestId: claim.metadataRecovery?.id ?? claim.requestId,
@@ -153,7 +158,10 @@ export function createConversationDispatchUseCaseV1(
 				!authority.controlOnly &&
 				dependencies.runtimeHost.renewAuthorization
 				? async (signal) => {
-						if (!terminalCommitPossible)
+						if (
+							!terminalCommitPossible &&
+							(!recoveringApiTask || businessResumed)
+						)
 							await dependencies.runtimeHost.renewAuthorization?.(
 								eventRequest,
 								signal,
@@ -175,6 +183,25 @@ export function createConversationDispatchUseCaseV1(
 				{},
 			);
 		try {
+			if (
+				recoveringApiTask &&
+				runningConfirmed &&
+				!claim.stopPending &&
+				!terminalCommitPossible &&
+				!authority.controlOnly &&
+				dependencies.runtimeHost.renewAuthorization
+			) {
+				try {
+					await dependencies.runtimeHost.renewAuthorization(
+						eventRequest,
+						eventHeartbeat.signal,
+					);
+					businessResumed = true;
+				} catch {
+					// Fresh route/authorization may permit only recovery controls.
+					// Event and ACK adapters recheck that authority before querying.
+				}
+			}
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
 			if (claim.runtimeCursor)
@@ -188,7 +215,15 @@ export function createConversationDispatchUseCaseV1(
 			)) {
 				const runtimeEvent = parseRuntimeEvent(eventInput, claim);
 				const event = normalizedEvent(runtimeEvent);
-				const transition = transitionFromEvent(event);
+				// Replayed running frames cannot override the latest unknown lookup.
+				// Keep the real event while retaining the current occupied projection.
+				const transition =
+					recoveringApiTask &&
+					responseStatus === "unknown" &&
+					event.type === "execution.status" &&
+					event.status === "processing"
+						? undefined
+						: transitionFromEvent(event);
 				const eventFinalStatus = terminalStatus(event);
 				const connectionMetadata =
 					event.type === "execution.operation" &&
@@ -258,6 +293,15 @@ export function createConversationDispatchUseCaseV1(
 			const current = await eventHeartbeat.stop();
 			if (!current) return retryInterruptedDrain();
 			const failure = runtimeFailure(error);
+			if (recoveringApiTask && !businessResumed)
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					failure.code,
+					"retry",
+					{},
+				);
 			return failure.retryable
 				? retry(
 						dependencies.store,
@@ -843,6 +887,34 @@ export function createConversationDispatchUseCaseV1(
 					if (status.outcome === "not_found") {
 						if (!(await dispatchHeartbeat.stop())) {
 							return { schemaVersion: 1, outcome: "stale" };
+						}
+						if (
+							claim.taskWaitOrder !== undefined &&
+							claim.operation === "conversation.turn.submit.v1" &&
+							claim.executionStatus === "unknown" &&
+							status.hostSessionRef !== null &&
+							dependencies.runtimeHost.recoverOriginalStatus &&
+							dependencies.store.reconcileUnacceptedTask
+						) {
+							const reconciled =
+								await dependencies.store.reconcileUnacceptedTask({
+									claim,
+									hostSessionRef: status.hostSessionRef,
+								});
+							switch (reconciled) {
+								case "waiting":
+									return {
+										schemaVersion: 1,
+										outcome: "retry",
+										retryScheduled: true,
+									};
+								case "failed":
+									return { schemaVersion: 1, outcome: "rejected" };
+								case "cancelled":
+									return { schemaVersion: 1, outcome: "already_completed" };
+								case "stale":
+									return { schemaVersion: 1, outcome: "stale" };
+							}
 						}
 						if (!claim.stopPending)
 							return retry(

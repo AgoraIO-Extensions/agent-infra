@@ -202,7 +202,15 @@ export async function cancelStoppedTurn(
 	`;
 	const readied = await transaction<{ id: string }[]>`
 		update platform.conversations
-		set status = 'ready', updated_at = clock_timestamp()
+		set status = case when status = 'active'
+			and not exists (select 1 from platform.conversation_executions e
+				where e.conversation_id = ${conversation.id} and e.status in ('submitted', 'processing', 'unknown'))
+			and not exists (select 1 from platform.conversation_stops s
+				join platform.conversation_executions e on e.execution_id = s.execution_id
+				where e.conversation_id = ${conversation.id} and s.execution_id <> ${execution.execution_id} and s.status = 'submitted')
+			and not exists (select 1 from platform.conversation_generation_tombstones t
+				where t.conversation_id = ${conversation.id} and t.status = 'pending')
+			then 'ready'::platform.conversation_status else status end, updated_at = clock_timestamp()
 		where id = ${conversation.id}
 			and session_generation = ${payload.sessionGeneration}
 			and authorization_revision = ${conversation.authorization_revision}

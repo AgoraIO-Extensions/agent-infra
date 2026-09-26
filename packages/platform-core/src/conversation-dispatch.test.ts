@@ -10,6 +10,7 @@ import {
 	type ConversationEventUseCaseV1,
 	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEventV1,
+	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
@@ -426,6 +427,446 @@ function dispatch(
 }
 
 describe("Conversation Worker dispatch", () => {
+	it.each([
+		["unknown", false],
+		["unknown", true],
+		["processing", false],
+		["processing", true],
+	] as const)(
+		"resumes %s API business or drains stop control evidence (stop race %s)",
+		async (executionStatus, stopRaces) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus,
+					taskWaitOrder: 1,
+					hostSessionRef: "host-original",
+					runtimeCursor: "cursor-prior",
+				}),
+			);
+			const calls: string[] = [];
+			let renewed = false;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async dispatch() {
+					throw new Error("Unexpected dispatch");
+				},
+				async recoverStatus() {
+					throw new Error("Unexpected legacy recovery");
+				},
+				async recoverOriginalStatus(request) {
+					calls.push("status");
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: "host-original",
+						outcome: "found",
+						status: "running",
+					};
+				},
+				async renewAuthorization() {
+					calls.push("renew");
+					expect(store.current.executionStatus).toBe("processing");
+					if (stopRaces) {
+						store.current = { ...store.current, stopPending: true };
+						throw new ConversationRuntimeHostError(
+							"TASK_AUTHORIZATION_CONTROL_ONLY",
+							false,
+						);
+					}
+					renewed = true;
+				},
+				async acknowledge() {
+					calls.push("ack");
+					if (!renewed && !store.current.stopPending)
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							false,
+						);
+				},
+				async *events() {
+					calls.push("events");
+					if (!renewed && !store.current.stopPending)
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							false,
+						);
+					yield stopRaces
+						? {
+								...runtimeEvent(1),
+								type: "completed" as const,
+								payload: { status: "cancelled" as const },
+							}
+						: runtimeEvent(1);
+				},
+			};
+			const f = setup({ store, runtimeHost });
+			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+			expect(calls).toEqual(["status", "renew", "ack", "events", "ack"]);
+			expect(store.current.executionStatus).toBe(
+				stopRaces ? "cancelled" : "completed",
+			);
+		},
+	);
+
+	it.each([true, false])(
+		"attempts control evidence after failed recovery renewal (allowed %s)",
+		async (evidenceAllowed) => {
+			vi.useFakeTimers();
+			try {
+				const store = new MemoryDispatchStore(
+					claim({
+						executionStatus: "unknown",
+						taskWaitOrder: 1,
+						hostSessionRef: "host-original",
+					}),
+				);
+				const renewAuthorization = vi.fn(async () => {
+					throw new ConversationRuntimeHostError(
+						"RUNTIME_WORKLOAD_UNAVAILABLE",
+						false,
+					);
+				});
+				const events = vi.fn();
+				const f = setup({
+					store,
+					runtimeHost: {
+						async dispatch() {
+							throw new Error("Unexpected dispatch");
+						},
+						async recoverStatus() {
+							throw new Error("Unexpected legacy recovery");
+						},
+						async recoverOriginalStatus(request) {
+							return {
+								schemaVersion: 2,
+								executionId: request.executionId,
+								hostSessionRef: "host-original",
+								outcome: "found",
+								status: "running",
+							};
+						},
+						renewAuthorization,
+						async *events() {
+							events();
+							await vi.advanceTimersByTimeAsync(1_100);
+							if (!evidenceAllowed)
+								throw new ConversationRuntimeHostError(
+									"RUNTIME_GRANT_INVALID",
+									false,
+								);
+							yield runtimeEvent(1);
+						},
+					},
+				});
+				expect(await dispatch(f.useCase)).toMatchObject(
+					evidenceAllowed
+						? { outcome: "accepted" }
+						: { outcome: "retry", retryScheduled: true },
+				);
+				expect(events).toHaveBeenCalledOnce();
+				expect(renewAuthorization).toHaveBeenCalledOnce();
+				expect(store.current.executionStatus).toBe(
+					evidenceAllowed ? "completed" : "processing",
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it("keeps replayed processing evidence unknown until a fresh running lookup", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				taskWaitOrder: 1,
+				hostSessionRef: "host-original",
+			}),
+		);
+		const calls: string[] = [];
+		const f = setup({
+			store,
+			runtimeHost: {
+				async dispatch() {
+					throw new Error("Unexpected dispatch");
+				},
+				async recoverStatus() {
+					throw new Error("Unexpected legacy recovery");
+				},
+				async recoverOriginalStatus(request) {
+					calls.push("status");
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: "host-original",
+						outcome: "found",
+						status: "unknown",
+					};
+				},
+				async renewAuthorization() {
+					calls.push("renew");
+				},
+				async acknowledge() {
+					calls.push("ack");
+					expect(store.current.executionStatus).toBe("unknown");
+				},
+				async *events() {
+					calls.push("events");
+					yield runtimeEvent(1, "running");
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "retry" });
+		expect(calls).toEqual(["status", "events", "ack"]);
+		expect(store.current.executionStatus).toBe("unknown");
+		expect(f.events.persisted[0]?.event).toEqual({
+			type: "execution.status",
+			status: "processing",
+		});
+		expect(f.events.persisted[0]?.transition).toBeUndefined();
+	});
+
+	it("drains stopped API recovery under control without resuming business authority", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "processing",
+				taskWaitOrder: 1,
+				hostSessionRef: "host-original",
+				stopPending: true,
+			}),
+		);
+		const renewAuthorization = vi.fn(async () => {
+			throw new Error("Business renewal is forbidden under stop");
+		});
+		const f = setup({
+			store,
+			runtimeHost: {
+				async dispatch() {
+					throw new Error("Unexpected dispatch");
+				},
+				async recoverStatus() {
+					throw new Error("Unexpected legacy recovery");
+				},
+				async recoverOriginalStatus(request) {
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: "host-original",
+						outcome: "found",
+						status: "running",
+					};
+				},
+				renewAuthorization,
+				async *events() {
+					yield {
+						...runtimeEvent(1),
+						type: "completed" as const,
+						payload: { status: "cancelled" as const },
+					};
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+		expect(renewAuthorization).not.toHaveBeenCalled();
+		expect(store.current.executionStatus).toBe("cancelled");
+	});
+
+	it("keeps unknown API evidence reads under control without an interval business renewal", async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+					hostSessionRef: "host-original",
+				}),
+			);
+			const renewAuthorization = vi.fn(async () => {});
+			const f = setup({
+				store,
+				runtimeHost: {
+					async dispatch() {
+						throw new Error("Unexpected dispatch");
+					},
+					async recoverStatus() {
+						throw new Error("Unexpected legacy recovery");
+					},
+					async recoverOriginalStatus(request) {
+						return {
+							schemaVersion: 2,
+							executionId: request.executionId,
+							hostSessionRef: "host-original",
+							outcome: "found",
+							status: "unknown",
+						};
+					},
+					renewAuthorization,
+					async *events() {
+						await vi.advanceTimersByTimeAsync(1_100);
+						yield {
+							...runtimeEvent(1),
+							type: "text" as const,
+							payload: { delta: "Actual bounded evidence" },
+						};
+					},
+				},
+			});
+			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "retry" });
+			expect(renewAuthorization).not.toHaveBeenCalled();
+			expect(store.current.executionStatus).toBe("unknown");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		["waiting", false],
+		["failed", false],
+		["cancelled", true],
+		["stale", false],
+	] as const)(
+		"reconciles fenced absence of the original API Turn as %s without resending",
+		async (result, stopPending) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+					hostSessionRef: null,
+					stopPending,
+				}),
+			);
+			const reconcileUnacceptedTask = vi.fn(async () => {
+				if (result !== "stale") {
+					store.current = {
+						...store.current,
+						executionStatus: result,
+						hostSessionRef: "host-original",
+					};
+					store.outboxStatus = result === "waiting" ? "pending" : "failed";
+				}
+				return result;
+			});
+			Object.assign(store, { reconcileUnacceptedTask });
+			const native = new FakeConversationRuntimeHostV1();
+			const recoverOriginalStatus = vi.fn(
+				async (request: { executionId: string }) => ({
+					schemaVersion: 2 as const,
+					executionId: request.executionId,
+					hostSessionRef: "host-original",
+					outcome: "not_found" as const,
+				}),
+			);
+			const f = setup({
+				store,
+				runtimeHost: {
+					dispatch: native.dispatch.bind(native),
+					events: native.events.bind(native),
+					recoverStatus: native.recoverStatus.bind(native),
+					recoverOriginalStatus,
+				},
+			});
+			expect(await dispatch(f.useCase)).toEqual(
+				result === "waiting"
+					? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+					: {
+							schemaVersion: 1,
+							outcome:
+								result === "failed"
+									? "rejected"
+									: result === "cancelled"
+										? "already_completed"
+										: "stale",
+						},
+			);
+			expect(reconcileUnacceptedTask).toHaveBeenCalledWith({
+				claim: expect.objectContaining({
+					executionId: "execution-1",
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+				}),
+				hostSessionRef: "host-original",
+			});
+			expect(recoverOriginalStatus).toHaveBeenCalledOnce();
+			expect(native.sideEffectCount()).toBe(0);
+			if (result === "stale")
+				expect(store.current.executionStatus).toBe("unknown");
+		},
+	);
+
+	it.each([
+		{ taskWaitOrder: undefined },
+		{ operation: "conversation.turn.regenerate.v1" as const },
+		{ executionStatus: "processing" as const },
+		{ hostSessionRef: null },
+	])(
+		"does not restore absence outside original API acceptance proof: %j",
+		async (change) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					taskWaitOrder: 1,
+					hostSessionRef: "host-original",
+					...change,
+				}),
+			);
+			const reconcileUnacceptedTask = vi.fn(async () => "waiting" as const);
+			Object.assign(store, { reconcileUnacceptedTask });
+			const native = new FakeConversationRuntimeHostV1();
+			const f = setup({
+				store,
+				runtimeHost: {
+					dispatch: native.dispatch.bind(native),
+					events: native.events.bind(native),
+					recoverStatus: native.recoverStatus.bind(native),
+					async recoverOriginalStatus(request) {
+						return {
+							schemaVersion: 2,
+							executionId: request.executionId,
+							hostSessionRef: request.hostSessionRef,
+							outcome: "not_found",
+						};
+					},
+				},
+			});
+			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "unknown" });
+			expect(reconcileUnacceptedTask).not.toHaveBeenCalled();
+			expect(native.sideEffectCount()).toBe(0);
+		},
+	);
+
+	it("keeps confirmed running API work occupied and never reconciles it as unsent", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				taskWaitOrder: 1,
+				hostSessionRef: "host-original",
+			}),
+		);
+		const reconcileUnacceptedTask = vi.fn(async () => "waiting" as const);
+		Object.assign(store, { reconcileUnacceptedTask });
+		const native = new FakeConversationRuntimeHostV1();
+		native.setEvents([runtimeEvent(1)]);
+		const f = setup({
+			store,
+			runtimeHost: {
+				dispatch: native.dispatch.bind(native),
+				events: native.events.bind(native),
+				recoverStatus: native.recoverStatus.bind(native),
+				async recoverOriginalStatus(request) {
+					return {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						hostSessionRef: "host-original",
+						outcome: "found",
+						status: "running",
+					};
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+		expect(reconcileUnacceptedTask).not.toHaveBeenCalled();
+		expect(native.sideEffectCount()).toBe(0);
+		expect(store.current.executionStatus).toBe("completed");
+	});
+
 	it("sends an eligible waiting task as its original Turn without recovery", async () => {
 		const native = new FakeConversationRuntimeHostV1();
 		native.setEvents([runtimeEvent(1)]);
