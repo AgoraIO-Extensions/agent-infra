@@ -1,5 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
-import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	createRuntimeExecutionGrantVerifierV2,
+	FakeRuntimeDriver,
+	FileRuntimeStore,
+	RuntimeHost,
+} from "@agent-infra/agent-runtime";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -9,14 +17,25 @@ import type {
 	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import {
+	migratePlatformDatabase,
+	PostgresConversationEventTransactionV1,
+	PostgresTaskAuthorizationStoreV1,
+} from "@agent-infra/platform-store";
+import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { normalizedEvent } from "../../../packages/platform-core/src/conversation-dispatch-transition.js";
+import { createConversationEventUseCaseV1 } from "../../../packages/platform-core/src/conversation-events.js";
+import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeOptionsV2,
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
 
 const keys = generateKeyPairSync("ed25519");
 const verify = createRuntimeExecutionGrantVerifierV2(
@@ -144,13 +163,22 @@ function harness(
 	};
 	const authorizationStore = {
 		readExecution: vi.fn(async () => record),
-		recordControl: vi.fn(async (input: { reason: string }) => {
-			if (input.reason === "authorization_revoked" && record) {
-				record.revokedAt = new Date(now);
-				Object.assign(state, { stopPending: true });
-			}
-			return { controlRecordId: `control-${input.reason}` };
-		}),
+		recordControl: vi.fn(
+			async (
+				input: Parameters<
+					ConversationRuntimeOptionsV2["taskAuthorizationStore"]["recordControl"]
+				>[0],
+			) => {
+				if (input.reason === "authorization_revoked" && record) {
+					record.revokedAt = new Date(now);
+					Object.assign(state, { stopPending: true });
+				}
+				return {
+					controlRecordId: `control-${input.reason}`,
+					reason: input.reason,
+				};
+			},
+		),
 	};
 	let legacyRecord: ConversationLegacyControlRecoveryV2 | null = null;
 	const legacyStore = {
@@ -716,7 +744,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		Object.assign(h.state, { stopPending: true });
 		h.authorizationStore.recordControl.mockImplementation(async () => {
 			h.store.readRuntimeState.mockResolvedValue(null);
-			return { controlRecordId: "control-stop" };
+			return { controlRecordId: "control-stop", reason: "stop" };
 		});
 		await expect(
 			h.runtime.runtimeHost.recoverOriginalStatus?.({
@@ -1810,3 +1838,297 @@ describe("explicit historical metadata delivery", () => {
 		},
 	);
 });
+
+it.each(["stop", "authorization_revoked"] as const)(
+	"preserves persisted control continuity for %s across terminal lease takeover",
+	async (reason) => {
+		const database = await startPostgresTestDatabase("control-continuity");
+		const sql = postgres(database.databaseUrl, { max: 1 });
+		const taskStore = new PostgresTaskAuthorizationStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const eventTransaction = new PostgresConversationEventTransactionV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const directory = await mkdtemp(join(tmpdir(), "control-continuity-"));
+		const h = harness();
+		let host: RuntimeHost | undefined;
+		try {
+			await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+			const record = h.record();
+			if (!record) throw new Error("Missing original authority");
+			await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','user','web','active',1,'agent-7')`;
+			await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at) values ('execution','conversation','agent','user','web','turn','processing',1,1,'agent-7',now())`;
+			await sql`insert into platform.task_authorization_records (id,execution_id,boundary) values ('original-authorization','execution',${sql.json(JSON.parse(JSON.stringify(record.boundary)))})`;
+			h.authorizationStore.recordControl.mockImplementation((input) =>
+				taskStore.recordControl(input),
+			);
+			const controlRequest = {
+				executionId: "execution",
+				authorizationRecordId: "original-authorization",
+				workerId: "instance",
+				traceId: "trace",
+				requestId: "recovery-request",
+			};
+			const initialRecovery = await taskStore.recordControl({
+				...controlRequest,
+				reason: "recovery",
+			});
+			expect(
+				await sql`select reason from platform.task_control_records where id=${initialRecovery.controlRecordId}`,
+			).toEqual([{ reason: "recovery" }]);
+			expect(await sql`select * from platform.conversation_stops`).toHaveLength(
+				0,
+			);
+			h.store.readRuntimeState.mockImplementation(async () => {
+				const [state] = await sql<
+					{
+						status: ConversationRuntimeStateV2["executionStatus"];
+						last_runtime_cursor: string | null;
+					}[]
+				>`select status,last_runtime_cursor from platform.conversation_executions where execution_id='execution'`;
+				if (!state) throw new Error("Missing original execution");
+				return {
+					...h.state,
+					executionStatus: state.status,
+					runtimeCursor: state.last_runtime_cursor,
+				};
+			});
+			const driver = await FakeRuntimeDriver.open(
+				join(directory, "driver.json"),
+				[{ schemaVersion: 1, modelOptionId: "option", reasoningLevel: "high" }],
+			);
+			const storePath = join(directory, "host.json");
+			host = await RuntimeHost.open({
+				driver,
+				store: await FileRuntimeStore.open(storePath),
+				grantValidation: { expectedIssuer: "unused-v1" },
+				grantValidationV2: {
+					expectedIssuer: "platform",
+					expectedWorkerId: "transport",
+					now: () => now,
+				},
+			});
+			const app = createRuntimeHostApp({
+				host,
+				runtimeWorkerId: "transport",
+				serviceToken: "synthetic-transport-proof",
+				verifyGrant: () => {
+					throw new Error("V1 disabled");
+				},
+				verifyGrantV2: verify,
+			});
+			h.fetcher.mockImplementation(async (url, init) =>
+				app.request(String(url), init),
+			);
+			Object.assign(h.claim, {
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+				hostSessionRef: null,
+			});
+			Object.assign(h.state, { hostSessionRef: null });
+			const context = await h.authorize();
+			const accepted = await h.runtime.runtimeHost.dispatch({
+				...h.request(context),
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			});
+			Object.assign(h.state, { hostSessionRef: accepted.hostSessionRef });
+			const stream = h.runtime.runtimeHost
+				.events(h.events(context))
+				[Symbol.asyncIterator]();
+			const first = await stream.next();
+			if (first.done) throw new Error("Expected original status event");
+			const events = createConversationEventUseCaseV1({
+				transaction: eventTransaction,
+			});
+			const persist = (event: typeof first.value) =>
+				events.persist({
+					schemaVersion: 1,
+					conversationId: "conversation",
+					executionId: "execution",
+					sessionGeneration: 1,
+					deliveryFence: 1,
+					adapterEventKey: event.adapterEventKey,
+					runtimeCursor: event.cursor,
+					occurredAt: event.occurredAt,
+					event: normalizedEvent(event),
+				});
+			expect(await persist(first.value)).toMatchObject({ outcome: "accepted" });
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(context),
+				confirmedCursor: first.value.cursor,
+			});
+			await stream.return?.();
+			const originalControl = await taskStore.recordControl({
+				executionId: "execution",
+				authorizationRecordId: "original-authorization",
+				reason,
+				workerId: "instance",
+				traceId: "trace",
+				requestId: "stop-request",
+			});
+			const sign = createWorkerRuntimeGrantSignerV2({
+				issuer: "platform",
+				workerId: "transport",
+				keyId: "signing",
+				privateKey: keys.privateKey,
+				now: () => now,
+			});
+			const stop = {
+				schemaVersion: 3 as const,
+				requestId: "stop-request",
+				traceId: "trace",
+				principal: { kind: "user" as const, id: "user" },
+				channelId: "web",
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				hostSessionRef: accepted.hostSessionRef,
+				operation: {
+					kind: "stop" as const,
+					id: "stop-request",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+			};
+			const grant = sign(
+				stop,
+				{
+					purpose: "control",
+					reason,
+					controlRecordId: originalControl.controlRecordId,
+				},
+				"turn.stop",
+			);
+			expect(
+				await host.stopV3({ ...stop, grant }, verify(grant)),
+			).toMatchObject({ result: { status: "cancelled" } });
+			await sql`update platform.conversation_executions set status='cancelled' where execution_id='execution'`;
+			Object.assign(h.claim, {
+				deliveryFence: 2,
+				executionStatus: "cancelled",
+			});
+			h.directory.resolveUser.mockRejectedValue(
+				new Error("Original user unavailable"),
+			);
+			const recovery = await h.authorize();
+			const drain = h.runtime.runtimeHost
+				.events(h.events(recovery))
+				[Symbol.asyncIterator]();
+			const delivery = await drain.next().then(
+				(value) => ({ value }),
+				(error) => ({
+					failure: { code: error.code, retryable: error.retryable },
+				}),
+			);
+			expect(delivery).toMatchObject({ value: { done: false } });
+			if (!("value" in delivery) || delivery.value.done)
+				throw new Error("Expected durable terminal event");
+			const terminal = delivery.value;
+			expect(terminal.value).toMatchObject({
+				type: "completed",
+				payload: { status: "cancelled" },
+			});
+			const ackCount = () =>
+				h.fetcher.mock.calls.filter(([url]) =>
+					String(url).endsWith("/events/ack"),
+				).length;
+			const beforeCommit = ackCount();
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(recovery),
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(ackCount()).toBe(beforeCommit);
+			expect(await persist(terminal.value)).toMatchObject({
+				outcome: "accepted",
+			});
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(recovery),
+				confirmedCursor: terminal.value.cursor,
+			});
+			// FakeRuntimeDriver tails even a completed journal; close this fixture
+			// subscription after verifying delivery and the durable acknowledgement.
+			await drain.return?.();
+			const controlQueries = h.fetcher.mock.calls.filter(([url, init]) => {
+				if (
+					!String(url).endsWith("/events/stream") &&
+					!String(url).endsWith("/events/ack")
+				)
+					return false;
+				return (
+					verify(JSON.parse(init?.body as string).grant).claims.purpose ===
+					"control"
+				);
+			});
+			expect(controlQueries).toHaveLength(2);
+			for (const [, init] of controlQueries)
+				expect(
+					verify(JSON.parse(init?.body as string).grant).claims,
+				).toMatchObject({
+					purpose: "control",
+					reason,
+					controlRecordId: originalControl.controlRecordId,
+					operation: { deliveryFence: 1, executionDeliveryFence: 1 },
+				});
+			const saved = JSON.parse(await readFile(storePath, "utf8")).sessions[
+				accepted.hostSessionRef
+			];
+			expect(saved.executionAuthorities.execution).toMatchObject({
+				stopped: true,
+				control: { reason, controlRecordId: originalControl.controlRecordId },
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(
+				await sql`select reason from platform.task_control_records order by reason`,
+			).toEqual(
+				[{ reason: "recovery" }, { reason }].sort((a, b) =>
+					a.reason.localeCompare(b.reason),
+				),
+			);
+			expect(await driver.sideEffectCount()).toBe(2);
+			const beforeDenied = h.fetcher.mock.calls.length;
+			await expect(
+				h.runtime.runtimeHost.renewAuthorization?.(h.events(recovery)),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			await expect(
+				h.runtime.runtimeHost.dispatch({
+					...h.request(recovery),
+					deliveryFence: 2,
+					executionDeliveryFence: 1,
+				}),
+			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			expect(h.fetcher).toHaveBeenCalledTimes(beforeDenied);
+			await taskStore.recordControl({
+				...controlRequest,
+				reason: reason === "stop" ? "authorization_revoked" : "stop",
+			});
+			const controls =
+				await sql`select id,reason from platform.task_control_records order by reason`;
+			await expect(
+				taskStore.recordControl({ ...controlRequest, reason: "recovery" }),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+			expect(
+				await sql`select id,reason from platform.task_control_records order by reason`,
+			).toEqual(controls);
+			await expect(
+				taskStore.recordControl({
+					...controlRequest,
+					executionId: "other-execution",
+					reason: "recovery",
+				}),
+			).rejects.toThrow("Task authorization persistence is unavailable");
+		} finally {
+			h.runtime.close();
+			await host?.close();
+			await eventTransaction.close();
+			await taskStore.close();
+			await sql.end();
+			await database.stop();
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+	120_000,
+);

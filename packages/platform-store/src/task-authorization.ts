@@ -7,6 +7,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
 	type TaskAuthorizationBoundaryV1,
+	type TaskSystemControlReasonV1,
 } from "@agent-infra/platform-core";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -196,7 +197,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 		workerId: string;
 		traceId: string;
 		requestId: string;
-	}): Promise<{ controlRecordId: string }> {
+	}): Promise<{ controlRecordId: string; reason: TaskSystemControlReasonV1 }> {
 		try {
 			return await this.#client.begin(async (transaction) => {
 				await transaction`select conversation.id from platform.conversations conversation join platform.conversation_executions execution on execution.conversation_id = conversation.id where execution.execution_id = ${input.executionId} for update of conversation`;
@@ -248,10 +249,28 @@ export class PostgresTaskAuthorizationStoreV1 {
 						`;
 					}
 				}
+				if (input.reason === "recovery") {
+					const controls = await transaction<
+						{ id: string; reason: "stop" | "authorization_revoked" }[]
+					>`
+						select id, reason from platform.task_control_records
+						where execution_id = ${input.executionId}
+							and authorization_record_id = ${record.id}
+							and reason in ('stop', 'authorization_revoked')
+					`;
+					// A recovery query continues the original durable control. Several
+					// records do not prove which authority the Host has latched.
+					if (controls.length > 1) throw new TaskAuthorizationStoreError();
+					const [control] = controls;
+					if (control)
+						return { controlRecordId: control.id, reason: control.reason };
+				}
 				const [existing] = await transaction<{ id: string }[]>`
-					select id from platform.task_control_records where execution_id = ${input.executionId} and reason = ${input.reason}
+					select id from platform.task_control_records where execution_id = ${input.executionId}
+						and authorization_record_id = ${record.id} and reason = ${input.reason}
 				`;
-				if (existing) return { controlRecordId: existing.id };
+				if (existing)
+					return { controlRecordId: existing.id, reason: input.reason };
 				const controlRecordId = randomUUID();
 				if (plan.revokeAuthorization)
 					await transaction`
@@ -265,7 +284,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 					values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, ${plan.audit.action}, 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId, authorizationRecordId: record.id, reason: plan.audit.reason } as unknown as JsonValue)})
 				`;
-				return { controlRecordId };
+				return { controlRecordId, reason: input.reason };
 			});
 		} catch {
 			throw new TaskAuthorizationStoreError();
