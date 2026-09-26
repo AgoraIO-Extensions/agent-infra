@@ -210,6 +210,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${desired.agentId}, 1, 'authority-1')`;
 		await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, service_availability, workload_revision, fence) values ('application-cli', ${desired.agentId}, 'user-cli', 'Controlled Agent', 'Fixture', 'available', 'trace', 'request', now(), 1, 1, 'running', 'ready', 1, 1)`;
 		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli', now())`;
+		await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${desired.agentId}, 'user-cli-other', now())`;
 		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) values (${desired.agentId}, 1, 'admitted', now(), ${sql.json(configuration)})`;
 		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${desired.agentId}, 1, ${sql.json(state)}, now() + interval '1 hour')`;
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
@@ -248,8 +249,21 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			),
 		});
 		let ackCount = 0;
+		let heldPrincipal: string | undefined;
+		let heldDirectoryLookups = 0;
 		runtimeServer = createServer(async (req, res) => {
 			traces.push(`runtime:${req.method}:${req.url}`);
+			if (req.url?.startsWith("/test/directory?")) {
+				// Hold authorization after the durable dispatch claim so process death
+				// deterministically leaves the deferred Turn's lease behind.
+				if (
+					new URL(req.url, "http://localhost").searchParams.get("userId") ===
+					heldPrincipal
+				)
+					heldDirectoryLookups += 1;
+				else res.end("ok");
+				return;
+			}
 			if (req.url === "/healthz") {
 				res.end("ok");
 				return;
@@ -341,7 +355,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
-export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
+export const directory = { async resolveUser(userId) { if (!['user-cli','user-cli-other'].includes(userId)) return null; await fetch(${JSON.stringify(`${runtimeUrl}/test/directory`)}+'?userId='+encodeURIComponent(userId)); return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
 export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
@@ -378,14 +392,16 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			databaseUrl: database.databaseUrl,
 		});
 		const taskStore = authorization;
+		let callerId = "user-cli";
 		const api = createConversationExecutionUseCaseV1({
 			transaction: execution,
 			authorization: {
 				async authorize() {
+					const actorId = callerId;
 					const boundary = await taskStore.captureUserBoundary({
 						user: {
 							schemaVersion: 1,
-							userId: "user-cli",
+							userId: actorId,
 							accountStatus: "active",
 							organizationIds: [],
 							authorizationRevision: "identity-1",
@@ -398,7 +414,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 						outcome: "allowed" as const,
 						authority: {
 							schemaVersion: 1 as const,
-							actorId: "user-cli",
+							actorId,
 							agentId: desired.agentId,
 							channelId: "web",
 							authorizationRevision: boundary.agentAuthorizationRevision,
@@ -436,6 +452,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			};
 		};
 		const first = await admit("first");
+		callerId = "user-cli-other";
 		const second = await admit("second");
 
 		// A database failure must not acknowledge a Runtime event that did not commit.
@@ -475,18 +492,37 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			"persisted running event",
 		);
 		const [active] =
-			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
+			await sql`select execution_id, conversation_id, actor_id from platform.conversation_executions where status='processing'`;
 		if (!active) throw Error("No running execution");
+		callerId = active.actor_id;
 		expect(await driver.sideEffectCount()).toBe(1);
-		// Kill both process owners, expire only this test's owned lease, and recover
+		// Kill both process owners, expire this test's owned leases, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
 		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
+		heldPrincipal =
+			active.actor_id === "user-cli" ? "user-cli-other" : "user-cli";
+		await waitUntil(
+			async () =>
+				heldDirectoryLookups > 0 &&
+				(
+					await sql`select 1 from platform.outbox_items where payload->>'executionId' in (${first.executionId}, ${second.executionId}) and payload->>'executionId'<>${active.execution_id} and operation='conversation.turn.submit.v1' and status='processing' and lease_expires_at>now()`
+				).length === 1,
+			"deferred Turn claimed with a held Directory request before process death",
+		);
 		const [before] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
+		const deadLeases =
+			await sql`select id, lease_owner, delivery_fence from platform.outbox_items where scope_type='conversation' and payload->>'executionId' in (${first.executionId}, ${second.executionId}) and status='processing'`;
+		expect(deadLeases).toHaveLength(2);
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
-		await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${active.execution_id} and status='processing'`;
+		heldPrincipal = undefined;
+		// The deferred Turn can also have a committed claim when its owner dies.
+		// Expire both dead owners' leases, rather than waiting for the 30s lease
+		// inside a 15s assertion. Leave discovery and capacity admission to Worker.
+		for (const lease of deadLeases)
+			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where id=${lease.id} and status='processing' and lease_owner=${lease.lease_owner} and delivery_fence=${lease.delivery_fence}`;
 		start();
 		start();
 		await waitUntil(
@@ -574,6 +610,14 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				).length === 1,
 			"deferred conversation after capacity release",
 		);
+		await waitUntil(
+			// One initial Turn, one supplement, one stop and one deferred Turn.
+			async () => (await driver.sideEffectCount()) === 4,
+			"deferred Turn starts once after capacity release",
+		);
+		expect(
+			requests.filter((request) => request.path.endsWith("/turns")),
+		).toHaveLength(2);
 		expect(ackCount).toBeGreaterThan(0);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
