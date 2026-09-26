@@ -2158,12 +2158,13 @@ async function completeRenewalInTransaction(
 		{
 			connection_id: string;
 			external_account: string;
+			validity_elapsed: boolean;
 			provider_release_id: string;
 			state: "ACTIVE" | "EXPIRED";
 		}[]
 	>`
 		SELECT access.connection_id, access.provider_release_id,
-			access.state, account.external_account
+			access.state, account.external_account, access.valid_until <= now() AS validity_elapsed
 		FROM connection_access_authorizations access
 		JOIN connection_accounts account ON account.id = access.connection_id
 		JOIN connection_access_requests request ON request.id = ${requestId}
@@ -2220,7 +2221,7 @@ async function completeRenewalInTransaction(
 			AND state IN ('ACTIVE', 'EXPIRED')
 	`;
 	if (updated.count !== 1) forbidden();
-	if (target.state === "EXPIRED") {
+	if (target.state === "EXPIRED" || target.validity_elapsed) {
 		await sql`
 			UPDATE connection_accounts
 			SET revision = revision + 1, execution_fence = execution_fence + 1

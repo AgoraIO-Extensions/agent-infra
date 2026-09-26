@@ -20,6 +20,7 @@ const approvalTopics = [
 	"connection.access-baseline.created",
 	"connection.access-enforcement.activated",
 	"connection.access-policy.published",
+	"connection.access-policy.draft-updated",
 	"connection.access-policy.revoked",
 	"connection.access-request.approve",
 	"connection.access-request.canceled",
@@ -137,9 +138,16 @@ export class PostgresConnectionNotificationDispatcher {
 		try {
 			return await this.sql.begin(async (sql) => {
 				const [event] = await sql<
-					{ aggregate_id: string; id: string; topic: string }[]
+					{
+						aggregate_id: string;
+						id: string;
+						topic: string;
+						source_aggregate_id: string | null;
+						aggregate_revision: string | null;
+					}[]
 				>`
-					SELECT id, topic, aggregate_id FROM connection_outbox_events
+					SELECT id, topic, aggregate_id, payload->>'aggregateId' AS source_aggregate_id,
+						payload->>'aggregateRevision' AS aggregate_revision FROM connection_outbox_events
 					WHERE status = 'PENDING' AND available_at <= now()
 						AND topic IN ${sql([...topics, ...approvalTopics])}
 					ORDER BY available_at, id LIMIT 1
@@ -148,10 +156,21 @@ export class PostgresConnectionNotificationDispatcher {
 				if (!event) return false;
 				eventId = event.id;
 				if (approvalTopics.some((topic) => topic === event.topic)) {
+					const draftUpdate =
+						event.topic === "connection.access-policy.draft-updated";
+					if (
+						draftUpdate &&
+						(!event.source_aggregate_id ||
+							!event.aggregate_revision ||
+							event.aggregate_id !==
+								`${event.source_aggregate_id}:${event.aggregate_revision}`)
+					)
+						throw new Error("Draft update outbox identity is invalid");
 					const [audit] = await sql<{ id: string }[]>`
 						SELECT id FROM connection_audit_records
 						WHERE event = ${event.topic}
-							AND detail->>'aggregateId' = ${event.aggregate_id}
+							AND detail->>'aggregateId' = ${draftUpdate ? event.source_aggregate_id : event.aggregate_id}
+							AND (NOT ${draftUpdate} OR detail->>'aggregateRevision' = ${event.aggregate_revision})
 						LIMIT 1
 					`;
 					if (!audit) throw new Error("Approval outbox audit fact is missing");

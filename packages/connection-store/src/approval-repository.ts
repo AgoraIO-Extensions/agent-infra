@@ -1140,7 +1140,7 @@ export class PostgresConnectionApprovalRepository {
 			INSERT INTO connection_audit_records (principal_id, event, detail)
 			VALUES (
 				${input.actorPrincipalId}, ${input.event},
-				${sql.json({ aggregateId: input.aggregateId, ...(input.reason ? { reason: input.reason } : {}) })}
+				${sql.json({ aggregateId: input.aggregateId, ...(input.aggregateRevision ? { aggregateRevision: input.aggregateRevision } : {}), ...(input.reason ? { reason: input.reason } : {}) })}
 			)
 		`;
 		await sql`

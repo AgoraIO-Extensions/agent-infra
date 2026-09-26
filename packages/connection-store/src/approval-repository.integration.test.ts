@@ -1209,6 +1209,15 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				let drained = 0;
 				while (drained < 30 && (await dispatcher.runOnce())) drained++;
 				expect(drained).toBeGreaterThan(0);
+				const draftDeliveries = await sql<{ status: string }[]>`
+					SELECT status FROM connection_outbox_events
+					WHERE topic = 'connection.access-policy.draft-updated'
+						AND payload->>'aggregateId' IN (${`incomplete-disclaimer-${suffix}`}, ${`incomplete-approvers-${suffix}`})
+				`;
+				expect(draftDeliveries).toHaveLength(4);
+				expect(
+					draftDeliveries.every((event) => event.status === "DELIVERED"),
+				).toBe(true);
 				const approvedEventId = `${decisionId}:connection.access-request.approve`;
 				const [delivered] = await sql<{ status: string }[]>`
 					SELECT status FROM connection_outbox_events WHERE id = ${approvedEventId}
@@ -1224,6 +1233,22 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					WHERE business_id = ${requestId} AND recipient_principal_id = ${applicantId}
 				`;
 				expect(afterReplay?.count).toBe(2);
+				const unauditedDraftEvent = `unaudited-draft-${suffix}`;
+				await sql`
+					INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+					VALUES (${unauditedDraftEvent}, 'connection.access-policy.draft-updated',
+						${`incomplete-disclaimer-${suffix}:999`},
+						${sql.json({ aggregateId: `incomplete-disclaimer-${suffix}`, aggregateRevision: "999" })})
+				`;
+				await expect(dispatcher.runOnce()).rejects.toThrow(
+					"Approval outbox audit fact is missing",
+				);
+				const [notDelivered] = await sql<
+					{ status: string; attempt_count: number }[]
+				>`
+					SELECT status, attempt_count FROM connection_outbox_events WHERE id = ${unauditedDraftEvent}
+				`;
+				expect(notDelivered).toEqual({ status: "PENDING", attempt_count: 1 });
 				const [approved] = await sql<{ permit_count: number; state: string }[]>`
 					SELECT request.state,
 						(SELECT count(*)::int FROM connection_connect_permits permit
@@ -1519,91 +1544,31 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				expect(renewed?.valid_until.getTime()).toBeLessThan(
 					Date.now() + 101 * 86_400_000,
 				);
-				const beforeLatePreview =
-					await connections.createCurrentConsumerAuthorizationPreview({
-						connectionId,
-						consumerId,
-						principalId: applicantId,
-					});
-				const beforeLateGrant =
-					await connections.confirmCurrentConsumerAuthorization({
-						confirmationToken: beforeLatePreview.confirmationToken,
-						idempotencyKey: `before-late-renewal-${suffix}`,
-						previewId: beforeLatePreview.previewId,
-						principalId: applicantId,
-					});
-				await sql`
+				for (const maintainExpiry of [false, true]) {
+					const beforeLatePreview =
+						await connections.createCurrentConsumerAuthorizationPreview({
+							connectionId,
+							consumerId,
+							principalId: applicantId,
+						});
+					const beforeLateGrant =
+						await connections.confirmCurrentConsumerAuthorization({
+							confirmationToken: beforeLatePreview.confirmationToken,
+							idempotencyKey: `before-late-renewal-${suffix}-${maintainExpiry}`,
+							previewId: beforeLatePreview.previewId,
+							principalId: applicantId,
+						});
+					await sql`
 					UPDATE connection_access_authorizations
 					SET valid_until = now() + interval '4 seconds'
 					WHERE id = ${accessAuthorizationId}
 				`;
-				const lateOption = (
-					await requestRepository.listAccessOptions(applicantId)
-				).find((item) => item.policyVersionId === policyId);
-				if (!lateOption) throw new Error("Late renewal option is missing");
-				const lateRequestId = `late-renewal-${suffix}`;
-				await requestRepository.createRenewalRequest({
-					applicantPrincipalId: applicantId,
-					authorizationId: accessAuthorizationId,
-					capabilityProfileId: profileId,
-					disclaimerConfirmations: [
-						{
-							contentSha256: disclaimerDigest,
-							disclaimerVersionId: disclaimerId,
-							locale: "zh-CN",
-						},
-					],
-					duration: { days: 90, kind: "FINITE" },
-					id: lateRequestId,
-					policyVersionId: policyId,
-					presentationId: lateOption.presentationId,
-					providerReleaseId: releaseId,
-					purpose: "Pending across original expiry",
-				});
-				const lateRequest = await requestRepository.getRequest(
-					applicantId,
-					lateRequestId,
-				);
-				const lateStage = lateRequest.stages[0];
-				if (!lateStage) throw new Error("Late renewal stage is missing");
-				const [beforeExpiry] = await sql<{ execution_fence: string }[]>`
-				SELECT execution_fence::text FROM connection_accounts
-				WHERE id = ${connectionId}
-			`;
-				await new Promise((resolve) => setTimeout(resolve, 4_100));
-				expect(await requestRepository.expireDueAuthorizations()).toBe(1);
-				expect(await requestRepository.expireDueAuthorizations()).toBe(0);
-				const [afterExpiry] = await sql<
-					{
-						execution_fence: string;
-						state: string;
-					}[]
-				>`
-				SELECT account.execution_fence::text,
-					access.state
-				FROM connection_accounts account
-				JOIN connection_access_authorizations access
-					ON access.connection_id = account.id
-				WHERE access.id = ${accessAuthorizationId}
-			`;
-				expect(afterExpiry).toEqual({
-					execution_fence: String(Number(beforeExpiry?.execution_fence) + 1),
-					state: "EXPIRED",
-				});
-				expect(
-					(await requestRepository.listNotifications(applicantId)).items.some(
-						(item) =>
-							item.businessType === "CONNECTION_ACCESS_AUTHORIZATION" &&
-							item.state === "EXPIRED",
-					),
-				).toBe(true);
-				const expiredOption = (
-					await requestRepository.listAccessOptions(applicantId)
-				).find((item) => item.policyVersionId === policyId);
-				if (!expiredOption)
-					throw new Error("Expired renewal option is missing");
-				await expect(
-					requestRepository.createRenewalRequest({
+					const lateOption = (
+						await requestRepository.listAccessOptions(applicantId)
+					).find((item) => item.policyVersionId === policyId);
+					if (!lateOption) throw new Error("Late renewal option is missing");
+					const lateRequestId = `late-renewal-${suffix}-${maintainExpiry}`;
+					await requestRepository.createRenewalRequest({
 						applicantPrincipalId: applicantId,
 						authorizationId: accessAuthorizationId,
 						capabilityProfileId: profileId,
@@ -1615,48 +1580,113 @@ describe("PostgreSQL Connection access approval catalog", () => {
 							},
 						],
 						duration: { days: 90, kind: "FINITE" },
-						id: `expired-renewal-${suffix}`,
+						id: lateRequestId,
 						policyVersionId: policyId,
-						presentationId: expiredOption.presentationId,
+						presentationId: lateOption.presentationId,
 						providerReleaseId: releaseId,
-						purpose: "Expired renewal cannot start",
-					}),
-				).rejects.toMatchObject({ code: "FORBIDDEN" });
-				await requestRepository.decide({
-					actorPrincipalId: approverId,
-					approverPrincipalId: approverId,
-					decision: "APPROVE",
-					expectedRequestRevision: lateRequest.revision,
-					expectedRoutingRevision: lateStage.routingRevision,
-					expectedStageRevision: lateStage.revision,
-					id: `late-renewal-decision-${suffix}`,
-					requestId: lateRequestId,
-				});
-				const [resumed] = await sql<
-					{ request_state: string; state: string; valid_until: Date }[]
-				>`
+						purpose: "Pending across original expiry",
+					});
+					const lateRequest = await requestRepository.getRequest(
+						applicantId,
+						lateRequestId,
+					);
+					const lateStage = lateRequest.stages[0];
+					if (!lateStage) throw new Error("Late renewal stage is missing");
+					const [beforeExpiry] = await sql<{ execution_fence: string }[]>`
+				SELECT execution_fence::text FROM connection_accounts
+				WHERE id = ${connectionId}
+			`;
+					await new Promise((resolve) => setTimeout(resolve, 4_100));
+					if (maintainExpiry) {
+						expect(await requestRepository.expireDueAuthorizations()).toBe(1);
+						expect(await requestRepository.expireDueAuthorizations()).toBe(0);
+					}
+					const [afterExpiry] = await sql<
+						{
+							execution_fence: string;
+							state: string;
+						}[]
+					>`
+				SELECT account.execution_fence::text,
+					access.state
+				FROM connection_accounts account
+				JOIN connection_access_authorizations access
+					ON access.connection_id = account.id
+				WHERE access.id = ${accessAuthorizationId}
+			`;
+					expect(afterExpiry).toEqual({
+						execution_fence: String(
+							Number(beforeExpiry?.execution_fence) + (maintainExpiry ? 1 : 0),
+						),
+						state: maintainExpiry ? "EXPIRED" : "ACTIVE",
+					});
+					expect(
+						(await requestRepository.listNotifications(applicantId)).items.some(
+							(item) =>
+								item.businessType === "CONNECTION_ACCESS_AUTHORIZATION" &&
+								item.state === "EXPIRED",
+						),
+					).toBe(maintainExpiry);
+					const expiredOption = (
+						await requestRepository.listAccessOptions(applicantId)
+					).find((item) => item.policyVersionId === policyId);
+					if (!expiredOption)
+						throw new Error("Expired renewal option is missing");
+					await expect(
+						requestRepository.createRenewalRequest({
+							applicantPrincipalId: applicantId,
+							authorizationId: accessAuthorizationId,
+							capabilityProfileId: profileId,
+							disclaimerConfirmations: [
+								{
+									contentSha256: disclaimerDigest,
+									disclaimerVersionId: disclaimerId,
+									locale: "zh-CN",
+								},
+							],
+							duration: { days: 90, kind: "FINITE" },
+							id: `expired-renewal-${suffix}`,
+							policyVersionId: policyId,
+							presentationId: expiredOption.presentationId,
+							providerReleaseId: releaseId,
+							purpose: "Expired renewal cannot start",
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					await requestRepository.decide({
+						actorPrincipalId: approverId,
+						approverPrincipalId: approverId,
+						decision: "APPROVE",
+						expectedRequestRevision: lateRequest.revision,
+						expectedRoutingRevision: lateStage.routingRevision,
+						expectedStageRevision: lateStage.revision,
+						id: `late-renewal-decision-${suffix}-${maintainExpiry}`,
+						requestId: lateRequestId,
+					});
+					const [resumed] = await sql<
+						{ request_state: string; state: string; valid_until: Date }[]
+					>`
 					SELECT request.state AS request_state, access.state, access.valid_until
 					FROM connection_access_requests request
 					JOIN connection_authorization_renewals renewal ON renewal.request_id = request.id
 					JOIN connection_access_authorizations access ON access.id = renewal.access_authorization_id
 					WHERE request.id = ${lateRequestId}
 				`;
-				expect(resumed).toMatchObject({
-					request_state: "CONSUMED",
-					state: "ACTIVE",
-				});
-				expect(resumed?.valid_until.getTime()).toBeGreaterThan(
-					Date.now() + 89 * 86_400_000,
-				);
-				const [renewedGrant] = await sql<
-					{
-						old_status: string;
-						current_id: string;
-						current_status: string;
-						current_fence: string;
-						account_fence: string;
-					}[]
-				>`
+					expect(resumed).toMatchObject({
+						request_state: "CONSUMED",
+						state: "ACTIVE",
+					});
+					expect(resumed?.valid_until.getTime()).toBeGreaterThan(
+						Date.now() + 89 * 86_400_000,
+					);
+					const [renewedGrant] = await sql<
+						{
+							old_status: string;
+							current_id: string;
+							current_status: string;
+							current_fence: string;
+							account_fence: string;
+						}[]
+					>`
 					SELECT prior.status AS old_status, current.id AS current_id, current.status AS current_status,
 						current.connection_execution_fence::text AS current_fence, account.execution_fence::text AS account_fence
 					FROM connection_grants prior
@@ -1665,12 +1695,13 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					JOIN connection_accounts account ON account.id = current.connection_id
 					WHERE prior.id = ${beforeLateGrant.grantId}
 				`;
-				expect(renewedGrant).toMatchObject({
-					old_status: "REPLACED",
-					current_status: "ACTIVE",
-				});
-				expect(renewedGrant?.current_id).not.toBe(beforeLateGrant.grantId);
-				expect(renewedGrant?.current_fence).toBe(renewedGrant?.account_fence);
+					expect(renewedGrant).toMatchObject({
+						old_status: "REPLACED",
+						current_status: "ACTIVE",
+					});
+					expect(renewedGrant?.current_id).not.toBe(beforeLateGrant.grantId);
+					expect(renewedGrant?.current_fence).toBe(renewedGrant?.account_fence);
+				}
 				const expiringRequestId = `approval-expiring-${suffix}`;
 				const renewalOption = (
 					await requestRepository.listAccessOptions(applicantId)
