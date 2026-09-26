@@ -40,7 +40,19 @@ import type {
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
-function providerCredentialValue(body: ProviderCredentialRequest) {
+function providerCredentialValue(
+	body: ProviderCredentialRequest,
+	email?: string | null,
+	hciSession?: string,
+) {
+	if (body.providerId === "datalego") {
+		if (!hciSession)
+			throw new ConnectionError(
+				"AUTHENTICATION_FAILED",
+				"Company HCI login is required",
+			);
+		return JSON.stringify({ email, sessionToken: hciSession });
+	}
 	return "accessToken" in body
 		? body.accessToken
 		: "apiToken" in body
@@ -2089,7 +2101,11 @@ export function createConnectionOAuthApp(
 						return management.service.connectProviderCredential(
 							session.account.principalId,
 							body.providerId,
-							providerCredentialValue(body),
+							providerCredentialValue(
+								body,
+								session.account.email,
+								getCookie(context, "HCIAuthToken"),
+							),
 							body.accessRequestId,
 						);
 					},
@@ -2150,7 +2166,11 @@ export function createConnectionOAuthApp(
 								session.account.principalId,
 								connectionId,
 								body.providerId,
-								providerCredentialValue(body),
+								providerCredentialValue(
+									body,
+									session.account.email,
+									getCookie(context, "HCIAuthToken"),
+								),
 							),
 					),
 				);

@@ -541,11 +541,14 @@ export type ApprovalPolicyStages = {
 
 export type ProviderCredentialRequest = {
     accessRequestId?: string;
+    providerId: 'datalego';
+} | {
+    accessRequestId?: string;
     providerId: 'bitbucket' | 'rehoboam';
     accessToken: string;
 } | {
     accessRequestId?: string;
-    providerId: 'confluence' | 'jira';
+    providerId: 'confluence' | 'jira' | 'manhattan';
     username: string;
     password: string;
 } | {

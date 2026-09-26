@@ -2775,6 +2775,18 @@
 					{
 						"type": "object",
 						"additionalProperties": false,
+						"required": ["providerId"],
+						"properties": {
+							"accessRequestId": { "type": "string" },
+							"providerId": {
+								"type": "string",
+								"const": "datalego"
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
 						"required": ["providerId", "accessToken"],
 						"properties": {
 							"accessRequestId": { "type": "string" },
@@ -2797,7 +2809,7 @@
 							"accessRequestId": { "type": "string" },
 							"providerId": {
 								"type": "string",
-								"enum": ["confluence", "jira"]
+								"enum": ["confluence", "jira", "manhattan"]
 							},
 							"username": {
 								"type": "string",

@@ -12,6 +12,7 @@ const maxConsoleBytes = 256 * 1024;
 const maxResponseBytes = 5 * 1024 * 1024;
 const requestTimeoutMs = 30_000;
 const sourceCommit = "connection-native";
+const writeActionNames = new Set(["abort_build", "build_job", "rebuild_job"]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -94,6 +95,42 @@ const actionSpecs = [
 		properties: { queueItemId: { minimum: 1, type: "integer" } },
 		required: ["queueItemId"],
 	},
+	{
+		description: "触发一个 Jenkins Job，可传入有界标量参数。",
+		name: "build_job",
+		properties: {
+			jobFullName: { minLength: 1, type: "string" },
+			parameters: {
+				additionalProperties: { type: ["string", "number", "boolean"] },
+				maxProperties: 100,
+				type: "object",
+			},
+		},
+		required: ["jobFullName"],
+	},
+	{
+		description: "通过 Jenkins graceful stop 终止一个正在运行的 Build。",
+		name: "abort_build",
+		properties: {
+			buildNumber: { minimum: 1, type: "integer" },
+			jobFullName: { minLength: 1, type: "string" },
+		},
+		required: ["jobFullName", "buildNumber"],
+	},
+	{
+		description: "读取历史 Build 参数并重新触发 Job，可显式覆盖有界标量参数。",
+		name: "rebuild_job",
+		properties: {
+			buildNumber: { minimum: 1, type: "integer" },
+			jobFullName: { minLength: 1, type: "string" },
+			parameters: {
+				additionalProperties: { type: ["string", "number", "boolean"] },
+				maxProperties: 100,
+				type: "object",
+			},
+		},
+		required: ["jobFullName", "buildNumber"],
+	},
 ] as const;
 
 export function createJenkinsConnectionCatalog(
@@ -102,8 +139,10 @@ export function createJenkinsConnectionCatalog(
 	return {
 		actions: actionSpecs.map((action) => ({
 			description: action.description,
-			effect: "READ" as const,
-			id: `${profile.providerId}.${action.name}@v7`,
+			effect: writeActionNames.has(action.name)
+				? ("WRITE" as const)
+				: ("READ" as const),
+			id: `${profile.providerId}.${action.name}@v8`,
 			inputSchema: {
 				additionalProperties: false,
 				properties: action.properties,
@@ -126,7 +165,7 @@ export function createJenkinsConnectionCatalog(
 		},
 		executorDigest: jenkinsExecutorDigest,
 		provider: profile.providerId,
-		providerReleaseId: `${profile.providerId}-connection-v7`,
+		providerReleaseId: `${profile.providerId}-connection-v8`,
 		sourceCommit,
 	} as const;
 }
@@ -225,8 +264,102 @@ export class JenkinsAdapter
 					credential,
 					`/queue/item/${positiveInteger(input.input, "queueItemId")}/api/json`,
 				);
+			case "build_job":
+				return this.submitBuild(
+					credential,
+					jobPath(input.input),
+					parameters(input.input),
+				);
+			case "abort_build":
+				return this.requestWrite(
+					credential,
+					`${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}/stop`,
+				);
+			case "rebuild_job": {
+				const path = `${jobPath(input.input)}/${positiveInteger(input.input, "buildNumber")}`;
+				const build = await this.requestJson(credential, `${path}/api/json`);
+				return this.submitBuild(credential, jobPath(input.input), {
+					...buildParameters(build),
+					...parameters(input.input),
+				});
+			}
 			default:
 				throw providerError(`Unsupported Jenkins action: ${action}`);
+		}
+	}
+
+	private async submitBuild(
+		credential: JenkinsCredential,
+		path: string,
+		values: JsonObject,
+	) {
+		const body = new URLSearchParams();
+		for (const [name, value] of Object.entries(values))
+			body.set(name, String(value));
+		return this.requestWrite(
+			credential,
+			`${path}/${body.size ? "buildWithParameters" : "build"}`,
+			body,
+		);
+	}
+
+	private async requestWrite(
+		credential: JenkinsCredential,
+		path: string,
+		body?: URLSearchParams,
+	) {
+		const accessToken = await this.gatewayTokenProvider?.getAccessToken();
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+		try {
+			const response = await this.fetcher(
+				new URL(path, this.profile.apiOrigin),
+				{
+					body: body?.toString(),
+					headers: {
+						...(accessToken ? { accessToken } : {}),
+						authorization: `Basic ${Buffer.from(`${credential.username}:${credential.apiToken}`).toString("base64")}`,
+						...(body
+							? { "content-type": "application/x-www-form-urlencoded" }
+							: {}),
+					},
+					method: "POST",
+					redirect: "manual",
+					signal: controller.signal,
+				},
+			);
+			if (response.status === 401 || response.status === 403)
+				throw invalidCredential("Jenkins credential was rejected");
+			if (response.status >= 500)
+				throw providerError(
+					`Jenkins write failed with HTTP ${response.status}`,
+					{ providerStatus: response.status, submissionUncertain: true },
+				);
+			if (!response.ok && response.status !== 302)
+				throw providerError(
+					`Jenkins write failed with HTTP ${response.status}`,
+					{ providerStatus: response.status },
+				);
+			const location = response.headers.get("location");
+			const queueId = location?.match(/\/queue\/item\/(\d+)\/?$/)?.[1];
+			return {
+				accepted: true,
+				...(location ? { location } : {}),
+				...(queueId ? { queueId: Number(queueId) } : {}),
+			};
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				(error.message.startsWith("Jenkins") ||
+					(error as { providerCredentialInvalid?: boolean })
+						.providerCredentialInvalid)
+			)
+				throw error;
+			throw providerError("Jenkins write response was lost", {
+				submissionUncertain: true,
+			});
+		} finally {
+			clearTimeout(timeout);
 		}
 	}
 
@@ -620,9 +753,55 @@ function stringValue(input: JsonObject, name: string) {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function parameters(input: JsonObject) {
+	const value = input.parameters;
+	if (value === undefined) return {};
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw providerError("Jenkins parameters must be an object");
+	const entries = Object.entries(value);
+	if (entries.length > 100)
+		throw providerError("Jenkins parameters exceed the limit");
+	for (const [name, item] of entries) {
+		if (
+			!name ||
+			name.length > 256 ||
+			!["string", "number", "boolean"].includes(typeof item) ||
+			(typeof item === "number" && !Number.isFinite(item))
+		)
+			throw providerError(
+				"Jenkins parameters must contain bounded scalar values",
+			);
+	}
+	return Object.fromEntries(entries) as JsonObject;
+}
+
+function buildParameters(build: JsonObject) {
+	const actions = Array.isArray(build.actions) ? build.actions : [];
+	const result: JsonObject = {};
+	for (const action of actions) {
+		if (!action || typeof action !== "object") continue;
+		const values = (action as { parameters?: unknown }).parameters;
+		if (!Array.isArray(values)) continue;
+		for (const parameter of values) {
+			if (!parameter || typeof parameter !== "object") continue;
+			const { name, value } = parameter as { name?: unknown; value?: unknown };
+			if (
+				typeof name === "string" &&
+				["string", "number", "boolean"].includes(typeof value)
+			)
+				result[name] = value;
+		}
+	}
+	return parameters({ parameters: result });
+}
+
 function providerError(
 	message: string,
-	metadata: { providerStatus?: number; providerUnavailable?: boolean } = {},
+	metadata: {
+		providerStatus?: number;
+		providerUnavailable?: boolean;
+		submissionUncertain?: boolean;
+	} = {},
 ) {
 	return Object.assign(new Error(message), metadata);
 }

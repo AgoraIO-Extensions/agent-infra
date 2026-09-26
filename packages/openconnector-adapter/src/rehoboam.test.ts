@@ -13,18 +13,73 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 	assert.equal(rehoboamExecutorDigest, `sha256:${digest}`);
 });
 
-test("Rehoboam catalog exposes one bounded read action", () => {
+test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.map((action) => action.id),
-		["rehoboam.get_current_user@v1"],
+		[
+			"rehoboam.get_current_user@v7",
+			"rehoboam.list_releases@v4",
+			"rehoboam.get_release@v4",
+			"rehoboam.list_release_pipelines@v4",
+			"rehoboam.get_release_pipeline@v4",
+			"rehoboam.prepare_release_pipeline_run@v4",
+			"rehoboam.execute_release_pipeline@v4",
+			"rehoboam.list_execution_requests@v4",
+			"rehoboam.get_execution_request@v4",
+			"rehoboam.approve_execution_request@v4",
+			"rehoboam.withdraw_execution_request@v4",
+			"rehoboam.reject_execution_request@v4",
+			"rehoboam.list_release_pipeline_runs@v4",
+			"rehoboam.get_release_pipeline_run@v4",
+		],
 	);
 	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
+	assert.equal(
+		rehoboamConnectionCatalog.actions.find(
+			(action) => action.name === "rehoboam.execute_release_pipeline",
+		)?.effect,
+		"WRITE",
+	);
 });
 
-test("Rehoboam sends machine apiKey with personal Bearer token", async () => {
+test("Rehoboam validates a scoped personal access token", async () => {
 	let request: { headers: Headers; url: string } | undefined;
 	const adapter = new RehoboamAdapter(async (input, init) => {
 		request = { headers: new Headers(init?.headers), url: String(input) };
+		return Response.json({
+			data: {
+				role: "operator",
+				scopes: ["metadata:read", "release:write"],
+				user_id: "user-1",
+				username: "user@example.com",
+			},
+			success: true,
+		});
+	}, "machine-key");
+
+	const identity = await adapter.validateCredential("personal-pat");
+
+	assert.equal(
+		request?.url,
+		"https://justinia.gz3.agoralab.co/api/connection/whoami",
+	);
+	assert.equal(request?.headers.get("apikey"), "machine-key");
+	assert.equal(request?.headers.get("authorization"), "Bearer personal-pat");
+	assert.equal(identity.externalAccount, "user-1");
+	assert.equal(identity.displayName, "user@example.com");
+	assert.equal(identity.accessToken, "personal-pat");
+	assert.deepEqual(identity.grantedScopes, [
+		"rehoboam.metadata.read",
+		"rehoboam.release.read",
+		"rehoboam.release.write",
+	]);
+	assert.equal(JSON.stringify(identity).includes("machine-key"), false);
+});
+
+test("Rehoboam execution sends the stored personal token", async () => {
+	let authorization: string | null = null;
+	const adapter = new RehoboamAdapter(async (_input, init) => {
+		authorization = new Headers(init?.headers).get("authorization");
 		return Response.json({
 			data: {
 				role: "operator",
@@ -35,21 +90,115 @@ test("Rehoboam sends machine apiKey with personal Bearer token", async () => {
 		});
 	}, "machine-key");
 
-	const identity = await adapter.validateCredential("personal-token");
+	const result = await adapter.execute({
+		action: "rehoboam.get_current_user",
+		credential: { accessToken: "stored-token" },
+		input: {},
+	});
 
-	assert.equal(
-		request?.url,
-		"https://justinia.gz3.agoralab.co/api/connection/whoami",
-	);
-	assert.equal(request?.headers.get("apikey"), "machine-key");
-	assert.equal(request?.headers.get("authorization"), "Bearer personal-token");
-	assert.equal(identity.externalAccount, "user-1");
-	assert.equal(identity.displayName, "user@example.com");
-	assert.equal(JSON.stringify(identity).includes("machine-key"), false);
-	assert.equal(JSON.stringify(identity).includes("personal-token"), true);
+	assert.equal(authorization, "Bearer stored-token");
+	assert.deepEqual(result, {
+		role: "operator",
+		scopes: [],
+		user_id: "user-1",
+		username: "user@example.com",
+	});
 });
 
-test("Rehoboam rejects redirects and invalid personal credentials", async () => {
+test("Rehoboam release read preserves the bounded stored publication result", async () => {
+	const latestReleaseInfo = {
+		content: "<p>Release 4.7.0</p>",
+		content_source: "final_content.html",
+		operator: "publisher",
+		time: 42,
+		truncated: false,
+	};
+	const adapter = new RehoboamAdapter(
+		async () =>
+			Response.json({
+				data: { _id: "release-1", latest_release_info: latestReleaseInfo },
+				success: true,
+			}),
+		"machine-key",
+	);
+
+	const result = await adapter.execute({
+		action: "rehoboam.get_release",
+		credential: { accessToken: "stored-token" },
+		input: { releaseId: "release-1" },
+	});
+	assert.deepEqual(result, {
+		_id: "release-1",
+		latest_release_info: latestReleaseInfo,
+	});
+});
+
+test("Rehoboam maps release reads and writes to fixed endpoints", async () => {
+	const requests: Array<{ body?: string; method?: string; url: string }> = [];
+	const adapter = new RehoboamAdapter(async (input, init) => {
+		requests.push({
+			body: init?.body as string | undefined,
+			method: init?.method,
+			url: String(input),
+		});
+		return Response.json({ data: { ok: true }, success: true });
+	}, "machine-key");
+	const credential = { accessToken: "stored-token" };
+
+	await adapter.execute({
+		action: "rehoboam.list_release_pipelines",
+		credential,
+		input: { releaseId: "rel/1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.get_release",
+		credential,
+		input: { releaseId: "rel/1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.list_release_pipeline_runs",
+		credential,
+		input: { releaseId: "rel/1", page: 2, pageSize: 1 },
+	});
+	await adapter.execute({
+		action: "rehoboam.execute_release_pipeline",
+		credential,
+		input: { cardId: "card-1", params: { env: "prod" }, releaseId: "rel-1" },
+	});
+	await adapter.execute({
+		action: "rehoboam.reject_execution_request",
+		credential,
+		input: { reason: "not ready", releaseId: "rel-1", requestId: "req-1" },
+	});
+
+	assert.equal(
+		requests[0]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/pipelines",
+	);
+	assert.equal(
+		requests[1]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/connection-summary",
+	);
+	assert.equal(
+		requests[2]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel%2F1/pipeline-runs?page=2&page_size=1",
+	);
+	assert.equal(
+		requests[3]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/releases/rel-1/pipeline-runs",
+	);
+	assert.equal(requests[3]?.method, "POST");
+	assert.deepEqual(JSON.parse(requests[3]?.body ?? "{}"), {
+		card_id: "card-1",
+		params: { env: "prod" },
+	});
+	assert.deepEqual(JSON.parse(requests[4]?.body ?? "{}"), {
+		reject_reason: "not ready",
+		release_id: "rel-1",
+	});
+});
+
+test("Rehoboam rejects redirects and invalid PATs", async () => {
 	for (const response of [
 		new Response(null, {
 			headers: { location: "https://oauth.example" },
@@ -59,7 +208,7 @@ test("Rehoboam rejects redirects and invalid personal credentials", async () => 
 	]) {
 		const adapter = new RehoboamAdapter(async () => response, "machine-key");
 		await assert.rejects(
-			adapter.validateCredential("personal-token"),
+			adapter.validateCredential("personal-pat"),
 			(error: Error & { providerCredentialInvalid?: boolean }) =>
 				error.providerCredentialInvalid === true,
 		);

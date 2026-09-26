@@ -332,14 +332,16 @@ export function ConnectionsView(props: {
 export type ConnectorProviderId =
 	| "bitbucket"
 	| "confluence"
+	| "datalego"
 	| "github"
 	| "jenkins-ci"
 	| "jenkins-release"
 	| "jira"
+	| "manhattan"
 	| "rehoboam";
 
 export const connectorDefinitions: Array<{
-	category: "代码托管" | "研发协作" | "知识库" | "CI/CD";
+	category: "代码托管" | "研发协作" | "知识库" | "CI/CD" | "数据平台";
 	description: string;
 	icon: typeof Boxes;
 	name: string;
@@ -374,6 +376,20 @@ export const connectorDefinitions: Array<{
 		providerId: "confluence",
 	},
 	{
+		category: "数据平台",
+		description: "SQL 查询任务与结果",
+		icon: Boxes,
+		name: "DataLego",
+		providerId: "datalego",
+	},
+	{
+		category: "研发协作",
+		description: "SDK dump、崩溃分析与 Symbol",
+		icon: Boxes,
+		name: "Manhattan",
+		providerId: "manhattan",
+	},
+	{
 		category: "CI/CD",
 		description: "发布 Job、Build 与 Queue",
 		icon: SlidersHorizontal,
@@ -399,10 +415,18 @@ export const connectorDefinitions: Array<{
 export function ConnectorCatalog(props: {
 	connections: Connection[];
 	onConnect: (providerId: ConnectorProviderId) => void;
+	pendingProviderId?: ConnectorProviderId | null;
 }) {
 	const [category, setCategory] = useState("全部");
 	const [query, setQuery] = useState("");
-	const categories = ["全部", "代码托管", "研发协作", "知识库", "CI/CD"];
+	const categories = [
+		"全部",
+		"代码托管",
+		"研发协作",
+		"知识库",
+		"CI/CD",
+		"数据平台",
+	];
 	const visibleConnectors = useMemo(() => {
 		const normalized = query.trim().toLowerCase();
 		return connectorDefinitions.filter(
@@ -492,9 +516,14 @@ export function ConnectorCatalog(props: {
 										aria-label={`连接 ${connector.name}`}
 										className={`button ${connectionCount ? "button-secondary" : "button-primary"}`}
 										onClick={() => props.onConnect(connector.providerId)}
+										disabled={props.pendingProviderId === connector.providerId}
 										type="button"
 									>
-										{connectionCount ? "再连接" : "连接"}
+										{props.pendingProviderId === connector.providerId
+											? "正在连接"
+											: connectionCount
+												? "再连接"
+												: "连接"}
 									</button>
 								</article>
 							);
@@ -541,11 +570,13 @@ export function providerLabel(value: string) {
 		{
 			bitbucket: "Bitbucket",
 			confluence: "Confluence",
+			datalego: "DataLego",
 			github: "GitHub",
 			"jenkins-ci": "Jenkins CI",
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 			rehoboam: "Rehoboam",
+			manhattan: "Manhattan",
 		}[value] ?? value
 	);
 }

@@ -132,19 +132,76 @@ Build artifact 有界读取与 HCI OAuth 双层鉴权发布为新的 `@v7` Actio
 以及 `jenkins-ci-connection-v7` 和 `jenkins-release-connection-v7` ProviderRelease；
 Jenkins CI 的用户入口是 `jenkins-ci.agoralab.co`，机器 API 固定访问
 `jenkins-api.bj2.agoralab.co`，
+
+Jenkins v8 增加 `build_job`、`abort_build` 和 `rebuild_job` 三个 WRITE Action。参数仅允许最多
+100 个 string、number 或 boolean 标量；abort 只调用 graceful `/stop`，不开放 `/term`、`/kill`
+或任意请求。WRITE 在提交开始后遇到网络错误或 5xx 必须进入 `UNCERTAIN`，禁止自动重试；rebuild
+只读取历史参数并创建新 Queue item，不修改历史 Build。
 不修改 immutable v4 catalog。Artifact path 逐段校验，响应固定为 identity representation，单页最多
 256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
 Connection/Grant 同样不自动获得该新增 Action。
 
 Rehoboam 的首个 **[设计决策]** Provider profile 固定为
 `https://justinia.gz3.agoralab.co`。Kong `key-auth` 使用部署级 `apiKey` 放行机器请求，用户个人
-Rehoboam Bearer Token 作为 provider-specific encrypted credential 保存；两者不得进入同一
-credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志或 Action 结果。identity proof 固定为
-`GET /api/connection/whoami`，由 Rehoboam 现有 `agent_auth` 服务端解析 Token、角色与启用状态，仅返回
-`user_id`、`username` 和 `role`。首个 `rehoboam-connection-v1` 只发布
-`rehoboam.get_current_user@v1` READ Action，不允许调用方提交 URL、路径、Header、用户身份或任意 Rehoboam
+用户在 Rehoboam Security 创建 Personal Access Token；每枚 PAT 隐含 `metadata:read`，Connection 只把该 PAT 作为
+provider-specific encrypted credential 保存，不接收 Rehoboam 密码。机器 `apiKey` 与
+个人 Token 不得进入同一 credential envelope，且 `apiKey` 不得进入浏览器、MCP 参数、日志或 Action 结果。identity proof 固定为
+`GET /api/connection/whoami`，由 Rehoboam PAT 服务解析 owner、`metadata:read`、过期与撤销状态，仅返回
+`user_id`、`username` 和 `role`。PAT 模式发布 `rehoboam-connection-v3` 与
+`rehoboam.get_current_user@v3` READ Action，不修改 immutable v1/v2 catalog；不允许调用方提交
+URL、路径、Header、用户身份或任意 Rehoboam
 业务操作。Rehoboam 作为 Provider 与既有 `consumer-rehoboam-ai` Consumer 是独立信任方向，不复用 PAT、
 Grant 或凭证。
+
+Rehoboam Release workflow 作为后续 immutable `rehoboam-connection-v4` 发布：旧 Release 保留
+`rehoboam.get_current_user@v3`，v4 发布新的 `rehoboam.get_current_user@v4` 并新增有界的 Release list/detail、Release Pipeline discovery、运行预检、
+执行/审批、Execution Request 和 Release-scoped Job result Actions。READ 要求
+`rehoboam.release.read`，WRITE 要求 `rehoboam.release.write`；Provider scope 只能来自 Rehoboam
+`whoami` 对当前 PAT scope 的服务端证明。执行目标必须是指定 Release 拥有的 Card，禁止任意全局 Pipeline、
+Provider URL 或 Header。服务端实时判定 Pipeline 管理员：管理员直跑，其他用户创建
+`auto_after_approval` Execution Request；approve/reject 重新解析当前 approver，并复用现有 CAS、通知和
+exactly-once auto-run 状态机。Job 查询必须同时证明 Release、Card/PipelineHistory 与 Job 归属。
+
+后续 `rehoboam-connection-v5` 不改写 v4：`get_release@v2` 改为固定的有界摘要入口，
+`list_release_pipeline_runs@v2` 增加服务端分页（单页最多 20 条）并返回可查询的 Job ID；
+其余 Actions 仅为 immutable ProviderRelease 绑定发布新版本，语义与权限保持不变。
+
+后续 `rehoboam-connection-v6` 保留 v5：`get_release@v3` 在有界摘要中返回 Rehoboam 已存储的
+最新 `release_infos` 发布结果，优先最终 HTML、回退描述，内容最多 8000 字符并显式标记截断；
+不暴露完整历史或任意正文查询。其他 Actions 只随 immutable ProviderRelease 更新版本，不改变语义与权限。
+
+后续 `rehoboam-connection-v7` 保留 v6：`get_release@v4` 和 Card 查询不再为未记录的进度节点或
+未计算的 PipelineHistory 状态伪造空值；已保存的进度和状态原样保留。实际运行状态继续通过
+Release-scoped Job READ 查询；其余 Actions 只更新 immutable 绑定版本，不改变权限或写入语义。
+
+Manhattan 的首个 **[设计决策]** Provider profile 固定为
+`https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
+`apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
+v3 连接表单接收公司 HCI 用户名与密码，并只发送到固定 `/api/connection/login`；Manhattan 服务端完成
+password grant 后返回短期个人 Token，Connection 只加密保存该 Token，不保存账号密码。随后 Manhattan
+调用固定 user-info endpoint 验证 Token 并执行现有 RBAC 校验。机器 key 只由 Secret Manager 注入，不得
+进入 credential envelope。手工 Bearer v1 和 HCI Cookie v2 保持不可变；`manhattan-connection-v3` 发布当前用户、SDK dump 列表/详情和 Symbol
+列表四个 READ Actions，固定访问 `/api/connection/*`，禁止调用方提交 URL、Header 或用户邮箱；响应上限
+为 64 KiB。首版不开放上传、删除、重新解析、配置或告警写入。
+
+DataLego 的首个 **[设计决策]** Provider profile 固定为
+`https://datalego.agoralab.co`，只发布当前用户、提交 SQL 查询、查询任务状态和取消任务四个有界动作。
+浏览器连接请求不得提交 LDAP 密码或 Token；Connection API 仅从同站请求携带的 HttpOnly
+`HCIAuthToken` Cookie 建立个人 Credential，并通过固定不存在的 job status READ 探针证明内嵌
+access token 已进入 DataLego 业务鉴权，再使用 Connection 已服务端验证的 Principal email 形成账号
+身份，并与完整 session token 一起加密保存。执行 `/api/v1/datainsight/*` 时，Adapter 只在服务端解析
+Cookie JWT 中的个人
+`access_token`，通过 `accessToken` Header 发送；原始 session、内嵌 token 和 SQL 不得进入日志、错误
+或身份响应。查询状态是 READ，提交与取消任务是 WRITE，调用方不能提交 URL、路径或 Header。
+仅当 DataLego 返回精确的 access-token-expired 401 时，Adapter 才携带现有 `HCIAuthToken` 访问固定
+`https://grafana.bj2.agoralab.co` HCI 入口，读取新的 `Set-Cookie` 并重试原请求一次；其他失败不得刷新
+或重放。该 refresh origin 是当前受监督 pilot 已验证的 HCI sliding-session 兼容契约，HCI 提供正式
+refresh endpoint 后必须发布新 ProviderRelease 迁移；刷新失败要求用户重新连接，不回退到机器人账号、
+LDAP 密码或客户端 Token 输入。
+生产验证发现 `/api/userInfo` 不接受服务端 Cookie 重放后，身份校验改为固定不存在 job 的 status READ
+探针，并发布 `datalego-connection-v2` 与 `@v2` ActionVersion；不得修改已发布的 v1 catalog。
+身份校验发生一次受控 refresh 时，Adapter 必须把实际验证成功的新 session 写入 Credential envelope，
+并以 `datalego-connection-v3` 与 `@v3` ActionVersion 发布；不得修改已发布的 v2 catalog。
 
 Bitbucket 的首个 **[设计决策]** profile 固定为公司 Bitbucket Server `6.7.2`（build
 `6007002`）、受控 HTTPS API origin `https://bitbucket-api.agoralab.co` 和 Personal Access Token
@@ -896,11 +953,13 @@ stateDiagram-v2
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
 - ProviderRelease/ActionVersion disable 不改变 Connection 状态，但 effective eligibility 立即为 false。
-- ProviderRelease 升级不等于 Credential 失效。auth profile、Credential scope 与 stable account proof
+- ProviderRelease 升级不等于 Credential 失效。auth profile 与 stable account proof
   兼容时，用户发起 Provider Connection Upgrade，服务端使用 current Credential 对新 Release 重新做
   identity proof，并以 expected Connection/CredentialVersion CAS 创建新 CredentialVersion；浏览器不接收
-  或重新提交 Secret。新增 Action 仍单独 preview/consent。只有验证失败、scope 变化、auth profile 变化、
-  换号或用户主动轮换时进入 Credential Rotation 并收集新 Credential。
+  或重新提交 Secret。Provider 重验得到的 scope 是新 CredentialVersion 的权威能力集合，scope 扩缩仍触发
+  Campaign 与 Grant 兼容检查，但不单独触发 Credential Rotation；新增 Action 仍单独 preview/consent，
+  scope 缩减后的不兼容 Grant 保持暂停。只有凭证验证失败、auth profile 无法兼容、换号或用户主动轮换时
+  进入 Credential Rotation 并收集新 Credential。
 - Identity、Shared scope 或 Recovery evidence 不可用时返回暂时不可用，不猜测为永久 loss。
 
 ### 14.4 Shared Scope

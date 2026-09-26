@@ -34,10 +34,18 @@ import {
 	confluenceServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/confluence-server";
 import {
+	DataLegoAdapter,
+	datalegoConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/datalego";
+import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/jira-server";
+import {
+	ManhattanAdapter,
+	manhattanConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/manhattan";
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
@@ -89,8 +97,10 @@ export async function createConnectionRuntime(
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
 		confluenceServerConnectionCatalog,
+		datalegoConnectionCatalog,
 		jenkinsCiConnectionCatalog,
 		jenkinsReleaseConnectionCatalog,
+		manhattanConnectionCatalog,
 		rehoboamConnectionCatalog,
 	]) {
 		await repository.publishProviderCatalog(catalog, {
@@ -108,8 +118,10 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog,
 			jiraServerConnectionCatalog,
 			confluenceServerConnectionCatalog,
+			datalegoConnectionCatalog,
 			jenkinsCiConnectionCatalog,
 			jenkinsReleaseConnectionCatalog,
+			manhattanConnectionCatalog,
 			rehoboamConnectionCatalog,
 		]) {
 			await repository.publishConsumerDeclaration({
@@ -189,13 +201,22 @@ export async function createConnectionRuntime(
 		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
 		config.rehoboamApiKey,
 	);
+	const manhattan = new ManhattanAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		config.manhattanApiKey,
+	);
+	const datalego = new DataLegoAdapter(
+		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+	);
 	const executors = new ProviderExecutorRouter({
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
+		[datalegoConnectionCatalog.providerReleaseId]: datalego,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
+		[manhattanConnectionCatalog.providerReleaseId]: manhattan,
 		[rehoboamConnectionCatalog.providerReleaseId]: rehoboam,
 	});
 	const service = new ConnectionApplicationService(
@@ -208,8 +229,10 @@ export async function createConnectionRuntime(
 		{
 			bitbucket,
 			confluence,
+			datalego,
 			[jenkins.providerId]: jenkins,
 			[jenkinsCi.providerId]: jenkinsCi,
+			[manhattan.providerId]: manhattan,
 			[rehoboam.providerId]: rehoboam,
 			jira,
 		},
@@ -235,6 +258,7 @@ export async function createConnectionRuntime(
 					bitbucketServerConnectionCatalog,
 					jiraServerConnectionCatalog,
 					confluenceServerConnectionCatalog,
+					datalegoConnectionCatalog,
 					jenkinsCiConnectionCatalog,
 					jenkinsReleaseConnectionCatalog,
 					rehoboamConnectionCatalog,
@@ -249,9 +273,12 @@ export async function createConnectionRuntime(
 			"10.80.1.129": jenkinsReleaseConnectionCatalog.provider,
 			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
 			"github.com": githubConnectionCatalog.provider,
+			"datalego.agoralab.co": datalegoConnectionCatalog.provider,
+			"datalego.la3d.agoralab.co": datalegoConnectionCatalog.provider,
 			"jenkins-ci.agoralab.co": "jenkins-ci",
 			"rehoboam.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 			"justinia.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
+			"manhattan-api.agoralab.co": manhattanConnectionCatalog.provider,
 		},
 		service,
 		supportedProviders: [
@@ -259,9 +286,11 @@ export async function createConnectionRuntime(
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,
 			confluenceServerConnectionCatalog.provider,
+			datalegoConnectionCatalog.provider,
 			jenkinsCiConnectionCatalog.provider,
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,
+			manhattanConnectionCatalog.provider,
 		],
 	});
 	return {

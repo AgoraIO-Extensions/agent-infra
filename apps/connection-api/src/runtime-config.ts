@@ -52,6 +52,7 @@ export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 		tokenUrl: string;
 		username: string;
 	};
+	manhattanApiKey: string;
 	rehoboamApiKey: string;
 };
 
@@ -348,6 +349,7 @@ export function fullConnectionRuntimeConfig(
 			tokenUrl: "https://oauth.agoralab.co/oauth/token",
 			username: requireValue(environment, "JENKINS_CI_TOKEN_USERNAME"),
 		},
+		manhattanApiKey: requireValue(environment, "MANHATTAN_KONG_API_KEY"),
 		rehoboamApiKey: requireValue(environment, "REHOBOAM_KONG_API_KEY"),
 	};
 }

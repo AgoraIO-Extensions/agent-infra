@@ -1074,9 +1074,8 @@ describe("Connection application service", () => {
 		const repository = new MemoryRepository();
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
-				throw Object.assign(new Error("Bad credentials"), {
-					providerCode: "authorization_failed",
-					providerStatus: 401,
+				throw Object.assign(new Error("Expired credential"), {
+					providerCredentialInvalid: true,
 				});
 			},
 		});
@@ -1633,31 +1632,34 @@ describe("Connection application service", () => {
 			accessToken: "stored-token",
 			credentialVersionId: "credential-v1",
 			externalAccount: "alice",
-			grantedScopes: ["jenkins.read"],
-			providerId: "jenkins-release",
+			grantedScopes: ["rehoboam.metadata.read"],
+			providerId: "rehoboam",
 		});
 		let stored: Record<string, unknown> | undefined;
 		repository.storeProviderCredential = async (input) => {
 			stored = input;
-			return { connectionId: "connection-jenkins" };
+			return { connectionId: "connection-rehoboam" };
 		};
 		const service = new ConnectionApplicationService(
 			repository,
 			{ execute: async () => ({}) },
 			undefined,
 			{
-				"jenkins-release": {
-					providerId: "jenkins-release",
-					providerReleaseId: "jenkins-release-v2",
+				rehoboam: {
+					providerId: "rehoboam",
+					providerReleaseId: "rehoboam-connection-v4",
 					validateCredential: async (accessToken) => {
 						expect(accessToken).toBe("stored-token");
 						return {
 							accessToken,
 							displayName: "Alice",
 							externalAccount: "alice",
-							grantedScopes: ["jenkins.read"],
-							providerId: "jenkins-release",
-							providerReleaseId: "jenkins-release-v2",
+							grantedScopes: [
+								"rehoboam.metadata.read",
+								"rehoboam.release.read",
+							],
+							providerId: "rehoboam",
+							providerReleaseId: "rehoboam-connection-v4",
 						};
 					},
 				},
@@ -1666,14 +1668,15 @@ describe("Connection application service", () => {
 		expect(
 			await service.upgradeProviderConnection(
 				"principal-alice",
-				"connection-jenkins",
+				"connection-rehoboam",
 			),
-		).toEqual({ connectionId: "connection-jenkins" });
+		).toEqual({ connectionId: "connection-rehoboam" });
 		expect(stored).toMatchObject({
-			expectedConnectionId: "connection-jenkins",
+			expectedConnectionId: "connection-rehoboam",
 			expectedCredentialVersionId: "credential-v1",
 			principalId: "principal-alice",
-			providerReleaseId: "jenkins-release-v2",
+			grantedScopes: ["rehoboam.metadata.read", "rehoboam.release.read"],
+			providerReleaseId: "rehoboam-connection-v4",
 		});
 	});
 

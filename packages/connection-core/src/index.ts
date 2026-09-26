@@ -1187,9 +1187,7 @@ export class ConnectionApplicationService {
 			identity.providerId !== current.providerId ||
 			identity.providerId !== connector.providerId ||
 			identity.providerReleaseId !== connector.providerReleaseId ||
-			identity.externalAccount !== current.externalAccount ||
-			JSON.stringify([...identity.grantedScopes].sort()) !==
-				JSON.stringify([...current.grantedScopes].sort())
+			identity.externalAccount !== current.externalAccount
 		) {
 			throw new ConnectionError(
 				"PROVIDER_FAILED",
@@ -2091,11 +2089,12 @@ function isSubmissionUncertain(error: unknown) {
 
 function isDeterministicProviderRejection(error: unknown) {
 	return (
-		typeof error === "object" &&
-		error !== null &&
-		((error as { providerStatus?: number }).providerStatus ?? 0) >= 400 &&
-		((error as { providerStatus?: number }).providerStatus ?? 0) < 500 &&
-		(error as { providerStatus?: number }).providerStatus !== 429
+		isProviderReauthorizationFailure(error) ||
+		(typeof error === "object" &&
+			error !== null &&
+			((error as { providerStatus?: number }).providerStatus ?? 0) >= 400 &&
+			((error as { providerStatus?: number }).providerStatus ?? 0) < 500 &&
+			(error as { providerStatus?: number }).providerStatus !== 429)
 	);
 }
 
@@ -2123,9 +2122,11 @@ function isProviderReauthorizationFailure(error: unknown) {
 	return (
 		typeof error === "object" &&
 		error !== null &&
-		(error as { providerCode?: unknown }).providerCode ===
-			"authorization_failed" &&
-		(error as { providerStatus?: number }).providerStatus === 401
+		((error as { providerCredentialInvalid?: unknown })
+			.providerCredentialInvalid === true ||
+			((error as { providerCode?: unknown }).providerCode ===
+				"authorization_failed" &&
+				(error as { providerStatus?: number }).providerStatus === 401))
 	);
 }
 

@@ -40,6 +40,7 @@ const accountBase = {
 	JENKINS_CI_TOKEN_CLIENT_SECRET: "jenkins-ci-secret",
 	JENKINS_CI_TOKEN_PASSWORD: "jenkins-ci-token-password",
 	JENKINS_CI_TOKEN_USERNAME: "jenkins-ci-token-user",
+	MANHATTAN_KONG_API_KEY: "manhattan-machine-key",
 	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 
@@ -130,6 +131,7 @@ describe("Connection runtime configuration", () => {
 			username: "jenkins-ci-token-user",
 		});
 		expect(config.rehoboamApiKey).toBe("rehoboam-machine-key");
+		expect(config.manhattanApiKey).toBe("manhattan-machine-key");
 	});
 
 	it("requires a primary GitHub egress before configuring READ fallback", () => {

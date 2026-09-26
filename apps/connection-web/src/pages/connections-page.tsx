@@ -18,7 +18,14 @@ import {
 	SlidersHorizontal,
 	X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type FormEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -55,7 +62,7 @@ export function ConnectionsPage() {
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
 		consumerId: string;
-		initialActionVersionIds: string[];
+		initialActions: Grant["actions"] | null;
 		preview: AuthorizationPreviewResponse | null;
 		reviewed: boolean;
 	} | null>(null);
@@ -66,12 +73,16 @@ export function ConnectionsPage() {
 	const [rehoboamOpen, setRehoboamOpen] = useState(false);
 	const [rehoboamPending, setRehoboamPending] = useState(false);
 	const [rehoboamError, setRehoboamError] = useState<Error | null>(null);
+	const [manhattanOpen, setManhattanOpen] = useState(false);
+	const [manhattanPending, setManhattanPending] = useState(false);
+	const [manhattanError, setManhattanError] = useState<Error | null>(null);
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
 	const [confluenceOpen, setConfluenceOpen] = useState(false);
 	const [confluencePending, setConfluencePending] = useState(false);
 	const [confluenceError, setConfluenceError] = useState<Error | null>(null);
+	const [datalegoError, setDatalegoError] = useState<Error | null>(null);
 	const [jenkinsOpen, setJenkinsOpen] = useState(false);
 	const [jenkinsProviderId, setJenkinsProviderId] = useState<
 		"jenkins-ci" | "jenkins-release"
@@ -126,6 +137,12 @@ export function ConnectionsPage() {
 		Date.parse(prepareConnect.data?.connectExpiresAt ?? "") > Date.now()
 			? accessRequestId
 			: undefined;
+	const [bulkUpgrade, setBulkUpgrade] = useState<{
+		completed: number;
+		failedConnectionIds: string[];
+		running: boolean;
+		total: number;
+	} | null>(null);
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
@@ -147,6 +164,7 @@ export function ConnectionsPage() {
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
+		if (provider === "manhattan") setManhattanOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
 		if (provider === "jenkins-ci" || provider === "jenkins-release") {
@@ -243,6 +261,28 @@ export function ConnectionsPage() {
 			setRehoboamPending(false);
 		}
 	};
+	const connectManhattan = async (credential: {
+		password: string;
+		username: string;
+	}) => {
+		setManhattanPending(true);
+		setManhattanError(null);
+		try {
+			await connectCredential({
+				providerId: "manhattan",
+				...credential,
+			});
+			setManhattanOpen(false);
+			setReconnectTargetId(null);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setManhattanError(
+				error instanceof Error ? error : new Error("Manhattan 连接失败"),
+			);
+		} finally {
+			setManhattanPending(false);
+		}
+	};
 	const connectJira = async (credential: {
 		password: string;
 		username: string;
@@ -283,6 +323,18 @@ export function ConnectionsPage() {
 			);
 		} finally {
 			setConfluencePending(false);
+		}
+	};
+	const connectDatalego = async () => {
+		setDatalegoError(null);
+		try {
+			await connectCredential({ providerId: "datalego" });
+			setReconnectTargetId(null);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setDatalegoError(
+				error instanceof Error ? error : new Error("DataLego 连接失败"),
+			);
 		}
 	};
 	const connectJenkins = async (credential: {
@@ -338,7 +390,9 @@ export function ConnectionsPage() {
 	const beginOAuth = () => oauth.begin(undefined, approvedAccessRequestId);
 	const openProviderCredential = (providerId: ConnectorProviderId) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
+		else if (providerId === "datalego") void connectDatalego();
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
+		else if (providerId === "manhattan") setManhattanOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "jenkins-ci" || providerId === "jenkins-release") {
@@ -362,6 +416,20 @@ export function ConnectionsPage() {
 	};
 
 	const data = overview.data?.overview;
+	const previousActions = useCallback(
+		(connectionId: string, consumerId: string) => {
+			const grant = data?.grants.find(
+				(entry) =>
+					entry.connectionId === connectionId &&
+					entry.consumerId === consumerId &&
+					["ACTIVE", "PAUSED_CONNECTION", "PAUSED_CREDENTIAL"].includes(
+						entry.status,
+					),
+			);
+			return grant ? grant.actions : null;
+		},
+		[data?.grants],
+	);
 	const githubConnectionHealthy = data?.connections.some(
 		(connection) =>
 			connection.providerId === "github" &&
@@ -390,16 +458,87 @@ export function ConnectionsPage() {
 		setAuthorization({
 			connectionId: candidates[0].id,
 			consumerId: data.consumers[0]?.id ?? "",
-			initialActionVersionIds: [],
+			initialActions: previousActions(
+				candidates[0].id,
+				data.consumers[0]?.id ?? "",
+			),
 			preview: null,
 			reviewed: false,
 		});
-	}, [data]);
+	}, [data, previousActions]);
 	const visibleGrants = data
 		? showHistory
 			? data.grants
 			: data.grants.filter((grant) => grant.status === "ACTIVE")
 		: [];
+	const bulkUpgradeConnectionIds = data
+		? [
+				...new Set(
+					data.upgradeTasks
+						.filter((task) => task.status === "PENDING_CONNECTION")
+						.map((task) => task.connectionId),
+				),
+			]
+		: [];
+	const runBulkUpgrade = async (connectionIds: string[]) => {
+		setUpgradeNotice(null);
+		setBulkUpgrade({
+			completed: 0,
+			failedConnectionIds: [],
+			running: true,
+			total: connectionIds.length,
+		});
+		const failedConnectionIds: string[] = [];
+		let completed = 0;
+		for (const connectionId of connectionIds) {
+			try {
+				await connectionApi.upgradeProviderConnection(connectionId);
+			} catch {
+				failedConnectionIds.push(connectionId);
+			}
+			completed += 1;
+			setBulkUpgrade({
+				completed,
+				failedConnectionIds: [...failedConnectionIds],
+				running: true,
+				total: connectionIds.length,
+			});
+		}
+		const refreshed = await connectionApi.getConnections().catch(() => null);
+		if (!refreshed) {
+			setBulkUpgrade({
+				completed,
+				failedConnectionIds: [],
+				running: false,
+				total: connectionIds.length,
+			});
+			setUpgradeNotice(
+				"批量升级请求已处理，但刷新结果失败；请刷新页面确认最新状态。",
+			);
+			return;
+		}
+		queryClient.setQueryData(["connections"], refreshed);
+		const pendingConnectionIds = new Set(
+			refreshed.overview.upgradeTasks
+				.filter((task) => task.status === "PENDING_CONNECTION")
+				.map((task) => task.connectionId),
+		);
+		const retryableFailedConnectionIds = failedConnectionIds.filter(
+			(connectionId) => pendingConnectionIds.has(connectionId),
+		);
+		const needsAuthorization = refreshed.overview.upgradeTasks.filter(
+			(task) => task.status === "PENDING_AUTHORIZATION",
+		).length;
+		setBulkUpgrade({
+			completed,
+			failedConnectionIds: retryableFailedConnectionIds,
+			running: false,
+			total: connectionIds.length,
+		});
+		setUpgradeNotice(
+			`批量处理完成：${connectionIds.length - retryableFailedConnectionIds.length} 个连接已升级，${retryableFailedConnectionIds.length} 个失败，${needsAuthorization} 条授权待确认。`,
+		);
+	};
 	return (
 		<ConsoleShell>
 			<PageHeader
@@ -441,8 +580,10 @@ export function ConnectionsPage() {
 			) : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
+			{manhattanError ? <PageError error={manhattanError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
+			{datalegoError ? <PageError error={datalegoError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
@@ -490,6 +631,25 @@ export function ConnectionsPage() {
 									<h2 id="upgrade-tasks-title">需要处理的升级</h2>
 									<p>完成连接升级后，可能还需要重新确认客户端授权。</p>
 								</div>
+								{bulkUpgradeConnectionIds.length >= 2 ||
+								bulkUpgrade?.failedConnectionIds.length ? (
+									<Button
+										disabled={bulkUpgrade?.running || upgrade.isPending}
+										onClick={() =>
+											void runBulkUpgrade(
+												bulkUpgrade?.failedConnectionIds.length
+													? bulkUpgrade.failedConnectionIds
+													: bulkUpgradeConnectionIds,
+											)
+										}
+									>
+										{bulkUpgrade?.running
+											? `正在升级 ${bulkUpgrade.completed}/${bulkUpgrade.total}`
+											: bulkUpgrade?.failedConnectionIds.length
+												? `重试 ${bulkUpgrade.failedConnectionIds.length} 个失败项`
+												: `一键升级 ${bulkUpgradeConnectionIds.length} 个连接`}
+									</Button>
+								) : null}
 							</div>
 							<div className="table-scroll">
 								<table className="management-table">
@@ -519,12 +679,18 @@ export function ConnectionsPage() {
 												</td>
 												<td className="table-action">
 													{task.status === "PENDING_CONNECTION" ? (
-														<a
-															className="button button-secondary"
-															href={`/connection/connections?connectionId=${encodeURIComponent(task.connectionId)}&provider=${encodeURIComponent(task.providerId)}&intent=reauthorize`}
+														<Button
+															disabled={
+																upgrade.isPending || bulkUpgrade?.running
+															}
+															onClick={() => upgrade.mutate(task.connectionId)}
+															variant="secondary"
 														>
-															处理升级
-														</a>
+															{upgrade.isPending &&
+															upgrade.variables === task.connectionId
+																? "正在升级"
+																: "处理升级"}
+														</Button>
 													) : task.status === "PENDING_AUTHORIZATION" ? (
 														<button
 															className="button button-secondary"
@@ -533,7 +699,10 @@ export function ConnectionsPage() {
 																setAuthorization({
 																	connectionId: task.connectionId,
 																	consumerId: task.consumerId,
-																	initialActionVersionIds: [],
+																	initialActions: previousActions(
+																		task.connectionId,
+																		task.consumerId,
+																	),
 																	preview: null,
 																	reviewed: false,
 																})
@@ -563,14 +732,10 @@ export function ConnectionsPage() {
 							setAuthorization({
 								connectionId,
 								consumerId: consumerId ?? data.consumers[0]?.id ?? "",
-								initialActionVersionIds: consumerId
-									? (data.grants.find(
-											(grant) =>
-												grant.connectionId === connectionId &&
-												grant.consumerId === consumerId &&
-												grant.status === "ACTIVE",
-										)?.actionVersionIds ?? [])
-									: [],
+								initialActions: previousActions(
+									connectionId,
+									consumerId ?? data.consumers[0]?.id ?? "",
+								),
 								preview: null,
 								reviewed: false,
 							})
@@ -661,7 +826,7 @@ export function ConnectionsPage() {
 								key={authorization.preview.preview.previewId}
 								value={authorization.preview}
 								busy={confirm.isPending || preview.isPending}
-								initialActionVersionIds={authorization.initialActionVersionIds}
+								initialActions={authorization.initialActions}
 								reviewed={authorization.reviewed}
 								onReview={(actionVersionIds) =>
 									preview.mutate({
@@ -689,6 +854,10 @@ export function ConnectionsPage() {
 										setAuthorization({
 											...authorization,
 											consumerId: event.target.value,
+											initialActions: previousActions(
+												authorization.connectionId,
+												event.target.value,
+											),
 										})
 									}
 								>
@@ -788,6 +957,70 @@ export function ConnectionsPage() {
 			</Dialog>
 
 			<Dialog
+				open={manhattanOpen}
+				onOpenChange={(open) => {
+					setManhattanOpen(open);
+					if (!open) {
+						setManhattanError(null);
+						setReconnectTargetId(null);
+					}
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接 Manhattan</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const form = new FormData(event.currentTarget);
+							const username = form.get("username");
+							const password = form.get("password");
+							if (typeof username === "string" && typeof password === "string")
+								void connectManhattan({ password, username });
+						}}
+					>
+						<label htmlFor="manhattan-username">公司账号</label>
+						<input
+							autoComplete="username"
+							defaultValue={overview.data?.account.email ?? ""}
+							id="manhattan-username"
+							maxLength={256}
+							name="username"
+							required
+							type="text"
+						/>
+						<label htmlFor="manhattan-password">公司密码</label>
+						<input
+							autoComplete="current-password"
+							id="manhattan-password"
+							maxLength={1024}
+							name="password"
+							required
+							type="password"
+						/>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={manhattanPending}>
+								<KeyRound aria-hidden="true" size={17} />
+								{manhattanPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+
+			<Dialog
 				open={rehoboamOpen}
 				onOpenChange={(open) => {
 					setRehoboamOpen(open);
@@ -822,7 +1055,7 @@ export function ConnectionsPage() {
 								void connectRehoboam(accessToken);
 						}}
 					>
-						<label htmlFor="rehoboam-access-token">Rehoboam 访问令牌</label>
+						<label htmlFor="rehoboam-access-token">Rehoboam PAT</label>
 						<input
 							autoComplete="off"
 							id="rehoboam-access-token"
@@ -1081,6 +1314,17 @@ export function ConnectionsPage() {
 	);
 }
 
+function actionVersions(connection: Connection) {
+	return [
+		...new Set(
+			connection.actionVersionIds.flatMap((id) => {
+				const version = id.match(/@(v\d+)$/)?.[1];
+				return version ? [version] : [];
+			}),
+		),
+	].sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
+}
+
 function ConnectorManagementWorkspace(props: {
 	accessRequests: AccessRequestsResponse["requests"];
 	accessRequestsError: unknown;
@@ -1105,16 +1349,18 @@ function ConnectorManagementWorkspace(props: {
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
+	const activeConnections = props.connections.filter(
+		(connection) => connection.status === "ACTIVE",
+	);
 	const requestedProvider = new URLSearchParams(window.location.search).get(
 		"provider",
 	);
 	const initialProvider =
 		connectorDefinitions.find((item) => item.providerId === requestedProvider)
 			?.providerId ??
-		props.connections.find((connection) => connection.providerId === "github")
+		activeConnections.find((connection) => connection.providerId === "github")
 			?.providerId ??
-		props.connections.find((connection) => connection.status === "ACTIVE")
-			?.providerId ??
+		activeConnections[0]?.providerId ??
 		connectorDefinitions[0]?.providerId ??
 		"github";
 	const [providerId, setProviderId] = useState(initialProvider);
@@ -1138,9 +1384,17 @@ function ConnectorManagementWorkspace(props: {
 				"APPROVED_PENDING_CONNECTION",
 			].includes(item.state),
 	);
-	const accounts = props.connections.filter(
-		(connection) => connection.providerId === connector?.providerId,
-	);
+	const accounts = props.connections
+		.filter(
+			(connection) =>
+				connection.status === "ACTIVE" ||
+				(connection.status === "DISCONNECTED" &&
+					connection.accessAuthorization?.state === "DISCONNECTED" &&
+					(!connection.accessAuthorization.validUntil ||
+						Date.parse(connection.accessAuthorization.validUntil) >
+							Date.now())),
+		)
+		.filter((connection) => connection.providerId === connector?.providerId);
 	const selected =
 		accounts.find((connection) => connection.id === connectionId) ??
 		accounts[0];
@@ -1173,10 +1427,8 @@ function ConnectorManagementWorkspace(props: {
 				</label>
 				<strong className="connection-list-label">连接器</strong>
 				{visibleConnectors.map((item) => {
-					const count = props.connections.filter(
-						(connection) =>
-							connection.providerId === item.providerId &&
-							connection.status === "ACTIVE",
+					const count = activeConnections.filter(
+						(connection) => connection.providerId === item.providerId,
 					).length;
 					const ItemIcon = item.icon;
 					return (
@@ -1262,33 +1514,39 @@ function ConnectorManagementWorkspace(props: {
 									<p>{accounts.length} 个账号</p>
 								</div>
 							</div>
-							{accounts.map((account) => (
-								<button
-									className={account.id === selected.id ? "active" : ""}
-									key={account.id}
-									onClick={() => setConnectionId(account.id)}
-									type="button"
-								>
-									<span className="connection-account-avatar">
-										{account.displayName.slice(0, 1).toUpperCase()}
-									</span>
-									<span>
-										<b>{account.displayName}</b>
-										<small>{account.externalAccount}</small>
-										<small>
-											{
-												props.grants.filter(
-													(grant) =>
-														grant.connectionId === account.id &&
-														grant.status === "ACTIVE",
-												).length
-											}{" "}
-											个客户端
-										</small>
-									</span>
-									<ChevronRight aria-hidden="true" size={16} />
-								</button>
-							))}
+							{accounts.map((account) => {
+								const versions = actionVersions(account);
+								return (
+									<button
+										className={account.id === selected.id ? "active" : ""}
+										key={account.id}
+										onClick={() => setConnectionId(account.id)}
+										type="button"
+									>
+										<span className="connection-account-avatar">
+											{account.displayName.slice(0, 1).toUpperCase()}
+										</span>
+										<span>
+											<b>{account.displayName}</b>
+											<small>{account.externalAccount}</small>
+											{versions.length ? (
+												<small>授权版本 {versions.join(", ")}</small>
+											) : null}
+											<small>
+												{
+													props.grants.filter(
+														(grant) =>
+															grant.connectionId === account.id &&
+															grant.status === "ACTIVE",
+													).length
+												}{" "}
+												个客户端
+											</small>
+										</span>
+										<ChevronRight aria-hidden="true" size={16} />
+									</button>
+								);
+							})}
 						</section>
 						<section className="connection-grant-list">
 							<div className="connection-selected-account">
@@ -1494,20 +1752,26 @@ function ConnectorManagementWorkspace(props: {
 
 export function PreviewContent(props: {
 	busy: boolean;
-	initialActionVersionIds?: string[];
+	initialActions?: Grant["actions"] | null;
 	onConfirm: () => void;
 	onReview?: (actionVersionIds: string[]) => void;
 	reviewed?: boolean;
 	value: AuthorizationPreviewResponse;
 }) {
-	const availableActionIds = new Set(
-		props.value.preview.actions.map((action) => action.id),
-	);
-	const defaultSelection = props.initialActionVersionIds?.length
-		? props.initialActionVersionIds.filter((id) => availableActionIds.has(id))
-		: props.value.preview.actions
-				.filter((action) => action.effect === "READ")
-				.map((action) => action.id);
+	const defaultSelection =
+		props.initialActions !== undefined && props.initialActions !== null
+			? props.value.preview.actions
+					.filter((action) =>
+						props.initialActions?.some(
+							(previous) =>
+								previous.name === action.name &&
+								previous.effect === action.effect,
+						),
+					)
+					.map((action) => action.id)
+			: props.value.preview.actions
+					.filter((action) => action.effect === "READ")
+					.map((action) => action.id);
 	const [selected, setSelected] = useState(() => new Set(defaultSelection));
 	const [query, setQuery] = useState("");
 	const [effect, setEffect] = useState<"ALL" | "READ" | "WRITE">("ALL");

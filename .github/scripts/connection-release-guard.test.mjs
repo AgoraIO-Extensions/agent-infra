@@ -11,6 +11,8 @@ import {
 	compareApprovalFence,
 	compareCatalogs,
 	parseCatalogSource,
+	providerSources,
+	readCatalog,
 } from "./connection-release-guard.mjs";
 
 const approvalJournal = { entries: [{ tag: "0032_connection_access_approval" }] };
@@ -86,6 +88,20 @@ test("prevents approval protocol removal and downgrade", () => {
 	assert.throws(() => compareApprovalFence(null, baseline, { entries: [] }), /migration journal/);
 });
 
+test("tracks the Rehoboam provider catalog", () => {
+	assert.equal(
+		providerSources.rehoboam,
+		"packages/openconnector-adapter/src/rehoboam.ts",
+	);
+});
+
+test("tracks the Manhattan provider catalog", () => {
+	assert.equal(
+		providerSources.manhattan,
+		"packages/openconnector-adapter/src/manhattan.ts",
+	);
+});
+
 test("parses action and provider release versions", () => {
 	assert.deepEqual(
 		parseCatalogSource('const id = "bitbucket.get@v6"; const release = "connection-v6";'),
@@ -108,6 +124,63 @@ test("accepts monotonic catalog versions", () => {
 	assert.equal(
 		compareCatalogs({ jira: { actions: { "jira.get": 8 }, actionVersion: 8, providerReleaseVersion: 8 } }, { jira: { actions: { "jira.get": 9 }, actionVersion: 9, providerReleaseVersion: 9 } }).length,
 		1,
+	);
+});
+
+test("reports a newly added provider from a zero baseline", () => {
+	assert.deepEqual(
+		compareCatalogs({}, {
+			manhattan: {
+				actions: { "manhattan.get_current_user": 1 },
+				actionVersion: 1,
+				providerReleaseVersion: 1,
+			},
+		}),
+		[
+			{
+				provider: "manhattan",
+				before: {
+					actions: {},
+					actionVersion: 0,
+					providerReleaseVersion: null,
+				},
+				after: {
+					actions: { "manhattan.get_current_user": 1 },
+					actionVersion: 1,
+					providerReleaseVersion: 1,
+				},
+			},
+		],
+	);
+});
+
+test("fails closed when the baseline ref is invalid", () => {
+	assert.throws(
+		() => readCatalog("definitely-not-a-valid-ref"),
+		/Not a valid object name|unknown revision|bad object/i,
+	);
+});
+
+test("rejects a DataLego catalog downgrade", () => {
+	assert.throws(
+		() =>
+			compareCatalogs(
+				{
+					datalego: {
+						actions: { "datalego.get_current_user": 3 },
+						actionVersion: 3,
+						providerReleaseVersion: 3,
+					},
+				},
+				{
+					datalego: {
+						actions: { "datalego.get_current_user": 2 },
+						actionVersion: 2,
+						providerReleaseVersion: 2,
+					},
+				},
+			),
+		/Action version downgrade: datalego\.get_current_user/,
 	);
 });
 

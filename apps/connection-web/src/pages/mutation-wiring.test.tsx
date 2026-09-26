@@ -3,6 +3,7 @@
 import type {
 	AccessOptionsResponse,
 	AccessRequestsResponse,
+	ProviderUpgradeTask,
 } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -138,6 +139,16 @@ const api = vi.hoisted(() => ({
 					requiresReconnect: true,
 					status: "ACTIVE",
 				},
+				{
+					actionVersionIds: ["datalego.get_current_user@v1"],
+					displayName: "Disconnected DataLego",
+					externalAccount: "old@example.invalid",
+					id: "connection-datalego-old",
+					ownerType: "PERSONAL" as const,
+					providerId: "datalego",
+					requiresReconnect: false,
+					status: "DISCONNECTED",
+				},
 			],
 			consumers: [{ id: "consumer-codex", name: "Codex" }],
 			grants: [
@@ -145,7 +156,7 @@ const api = vi.hoisted(() => ({
 					actionVersionIds: ["github.get_repository@v2"],
 					actions: [
 						{
-							effect: "READ" as const,
+							effect: "READ" as "READ" | "WRITE",
 							id: "github.get_repository@v2",
 							name: "github.get_repository",
 						},
@@ -160,6 +171,7 @@ const api = vi.hoisted(() => ({
 					status: "ACTIVE",
 				},
 			],
+			upgradeTasks: [] as ProviderUpgradeTask[],
 		},
 	})),
 	getSharedConnections: vi.fn(async () => ({
@@ -473,6 +485,166 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
 	});
 
+	it("批量升级按 Connection 去重并隔离失败", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha-codex",
+			},
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-rehoboam",
+				consumerName: "RehoboamAI",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha-rehoboam",
+			},
+			{
+				campaignId: "campaign-2",
+				connectionId: "connection-beta",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-beta-codex",
+			},
+		];
+		const refreshed = structuredClone(initial);
+		refreshed.overview.upgradeTasks = [
+			{
+				...initial.overview.upgradeTasks[0],
+				status: "PENDING_AUTHORIZATION",
+			},
+			initial.overview.upgradeTasks[2],
+		];
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockResolvedValueOnce(refreshed);
+		api.upgradeProviderConnection
+			.mockResolvedValueOnce({ connectionId: "connection-alpha" })
+			.mockRejectedValueOnce(new Error("upgrade failed"));
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "一键升级 2 个连接",
+			}),
+		);
+
+		await waitFor(() =>
+			expect(api.upgradeProviderConnection).toHaveBeenCalledTimes(2),
+		);
+		expect(calls(api.upgradeProviderConnection).map((call) => call[0])).toEqual(
+			["connection-alpha", "connection-beta"],
+		);
+		expect(
+			await screen.findByText(
+				"批量处理完成：1 个连接已升级，1 个失败，1 条授权待确认。",
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "重试 1 个失败项" }),
+		).toBeTruthy();
+	});
+
+	it("升级任务复用服务端保存的凭证", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-rehoboam",
+				connectionId: "connection-rehoboam",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-rehoboam",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(initial);
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "处理升级" }));
+
+		await waitFor(() =>
+			expect(calls(api.upgradeProviderConnection)[0]?.[0]).toBe(
+				"connection-rehoboam",
+			),
+		);
+		expect(screen.queryByRole("heading", { name: "连接 Rehoboam" })).toBeNull();
+	});
+
+	it("批量升级刷新失败后解除进行中状态", async () => {
+		const initial = await api.getConnections();
+		initial.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-1",
+				connectionId: "connection-alpha",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "jenkins-ci",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "jenkins-ci-connection-v8",
+				taskId: "task-alpha",
+			},
+			{
+				campaignId: "campaign-2",
+				connectionId: "connection-beta",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "rehoboam",
+				reason: "Provider upgraded",
+				status: "PENDING_CONNECTION",
+				targetProviderReleaseId: "rehoboam-connection-v4",
+				taskId: "task-beta",
+			},
+		];
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockRejectedValueOnce(new Error("refresh failed"));
+
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "一键升级 2 个连接",
+			}),
+		);
+
+		expect(
+			await screen.findByText(
+				"批量升级请求已处理，但刷新结果失败；请刷新页面确认最新状态。",
+			),
+		).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "一键升级 2 个连接",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
 	it("根据 MCP 恢复链接直接打开目标 Provider 的连接界面", async () => {
 		window.history.replaceState(
 			{},
@@ -744,7 +916,10 @@ describe("Connection 管理 mutation wiring", () => {
 		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "查看授权差异" });
-		expect(screen.getByText("已选择 1 / 共 2 项")).toBeTruthy();
+		expect(screen.getByText("已选择 0 / 共 2 项")).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: /github.get_pull_request/ }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
 		await screen.findByRole("button", { name: "确认授权" });
 		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
@@ -761,6 +936,54 @@ describe("Connection 管理 mutation wiring", () => {
 			idempotencyKey: "confirmation-idempotency-key",
 			previewId: "preview-id",
 		});
+	});
+
+	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("测试需要旧 Grant");
+		grant.status = "PAUSED_CREDENTIAL";
+		grant.actionVersionIds = ["github.create_pull_request@v5"];
+		grant.actions = [
+			{
+				id: "github.create_pull_request@v5",
+				name: "github.create_pull_request",
+				effect: "WRITE",
+			},
+		];
+		overview.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-upgrade",
+				connectionId: "connection-personal",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "github",
+				reason: "Provider upgraded",
+				status: "PENDING_AUTHORIZATION",
+				targetProviderReleaseId: "github-v6",
+				taskId: "task-upgrade",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "确认授权" }));
+		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
+		await screen.findByText("已选择 1 / 共 2 项");
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.create_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(true);
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.get_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(false);
 	});
 
 	it("GitHub OAuth 携带批准的申请 ID", async () => {
@@ -836,8 +1059,8 @@ describe("Connection 管理 mutation wiring", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Rehoboam 未连接" }));
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		fireEvent.change(screen.getByLabelText("Rehoboam 访问令牌"), {
-			target: { value: "rehoboam-personal-token" },
+		fireEvent.change(screen.getByLabelText("Rehoboam PAT"), {
+			target: { value: "rehoboam-personal-pat" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		await waitFor(() =>
@@ -845,9 +1068,73 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
 			accessRequestId: "request-approved",
-			accessToken: "rehoboam-personal-token",
+			accessToken: "rehoboam-personal-pat",
 			providerId: "rehoboam",
 		});
+	});
+
+	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
+		approvedFor("datalego");
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "DataLego 未连接" });
+
+		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			providerId: "datalego",
+			accessRequestId: "request-approved",
+		});
+	});
+
+	it.each(["datalego", "manhattan"])(
+		"%s 恢复链接没有审批时不提交凭证",
+		async (providerId) => {
+			window.history.replaceState(
+				{},
+				"",
+				`/connection/connections?provider=${providerId}&intent=connect`,
+			);
+			renderPage(<ConnectionsPage />);
+			await screen.findByRole("button", { name: "查看连接申请" });
+			expect(api.connectProviderCredential).not.toHaveBeenCalled();
+			expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
+			expect(screen.queryByLabelText("公司密码")).toBeNull();
+		},
+	);
+
+	it("Manhattan 凭证提交携带批准的申请 ID", async () => {
+		approvedFor("manhattan");
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "Manhattan 未连接" });
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		fireEvent.change(screen.getByLabelText("公司密码"), {
+			target: { value: "fixture-manhattan-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			providerId: "manhattan",
+			accessRequestId: "request-approved",
+			username: "guoxianzhe@agora.io",
+			password: "fixture-manhattan-password",
+		});
+	});
+
+	it("断开的 Connection 不显示在已连接账号列表", async () => {
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("heading", { name: "客户端授权" });
+
+		fireEvent.click(screen.getByRole("button", { name: "DataLego 未连接" }));
+		expect(
+			screen.getByRole("heading", { name: "还没有 DataLego Connection" }),
+		).toBeTruthy();
+		expect(screen.queryByText("Disconnected DataLego")).toBeNull();
+		expect(screen.queryByText("old@example.invalid")).toBeNull();
 	});
 
 	it("连接页调用 Jenkins CI credential API", async () => {
@@ -936,7 +1223,11 @@ describe("Connection 管理 mutation wiring", () => {
 	it("同一连接器下切换账号时只显示该账号的客户端授权", async () => {
 		const overview = await api.getConnections();
 		overview.overview.connections.push({
-			actionVersionIds: ["github.get_repository@v2"],
+			actionVersionIds: [
+				"github.get_repository@v8",
+				"github.get_pull_request@v7",
+				"github.list_repositories@v8",
+			],
 			displayName: "AgoraIO-Extensions",
 			externalAccount: "agora-release-bot",
 			id: "connection-github-shared",
@@ -977,6 +1268,7 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBeTruthy();
 		expect(screen.getByText("RehoboamAI")).toBeTruthy();
 		expect(screen.queryByText("Codex")).toBeNull();
+		expect(screen.getByText("授权版本 v7, v8")).toBeTruthy();
 	});
 
 	it("Token 页面调用签发和撤销 API", async () => {

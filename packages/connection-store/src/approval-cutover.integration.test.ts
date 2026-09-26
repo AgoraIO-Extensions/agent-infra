@@ -11,6 +11,9 @@ import { assertIsolatedTestDatabaseUrl } from "./test-database";
 
 const databaseUrl = process.env.CONNECTION_CUTOVER_TEST_DATABASE_URL;
 assertIsolatedTestDatabaseUrl(databaseUrl, process.env.DATABASE_URL);
+if (process.env.CI && !databaseUrl) {
+	throw new Error("CONNECTION_CUTOVER_TEST_DATABASE_URL is required in CI");
+}
 const integrationTest = databaseUrl ? it : it.skip;
 
 describe("personal Connection approval cutover", () => {
