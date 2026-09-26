@@ -525,6 +525,15 @@ export class PostgresConnectionApprovalRepository {
 		capabilityProfileId: string;
 	}) {
 		await this.sql.begin(async (sql) => {
+			const [admin] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!admin)
+				throw new ConnectionError("FORBIDDEN", "Administrator required");
 			const [row] = await sql<
 				{
 					id: string;
@@ -635,6 +644,15 @@ export class PostgresConnectionApprovalRepository {
 		disclaimerVersionId: string;
 	}) {
 		await this.sql.begin(async (sql) => {
+			const [admin] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!admin)
+				throw new ConnectionError("FORBIDDEN", "Administrator required");
 			const rows = await sql`
 				UPDATE connection_disclaimer_versions
 				SET status = 'PUBLISHED', published_at = now(), revision = revision + 1

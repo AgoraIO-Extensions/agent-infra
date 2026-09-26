@@ -536,6 +536,18 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					name: "Approval read",
 					providerReleaseId: releaseId,
 				});
+				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now() WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+				await expect(
+					repository.publishCapabilityProfile({
+						actorPrincipalId: adminId,
+						capabilityProfileId: profileId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const [unpublishedProfile] = await sql<
+					{ status: string }[]
+				>`SELECT status FROM connection_capability_profiles WHERE id = ${profileId}`;
+				expect(unpublishedProfile?.status).toBe("DRAFT");
+				await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
 				await repository.publishCapabilityProfile({
 					actorPrincipalId: adminId,
 					capabilityProfileId: profileId,
@@ -551,6 +563,18 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					materialChange: false,
 					ownerMetadata: { owner: "integration" },
 				});
+				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now() WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+				await expect(
+					repository.publishDisclaimer({
+						actorPrincipalId: adminId,
+						disclaimerVersionId: disclaimerId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				const [unpublishedDisclaimer] = await sql<
+					{ status: string }[]
+				>`SELECT status FROM connection_disclaimer_versions WHERE id = ${disclaimerId}`;
+				expect(unpublishedDisclaimer?.status).toBe("DRAFT");
+				await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
 				await repository.publishDisclaimer({
 					actorPrincipalId: adminId,
 					disclaimerVersionId: disclaimerId,
