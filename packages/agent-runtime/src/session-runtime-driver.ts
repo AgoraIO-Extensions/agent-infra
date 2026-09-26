@@ -22,6 +22,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -51,6 +52,9 @@ export interface SessionRuntimeDriverOptions {
 	readonly retireSession: (directory: string) => Promise<void>;
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
 	readonly modelLifecycleAtTransport?: boolean;
+	readonly authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 }
 export interface NativeSessionOptions {
 	directory: string;
@@ -74,6 +78,7 @@ export interface NativeSessionOptions {
 		readonly name: string;
 		/** False means the native permission boundary rejected the request. */
 		readonly permitted?: boolean;
+		readonly executionBoundary?: true;
 	}) => Promise<void>;
 	update: (event?: RuntimeEventInput) => Promise<void>;
 }
@@ -661,6 +666,36 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (!binding) unavailable();
 		return this.file(binding);
 	}
+	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
+		if (this.closed || action.kind !== "tool" || action.purpose) unavailable();
+		const file = await this.forReference(action.nativeSessionRef);
+		const state = await file.readCommitted();
+		const turn = state.turns.find(
+			(entry) => entry.executionId === action.executionId,
+		);
+		const record = state.operations.find(
+			(entry) => entry.key === turn?.operationKey,
+		)?.record;
+		const fact = turn?.events
+			.filter(
+				(event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.operationRef === action.operationRef &&
+					event.payload.attemptRef === action.attemptRef,
+			)
+			.at(-1);
+		if (
+			this.closed ||
+			state.cancelled ||
+			turn?.status !== "running" ||
+			!record ||
+			record.operationId !== action.runtimeOperationId ||
+			fact?.type !== "operation" ||
+			fact.payload.phase !== "intent"
+		)
+			unavailable();
+	}
 	private exclusive<T>(ref: string, action: () => Promise<T>): Promise<T> {
 		const task = (this.locks.get(ref) ?? Promise.resolve())
 			.catch(() => {})
@@ -1221,15 +1256,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			readonly toolCallId: string;
 			readonly name: string;
 			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
 		},
 	) {
 		const ref = file.read().binding.ref;
-		await this.toolExclusive(ref, async () => {
+		const created = await this.toolExclusive(ref, async () => {
 			const turn = file
 				.read()
 				.turns.find((entry) => entry.executionId === executionId);
 			if (!turn || terminal(turn.status)) unavailable();
 			const identity = turn.toolOperations?.[value.toolCallId];
+			// A repeated execute may already have caused effects even if its native
+			// terminal was lost. It must never receive a second business permit.
+			if (value.executionBoundary && identity) unavailable();
 			const previousEvent = identity
 				? [...turn.events]
 						.reverse()
@@ -1284,7 +1323,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					phase: "failed",
 					failureCode: "authorization_denied",
 				});
+			return created;
 		});
+		if (value.executionBoundary) {
+			if (!created || !this.options.authorizeExternalAction) unavailable();
+			const state = file.read();
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			const record = state.operations.find(
+				(entry) => entry.key === turn?.operationKey,
+			)?.record;
+			if (!record) unavailable();
+			const action = {
+				nativeSessionRef: ref,
+				executionId,
+				runtimeOperationId: record.operationId,
+				operationRef: created.operationRef,
+				attemptRef: created.attemptRef,
+				kind: "tool" as const,
+			};
+			// Host authorization may read the same durable file. Never hold its
+			// mutation/tool queue while waiting for the current business authority.
+			await this.validateExternalAction(action);
+			// The Host rechecks current authority after its Driver inspection. No
+			// queued durable read may separate that final gate from this permit.
+			await this.options.authorizeExternalAction(action);
+		}
 	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,

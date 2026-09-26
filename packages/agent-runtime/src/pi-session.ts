@@ -161,17 +161,12 @@ export async function openPiSession(
 							payload: { delta: delta.delta },
 						});
 					if (
-						["tool_execution_start", "tool_execution_end"].includes(
-							frame.type as string,
-						) &&
+						// Pi emits start before preparation/permission, including calls
+						// that never execute. It cannot establish an actual startedAt.
+						frame.type === "tool_execution_end" &&
 						typeof frame.toolCallId === "string"
 					) {
-						const phase =
-							frame.type === "tool_execution_start"
-								? "started"
-								: frame.isError === true
-									? "failed"
-									: "completed";
+						const phase = frame.isError === true ? "failed" : "completed";
 						if (phases.get(frame.toolCallId) !== phase) {
 							phases.set(frame.toolCallId, phase);
 							await options.update({

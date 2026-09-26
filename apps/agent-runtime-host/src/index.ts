@@ -250,6 +250,15 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								authorizeExternalAction: async (action) => {
+									if (!assembledHost)
+										throw new RuntimeHostError(
+											"RUNTIME_GRANT_INVALID",
+											"Runtime authorization is not ready",
+											403,
+										);
+									await assembledHost.authorizeExternalAction(action);
+								},
 								path: join(dataDirectory, "pi-driver"),
 							})
 						: await ClaudeRuntimeDriver.open({

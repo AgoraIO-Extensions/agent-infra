@@ -2,6 +2,7 @@ import type {
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
@@ -14,6 +15,9 @@ import {
 } from "./session-runtime-driver.js";
 
 export interface PiRuntimeDriverOptions {
+	authorizeExternalAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<void>;
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;

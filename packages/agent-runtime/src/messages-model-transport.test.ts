@@ -10,6 +10,7 @@ it("admits Pi tool execution only after the token-protected intent callback", as
 		model: "claude-opus-5",
 		effort: "high",
 		admit: async () => {},
+		client: "pi",
 		toolRequestStarted: async (tool) => {
 			requests.push(tool);
 		},
@@ -31,7 +32,9 @@ it("admits Pi tool execution only after the token-protected intent callback", as
 			body,
 		});
 		expect(admitted.status).toBe(204);
-		expect(requests).toEqual([{ toolCallId: "tool-1", name: "read" }]);
+		expect(requests).toEqual([
+			{ toolCallId: "tool-1", name: "read", executionBoundary: true },
+		]);
 	} finally {
 		await transport.close();
 	}

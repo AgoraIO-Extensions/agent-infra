@@ -11,7 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createPiWorkspaceTools } from "./pi-policy.js";
 
 it.each(["read", "write", "edit"] as const)(
@@ -25,7 +25,7 @@ it.each(["read", "write", "edit"] as const)(
 		const foreign = join(root, "foreign.txt");
 		const canary = "prefix SYNTHETIC_FOREIGN_CANARY";
 		await writeFile(foreign, canary);
-		const tool = createPiWorkspaceTools(workspace)[name];
+		const tool = createPiWorkspaceTools(workspace, async () => {})[name];
 		const execute = (path: string) =>
 			tool.execute(
 				"synthetic-tool-call",
@@ -64,6 +64,53 @@ it.each(["read", "write", "edit"] as const)(
 			await expect(execute("owner.txt")).resolves.toHaveProperty("content");
 		} finally {
 			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+it.each(["read", "write", "edit"] as const)(
+	"requires a fresh durable permit in the real %s execute boundary without a tool_call event",
+	async (name) => {
+		const workspace = await realpath(
+			await mkdtemp(join(tmpdir(), "pi-permit-")),
+		);
+		const file = join(workspace, "owner.txt");
+		let allowed = false;
+		const permit = vi.fn(async () => {
+			if (!allowed) throw new Error("SYNTHETIC_INTENT_UNAVAILABLE");
+		});
+		const tool = createPiWorkspaceTools(workspace, permit)[name];
+		const execute = () =>
+			tool.execute(
+				"same-native-call",
+				{
+					path: "owner.txt",
+					content: "replacement",
+					edits: [{ oldText: "prefix", newText: "changed" }],
+				},
+				undefined,
+				undefined,
+				{ cwd: workspace } as ExtensionContext,
+			);
+		try {
+			await writeFile(file, "prefix SYNTHETIC_OWNER_CANARY");
+			await expect(execute()).rejects.toThrow();
+			expect(await readFile(file, "utf8")).toBe(
+				"prefix SYNTHETIC_OWNER_CANARY",
+			);
+			allowed = true;
+			await expect(execute()).resolves.toHaveProperty("content");
+			await writeFile(file, "prefix SYNTHETIC_OWNER_CANARY");
+			allowed = false;
+			await expect(execute()).rejects.toThrow();
+			expect(await readFile(file, "utf8")).toBe(
+				"prefix SYNTHETIC_OWNER_CANARY",
+			);
+			expect(permit.mock.calls).toEqual(
+				Array.from({ length: 3 }, () => ["same-native-call", name]),
+			);
+		} finally {
+			await rm(workspace, { recursive: true, force: true });
 		}
 	},
 );

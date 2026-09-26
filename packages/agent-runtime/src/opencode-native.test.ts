@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RuntimeEvent } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import {
 	type OpenCodeRuntimeOptions,
 	openOpenCodeRuntime,
@@ -293,6 +294,17 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 				if (!address || typeof address === "string") throw new Error();
 				const driver = await openNative({
 					path: join(path, "driver"),
+					// This path-isolation fixture explicitly authorizes durable Pi tool
+					// attempts; real Host Grant negatives remain in pi-native.test.ts.
+					...(runtime === "Pi"
+						? {
+								authorizeExternalAction: async (
+									action: RuntimeExternalActionAuthorization,
+								): Promise<void> => {
+									await driver.validateExternalAction(action);
+								},
+							}
+						: {}),
 					executable: process.env.OPENCODE_EXECUTABLE ?? "",
 					configVersion: "configuration-a",
 					defaultModelOptionId: "primary",

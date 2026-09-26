@@ -102,7 +102,7 @@ it.each([false, true])(
 				events.flatMap((event) =>
 					event.type === "tool" ? [event.payload.phase] : [],
 				),
-			).toEqual(["started", "completed"]);
+			).toEqual(["completed"]);
 			expect(
 				events
 					.filter((event) => event.type === "text")

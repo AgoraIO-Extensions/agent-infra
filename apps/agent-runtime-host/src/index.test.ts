@@ -16,6 +16,7 @@ import {
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
+	openPiRuntime: vi.fn(),
 	assertRuntimeProcessProtection: vi.fn(),
 }));
 
@@ -36,6 +37,10 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
 		verifyCodexPilotInstallation:
 			runtimeAssemblyMocks.verifyCodexPilotInstallation,
+		openPiRuntime: (...args: Parameters<typeof actual.openPiRuntime>) => {
+			runtimeAssemblyMocks.openPiRuntime(...args);
+			return actual.openPiRuntime(...args);
+		},
 	};
 });
 
@@ -72,6 +77,7 @@ afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.verifyCodexPilotInstallation.mockReset();
+	runtimeAssemblyMocks.openPiRuntime.mockReset();
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -309,6 +315,20 @@ describe("RuntimeHost environment assembly", () => {
 				expect(
 					runtimeAssemblyMocks.openCodexRuntimeDriver,
 				).not.toHaveBeenCalled();
+				if (driver === "pi") {
+					const options = runtimeAssemblyMocks.openPiRuntime.mock.calls[0]?.[0];
+					expect(options?.authorizeExternalAction).toBeTypeOf("function");
+					await expect(
+						options.authorizeExternalAction({
+							nativeSessionRef: "unbound",
+							executionId: "unbound",
+							runtimeOperationId: "unbound",
+							operationRef: "unbound",
+							attemptRef: "unbound",
+							kind: "tool",
+						}),
+					).rejects.toThrow();
+				}
 			} finally {
 				await runtime.close();
 			}

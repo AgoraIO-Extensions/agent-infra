@@ -17,6 +17,8 @@ export interface RuntimeMessagesTransportOptions {
 	readonly toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
+		/** Pi calls this endpoint from each real ToolDefinition.execute invocation. */
+		readonly executionBoundary?: true;
 	}) => Promise<void>;
 	readonly fetch?: typeof fetch;
 	readonly receipt?: (
@@ -105,6 +107,9 @@ export async function openRuntimeMessagesTransport(
 					await options.toolRequestStarted({
 						toolCallId: tool.toolCallId,
 						name: tool.name,
+						...(options.client === "pi"
+							? { executionBoundary: true as const }
+							: {}),
 					});
 					response.writeHead(204).end();
 				} catch {
