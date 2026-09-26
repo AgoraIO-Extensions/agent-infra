@@ -4,7 +4,7 @@ run-name: >-
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, review_requested]
+    types: [opened, reopened, ready_for_review, review_requested, edited]
 
 permissions: {}
 
@@ -86,7 +86,7 @@ jobs:
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
           github_action_config.pr_actions: >-
-            ["opened", "reopened", "ready_for_review", "review_requested"]
+            ["opened", "reopened", "ready_for_review", "review_requested", "edited"]
 
   publish:
     name: PR-Agent Publish Review
@@ -161,7 +161,7 @@ jobs:
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"
           github_action_config.pr_actions: >-
-            ["opened", "reopened", "ready_for_review", "review_requested"]
+            ["opened", "reopened", "ready_for_review", "review_requested", "edited"]
 
   coverage:
     name: Publish Automated Review Coverage
