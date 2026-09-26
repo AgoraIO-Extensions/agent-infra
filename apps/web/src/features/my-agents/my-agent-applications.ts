@@ -75,13 +75,14 @@ export function hasCreatedAgent(
 	);
 }
 
-function requestError(retryable: boolean) {
+function requestError(input: { retryable?: boolean; code?: string } = {}) {
 	return Object.assign(new Error("My Agent data is temporarily unavailable"), {
-		retryable,
+		code: input.code,
+		retryable: input.retryable !== false,
 	});
 }
 
-const retryableError = () => requestError(true);
+const retryableError = () => requestError();
 const maximumMyAgentApplicationPages = 100;
 
 function unavailable(error: { retryable?: boolean } | undefined) {
@@ -159,7 +160,12 @@ export async function createMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
 
 	return result.data;
 }
@@ -184,8 +190,14 @@ export async function updateMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
-	if (result.data.applicationId !== applicationId) throw requestError(false);
+	if (!result.data) {
+		throw requestError({
+			code: result.error?.code,
+			retryable: result.error?.retryable,
+		});
+	}
+	if (result.data.applicationId !== applicationId)
+		throw requestError({ retryable: false });
 
 	return result.data;
 }
@@ -202,7 +214,7 @@ export async function withdrawMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data) throw requestError(result.error ?? {});
 
 	return result.data;
 }

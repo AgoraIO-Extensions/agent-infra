@@ -16,7 +16,10 @@ import {
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
 
-type RequestError = Error & { readonly retryable?: boolean };
+type RequestError = Error & {
+	readonly code?: string;
+	readonly retryable?: boolean;
+};
 
 type AgentApplicationSubmissionScreenProps =
 	| {
@@ -70,6 +73,9 @@ export function AgentApplicationSubmissionScreen(
 			取消
 		</Link>
 	);
+	const validationError =
+		props.error?.code === "INVALID_REQUEST" ||
+		props.error?.code === "MODEL_SELECTION_INVALID";
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">
@@ -102,9 +108,11 @@ export function AgentApplicationSubmissionScreen(
 					{props.error ? (
 						<Alert variant="destructive" className="my-3">
 							<AlertDescription>
-								{props.error.retryable === false
-									? "申请已变更或当前不可用，请刷新页面后核对。"
-									: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
+								{validationError
+									? "申请内容未通过服务端校验，请检查字段后重试。"
+									: props.error.retryable === false
+										? "申请已变更或当前不可用，请刷新页面后核对。"
+										: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
 							</AlertDescription>
 						</Alert>
 					) : null}
@@ -117,6 +125,7 @@ export function AgentApplicationSubmissionScreen(
 							}
 							{...props}
 							cancelAction={cancelAction}
+							serverError={props.error}
 						/>
 					)}
 					{props.result ? (
