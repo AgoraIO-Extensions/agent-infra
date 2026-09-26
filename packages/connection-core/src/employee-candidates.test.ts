@@ -13,6 +13,7 @@ describe("approval employee candidate identity", () => {
 		let directoryFailure = false;
 		let searchFailure = false;
 		let candidateWrites = 0;
+		let candidateResolutions = 0;
 		const service = new ConnectionOAuthService({
 			consumer: { id: "consumer-test", name: "Test" },
 			directory: {
@@ -64,13 +65,16 @@ describe("approval employee candidate identity", () => {
 								email: "alice@example.invalid",
 							}
 						: undefined,
-				resolveEmployeeCandidate: async () => ({
-					displaySnapshot: {
-						displayName: "Alice",
-						email: "alice@example.invalid",
-					},
-					principalId: "principal-alice",
-				}),
+				resolveEmployeeCandidate: async () => {
+					candidateResolutions++;
+					return {
+						displaySnapshot: {
+							displayName: "Alice",
+							email: "alice@example.invalid",
+						},
+						principalId: "principal-alice",
+					};
+				},
 			} as unknown as ConnectionOAuthRepository,
 			resource: "https://connection.example/mcp",
 		});
@@ -104,7 +108,8 @@ describe("approval employee candidate identity", () => {
 		).rejects.toMatchObject({ error: "access_denied" });
 		await expect(
 			service.resolveEmployeeCandidate("admin", candidateId),
-		).rejects.toMatchObject({ error: "access_denied" });
+		).rejects.toMatchObject({ error: "access_denied", status: 403 });
+		expect(candidateResolutions).toBe(0);
 		isActive = true;
 		await expect(
 			service.ensureActiveEmployeePrincipal("principal-alice"),
@@ -113,6 +118,13 @@ describe("approval employee candidate identity", () => {
 			service.ensureActiveEmployeePrincipal("principal-unknown"),
 		).rejects.toMatchObject({ error: "access_denied" });
 		directoryFailure = true;
+		await expect(
+			service.resolveEmployeeCandidate("admin", candidateId),
+		).rejects.toMatchObject({
+			status: 503,
+			message: "Employee directory verification is unavailable",
+		});
+		expect(candidateResolutions).toBe(0);
 		await expect(
 			service.ensureActiveEmployeePrincipal("principal-alice"),
 		).rejects.toMatchObject({ status: 503 });

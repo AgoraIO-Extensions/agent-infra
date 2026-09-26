@@ -798,7 +798,17 @@ export class ConnectionOAuthService {
 			);
 		}
 		const identity = this.protector.unprotect(candidate.identityReference);
-		if (!(await this.options.directory.isActive(identity))) {
+		let active: boolean;
+		try {
+			active = await this.options.directory.isActive(identity);
+		} catch {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory verification is unavailable",
+				503,
+			);
+		}
+		if (!active) {
 			throw new OAuthProtocolError(
 				"access_denied",
 				"Employee candidate is inactive",

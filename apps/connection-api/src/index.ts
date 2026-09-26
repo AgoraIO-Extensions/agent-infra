@@ -77,24 +77,26 @@ export function startConnectionApi(options: StartOptions) {
 			if (running) return;
 			running = true;
 			void (async () => {
-				await options.approvalMaintenance?.expireDueAuthorizations();
-				await options.approvalMaintenance?.expireDueRequests();
-			})()
-				.catch((error: unknown) =>
-					log(
-						JSON.stringify({
-							error:
-								error instanceof Error
-									? error.message
-									: "Approval maintenance failed",
-							service: connectionApiService,
-							status: "approval_maintenance_failed",
-						}),
-					),
-				)
-				.finally(() => {
-					running = false;
-				});
+				for (const operation of [
+					"expireDueAuthorizations",
+					"expireDueRequests",
+				] as const) {
+					try {
+						await options.approvalMaintenance?.[operation]();
+					} catch {
+						log(
+							JSON.stringify({
+								operation,
+								error: "Approval maintenance operation failed",
+								service: connectionApiService,
+								status: "approval_maintenance_failed",
+							}),
+						);
+					}
+				}
+			})().finally(() => {
+				running = false;
+			});
 		}, options.approvalMaintenanceIntervalMs ?? 30_000);
 		timer.unref();
 		server.once("close", () => clearInterval(timer));
