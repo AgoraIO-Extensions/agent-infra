@@ -2,6 +2,7 @@ import { type FileHandle, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeDriverLookup } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
@@ -208,6 +209,595 @@ describe("Runtime V3 durable authorization", () => {
 			code: "RUNTIME_GRANT_INVALID",
 		});
 	});
+
+	it("authorizes the first model intent after its original Driver receipt is durable and before execute returns", async () => {
+		const env = await setup();
+		const execute = env.driver.execute.bind(env.driver);
+		let authorizationError: unknown;
+		let modelDispatches = 0;
+		vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+			const record = await execute(command);
+			expect(await env.driver.lookupOperation(command)).toEqual({
+				state: "found",
+				record,
+			});
+			const action = {
+				nativeSessionRef: record.nativeSessionRef,
+				executionId: command.executionId,
+				runtimeOperationId: command.operationId,
+				operationRef: "first-model-intent",
+				attemptRef: "first-model-attempt",
+				kind: "model" as const,
+			};
+			try {
+				await env.host.authorizeExternalAction(action);
+				modelDispatches += 1;
+			} catch (error) {
+				authorizationError = error;
+			}
+			return record;
+		});
+		try {
+			const accepted = await submit(env.host);
+			expect(authorizationError).toBeUndefined();
+			expect(modelDispatches).toBe(1);
+			expect(accepted.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			expect(await env.driver.sideEffectCount()).toBe(1);
+			await expect(
+				env.host.authorizeExternalAction(
+					guard(accepted.hostSessionRef, env.store),
+				),
+			).resolves.toBeUndefined();
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("authorizes concurrent first callbacks sharing one durable original running receipt", async () => {
+		const env = await setup();
+		const execute = env.driver.execute.bind(env.driver);
+		let decisions: unknown[] = [];
+		vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+			const record = await execute(command);
+			decisions = await Promise.all(
+				["first", "second"].map((attempt) =>
+					env.host
+						.authorizeExternalAction({
+							nativeSessionRef: record.nativeSessionRef,
+							executionId: command.executionId,
+							runtimeOperationId: command.operationId,
+							operationRef: `${attempt}-model-intent`,
+							attemptRef: `${attempt}-model-attempt`,
+							kind: "model",
+						})
+						.then(
+							() => ({ allowed: true }),
+							(error: unknown) => ({ allowed: false, error }),
+						),
+				),
+			);
+			return record;
+		});
+		try {
+			const accepted = await submit(env.host);
+			expect(decisions).toEqual([{ allowed: true }, { allowed: true }]);
+			expect(accepted.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			expect(await env.driver.sideEffectCount()).toBe(1);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it("denies the first model intent before the original Driver submit is accepted", async () => {
+		let authorizationError: unknown;
+		const env = await setup({
+			afterOperationPrepared: async () => {
+				try {
+					await env.host.authorizeExternalAction({
+						nativeSessionRef: "unaccepted-native-session",
+						executionId: "execution-fixture",
+						runtimeOperationId: "execution-fixture",
+						operationRef: "unaccepted-model-intent",
+						attemptRef: "unaccepted-model-attempt",
+						kind: "model",
+					});
+				} catch (error) {
+					authorizationError = error;
+				}
+				expect(await env.driver.sideEffectCount()).toBe(0);
+			},
+		});
+		const validate = vi.spyOn(env.driver, "validateExternalAction");
+		try {
+			await submit(env.host);
+			expect(authorizationError).toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+				httpStatus: 403,
+			});
+			expect(validate).not.toHaveBeenCalled();
+			expect(await env.driver.sideEffectCount()).toBe(1);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it.each([
+		"missing",
+		"unknown",
+		"unavailable",
+		"nativeSessionRef",
+		"agentId",
+		"conversationId",
+		"sessionGeneration",
+		"operationId",
+		"kind",
+		"terminal",
+		"busy",
+		"rejected",
+	] as const)(
+		"denies the first model intent when the original Driver lookup is %s",
+		async (failure) => {
+			const env = await setup();
+			const execute = env.driver.execute.bind(env.driver);
+			let authorizationError: unknown;
+			let modelDispatches = 0;
+			const validate = vi.spyOn(env.driver, "validateExternalAction");
+			vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+				const record = await execute(command);
+				let lookup: RuntimeDriverLookup = { state: "found", record };
+				if (failure === "missing" || failure === "unknown")
+					lookup = { state: failure };
+				else if (failure === "terminal")
+					lookup = {
+						state: "found",
+						record: {
+							...record,
+							result: { outcome: "accepted", status: "completed" },
+						},
+					};
+				else if (failure === "busy")
+					lookup = {
+						state: "found",
+						record: { ...record, result: { outcome: "busy" } },
+					};
+				else if (failure === "rejected")
+					lookup = {
+						state: "found",
+						record: {
+							...record,
+							result: {
+								outcome: "rejected",
+								code: "RUNTIME_TURN_NOT_ACTIVE",
+								message: "Runtime turn is no longer active",
+								retryable: false,
+							},
+						},
+					};
+				else if (failure !== "unavailable")
+					lookup = {
+						state: "found",
+						record: {
+							...record,
+							[failure]:
+								failure === "sessionGeneration"
+									? 2
+									: failure === "kind"
+										? "supplement"
+										: "foreign-binding",
+						},
+					};
+				const inspect = vi.spyOn(env.driver, "lookupOperation");
+				if (failure === "unavailable")
+					inspect.mockRejectedValueOnce(new Error("synthetic lookup failure"));
+				else inspect.mockResolvedValueOnce(lookup);
+				try {
+					await env.host.authorizeExternalAction({
+						nativeSessionRef: record.nativeSessionRef,
+						executionId: command.executionId,
+						runtimeOperationId: command.operationId,
+						operationRef: "first-model-intent",
+						attemptRef: "first-model-attempt",
+						kind: "model",
+					});
+					modelDispatches += 1;
+				} catch (error) {
+					authorizationError = error;
+				} finally {
+					inspect.mockRestore();
+				}
+				expect(
+					env.store.listRecoverableOperations()[0]?.session.nativeSessionRef,
+				).toBeUndefined();
+				return record;
+			});
+			try {
+				await submit(env.host);
+				expect(authorizationError).toBeDefined();
+				expect(modelDispatches).toBe(0);
+				expect(validate).not.toHaveBeenCalled();
+				expect(await env.driver.sideEffectCount()).toBe(1);
+			} finally {
+				await env.host.close();
+			}
+		},
+	);
+
+	it.each(["lookup", "validation"] as const)(
+		"rechecks first-action authority after %s yields to expiry, stop, fence, tombstone or close",
+		async (stage) => {
+			for (const change of [
+				"expiry",
+				"stop",
+				"fence",
+				"tombstone",
+				"close",
+			] as const) {
+				const env = await setup();
+				const execute = env.driver.execute.bind(env.driver);
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let closing: Promise<void> | undefined;
+				let modelDispatches = 0;
+				let decision: unknown;
+				let mutationError: unknown;
+				vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+					const record = await execute(command);
+					const pending = env.store.listRecoverableOperations()[0];
+					if (!pending) throw new Error("Original submit must be prepared");
+					const hook =
+						stage === "lookup"
+							? vi
+									.spyOn(env.driver, "lookupOperation")
+									.mockImplementationOnce(async () => {
+										entered.resolve();
+										await release.promise;
+										return { state: "found", record };
+									})
+							: vi
+									.spyOn(env.driver, "validateExternalAction")
+									.mockImplementationOnce(async () => {
+										entered.resolve();
+										await release.promise;
+									});
+					const authorization = env.host
+						.authorizeExternalAction({
+							nativeSessionRef: record.nativeSessionRef,
+							executionId: command.executionId,
+							runtimeOperationId: command.operationId,
+							operationRef: "first-model-intent",
+							attemptRef: "first-model-attempt",
+							kind: "model",
+						})
+						.then(
+							() => {
+								modelDispatches += 1;
+								return { allowed: true };
+							},
+							(error: unknown) => ({ allowed: false, error }),
+						);
+					try {
+						await entered.promise;
+						if (change === "expiry") env.clock.now += 30_000;
+						else if (change === "close") closing = env.host.close();
+						else if (change === "tombstone") {
+							await env.store.prepareOperation({
+								requestedHostSessionRef: pending.session.hostSessionRef,
+								binding: submitV3Fixture(),
+								operationId: "first-action-tombstone",
+								kind: "generation-cancel",
+								scope: "generation:1",
+								deliveryFence: 1,
+								executionDeliveryFence: 1,
+								requestDigest: "synthetic-tombstone",
+								command: () => ({
+									schemaVersion: 1,
+									kind: "generation-cancel",
+									operationId: "first-action-tombstone",
+									agentId: command.agentId,
+									conversationId: command.conversationId,
+									executionId: command.executionId,
+									turnId: command.turnId,
+									sessionGeneration: command.sessionGeneration,
+									nativeSessionRef: record.nativeSessionRef,
+								}),
+							});
+							await env.store.activateGenerationBarrier(
+								pending.session.hostSessionRef,
+								submitV3Fixture(),
+								"first-action-tombstone",
+							);
+						} else if (change === "stop") {
+							const control = signV3Fixture(
+								{
+									...base(pending.session.hostSessionRef),
+									originalOperationDigest: originalDigest(),
+								},
+								"session.status",
+								{ purpose: "control" },
+							);
+							await env.store.authorizeRequestV3(
+								verifyRuntimeV2Fixture(control.grant).claims,
+							);
+						} else
+							await env.store.prepareOperation({
+								requestedHostSessionRef: pending.session.hostSessionRef,
+								binding: submitV3Fixture(),
+								operationId: command.operationId,
+								kind: "submit-turn",
+								scope: pending.operation.scope,
+								deliveryFence: 2,
+								executionDeliveryFence: 1,
+								requestDigest: pending.operation.requestDigest,
+								command: () => command,
+							});
+					} catch (error) {
+						mutationError = error;
+					} finally {
+						release.resolve();
+					}
+					decision = await authorization;
+					hook.mockRestore();
+					return record;
+				});
+				try {
+					await submit(env.host).catch((error: unknown) => {
+						if (change !== "close") throw error;
+					});
+					expect(mutationError, `${stage}/${change} mutation`).toBeUndefined();
+					expect(decision, `${stage}/${change}`).toMatchObject({
+						allowed: false,
+						error: { code: "RUNTIME_GRANT_INVALID", httpStatus: 403 },
+					});
+					expect(modelDispatches).toBe(0);
+					expect(await env.driver.sideEffectCount()).toBe(1);
+				} finally {
+					release.resolve();
+					await closing;
+					await env.host.close();
+				}
+			}
+		},
+	);
+
+	it.each(["prepared", "terminal"] as const)(
+		"denies the first model intent when another %s original submit has the same Execution identity",
+		async (state) => {
+			const env = await setup();
+			const execute = env.driver.execute.bind(env.driver);
+			let authorizationError: unknown;
+			let modelDispatches = 0;
+			vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+				const record = await execute(command);
+				const duplicate = signV3Fixture(
+					{
+						...submitV3Fixture(),
+						agentId: "other-agent",
+						conversationId: "other-conversation",
+					},
+					"turn.submit",
+				);
+				const prepared = await env.store.prepareOperation({
+					authorization: verifyRuntimeV2Fixture(duplicate.grant).claims,
+					now: env.clock.now,
+					binding: duplicate,
+					operationId: command.operationId,
+					kind: "submit-turn",
+					scope: `execution:${command.executionId}`,
+					deliveryFence: 1,
+					requestDigest: originalDigest(duplicate),
+					command: () => ({
+						...command,
+						agentId: duplicate.agentId,
+						conversationId: duplicate.conversationId,
+					}),
+				});
+				if (state === "terminal")
+					await env.store.resolveOperation(
+						prepared.session.hostSessionRef,
+						command.operationId,
+						{ outcome: "accepted", status: "completed" },
+						"other-native-session",
+					);
+				try {
+					await env.host.authorizeExternalAction({
+						nativeSessionRef: record.nativeSessionRef,
+						executionId: command.executionId,
+						runtimeOperationId: command.operationId,
+						operationRef: "first-model-intent",
+						attemptRef: "first-model-attempt",
+						kind: "model",
+					});
+					modelDispatches += 1;
+				} catch (error) {
+					authorizationError = error;
+				}
+				return record;
+			});
+			try {
+				await submit(env.host);
+				expect(authorizationError).toMatchObject({
+					code: "RUNTIME_GRANT_INVALID",
+					httpStatus: 403,
+				});
+				expect(modelDispatches).toBe(0);
+				expect(await env.driver.sideEffectCount()).toBe(1);
+			} finally {
+				await env.host.close();
+			}
+		},
+	);
+
+	it("denies the first model intent when Driver intent validation fails after receipt binding", async () => {
+		const env = await setup();
+		const execute = env.driver.execute.bind(env.driver);
+		let authorizationError: unknown;
+		let modelDispatches = 0;
+		vi.spyOn(env.driver, "validateExternalAction").mockRejectedValue(
+			new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"synthetic invalid intent",
+				403,
+			),
+		);
+		vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+			const record = await execute(command);
+			try {
+				await env.host.authorizeExternalAction({
+					nativeSessionRef: record.nativeSessionRef,
+					executionId: command.executionId,
+					runtimeOperationId: command.operationId,
+					operationRef: "foreign-model-intent",
+					attemptRef: "foreign-model-attempt",
+					kind: "model",
+				});
+				modelDispatches += 1;
+			} catch (error) {
+				authorizationError = error;
+			}
+			return record;
+		});
+		try {
+			await submit(env.host);
+			expect(authorizationError).toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+				httpStatus: 403,
+			});
+			expect(modelDispatches).toBe(0);
+			expect(await env.driver.sideEffectCount()).toBe(1);
+		} finally {
+			await env.host.close();
+		}
+	});
+
+	it.each(["failed", "completed", "running"] as const)(
+		"preserves the dispatch %s receipt when its persistence overlaps an independent first-action callback",
+		async (status) => {
+			const env = await setup();
+			const execute = env.driver.execute.bind(env.driver);
+			const lookup = env.driver.lookupOperation.bind(env.driver);
+			const getStatus = env.driver.getStatus.bind(env.driver);
+			const binding = env.store.resolveOriginalExecutionBinding.bind(env.store);
+			const resolve = env.store.resolveOperation.bind(env.store);
+			const helperLookupEntered = Promise.withResolvers<void>();
+			const helperAuthorityRead = Promise.withResolvers<void>();
+			const dispatchPersistenceEntered = Promise.withResolvers<void>();
+			const helperResolutionQueued = Promise.withResolvers<void>();
+			const releaseDispatchPersistence = Promise.withResolvers<void>();
+			let authorityReads = 0;
+			let dispatchPersistenceStarted = false;
+			let modelDispatches = 0;
+			let authorization: Promise<unknown> | undefined;
+			const handle = await open(env.directory, "r");
+			const prototype = Object.getPrototypeOf(handle) as FileHandle;
+			await handle.close();
+			const sync = prototype.sync;
+			let persistenceHook: { mockRestore(): void } | undefined;
+			vi.spyOn(env.store, "resolveOriginalExecutionBinding").mockImplementation(
+				async (...args) => {
+					const result = await binding(...args);
+					if (++authorityReads === 2) {
+						helperAuthorityRead.resolve();
+						await dispatchPersistenceEntered.promise;
+					}
+					return result;
+				},
+			);
+			vi.spyOn(env.store, "resolveOperation").mockImplementation((...args) => {
+				const resolving = resolve(...args);
+				if (
+					args[2].outcome === "accepted" &&
+					args[2].status === "running" &&
+					dispatchPersistenceStarted
+				)
+					helperResolutionQueued.resolve();
+				return resolving;
+			});
+			vi.spyOn(env.driver, "getStatus").mockImplementation(async (...args) => {
+				await helperAuthorityRead.promise;
+				return getStatus(...args);
+			});
+			vi.spyOn(env.driver, "execute").mockImplementation(async (command) => {
+				const record = await execute(command);
+				vi.spyOn(env.driver, "lookupOperation").mockImplementation(
+					async (original) => {
+						const found = await lookup(original);
+						helperLookupEntered.resolve();
+						return found;
+					},
+				);
+				authorization = env.host
+					.authorizeExternalAction({
+						nativeSessionRef: record.nativeSessionRef,
+						executionId: command.executionId,
+						runtimeOperationId: command.operationId,
+						operationRef: "independent-first-model-intent",
+						attemptRef: "independent-first-model-attempt",
+						kind: "model",
+					})
+					.then(
+						() => {
+							modelDispatches += 1;
+							return { allowed: true };
+						},
+						(error: unknown) => ({ allowed: false, error }),
+					);
+				await helperLookupEntered.promise;
+				await env.driver.setOperationStatus(command.operationId, status);
+				// Delay the real Host dispatch's fsync; its queued receipt has not
+				// become committed state when the independent callback resumes.
+				persistenceHook = vi
+					.spyOn(prototype, "sync")
+					.mockImplementationOnce(async function (this: FileHandle) {
+						dispatchPersistenceStarted = true;
+						dispatchPersistenceEntered.resolve();
+						await releaseDispatchPersistence.promise;
+						return sync.call(this);
+					});
+				return record;
+			});
+			const submitting = submit(env.host);
+			try {
+				await dispatchPersistenceEntered.promise;
+				await helperResolutionQueued.promise;
+				releaseDispatchPersistence.resolve();
+				const accepted = await submitting;
+				const decision = await authorization;
+				const persisted = JSON.parse(await readFile(env.storePath, "utf8"));
+				const saved = persisted.sessions[accepted.hostSessionRef];
+				expect(accepted.result).toEqual({ outcome: "accepted", status });
+				expect(saved.operations[accepted.operationId].result).toEqual({
+					outcome: "accepted",
+					status,
+				});
+				expect(saved.nativeSessionRef).toBe(
+					env.store.nativeSessionRef(accepted.hostSessionRef),
+				);
+				if (status === "running") {
+					expect(decision).toEqual({ allowed: true });
+					expect(modelDispatches).toBe(1);
+				} else {
+					expect(decision).toMatchObject({
+						allowed: false,
+						error: { code: "RUNTIME_GRANT_INVALID", httpStatus: 403 },
+					});
+					expect(modelDispatches).toBe(0);
+				}
+				expect(await env.driver.sideEffectCount()).toBe(1);
+			} finally {
+				releaseDispatchPersistence.resolve();
+				await submitting;
+				await authorization;
+				persistenceHook?.mockRestore();
+				await env.host.close();
+			}
+		},
+	);
 
 	it("replays a resolved submit while its execution is under recovery query authority", async () => {
 		const env = await setup();
