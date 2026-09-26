@@ -34,6 +34,9 @@ Principal；Connection 在服务端解析该 Principal 的 Consumer、访问凭�
 | Consumer | 使用 Connection 的客户端或服务，例如 Codex、Claude App、Cursor、Agent Platform 或 CI/CD |
 | Actor | Delegated Consumer 内可选的细分使用单元，例如一个 Agent；对 Connection 是不透明稳定标识 |
 | Connection | 已完成鉴权、对应一个稳定外部账号的连接 |
+| Connection Access Policy | 系统管理员按 Provider 能力配置的前置审批规则，包含有效期、顺序阶段、审批人和通过人数 |
+| Connection Access Request | 员工在提供 Provider Credential 前提交的连接申请 |
+| Connection Access Authorization | 审批并连接成功后，控制该个人 Connection 可持续使用时间和能力上限的公司准入资格 |
 | Consumer 授权 | Principal 允许 Consumer 或其指定 Actor 使用某个 Connection 的已确认 Action 集合 |
 
 Consumer 管理者可以声明产品需要的 Provider 和 Action，但不能替普通使用者绑定外部账号或扩大授权。使用者必须在 Connection 中明确选择具体账号和能力范围。Consumer 不能选择默认账号、替换目标 Connection 或读取原始凭证。
@@ -46,6 +49,7 @@ Connection 接入公司身份和组织系统，并定义自己的系统管理员
 - 注册和停用 Consumer，审核其请求的 Action 集合与回调配置。
 - 配置公司共享 Connection 及其员工或组织使用范围。
 - 查看 Connection 管理审计和调用审计。
+- 配置和发布个人 Connection 的 Capability Profile、审批策略、审批人和免责声明版本；管理员身份本身不产生审批通过权。
 
 Consumer 管理者只能管理自己的 Consumer 注册、显示信息和所需 Action 声明。最终账号授权始终由有资格使用该 Connection 的 Principal 确认。
 
@@ -219,6 +223,21 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 新调用只能使用授权时解析出的 Connection 的 current Credential，不能自动回退到历史版本。
 - Consumer、模型上下文、Sandbox、页面、日志、错误和审计导出都不能获得原始 Credential。
 - 断开 Connection 后，后续调用立即停止；已提交给 Provider 的操作保留实际结果。
+
+### 8.3 个人 Connection 前置审批
+
+- 员工创建任何个人 Connection 前，必须选择已发布的 Capability Profile、申请有效期、填写用途并确认精确免责声明版本。
+- Connection 按已发布 Policy 的顺序阶段通知审批人；每阶段可以要求任意一人、全部或至少 N 人通过。禁止申请人自审、越级审批和自动批准。
+- 全部阶段通过后，Connection 只在服务端生成一次性 Connect Permit；用户才可以进入 Provider OAuth 或提交 PAT/API Key。一次 Permit 只能成功创建一个外部账号 Connection。
+- Provider OAuth、PAT/API Key 验证和 Consumer Grant 是三种不同事务。公司审批不证明 Provider 身份，也不自动授权任何 Consumer。
+- Policy 可以提供有限期限或明确的永久选项。永久只取消自然到期，不覆盖账号停用、撤销、换号、扩权、Provider/Action 停用或强制重审。
+- 有限期限从 Connection 成功创建时起算。续期必须重新审批；审批未在原到期日前完成时不提供隐式宽限。
+- 有限期资格只在策略允许的续期窗口内为同一账号、Provider 版本和能力包续期；审批提前通过不损失剩余时间，过期后不能新发起续期。续期待审期间原期限照常生效，晚到的审批通过后才恢复资格。
+- 到期、撤销或重审逾期立即阻止新调用并暂停相关 Consumer Grant；已经提交给 Provider 的操作保留真实结果或未知状态。
+- 管理员紧急撤销已发布审批策略时，立即终止该 Provider 版本和能力包下未完成的申请及未消费 Permit，暂停其既有个人 Connection 资格与新调用；已提交的 Provider 操作仍按真实结果收敛。
+- 发布替代策略不自动中断既有资格。管理员将换版标记为重大变更时必须指定重审截止时间和原因；发布与受影响资格进入限期重审同时生效，逾期未通过才暂停。重大免责声明变更不能按普通换版绕过重审。
+- 页面在现有 Provider 详情中展示完整审批时间线，并通过右上角铃铛提供待办和通知。已读不等于完成待办；首期使用轮询，不增加长连接。
+- 无匹配 Policy、匹配冲突、免责声明缺失、审批人无效、目录不可用或 Permit 失效时均 fail closed，不能进入 Credential 流程。
 
 ## 9. Consumer 授权
 

@@ -68,6 +68,7 @@ describe("Connection store migrations", () => {
 			"0029_provider_egress_admission",
 			"0030_github_oauth_refresh",
 			"0031_provider_upgrade_campaigns",
+			"0032_connection_access_approval",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));
@@ -152,6 +153,10 @@ describe("Connection store migrations", () => {
 			resolve(directory, "0030_github_oauth_refresh.sql"),
 			"utf8",
 		);
+		const accessApproval = await readFile(
+			resolve(directory, "0032_connection_access_approval.sql"),
+			"utf8",
+		);
 		expect(authority).toContain("DEFERRABLE INITIALLY DEFERRED");
 		expect(effects).toContain("connection_enforce_status_transition");
 		expect(lease).toContain("ADD COLUMN IF NOT EXISTS lease_id TEXT");
@@ -222,6 +227,31 @@ describe("Connection store migrations", () => {
 		);
 		expect(githubOAuthRefresh).toContain(
 			"WHERE status IN ('PREPARED', 'SUBMISSION_STARTED')",
+		);
+		expect(accessApproval).toContain(
+			"connection_access_policy_versions_current",
+		);
+		expect(accessApproval).toContain("connection_access_requests_one_open");
+		expect(accessApproval).toContain(
+			"connection_access_authorizations_current",
+		);
+		expect(accessApproval).toContain(
+			"FOREIGN KEY (action_version_id, provider_release_id)",
+		);
+		expect(accessApproval).toContain(
+			"FOREIGN KEY (connection_id, principal_id)",
+		);
+		expect(accessApproval).toContain(
+			"UNIQUE (request_stage_id, approver_principal_id)",
+		);
+		expect(accessApproval).toContain(
+			"CHECK ((consumed_at IS NULL) = (connection_id IS NULL))",
+		);
+		expect(accessApproval).toContain(
+			"connection_enforce_approval_version_transition",
+		);
+		expect(accessApproval).toContain(
+			"connection_approval_decision_append_only",
 		);
 	});
 });

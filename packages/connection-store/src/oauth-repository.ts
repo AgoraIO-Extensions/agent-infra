@@ -207,6 +207,138 @@ export class PostgresConnectionOAuthRepository
 		await this.sql.end();
 	}
 
+	async storeEmployeeCandidates(input: {
+		requestedByPrincipalId: string;
+		candidates: readonly {
+			alias: string | null;
+			displayName: string;
+			email: string | null;
+			id: string;
+			identityIssuer: string;
+			identityReference: string;
+			identitySubjectHash: string;
+			legacyIdentitySubjectHash: string;
+		}[];
+	}) {
+		await this.sql.begin(async (sql) => {
+			const [administrator] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles admin ON admin.principal_id = principal.id
+				WHERE principal.id = ${input.requestedByPrincipalId}
+					AND principal.status = 'ACTIVE' AND admin.status = 'ACTIVE'
+					AND admin.role = 'CONNECTION_ADMIN'
+				FOR SHARE OF principal, admin
+			`;
+			if (!administrator) {
+				throw new OAuthProtocolError(
+					"access_denied",
+					"Employee search is unavailable",
+					403,
+				);
+			}
+			for (const candidate of input.candidates) {
+				await sql`
+					INSERT INTO connection_employee_candidates (
+						id, requested_by_principal_id, identity_issuer,
+						identity_subject_hash, legacy_identity_subject_hash,
+						identity_reference, display_name, email, alias, expires_at
+					) VALUES (
+						${candidate.id}, ${input.requestedByPrincipalId},
+						${candidate.identityIssuer}, ${candidate.identitySubjectHash},
+						${candidate.legacyIdentitySubjectHash},
+						${candidate.identityReference}, ${candidate.displayName},
+						${candidate.email}, ${candidate.alias}, now() + interval '5 minutes'
+					)
+				`;
+			}
+		});
+	}
+
+	async getEmployeeCandidate(input: {
+		candidateId: string;
+		requestedByPrincipalId: string;
+	}) {
+		const [row] = await this.sql<{ identity_reference: string }[]>`
+			SELECT identity_reference FROM connection_employee_candidates
+			WHERE id = ${input.candidateId}
+				AND requested_by_principal_id = ${input.requestedByPrincipalId}
+				AND expires_at > now()
+		`;
+		return row ? { identityReference: row.identity_reference } : undefined;
+	}
+
+	async getEmployeePrincipalIdentity(principalId: string) {
+		const rows = await this.sql<{ identity_reference: string }[]>`
+			SELECT identity.identity_reference
+			FROM connection_principal_identities identity
+			JOIN connection_principals principal
+				ON principal.id = identity.principal_id
+			WHERE identity.principal_id = ${principalId}
+				AND identity.status = 'ACTIVE' AND principal.status = 'ACTIVE'
+			ORDER BY identity.verified_at DESC LIMIT 2
+		`;
+		const [identity] = rows;
+		return rows.length === 1 && identity
+			? { identityReference: identity.identity_reference }
+			: undefined;
+	}
+
+	async resolveEmployeeCandidate(input: {
+		candidateId: string;
+		requestedByPrincipalId: string;
+	}) {
+		return this.sql.begin(async (sql) => {
+			const [candidate] = await sql<
+				{
+					display_name: string;
+					email: string | null;
+					identity_issuer: string;
+					identity_reference: string;
+					identity_subject_hash: string;
+					legacy_identity_subject_hash: string;
+				}[]
+			>`
+				SELECT candidate.display_name, candidate.email, candidate.identity_issuer,
+					candidate.identity_reference, candidate.identity_subject_hash,
+					candidate.legacy_identity_subject_hash
+				FROM connection_employee_candidates candidate
+				JOIN connection_principal_roles admin
+					ON admin.principal_id = candidate.requested_by_principal_id
+				JOIN connection_principals administrator
+					ON administrator.id = candidate.requested_by_principal_id
+				WHERE candidate.id = ${input.candidateId}
+					AND candidate.requested_by_principal_id = ${input.requestedByPrincipalId}
+					AND candidate.expires_at > now()
+					AND admin.status = 'ACTIVE' AND admin.role = 'CONNECTION_ADMIN'
+					AND administrator.status = 'ACTIVE'
+				FOR UPDATE OF candidate
+			`;
+			if (!candidate) {
+				throw new OAuthProtocolError(
+					"access_denied",
+					"Employee candidate is unavailable",
+					403,
+				);
+			}
+			const principalId = await upsertPrincipalIdentity(sql, {
+				displayName: candidate.display_name,
+				email: candidate.email,
+				identityIssuer: candidate.identity_issuer,
+				identityReference: candidate.identity_reference,
+				identitySubjectHash: candidate.identity_subject_hash,
+				legacyIdentitySubjectHash: candidate.legacy_identity_subject_hash,
+				principalId: randomUUID(),
+			});
+			return {
+				displaySnapshot: {
+					displayName: candidate.display_name,
+					email: candidate.email,
+				},
+				principalId,
+			};
+		});
+	}
+
 	async registerClient(client: OAuthClientRegistration) {
 		await this.sql.begin(async (sql) => {
 			const [consumer] = await sql<{ status: string }[]>`

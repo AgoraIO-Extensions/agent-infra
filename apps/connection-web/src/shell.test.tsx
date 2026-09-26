@@ -17,12 +17,38 @@ const mocks = vi.hoisted(() => ({
 		isAdministrator: true,
 	})),
 	logout: vi.fn(async () => undefined),
+	listConnectionNotifications: vi.fn(async () => ({
+		adminWorkItems: 1,
+		openWorkItems: 0,
+		reapprovalWorkItems: 0,
+		upgradeWorkItems: 0,
+		unreadCount: 0,
+		items: [
+			{
+				id: "notice-1",
+				businessId: "request-1",
+				businessType: "CONNECTION_ACCESS_REQUEST",
+				providerId: "jira",
+				state: "ROUTING_BLOCKED",
+				eventType: "ROUTING_BLOCKED",
+				createdAt: "2026-09-25T00:00:00Z",
+				readAt: null,
+				archivedAt: null,
+			},
+		],
+	})),
+	updateApprovalNotification: vi.fn(async () => undefined),
 	navigate: vi.fn(async () => undefined),
 	redirect: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
-	connectionApi: { getSession: mocks.getSession, logout: mocks.logout },
+	connectionApi: {
+		getSession: mocks.getSession,
+		logout: mocks.logout,
+		listConnectionNotifications: mocks.listConnectionNotifications,
+		updateApprovalNotification: mocks.updateApprovalNotification,
+	},
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -56,6 +82,27 @@ afterEach(() => {
 });
 
 describe("Connection 控制台 Session", () => {
+	it("把管理员审批异常从铃铛导向现有处理页", async () => {
+		const client = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={client}>
+				<ConsoleShell>内容</ConsoleShell>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "通知与待办 1 项" }),
+		);
+		expect(
+			screen.getByRole("link", { name: "审批异常 1" }).getAttribute("href"),
+		).toBe("/connection/admin/approval");
+		expect(
+			screen
+				.getByRole("link", { name: "jira · 待重新分配" })
+				.getAttribute("href"),
+		).toBe("/connection/admin/approval");
+	});
 	it("未登录时把受控 Connection 深链带到登录页", async () => {
 		mocks.getSession.mockRejectedValueOnce(new Error("unauthorized"));
 		window.history.replaceState(

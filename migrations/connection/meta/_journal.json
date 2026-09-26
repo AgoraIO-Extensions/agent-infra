@@ -225,6 +225,13 @@
       "when": 1790136000000,
       "tag": "0031_provider_upgrade_campaigns",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790222400000,
+      "tag": "0032_connection_access_approval",
+      "breakpoints": true
     }
   ]
 }

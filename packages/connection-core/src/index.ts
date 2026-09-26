@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Schema } from "@cfworker/json-schema";
 import { Validator } from "@cfworker/json-schema";
 
+export * from "./access-approval";
 export * from "./oauth";
 
 export const forbiddenSelectorNames = new Set([
@@ -94,6 +95,15 @@ export type ConnectionOverview = {
 	actions: ActionDefinition[];
 	calls: CallProjection[];
 	connections: Array<{
+		accessAuthorization?: {
+			capabilityProfileId: string;
+			id: string;
+			providerReleaseId: string;
+			renewalOpensAt: string | null;
+			state: string;
+			validityKind: "FINITE" | "PERMANENT";
+			validUntil: string | null;
+		} | null;
 		actionVersionIds: string[];
 		displayName: string;
 		externalAccount: string;
@@ -576,6 +586,8 @@ export function decideReconnectAuthorization(input: {
 }
 
 export type OAuthTransaction = {
+	accessRequestId?: string;
+	reconnectConnectionId?: string;
 	codeVerifier: string;
 	principalId: string;
 	redirectUri: string;
@@ -675,7 +687,19 @@ export interface ConnectionRepository {
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
 	): Promise<void>;
+	validatePersonalConnectRequest(input: {
+		principalId: string;
+		providerId: string;
+		requestId?: string;
+	}): Promise<void>;
+	validatePersonalReconnect?(input: {
+		connectionId: string;
+		principalId: string;
+	}): Promise<{ providerId: string }>;
 	storeGithubOAuthCredential(input: {
+		accessRequestId?: string;
+		expectedConnectionId?: string;
+		expectedCredentialVersionId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -686,6 +710,7 @@ export interface ConnectionRepository {
 		refreshToken?: string;
 	}): Promise<{ connectionId: string }>;
 	storeProviderCredential(input: {
+		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
 		externalAccount: string;
@@ -1051,7 +1076,15 @@ export class ConnectionApplicationService {
 		principalId: string,
 		providerId: string,
 		accessToken: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
 	) {
+		if (accessRequestId && reconnectConnectionId) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Connection targets are mutually exclusive",
+			);
+		}
 		if (!accessToken || accessToken.length > 8_192) {
 			throw new ConnectionError("INVALID_REQUEST", "Provider token is invalid");
 		}
@@ -1063,6 +1096,23 @@ export class ConnectionApplicationService {
 			);
 		}
 		await this.repository.ensurePrincipal({ principalId });
+		if (reconnectConnectionId) {
+			const target = await this.repository.validatePersonalReconnect?.({
+				principalId,
+				connectionId: reconnectConnectionId,
+			});
+			if (target?.providerId !== providerId)
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Reconnect target is unavailable",
+				);
+		} else {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId,
+				...(accessRequestId ? { requestId: accessRequestId } : {}),
+			});
+		}
 		let identity: ProviderCredentialIdentity;
 		try {
 			identity = await connector.validateCredential(accessToken);
@@ -1086,8 +1136,27 @@ export class ConnectionApplicationService {
 		}
 		return this.repository.storeProviderCredential({
 			...identity,
+			accessRequestId,
+			...(reconnectConnectionId
+				? { expectedConnectionId: reconnectConnectionId }
+				: {}),
 			principalId,
 		});
+	}
+
+	reconnectProviderCredential(
+		principalId: string,
+		connectionId: string,
+		providerId: string,
+		credential: string,
+	) {
+		return this.connectProviderCredential(
+			principalId,
+			providerId,
+			credential,
+			undefined,
+			connectionId,
+		);
 	}
 
 	async upgradeProviderConnection(principalId: string, connectionId: string) {
@@ -1574,13 +1643,43 @@ export class ConnectionApplicationService {
 		return this.repository.disconnectConnection({ connectionId, principalId });
 	}
 
-	async startGithubOAuth(principalId: string, redirectUri: string) {
+	async startGithubOAuth(
+		principalId: string,
+		redirectUri: string,
+		accessRequestId?: string,
+		reconnectConnectionId?: string,
+	) {
+		if (accessRequestId && reconnectConnectionId) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Connection targets are mutually exclusive",
+			);
+		}
 		const oauth = this.requireOAuth();
 		await this.repository.ensurePrincipal({ principalId });
+		if (reconnectConnectionId) {
+			const target = await this.repository.validatePersonalReconnect?.({
+				principalId,
+				connectionId: reconnectConnectionId,
+			});
+			if (target?.providerId !== "github")
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Reconnect target is unavailable",
+				);
+		} else {
+			await this.repository.validatePersonalConnectRequest({
+				principalId,
+				providerId: "github",
+				...(accessRequestId ? { requestId: accessRequestId } : {}),
+			});
+		}
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
 		await this.repository.createOAuthTransaction({
+			...(accessRequestId ? { accessRequestId } : {}),
+			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
 			codeVerifier,
 			principalId,
 			redirectUri,
@@ -1629,6 +1728,27 @@ export class ConnectionApplicationService {
 			);
 		}
 		const transaction = await this.repository.consumeOAuthTransaction(state);
+		if (!transaction.sharedScopeId) {
+			if (transaction.reconnectConnectionId) {
+				const target = await this.repository.validatePersonalReconnect?.({
+					principalId: transaction.principalId,
+					connectionId: transaction.reconnectConnectionId,
+				});
+				if (target?.providerId !== "github")
+					throw new ConnectionError(
+						"FORBIDDEN",
+						"Reconnect target is unavailable",
+					);
+			} else {
+				await this.repository.validatePersonalConnectRequest({
+					principalId: transaction.principalId,
+					providerId: "github",
+					...(transaction.accessRequestId
+						? { requestId: transaction.accessRequestId }
+						: {}),
+				});
+			}
+		}
 		const identity = await this.requireOAuth().exchangeCode({
 			code,
 			codeVerifier: transaction.codeVerifier,
@@ -1642,6 +1762,12 @@ export class ConnectionApplicationService {
 				})
 			: this.repository.storeGithubOAuthCredential({
 					...identity,
+					...(transaction.reconnectConnectionId
+						? { expectedConnectionId: transaction.reconnectConnectionId }
+						: {}),
+					...(transaction.accessRequestId
+						? { accessRequestId: transaction.accessRequestId }
+						: {}),
 					principalId: transaction.principalId,
 				});
 	}

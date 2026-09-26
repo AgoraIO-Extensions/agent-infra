@@ -1,5 +1,6 @@
 import {
 	type ActionDefinition,
+	type ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionError,
 	type ConnectionOAuthService,
@@ -82,6 +83,7 @@ class TestRepository implements ConnectionRepository {
 	}
 
 	async ensurePrincipal() {}
+	async validatePersonalConnectRequest() {}
 	async authorizeConnectionAdministration() {
 		return false;
 	}
@@ -419,6 +421,911 @@ describe("Connection API", () => {
 		});
 		expect(logout.status).toBe(204);
 		expect(logoutToken).toBe(sessionToken);
+	});
+
+	it("scopes access requests and approval decisions to the browser Principal", async () => {
+		const sessionToken = `conn_session_${"A".repeat(43)}`;
+		const account = {
+			displayName: "Approval User",
+			email: "approval@example.invalid",
+			principalId: "principal-approval-user",
+		};
+		const calls: Array<{ name: string; value: unknown }> = [];
+		const approvalService = {
+			cancelRequest: async (principalId: string, requestId: string) => {
+				calls.push({ name: "cancel", value: { principalId, requestId } });
+			},
+			decide: async (principalId: string, input: unknown) => {
+				calls.push({ name: "decide", value: { input, principalId } });
+				return { replayed: false, requestId: "request-1" };
+			},
+			getRequest: async () => ({ id: "request-1" }),
+			listAccessOptions: async () => [],
+			listApprovalQueue: async () => [],
+			listNotifications: async (principalId: string) => {
+				calls.push({ name: "notifications", value: { principalId } });
+				return {
+					items: [],
+					openWorkItems: 0,
+					reapprovalWorkItems: 0,
+					unreadCount: 0,
+					upgradeWorkItems: 0,
+				};
+			},
+			listWorkItems: async (principalId: string) => {
+				calls.push({ name: "work-items", value: { principalId } });
+				return [];
+			},
+			prepareConnect: async (principalId: string, requestId: string) => {
+				calls.push({
+					name: "prepare-connect",
+					value: { principalId, requestId },
+				});
+				return {
+					requestId,
+					providerId: "jira",
+					providerReleaseId: "jira-release-1",
+					connectExpiresAt: "2030-01-01T00:00:00.000Z",
+				};
+			},
+			listRequests: async () => [],
+			markNotifications: async (
+				principalId: string,
+				notificationIds: string[],
+				archive: boolean,
+			) => {
+				calls.push({
+					name: "mark-notifications",
+					value: { principalId, notificationIds, archive },
+				});
+			},
+			submitRequest: async (principalId: string, input: unknown) => {
+				calls.push({ name: "submit", value: { input, principalId } });
+				return { requestId: "request-1" };
+			},
+			submitRenewal: async (
+				principalId: string,
+				authorizationId: string,
+				input: unknown,
+			) => {
+				calls.push({
+					name: "renew",
+					value: { authorizationId, input, principalId },
+				});
+				return { requestId: "renewal-request-1" };
+			},
+		} as unknown as ConnectionAccessApprovalService;
+		const oauth = {
+			ensureActiveEmployeePrincipal: async (principalId: string) => {
+				calls.push({ name: "verify-approver", value: { principalId } });
+			},
+			getBrowserAccount: async () => account,
+			loginBrowserSession: async () => ({
+				account,
+				expiresAt: new Date(Date.now() + 60_000),
+				sessionToken,
+			}),
+		} as unknown as ConnectionOAuthService;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				approvalCatalog: {
+					listPolicyApproverPrincipalIds: async () => [
+						"principal-approval-seat",
+					],
+				} as never,
+				approvalDirectoryEnabled: true,
+				approvalService,
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {} as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: oauth,
+		});
+		const login = await app.request("/api/v1/connection/session", {
+			body: JSON.stringify({ password: "password", username: "user" }),
+			headers: {
+				"content-type": "application/json",
+				"idempotency-key": "approval-login",
+				origin: "https://connection.example",
+			},
+			method: "POST",
+		});
+		const cookie =
+			(login.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+		const submitted = await app.request("/api/v1/connection/access-requests", {
+			body: JSON.stringify({
+				capabilityProfileId: "profile-1",
+				disclaimerConfirmations: [
+					{
+						contentSha256: "a".repeat(64),
+						disclaimerVersionId: "disclaimer-1",
+						locale: "zh-CN",
+					},
+				],
+				duration: { days: 90, kind: "FINITE" },
+				policyVersionId: "policy-1",
+				presentationId: "presentation-1",
+				providerReleaseId: "provider-release-1",
+				purpose: "Approval API test",
+			}),
+			headers: {
+				"content-type": "application/json",
+				cookie,
+				"idempotency-key": "approval-submit",
+				origin: "https://connection.example",
+			},
+			method: "POST",
+		});
+		expect(submitted.status).toBe(201);
+		const decided = await app.request(
+			"/api/v1/connection/approval-requests/request-1/decisions",
+			{
+				body: JSON.stringify({
+					approverPrincipalId: "principal-approval-seat",
+					decision: "APPROVE",
+					expectedRequestRevision: "1",
+					expectedRoutingRevision: "1",
+					expectedStageRevision: "1",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "approval-decide",
+					origin: "https://connection.example",
+				},
+				method: "POST",
+			},
+		);
+		expect(decided.status).toBe(201);
+		const canceled = await app.request(
+			"/api/v1/connection/access-requests/request-1",
+			{
+				headers: {
+					cookie,
+					"idempotency-key": "approval-cancel",
+					origin: "https://connection.example",
+				},
+				method: "DELETE",
+			},
+		);
+		expect(canceled.status).toBe(204);
+		const notifications = await app.request(
+			"/api/v1/connection/notifications",
+			{
+				headers: { cookie },
+			},
+		);
+		expect(notifications.status).toBe(200);
+		const workItems = await app.request("/api/v1/connection/work-items", {
+			headers: { cookie },
+		});
+		expect(workItems.status).toBe(200);
+		const marked = await app.request("/api/v1/connection/notifications/read", {
+			method: "POST",
+			body: JSON.stringify({ notificationIds: ["notification-1"] }),
+			headers: {
+				"content-type": "application/json",
+				cookie,
+				"idempotency-key": "approval-notification-read",
+				origin: "https://connection.example",
+			},
+		});
+		expect(marked.status).toBe(204);
+		const archived = await app.request(
+			"/api/v1/connection/notifications/archive",
+			{
+				method: "POST",
+				body: JSON.stringify({ notificationIds: ["notification-1"] }),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "approval-notification-archive",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(archived.status).toBe(204);
+		expect(calls).toHaveLength(10);
+		expect(calls[0]).toMatchObject({
+			name: "verify-approver",
+			value: { principalId: "principal-approval-seat" },
+		});
+		expect(calls[1]).toMatchObject({
+			name: "submit",
+			value: { principalId: account.principalId },
+		});
+		expect(calls[2]).toEqual({
+			name: "verify-approver",
+			value: { principalId: "principal-approval-seat" },
+		});
+		expect(calls[3]).toEqual({
+			name: "verify-approver",
+			value: { principalId: account.principalId },
+		});
+		expect(calls[4]).toMatchObject({
+			name: "decide",
+			value: { principalId: account.principalId },
+		});
+		expect(calls[5]).toEqual({
+			name: "cancel",
+			value: { principalId: account.principalId, requestId: "request-1" },
+		});
+		expect(calls[6]).toEqual({
+			name: "notifications",
+			value: { principalId: account.principalId },
+		});
+		expect(calls[7]).toEqual({
+			name: "work-items",
+			value: { principalId: account.principalId },
+		});
+		expect(calls[8]).toEqual({
+			name: "mark-notifications",
+			value: {
+				principalId: account.principalId,
+				notificationIds: ["notification-1"],
+				archive: false,
+			},
+		});
+		expect(calls[9]).toEqual({
+			name: "mark-notifications",
+			value: {
+				principalId: account.principalId,
+				notificationIds: ["notification-1"],
+				archive: true,
+			},
+		});
+		const renewal = await app.request(
+			"/api/v1/connection/access-authorizations/access-1/renewals",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					capabilityProfileId: "profile-1",
+					disclaimerConfirmations: [
+						{
+							contentSha256: "a".repeat(64),
+							disclaimerVersionId: "disclaimer-1",
+							locale: "zh-CN",
+						},
+					],
+					duration: { kind: "FINITE", days: 90 },
+					policyVersionId: "policy-1",
+					presentationId: "presentation-2",
+					providerReleaseId: "provider-release-1",
+					purpose: "Renew existing connection",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					"idempotency-key": "approval-renew-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(renewal.status).toBe(201);
+		expect(calls.at(-2)).toEqual({
+			name: "verify-approver",
+			value: { principalId: "principal-approval-seat" },
+		});
+		expect(calls.at(-1)).toMatchObject({
+			name: "renew",
+			value: { authorizationId: "access-1", principalId: account.principalId },
+		});
+		const prepared = await app.request(
+			"/api/v1/connection/access-requests/request-1/connect",
+			{
+				method: "POST",
+				headers: {
+					cookie,
+					"idempotency-key": "prepare-connect-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(prepared.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			name: "prepare-connect",
+			value: { principalId: account.principalId, requestId: "request-1" },
+		});
+		expect(JSON.stringify(calls)).not.toContain("applicantPrincipalId");
+		expect(JSON.stringify(calls)).not.toContain("actorPrincipalId");
+	});
+
+	it("hides employee search and policy management from non-administrators", async () => {
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				approvalDirectoryEnabled: true,
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					authorizeConnectionAdministration: async () => false,
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {
+				getBrowserAccount: async () => ({
+					displayName: "User",
+					email: null,
+					principalId: "ordinary-user",
+				}),
+			} as unknown as ConnectionOAuthService,
+		});
+		const headers = {
+			cookie: "connection_session=test",
+			origin: "https://connection.example",
+		};
+		const search = await app.request(
+			"/api/v1/connection/admin/employee-candidates?query=alice",
+			{ headers },
+		);
+		expect(search.status).toBe(404);
+		const policy = await app.request(
+			"/api/v1/connection/admin/access-policies",
+			{
+				body: "{}",
+				headers: { ...headers, "content-type": "application/json" },
+				method: "POST",
+			},
+		);
+		expect(policy.status).toBe(404);
+		const disclaimers = await app.request(
+			"/api/v1/connection/admin/disclaimers",
+			{ headers },
+		);
+		expect(disclaimers.status).toBe(404);
+		const blocked = await app.request(
+			"/api/v1/connection/admin/routing-blocked",
+			{ headers },
+		);
+		expect(blocked.status).toBe(404);
+		const reroute = await app.request(
+			"/api/v1/connection/admin/access-requests/request-1/reroute",
+			{
+				body: "{}",
+				headers: { ...headers, "content-type": "application/json" },
+				method: "POST",
+			},
+		);
+		expect(reroute.status).toBe(404);
+		const publishPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/publish",
+			{
+				method: "POST",
+				body: JSON.stringify({ materialChange: false }),
+				headers: { ...headers, "content-type": "application/json" },
+			},
+		);
+		expect(publishPolicy.status).toBe(404);
+		const revokePolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revoke",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					expectedRevision: "2",
+					reason: "Security incident",
+				}),
+				headers: { ...headers, "content-type": "application/json" },
+			},
+		);
+		expect(revokePolicy.status).toBe(404);
+		const outbox = await app.request(
+			"/api/v1/connection/admin/outbox-failures",
+			{ headers },
+		);
+		expect(outbox.status).toBe(404);
+		const retry = await app.request(
+			"/api/v1/connection/admin/outbox-failures/event-1/retry",
+			{
+				method: "POST",
+				body: JSON.stringify({ expectedAttempts: 10 }),
+				headers: { ...headers, "content-type": "application/json" },
+			},
+		);
+		expect(retry.status).toBe(404);
+		const authorizations = await app.request(
+			"/api/v1/connection/admin/access-authorizations",
+			{ headers },
+		);
+		expect(authorizations.status).toBe(404);
+		const campaign = await app.request(
+			"/api/v1/connection/admin/reapproval-campaigns",
+			{
+				method: "POST",
+				body: "{}",
+				headers: { ...headers, "content-type": "application/json" },
+			},
+		);
+		expect(campaign.status).toBe(404);
+	});
+
+	it("reroutes a blocked request with server-resolved employee candidates", async () => {
+		const calls: unknown[] = [];
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				approvalCatalog: {
+					listCatalog: async () => ({ disclaimers: [] }),
+					listPolicyApproverPrincipalIds: async () => ["approver-1"],
+					publishPolicy: async (input: unknown) => {
+						calls.push({ publishPolicy: input });
+					},
+					revokePolicy: async (input: unknown) => {
+						calls.push({ revokePolicy: input });
+						return {
+							policyVersionId: "policy-1",
+							canceledRequests: 2,
+							suspendedConnections: 1,
+						};
+					},
+				} as never,
+				approvalDirectoryEnabled: true,
+				approvalService: {
+					createDelegation: async (principalId: string, input: unknown) => {
+						calls.push({ principalId, delegation: input });
+						return { delegationId: "delegation-1" };
+					},
+					listDelegations: async (principalId: string) => {
+						calls.push({ listDelegationsPrincipalId: principalId });
+						return [];
+					},
+					revokeDelegation: async (
+						principalId: string,
+						delegationId: string,
+						expectedRevision: string,
+					) => {
+						calls.push({ principalId, delegationId, expectedRevision });
+						return { delegationId };
+					},
+					createReapprovalCampaign: async (
+						principalId: string,
+						input: unknown,
+					) => {
+						calls.push({ campaignPrincipalId: principalId, input });
+						return { campaignId: "campaign-1", affectedConnections: 1 };
+					},
+					listRoutingBlocked: async () => [],
+					listCurrentAuthorizations: async (principalId: string) => {
+						calls.push({ listPrincipalId: principalId });
+						return [];
+					},
+					revokeAuthorization: async (
+						principalId: string,
+						authorizationId: string,
+						expectedRevision: string,
+					) => {
+						calls.push({ principalId, authorizationId, expectedRevision });
+						return { authorizationId };
+					},
+					reroute: async (principalId: string, input: unknown) => {
+						calls.push({ principalId, input });
+						return { requestId: "blocked-1" };
+					},
+				} as unknown as ConnectionAccessApprovalService,
+				notificationDispatcher: {
+					listFailures: async (principalId: string) => {
+						calls.push({ listFailuresPrincipalId: principalId });
+						return [
+							{
+								id: "event-1",
+								topic: "connection.access-request.created",
+								attemptCount: 10,
+								createdAt: "2026-09-25T00:00:00Z",
+							},
+						];
+					},
+					retryFailure: async (
+						principalId: string,
+						eventId: string,
+						expectedAttempts: number,
+					) => {
+						calls.push({ principalId, eventId, expectedAttempts });
+						return { eventId };
+					},
+				} as never,
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					authorizeConnectionAdministration: async () => true,
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {
+				ensureActiveEmployeePrincipal: async (principalId: string) => {
+					calls.push({ verifiedApprover: principalId });
+				},
+				getBrowserAccount: async () => ({
+					principalId: "admin-1",
+					displayName: "Admin",
+					email: null,
+				}),
+				resolveEmployeeCandidate: async (
+					_principalId: string,
+					candidateId: string,
+				) => ({
+					principalId: `resolved-${candidateId}`,
+					displaySnapshot: { displayName: "Reviewer", email: null },
+				}),
+			} as unknown as ConnectionOAuthService,
+		});
+		const result = await app.request(
+			"/api/v1/connection/admin/access-requests/blocked-1/reroute",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					approverCandidateIds: ["candidate-1"],
+					expectedRequestRevision: "1",
+					expectedRoutingRevision: "1",
+					expectedStageRevision: "1",
+					reason: "Self-review blocked",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=test",
+					"idempotency-key": "reroute-blocked-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(result.status).toBe(200);
+		expect(calls).toEqual([
+			{
+				principalId: "admin-1",
+				input: {
+					approvers: [
+						{
+							principalId: "resolved-candidate-1",
+							displaySnapshot: { displayName: "Reviewer", email: null },
+						},
+					],
+					expectedRequestRevision: "1",
+					expectedRoutingRevision: "1",
+					expectedStageRevision: "1",
+					reason: "Self-review blocked",
+					requestId: "blocked-1",
+				},
+			},
+		]);
+		const disclaimers = await app.request(
+			"/api/v1/connection/admin/disclaimers",
+			{
+				headers: { cookie: "connection_session=test" },
+			},
+		);
+		expect(disclaimers.status).toBe(200);
+		const listed = await app.request(
+			"/api/v1/connection/admin/access-authorizations",
+			{
+				headers: { cookie: "connection_session=test" },
+			},
+		);
+		expect(listed.status).toBe(200);
+		const revoked = await app.request(
+			"/api/v1/connection/admin/access-authorizations/access-1/revoke",
+			{
+				method: "POST",
+				body: JSON.stringify({ expectedRevision: "2" }),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=test",
+					"idempotency-key": "revoke-access-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(revoked.status).toBe(200);
+		expect(calls.slice(-2)).toEqual([
+			{ listPrincipalId: "admin-1" },
+			{
+				principalId: "admin-1",
+				authorizationId: "access-1",
+				expectedRevision: "2",
+			},
+		]);
+		const campaign = await app.request(
+			"/api/v1/connection/admin/reapproval-campaigns",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					providerReleaseId: "jira-release-1",
+					capabilityProfileId: "profile-1",
+					triggerKind: "POLICY",
+					triggerVersionId: "policy-2",
+					reason: "Authorization changed",
+					deadlineAt: "2030-01-01T00:00:00.000Z",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=test",
+					"idempotency-key": "create-reapproval-campaign-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(campaign.status).toBe(201);
+		expect(calls.at(-1)).toMatchObject({
+			campaignPrincipalId: "admin-1",
+			input: { triggerVersionId: "policy-2" },
+		});
+		const failedEvents = await app.request(
+			"/api/v1/connection/admin/outbox-failures",
+			{
+				headers: { cookie: "connection_session=test" },
+			},
+		);
+		expect(failedEvents.status).toBe(200);
+		expect(calls.at(-1)).toEqual({ listFailuresPrincipalId: "admin-1" });
+		const retriedEvent = await app.request(
+			"/api/v1/connection/admin/outbox-failures/event-1/retry",
+			{
+				method: "POST",
+				body: JSON.stringify({ expectedAttempts: 10 }),
+				headers: {
+					"content-type": "application/json",
+					cookie: "connection_session=test",
+					"idempotency-key": "retry-outbox-event-1",
+					origin: "https://connection.example",
+				},
+			},
+		);
+		expect(retriedEvent.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			principalId: "admin-1",
+			eventId: "event-1",
+			expectedAttempts: 10,
+		});
+		const delegationHeaders = {
+			"content-type": "application/json",
+			cookie: "connection_session=test",
+			"idempotency-key": "create-delegation-1",
+			origin: "https://connection.example",
+		};
+		const createdDelegation = await app.request(
+			"/api/v1/connection/admin/approval-delegations",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					principalCandidateId: "candidate-1",
+					delegateCandidateId: "candidate-2",
+					startsAt: "2030-01-01T00:00:00Z",
+					endsAt: "2030-01-02T00:00:00Z",
+				}),
+				headers: delegationHeaders,
+			},
+		);
+		expect(createdDelegation.status).toBe(201);
+		expect(calls.at(-1)).toMatchObject({
+			principalId: "admin-1",
+			delegation: {
+				principalId: "resolved-candidate-1",
+				delegatePrincipalId: "resolved-candidate-2",
+			},
+		});
+		const delegationList = await app.request(
+			"/api/v1/connection/admin/approval-delegations",
+			{
+				headers: { cookie: "connection_session=test" },
+			},
+		);
+		expect(delegationList.status).toBe(200);
+		expect(calls.at(-1)).toEqual({ listDelegationsPrincipalId: "admin-1" });
+		const revokedDelegation = await app.request(
+			"/api/v1/connection/admin/approval-delegations/delegation-1/revoke",
+			{
+				method: "POST",
+				body: JSON.stringify({ expectedRevision: "1" }),
+				headers: {
+					...delegationHeaders,
+					"idempotency-key": "revoke-delegation-1",
+				},
+			},
+		);
+		expect(revokedDelegation.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			principalId: "admin-1",
+			delegationId: "delegation-1",
+			expectedRevision: "1",
+		});
+		const policyHeaders = {
+			"content-type": "application/json",
+			cookie: "connection_session=test",
+			origin: "https://connection.example",
+		};
+		const publishedPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/publish",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					materialChange: true,
+					reapprovalDeadlineAt: "2030-01-01T00:00:00Z",
+					reason: "Material change",
+				}),
+				headers: {
+					...policyHeaders,
+					"idempotency-key": "publish-material-policy-1",
+				},
+			},
+		);
+		expect(publishedPolicy.status).toBe(204);
+		expect(calls.slice(-2)).toEqual([
+			{ verifiedApprover: "approver-1" },
+			{
+				publishPolicy: {
+					actorPrincipalId: "admin-1",
+					policyVersionId: "policy-1",
+					materialChange: true,
+					reapprovalDeadlineAt: "2030-01-01T00:00:00Z",
+					reason: "Material change",
+				},
+			},
+		]);
+		const revokedPolicy = await app.request(
+			"/api/v1/connection/admin/access-policies/policy-1/revoke",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					expectedRevision: "2",
+					reason: "Security incident",
+				}),
+				headers: { ...policyHeaders, "idempotency-key": "revoke-policy-1" },
+			},
+		);
+		expect(revokedPolicy.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			revokePolicy: {
+				actorPrincipalId: "admin-1",
+				policyVersionId: "policy-1",
+				expectedRevision: "2",
+				reason: "Security incident",
+			},
+		});
+	});
+
+	it("reconnects only the browser Principal's target and rejects Permit mixing", async () => {
+		const calls: unknown[] = [];
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					connectProviderCredential: async (...args: unknown[]) => {
+						calls.push(args);
+						if (!args[3])
+							throw new ConnectionError(
+								"FORBIDDEN",
+								"Approval Permit required",
+							);
+						return { connectionId: "connection-2" };
+					},
+					reconnectProviderCredential: async (...args: unknown[]) => {
+						calls.push(args);
+						return { connectionId: "connection-1" };
+					},
+					startGithubOAuth: async (...args: unknown[]) => {
+						calls.push(args);
+						if (!args[2] && !args[3])
+							throw new ConnectionError(
+								"FORBIDDEN",
+								"Approval Permit required",
+							);
+						return { authorizationUrl: "https://github.example/authorize" };
+					},
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {
+				getBrowserAccount: async () => ({
+					principalId: "owner-1",
+					displayName: "Owner",
+					email: null,
+				}),
+			} as unknown as ConnectionOAuthService,
+		});
+		const headers = {
+			"content-type": "application/json",
+			cookie: "connection_session=test",
+			origin: "https://connection.example",
+		};
+		const credential = await app.request(
+			"/api/v1/connection/connections/connection-1/reauthorize",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					providerId: "bitbucket",
+					accessToken: "fixture-token",
+				}),
+				headers: { ...headers, "idempotency-key": "reconnect-credential-1" },
+			},
+		);
+		expect(credential.status).toBe(201);
+		expect(calls[0]).toEqual([
+			"owner-1",
+			"connection-1",
+			"bitbucket",
+			"fixture-token",
+		]);
+		const oauth = await app.request(
+			"/api/v1/connection/connections/connection-1/reauthorize",
+			{
+				method: "POST",
+				body: JSON.stringify({ mode: "OAUTH" }),
+				headers: { ...headers, "idempotency-key": "reconnect-oauth-1" },
+			},
+		);
+		expect(oauth.status).toBe(200);
+		expect(calls[1]).toEqual([
+			"owner-1",
+			"https://connection.example/oauth/callback",
+			undefined,
+			"connection-1",
+		]);
+		const mixed = await app.request(
+			"/api/v1/connection/connections/connection-1/reauthorize",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					providerId: "bitbucket",
+					accessToken: "fixture-token",
+					accessRequestId: "request-1",
+				}),
+				headers: { ...headers, "idempotency-key": "reconnect-mixed-1" },
+			},
+		);
+		expect(mixed.status).toBe(400);
+		expect(calls).toHaveLength(2);
+		const noPermitCredential = await app.request(
+			"/api/v1/connection/provider-credentials",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					providerId: "bitbucket",
+					accessToken: "fixture-token",
+				}),
+				headers: { ...headers, "idempotency-key": "new-credential-no-permit" },
+			},
+		);
+		expect(noPermitCredential.status).toBe(404);
+		const approvedCredential = await app.request(
+			"/api/v1/connection/provider-credentials",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					providerId: "bitbucket",
+					accessToken: "fixture-token",
+					accessRequestId: "approved-request-1",
+				}),
+				headers: { ...headers, "idempotency-key": "new-credential-approved" },
+			},
+		);
+		expect(approvedCredential.status).toBe(201);
+		expect(calls.slice(2, 4)).toEqual([
+			["owner-1", "bitbucket", "fixture-token", undefined],
+			["owner-1", "bitbucket", "fixture-token", "approved-request-1"],
+		]);
+		const noPermitOAuth = await app.request(
+			"/api/v1/connection/oauth-transactions",
+			{
+				method: "POST",
+				body: "{}",
+				headers: { ...headers, "idempotency-key": "new-oauth-no-permit" },
+			},
+		);
+		expect(noPermitOAuth.status).toBe(404);
+		const approvedOAuth = await app.request(
+			"/api/v1/connection/oauth-transactions",
+			{
+				method: "POST",
+				body: JSON.stringify({ accessRequestId: "approved-request-2" }),
+				headers: { ...headers, "idempotency-key": "new-oauth-approved" },
+			},
+		);
+		expect(approvedOAuth.status).toBe(200);
+		expect(calls.slice(4)).toEqual([
+			["owner-1", "https://connection.example/oauth/callback", undefined],
+			[
+				"owner-1",
+				"https://connection.example/oauth/callback",
+				"approved-request-2",
+			],
+		]);
 	});
 
 	it("maps direct Browser command replay failures to the stable 409 envelope", async () => {

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, ConnectProviderCredentialData, ConnectProviderCredentialErrors, ConnectProviderCredentialResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListProviderUpgradeCampaignsData, ListProviderUpgradeCampaignsErrors, ListProviderUpgradeCampaignsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses, UpgradeProviderConnectionData, UpgradeProviderConnectionErrors, UpgradeProviderConnectionResponses } from './types.gen';
+import type { ArchiveConnectionNotificationsData, ArchiveConnectionNotificationsErrors, ArchiveConnectionNotificationsResponses, CancelConnectionAccessRequestData, CancelConnectionAccessRequestErrors, CancelConnectionAccessRequestResponses, ConfirmAuthorizationData, ConfirmAuthorizationErrors, ConfirmAuthorizationResponses, ConnectProviderCredentialData, ConnectProviderCredentialErrors, ConnectProviderCredentialResponses, CreateApprovalCapabilityProfileData, CreateApprovalCapabilityProfileErrors, CreateApprovalCapabilityProfileResponses, CreateApprovalDelegationData, CreateApprovalDelegationErrors, CreateApprovalDelegationResponses, CreateApprovalDisclaimerData, CreateApprovalDisclaimerErrors, CreateApprovalDisclaimerResponses, CreateAuthorizationPreviewData, CreateAuthorizationPreviewErrors, CreateAuthorizationPreviewResponses, CreateConnectionAccessPolicyData, CreateConnectionAccessPolicyErrors, CreateConnectionAccessPolicyResponses, CreateReapprovalCampaignData, CreateReapprovalCampaignErrors, CreateReapprovalCampaignResponses, CreateSharedScopeData, CreateSharedScopeErrors, CreateSharedScopeResponses, DecideConnectionAccessRequestData, DecideConnectionAccessRequestErrors, DecideConnectionAccessRequestResponses, DisconnectConnectionData, DisconnectConnectionErrors, DisconnectConnectionResponses, DisconnectSharedConnectionData, DisconnectSharedConnectionErrors, DisconnectSharedConnectionResponses, GetApprovalPolicyStagesData, GetApprovalPolicyStagesErrors, GetApprovalPolicyStagesResponses, GetConnectionAccessRequestData, GetConnectionAccessRequestErrors, GetConnectionAccessRequestResponses, GetConnectionBrowserOpenApiData, GetConnectionBrowserOpenApiResponses, GetConnectionsData, GetConnectionsErrors, GetConnectionsResponses, GetSessionData, GetSessionErrors, GetSessionResponses, GetSharedConnectionsData, GetSharedConnectionsErrors, GetSharedConnectionsResponses, GrantAdministratorData, GrantAdministratorErrors, GrantAdministratorResponses, GrantSharedScopePrincipalData, GrantSharedScopePrincipalErrors, GrantSharedScopePrincipalResponses, IssueTokenData, IssueTokenErrors, IssueTokenResponses, ListAdminAccessAuthorizationsData, ListAdminAccessAuthorizationsErrors, ListAdminAccessAuthorizationsResponses, ListAdministratorsData, ListAdministratorsErrors, ListAdministratorsResponses, ListApprovalDelegationsData, ListApprovalDelegationsErrors, ListApprovalDelegationsResponses, ListApprovalDisclaimersData, ListApprovalDisclaimersErrors, ListApprovalDisclaimersResponses, ListApprovalPolicyCatalogData, ListApprovalPolicyCatalogErrors, ListApprovalPolicyCatalogResponses, ListApprovalRoutingBlockedData, ListApprovalRoutingBlockedErrors, ListApprovalRoutingBlockedResponses, ListConnectionAccessOptionsData, ListConnectionAccessOptionsErrors, ListConnectionAccessOptionsResponses, ListConnectionAccessRequestsData, ListConnectionAccessRequestsErrors, ListConnectionAccessRequestsResponses, ListConnectionApprovalQueueData, ListConnectionApprovalQueueErrors, ListConnectionApprovalQueueResponses, ListConnectionNotificationsData, ListConnectionNotificationsErrors, ListConnectionNotificationsResponses, ListConnectionOutboxFailuresData, ListConnectionOutboxFailuresErrors, ListConnectionOutboxFailuresResponses, ListConnectionWorkItemsData, ListConnectionWorkItemsErrors, ListConnectionWorkItemsResponses, ListProviderUpgradeCampaignsData, ListProviderUpgradeCampaignsErrors, ListProviderUpgradeCampaignsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, PrepareConnectionAccessData, PrepareConnectionAccessErrors, PrepareConnectionAccessResponses, PublishApprovalCapabilityProfileData, PublishApprovalCapabilityProfileErrors, PublishApprovalCapabilityProfileResponses, PublishApprovalDisclaimerData, PublishApprovalDisclaimerErrors, PublishApprovalDisclaimerResponses, PublishConnectionAccessPolicyData, PublishConnectionAccessPolicyErrors, PublishConnectionAccessPolicyResponses, ReadConnectionNotificationsData, ReadConnectionNotificationsErrors, ReadConnectionNotificationsResponses, ReauthorizeProviderConnectionData, ReauthorizeProviderConnectionErrors, ReauthorizeProviderConnectionResponses, RenameSharedScopeData, RenameSharedScopeErrors, RenameSharedScopeResponses, RerouteApprovalRequestData, RerouteApprovalRequestErrors, RerouteApprovalRequestResponses, RetryConnectionOutboxFailureData, RetryConnectionOutboxFailureErrors, RetryConnectionOutboxFailureResponses, RevokeAdminAccessAuthorizationData, RevokeAdminAccessAuthorizationErrors, RevokeAdminAccessAuthorizationResponses, RevokeAdministratorData, RevokeAdministratorErrors, RevokeAdministratorResponses, RevokeApprovalDelegationData, RevokeApprovalDelegationErrors, RevokeApprovalDelegationResponses, RevokeConnectionAccessPolicyData, RevokeConnectionAccessPolicyErrors, RevokeConnectionAccessPolicyResponses, RevokeGrantData, RevokeGrantErrors, RevokeGrantResponses, RevokeSharedScopePrincipalData, RevokeSharedScopePrincipalErrors, RevokeSharedScopePrincipalResponses, RevokeTokenData, RevokeTokenErrors, RevokeTokenResponses, SearchApprovalEmployeeCandidatesData, SearchApprovalEmployeeCandidatesErrors, SearchApprovalEmployeeCandidatesResponses, StartGithubOAuthData, StartGithubOAuthErrors, StartGithubOAuthResponses, SubmitConnectionAccessRenewalData, SubmitConnectionAccessRenewalErrors, SubmitConnectionAccessRenewalResponses, SubmitConnectionAccessRequestData, SubmitConnectionAccessRequestErrors, SubmitConnectionAccessRequestResponses, UpgradeProviderConnectionData, UpgradeProviderConnectionErrors, UpgradeProviderConnectionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -127,6 +127,20 @@ export const connectProviderCredential = <ThrowOnError extends boolean = false>(
     }
 });
 
+export const reauthorizeProviderConnection = <ThrowOnError extends boolean = false>(options: Options<ReauthorizeProviderConnectionData, ThrowOnError>): RequestResult<ReauthorizeProviderConnectionResponses, ReauthorizeProviderConnectionErrors, ThrowOnError> => (options.client ?? client).post<ReauthorizeProviderConnectionResponses, ReauthorizeProviderConnectionErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/connections/{connectionId}/reauthorize',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const startGithubOAuth = <ThrowOnError extends boolean = false>(options: Options<StartGithubOAuthData, ThrowOnError>): RequestResult<StartGithubOAuthResponses, StartGithubOAuthErrors, ThrowOnError> => (options.client ?? client).post<StartGithubOAuthResponses, StartGithubOAuthErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
@@ -134,6 +148,410 @@ export const startGithubOAuth = <ThrowOnError extends boolean = false>(options: 
             type: 'apiKey'
         }],
     url: '/api/v1/connection/oauth-transactions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const listConnectionAccessOptions = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionAccessOptionsData, ThrowOnError>): RequestResult<ListConnectionAccessOptionsResponses, ListConnectionAccessOptionsErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionAccessOptionsResponses, ListConnectionAccessOptionsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-options',
+    ...options
+});
+
+export const listConnectionAccessRequests = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionAccessRequestsData, ThrowOnError>): RequestResult<ListConnectionAccessRequestsResponses, ListConnectionAccessRequestsErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionAccessRequestsResponses, ListConnectionAccessRequestsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-requests',
+    ...options
+});
+
+export const submitConnectionAccessRequest = <ThrowOnError extends boolean = false>(options: Options<SubmitConnectionAccessRequestData, ThrowOnError>): RequestResult<SubmitConnectionAccessRequestResponses, SubmitConnectionAccessRequestErrors, ThrowOnError> => (options.client ?? client).post<SubmitConnectionAccessRequestResponses, SubmitConnectionAccessRequestErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-requests',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const submitConnectionAccessRenewal = <ThrowOnError extends boolean = false>(options: Options<SubmitConnectionAccessRenewalData, ThrowOnError>): RequestResult<SubmitConnectionAccessRenewalResponses, SubmitConnectionAccessRenewalErrors, ThrowOnError> => (options.client ?? client).post<SubmitConnectionAccessRenewalResponses, SubmitConnectionAccessRenewalErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-authorizations/{authorizationId}/renewals',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const cancelConnectionAccessRequest = <ThrowOnError extends boolean = false>(options: Options<CancelConnectionAccessRequestData, ThrowOnError>): RequestResult<CancelConnectionAccessRequestResponses, CancelConnectionAccessRequestErrors, ThrowOnError> => (options.client ?? client).delete<CancelConnectionAccessRequestResponses, CancelConnectionAccessRequestErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-requests/{requestId}',
+    ...options
+});
+
+export const getConnectionAccessRequest = <ThrowOnError extends boolean = false>(options: Options<GetConnectionAccessRequestData, ThrowOnError>): RequestResult<GetConnectionAccessRequestResponses, GetConnectionAccessRequestErrors, ThrowOnError> => (options.client ?? client).get<GetConnectionAccessRequestResponses, GetConnectionAccessRequestErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-requests/{requestId}',
+    ...options
+});
+
+export const listApprovalRoutingBlocked = <ThrowOnError extends boolean = false>(options?: Options<ListApprovalRoutingBlockedData, ThrowOnError>): RequestResult<ListApprovalRoutingBlockedResponses, ListApprovalRoutingBlockedErrors, ThrowOnError> => (options?.client ?? client).get<ListApprovalRoutingBlockedResponses, ListApprovalRoutingBlockedErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/routing-blocked',
+    ...options
+});
+
+export const prepareConnectionAccess = <ThrowOnError extends boolean = false>(options: Options<PrepareConnectionAccessData, ThrowOnError>): RequestResult<PrepareConnectionAccessResponses, PrepareConnectionAccessErrors, ThrowOnError> => (options.client ?? client).post<PrepareConnectionAccessResponses, PrepareConnectionAccessErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/access-requests/{requestId}/connect',
+    ...options
+});
+
+export const listAdminAccessAuthorizations = <ThrowOnError extends boolean = false>(options?: Options<ListAdminAccessAuthorizationsData, ThrowOnError>): RequestResult<ListAdminAccessAuthorizationsResponses, ListAdminAccessAuthorizationsErrors, ThrowOnError> => (options?.client ?? client).get<ListAdminAccessAuthorizationsResponses, ListAdminAccessAuthorizationsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-authorizations',
+    ...options
+});
+
+export const revokeAdminAccessAuthorization = <ThrowOnError extends boolean = false>(options: Options<RevokeAdminAccessAuthorizationData, ThrowOnError>): RequestResult<RevokeAdminAccessAuthorizationResponses, RevokeAdminAccessAuthorizationErrors, ThrowOnError> => (options.client ?? client).post<RevokeAdminAccessAuthorizationResponses, RevokeAdminAccessAuthorizationErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-authorizations/{authorizationId}/revoke',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const createReapprovalCampaign = <ThrowOnError extends boolean = false>(options: Options<CreateReapprovalCampaignData, ThrowOnError>): RequestResult<CreateReapprovalCampaignResponses, CreateReapprovalCampaignErrors, ThrowOnError> => (options.client ?? client).post<CreateReapprovalCampaignResponses, CreateReapprovalCampaignErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/reapproval-campaigns',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const rerouteApprovalRequest = <ThrowOnError extends boolean = false>(options: Options<RerouteApprovalRequestData, ThrowOnError>): RequestResult<RerouteApprovalRequestResponses, RerouteApprovalRequestErrors, ThrowOnError> => (options.client ?? client).post<RerouteApprovalRequestResponses, RerouteApprovalRequestErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-requests/{requestId}/reroute',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const listApprovalDelegations = <ThrowOnError extends boolean = false>(options?: Options<ListApprovalDelegationsData, ThrowOnError>): RequestResult<ListApprovalDelegationsResponses, ListApprovalDelegationsErrors, ThrowOnError> => (options?.client ?? client).get<ListApprovalDelegationsResponses, ListApprovalDelegationsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/approval-delegations',
+    ...options
+});
+
+export const createApprovalDelegation = <ThrowOnError extends boolean = false>(options: Options<CreateApprovalDelegationData, ThrowOnError>): RequestResult<CreateApprovalDelegationResponses, CreateApprovalDelegationErrors, ThrowOnError> => (options.client ?? client).post<CreateApprovalDelegationResponses, CreateApprovalDelegationErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/approval-delegations',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const revokeApprovalDelegation = <ThrowOnError extends boolean = false>(options: Options<RevokeApprovalDelegationData, ThrowOnError>): RequestResult<RevokeApprovalDelegationResponses, RevokeApprovalDelegationErrors, ThrowOnError> => (options.client ?? client).post<RevokeApprovalDelegationResponses, RevokeApprovalDelegationErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/approval-delegations/{delegationId}/revoke',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const listConnectionOutboxFailures = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionOutboxFailuresData, ThrowOnError>): RequestResult<ListConnectionOutboxFailuresResponses, ListConnectionOutboxFailuresErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionOutboxFailuresResponses, ListConnectionOutboxFailuresErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/outbox-failures',
+    ...options
+});
+
+export const retryConnectionOutboxFailure = <ThrowOnError extends boolean = false>(options: Options<RetryConnectionOutboxFailureData, ThrowOnError>): RequestResult<RetryConnectionOutboxFailureResponses, RetryConnectionOutboxFailureErrors, ThrowOnError> => (options.client ?? client).post<RetryConnectionOutboxFailureResponses, RetryConnectionOutboxFailureErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/outbox-failures/{eventId}/retry',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const listConnectionWorkItems = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionWorkItemsData, ThrowOnError>): RequestResult<ListConnectionWorkItemsResponses, ListConnectionWorkItemsErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionWorkItemsResponses, ListConnectionWorkItemsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/work-items',
+    ...options
+});
+
+export const listConnectionNotifications = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionNotificationsData, ThrowOnError>): RequestResult<ListConnectionNotificationsResponses, ListConnectionNotificationsErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionNotificationsResponses, ListConnectionNotificationsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/notifications',
+    ...options
+});
+
+export const readConnectionNotifications = <ThrowOnError extends boolean = false>(options: Options<ReadConnectionNotificationsData, ThrowOnError>): RequestResult<ReadConnectionNotificationsResponses, ReadConnectionNotificationsErrors, ThrowOnError> => (options.client ?? client).post<ReadConnectionNotificationsResponses, ReadConnectionNotificationsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/notifications/read',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const archiveConnectionNotifications = <ThrowOnError extends boolean = false>(options: Options<ArchiveConnectionNotificationsData, ThrowOnError>): RequestResult<ArchiveConnectionNotificationsResponses, ArchiveConnectionNotificationsErrors, ThrowOnError> => (options.client ?? client).post<ArchiveConnectionNotificationsResponses, ArchiveConnectionNotificationsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/notifications/archive',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const listConnectionApprovalQueue = <ThrowOnError extends boolean = false>(options?: Options<ListConnectionApprovalQueueData, ThrowOnError>): RequestResult<ListConnectionApprovalQueueResponses, ListConnectionApprovalQueueErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectionApprovalQueueResponses, ListConnectionApprovalQueueErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/approval-queue',
+    ...options
+});
+
+export const searchApprovalEmployeeCandidates = <ThrowOnError extends boolean = false>(options: Options<SearchApprovalEmployeeCandidatesData, ThrowOnError>): RequestResult<SearchApprovalEmployeeCandidatesResponses, SearchApprovalEmployeeCandidatesErrors, ThrowOnError> => (options.client ?? client).get<SearchApprovalEmployeeCandidatesResponses, SearchApprovalEmployeeCandidatesErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/employee-candidates',
+    ...options
+});
+
+export const createApprovalCapabilityProfile = <ThrowOnError extends boolean = false>(options: Options<CreateApprovalCapabilityProfileData, ThrowOnError>): RequestResult<CreateApprovalCapabilityProfileResponses, CreateApprovalCapabilityProfileErrors, ThrowOnError> => (options.client ?? client).post<CreateApprovalCapabilityProfileResponses, CreateApprovalCapabilityProfileErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/capability-profiles',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const publishApprovalCapabilityProfile = <ThrowOnError extends boolean = false>(options: Options<PublishApprovalCapabilityProfileData, ThrowOnError>): RequestResult<PublishApprovalCapabilityProfileResponses, PublishApprovalCapabilityProfileErrors, ThrowOnError> => (options.client ?? client).post<PublishApprovalCapabilityProfileResponses, PublishApprovalCapabilityProfileErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/capability-profiles/{profileId}/publish',
+    ...options
+});
+
+export const listApprovalDisclaimers = <ThrowOnError extends boolean = false>(options?: Options<ListApprovalDisclaimersData, ThrowOnError>): RequestResult<ListApprovalDisclaimersResponses, ListApprovalDisclaimersErrors, ThrowOnError> => (options?.client ?? client).get<ListApprovalDisclaimersResponses, ListApprovalDisclaimersErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/disclaimers',
+    ...options
+});
+
+export const createApprovalDisclaimer = <ThrowOnError extends boolean = false>(options: Options<CreateApprovalDisclaimerData, ThrowOnError>): RequestResult<CreateApprovalDisclaimerResponses, CreateApprovalDisclaimerErrors, ThrowOnError> => (options.client ?? client).post<CreateApprovalDisclaimerResponses, CreateApprovalDisclaimerErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/disclaimers',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const publishApprovalDisclaimer = <ThrowOnError extends boolean = false>(options: Options<PublishApprovalDisclaimerData, ThrowOnError>): RequestResult<PublishApprovalDisclaimerResponses, PublishApprovalDisclaimerErrors, ThrowOnError> => (options.client ?? client).post<PublishApprovalDisclaimerResponses, PublishApprovalDisclaimerErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/disclaimers/{disclaimerId}/publish',
+    ...options
+});
+
+export const listApprovalPolicyCatalog = <ThrowOnError extends boolean = false>(options?: Options<ListApprovalPolicyCatalogData, ThrowOnError>): RequestResult<ListApprovalPolicyCatalogResponses, ListApprovalPolicyCatalogErrors, ThrowOnError> => (options?.client ?? client).get<ListApprovalPolicyCatalogResponses, ListApprovalPolicyCatalogErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies',
+    ...options
+});
+
+export const createConnectionAccessPolicy = <ThrowOnError extends boolean = false>(options: Options<CreateConnectionAccessPolicyData, ThrowOnError>): RequestResult<CreateConnectionAccessPolicyResponses, CreateConnectionAccessPolicyErrors, ThrowOnError> => (options.client ?? client).post<CreateConnectionAccessPolicyResponses, CreateConnectionAccessPolicyErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getApprovalPolicyStages = <ThrowOnError extends boolean = false>(options: Options<GetApprovalPolicyStagesData, ThrowOnError>): RequestResult<GetApprovalPolicyStagesResponses, GetApprovalPolicyStagesErrors, ThrowOnError> => (options.client ?? client).get<GetApprovalPolicyStagesResponses, GetApprovalPolicyStagesErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/stages',
+    ...options
+});
+
+export const publishConnectionAccessPolicy = <ThrowOnError extends boolean = false>(options: Options<PublishConnectionAccessPolicyData, ThrowOnError>): RequestResult<PublishConnectionAccessPolicyResponses, PublishConnectionAccessPolicyErrors, ThrowOnError> => (options.client ?? client).post<PublishConnectionAccessPolicyResponses, PublishConnectionAccessPolicyErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/publish',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const revokeConnectionAccessPolicy = <ThrowOnError extends boolean = false>(options: Options<RevokeConnectionAccessPolicyData, ThrowOnError>): RequestResult<RevokeConnectionAccessPolicyResponses, RevokeConnectionAccessPolicyErrors, ThrowOnError> => (options.client ?? client).post<RevokeConnectionAccessPolicyResponses, RevokeConnectionAccessPolicyErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/admin/access-policies/{policyId}/revoke',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const decideConnectionAccessRequest = <ThrowOnError extends boolean = false>(options: Options<DecideConnectionAccessRequestData, ThrowOnError>): RequestResult<DecideConnectionAccessRequestResponses, DecideConnectionAccessRequestErrors, ThrowOnError> => (options.client ?? client).post<DecideConnectionAccessRequestResponses, DecideConnectionAccessRequestErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'connection_session',
+            type: 'apiKey'
+        }],
+    url: '/api/v1/connection/approval-requests/{requestId}/decisions',
     ...options,
     headers: {
         'Content-Type': 'application/json',

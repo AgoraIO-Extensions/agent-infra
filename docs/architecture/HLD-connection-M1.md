@@ -1083,6 +1083,53 @@ type CredentialVersion = {
 - scope 比较使用 ProviderRelease 定义的 canonical scope set，不比较原始字符串顺序。
 - Consumer 声明的 scope 不能扩大 Provider 实际授予 scope。
 
+### 16.7 Connection Access Approval
+
+个人 Provider Connection 在 Credential 流程之前增加独立公司审批权威。它不复用 Consumer Grant、Provider OAuth transaction 或 ProviderUpgradeTask；完整决策原因见 [Connection Access Approval Authority ADR](../adr/ADR-connection-access-approval-authority.md)。
+
+`ConnectionAccessPolicyVersion` 固定 exact ProviderRelease、Capability Profile、离散时长、Disclaimer version bundle 和 1–10 个严格顺序 ApprovalStage。每阶段固定 LDAP Principal 候选集合与 `ANY | ALL | AT_LEAST_N` quorum；PUBLISHED 后不可修改。同一最高优先级匹配多条、没有匹配或任何安全输入缺失时拒绝申请。
+
+紧急撤销 current PUBLISHED Policy 时，在同一事务将其 ProviderRelease + Capability Profile 的 PUBLISHED/SUPERSEDED 版本标记 REVOKED，取消对应未终结 Request/未消费 Permit，暂停该组合的 ACTIVE、REAPPROVAL_REQUIRED 与 DISCONNECTED 个人 Access Authorization，提升 account revision/execution fence 并暂停 active Grant。进行中的 Renewal 同样取消；Request、WorkItem、Notification、audit/outbox 同事务收敛。旧 Provider submission 已进入 `SUBMISSION_STARTED` 时仍保留真实结果或 `UNCERTAIN`。撤销不能因状态重放而恢复资格。
+
+替代版本发布明确记录是否为 material；material 发布必须携带管理员指定的未来重审截止时间和原因，在同一事务创建 POLICY ReapprovalCampaign 并标记受影响资格为 REAPPROVAL_REQUIRED。新增 material Disclaimer bundle 不能声明为非 material。非 material 换版只影响新申请，不改变既有 Authorization。
+已断开的同账号资格仍属于 material Campaign 的受影响对象；重审前不能凭旧 `DISCONNECTED` 状态直接重连。
+
+```ts
+type ConnectionAccessRequestState =
+  | "SUBMITTED"
+  | "IN_REVIEW"
+  | "ROUTING_BLOCKED"
+  | "APPROVED_PENDING_CONNECTION"
+  | "CONSUMED"
+  | "REJECTED"
+  | "CANCELED"
+  | "EXPIRED";
+
+type ConnectionAccessAuthorizationState =
+  | "ACTIVE"
+  | "REAPPROVAL_REQUIRED"
+  | "SUSPENDED"
+  | "EXPIRED"
+  | "DISCONNECTED"
+  | "REVOKED";
+```
+
+ApprovalDecision 只接受 current Stage 的合格审批人，以 Request、Stage 和 routing revision 做事务内 CAS；Decision 不可修改。全部 Stage 满足 quorum 后产生服务端一次性 Connect Permit。OAuth/PAT/API Key validation 成功、稳定外部账号已证明、Connection 与 Access Authorization 已持久化时，Permit 才在同一事务消费。
+
+有限期 Access Authorization 的 Renewal Request 是例外：仅在已发布 PolicyVersion 的续期窗口内，固定同一 Principal、外部账号、ProviderRelease 和 Capability Profile，且原资格尚未自然到期时发起。它复用顺序 Stage 和免责声明确认，但最终通过时不生成 Connect Permit、不收集 Provider Credential，而是在同一事务将原 `validUntil` 从 `GREATEST(validUntil, now())` 起延长所选有限时长，记录 Renewal 和 Authorization revision。待审不产生宽限；原期限先到时仍阻断调用并暂停 Grant，之后审批通过才恢复同一资格。`PERMANENT`、换号、扩权或不兼容 ProviderRelease 不进入续期路径。
+
+所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
+
+Access Authorization 冻结 Principal、Connection、稳定外部账号指纹、ProviderRelease、Capability Profile、有效期和 revision。Invocation 建立与 Provider submission admission 都必须验证 current ACTIVE Authorization 及数据库时间；后台 expiry worker 只推进状态和通知，不是唯一门禁。到期、撤销和暂停提升 account/authorization revision 与 execution fence，并暂停相关 Grant；`SUBMISSION_STARTED` 调用仍按 Effect/UNCERTAIN 语义收敛。
+
+Consumer Grant 预览与确认也只选择 Access Authorization 的 exact Capability Profile ActionVersion 集合，不能仅按 Credential scopes 展示或提交额外 Action。pre-launch 清单中的旧账号在 cutoff 前最多沿用当时 active Grant ActionVersion 并集；确认时重新读取当前资格，过期、撤销和重审截止后的旧 Preview 不得产生 Grant。
+
+WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读状态。审批状态变化、WorkItem recipient、audit 和 outbox 同事务写入；独立 dispatcher 幂等投递。读取或归档 Notification 不能批准申请、完成 WorkItem 或恢复授权。首期页面加载、窗口聚焦和有界轮询刷新，不新增 WebSocket/SSE。
+
+员工候选搜索只向管理员返回最小展示投影，审批权威使用 LDAP issuer + uid 的 Principal 映射；姓名、邮箱、alias 和外部目录 iamId 不得成为授权键。生产员工目录 contract 未通过 Identity Owner gate 时，Policy 发布保持禁用。
+
+审批 migration 记录不可变 pre-launch 账号清单时间；此后新个人 Connection 即使尚未执行 cutoff，也必须先获得 Permit。清单内尚无 Authorization 的旧连接可在 cutoff 前继续按旧 Grant 使用，但一旦产生 Authorization 不再回退到旧权限。enforcement 启用时记录不可变 cutoff，只按清单内 exact 已有账号、scope 和 active Grant ActionVersion 并集生成 `PRE_LAUNCH_BASELINE` Authorization；已按审批创建有效 Authorization 的连接保持原资格，不重复生成 baseline。cutoff 后全部新个人 Connection 强制 Permit。发现真实生产 legacy 或不明数据时禁止使用该简化 baseline。
+
 ## 17. Consumer Grant 与授权交集
 
 ### 17.1 AuthorizationRoot
@@ -1669,6 +1716,12 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `authorization_consent` | id、root_id、preview_id、display_snapshot_ciphertext、snapshot_hash、codec_version、kms_key_ref、locale、confirmed_at | immutable；encryption context 绑定 environment/root/consent purpose |
 | `connection_grant` | id、root_id、connection_id、all frozen revisions/digests、status、consent_id | 不绑定 ConsumerInstance；current pointer only via root |
 | `grant_action_version` | grant_id、action_version_id、authorization_digest | composite PK |
+| `capability_profile` / `capability_profile_action_version` | release、ActionVersion 集合、effect/scope digest、state/revision | immutable published profile；非空 exact ActionVersion 集合 |
+| `connection_access_policy_version` / `approval_stage` / `stage_approver` | release/profile、priority、durations、Disclaimer bundle、顺序、quorum、LDAP Principal | published immutable；唯一 current match；1–10 stages |
+| `connection_access_request` / `request_stage` / `routing_revision` / `approval_decision` | applicant、policy/profile snapshot、purpose、duration、state/revisions、Decision | one open request per principal+release+profile；append-only Decision |
+| `connect_permit` | request、expiry、consumed connection | 服务端 take-once；只与 Connection 创建同事务消费 |
+| `connection_access_authorization` | principal、connection、account fingerprint、profile、validity、state/revision | one current per personal Connection；dispatch fence source |
+| `disclaimer_version` / `policy_disclaimer_version` | locale、content digest、state、owner metadata | published immutable；production policy 必须绑定基础版本 |
 
 Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
@@ -1849,6 +1902,17 @@ GET    /api/v1/connection/tokens
 POST   /api/v1/connection/tokens
 DELETE /api/v1/connection/tokens/{tokenId}
 GET    /api/v1/connection/connections
+GET    /api/v1/connection/access-options
+GET    /api/v1/connection/access-requests
+POST   /api/v1/connection/access-requests
+GET    /api/v1/connection/access-requests/{requestId}
+DELETE /api/v1/connection/access-requests/{requestId}
+POST   /api/v1/connection/access-requests/{requestId}/connect
+POST   /api/v1/connection/access-authorizations/{id}/renewals
+GET    /api/v1/connection/work-items
+GET    /api/v1/connection/notifications
+POST   /api/v1/connection/notifications/read
+POST   /api/v1/connection/notifications/archive
 POST   /api/v1/connection/oauth-transactions
 POST   /api/v1/connection/connections/{id}/reauthorize
 DELETE /api/v1/connection/connections/{id}
@@ -1860,6 +1924,29 @@ GET    /api/v1/connection/action-calls/{callId}
 GET    /api/v1/connection/admin/administrators
 PUT    /api/v1/connection/admin/administrators/{principalId}
 DELETE /api/v1/connection/admin/administrators/{principalId}
+GET    /api/v1/connection/approval-queue
+POST   /api/v1/connection/approval-requests/{requestId}/decisions
+GET    /api/v1/connection/admin/employee-candidates
+GET    /api/v1/connection/admin/approval-delegations
+POST   /api/v1/connection/admin/approval-delegations
+POST   /api/v1/connection/admin/approval-delegations/{delegationId}/revoke
+GET    /api/v1/connection/admin/outbox-failures
+POST   /api/v1/connection/admin/outbox-failures/{eventId}/retry
+POST   /api/v1/connection/admin/capability-profiles
+POST   /api/v1/connection/admin/capability-profiles/{profileId}/publish
+GET    /api/v1/connection/admin/access-policies
+POST   /api/v1/connection/admin/access-policies
+GET    /api/v1/connection/admin/access-policies/{policyId}/stages
+POST   /api/v1/connection/admin/access-policies/{policyId}/publish
+POST   /api/v1/connection/admin/access-policies/{policyId}/revoke
+GET    /api/v1/connection/admin/disclaimers
+POST   /api/v1/connection/admin/disclaimers
+POST   /api/v1/connection/admin/disclaimers/{disclaimerId}/publish
+GET    /api/v1/connection/admin/routing-blocked
+POST   /api/v1/connection/admin/access-requests/{requestId}/reroute
+GET    /api/v1/connection/admin/access-authorizations
+POST   /api/v1/connection/admin/access-authorizations/{authorizationId}/revoke
+POST   /api/v1/connection/admin/reapproval-campaigns
 GET    /api/v1/connection/admin/consumers/{consumerId}/declarations
 POST   /api/v1/connection/admin/consumers/{consumerId}/declarations
 GET    /api/v1/connection/admin/shared-connections

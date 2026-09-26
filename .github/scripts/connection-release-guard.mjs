@@ -8,9 +8,41 @@ const providers = {
 	jenkins: "packages/openconnector-adapter/src/jenkins.ts",
 	jira: "packages/openconnector-adapter/src/jira-server.ts",
 };
+const approvalFencePath = "packages/connection-contracts/approval-fence.json";
+const migrationJournalPath = "migrations/connection/meta/_journal.json";
 
 const git = (...args) =>
 	execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+function gitFileExists(ref, path) {
+	try {
+		git("cat-file", "-e", `${ref}:${path}`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export function compareApprovalFence(baseline, candidate, journal) {
+	const hasMigration = journal.entries?.some((entry) => entry.tag === "0032_connection_access_approval") === true;
+	if (baseline && !candidate) throw new Error("Approval fence cannot be removed");
+	if (hasMigration && !candidate) throw new Error("Approval fence manifest is required with migration 0032");
+	if (!candidate) return null;
+	if (!Number.isSafeInteger(candidate.protocolVersion) || candidate.protocolVersion < 1 ||
+		candidate.migration !== "0032_connection_access_approval" || !hasMigration) {
+		throw new Error("Approval fence manifest does not match the migration journal");
+	}
+	if (baseline && candidate.protocolVersion < baseline.protocolVersion) {
+		throw new Error(`Approval protocol downgrade: v${baseline.protocolVersion} -> v${candidate.protocolVersion}`);
+	}
+	return { before: baseline?.protocolVersion ?? null, after: candidate.protocolVersion };
+}
+
+function readApprovalFence(ref) {
+	return gitFileExists(ref, approvalFencePath)
+		? JSON.parse(git("show", `${ref}:${approvalFencePath}`))
+		: null;
+}
 
 export function parseCatalogSource(source, providerHint) {
 	const explicitActions = Object.fromEntries(
@@ -104,12 +136,30 @@ export function markdownDiff(rows) {
 }
 
 async function main() {
+	const approvalBaselineIndex = process.argv.indexOf("--approval-baseline");
+	if (approvalBaselineIndex >= 0) {
+		const baselineRef = process.argv[approvalBaselineIndex + 1];
+		if (!baselineRef) throw new Error("--approval-baseline requires a ref");
+		git("fetch", "origin", "connection", "--prune");
+		const approvalFence = compareApprovalFence(
+			readApprovalFence(baselineRef),
+			readApprovalFence("HEAD"),
+			JSON.parse(git("show", `HEAD:${migrationJournalPath}`)),
+		);
+		process.stdout.write(`${JSON.stringify({ approvalFence })}\n`);
+		return;
+	}
 	const baselineIndex = process.argv.indexOf("--baseline");
 	if (baselineIndex < 0 || !process.argv[baselineIndex + 1]) throw new Error("--baseline is required");
 	git("fetch", "origin", "connection", "--prune");
 	const sha = verifyCanonicalSha();
 	const rows = compareCatalogs(readCatalog(process.argv[baselineIndex + 1]), readCatalog("HEAD"));
-	process.stdout.write(`${JSON.stringify({ sha, rows })}\n${markdownDiff(rows)}\n`);
+	const approvalFence = compareApprovalFence(
+		readApprovalFence(process.argv[baselineIndex + 1]),
+		readApprovalFence("HEAD"),
+		JSON.parse(git("show", `HEAD:${migrationJournalPath}`)),
+	);
+	process.stdout.write(`${JSON.stringify({ sha, rows, approvalFence })}\n${markdownDiff(rows)}\nApproval fence: ${approvalFence ? `${approvalFence.before ?? "none"} -> v${approvalFence.after}` : "not enabled"}\n`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

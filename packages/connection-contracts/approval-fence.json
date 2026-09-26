@@ -1,0 +1,4 @@
+{
+	"protocolVersion": 1,
+	"migration": "0032_connection_access_approval"
+}

@@ -22,6 +22,9 @@ export const oauthAuthorizationRequestUnavailableMessage =
 export interface DirectoryAuthenticator {
 	authenticate(username: string, password: string): Promise<DirectoryIdentity>;
 	isActive(identity: { issuer: string; subject: string }): Promise<boolean>;
+	searchEmployees?(
+		query: string,
+	): Promise<Array<DirectoryIdentity & { alias: string | null }>>;
 }
 
 export type OAuthClientRegistration = {
@@ -143,6 +146,33 @@ export interface ConnectionPatBindingRepository {
 }
 
 export interface ConnectionOAuthRepository {
+	storeEmployeeCandidates?(input: {
+		requestedByPrincipalId: string;
+		candidates: readonly {
+			alias: string | null;
+			displayName: string;
+			email: string | null;
+			id: string;
+			identityIssuer: string;
+			identityReference: string;
+			identitySubjectHash: string;
+			legacyIdentitySubjectHash: string;
+		}[];
+	}): Promise<void>;
+	getEmployeeCandidate?(input: {
+		candidateId: string;
+		requestedByPrincipalId: string;
+	}): Promise<{ identityReference: string } | undefined>;
+	getEmployeePrincipalIdentity?(
+		principalId: string,
+	): Promise<{ identityReference: string } | undefined>;
+	resolveEmployeeCandidate?(input: {
+		candidateId: string;
+		requestedByPrincipalId: string;
+	}): Promise<{
+		displaySnapshot: { displayName: string; email: string | null };
+		principalId: string;
+	}>;
 	approveAuthorization(input: {
 		codeHash: string;
 		displayName: string;
@@ -633,6 +663,121 @@ export class ConnectionOAuthService {
 			sessionId: `browser-session-${randomUUID()}`,
 		});
 		return { account: this.browserAccount(account), expiresAt, sessionToken };
+	}
+
+	async searchEmployeeCandidates(
+		administratorPrincipalId: string,
+		query: string,
+	) {
+		const search = this.options.directory.searchEmployees;
+		const store = this.options.repository.storeEmployeeCandidates;
+		if (!search || !store) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory is unavailable",
+				503,
+			);
+		}
+		const identities = await search.call(this.options.directory, query);
+		const candidates = identities.map((identity) => ({
+			alias: identity.alias,
+			displayName: identity.displayName,
+			email: identity.email,
+			id: `employee-candidate-${randomUUID()}`,
+			identityIssuer: identity.issuer,
+			identityReference: this.protector.protect(identity),
+			identitySubjectHash: this.protector.subjectHash(
+				this.options.identityRealm,
+				identity,
+			),
+			legacyIdentitySubjectHash: this.protector.legacySubjectHash(identity),
+		}));
+		await store.call(this.options.repository, {
+			requestedByPrincipalId: administratorPrincipalId,
+			candidates,
+		});
+		return candidates.map(({ id, displayName, email, alias }) => ({
+			candidateId: id,
+			displayName,
+			email,
+			alias,
+		}));
+	}
+
+	async resolveEmployeeCandidate(
+		administratorPrincipalId: string,
+		candidateId: string,
+	) {
+		const get = this.options.repository.getEmployeeCandidate;
+		const resolve = this.options.repository.resolveEmployeeCandidate;
+		if (!get || !resolve) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory is unavailable",
+				503,
+			);
+		}
+		const candidate = await get.call(this.options.repository, {
+			candidateId,
+			requestedByPrincipalId: administratorPrincipalId,
+		});
+		if (!candidate) {
+			throw new OAuthProtocolError(
+				"access_denied",
+				"Employee candidate is unavailable",
+				403,
+			);
+		}
+		const identity = this.protector.unprotect(candidate.identityReference);
+		if (!(await this.options.directory.isActive(identity))) {
+			throw new OAuthProtocolError(
+				"access_denied",
+				"Employee candidate is inactive",
+				403,
+			);
+		}
+		return resolve.call(this.options.repository, {
+			candidateId,
+			requestedByPrincipalId: administratorPrincipalId,
+		});
+	}
+
+	async ensureActiveEmployeePrincipal(principalId: string) {
+		const get = this.options.repository.getEmployeePrincipalIdentity;
+		if (!get) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory is unavailable",
+				503,
+			);
+		}
+		const record = await get.call(this.options.repository, principalId);
+		if (!record) {
+			throw new OAuthProtocolError(
+				"access_denied",
+				"Approver identity is unavailable",
+				403,
+			);
+		}
+		let active = false;
+		try {
+			active = await this.options.directory.isActive(
+				this.protector.unprotect(record.identityReference),
+			);
+		} catch {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Employee directory verification is unavailable",
+				503,
+			);
+		}
+		if (!active) {
+			throw new OAuthProtocolError(
+				"access_denied",
+				"Approver is inactive",
+				403,
+			);
+		}
 	}
 
 	async getBrowserAccount(sessionToken: string | undefined) {

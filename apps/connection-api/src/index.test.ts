@@ -55,4 +55,65 @@ describe("connection-api recovery lifecycle", () => {
 		expect(attempts).toBe(2);
 		server.close();
 	});
+
+	it("runs approval expiry maintenance sequentially and stops with the server", async () => {
+		vi.useFakeTimers();
+		const calls: string[] = [];
+		let finish: (() => void) | undefined;
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			approvalMaintenance: {
+				expireDueAuthorizations: () => {
+					calls.push("authorization");
+					return new Promise<number>((resolve) => {
+						finish = () => resolve(1);
+					});
+				},
+				expireDueRequests: async () => {
+					calls.push("request");
+					return 1;
+				},
+			},
+			approvalMaintenanceIntervalMs: 100,
+			log: () => undefined,
+			port: 0,
+		});
+		await vi.advanceTimersByTimeAsync(300);
+		expect(calls).toEqual(["authorization"]);
+		finish?.();
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(calls).toEqual(["authorization", "request", "authorization"]);
+		server.close();
+		finish?.();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(calls).toEqual([
+			"authorization",
+			"request",
+			"authorization",
+			"request",
+		]);
+	});
+
+	it("runs a bounded notification dispatcher independently of recovery", async () => {
+		vi.useFakeTimers();
+		let deliveries = 0;
+		const server = startConnectionApi({
+			app: { fetch: () => new Response("ok") },
+			log: () => undefined,
+			notificationDispatcher: {
+				runOnce: async () => {
+					deliveries++;
+					return true;
+				},
+			},
+			notificationDispatchIntervalMs: 100,
+			port: 0,
+		});
+		await vi.advanceTimersByTimeAsync(300);
+		expect(deliveries).toBe(3);
+		server.close();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(deliveries).toBe(3);
+	});
 });

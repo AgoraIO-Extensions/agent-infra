@@ -1,7 +1,9 @@
 import type {
+	AccessRequestsResponse,
 	AuthorizationPreviewResponse,
 	Connection,
 	Grant,
+	ProviderCredentialRequest,
 } from "@agent-infra/connection-contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -37,6 +39,15 @@ import {
 	providerLabel,
 	Status,
 } from "../views";
+import { AccessRequestPanel } from "./access-request-panel";
+
+const accessStateLabels: Record<string, string> = {
+	DISCONNECTED: "已断开",
+	EXPIRED: "已到期",
+	REAPPROVAL_REQUIRED: "待重审",
+	REVOKED: "已撤销",
+	SUSPENDED: "已暂停",
+};
 
 export function ConnectionsPage() {
 	const queryClient = useQueryClient();
@@ -68,6 +79,53 @@ export function ConnectionsPage() {
 	const [jenkinsPending, setJenkinsPending] = useState(false);
 	const [jenkinsError, setJenkinsError] = useState<Error | null>(null);
 	const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
+	const [requestTrigger, setRequestTrigger] = useState(0);
+	const [requestTargetProvider, setRequestTargetProvider] = useState("");
+	const [renewalTarget, setRenewalTarget] =
+		useState<Connection["accessAuthorization"]>(null);
+	const [renewalProviderId, setRenewalProviderId] = useState("");
+	const [reconnectTargetId, setReconnectTargetId] = useState<string | null>(
+		null,
+	);
+	const [approvalRequiredProvider, setApprovalRequiredProvider] =
+		useState<ConnectorProviderId | null>(null);
+	const connectSearch = new URLSearchParams(window.location.search);
+	const accessRequestId = connectSearch.get("accessRequestId") ?? undefined;
+	const approvedProvider = connectSearch.get("provider");
+	const prepareAttempted = useRef<string | undefined>(undefined);
+	const approvedRequest = useQuery({
+		queryKey: ["approved-connection-request", accessRequestId],
+		queryFn: () =>
+			connectionApi.getConnectionAccessRequest(accessRequestId ?? ""),
+		enabled: Boolean(accessRequestId),
+	});
+	const prepareConnect = useMutation({
+		mutationFn: connectionApi.prepareConnectionAccess,
+	});
+	const requestReady = Boolean(
+		approvedRequest.data?.id === accessRequestId &&
+			approvedRequest.data?.state === "APPROVED_PENDING_CONNECTION" &&
+			approvedRequest.data?.connectExpiresAt &&
+			Date.parse(approvedRequest.data.connectExpiresAt) > Date.now() &&
+			approvedRequest.data?.providerId === approvedProvider,
+	);
+	useEffect(() => {
+		if (
+			!requestReady ||
+			!accessRequestId ||
+			prepareAttempted.current === accessRequestId
+		)
+			return;
+		prepareAttempted.current = accessRequestId;
+		prepareConnect.mutate(accessRequestId);
+	}, [accessRequestId, requestReady, prepareConnect.mutate]);
+	const approvedAccessRequestId =
+		requestReady &&
+		prepareConnect.data?.requestId === accessRequestId &&
+		prepareConnect.data?.providerId === approvedProvider &&
+		Date.parse(prepareConnect.data?.connectExpiresAt ?? "") > Date.now()
+			? accessRequestId
+			: undefined;
 	const callbackFailed =
 		new URLSearchParams(window.location.search).get("oauth") ===
 		"callback_failed";
@@ -76,6 +134,17 @@ export function ConnectionsPage() {
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
+		if (
+			accessRequestId &&
+			(approvedRequest.isPending ||
+				(requestReady && !prepareConnect.isSuccess && !prepareConnect.isError))
+		)
+			return;
+		if (!approvedAccessRequestId) {
+			if (provider)
+				setApprovalRequiredProvider(provider as ConnectorProviderId);
+			return;
+		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
@@ -84,12 +153,35 @@ export function ConnectionsPage() {
 			setJenkinsProviderId(provider);
 			setJenkinsOpen(true);
 		}
-	}, []);
+	}, [
+		accessRequestId,
+		approvedAccessRequestId,
+		approvedRequest.isPending,
+		requestReady,
+		prepareConnect.isSuccess,
+		prepareConnect.isError,
+	]);
 	const overview = useQuery({
 		queryKey: ["connections"],
 		queryFn: connectionApi.getConnections,
 	});
+	const accessRequests = useQuery({
+		queryKey: ["connection-access-requests"],
+		queryFn: connectionApi.listConnectionAccessRequests,
+		refetchInterval: 30_000,
+	});
 	const oauth = useGithubOAuth();
+	const reconnectOAuth = useMutation({
+		mutationFn: (connectionId: string) =>
+			connectionApi.reauthorizeProviderConnection({
+				connectionId,
+				body: { mode: "OAUTH" },
+			}),
+		onSuccess: (result) => {
+			if ("authorizationUrl" in result)
+				window.location.assign(result.authorizationUrl);
+		},
+	});
 	const disconnect = useMutation({
 		mutationFn: connectionApi.disconnectConnection,
 		onSuccess: () =>
@@ -103,15 +195,26 @@ export function ConnectionsPage() {
 			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
 		},
 	});
+	const connectCredential = (body: ProviderCredentialRequest) =>
+		reconnectTargetId
+			? connectionApi.reauthorizeProviderConnection({
+					connectionId: reconnectTargetId,
+					body,
+				})
+			: connectionApi.connectProviderCredential({
+					...body,
+					accessRequestId: approvedAccessRequestId,
+				});
 	const connectBitbucket = async (accessToken: string) => {
 		setBitbucketPending(true);
 		setBitbucketError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				accessToken,
 				providerId: "bitbucket",
 			});
 			setBitbucketOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setBitbucketError(
@@ -125,11 +228,12 @@ export function ConnectionsPage() {
 		setRehoboamPending(true);
 		setRehoboamError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				accessToken,
 				providerId: "rehoboam",
 			});
 			setRehoboamOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setRehoboamError(
@@ -146,11 +250,12 @@ export function ConnectionsPage() {
 		setJiraPending(true);
 		setJiraError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: "jira",
 				...credential,
 			});
 			setJiraOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setJiraError(error instanceof Error ? error : new Error("Jira 连接失败"));
@@ -165,11 +270,12 @@ export function ConnectionsPage() {
 		setConfluencePending(true);
 		setConfluenceError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: "confluence",
 				...credential,
 			});
 			setConfluenceOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setConfluenceError(
@@ -186,11 +292,12 @@ export function ConnectionsPage() {
 		setJenkinsPending(true);
 		setJenkinsError(null);
 		try {
-			await connectionApi.connectProviderCredential({
+			await connectCredential({
 				providerId: jenkinsProviderId,
 				...credential,
 			});
 			setJenkinsOpen(false);
+			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
 			setJenkinsError(
@@ -228,8 +335,8 @@ export function ConnectionsPage() {
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
 
-	const beginOAuth = () => oauth.begin();
-	const connectProvider = (providerId: ConnectorProviderId) => {
+	const beginOAuth = () => oauth.begin(undefined, approvedAccessRequestId);
+	const openProviderCredential = (providerId: ConnectorProviderId) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
@@ -238,6 +345,20 @@ export function ConnectionsPage() {
 			setJenkinsProviderId(providerId);
 			setJenkinsOpen(true);
 		} else beginOAuth();
+	};
+	const connectProvider = (providerId: ConnectorProviderId) => {
+		if (!approvedAccessRequestId || approvedProvider !== providerId) {
+			setRenewalTarget(null);
+			setRenewalProviderId("");
+			setReconnectTargetId(null);
+			setRequestTargetProvider(providerId);
+			setRequestTrigger((value) => value + 1);
+			document
+				.getElementById(`connection-access-${providerId}`)
+				?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+			return;
+		}
+		openProviderCredential(providerId);
 	};
 
 	const data = overview.data?.overview;
@@ -309,6 +430,15 @@ export function ConnectionsPage() {
 			) : null}
 			{overview.isError ? <PageError error={overview.error} /> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
+			{approvedRequest.isError ? (
+				<PageError error={approvedRequest.error} />
+			) : null}
+			{prepareConnect.isError ? (
+				<PageError error={prepareConnect.error} />
+			) : null}
+			{reconnectOAuth.isError ? (
+				<PageError error={reconnectOAuth.error} />
+			) : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
@@ -324,15 +454,24 @@ export function ConnectionsPage() {
 			) : null}
 			{!data && !overview.isPending ? (
 				<ConnectorManagementWorkspace
+					accessRequests={accessRequests.data?.requests ?? []}
+					accessRequestsError={accessRequests.error}
+					accessRequestsPending={accessRequests.isPending}
 					connections={[]}
 					grants={[]}
 					hasGrantHistory={false}
 					onAuthorize={() => undefined}
 					onConnect={connectProvider}
+					onRenew={() => undefined}
+					onRequestSubmitted={() => undefined}
 					onDisconnect={() => undefined}
 					onReconnect={() => undefined}
 					onRevoke={() => undefined}
 					revokePending={false}
+					requestTrigger={requestTrigger}
+					requestTargetProvider={requestTargetProvider}
+					renewalTarget={null}
+					renewalProviderId=""
 					onShowHistoryChange={() => undefined}
 					onUpgrade={() => undefined}
 					showHistory={false}
@@ -414,6 +553,9 @@ export function ConnectionsPage() {
 						</section>
 					) : null}
 					<ConnectorManagementWorkspace
+						accessRequests={accessRequests.data?.requests ?? []}
+						accessRequestsError={accessRequests.error}
+						accessRequestsPending={accessRequests.isPending}
 						connections={data.connections}
 						grants={visibleGrants}
 						hasGrantHistory={data.grants.length > 0}
@@ -434,6 +576,20 @@ export function ConnectionsPage() {
 							})
 						}
 						onConnect={connectProvider}
+						onRenew={(connection) => {
+							if (!connection.accessAuthorization) return;
+							setRenewalTarget(connection.accessAuthorization);
+							setRenewalProviderId(connection.providerId);
+							setRequestTargetProvider(connection.providerId);
+							setRequestTrigger((value) => value + 1);
+							document
+								.getElementById(`connection-access-${connection.providerId}`)
+								?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+						}}
+						onRequestSubmitted={() => {
+							setRenewalTarget(null);
+							setRenewalProviderId("");
+						}}
 						onDisconnect={(connectionId) => {
 							const connection = data.connections.find(
 								(entry) => entry.id === connectionId,
@@ -446,20 +602,27 @@ export function ConnectionsPage() {
 								disconnect.mutate(connectionId);
 						}}
 						onReconnect={(connection) => {
-							if (connection.providerId === "bitbucket") setBitbucketOpen(true);
-							else if (connection.providerId === "rehoboam")
-								setRehoboamOpen(true);
-							else if (connection.providerId === "jira") setJiraOpen(true);
-							else if (connection.providerId === "confluence")
-								setConfluenceOpen(true);
-							else if (
-								connection.providerId === "jenkins-ci" ||
-								connection.providerId === "jenkins-release"
+							if (
+								connection.status === "DISCONNECTED" &&
+								connection.accessAuthorization?.state === "DISCONNECTED" &&
+								(!connection.accessAuthorization.validUntil ||
+									Date.parse(connection.accessAuthorization.validUntil) >
+										Date.now())
 							) {
-								setJenkinsProviderId(connection.providerId);
-								setJenkinsOpen(true);
-							} else beginOAuth();
+								setReconnectTargetId(connection.id);
+								if (connection.providerId === "github")
+									reconnectOAuth.mutate(connection.id);
+								else
+									openProviderCredential(
+										connection.providerId as ConnectorProviderId,
+									);
+							} else
+								connectProvider(connection.providerId as ConnectorProviderId);
 						}}
+						requestTrigger={requestTrigger}
+						requestTargetProvider={requestTargetProvider}
+						renewalTarget={renewalTarget}
+						renewalProviderId={renewalProviderId}
 						onRevoke={(grantId) => revokeGrant.mutate(grantId)}
 						revokePending={revokeGrant.isPending}
 						onShowHistoryChange={setShowHistory}
@@ -559,7 +722,10 @@ export function ConnectionsPage() {
 				open={jenkinsOpen}
 				onOpenChange={(open) => {
 					setJenkinsOpen(open);
-					if (!open) setJenkinsError(null);
+					if (!open) {
+						setJenkinsError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -625,7 +791,10 @@ export function ConnectionsPage() {
 				open={rehoboamOpen}
 				onOpenChange={(open) => {
 					setRehoboamOpen(open);
-					if (!open) setRehoboamError(null);
+					if (!open) {
+						setRehoboamError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -673,10 +842,47 @@ export function ConnectionsPage() {
 			</Dialog>
 
 			<Dialog
+				open={approvalRequiredProvider !== null}
+				onOpenChange={(open) => {
+					if (!open) setApprovalRequiredProvider(null);
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>
+							申请连接 {providerLabel(approvalRequiredProvider ?? "")}
+						</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<p>连接外部账号前需要完成审批。</p>
+					<Button
+						onClick={() => {
+							const providerId = approvalRequiredProvider;
+							setApprovalRequiredProvider(null);
+							if (providerId) connectProvider(providerId);
+						}}
+					>
+						查看连接申请
+					</Button>
+				</DialogContent>
+			</Dialog>
+			<Dialog
 				open={bitbucketOpen}
 				onOpenChange={(open) => {
 					setBitbucketOpen(open);
-					if (!open) setBitbucketError(null);
+					if (!open) {
+						setBitbucketError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -730,7 +936,10 @@ export function ConnectionsPage() {
 				open={confluenceOpen}
 				onOpenChange={(open) => {
 					setConfluenceOpen(open);
-					if (!open) setConfluenceError(null);
+					if (!open) {
+						setConfluenceError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -800,7 +1009,10 @@ export function ConnectionsPage() {
 				open={jiraOpen}
 				onOpenChange={(open) => {
 					setJiraOpen(open);
-					if (!open) setJiraError(null);
+					if (!open) {
+						setJiraError(null);
+						setReconnectTargetId(null);
+					}
 				}}
 			>
 				<DialogContent aria-describedby={undefined}>
@@ -870,21 +1082,35 @@ export function ConnectionsPage() {
 }
 
 function ConnectorManagementWorkspace(props: {
+	accessRequests: AccessRequestsResponse["requests"];
+	accessRequestsError: unknown;
+	accessRequestsPending: boolean;
 	connections: Connection[];
 	grants: Grant[];
 	hasGrantHistory: boolean;
 	onAuthorize: (connectionId: string, consumerId?: string) => void;
 	onConnect: (providerId: ConnectorProviderId) => void;
+	onRenew: (connection: Connection) => void;
+	onRequestSubmitted: () => void;
 	onDisconnect: (connectionId: string) => void;
 	onReconnect: (connection: Connection) => void;
 	onRevoke: (grantId: string) => void;
 	onShowHistoryChange: (show: boolean) => void;
 	onUpgrade: (connectionId: string) => void;
 	revokePending: boolean;
+	requestTrigger: number;
+	requestTargetProvider: string;
+	renewalTarget: Connection["accessAuthorization"];
+	renewalProviderId: string;
 	showHistory: boolean;
 	upgradingConnectionId: string | null;
 }) {
+	const requestedProvider = new URLSearchParams(window.location.search).get(
+		"provider",
+	);
 	const initialProvider =
+		connectorDefinitions.find((item) => item.providerId === requestedProvider)
+			?.providerId ??
 		props.connections.find((connection) => connection.providerId === "github")
 			?.providerId ??
 		props.connections.find((connection) => connection.status === "ACTIVE")
@@ -902,6 +1128,16 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
+	const currentRequest = props.accessRequests.find(
+		(item) =>
+			item.providerId === connector?.providerId &&
+			[
+				"SUBMITTED",
+				"IN_REVIEW",
+				"ROUTING_BLOCKED",
+				"APPROVED_PENDING_CONNECTION",
+			].includes(item.state),
+	);
 	const accounts = props.connections.filter(
 		(connection) => connection.providerId === connector?.providerId,
 	);
@@ -913,7 +1149,12 @@ function ConnectorManagementWorkspace(props: {
 		: [];
 	const Icon = connector?.icon;
 	const authorizationAvailable =
-		selected?.status === "ACTIVE" && !selected.requiresReconnect;
+		selected?.status === "ACTIVE" &&
+		!selected.requiresReconnect &&
+		(!selected.accessAuthorization ||
+			(selected.accessAuthorization.state === "ACTIVE" &&
+				(!selected.accessAuthorization.validUntil ||
+					Date.parse(selected.accessAuthorization.validUntil) > Date.now())));
 
 	return (
 		<section className="connection-management-workspace">
@@ -972,13 +1213,46 @@ function ConnectorManagementWorkspace(props: {
 						<h2>{connector?.name}</h2>
 						<p>{connector?.description}</p>
 					</div>
-					<Button
-						variant={accounts.length ? "secondary" : "primary"}
-						onClick={() => connector && props.onConnect(connector.providerId)}
-					>
-						{accounts.length ? "再连接" : "连接"}
-					</Button>
+					{currentRequest?.state === "APPROVED_PENDING_CONNECTION" &&
+					currentRequest.connectExpiresAt &&
+					Date.parse(currentRequest.connectExpiresAt) > Date.now() ? (
+						<a
+							className="button button-primary"
+							href={`/connection/connections?provider=${encodeURIComponent(providerId)}&intent=connect&accessRequestId=${encodeURIComponent(currentRequest.id)}`}
+						>
+							连接账号
+						</a>
+					) : (
+						<Button
+							variant={accounts.length ? "secondary" : "primary"}
+							disabled={Boolean(currentRequest)}
+							onClick={() => connector && props.onConnect(connector.providerId)}
+						>
+							{currentRequest?.state === "APPROVED_PENDING_CONNECTION"
+								? "连接窗口已过期"
+								: currentRequest
+									? "审批中"
+									: "申请连接"}
+						</Button>
+					)}
 				</header>
+				{connector ? (
+					<AccessRequestPanel
+						key={connector.providerId}
+						onSubmitted={props.onRequestSubmitted}
+						providerId={connector.providerId}
+						renewalTarget={
+							props.renewalProviderId === connector.providerId
+								? (props.renewalTarget ?? null)
+								: null
+						}
+						requests={props.accessRequests}
+						requestsError={props.accessRequestsError}
+						requestsPending={props.accessRequestsPending}
+						startProviderId={props.requestTargetProvider}
+						startSignal={props.requestTrigger}
+					/>
+				) : null}
 				{selected ? (
 					<div className="connection-account-workspace">
 						<section className="connection-account-list">
@@ -1023,6 +1297,16 @@ function ConnectorManagementWorkspace(props: {
 									<h2 className="sr-only">客户端授权</h2>
 									<h3>{selected.displayName}</h3>
 									<p>{selected.externalAccount}</p>
+									{selected.accessAuthorization ? (
+										<p className="connection-access-validity">
+											{selected.accessAuthorization.state === "ACTIVE"
+												? selected.accessAuthorization.validityKind ===
+													"PERMANENT"
+													? "审批：永久有效"
+													: `审批有效至 ${new Date(selected.accessAuthorization.validUntil ?? "").toLocaleString()}`
+												: `审批：${accessStateLabels[selected.accessAuthorization.state] ?? selected.accessAuthorization.state}`}
+										</p>
+									) : null}
 								</div>
 								<Status value={selected.status} />
 							</div>
@@ -1099,24 +1383,95 @@ function ConnectorManagementWorkspace(props: {
 								)}
 							</div>
 							<div className="connection-account-actions">
-								{selected.requiresReconnect ? (
+								{!currentRequest &&
+								selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								["REAPPROVAL_REQUIRED", "SUSPENDED"].includes(
+									selected.accessAuthorization?.state ?? "",
+								) ? (
 									<Button
 										variant="secondary"
-										disabled={props.upgradingConnectionId === selected.id}
 										onClick={() =>
-											selected.providerId === "github"
-												? props.onReconnect(selected)
-												: props.onUpgrade(selected.id)
+											props.onConnect(
+												selected.providerId as ConnectorProviderId,
+											)
 										}
 									>
-										{props.upgradingConnectionId === selected.id
-											? "正在升级"
-											: selected.providerId === "github"
-												? "重新连接"
-												: "升级连接"}
+										申请重审
 									</Button>
 								) : null}
-								{selected.ownerType === "PERSONAL" ? (
+								{selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								selected.accessAuthorization?.state === "EXPIRED" ? (
+									<Button
+										variant="secondary"
+										onClick={() =>
+											props.onConnect(
+												selected.providerId as ConnectorProviderId,
+											)
+										}
+									>
+										重新申请
+									</Button>
+								) : null}
+								{!currentRequest &&
+								selected.status === "ACTIVE" &&
+								!selected.requiresReconnect &&
+								selected.accessAuthorization?.validityKind === "FINITE" &&
+								selected.accessAuthorization.renewalOpensAt &&
+								Date.parse(selected.accessAuthorization.renewalOpensAt) <=
+									Date.now() &&
+								selected.accessAuthorization.state === "ACTIVE" ? (
+									<Button
+										variant="secondary"
+										onClick={() => props.onRenew(selected)}
+									>
+										申请续期
+									</Button>
+								) : null}
+								{selected.requiresReconnect ? (
+									selected.status === "DISCONNECTED" &&
+									selected.accessAuthorization?.state === "DISCONNECTED" &&
+									(!selected.accessAuthorization.validUntil ||
+										Date.parse(selected.accessAuthorization.validUntil) >
+											Date.now()) ? (
+										<Button
+											variant="secondary"
+											onClick={() => props.onReconnect(selected)}
+										>
+											重新连接
+										</Button>
+									) : selected.accessAuthorization ? (
+										<Button
+											variant="secondary"
+											onClick={() =>
+												props.onConnect(
+													selected.providerId as ConnectorProviderId,
+												)
+											}
+										>
+											重新申请
+										</Button>
+									) : (
+										<Button
+											variant="secondary"
+											disabled={props.upgradingConnectionId === selected.id}
+											onClick={() =>
+												selected.providerId === "github"
+													? props.onReconnect(selected)
+													: props.onUpgrade(selected.id)
+											}
+										>
+											{props.upgradingConnectionId === selected.id
+												? "正在升级"
+												: selected.providerId === "github"
+													? "重新连接"
+													: "升级连接"}
+										</Button>
+									)
+								) : null}
+								{selected.ownerType === "PERSONAL" &&
+								selected.status === "ACTIVE" ? (
 									<Button
 										variant="danger"
 										onClick={() => props.onDisconnect(selected.id)}

@@ -180,6 +180,29 @@ describe("Connection runtime configuration", () => {
 		);
 	});
 
+	it("keeps employee directory approval disabled until active LDAP is configured", () => {
+		expect(
+			connectionApiRuntimeConfig(accountBase).approvalDirectoryEnabled,
+		).toBe(false);
+		expect(() =>
+			connectionApiRuntimeConfig({
+				...accountBase,
+				CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
+			}),
+		).toThrow(
+			"Approval employee search requires LDAP active-state configuration",
+		);
+		const configured = connectionApiRuntimeConfig({
+			...accountBase,
+			CONNECTION_APPROVAL_DIRECTORY_ENABLED: "true",
+			LDAP_ACTIVE_ATTRIBUTE: "employeeStatus",
+			LDAP_ACTIVE_VALUE: "active",
+			LDAP_ALIAS_ATTRIBUTE: "alias",
+		});
+		expect(configured.approvalDirectoryEnabled).toBe(true);
+		expect(configured.ldap.aliasAttribute).toBe("alias");
+	});
+
 	it("keeps the production skeleton migration config database-only", () => {
 		expect(
 			productionMigrationRuntimeConfig({ DATABASE_URL: "postgresql://db" }),
