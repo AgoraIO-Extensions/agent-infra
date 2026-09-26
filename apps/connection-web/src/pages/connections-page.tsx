@@ -307,12 +307,15 @@ export function ConnectionsPage() {
 			const grant = data?.grants.find(
 				(entry) =>
 					entry.connectionId === connectionId &&
-					entry.consumerId === consumerId &&
-					["ACTIVE", "PAUSED_CONNECTION", "PAUSED_CREDENTIAL"].includes(
-						entry.status,
-					),
+					entry.consumerId === consumerId,
 			);
-			return grant ? grant.actions : null;
+			if (!grant) return null;
+			// Overview is newest-consent first; never fall back past a revoked decision.
+			return ["ACTIVE", "PAUSED_CONNECTION", "PAUSED_CREDENTIAL"].includes(
+				grant.status,
+			)
+				? grant.actions
+				: [];
 		},
 		[data?.grants],
 	);

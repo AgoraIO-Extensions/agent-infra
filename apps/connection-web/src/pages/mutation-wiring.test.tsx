@@ -619,6 +619,103 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBe(false);
 	});
 
+	it.each([
+		{ entry: "upgrade", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "normal", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "ACTIVE" },
+		{ entry: "upgrade", count: 0, status: "REVOKED" },
+		{ entry: "upgrade", count: 0, status: "TERMINATED" },
+	])(
+		"$entry 入口沿用最新 $status 授权的 $count 项，不合并历史权限",
+		async ({ entry, count, status }) => {
+			const overview = await api.getConnections();
+			const template = overview.overview.grants[0];
+			if (!template) throw new Error("测试需要 Grant");
+			const actions = Array.from({ length: 15 }, (_, index) => ({
+				id: `rehoboam.action_${index}@v6`,
+				name:
+					index === 0
+						? "rehoboam.get_current_user"
+						: `rehoboam.action_${index}`,
+				effect: index < 10 ? ("READ" as const) : ("WRITE" as const),
+				description: `Action ${index}`,
+				requiredScopes: [],
+			}));
+			const oldActions = actions.slice(0, 14).map((action) => ({
+				...action,
+				id: action.id.replace("@v6", "@v5"),
+			}));
+			const latest = {
+				...template,
+				id: "grant-z-latest",
+				status,
+				actions: oldActions.slice(0, count || 14),
+				actionVersionIds: oldActions
+					.slice(0, count || 14)
+					.map((action) => action.id),
+			};
+			// The server returns newest decisions first, regardless of lexicographic IDs.
+			overview.overview.grants = [
+				{ ...template, connectionId: "other-connection", actions: oldActions },
+				{ ...template, consumerId: "other-consumer", actions: oldActions },
+				latest,
+				{
+					...template,
+					id: "grant-a-old",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions.slice(0, 1),
+				},
+				{
+					...template,
+					id: "grant-b-old-full",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions,
+				},
+			];
+			overview.overview.upgradeTasks = [
+				{
+					campaignId: "campaign-upgrade",
+					connectionId: template.connectionId,
+					consumerId: template.consumerId,
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "github",
+					reason: "Provider upgraded",
+					status: "PENDING_AUTHORIZATION",
+					targetProviderReleaseId: "provider-v6",
+					taskId: "task-upgrade",
+				},
+			];
+			const response = await api.createAuthorizationPreview();
+			response.preview.actions = actions;
+			api.createAuthorizationPreview.mockResolvedValueOnce(response);
+			api.getConnections.mockResolvedValueOnce(overview);
+			renderPage(<ConnectionsPage />);
+			if (entry === "upgrade") {
+				fireEvent.click(
+					await screen.findByRole("button", { name: "确认授权" }),
+				);
+			} else {
+				fireEvent.click(
+					await screen.findByRole("button", { name: /GitHub 已连接/ }),
+				);
+				fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+			}
+			fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
+			await screen.findByText(`已选择 ${count} / 共 15 项`);
+			for (const [index, action] of actions.entries()) {
+				expect(
+					(
+						screen.getByRole("checkbox", {
+							name: `${action.name} ${action.effect === "READ" ? "读取" : "写入"}`,
+						}) as HTMLInputElement
+					).checked,
+				).toBe(index < count);
+			}
+		},
+	);
+
 	it("连接页调用 Jira Server credential API", async () => {
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("heading", { name: "客户端授权" });
