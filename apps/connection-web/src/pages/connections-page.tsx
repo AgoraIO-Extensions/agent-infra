@@ -25,7 +25,7 @@ import {
 	useState,
 } from "react";
 
-import { connectionApi } from "../api";
+import { ConnectionApiError, connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
@@ -52,8 +52,6 @@ export function ConnectionsPage() {
 		connectionId: string;
 		consumerId: string;
 		initialActions: Grant["actions"] | null;
-		preview: AuthorizationPreviewResponse | null;
-		reviewed: boolean;
 	} | null>(null);
 	const [showHistory, setShowHistory] = useState(false);
 	const [bitbucketOpen, setBitbucketOpen] = useState(false);
@@ -261,18 +259,31 @@ export function ConnectionsPage() {
 			setJenkinsPending(false);
 		}
 	};
-	const preview = useMutation({
-		mutationFn: connectionApi.createAuthorizationPreview,
-		onSuccess: (value, variables) =>
-			setAuthorization((current) =>
-				current
-					? {
-							...current,
-							preview: value,
-							reviewed: Boolean(variables.actionVersionIds),
-						}
-					: current,
-			),
+	const preview = useQuery({
+		queryKey: [
+			"authorization-discovery",
+			authorization?.connectionId,
+			authorization?.consumerId,
+		],
+		queryFn: async () => {
+			const input = {
+				connectionId: authorization?.connectionId ?? "",
+				consumerId: authorization?.consumerId ?? "",
+			};
+			const value = await connectionApi.createAuthorizationPreview(input);
+			if (
+				value.preview.consumer.id !== input.consumerId ||
+				value.preview.targetConnection.id !== input.connectionId
+			) {
+				throw new Error("授权对象已变化，请重新加载。");
+			}
+			return value;
+		},
+		enabled: Boolean(authorization?.consumerId),
+		gcTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+		refetchOnWindowFocus: false,
 	});
 	const confirm = useMutation({
 		mutationFn: connectionApi.confirmAuthorization,
@@ -351,8 +362,6 @@ export function ConnectionsPage() {
 				candidates[0].id,
 				data.consumers[0]?.id ?? "",
 			),
-			preview: null,
-			reviewed: false,
 		});
 	}, [data, previousActions]);
 	const visibleGrants = data
@@ -574,8 +583,6 @@ export function ConnectionsPage() {
 																		task.connectionId,
 																		task.consumerId,
 																	),
-																	preview: null,
-																	reviewed: false,
 																})
 															}
 														>
@@ -604,8 +611,6 @@ export function ConnectionsPage() {
 									connectionId,
 									consumerId ?? data.consumers[0]?.id ?? "",
 								),
-								preview: null,
-								reviewed: false,
 							})
 						}
 						onConnect={connectProvider}
@@ -654,7 +659,7 @@ export function ConnectionsPage() {
 			<Dialog
 				open={Boolean(authorization && data)}
 				onOpenChange={(open) => {
-					if (!open) setAuthorization(null);
+					if (!open && !confirm.isPending) setAuthorization(null);
 				}}
 			>
 				{authorization && data ? (
@@ -667,73 +672,63 @@ export function ConnectionsPage() {
 									size="icon"
 									type="button"
 									aria-label="关闭"
+									disabled={confirm.isPending}
 								>
 									<X aria-hidden="true" size={18} />
 								</Button>
 							</DialogClose>
 						</DialogHeader>
-						{authorization.preview ? (
-							<PreviewContent
-								key={authorization.preview.preview.previewId}
-								value={authorization.preview}
-								busy={confirm.isPending || preview.isPending}
-								initialActions={authorization.initialActions}
-								reviewed={authorization.reviewed}
-								onReview={(actionVersionIds) =>
-									preview.mutate({
-										actionVersionIds,
-										connectionId: authorization.connectionId,
-										consumerId: authorization.consumerId,
+						<div className="form-stack">
+							<label htmlFor="consumer">客户端</label>
+							<select
+								id="consumer"
+								value={authorization.consumerId}
+								disabled={confirm.isPending}
+								onChange={(event) =>
+									setAuthorization({
+										...authorization,
+										consumerId: event.target.value,
+										initialActions: previousActions(
+											authorization.connectionId,
+											event.target.value,
+										),
 									})
 								}
-								onConfirm={() =>
-									confirm.mutate({
-										confirmationToken:
-											authorization.preview?.preview.confirmationToken ?? "",
-										idempotencyKey: authorization.preview?.idempotencyKey ?? "",
-										previewId: authorization.preview?.preview.previewId ?? "",
+							>
+								{data.consumers.map((consumer) => (
+									<option key={consumer.id} value={consumer.id}>
+										{consumer.name}
+									</option>
+								))}
+							</select>
+						</div>
+						{preview.isFetching ? (
+							<p role="status">正在加载授权内容...</p>
+						) : preview.data && !preview.isError ? (
+							<PreviewContent
+								key={`${authorization.connectionId}:${authorization.consumerId}:${preview.dataUpdatedAt}`}
+								value={preview.data}
+								busy={confirm.isPending}
+								initialActions={authorization.initialActions}
+								onCancel={() => setAuthorization(null)}
+								onRefresh={() => {
+									void preview.refetch();
+								}}
+								onConfirm={(value) =>
+									confirm.mutateAsync({
+										confirmationToken: value.preview.confirmationToken,
+										idempotencyKey: value.idempotencyKey,
+										previewId: value.preview.previewId,
 									})
 								}
 							/>
-						) : (
-							<div className="form-stack">
-								<label htmlFor="consumer">客户端</label>
-								<select
-									id="consumer"
-									value={authorization.consumerId}
-									onChange={(event) =>
-										setAuthorization({
-											...authorization,
-											consumerId: event.target.value,
-											initialActions: previousActions(
-												authorization.connectionId,
-												event.target.value,
-											),
-										})
-									}
-								>
-									{data.consumers.map((consumer) => (
-										<option key={consumer.id} value={consumer.id}>
-											{consumer.name}
-										</option>
-									))}
-								</select>
-								<Button
-									type="button"
-									disabled={!authorization.consumerId || preview.isPending}
-									onClick={() =>
-										preview.mutate({
-											connectionId: authorization.connectionId,
-											consumerId: authorization.consumerId,
-										})
-									}
-								>
-									查看授权内容
-								</Button>
-							</div>
-						)}
-						{preview.isError ? <PageError error={preview.error} /> : null}
-						{confirm.isError ? <PageError error={confirm.error} /> : null}
+						) : null}
+						{preview.isError ? (
+							<>
+								<PageError error={preview.error} />
+								<Button onClick={() => void preview.refetch()}>重试</Button>
+							</>
+						) : null}
 					</DialogContent>
 				) : null}
 			</Dialog>
@@ -1401,9 +1396,9 @@ function ConnectorManagementWorkspace(props: {
 export function PreviewContent(props: {
 	busy: boolean;
 	initialActions?: Grant["actions"] | null;
-	onConfirm: () => void;
-	onReview?: (actionVersionIds: string[]) => void;
-	reviewed?: boolean;
+	onConfirm: (value: AuthorizationPreviewResponse) => unknown;
+	onCancel: () => void;
+	onRefresh: () => void;
 	value: AuthorizationPreviewResponse;
 }) {
 	const defaultSelection =
@@ -1423,6 +1418,94 @@ export function PreviewContent(props: {
 	const [selected, setSelected] = useState(() => new Set(defaultSelection));
 	const [query, setQuery] = useState("");
 	const [effect, setEffect] = useState<"ALL" | "READ" | "WRITE">("ALL");
+	const submitting = useRef(false);
+	const [submitError, setSubmitError] = useState<Error | null>(null);
+	const [needsRefresh, setNeedsRefresh] = useState(false);
+	const [notice, setNotice] = useState("");
+	const actionVersionIds = [...selected].sort();
+	const finalPreview = useQuery({
+		queryKey: [
+			"authorization-final",
+			props.value.preview.previewId,
+			props.value.preview.consumer.id,
+			props.value.preview.targetConnection.id,
+			actionVersionIds,
+		],
+		queryFn: () =>
+			connectionApi.createAuthorizationPreview({
+				actionVersionIds,
+				connectionId: props.value.preview.targetConnection.id,
+				consumerId: props.value.preview.consumer.id,
+			}),
+		enabled: selected.size > 0,
+		retry: false,
+		gcTime: 0,
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: false,
+	});
+	const selectedActions = props.value.preview.actions.filter((action) =>
+		selected.has(action.id),
+	);
+	const matches = Boolean(
+		finalPreview.data &&
+			authorizationFacts(finalPreview.data) ===
+				authorizationFacts({
+					...props.value,
+					preview: { ...props.value.preview, actions: selectedActions },
+				}),
+	);
+	const changed = Boolean(finalPreview.data && !matches);
+	const invalidFinalPreview =
+		finalPreview.error instanceof ConnectionApiError &&
+		finalPreview.error.detail.code === "INVALID_REQUEST";
+	const added = selectedActions.filter(
+		(action) =>
+			!props.initialActions?.some(
+				(previous) =>
+					previous.name === action.name && previous.effect === action.effect,
+			),
+	);
+	const removed = (props.initialActions ?? []).filter(
+		(previous) =>
+			!selectedActions.some(
+				(action) =>
+					previous.name === action.name && previous.effect === action.effect,
+			),
+	);
+	const submit = async () => {
+		if (
+			submitting.current ||
+			props.busy ||
+			finalPreview.isFetching ||
+			finalPreview.isError ||
+			!matches ||
+			needsRefresh ||
+			!finalPreview.data
+		)
+			return;
+		const expiresAt = Date.parse(finalPreview.data.preview.expiresAt);
+		if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+			setNotice("授权预览已过期，刷新后请重新确认。");
+			void finalPreview.refetch();
+			return;
+		}
+		submitting.current = true;
+		setSubmitError(null);
+		try {
+			await props.onConfirm(finalPreview.data);
+		} catch (error) {
+			setSubmitError(
+				error instanceof Error ? error : new Error("授权确认失败"),
+			);
+			if (
+				error instanceof ConnectionApiError &&
+				error.detail.code === "INVALID_REQUEST"
+			)
+				setNeedsRefresh(true);
+		} finally {
+			submitting.current = false;
+		}
+	};
 	const visibleActions = useMemo(() => {
 		const normalized = query.trim().toLowerCase();
 		return props.value.preview.actions.filter(
@@ -1433,15 +1516,26 @@ export function PreviewContent(props: {
 					action.description.toLowerCase().includes(normalized)),
 		);
 	}, [effect, props.value.preview.actions, query]);
-	if (props.reviewed === false && props.onReview) {
-		return (
-			<div className="compact content-stack">
-				<div className="account-switch">
-					<strong>
-						{props.value.preview.targetConnection.externalAccount}
-					</strong>
-					<span>{props.value.preview.consumer.name}</span>
-				</div>
+	return (
+		<div className="authorization-selection compact content-stack">
+			<div className="account-switch">
+				<strong>{props.value.preview.targetConnection.externalAccount}</strong>
+				<span>{props.value.preview.consumer.name}</span>
+			</div>
+			{props.value.preview.currentConnection &&
+			props.value.preview.currentConnection.id !==
+				props.value.preview.targetConnection.id ? (
+				<p className="alert alert-warning">
+					账号切换：{props.value.preview.currentConnection.externalAccount} →{" "}
+					{props.value.preview.targetConnection.externalAccount}
+				</p>
+			) : null}
+			<fieldset
+				disabled={props.busy}
+				className="authorization-options content-stack"
+				style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+			>
+				<legend className="sr-only">授权能力</legend>
 				<div className="permission-controls">
 					<input
 						aria-label="搜索能力"
@@ -1488,11 +1582,27 @@ export function PreviewContent(props: {
 				<p className="scope-summary">
 					已选择 {selected.size} / 共 {props.value.preview.actions.length} 项
 				</p>
-				<ul className="permission-list">
+				<p className="scope-summary" aria-live="polite">
+					新增授权 {added.length} 项，取消授权 {removed.length} 项
+				</p>
+				{removed.length ? (
+					<details>
+						<summary>取消的权限</summary>
+						<ul>
+							{removed.map((action) => (
+								<li key={action.id}>
+									{action.name}（{action.effect === "WRITE" ? "写入" : "读取"}）
+								</li>
+							))}
+						</ul>
+					</details>
+				) : null}
+				<ul className="permission-list authorization-actions">
 					{visibleActions.map((action) => (
 						<li key={action.id}>
 							<label className="permission-option">
 								<input
+									aria-label={`${action.name} ${action.effect === "WRITE" ? "写入" : "读取"}`}
 									checked={selected.has(action.id)}
 									type="checkbox"
 									onChange={(event) =>
@@ -1507,42 +1617,16 @@ export function PreviewContent(props: {
 								<span>
 									<strong>{action.name}</strong>
 									<small>{action.effect === "WRITE" ? "写入" : "读取"}</small>
+									{props.initialActions &&
+									!props.initialActions.some(
+										(previous) =>
+											previous.name === action.name &&
+											previous.effect === action.effect,
+									) ? (
+										<small>新增能力</small>
+									) : null}
 								</span>
 							</label>
-						</li>
-					))}
-				</ul>
-				<div className="dialog-actions">
-					<Button
-						type="button"
-						disabled={props.busy || selected.size === 0}
-						onClick={() => props.onReview?.([...selected].sort())}
-					>
-						查看授权差异
-					</Button>
-				</div>
-			</div>
-		);
-	}
-	return (
-		<div className="compact content-stack">
-			<div className="account-switch authorization-summary">
-				<div>
-					<strong>
-						{props.value.preview.targetConnection.externalAccount}
-					</strong>
-					<span>{props.value.preview.consumer.name}</span>
-				</div>
-				<Button type="button" disabled={props.busy} onClick={props.onConfirm}>
-					<Check aria-hidden="true" size={17} />
-					{props.busy ? "正在确认" : "确认授权"}
-				</Button>
-			</div>
-			<ul className="permission-list">
-				{props.value.preview.actions.map((action) => (
-					<li key={action.id}>
-						<div>
-							<strong>{action.name}</strong>
 							<p>{action.description}</p>
 							<p className="scope-summary">
 								所需 scope：
@@ -1550,15 +1634,84 @@ export function PreviewContent(props: {
 									? action.requiredScopes.join("、")
 									: "无"}
 							</p>
-						</div>
-						<span className="effect-badge">
-							{action.effect === "WRITE" ? "写入" : "读取"}
-						</span>
-					</li>
-				))}
-			</ul>
+						</li>
+					))}
+				</ul>
+			</fieldset>
+			{notice ? <p role="status">{notice}</p> : null}
+			{finalPreview.isError ? (
+				<>
+					<PageError error={finalPreview.error} />
+					<Button onClick={() => void finalPreview.refetch()}>重试</Button>
+				</>
+			) : null}
+			{submitError ? <PageError error={submitError} /> : null}
+			{changed || needsRefresh || invalidFinalPreview ? (
+				<div role="alert">
+					<p>授权内容已变化，请刷新后重新确认。</p>
+					<Button onClick={props.onRefresh}>刷新授权内容</Button>
+				</div>
+			) : null}
+			<div className="dialog-actions authorization-footer">
+				<Button
+					variant="secondary"
+					type="button"
+					disabled={props.busy}
+					onClick={props.onCancel}
+				>
+					取消
+				</Button>
+				<Button
+					type="button"
+					disabled={
+						props.busy ||
+						selected.size === 0 ||
+						finalPreview.isFetching ||
+						finalPreview.isError ||
+						!matches ||
+						needsRefresh
+					}
+					onClick={() => void submit()}
+				>
+					<Check aria-hidden="true" size={17} />
+					{props.busy
+						? "正在确认"
+						: finalPreview.isFetching
+							? "正在校验"
+							: "确认授权"}
+				</Button>
+			</div>
 		</div>
 	);
+}
+
+function authorizationFacts(value: AuthorizationPreviewResponse) {
+	const { consumer, currentConnection, targetConnection, actions } =
+		value.preview;
+	return JSON.stringify({
+		consumer: [consumer.id, consumer.name],
+		currentAccount: currentConnection
+			? [
+					currentConnection.id,
+					currentConnection.externalAccount,
+					currentConnection.displayName,
+				]
+			: null,
+		account: [
+			targetConnection.id,
+			targetConnection.externalAccount,
+			targetConnection.displayName,
+		],
+		actions: [...actions]
+			.sort((a, b) => a.id.localeCompare(b.id))
+			.map((action) => [
+				action.id,
+				action.name,
+				action.description,
+				action.effect,
+				[...action.requiredScopes].sort(),
+			]),
+	});
 }
 
 function GrantPermissions(props: {

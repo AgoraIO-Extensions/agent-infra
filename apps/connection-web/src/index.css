@@ -1219,6 +1219,44 @@ tbody tr:hover {
 	border-bottom: 0;
 }
 
+.authorization-actions li {
+	display: block;
+}
+.authorization-selection {
+	margin-top: 12px;
+}
+.authorization-options {
+	gap: 10px;
+}
+.authorization-options > p {
+	margin: 0;
+}
+.authorization-actions .permission-option span {
+	flex-wrap: wrap;
+}
+.authorization-actions .permission-option strong {
+	flex: 1 1 180px;
+	min-width: 0;
+}
+.authorization-actions p {
+	margin: 4px 0 0;
+}
+.authorization-selection .account-switch strong {
+	overflow-wrap: anywhere;
+}
+.authorization-actions strong,
+.authorization-actions p {
+	overflow-wrap: anywhere;
+}
+.authorization-footer {
+	position: sticky;
+	bottom: -20px;
+	z-index: 1;
+	gap: 8px;
+	padding: 12px 0;
+	background: var(--surface-raised);
+}
+
 .permission-controls {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
