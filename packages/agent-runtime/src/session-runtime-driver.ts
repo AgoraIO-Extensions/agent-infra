@@ -1269,8 +1269,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				pending.push(event.payload);
 		}
 		for (const fact of pending) {
+			const {
+				startedAt: _startedAt,
+				durationMs: _durationMs,
+				...withoutTiming
+			} = fact;
+			const base = fact.kind === "tool" ? withoutTiming : fact;
 			await this.appendOperationFact(file, executionId, {
-				...fact,
+				...base,
 				phase: "unknown",
 				failureCode: "recovery_unconfirmed",
 			});
@@ -1551,29 +1557,25 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (value.phase === "started") {
 			if (!previous) return;
 			if (previous.phase !== "intent") return;
-			const startedAt = new Date().toISOString();
+			// Native progress confirms a phase, not the actual action start time.
 			await this.appendOperationFact(file, executionId, {
 				...previous,
 				phase: "started",
-				startedAt,
 			});
 			return;
 		}
 		if (!previous) return;
 		if (["completed", "failed", "unknown"].includes(previous.phase)) return;
 		const now = new Date().toISOString();
+		const {
+			startedAt: _startedAt,
+			durationMs: _durationMs,
+			...fact
+		} = previous;
 		await this.appendOperationFact(file, executionId, {
-			...previous,
+			...fact,
 			phase: value.phase,
 			finishedAt: now,
-			...(previous.startedAt
-				? {
-						durationMs: Math.max(
-							0,
-							Date.parse(now) - Date.parse(previous.startedAt),
-						),
-					}
-				: {}),
 			...(value.phase === "failed"
 				? { failureCode: value.failureCode ?? ("operation_failed" as const) }
 				: {}),

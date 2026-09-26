@@ -940,6 +940,10 @@ it.each([
 	"%s settles an unsent denied count with receipt failure %s before native completion, stop, close and restart",
 	async (kind, receiptFailure) => {
 		let responseStatus = 0;
+		let responseReceived = () => {};
+		const responseGate = new Promise<void>((resolve) => {
+			responseReceived = resolve;
+		});
 		let allowTerminal = false;
 		let releaseNative = () => {};
 		const nativeGate = new Promise<void>((resolve) => {
@@ -967,6 +971,7 @@ it.each([
 					await generated.text();
 					const denied = await request();
 					responseStatus = denied.status;
+					responseReceived();
 					await denied.text();
 					await nativeGate;
 					// On a red verdict, leave through the source error path so cleanup cannot hang.
@@ -982,7 +987,8 @@ it.each([
 					reopen,
 				}) => {
 					try {
-						await vi.waitFor(() => expect(responseStatus).toBe(400));
+						await responseGate;
+						expect(responseStatus).toBe(400);
 						const facts = (
 							await driver.replayEvents(ref, command.executionId)
 						).flatMap((event) =>

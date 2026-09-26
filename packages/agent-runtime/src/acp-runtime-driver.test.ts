@@ -272,8 +272,8 @@ it.each([
 			if (!permitted)
 				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
 			if (mode === "tool-status-before-permission") {
-				expect(tools.at(-1)?.startedAt).toEqual(expect.any(String));
-				expect(tools.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
+				expect(tools.at(-1)?.startedAt).toBeUndefined();
+				expect(tools.at(-1)?.durationMs).toBeUndefined();
 			}
 		} finally {
 			await driver.close();
@@ -460,6 +460,20 @@ it.each([
 				).toBe(true);
 			});
 			await driver.close();
+			if (mode === "tool-permission-hold") {
+				const statePath = join(path, accepted.nativeSessionRef, "state.json");
+				const state = JSON.parse(await readFile(statePath, "utf8"));
+				const pending = state.turns[0].events.find(
+					(event: { type: string; payload: { kind: string; phase: string } }) =>
+						event.type === "operation" &&
+						event.payload.kind === "tool" &&
+						event.payload.phase === "started",
+				);
+				expect(pending).toBeDefined();
+				pending.payload.startedAt = "2026-01-01T00:00:00Z";
+				pending.payload.durationMs = 123;
+				await writeFile(statePath, JSON.stringify(state));
+			}
 			driver = await GenericAcpRuntimeDriver.open(options);
 			expect(
 				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
@@ -486,6 +500,7 @@ it.each([
 				mode === "tool-permission-hold" ? "recovery_unconfirmed" : undefined,
 			);
 			if (mode === "tool-permission-hold") {
+				expect(toolFacts.at(-1)?.startedAt).toBeUndefined();
 				expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
 				expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
 			}

@@ -424,10 +424,11 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 							? [event.payload]
 							: [],
 					);
-					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual([
-						"intent",
-						"completed",
-					]);
+					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual(
+						runtime === "OpenCode" && toolName === "edit"
+							? ["intent", "started", "completed"]
+							: ["intent", "completed"],
+					);
 					expect(ownerToolFacts.at(-1)?.startedAt).toBeUndefined();
 					expect(ownerToolFacts.at(-1)?.durationMs).toBeUndefined();
 					expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe(
