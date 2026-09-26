@@ -937,6 +937,7 @@ export class ConnectionError extends Error {
 			| "RESOURCE_NOT_FOUND"
 			| "RESULT_UNCERTAIN",
 		message: string,
+		readonly data?: Record<string, unknown>,
 	) {
 		super(message);
 	}
@@ -1935,24 +1936,8 @@ export class ConnectionApplicationService {
 			) {
 				throw new ConnectionError(
 					"PROVIDER_RESOURCE_NOT_FOUND",
-					"Provider resource was not found",
-				);
-			}
-			if (
-				typeof error === "object" &&
-				error !== null &&
-				(error as { providerCode?: unknown }).providerCode ===
-					"invalid_input" &&
-				[400, 404, 409, 422].includes(
-					(error as { providerStatus?: number }).providerStatus ?? 0,
-				)
-			) {
-				throw new ConnectionError(
-					"INVALID_REQUEST",
-					typeof (error as { providerMessage?: unknown }).providerMessage ===
-						"string"
-						? `Provider rejected the action input: ${(error as { providerMessage: string }).providerMessage}`
-						: "Provider rejected the action input",
+					providerMessage(error, "Provider resource was not found"),
+					providerFailureData(error),
 				);
 			}
 			if (isProviderReauthorizationFailure(error)) {
@@ -1965,6 +1950,17 @@ export class ConnectionApplicationService {
 				throw new ConnectionError(
 					"INVALID_REQUEST",
 					providerFailureMessage(error),
+					providerFailureData(error),
+				);
+			}
+			if (isDeterministicProviderRejection(error)) {
+				const message = providerMessage(error, "Provider rejected the request");
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					(error as { providerCode?: unknown }).providerCode === "invalid_input"
+						? `Provider rejected the action input: ${message}`
+						: `Provider rejected the action: ${message}`,
+					providerFailureData(error),
 				);
 			}
 			throw new ConnectionError("PROVIDER_FAILED", "Provider request failed");
@@ -2108,14 +2104,53 @@ function isProviderPermissionFailure(error: unknown) {
 	);
 }
 
-function providerFailureMessage(error: unknown) {
+function providerFailureMessage(
+	error: unknown,
+	fallback = "Provider rejected the request",
+) {
 	const message =
 		typeof error === "object" &&
 		error !== null &&
 		typeof (error as { providerMessage?: unknown }).providerMessage === "string"
 			? (error as { providerMessage: string }).providerMessage
-			: "Provider rejected the request";
+			: fallback;
 	return `Provider rejected the action: ${message}`;
+}
+
+function providerMessage(error: unknown, fallback: string) {
+	return typeof error === "object" &&
+		error !== null &&
+		typeof (error as { providerMessage?: unknown }).providerMessage === "string"
+		? (error as { providerMessage: string }).providerMessage
+		: fallback;
+}
+
+function providerFailureData(error: unknown) {
+	if (typeof error !== "object" || error === null) return undefined;
+	const provider = error as {
+		providerCode?: unknown;
+		providerDetails?: unknown;
+		providerRetryable?: unknown;
+		providerStatus?: unknown;
+		providerSubmissionOutcome?: unknown;
+	};
+	return {
+		...(typeof provider.providerCode === "string"
+			? { providerCode: provider.providerCode }
+			: {}),
+		...(provider.providerDetails && typeof provider.providerDetails === "object"
+			? { providerDetails: provider.providerDetails }
+			: {}),
+		...(typeof provider.providerRetryable === "boolean"
+			? { retryable: provider.providerRetryable }
+			: {}),
+		...(typeof provider.providerStatus === "number"
+			? { providerHttpStatus: provider.providerStatus }
+			: {}),
+		...(typeof provider.providerSubmissionOutcome === "string"
+			? { submissionOutcome: provider.providerSubmissionOutcome }
+			: {}),
+	};
 }
 
 function isProviderReauthorizationFailure(error: unknown) {
