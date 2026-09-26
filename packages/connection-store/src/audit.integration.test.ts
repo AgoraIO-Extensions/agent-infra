@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
-import { ConnectionApplicationService } from "@agent-infra/connection-core";
+import {
+	ConnectionApplicationService,
+	newCallDiagnostics,
+	observeProviderFetch,
+	withCallDiagnostics,
+} from "@agent-infra/connection-core";
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import postgres from "postgres";
 import { expect, it } from "vitest";
@@ -76,7 +83,23 @@ if (process.env.CI && !url)
 				},
 				invocation,
 			});
+			const diagnostic = newCallDiagnostics("EXECUTE");
+			await withCallDiagnostics(diagnostic, () =>
+				observeProviderFetch(
+					"github",
+					(async () =>
+						new Response(null, {
+							status: 200,
+							headers: {
+								"x-request-id": "123e4567-e89b-12d3-a456-426614174000",
+							},
+						})) as typeof fetch,
+				)(
+					"https://api.github.com/repos/SECRET-CANARY/SECRET-CANARY/pulls?token=SECRET-CANARY",
+				),
+			);
 			await repo.setCallResult({
+				diagnostics: diagnostic,
 				callId: call.callId,
 				status: "SUCCEEDED",
 				result: { total: 3, body: "AUDIT-BODY-CANARY" },
@@ -118,6 +141,85 @@ if (process.env.CI && !url)
 				).items,
 			).toEqual([]);
 			const detail = await service.getAuditCall(admin, call.callId);
+			expect(detail.diagnostics).toHaveLength(1);
+			expect(detail.diagnostics[0]?.requests[0]).toMatchObject({
+				pathTemplate: "/repos/{segment}/{segment}/pulls",
+				status: 200,
+			});
+			const historical = await service.getAuditCall(
+				admin,
+				`audit-call-0-${suffix}`,
+			);
+			expect(historical.diagnostics).toEqual([]);
+			const [storedDiagnostic] =
+				await sql`SELECT diagnostic FROM connection_call_diagnostics WHERE call_id = ${call.callId}`;
+			expect(JSON.stringify(storedDiagnostic)).not.toContain("CANARY");
+			const diagnosticConstraint = `diagnostic_failure_${suffix.replaceAll("-", "")}`;
+			await sql.unsafe(
+				`ALTER TABLE connection_call_diagnostics ADD CONSTRAINT ${diagnosticConstraint} CHECK (call_id <> '${call.callId}') NOT VALID`,
+			);
+			try {
+				await expect(
+					repo.setCallResult({
+						callId: call.callId,
+						status: "FAILED",
+						diagnostics: newCallDiagnostics("EXECUTE"),
+					}),
+				).rejects.toThrow();
+				const [unchanged] =
+					await sql`SELECT status FROM connection_calls WHERE id = ${call.callId}`;
+				expect(unchanged?.status).toBe("SUCCEEDED");
+			} finally {
+				await sql.unsafe(
+					`ALTER TABLE connection_call_diagnostics DROP CONSTRAINT ${diagnosticConstraint}`,
+				);
+			}
+			const { call: pending } = await repo.createCall({
+				action: "github.create_pull_request",
+				argsHash: randomUUID(),
+				idempotencyKey: randomUUID(),
+				input: {},
+				invocation,
+			});
+			await repo.startDispatch({
+				action: "github.create_pull_request",
+				callId: pending.callId,
+				invocation,
+			});
+			await repo.setCallResult({
+				callId: pending.callId,
+				status: "UNCERTAIN",
+				diagnostics: newCallDiagnostics("EXECUTE"),
+			});
+			const lease = await repo.claimReconciliationJob();
+			expect(lease?.callId).toBe(pending.callId);
+			const staleDiagnostic = newCallDiagnostics("RECONCILE");
+			await repo.rescheduleReconciliationJob({
+				callId: pending.callId,
+				leaseId: "stale",
+				reason: "test",
+				diagnostics: staleDiagnostic,
+			});
+			expect(
+				await sql`SELECT 1 FROM connection_call_diagnostics WHERE execution_id = ${staleDiagnostic.executionId}`,
+			).toHaveLength(0);
+			await repo.rescheduleReconciliationJob({
+				callId: pending.callId,
+				leaseId: lease?.leaseId ?? "",
+				reason: "test",
+				diagnostics: newCallDiagnostics("RECONCILE"),
+			});
+			await sql`UPDATE connection_reconciliation_jobs SET next_attempt_at = now() WHERE call_id = ${pending.callId}`;
+			const retryLease = await repo.claimReconciliationJob();
+			await repo.completeReconciliationJob({
+				callId: pending.callId,
+				leaseId: retryLease?.leaseId ?? "",
+				result: {},
+				diagnostics: newCallDiagnostics("RECONCILE"),
+			});
+			expect(
+				(await service.getAuditCall(admin, pending.callId)).diagnostics,
+			).toHaveLength(3);
 			expect(detail.timeline.map((event) => event.event)).toEqual([
 				"CALL_AUTHORIZED",
 				"CALL_SUCCEEDED",
@@ -128,6 +230,41 @@ if (process.env.CI && !url)
 				state: "AVAILABLE",
 			});
 			expect(JSON.stringify([first, detail])).not.toContain("CANARY");
+			const server = createServer((_request, response) => {
+				response.setHeader(
+					"x-request-id",
+					"123e4567-e89b-12d3-a456-426614174000",
+				);
+				response.setHeader("content-type", "application/json");
+				response.end(JSON.stringify({ total: 1 }));
+			});
+			await new Promise<void>((resolve) =>
+				server.listen(0, "127.0.0.1", resolve),
+			);
+			try {
+				const actualFetch = observeProviderFetch("github", fetch);
+				const executing = new ConnectionApplicationService(repo, {
+					execute: async () => {
+						const response = await actualFetch(
+							`http://127.0.0.1:${(server.address() as AddressInfo).port}/repos/fixture/fixture/pulls?secret=CANARY`,
+						);
+						return response.json();
+					},
+				});
+				const actual = await executing.executeDirectActionForIdentity(
+					{ principalId: user, consumerId: consumer, instanceId: instance },
+					"github.list_pull_requests",
+					{ owner: "fixture", repo: "fixture" },
+				);
+				const persisted = await service.getAuditCall(admin, actual.callId);
+				expect(persisted.diagnostics).toHaveLength(1);
+				expect(
+					persisted.diagnostics[0]?.requests[0]?.requestIds[0]?.value,
+				).toBe("123e4567-e89b-12d3-a456-426614174000");
+				expect(JSON.stringify(persisted)).not.toContain("CANARY");
+			} finally {
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			}
 			await expect(service.listAuditCalls(user, filter)).rejects.toThrow();
 			await expect(service.getAuditCall(user, call.callId)).rejects.toThrow();
 			await expect(

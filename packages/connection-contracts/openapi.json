@@ -667,6 +667,111 @@
 			}
 		},
 		"schemas": {
+			"AuditSummaryState": {
+				"type": "string",
+				"enum": [
+					"AVAILABLE",
+					"REDACTED",
+					"NO_PARAMETERS",
+					"EMPTY_INPUT",
+					"EMPTY_OUTPUT",
+					"UNSUPPORTED",
+					"NOT_RECORDED"
+				]
+			},
+			"CallDiagnostics": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["executionId", "phase", "requests", "droppedRequests"],
+				"properties": {
+					"executionId": {
+						"type": "string"
+					},
+					"phase": {
+						"type": "string",
+						"enum": ["EXECUTE", "RECONCILE"]
+					},
+					"requests": {
+						"type": "array",
+						"maxItems": 32,
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"sequence",
+								"service",
+								"method",
+								"origin",
+								"pathTemplate",
+								"startedAt",
+								"finishedAt",
+								"durationMs",
+								"status",
+								"outcome",
+								"errorCategory",
+								"requestIds"
+							],
+							"properties": {
+								"sequence": {
+									"type": "integer"
+								},
+								"service": {
+									"type": "string"
+								},
+								"method": {
+									"type": "string"
+								},
+								"origin": {
+									"type": "string"
+								},
+								"pathTemplate": {
+									"type": "string"
+								},
+								"startedAt": {
+									"type": "string"
+								},
+								"finishedAt": {
+									"type": ["string", "null"]
+								},
+								"durationMs": {
+									"type": ["integer", "null"]
+								},
+								"status": {
+									"type": ["integer", "null"]
+								},
+								"outcome": {
+									"type": "string",
+									"enum": ["STARTED", "RESPONSE_HEADERS", "TRANSPORT_ERROR"]
+								},
+								"errorCategory": {
+									"type": ["string", "null"],
+									"enum": ["TIMEOUT", "ABORTED", "TRANSPORT_ERROR", null]
+								},
+								"requestIds": {
+									"type": "array",
+									"maxItems": 6,
+									"items": {
+										"type": "object",
+										"additionalProperties": false,
+										"required": ["name", "value"],
+										"properties": {
+											"name": {
+												"type": "string"
+											},
+											"value": {
+												"type": "string"
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"droppedRequests": {
+						"type": "integer"
+					}
+				}
+			},
 			"AuditCall": {
 				"type": "object",
 				"additionalProperties": false,
@@ -774,6 +879,10 @@
 					"status",
 					"input",
 					"output",
+					"inputState",
+					"outputState",
+					"diagnostics",
+					"diagnosticsTruncated",
 					"timeline"
 				],
 				"properties": {
@@ -873,14 +982,18 @@
 							"additionalProperties": false,
 							"required": ["event", "occurredAt"],
 							"properties": {
-								"event": {
-									"type": "string"
-								},
-								"occurredAt": {
-									"type": "string"
-								}
+								"event": { "type": "string" },
+								"occurredAt": { "type": "string" }
 							}
 						}
+					},
+					"inputState": { "$ref": "#/components/schemas/AuditSummaryState" },
+					"outputState": { "$ref": "#/components/schemas/AuditSummaryState" },
+					"diagnosticsTruncated": { "type": "boolean" },
+					"diagnostics": {
+						"type": "array",
+						"maxItems": 20,
+						"items": { "$ref": "#/components/schemas/CallDiagnostics" }
 					}
 				}
 			},
