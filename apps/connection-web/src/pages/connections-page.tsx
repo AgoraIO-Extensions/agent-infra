@@ -51,7 +51,7 @@ export function ConnectionsPage() {
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
 		consumerId: string;
-		initialActionVersionIds: string[];
+		initialActions: Grant["actions"] | null;
 		preview: AuthorizationPreviewResponse | null;
 		reviewed: boolean;
 	} | null>(null);
@@ -302,6 +302,20 @@ export function ConnectionsPage() {
 	};
 
 	const data = overview.data?.overview;
+	const previousActions = useCallback(
+		(connectionId: string, consumerId: string) => {
+			const grant = data?.grants.find(
+				(entry) =>
+					entry.connectionId === connectionId &&
+					entry.consumerId === consumerId &&
+					["ACTIVE", "PAUSED_CONNECTION", "PAUSED_CREDENTIAL"].includes(
+						entry.status,
+					),
+			);
+			return grant ? grant.actions : null;
+		},
+		[data?.grants],
+	);
 	const githubConnectionHealthy = data?.connections.some(
 		(connection) =>
 			connection.providerId === "github" &&
@@ -330,11 +344,14 @@ export function ConnectionsPage() {
 		setAuthorization({
 			connectionId: candidates[0].id,
 			consumerId: data.consumers[0]?.id ?? "",
-			initialActionVersionIds: [],
+			initialActions: previousActions(
+				candidates[0].id,
+				data.consumers[0]?.id ?? "",
+			),
 			preview: null,
 			reviewed: false,
 		});
-	}, [data]);
+	}, [data, previousActions]);
 	const visibleGrants = data
 		? showHistory
 			? data.grants
@@ -550,7 +567,10 @@ export function ConnectionsPage() {
 																setAuthorization({
 																	connectionId: task.connectionId,
 																	consumerId: task.consumerId,
-																	initialActionVersionIds: [],
+																	initialActions: previousActions(
+																		task.connectionId,
+																		task.consumerId,
+																	),
 																	preview: null,
 																	reviewed: false,
 																})
@@ -577,14 +597,10 @@ export function ConnectionsPage() {
 							setAuthorization({
 								connectionId,
 								consumerId: consumerId ?? data.consumers[0]?.id ?? "",
-								initialActionVersionIds: consumerId
-									? (data.grants.find(
-											(grant) =>
-												grant.connectionId === connectionId &&
-												grant.consumerId === consumerId &&
-												grant.status === "ACTIVE",
-										)?.actionVersionIds ?? [])
-									: [],
+								initialActions: previousActions(
+									connectionId,
+									consumerId ?? data.consumers[0]?.id ?? "",
+								),
 								preview: null,
 								reviewed: false,
 							})
@@ -658,7 +674,7 @@ export function ConnectionsPage() {
 								key={authorization.preview.preview.previewId}
 								value={authorization.preview}
 								busy={confirm.isPending || preview.isPending}
-								initialActionVersionIds={authorization.initialActionVersionIds}
+								initialActions={authorization.initialActions}
 								reviewed={authorization.reviewed}
 								onReview={(actionVersionIds) =>
 									preview.mutate({
@@ -686,6 +702,10 @@ export function ConnectionsPage() {
 										setAuthorization({
 											...authorization,
 											consumerId: event.target.value,
+											initialActions: previousActions(
+												authorization.connectionId,
+												event.target.value,
+											),
 										})
 									}
 								>
@@ -1377,20 +1397,26 @@ function ConnectorManagementWorkspace(props: {
 
 export function PreviewContent(props: {
 	busy: boolean;
-	initialActionVersionIds?: string[];
+	initialActions?: Grant["actions"] | null;
 	onConfirm: () => void;
 	onReview?: (actionVersionIds: string[]) => void;
 	reviewed?: boolean;
 	value: AuthorizationPreviewResponse;
 }) {
-	const availableActionIds = new Set(
-		props.value.preview.actions.map((action) => action.id),
-	);
-	const defaultSelection = props.initialActionVersionIds?.length
-		? props.initialActionVersionIds.filter((id) => availableActionIds.has(id))
-		: props.value.preview.actions
-				.filter((action) => action.effect === "READ")
-				.map((action) => action.id);
+	const defaultSelection =
+		props.initialActions !== undefined && props.initialActions !== null
+			? props.value.preview.actions
+					.filter((action) =>
+						props.initialActions?.some(
+							(previous) =>
+								previous.name === action.name &&
+								previous.effect === action.effect,
+						),
+					)
+					.map((action) => action.id)
+			: props.value.preview.actions
+					.filter((action) => action.effect === "READ")
+					.map((action) => action.id);
 	const [selected, setSelected] = useState(() => new Set(defaultSelection));
 	const [query, setQuery] = useState("");
 	const [effect, setEffect] = useState<"ALL" | "READ" | "WRITE">("ALL");

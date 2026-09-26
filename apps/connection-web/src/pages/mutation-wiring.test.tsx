@@ -124,7 +124,7 @@ const api = vi.hoisted(() => ({
 					actionVersionIds: ["github.get_repository@v2"],
 					actions: [
 						{
-							effect: "READ" as const,
+							effect: "READ" as "READ" | "WRITE",
 							id: "github.get_repository@v2",
 							name: "github.get_repository",
 						},
@@ -549,7 +549,10 @@ describe("Connection 管理 mutation wiring", () => {
 		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
 		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByRole("button", { name: "查看授权差异" });
-		expect(screen.getByText("已选择 1 / 共 2 项")).toBeTruthy();
+		expect(screen.getByText("已选择 0 / 共 2 项")).toBeTruthy();
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: /github.get_pull_request/ }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
 		await screen.findByRole("button", { name: "确认授权" });
 		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
@@ -566,6 +569,54 @@ describe("Connection 管理 mutation wiring", () => {
 			idempotencyKey: "confirmation-idempotency-key",
 			previewId: "preview-id",
 		});
+	});
+
+	it("升级授权沿用旧版选择，不默认勾选新增 Action", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("测试需要旧 Grant");
+		grant.status = "PAUSED_CREDENTIAL";
+		grant.actionVersionIds = ["github.create_pull_request@v5"];
+		grant.actions = [
+			{
+				id: "github.create_pull_request@v5",
+				name: "github.create_pull_request",
+				effect: "WRITE",
+			},
+		];
+		overview.overview.upgradeTasks = [
+			{
+				campaignId: "campaign-upgrade",
+				connectionId: "connection-personal",
+				consumerId: "consumer-codex",
+				consumerName: "Codex",
+				deadlineAt: null,
+				providerId: "github",
+				reason: "Provider upgraded",
+				status: "PENDING_AUTHORIZATION",
+				targetProviderReleaseId: "github-v6",
+				taskId: "task-upgrade",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(await screen.findByRole("button", { name: "确认授权" }));
+		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
+		await screen.findByText("已选择 1 / 共 2 项");
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.create_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(true);
+		expect(
+			(
+				screen.getByRole("checkbox", {
+					name: /github.get_pull_request/,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(false);
 	});
 
 	it("连接页调用 Jira Server credential API", async () => {
