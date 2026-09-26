@@ -753,6 +753,7 @@ export class PostgresConnectionApprovalRepository {
 					actorPrincipalId: input.createdByPrincipalId,
 					aggregateId: input.id,
 					event: "connection.access-policy.draft-updated",
+					aggregateRevision: String(BigInt(expectedRevision) + 1n),
 				});
 		});
 		return { policyVersionId: input.id };
@@ -778,6 +779,15 @@ export class PostgresConnectionApprovalRepository {
 			invalid("Non-material policy replacement cannot schedule reapproval");
 		}
 		await this.sql.begin(async (sql) => {
+			const [admin] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!admin)
+				throw new ConnectionError("FORBIDDEN", "Administrator required");
 			const [policy] = await sql<PolicyRow[]>`
 				SELECT status, provider_release_id, capability_profile_id,
 					allow_permanent, default_duration_days
@@ -1118,10 +1128,14 @@ export class PostgresConnectionApprovalRepository {
 		input: {
 			actorPrincipalId: string;
 			aggregateId: string;
+			aggregateRevision?: string;
 			event: string;
 			reason?: string;
 		},
 	) {
+		const eventAggregateId = input.aggregateRevision
+			? `${input.aggregateId}:${input.aggregateRevision}`
+			: input.aggregateId;
 		await sql`
 			INSERT INTO connection_audit_records (principal_id, event, detail)
 			VALUES (
@@ -1133,8 +1147,8 @@ export class PostgresConnectionApprovalRepository {
 			INSERT INTO connection_outbox_events (
 				id, topic, aggregate_id, payload
 			) VALUES (
-				${`${input.aggregateId}:${input.event}`}, ${input.event},
-				${input.aggregateId}, ${sql.json({ aggregateId: input.aggregateId })}
+				${`${eventAggregateId}:${input.event}`}, ${input.event},
+				${eventAggregateId}, ${sql.json({ aggregateId: input.aggregateId, ...(input.aggregateRevision ? { aggregateRevision: input.aggregateRevision } : {}) })}
 			)
 		`;
 	}

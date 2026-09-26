@@ -48,6 +48,142 @@ async function authorizeCurrentConsumer(
 
 describe("PostgreSQL Connection business authority", () => {
 	integrationTest(
+		"orders grant history by consent decisions rather than Grant IDs",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 31),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const principalId = `history-user-${suffix}`;
+			const consumerId = `history-consumer-${suffix}`;
+			const actionIds = githubConnectionCatalog.actions
+				.slice(0, 14)
+				.map((action) => action.id);
+			try {
+				await repository.publishGithubCatalog(githubConnectionCatalog);
+				await sql`INSERT INTO connection_principals (id, display_name, email)
+				VALUES (${principalId}, 'History user', 'history@example.invalid'),
+					(${`unrelated-${suffix}`}, 'Other user', 'other@example.invalid')`;
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: actionIds,
+					consumer: { id: consumerId, name: "History consumer" },
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
+				});
+				await sql`INSERT INTO connection_consumer_instances
+				(id, consumer_id, kind, auth_subject, status, principal_id)
+				VALUES (${`instance-${suffix}`}, ${consumerId}, 'DEVICE', ${`subject-${suffix}`}, 'ACTIVE', ${principalId})`;
+				const { connectionId } = await repository.storeGithubOAuthCredential({
+					accessRequestId: await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						scopes: [
+							"delete_repo",
+							"read:user",
+							"repo",
+							"user:email",
+							"workflow",
+						],
+					}),
+					accessToken: `test-history-${suffix}`,
+					displayName: "History account",
+					externalAccount: `history-${suffix}`,
+					principalId,
+					grantedScopes: [
+						"delete_repo",
+						"read:user",
+						"repo",
+						"user:email",
+						"workflow",
+					],
+				});
+				const historyIds: string[] = [];
+				for (const [index, count] of [1, 14, 3].entries()) {
+					const preview =
+						await repository.createCurrentConsumerAuthorizationPreview({
+							principalId,
+							consumerId,
+							connectionId,
+							actionVersionIds: actionIds.slice(0, count),
+						});
+					const { grantId } =
+						await repository.confirmCurrentConsumerAuthorization({
+							principalId,
+							previewId: preview.previewId,
+							confirmationToken: preview.confirmationToken,
+							idempotencyKey: randomUUID(),
+						});
+					await sql.begin(async (tx) => {
+						await tx`UPDATE connection_grants SET status = 'PAUSED_CREDENTIAL' WHERE id = ${grantId}`;
+						await tx`UPDATE connection_authorization_roots SET current_grant_id = NULL, fence = fence + 1
+						WHERE current_grant_id = ${grantId}`;
+					});
+					// Deterministic IDs deliberately put the oldest decision first lexicographically.
+					const historyId = `grant-history-${index}-${suffix}`;
+					historyIds.unshift(historyId);
+					await sql`INSERT INTO connection_grants
+					SELECT (jsonb_populate_record(NULL::connection_grants,
+						to_jsonb(original) || jsonb_build_object('id', ${historyId}::text))).*
+					FROM connection_grants original WHERE original.id = ${grantId}`;
+					await sql`INSERT INTO connection_grant_actions
+					SELECT (jsonb_populate_record(NULL::connection_grant_actions,
+						to_jsonb(original) || jsonb_build_object('grant_id', ${historyId}::text))).*
+					FROM connection_grant_actions original WHERE original.grant_id = ${grantId}`;
+					// Equal confirmation timestamps must still respect the monotonically increasing root fence.
+					await sql`UPDATE connection_authorization_consents SET confirmed_at = '2026-01-01T00:00:00Z'
+					WHERE id = (SELECT consent_id FROM connection_grants WHERE id = ${grantId})`;
+					const overview = await repository.getOverview(principalId);
+					expect(overview.grants[0]?.actions).toHaveLength(count);
+					expect(
+						overview.grants
+							.filter((grant) => historyIds.includes(grant.id))
+							.map((grant) => grant.id),
+					).toEqual(historyIds);
+					expect(
+						(await repository.getOverview(`unrelated-${suffix}`)).grants,
+					).toEqual([]);
+				}
+				await authorizeCurrentConsumer(repository, {
+					principalId,
+					consumerId,
+					connectionId,
+				});
+				const [historyCredential] = await sql<
+					{ id: string }[]
+				>`SELECT id FROM connection_credential_versions WHERE connection_id = ${connectionId} AND status = 'ACTIVE'`;
+				await repository.storeGithubOAuthCredential({
+					expectedConnectionId: connectionId,
+					expectedCredentialVersionId: historyCredential?.id,
+					accessToken: `test-history-reconnected-${suffix}`,
+					displayName: "History account",
+					externalAccount: `history-${suffix}`,
+					principalId,
+					grantedScopes: [
+						"delete_repo",
+						"read:user",
+						"repo",
+						"user:email",
+						"workflow",
+					],
+				});
+				const latest = (await repository.getOverview(principalId)).grants[0];
+				expect(latest?.status).toBe("ACTIVE");
+				expect(latest?.actions).toHaveLength(14);
+			} finally {
+				await sql.end();
+				await repository.close();
+			}
+		},
+		30_000,
+	);
+
+	integrationTest(
 		"disables the incompatible GitHub OAuth v7 release and check actions",
 		async () => {
 			if (!databaseUrl) return;

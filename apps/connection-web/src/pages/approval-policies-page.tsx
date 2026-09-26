@@ -10,7 +10,7 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
@@ -43,6 +43,8 @@ export function ApprovalPoliciesPage() {
 	const [providerReleaseId, setProviderReleaseId] = useState("");
 	const [profileId, setProfileId] = useState("");
 	const [policyId, setPolicyId] = useState("");
+	const selectedPolicyId = useRef(policyId);
+	selectedPolicyId.current = policyId;
 	const [creatingNew, setCreatingNew] = useState(false);
 	const [editingDraft, setEditingDraft] = useState<{
 		revision: string;
@@ -228,7 +230,7 @@ export function ApprovalPoliciesPage() {
 	const loadDraft = useMutation({
 		mutationFn: connectionApi.getConnectionAccessPolicyDraft,
 		onSuccess: (result) => {
-			if (result.policyId !== policyId) return;
+			if (result.policyId !== selectedPolicyId.current) return;
 			setEditingDraft({ revision: result.revision, draft: result.draft });
 			setStages(result.draft.stages);
 			setCandidateLabels(
@@ -250,9 +252,11 @@ export function ApprovalPoliciesPage() {
 	});
 	const updatePolicy = useMutation({
 		mutationFn: connectionApi.updateConnectionAccessPolicy,
-		onSuccess: async () => {
-			setEditingDraft(null);
-			setNotice("策略草稿已更新。");
+		onSuccess: async (_result, input) => {
+			if (input.policyId === selectedPolicyId.current) {
+				setEditingDraft(null);
+				setNotice("策略草稿已更新。");
+			}
 			await refresh();
 			await client.invalidateQueries({ queryKey: ["approval-policy-stages"] });
 		},

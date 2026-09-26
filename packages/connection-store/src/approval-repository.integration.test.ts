@@ -660,6 +660,21 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						revision: "2",
 						stage_count: 1,
 					});
+					await repository.updatePolicyDraft({
+						...incompleteDraft,
+						expectedRevision: "2",
+						priority: 102,
+					});
+					expect(await repository.getPolicyDraft(incompleteId)).toMatchObject({
+						revision: "3",
+						priority: 102,
+					});
+					const draftEvents = await sql<{ revision: string }[]>`
+						SELECT payload->>'aggregateRevision' AS revision FROM connection_outbox_events
+						WHERE topic = 'connection.access-policy.draft-updated' AND payload->>'aggregateId' = ${incompleteId}
+						ORDER BY revision
+					`;
+					expect(draftEvents).toEqual([{ revision: "2" }, { revision: "3" }]);
 					if (missing === "approvers") {
 						const staleProfileId = `stale-profile-${suffix}`;
 						const stalePolicyId = `stale-policy-${suffix}`;
@@ -771,6 +786,17 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						},
 					],
 				});
+				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now(), revision = revision + 1 WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+				await expect(
+					repository.publishPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: policyId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(await repository.getPolicyDraft(policyId)).toMatchObject({
+					revision: "1",
+				});
+				await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL, revision = revision + 1 WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
 				await repository.publishPolicy({
 					actorPrincipalId: adminId,
 					policyVersionId: policyId,

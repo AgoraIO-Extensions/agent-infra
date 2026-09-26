@@ -7,6 +7,7 @@ import type {
 } from "@agent-infra/connection-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -41,7 +42,11 @@ const api = vi.hoisted(() => ({
 		connectionId,
 	})),
 	createAuthorizationPreview: vi.fn(
-		async (input?: { actionVersionIds?: string[] }) => ({
+		async (input?: {
+			actionVersionIds?: string[];
+			connectionId?: string;
+			consumerId?: string;
+		}) => ({
 			idempotencyKey: "confirmation-idempotency-key",
 			preview: {
 				actions: [
@@ -65,15 +70,15 @@ const api = vi.hoisted(() => ({
 						input.actionVersionIds.includes(action.id),
 				),
 				confirmationToken: "confirmation-token",
-				consumer: { id: "consumer-codex", name: "Codex" },
+				consumer: { id: input?.consumerId ?? "consumer-codex", name: "Codex" },
 				effectSummary: ["WRITE" as const],
-				expiresAt: "2026-08-26T12:00:00.000Z",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
 				previewId: "preview-id",
 				requiredScopes: ["repo"],
 				targetConnection: {
 					displayName: "GitHub",
 					externalAccount: "guoxianzhe",
-					id: "connection-personal",
+					id: input?.connectionId ?? "connection-personal",
 				},
 			},
 		}),
@@ -276,7 +281,10 @@ const api = vi.hoisted(() => ({
 	})),
 }));
 
-vi.mock("../api", () => ({ connectionApi: api }));
+vi.mock("../api", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../api")>()),
+	connectionApi: api,
+}));
 vi.mock("../shell", () => ({
 	ConsoleShell: ({ children }: { children: ReactNode }) => <>{children}</>,
 	PageError: () => <div role="alert">请求失败</div>,
@@ -316,6 +324,112 @@ function approvedFor(provider: string) {
 }
 
 describe("Connection 管理 mutation wiring", () => {
+	it("切换客户端自动加载，旧客户端的迟到响应不能覆盖当前预览", async () => {
+		const overview = await api.getConnections();
+		overview.overview.consumers.push({
+			id: "consumer-other",
+			name: "Other client",
+		});
+		api.getConnections.mockResolvedValueOnce(overview);
+		const oldResponse = await api.createAuthorizationPreview();
+		oldResponse.preview.consumer.name = "Slow client";
+		const newResponse = await api.createAuthorizationPreview({
+			consumerId: "consumer-other",
+		});
+		newResponse.preview.consumer.name = "Other client";
+		const finalResponse = structuredClone(newResponse);
+		finalResponse.preview.actions = finalResponse.preview.actions.filter(
+			(action) => action.effect === "READ",
+		);
+		let finishOld!: (value: typeof oldResponse) => void;
+		api.createAuthorizationPreview
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						finishOld = resolve;
+					}),
+			)
+			.mockResolvedValueOnce(newResponse)
+			.mockResolvedValueOnce(finalResponse);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.change(screen.getByRole("combobox", { name: "客户端" }), {
+			target: { value: "consumer-other" },
+		});
+		await screen.findByText("Other client", {
+			selector: ".account-switch span",
+		});
+		await act(async () => finishOld(oldResponse));
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
+		expect(
+			screen.getByText("Other client", { selector: ".account-switch span" }),
+		).toBeTruthy();
+		expect(
+			screen.queryByText("Slow client", { selector: ".account-switch span" }),
+		).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
+	it("发现预览身份不匹配时禁止展示和确认", async () => {
+		const response = await api.createAuthorizationPreview({
+			consumerId: "unexpected-consumer",
+		});
+		api.createAuthorizationPreview.mockResolvedValueOnce(response);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		await screen.findByRole("alert");
+		expect(screen.queryByRole("button", { name: "确认授权" })).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
+	it("刷新发现预览失败后不使用缓存继续确认", async () => {
+		const overview = await api.getConnections();
+		const grant = overview.overview.grants[0];
+		if (!grant) throw new Error("Grant required");
+		grant.actions = [
+			{
+				id: "github.get_pull_request@v2",
+				name: "github.get_pull_request",
+				effect: "READ",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
+		const discovery = await api.createAuthorizationPreview();
+		const final = structuredClone(discovery);
+		final.preview.actions = final.preview.actions.filter(
+			(action) => action.effect === "READ",
+		);
+		const action = final.preview.actions[0];
+		if (!action) throw new Error("Action required");
+		action.description = "Changed purpose";
+		api.createAuthorizationPreview
+			.mockResolvedValueOnce(discovery)
+			.mockResolvedValueOnce(final)
+			.mockRejectedValueOnce(new Error("Discovery unavailable"));
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /GitHub 已连接/ }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "刷新授权内容" }),
+		);
+		await screen.findByText("请求失败");
+		expect(screen.queryByRole("button", { name: "确认授权" })).toBeNull();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	});
+
 	it("升级连接时显示进行中和成功反馈", async () => {
 		let finishUpgrade: ((value: { connectionId: string }) => void) | undefined;
 		api.upgradeProviderConnection.mockImplementationOnce(
@@ -914,14 +1028,18 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(calls(api.revokeGrant)[0]?.[0]).toBe("grant-codex");
 
 		fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
-		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
-		await screen.findByRole("button", { name: "查看授权差异" });
-		expect(screen.getByText("已选择 0 / 共 2 项")).toBeTruthy();
+		await screen.findByText("已选择 0 / 共 2 项");
+		expect(screen.queryByRole("button", { name: "查看授权内容" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "查看授权差异" })).toBeNull();
 		fireEvent.click(
 			screen.getByRole("checkbox", { name: /github.get_pull_request/ }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "查看授权差异" }));
-		await screen.findByRole("button", { name: "确认授权" });
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "确认授权" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
 		expect(calls(api.createAuthorizationPreview).at(-1)?.[0]).toEqual({
 			actionVersionIds: ["github.get_pull_request@v2"],
 			connectionId: "connection-personal",
@@ -968,7 +1086,6 @@ describe("Connection 管理 mutation wiring", () => {
 		api.getConnections.mockResolvedValueOnce(overview);
 		renderPage(<ConnectionsPage />);
 		fireEvent.click(await screen.findByRole("button", { name: "确认授权" }));
-		fireEvent.click(screen.getByRole("button", { name: "查看授权内容" }));
 		await screen.findByText("已选择 1 / 共 2 项");
 		expect(
 			(
@@ -985,6 +1102,102 @@ describe("Connection 管理 mutation wiring", () => {
 			).checked,
 		).toBe(false);
 	});
+
+	it.each([
+		{ entry: "upgrade", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "normal", count: 14, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "PAUSED_CREDENTIAL" },
+		{ entry: "upgrade", count: 3, status: "ACTIVE" },
+		{ entry: "upgrade", count: 0, status: "REVOKED" },
+		{ entry: "upgrade", count: 0, status: "TERMINATED" },
+	])(
+		"$entry 入口沿用最新 $status 授权的 $count 项，不合并历史权限",
+		async ({ entry, count, status }) => {
+			const overview = await api.getConnections();
+			const template = overview.overview.grants[0];
+			if (!template) throw new Error("测试需要 Grant");
+			const actions = Array.from({ length: 15 }, (_, index) => ({
+				id: `rehoboam.action_${index}@v6`,
+				name:
+					index === 0
+						? "rehoboam.get_current_user"
+						: `rehoboam.action_${index}`,
+				effect: index < 10 ? ("READ" as const) : ("WRITE" as const),
+				description: `Action ${index}`,
+				requiredScopes: [],
+			}));
+			const oldActions = actions.slice(0, 14).map((action) => ({
+				...action,
+				id: action.id.replace("@v6", "@v5"),
+			}));
+			const latest = {
+				...template,
+				id: "grant-z-latest",
+				status,
+				actions: oldActions.slice(0, count || 14),
+				actionVersionIds: oldActions
+					.slice(0, count || 14)
+					.map((action) => action.id),
+			};
+			// The server returns newest decisions first, regardless of lexicographic IDs.
+			overview.overview.grants = [
+				{ ...template, connectionId: "other-connection", actions: oldActions },
+				{ ...template, consumerId: "other-consumer", actions: oldActions },
+				latest,
+				{
+					...template,
+					id: "grant-a-old",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions.slice(0, 1),
+				},
+				{
+					...template,
+					id: "grant-b-old-full",
+					status: "PAUSED_CREDENTIAL",
+					actions: oldActions,
+				},
+			];
+			overview.overview.upgradeTasks = [
+				{
+					campaignId: "campaign-upgrade",
+					connectionId: template.connectionId,
+					consumerId: template.consumerId,
+					consumerName: "Codex",
+					deadlineAt: null,
+					providerId: "github",
+					reason: "Provider upgraded",
+					status: "PENDING_AUTHORIZATION",
+					targetProviderReleaseId: "provider-v6",
+					taskId: "task-upgrade",
+				},
+			];
+			const response = await api.createAuthorizationPreview();
+			response.preview.actions = actions;
+			api.createAuthorizationPreview.mockResolvedValueOnce(response);
+			api.getConnections.mockResolvedValueOnce(overview);
+			renderPage(<ConnectionsPage />);
+			if (entry === "upgrade") {
+				fireEvent.click(
+					await screen.findByRole("button", { name: "确认授权" }),
+				);
+			} else {
+				fireEvent.click(
+					await screen.findByRole("button", { name: /GitHub 已连接/ }),
+				);
+				fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+			}
+			await screen.findByText(`已选择 ${count} / 共 15 项`);
+			for (const [index, action] of actions.entries()) {
+				expect(
+					(
+						screen.getByRole("checkbox", {
+							name: `${action.name} ${action.effect === "READ" ? "读取" : "写入"}`,
+						}) as HTMLInputElement
+					).checked,
+				).toBe(index < count);
+			}
+		},
+	);
 
 	it("GitHub OAuth 携带批准的申请 ID", async () => {
 		approvedFor("github");

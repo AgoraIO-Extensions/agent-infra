@@ -212,6 +212,68 @@ describe("approved personal Connection reconnect", () => {
 						principalId: "another-principal",
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				for (const authorizationState of [
+					"SUSPENDED",
+					"REAPPROVAL_REQUIRED",
+				] as const) {
+					const requestId = await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: nextReleaseId,
+						scopes: ["repo"],
+					});
+					const externalAccount = `restricted-${authorizationState}-${randomUUID()}`;
+					const restricted = await repository.storeProviderCredential({
+						accessRequestId: requestId,
+						accessToken: "fixture-restricted-token",
+						displayName: "Restricted account",
+						externalAccount,
+						grantedScopes: ["repo"],
+						principalId,
+						providerId: "github",
+						providerReleaseId: nextReleaseId,
+					});
+					if (authorizationState === "SUSPENDED") {
+						const [policy] = await sql<{ id: string; revision: string }[]>`
+							SELECT policy.id, policy.revision::text FROM connection_access_policy_versions policy
+							JOIN connection_access_requests request ON request.policy_version_id = policy.id WHERE request.id = ${requestId}
+						`;
+						if (!policy) throw new Error("Policy fixture is missing");
+						await approval.revokePolicy({
+							actorPrincipalId: principalId,
+							policyVersionId: policy.id,
+							expectedRevision: policy.revision,
+							reason: "Security revocation",
+						});
+					} else {
+						await sql`UPDATE connection_access_authorizations SET state = 'REAPPROVAL_REQUIRED', reapproval_deadline_at = now() + interval '1 day' WHERE connection_id = ${restricted.connectionId}`;
+					}
+					await repository.disconnectConnection({
+						connectionId: restricted.connectionId,
+						principalId,
+					});
+					const [preserved] = await sql<
+						{ state: string }[]
+					>`SELECT state FROM connection_access_authorizations WHERE connection_id = ${restricted.connectionId}`;
+					expect(preserved?.state).toBe(authorizationState);
+					await expect(
+						repository.validatePersonalReconnect({
+							connectionId: restricted.connectionId,
+							principalId,
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					await expect(
+						repository.storeProviderCredential({
+							accessToken: "fixture-reconnect-rejected",
+							displayName: "Restricted account",
+							externalAccount,
+							grantedScopes: ["repo"],
+							principalId,
+							providerId: "github",
+							providerReleaseId: nextReleaseId,
+							expectedConnectionId: restricted.connectionId,
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+				}
 			} finally {
 				await repository.close();
 				await approval.close();

@@ -3909,14 +3909,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					FROM connection_grants stored_grant
 					JOIN connection_consumers consumer ON consumer.id = stored_grant.consumer_id
 					JOIN connection_accounts account ON account.id = stored_grant.connection_id
+					LEFT JOIN connection_authorization_consents consent
+						ON consent.id = stored_grant.consent_id AND consent.root_id = stored_grant.root_id
+					LEFT JOIN connection_authorization_previews preview
+						ON preview.id = consent.preview_id AND preview.root_id = consent.root_id
 					LEFT JOIN connection_grant_actions grant_action
 						ON grant_action.grant_id = stored_grant.id
 					LEFT JOIN connection_action_versions action
 						ON action.id = grant_action.action_version_id
 					WHERE stored_grant.principal_id = ${principalId}
 					GROUP BY stored_grant.id, consumer.display_name,
-						account.provider_id, account.display_name, account.external_account
-					ORDER BY stored_grant.id
+						account.provider_id, account.display_name, account.external_account,
+						preview.root_fence, consent.confirmed_at
+					-- Root fences order authorization decisions, not random Grant IDs.
+					ORDER BY preview.root_fence DESC NULLS LAST,
+						consent.confirmed_at DESC NULLS LAST,
+						stored_grant.connection_revision DESC NULLS LAST, stored_grant.id
 				`,
 			this.sql<{ id: string; name: string }[]>`
 					SELECT DISTINCT consumer.id, consumer.display_name AS name
@@ -4201,7 +4209,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				UPDATE connection_access_authorizations
 				SET state = 'DISCONNECTED', revision = revision + 1, updated_at = now()
 				WHERE connection_id = ${input.connectionId}
-					AND state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED')
+					AND state = 'ACTIVE'
 			`;
 			await sql`
 					UPDATE connection_credential_versions
