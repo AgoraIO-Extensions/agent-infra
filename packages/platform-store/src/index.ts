@@ -103,6 +103,12 @@ export {
 	type SucceededOutboxItem,
 } from "./outbox.ts";
 export {
+	PostgresScopedPlatformAuditQueryV1,
+	type ScopedPlatformAuditPageV1,
+	type ScopedPlatformAuditProjectionV1,
+	type ScopedPlatformAuditRequestMetadataV1,
+} from "./scoped-audit-query.js";
+export {
 	openPostgresSecretActivationStoreV1,
 	type PostgresSecretActivationStoreOptionsV1,
 	PostgresSecretActivationStoreV1,

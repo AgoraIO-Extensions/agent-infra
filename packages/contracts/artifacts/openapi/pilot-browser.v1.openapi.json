@@ -4227,6 +4227,617 @@
         ],
         "type": "object"
       },
+      "ScopedPlatformAuditActionV1": {
+        "enum": [
+          "agent.application.submitted",
+          "agent.application.updated",
+          "agent.application.resubmitted",
+          "agent.application.withdrawn",
+          "agent.application.approved",
+          "agent.application.rejected",
+          "agent.lifecycle.stopped",
+          "agent.lifecycle.restarted",
+          "agent.lifecycle.creation_retried",
+          "agent.lifecycle.disabled",
+          "agent.workload.creation_succeeded",
+          "agent.workload.creation_failed",
+          "agent.workload.service_starting",
+          "agent.workload.service_ready",
+          "agent.workload.service_updating",
+          "agent.workload.service_unavailable",
+          "agent.configuration.revised",
+          "agent.access.updated",
+          "api.access.rejected",
+          "api.application.created",
+          "api.credential.issued",
+          "api.credential.revoked",
+          "api.credential.delivery.granted",
+          "api.credential.delivery.revoked",
+          "api.agent.grant.granted",
+          "api.agent.grant.revoked",
+          "task.api.access",
+          "task.api.subscription.started",
+          "task.api.subscription.ended",
+          "task.authorization.accepted",
+          "task.status.changed",
+          "task.control.created",
+          "execution.operation.observed",
+          "conversation.task.accepted",
+          "conversation.message.accepted",
+          "conversation.regeneration.accepted",
+          "conversation.stop.accepted",
+          "conversation.model_selection.updated",
+          "conversation.model_selection.fell_back",
+          "conversation.task.status",
+          "secret.decrypt",
+          "secret.activate",
+          "secret.rewrap",
+          "secret.retire-key",
+          "audit.query.completed",
+          "audit.query.failed"
+        ],
+        "type": "string"
+      },
+      "ScopedPlatformAuditPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditProjectionV1"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "ScopedPlatformAuditProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ScopedPlatformAuditActionV1"
+          },
+          "actor": {
+            "additionalProperties": false,
+            "properties": {
+              "actorId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application",
+                  "system",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "actorId"
+            ],
+            "type": "object"
+          },
+          "agentId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "auditId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authorizationRecordId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executionId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "const": "platform_worker",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "eventId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "fact": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attemptRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "durationMs": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "failureCode": {
+                            "enum": [
+                              "authorization_denied",
+                              "authorization_unavailable",
+                              "dependency_unavailable",
+                              "request_rejected",
+                              "response_incomplete",
+                              "operation_failed",
+                              "persistence_unavailable",
+                              "interrupted",
+                              "recovery_unconfirmed"
+                            ],
+                            "type": "string"
+                          },
+                          "finishedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "model",
+                            "type": "string"
+                          },
+                          "model": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "configVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "modelId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "modelOptionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "reasoningLevel": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "configVersion",
+                              "modelOptionId",
+                              "modelId"
+                            ],
+                            "type": "object"
+                          },
+                          "operationRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "parentOperationRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "phase": {
+                            "enum": [
+                              "intent",
+                              "started",
+                              "completed",
+                              "failed",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "usage": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "cachedInputTokens": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "inputTokens": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "outputTokens": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "operationRef",
+                          "attemptRef",
+                          "phase",
+                          "kind",
+                          "model"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attemptRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "connection": {
+                            "oneOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "callRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "serviceRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "verification": {
+                                    "const": "verified",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "serviceRef",
+                                  "verification",
+                                  "callRef"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "callRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "enum": [
+                                      "receipt_missing",
+                                      "record_unavailable",
+                                      "authorization_unavailable",
+                                      "binding_mismatch",
+                                      "response_unconfirmed"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "serviceRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "verification": {
+                                    "const": "unverified",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "serviceRef",
+                                  "verification",
+                                  "reason"
+                                ],
+                                "type": "object"
+                              }
+                            ],
+                            "type": "object"
+                          },
+                          "durationMs": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "failureCode": {
+                            "enum": [
+                              "authorization_denied",
+                              "authorization_unavailable",
+                              "dependency_unavailable",
+                              "request_rejected",
+                              "response_incomplete",
+                              "operation_failed",
+                              "persistence_unavailable",
+                              "interrupted",
+                              "recovery_unconfirmed"
+                            ],
+                            "type": "string"
+                          },
+                          "finishedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "tool",
+                            "type": "string"
+                          },
+                          "operationRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "parentOperationRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "phase": {
+                            "enum": [
+                              "intent",
+                              "started",
+                              "completed",
+                              "failed",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "resultRef": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "toolId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "operationRef",
+                          "attemptRef",
+                          "phase",
+                          "kind",
+                          "toolId"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "eventId",
+                  "fact"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "originalPrincipal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApiPrincipalV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requestId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/ScopedPlatformAuditResultV1"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "subject": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "agent_application",
+                  "agent",
+                  "secret",
+                  "secret_key",
+                  "grant",
+                  "unknown",
+                  "conversation",
+                  "execution",
+                  "configuration"
+                ],
+                "type": "string"
+              },
+              "subjectId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "subjectId"
+            ],
+            "type": "object"
+          },
+          "summary": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "taskApi": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "operation": {
+                    "enum": [
+                      "submit",
+                      "read",
+                      "cancel",
+                      "subscribe"
+                    ],
+                    "type": "string"
+                  },
+                  "phase": {
+                    "enum": [
+                      "access",
+                      "subscription.started",
+                      "subscription.ended"
+                    ],
+                    "type": "string"
+                  },
+                  "reason": {
+                    "enum": [
+                      "request_accepted",
+                      "invalid_request",
+                      "authentication_required",
+                      "authorization_revoked",
+                      "missing_scope",
+                      "resource_unavailable",
+                      "capacity_full",
+                      "conflict",
+                      "dependency_unavailable",
+                      "client_disconnected",
+                      "stream_ended",
+                      "subscription_unconfirmed"
+                    ],
+                    "type": "string"
+                  },
+                  "subscriptionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "phase",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "auditId",
+          "action",
+          "actor",
+          "subject",
+          "result",
+          "summary",
+          "taskApi",
+          "occurredAt",
+          "traceId",
+          "requestId",
+          "agentId",
+          "conversationId",
+          "executionId",
+          "authorizationRecordId",
+          "originalPrincipal",
+          "executor",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "ScopedPlatformAuditResultV1": {
+        "enum": [
+          "succeeded",
+          "rejected",
+          "failed",
+          "accepted",
+          "intent",
+          "started",
+          "submitted",
+          "waiting",
+          "processing",
+          "completed",
+          "cancelled",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "SseEventIdV1": {
         "pattern": "^[^\u0000\\n\\r]+$",
         "type": "string"
@@ -9282,6 +9893,333 @@
         }
       }
     },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "listOwnExecutionAudit",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalKind",
+            "schema": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditActionV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "result",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditResultV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "executionId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopedPlatformAuditPageV1"
+                }
+              }
+            },
+            "description": "Authorized audit metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          },
+          {}
+        ]
+      }
+    },
+    "/api/v1/audit/{auditId}": {
+      "get": {
+        "operationId": "getOwnExecutionAudit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "auditId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalKind",
+            "schema": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditActionV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "result",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditResultV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "executionId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopedPlatformAuditProjectionV1"
+                }
+              }
+            },
+            "description": "Authorized audit detail"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          },
+          {}
+        ]
+      }
+    },
     "/api/v1/conversations/{conversationId}": {
       "get": {
         "operationId": "getConversation",
@@ -11422,6 +12360,323 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v3/admin/audit": {
+      "get": {
+        "operationId": "listScopedAdministratorAudit",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalKind",
+            "schema": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditActionV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "result",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditResultV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "executionId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopedPlatformAuditPageV1"
+                }
+              }
+            },
+            "description": "Authorized audit metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v3/admin/audit/{auditId}": {
+      "get": {
+        "operationId": "getScopedAdministratorAudit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "auditId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalKind",
+            "schema": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "principalId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditActionV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "result",
+            "schema": {
+              "$ref": "#/components/schemas/ScopedPlatformAuditResultV1"
+            }
+          },
+          {
+            "in": "query",
+            "name": "executionId",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopedPlatformAuditProjectionV1"
+                }
+              }
+            },
+            "description": "Authorized audit detail"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Audit query failed"
+          }
+        },
+        "security": []
       }
     }
   }

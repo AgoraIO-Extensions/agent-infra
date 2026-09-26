@@ -61,6 +61,7 @@ describe("platform-store package surface", () => {
 			"PostgresLegacyTaskAuthorizationMigrationV1",
 			"PostgresLegacyTaskRecoveryReaderV1",
 			"PostgresPlatformAuditQueryV1",
+			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
 			"PostgresTaskApiAuditStoreV1",

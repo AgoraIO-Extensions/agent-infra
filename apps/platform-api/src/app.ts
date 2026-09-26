@@ -21,6 +21,10 @@ import {
 	registerManagementRoutes,
 } from "./http/management-routes.js";
 import {
+	registerScopedAuditRoutes,
+	type ScopedAuditRoutesDependencies,
+} from "./http/scoped-audit-routes.js";
+import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
@@ -43,6 +47,7 @@ export interface PlatformAppDependencies {
 	readonly tasks?: TaskRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
+	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 }
 
 export function createPlatformHealthApp() {
@@ -84,6 +89,8 @@ export function createPlatformApp(dependencies: PlatformAppDependencies) {
 		files: dependencies.files,
 	});
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
+	if (dependencies.scopedAudit)
+		registerScopedAuditRoutes(app, dependencies.scopedAudit);
 	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	return app;
