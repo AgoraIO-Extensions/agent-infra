@@ -5,6 +5,7 @@ import type { ConversationDispatchClaimV1 } from "./conversation-dispatch.js";
 import type {
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
+	TaskSystemControlReasonV1,
 } from "./task-authorization.js";
 import {
 	createTaskRuntimeAuthorizationUseCaseV1,
@@ -129,9 +130,12 @@ function harness() {
 		readRuntimeState: vi.fn(async () => state),
 		readAuthorization: vi.fn(async () => record),
 		resolveCurrentUser: vi.fn(async () => user),
-		recordControl: vi.fn(async (input: { reason: string }) => ({
-			controlRecordId: `control-${input.reason}`,
-		})),
+		recordControl: vi.fn(
+			async (input: { reason: TaskSystemControlReasonV1 }) => ({
+				controlRecordId: `control-${input.reason}`,
+				reason: input.reason,
+			}),
+		),
 		readLegacyRecovery: vi.fn(
 			async (): Promise<LegacyTaskControlRecoveryV1 | null> => null,
 		),
@@ -295,6 +299,18 @@ describe("task Runtime authorization Core use case", () => {
 });
 
 describe("terminal task event recovery authority", () => {
+	it("rejects an unrelated persisted control reason during terminal recovery", async () => {
+		const h = harness();
+		Object.assign(h.state, { executionStatus: "cancelled" });
+		h.ports.recordControl.mockResolvedValue({
+			controlRecordId: "unrelated-control",
+			reason: "generation_isolation",
+		});
+		await expect(
+			h.useCase.current(h.context, h.state, "events.persist", signal()),
+		).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_BINDING_INVALID" });
+	});
+
 	it.each(["healthy", "revoked", "directory-unavailable"])(
 		"permits only original queries and ACK for %s terminal history",
 		async (condition) => {

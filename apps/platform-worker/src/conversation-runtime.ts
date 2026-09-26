@@ -40,7 +40,10 @@ export interface ConversationTaskAuthorizationStoreV2 {
 		readonly workerId: string;
 		readonly traceId: string;
 		readonly requestId: string;
-	}): Promise<{ readonly controlRecordId: string }>;
+	}): Promise<{
+		readonly controlRecordId: string;
+		readonly reason: RuntimeControlReasonV2;
+	}>;
 }
 
 /** Read-only projection of already verified system migration evidence. */
