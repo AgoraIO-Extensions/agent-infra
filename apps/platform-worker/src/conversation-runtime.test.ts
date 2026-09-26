@@ -314,6 +314,84 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it.each(["cancel", "subject-disabled", "already-revoked"] as const)(
+		"recovers the lost original Session before stopping %s without restoring business authority",
+		async (reason) => {
+			const h = harness();
+			Object.assign(h.claim, {
+				taskWaitOrder: 1,
+				executionStatus: "unknown",
+				hostSessionRef: null,
+				stopPending: reason === "cancel",
+			});
+			Object.assign(h.state, {
+				taskWaitOrder: 1,
+				executionStatus: "unknown",
+				hostSessionRef: null,
+				stopPending: reason === "cancel",
+			});
+			if (reason === "subject-disabled") h.setUser(null);
+			if (reason === "already-revoked") {
+				const record = h.record();
+				if (!record) throw new Error("missing authorization");
+				h.setRecord({ ...record, revokedAt: new Date(now) });
+			}
+			try {
+				const reference = await h.authorize();
+				await h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+					hostSessionRef: null,
+				});
+				expect(h.sent().claims).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+					allowedCommands: ["session.status"],
+					hostSessionRef: null,
+				});
+				expect(h.sent().body).not.toHaveProperty("input");
+				expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+					expect.objectContaining({
+						reason: reason === "cancel" ? "stop" : "authorization_revoked",
+					}),
+				);
+				if (reason !== "cancel") expect(h.record()?.revokedAt).not.toBeNull();
+				expect(h.state.stopPending).toBe(true);
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({ code: "AUTHORIZATION_REVOKED" });
+				expect(
+					h.fetcher.mock.calls.some(([url]) => String(url).endsWith("/turns")),
+				).toBe(false);
+				Object.assign(h.state, {
+					hostSessionRef: "host",
+					executionStatus: "processing",
+				});
+				Object.assign(h.claim, {
+					hostSessionRef: "host",
+					executionStatus: "processing",
+					operation: "conversation.turn.stop.v1",
+					stopRequestId: "original-stop",
+					stopPending: true,
+				});
+				const stopReference = await h.authorize();
+				h.fetcher.mockClear();
+				await h.runtime.runtimeHost.dispatch({
+					...h.events(stopReference),
+					operation: "turn.stop",
+					stopRequestId: "original-stop",
+				});
+				expect(h.sent().claims).toMatchObject({
+					purpose: "control",
+					reason: reason === "cancel" ? "stop" : "authorization_revoked",
+					allowedCommands: ["turn.stop"],
+					hostSessionRef: "host",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
 	it.each(["web", "partner:channel", "wecom_bot:bot", "wecom_app:app"])(
 		"does not authorize %s without a current channel authority",
 		async (channelId) => {
@@ -759,7 +837,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		});
 		expect(h.sent().claims).toMatchObject({
 			purpose: "control",
-			reason: "stop",
+			reason: "recovery",
 		});
 		expect(h.sent().body).not.toHaveProperty("input");
 		h.runtime.close();

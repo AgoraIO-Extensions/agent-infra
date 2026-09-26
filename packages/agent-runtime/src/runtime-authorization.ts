@@ -217,17 +217,21 @@ export function applyRuntimeAuthority(
 	)
 		runtimeAuthorizationDenied();
 	const current = authorities[claims.executionId];
-	// Stop and Execution fences advance independently; terminal reads retain the stop latch.
+	// A stop status query can persist Execution scope before the independent stop arrives.
+	// Recovery drains that original scope without clearing the stop latch.
 	const stoppedExecutionRead =
 		mode === "query" &&
 		current?.stopped === true &&
 		(current.control?.reason === "stop" ||
 			current.control?.reason === "authorization_revoked") &&
-		current.controlOperation?.kind === "stop" &&
+		(current.controlOperation?.kind === "stop" ||
+			(current.controlOperation?.kind === "execution" &&
+				current.controlOperation.id === claims.executionId)) &&
 		claims.purpose === "control" &&
 		claims.reason === "recovery" &&
 		claims.operation.kind === "execution" &&
 		claims.operation.id === claims.executionId &&
+		claims.operation.deliveryFence === current.executionDeliveryFence &&
 		claims.operation.executionDeliveryFence ===
 			current.executionDeliveryFence &&
 		claims.allowedCommands.every((command) =>

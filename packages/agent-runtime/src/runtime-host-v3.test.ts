@@ -209,6 +209,38 @@ describe("Runtime V3 durable authorization", () => {
 		});
 	});
 
+	it.each(["user", "application"] as const)(
+		"persists the original %s native receipt before status observation permits the first model request",
+		async (kind) => {
+			const env = await setup();
+			const getStatus = env.driver.getStatus.bind(env.driver);
+			const observed = vi
+				.spyOn(env.driver, "getStatus")
+				.mockImplementationOnce(async (nativeSessionRef, executionId) => {
+					await env.host.authorizeExternalAction({
+						nativeSessionRef,
+						executionId,
+						runtimeOperationId: executionId,
+						operationRef: "model-fact-1",
+						attemptRef: "attempt-1",
+						kind: "model",
+					});
+					return getStatus(nativeSessionRef, executionId);
+				});
+			const request = signV3Fixture(
+				{ ...submitV3Fixture(), principal: { kind, id: "original-principal" } },
+				"turn.submit",
+			);
+			await expect(
+				env.host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant)),
+			).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
+			expect(observed).toHaveBeenCalledTimes(1);
+			expect(await env.driver.sideEffectCount()).toBe(1);
+		},
+	);
+
 	it("replays a resolved submit while its execution is under recovery query authority", async () => {
 		const env = await setup();
 		const unsigned = {
@@ -2197,6 +2229,112 @@ describe("Runtime V3 durable authorization", () => {
 		},
 	);
 
+	it.each(["stop", "authorization_revoked"] as const)(
+		"archives original events after a %s status query observes natural completion before stop delivery",
+		async (reason) => {
+			const env = await setup();
+			let host = env.host;
+			let store = env.store;
+			const restart = async () => {
+				await host.close();
+				store = await FileRuntimeStore.open(env.storePath);
+				const driver = await FakeRuntimeDriver.open(
+					join(env.directory, "driver.json"),
+				);
+				host = await RuntimeHost.open({ ...env.hostOptions, store, driver });
+			};
+			try {
+				const accepted = await submit(host);
+				await env.driver.setOperationStatus("execution-fixture", "completed");
+				const status = signV3Fixture(
+					{
+						...base(accepted.hostSessionRef),
+						originalOperationDigest: originalDigest(),
+					},
+					"session.status",
+					{
+						purpose: "control",
+						reason,
+						claims: { controlRecordId: "pending-stop" },
+					},
+				);
+				await expect(
+					host.recoverStatusV3(status, verifyRuntimeV2Fixture(status.grant)),
+				).resolves.toMatchObject({ outcome: "found", status: "completed" });
+				await restart();
+				const eventBase = {
+					...base(accepted.hostSessionRef),
+					consumer: "platform_worker_persistence" as const,
+				};
+				const control = {
+					purpose: "control" as const,
+					reason: "recovery" as const,
+					claims: { controlRecordId: "terminal-recovery" },
+				};
+				const query = signV3Fixture(
+					{ ...eventBase, afterCursor: null },
+					"events.persist",
+					control,
+				);
+				const stream = await host.streamEventsV3(
+					query,
+					verifyRuntimeV2Fixture(query.grant),
+				);
+				const iterator = stream[Symbol.asyncIterator]();
+				const event = await iterator.next();
+				await iterator.return?.();
+				if (event.done) throw Error("Original event missing");
+				await restart();
+				const ack = signV3Fixture(
+					{ ...eventBase, confirmedCursor: event.value.cursor },
+					"events.ack",
+					control,
+				);
+				await expect(
+					host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+				).resolves.toMatchObject({ confirmedCursor: event.value.cursor });
+				const saved = JSON.parse(await readFile(env.storePath, "utf8"));
+				expect(
+					saved.sessions[accepted.hostSessionRef].executionAuthorities[
+						status.executionId
+					],
+				).toMatchObject({
+					stopped: true,
+					control: { controlRecordId: "terminal-recovery", reason: "recovery" },
+					controlOperation: { kind: "execution", id: status.executionId },
+					confirmedCursor: event.value.cursor,
+				});
+				const conflicting = signV3Fixture(
+					{ ...eventBase, confirmedCursor: event.value.cursor },
+					"events.ack",
+					{ ...control, claims: { controlRecordId: "conflicting-recovery" } },
+				);
+				await expect(
+					host.acknowledgeEventsV3(
+						conflicting,
+						verifyRuntimeV2Fixture(conflicting.grant),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				const renewal = signV3Fixture(
+					base(accepted.hostSessionRef),
+					"execution.renew",
+				);
+				await expect(
+					host.renewAuthorizationV3(
+						renewal,
+						verifyRuntimeV2Fixture(renewal.grant),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				await expect(
+					host.authorizeExternalAction(guard(accepted.hostSessionRef, store)),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				expect(await env.driver.sideEffectCount()).toBe(1);
+			} finally {
+				await host.close();
+			}
+		},
+	);
+
 	it("clears a prior stop lock when applying trusted recovery authority", () => {
 		const authorities: Record<string, RuntimeExecutionAuthority> = {};
 		const stop = verifyRuntimeV2Fixture(
@@ -2239,9 +2377,24 @@ describe("Runtime V3 durable authorization", () => {
 				},
 			).grant,
 		).claims;
+		for (const controlOperation of [
+			undefined,
+			{ kind: "execution" as const, id: "other-execution" },
+		]) {
+			const missingScope = structuredClone(authorities);
+			const authority = missingScope["execution-fixture"];
+			if (!authority) throw Error("Stop authority missing");
+			if (controlOperation) authority.controlOperation = controlOperation;
+			else delete authority.controlOperation;
+			expect(() =>
+				applyRuntimeAuthority(missingScope, conflicting, "query"),
+			).toThrow();
+		}
 		expect(() =>
-			applyRuntimeAuthority(authorities, conflicting, "query"),
+			applyRuntimeAuthority(authorities, conflicting, "prepare"),
 		).toThrow();
+		applyRuntimeAuthority(authorities, conflicting, "query");
+		expect(authorities["execution-fixture"]?.stopped).toBe(true);
 
 		const recovery = verifyRuntimeV2Fixture(
 			signV3Fixture(

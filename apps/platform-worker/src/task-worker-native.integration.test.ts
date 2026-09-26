@@ -37,6 +37,7 @@ import {
 import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
+import { createRuntimeExecutionGrantVerifierV2 } from "../../../packages/agent-runtime/src/grant-v2.js";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { setProductionDeploymentInput } from "../../../tests/fixtures/platform-api-production-deployment.js";
@@ -60,6 +61,23 @@ import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 const execFile = promisify(execFileCallback);
 const root = resolve(import.meta.dirname, "../../..");
 const enabled = process.env.AGENT_INFRA_TASK_NATIVE_TEST === "1";
+function boundaryGate() {
+	let entered = false;
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	return {
+		get entered() {
+			return entered;
+		},
+		async wait() {
+			entered = true;
+			await released;
+		},
+		release,
+	};
+}
 async function waitUntil(check: () => Promise<boolean>, label: string) {
 	for (let attempt = 0; attempt < 300; attempt++) {
 		if (await check()) return;
@@ -134,10 +152,11 @@ const admin: IdentityContext = {
 	userId: "admin-cli",
 	displayName: "Synthetic administrator",
 };
+let nativeAccountStatus: "active" | "disabled" = "active";
 const directory: IdentityAdapter = {
 	async resolve(request) {
 		return request.headers.get("cookie") === "synthetic-owner-session"
-			? user
+			? { ...user, accountStatus: nativeAccountStatus }
 			: request.headers.get("cookie") === "synthetic-admin-session"
 				? admin
 				: null;
@@ -147,7 +166,7 @@ const directory: IdentityAdapter = {
 			? {
 					schemaVersion: 1,
 					userId: id,
-					accountStatus: user.accountStatus,
+					accountStatus: nativeAccountStatus,
 					organizationIds: [],
 					authorizationRevision: user.authorizationRevision,
 				}
@@ -249,8 +268,16 @@ it.skipIf(!enabled)(
 			| Awaited<ReturnType<typeof startPostgresTestDatabase>>
 			| undefined;
 		let upgradeSql: ReturnType<typeof postgres> | undefined;
+		let webUpgradeDatabase:
+			| Awaited<ReturnType<typeof startPostgresTestDatabase>>
+			| undefined;
+		let webUpgradeSql: ReturnType<typeof postgres> | undefined;
+		let webUpgradeRunning:
+			| Awaited<ReturnType<typeof startPlatformApiFromDeployment>>
+			| undefined;
 		const children: ChildProcess[] = [];
 		const traces: string[] = [];
+		let checks: string[] = [];
 		const keys = generateKeyPairSync("ed25519");
 		const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
 		const signing = {
@@ -258,6 +285,9 @@ it.skipIf(!enabled)(
 			issuer: "worker-platform",
 			keyId: "worker-key",
 		};
+		const verifyWireGrant = createRuntimeExecutionGrantVerifierV2(
+			new Map([[signing.keyId, keys.publicKey]]),
+		);
 		const policy = {
 			...workloadTestPolicy,
 			runtimeAuth: {
@@ -273,6 +303,8 @@ it.skipIf(!enabled)(
 		const containerName = `agent-infra-task-native-${randomUUID()}`;
 		const requests: {
 			path: string;
+			observedAt: number;
+			respondedAt?: number;
 			executionId?: string;
 			deliveryFence?: number;
 			responseStatus?: number;
@@ -297,8 +329,54 @@ it.skipIf(!enabled)(
 		let outputBytes = 0;
 		let unsafeOutput = false;
 		let uncertaintyIds: string[] = [];
+		let directoryBoundary:
+			| {
+					executionId: string;
+					stage: "waiting" | "unknown";
+					gate: ReturnType<typeof boundaryGate>;
+			  }
+			| undefined;
+		const directoryGateObservations: {
+			executionId: string;
+			stage: string;
+			attempt: number;
+			fence: number;
+			observedAt: number;
+			releasedAt?: number;
+		}[] = [];
+		const liveModelObservations: {
+			executionId: string;
+			principal: "user" | "application";
+			change: string;
+			requestsBefore: number;
+			requestsAtRevocation: number;
+			pendingAtRevocation: number;
+		}[] = [];
+		const liveNativeExecutionIds: string[] = [];
+		let preparedCandidateObservation:
+			| {
+					blockedWorkerClaims: number;
+					completedWorkerClaims: number;
+					attempt: number;
+			  }
+			| undefined;
+		type WireBoundary = {
+			executionId: string;
+			path: "/stops" | "/renew" | "/status";
+			gate: ReturnType<typeof boundaryGate>;
+			late?: boolean;
+			observedIndex?: number;
+			grantExpiresAt?: number;
+			rejectedAt?: number;
+		};
+		let wireBoundary: WireBoundary | undefined;
 		let responseLoss:
-			| { inputDigest: string; executionId?: string; dropped: number }
+			| {
+					inputDigest: string;
+					executionId?: string;
+					dropped: number;
+					acceptanceGate?: ReturnType<typeof boundaryGate>;
+			  }
 			| undefined;
 		let blockedStop: { executionId: string; attempts: number } | undefined;
 		let stopSuccessorObservation:
@@ -365,12 +443,45 @@ it.skipIf(!enabled)(
 		});
 
 		const runtimeServer = createServer(async (req, res) => {
+			// A deployment-owned directory fixture, shared by API and packaged
+			// Workers. Gates inspect the real claimed Execution, never mint authority.
+			if (req.url === "/test-directory/user-cli") {
+				const boundary = directoryBoundary;
+				if (boundary) {
+					const [claimed] =
+						await sql`select e.status,o.attempt_count::int as attempt,o.delivery_fence::int as fence from platform.conversation_executions e join platform.outbox_items o on o.payload->>'executionId'=e.execution_id where e.execution_id=${boundary.executionId} and e.actor_id=${user.userId} and o.status='processing' and o.operation='conversation.turn.submit.v1' and o.lease_owner is not null and e.status::text=${boundary.stage} and (${boundary.stage}='waiting' or o.attempt_count>1)`;
+					if (claimed) {
+						if (!boundary.gate.entered)
+							directoryGateObservations.push({
+								executionId: boundary.executionId,
+								stage: boundary.stage,
+								attempt: claimed.attempt,
+								fence: claimed.fence,
+								observedAt: Date.now(),
+							});
+						await boundary.gate.wait();
+					}
+				}
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						schemaVersion: 1,
+						userId: user.userId,
+						accountStatus: nativeAccountStatus,
+						organizationIds: [],
+						authorizationRevision: user.authorizationRevision,
+					}),
+				);
+				return;
+			}
 			const chunks: Uint8Array[] = [];
 			for await (const chunk of req) chunks.push(chunk);
 			const body = Buffer.concat(chunks).toString();
 			const parsed = body ? JSON.parse(body) : {};
 			const observed = {
 				path: req.url ?? "",
+				observedAt: Date.now(),
+				respondedAt: undefined as number | undefined,
 				executionId: parsed.executionId,
 				deliveryFence: parsed.operation?.executionDeliveryFence,
 				originalOperationDigest: parsed.originalOperationDigest,
@@ -388,6 +499,20 @@ it.skipIf(!enabled)(
 				responseLost: false,
 			};
 			requests.push(observed);
+			const boundary = wireBoundary;
+			const delayed =
+				boundary !== undefined &&
+				boundary.executionId === parsed.executionId &&
+				req.url?.endsWith(boundary.path) &&
+				!boundary.gate.entered;
+			if (delayed) {
+				boundary.observedIndex = requests.length - 1;
+				if (boundary.late)
+					boundary.grantExpiresAt = verifyWireGrant(
+						parsed.grant,
+					).claims.expiresAt;
+				await boundary.gate.wait();
+			}
 			if (
 				blockedStop &&
 				blockedStop.executionId === parsed.executionId &&
@@ -412,7 +537,9 @@ it.skipIf(!enabled)(
 			)
 				responseLoss.executionId = parsed.executionId;
 			const abort = new AbortController();
-			res.on("close", () => abort.abort());
+			// The late case represents bytes already in transit from a killed
+			// Worker. Forward the original signed request; never synthesize a Grant.
+			if (!(delayed && boundary.late)) res.on("close", () => abort.abort());
 			try {
 				const response = await fetch(`${runtimeOrigin}${req.url}`, {
 					method: req.method,
@@ -421,6 +548,9 @@ it.skipIf(!enabled)(
 					...(body ? { body } : {}),
 				});
 				observed.responseStatus = response.status;
+				observed.respondedAt = Date.now();
+				if (delayed && boundary.late && !response.ok)
+					boundary.rejectedAt = Date.now();
 				if (
 					response.ok &&
 					["/turns", "/status"].some((path) => req.url?.endsWith(path))
@@ -465,6 +595,14 @@ it.skipIf(!enabled)(
 				}
 				if (req.url?.endsWith("/ack") && response.ok) ackCount++;
 				traces.push(`runtime:${req.url}:${response.status}`);
+				if (
+					responseLoss?.acceptanceGate &&
+					responseLoss.executionId === parsed.executionId &&
+					req.url?.endsWith("/turns") &&
+					response.ok &&
+					observed.responseOutcome === "accepted"
+				)
+					await responseLoss.acceptanceGate.wait();
 				if (
 					responseLoss &&
 					responseLoss.executionId === parsed.executionId &&
@@ -724,6 +862,7 @@ it.skipIf(!enabled)(
 				return (await response.json()) as {
 					requests: number;
 					pending: number;
+					pendingIds: number[];
 					closed: number;
 					ready: boolean;
 					exitCode: number | null;
@@ -796,7 +935,7 @@ it.skipIf(!enabled)(
 			const configSource = `import { readFile } from 'node:fs/promises'; import { createPrivateKey } from 'node:crypto';
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directoryPath, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
-export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
+export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; const response=await fetch(${JSON.stringify(runtimeUrl)}+'/test-directory/user-cli'); if(!response.ok) throw new Error('TASK_NATIVE_DIRECTORY_UNAVAILABLE'); return response.json(); } };
 export const workloadInput = { databaseUrl: ${JSON.stringify(database.databaseUrl)}, policy: ${JSON.stringify(policy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
@@ -1029,6 +1168,16 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 						).length === 1,
 					"native execution completed",
 				);
+				await terminalDeliverySettled(executionId);
+			}
+			async function terminalDeliverySettled(executionId: string) {
+				await waitUntil(
+					async () =>
+						(
+							await sql`select 1 from platform.outbox_items where payload->>'executionId'=${executionId} and status in ('pending','processing','retry_scheduled')`
+						).length === 0,
+					"native terminal outbox delivery settled before next fixture phase",
+				);
 			}
 			start();
 			const first = await submit(userCredential.credential, "user-native");
@@ -1134,7 +1283,7 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			);
 			expect(children.every((child) => child.exitCode === null)).toBe(true);
 			expect(unsafeOutput).toBe(false);
-			const checks = [
+			checks = [
 				"landlock-ioctl-dev-enforced",
 				"production-http-user-credential-and-task",
 				"production-http-application-credential-and-task",
@@ -1504,6 +1653,40 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			checks.push(
 				"real-web-repeat-migration-preserves-history-and-automatic-native-resume",
 			);
+			const webControlsSource = await webSubmit("web-controls-native");
+			await completed(webControlsSource.executionId);
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.outbox_items where payload->>'executionId'=${webControlsSource.executionId} and status<>'succeeded'`
+					).length === 0 &&
+					requests.some(
+						(request) =>
+							request.executionId === webControlsSource.executionId &&
+							request.path.endsWith("/ack") &&
+							request.responseStatus === 200,
+					),
+				"independent Web Session has no unfinished original delivery",
+			);
+			const webControlsBefore = {
+				conversations:
+					await sql`select * from platform.conversations where id=${webControlsSource.conversationId} order by id`,
+				executions:
+					await sql`select to_jsonb(e)-'task_wait_order'-'task_wait_deadline' as record from platform.conversation_executions e where execution_id=${webControlsSource.executionId} order by execution_id`,
+				messages:
+					await sql`select * from platform.conversation_messages where execution_id=${webControlsSource.executionId} order by message_id`,
+				events:
+					await sql`select * from platform.conversation_events where execution_id=${webControlsSource.executionId} order by event_id`,
+				outboxes:
+					await sql`select * from platform.outbox_items where payload->>'executionId'=${webControlsSource.executionId} order by id`,
+				idempotency:
+					await sql`select * from platform.idempotency_records where idempotency_key='web-controls-native' order by id`,
+				authorization:
+					await sql`select * from platform.task_authorization_records where execution_id=${webControlsSource.executionId} order by id`,
+			};
+			const webControlsSession =
+				webControlsBefore.conversations[0]?.host_session_ref;
+			expect(webControlsSession).toEqual(expect.any(String));
 			await control("/hold");
 			const upgradeActive = await webSubmit("web-schema-upgrade-native");
 			await waitUntil(
@@ -1652,6 +1835,9 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			expect(originalUpgradeConversation?.status).toBe("active");
 			expect(originalUpgradeConversation?.host_session_ref).toEqual(
 				expect.any(String),
+			);
+			expect(webControlsSession).not.toBe(
+				originalUpgradeConversation?.host_session_ref,
 			);
 			const [agentRevision] =
 				await legacySql`select authorization_revision from platform.agents where id=${desired.agentId}`;
@@ -1970,6 +2156,312 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			const legacyWorkers = children.slice(-2);
 			for (const child of legacyWorkers) child.kill("SIGKILL");
 			await Promise.all(legacyWorkers.map((child) => once(child, "exit")));
+			// Keep the missing-Session historical unknowns in their original DB.
+			// A separate pre-0021 fixture contains only actual Web history, so its
+			// verified capacity is not fabricated by deleting those unknown records.
+			// Its completed source uses a distinct actual Session from active migration recovery.
+			webUpgradeDatabase = await startPostgresTestDatabase(
+				"482-native-web-upgrade-controls",
+			);
+			const webSql = postgres(webUpgradeDatabase.databaseUrl, { max: 2 });
+			webUpgradeSql = webSql;
+			await webSql.unsafe(
+				"create schema platform_migrations; create table platform_migrations.history(id serial primary key,hash text not null,created_at bigint)",
+			);
+			for (const migration of readMigrationFiles({ migrationsFolder }).slice(
+				0,
+				taskMigrationIndex,
+			)) {
+				for (const statement of migration.sql) await webSql.unsafe(statement);
+				await webSql`insert into platform_migrations.history(hash,created_at) values(${migration.hash},${migration.folderMillis})`;
+			}
+			for (const table of [
+				"agents",
+				"agent_applications",
+				"agent_configuration_revisions",
+				"agent_owners",
+				"workload_reconciliations",
+			]) {
+				const rows = await sql.unsafe(`select * from platform.${table}`);
+				for (const row of rows)
+					await webSql.unsafe(
+						`insert into platform.${table} select * from json_populate_record(null::platform.${table},$1::text::json)`,
+						[JSON.stringify(row)],
+					);
+			}
+			for (const [table, rows] of [
+				["conversations", webControlsBefore.conversations],
+				[
+					"conversation_executions",
+					webControlsBefore.executions.map(({ record }) => record),
+				],
+				["conversation_messages", webControlsBefore.messages],
+				["conversation_events", webControlsBefore.events],
+				["outbox_items", webControlsBefore.outboxes],
+				["idempotency_records", webControlsBefore.idempotency],
+				["task_authorization_records", webControlsBefore.authorization],
+			] as const) {
+				for (const row of rows)
+					await webSql.unsafe(
+						`insert into platform.${table} select * from json_populate_record(null::platform.${table},$1::text::json)`,
+						[JSON.stringify(row)],
+					);
+			}
+			const webUpgradeHistory =
+				await webSql`select * from platform_migrations.history order by id`;
+			await migratePlatformDatabase({
+				databaseUrl: webUpgradeDatabase.databaseUrl,
+			});
+			expect(
+				(await webSql`select * from platform_migrations.history order by id`)
+					.length,
+			).toBeGreaterThan(webUpgradeHistory.length);
+			expect(
+				await webSql`select * from platform.conversation_events where event_id in ${webSql(webControlsBefore.events.map((row) => row.event_id))} order by event_id`,
+			).toEqual(webControlsBefore.events);
+			expect(
+				await webSql`select * from platform.idempotency_records where idempotency_key='web-controls-native' order by id`,
+			).toEqual(webControlsBefore.idempotency);
+			await writeFile(
+				join(moduleDirectory, "configuration.mjs"),
+				configSource.replace(
+					JSON.stringify(database.databaseUrl),
+					JSON.stringify(webUpgradeDatabase.databaseUrl),
+				),
+				{ mode: 0o600 },
+			);
+			setProductionDeploymentInput({
+				...input,
+				databaseUrl: webUpgradeDatabase.databaseUrl,
+			});
+			try {
+				webUpgradeRunning = await startPlatformApiFromDeployment({
+					moduleSpecifier: pathToFileURL(apiDeployment).href,
+					port: 0,
+					log: () => {},
+				});
+			} finally {
+				setProductionDeploymentInput(input);
+			}
+			const upgradedOrigin = `http://127.0.0.1:${(webUpgradeRunning.server.address() as AddressInfo).port}`;
+			const upgradedWeb = (
+				path: string,
+				body?: unknown,
+				key = "upgraded-web",
+				lastEventId?: string,
+			) =>
+				fetch(`${upgradedOrigin}/api/v1${path}`, {
+					method: body === undefined ? "GET" : "POST",
+					headers: {
+						cookie: "synthetic-owner-session",
+						"content-type": "application/json",
+						"Idempotency-Key": key,
+						...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
+					},
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+					signal: AbortSignal.timeout(10_000),
+				});
+			async function upgradedStatus(executionId: string, expected: string) {
+				await waitUntil(
+					async () =>
+						(
+							await webSql`select 1 from platform.conversation_executions where execution_id=${executionId} and status::text=${expected}`
+						).length === 1,
+					"upgraded Web native Execution terminal",
+				);
+			}
+			const webUpgradeWorkerStart = children.length;
+			start();
+			start();
+			try {
+				const beforeUpgradeControls = (await control()).requests;
+				await upgradedStatus(webControlsSource.executionId, "completed");
+				expect((await control()).requests).toBe(beforeUpgradeControls);
+				expect(
+					(
+						await upgradedWeb(
+							`/conversations/${webControlsSource.conversationId}`,
+						)
+					).status,
+				).toBe(200);
+				const retry = await checkedJson<{
+					executionId: string;
+					messageId: string;
+				}>(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/messages`,
+						{ schemaVersion: 1, text: "synthetic historical Web input" },
+						"web-controls-native",
+					),
+					202,
+				);
+				expect(retry).toMatchObject({
+					executionId: webControlsSource.executionId,
+					messageId: webControlsSource.messageId,
+				});
+				const [oldCursor] =
+					await webSql`select event_id,conversation_cursor from platform.conversation_events where conversation_id=${webControlsSource.conversationId} order by conversation_cursor desc limit 1`;
+				if (!oldCursor) throw new Error("TASK_NATIVE_UPGRADE_CURSOR_REQUIRED");
+				await control("/hold");
+				const continuationBody = {
+					schemaVersion: 1,
+					text: "synthetic migrated Web continuation",
+				};
+				const continuation = await checkedJson<{
+					executionId: string;
+					messageId: string;
+				}>(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/messages`,
+						continuationBody,
+						"upgraded-native-continuation",
+					),
+					202,
+				);
+				await upgradedStatus(continuation.executionId, "processing");
+				const countsBeforeBusy =
+					await webSql`select (select count(*) from platform.conversation_messages)::int as messages,(select count(*) from platform.conversation_executions)::int as executions,(select count(*) from platform.outbox_items)::int as outboxes,(select count(*) from platform.idempotency_records)::int as idempotency`;
+				expect(
+					(
+						await upgradedWeb(
+							`/conversations/${webControlsSource.conversationId}/messages`,
+							{ schemaVersion: 1, text: "synthetic unsupported supplement" },
+							"upgraded-native-busy",
+						)
+					).status,
+				).toBe(409);
+				expect(
+					(
+						await upgradedWeb(
+							`/conversations/${webControlsSource.conversationId}/regenerations`,
+							{ schemaVersion: 1, messageId: webControlsSource.messageId },
+							"upgraded-native-busy-regeneration",
+						)
+					).status,
+				).toBe(409);
+				expect(
+					await webSql`select (select count(*) from platform.conversation_messages)::int as messages,(select count(*) from platform.conversation_executions)::int as executions,(select count(*) from platform.outbox_items)::int as outboxes,(select count(*) from platform.idempotency_records)::int as idempotency`,
+				).toEqual(countsBeforeBusy);
+				const stopBody = {
+					schemaVersion: 1,
+					targetExecutionId: continuation.executionId,
+				};
+				const stop = await checkedJson(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/stops`,
+						stopBody,
+						"upgraded-native-stop",
+					),
+					202,
+				);
+				expect(
+					await checkedJson(
+						await upgradedWeb(
+							`/conversations/${webControlsSource.conversationId}/stops`,
+							stopBody,
+							"upgraded-native-stop",
+						),
+						202,
+					),
+				).toEqual(stop);
+				await upgradedStatus(continuation.executionId, "cancelled");
+				await waitUntil(
+					async () => (await control()).pending === 0,
+					"upgraded Web stop closes original native connection",
+				);
+				const replayIds =
+					await webSql`select event_id from platform.conversation_events where conversation_id=${webControlsSource.conversationId} and conversation_cursor>${oldCursor.conversation_cursor} and event_type<>'execution.operation' order by conversation_cursor`;
+				await replayWebEvents(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/events`,
+						undefined,
+						"upgraded-web-reconnect",
+						String(oldCursor.event_id),
+					),
+					replayIds.map((row) => String(row.event_id)),
+					continuation.executionId,
+				);
+				await control("/release");
+				const nextBody = {
+					schemaVersion: 1,
+					text: "synthetic migrated Web post-stop continuation",
+				};
+				const next = await checkedJson<{
+					executionId: string;
+					messageId: string;
+				}>(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/messages`,
+						nextBody,
+						"upgraded-native-next",
+					),
+					202,
+				);
+				await upgradedStatus(next.executionId, "completed");
+				const regenerateBody = { schemaVersion: 1, messageId: next.messageId };
+				const regenerated = await checkedJson<{ executionId: string }>(
+					await upgradedWeb(
+						`/conversations/${webControlsSource.conversationId}/regenerations`,
+						regenerateBody,
+						"upgraded-native-regenerate",
+					),
+					202,
+				);
+				expect(
+					await checkedJson(
+						await upgradedWeb(
+							`/conversations/${webControlsSource.conversationId}/regenerations`,
+							regenerateBody,
+							"upgraded-native-regenerate",
+						),
+						202,
+					),
+				).toEqual(regenerated);
+				await upgradedStatus(regenerated.executionId, "completed");
+				expect(regenerated.executionId).not.toBe(next.executionId);
+				const legalNewExecutions = [
+					continuation.executionId,
+					next.executionId,
+					regenerated.executionId,
+				];
+				for (const executionId of legalNewExecutions) {
+					const delivered = requests.filter(
+						(request) =>
+							request.executionId === executionId &&
+							request.path.endsWith("/turns") &&
+							request.responseStatus === 200,
+					);
+					expect(delivered).toHaveLength(1);
+					expect(delivered[0]?.hostSessionRef).toBe(webControlsSession);
+					expect(delivered[0]?.responseHostSessionRef).toBe(webControlsSession);
+				}
+				expect(
+					await webSql`select * from platform.conversation_events where event_id in ${webSql(webControlsBefore.events.map((row) => row.event_id))} order by event_id`,
+				).toEqual(webControlsBefore.events);
+				expect(
+					await webSql`select * from platform.idempotency_records where idempotency_key='web-controls-native' order by id`,
+				).toEqual(webControlsBefore.idempotency);
+				expect((await control()).requests - beforeUpgradeControls).toBe(3);
+				checks.push(
+					"pre-0021-real-web-native-busy-stop-reconnect-continuation-regeneration",
+				);
+			} finally {
+				for (const child of children.slice(webUpgradeWorkerStart))
+					if (child.exitCode === null && !child.signalCode)
+						child.kill("SIGKILL");
+				await Promise.all(
+					children
+						.slice(webUpgradeWorkerStart)
+						.map((child) =>
+							child.exitCode !== null || child.signalCode
+								? Promise.resolve()
+								: once(child, "exit"),
+						),
+				);
+				await createPlatformApiShutdown(webUpgradeRunning)();
+				webUpgradeRunning = undefined;
+				await control("/release");
+			}
 			await writeFile(
 				join(moduleDirectory, "configuration.mjs"),
 				configSource,
@@ -1987,6 +2479,8 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 						).length === 1,
 					`native execution ${expected}`,
 				);
+				if (["completed", "cancelled", "failed"].includes(expected))
+					await terminalDeliverySettled(executionId);
 			}
 			const fifoRequestStart = requests.length;
 			await control("/hold");
@@ -2183,6 +2677,723 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			checks.push(
 				"same-conversation-native-fifo-restart-preserves-order-and-deadlines",
 			);
+			async function stopWorkers() {
+				const live = children.filter(
+					(child) => child.exitCode === null && !child.signalCode,
+				);
+				for (const child of live) child.kill("SIGKILL");
+				await Promise.all(live.map((child) => once(child, "exit")));
+			}
+			async function binding(executionId: string) {
+				const [row] =
+					await sql`select e.execution_id,e.conversation_id,e.turn_id,e.session_generation,e.task_wait_order,e.task_wait_deadline,c.host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${executionId}`;
+				if (!row) throw new Error("TASK_NATIVE_BINDING_REQUIRED");
+				return row;
+			}
+			async function parkTask(stage: "waiting" | "unknown", key: string) {
+				await stopWorkers();
+				const text = `synthetic parked native input ${key}`;
+				if (stage === "unknown") {
+					await control("/hold");
+					responseLoss = {
+						inputDigest: createHash("sha256").update(text).digest("hex"),
+						dropped: 0,
+					};
+				}
+				const task = await submit(
+					replacementCredential.credential,
+					key,
+					undefined,
+					text,
+				);
+				if (stage === "unknown") uncertaintyIds.push(task.executionId);
+				const before = await binding(task.executionId);
+				const gate = boundaryGate();
+				directoryBoundary =
+					stage === "waiting"
+						? { executionId: task.executionId, stage, gate }
+						: undefined;
+				start();
+				start();
+				try {
+					if (stage === "unknown") {
+						await waitUntil(
+							async () =>
+								requests.some(
+									(request) =>
+										request.executionId === task.executionId &&
+										request.path.endsWith("/turns") &&
+										request.responseOutcome === "accepted" &&
+										request.responseLost,
+								) && (await control()).pending === 1,
+							"real original accepted response lost before uncertain retry gate",
+						);
+						await status(task.executionId, "unknown");
+						directoryBoundary = { executionId: task.executionId, stage, gate };
+					}
+					await waitUntil(
+						async () => gate.entered,
+						"trusted directory boundary after native task claim",
+					);
+					const accepted = requests.find(
+						(request) =>
+							request.executionId === task.executionId &&
+							request.path.endsWith("/turns") &&
+							request.responseOutcome === "accepted" &&
+							request.responseLost,
+					);
+					if (stage === "unknown") {
+						expect(accepted?.responseHostSessionRef).toEqual(
+							expect.any(String),
+						);
+						expect((await control()).pending).toBe(1);
+					}
+					return {
+						task,
+						before,
+						gate,
+						acceptedHostSessionRef: accepted?.responseHostSessionRef,
+					};
+				} catch (error) {
+					gate.release();
+					directoryBoundary = undefined;
+					responseLoss = undefined;
+					await control("/release");
+					throw error;
+				}
+			}
+			function releaseDirectory(gate: ReturnType<typeof boundaryGate>) {
+				if (directoryBoundary?.gate === gate) {
+					const observation = directoryGateObservations.findLast(
+						(row) => row.executionId === directoryBoundary?.executionId,
+					);
+					if (observation) observation.releasedAt = Date.now();
+					directoryBoundary = undefined;
+				}
+				gate.release();
+			}
+			const restoreLifecycle = () =>
+				sql`update platform.agent_applications set status='available',desired_state='running',service_availability='ready',failure_code=null where agent_id=${desired.agentId}`;
+			async function observeBusyCandidate(executionId: string) {
+				const probe = postgres(database.databaseUrl, { max: 1 });
+				const lockGate = boundaryGate();
+				let lockerPid = 0;
+				let lockError: unknown;
+				const holding = probe
+					.begin(async (transaction) => {
+						const [owner] =
+							await transaction`select pg_backend_pid()::int as pid`;
+						lockerPid = owner?.pid;
+						const locked =
+							await transaction`select id from platform.outbox_items where payload->>'executionId'=${executionId} and operation='conversation.turn.submit.v1' for update`;
+						expect(locked).toHaveLength(1);
+						await lockGate.wait();
+					})
+					.catch((error: unknown) => {
+						lockError = error;
+					});
+				try {
+					await waitUntil(async () => {
+						if (lockError) throw lockError;
+						return lockGate.entered;
+					}, "test owns only successor candidate row synchronization lock");
+					let blockedClaims: { pid: number; transaction_started_at: string }[] =
+						[];
+					await waitUntil(async () => {
+						blockedClaims =
+							await sql`select pid::int,xact_start::text as transaction_started_at from pg_stat_activity where datname=current_database() and ${lockerPid}::int=any(pg_blocking_pids(pid)) and xact_start is not null`;
+						return blockedClaims.length > 0;
+					}, "packaged Worker enters actual successor candidate claim transaction");
+					lockGate.release();
+					await holding;
+					if (lockError) throw lockError;
+					for (const claim of blockedClaims)
+						await waitUntil(
+							async () =>
+								(
+									await sql`select 1 from pg_stat_activity where pid=${claim.pid} and xact_start=${claim.transaction_started_at}::timestamptz`
+								).length === 0,
+							"actual successor busy claim transaction completes while original remains unknown",
+						);
+					const [candidate] =
+						await sql`select e.status,o.attempt_count::int as attempt from platform.conversation_executions e join platform.outbox_items o on o.payload->>'executionId'=e.execution_id where e.execution_id=${executionId} and o.operation='conversation.turn.submit.v1'`;
+					if (!candidate)
+						throw new Error("TASK_NATIVE_BUSY_CANDIDATE_REQUIRED");
+					expect(candidate).toEqual({ status: "waiting", attempt: 0 });
+					preparedCandidateObservation = {
+						blockedWorkerClaims: blockedClaims.length,
+						completedWorkerClaims: blockedClaims.length,
+						attempt: candidate.attempt,
+					};
+				} finally {
+					lockGate.release();
+					await holding;
+					await probe.end();
+				}
+			}
+			for (const change of [
+				"starting",
+				"updating",
+				"stopped",
+				"disabled",
+				"fault",
+			] as const) {
+				const parked = await parkTask("waiting", `lifecycle-claimed-${change}`);
+				const modelsBefore = (await control()).requests;
+				try {
+					if (change === "stopped" || change === "disabled")
+						await sql`update platform.agent_applications set status=${change},desired_state='stopped',service_availability=null where agent_id=${desired.agentId}`;
+					else if (change === "fault")
+						await sql`update platform.agent_applications set service_availability='unavailable',failure_code='health_check_failed' where agent_id=${desired.agentId}`;
+					else
+						await sql`update platform.agent_applications set service_availability=${change} where agent_id=${desired.agentId}`;
+					releaseDirectory(parked.gate);
+					if (change === "starting" || change === "updating") {
+						await waitUntil(
+							async () =>
+								(
+									await sql`select 1 from platform.outbox_items where payload->>'executionId'=${parked.task.executionId} and attempt_count>0 and status='retry_scheduled'`
+								).length === 1,
+							"claimed lifecycle task durably retries without native send",
+						);
+						await status(parked.task.executionId, "waiting");
+					} else await status(parked.task.executionId, "failed");
+					expect((await control()).requests).toBe(modelsBefore);
+					expect(await binding(parked.task.executionId)).toEqual(parked.before);
+					expect(
+						requests.filter(
+							(request) =>
+								request.executionId === parked.task.executionId &&
+								request.path.endsWith("/turns"),
+						),
+					).toHaveLength(0);
+					await restoreLifecycle();
+					if (change === "starting" || change === "updating")
+						await completed(parked.task.executionId);
+					checks.push(`formal-claim-send-lifecycle-${change}`);
+				} finally {
+					releaseDirectory(parked.gate);
+					await restoreLifecycle();
+				}
+			}
+			// Preparation is already durable here: an unavailable route must retain
+			// unknown occupancy until the original operation can be reconciled.
+			const preparedLifecycle = await parkTask(
+				"unknown",
+				"lifecycle-prepared-updating",
+			);
+			const reconciliationGate = boundaryGate();
+			try {
+				await sql`update platform.agent_applications set service_availability='updating' where agent_id=${desired.agentId}`;
+				releaseDirectory(preparedLifecycle.gate);
+				await waitUntil(
+					async () =>
+						(
+							await sql`select 1 from platform.outbox_items where payload->>'executionId'=${preparedLifecycle.task.executionId} and status='retry_scheduled' and attempt_count>0`
+						).length === 1,
+					"prepared task retries after trusted lifecycle changes",
+				);
+				await status(preparedLifecycle.task.executionId, "unknown");
+				expect(await binding(preparedLifecycle.task.executionId)).toEqual(
+					preparedLifecycle.before,
+				);
+				expect(
+					requests.filter(
+						(request) =>
+							request.executionId === preparedLifecycle.task.executionId &&
+							request.path.endsWith("/turns"),
+					),
+				).toHaveLength(1);
+				wireBoundary = {
+					executionId: preparedLifecycle.task.executionId,
+					path: "/status",
+					gate: reconciliationGate,
+				};
+				responseLoss = undefined;
+				await restoreLifecycle();
+				await waitUntil(
+					async () => reconciliationGate.entered,
+					"ready route reconciles actual uncertain original operation",
+				);
+				const successor = await submit(
+					replacementCredential.credential,
+					"lifecycle-prepared-successor",
+					preparedLifecycle.task.conversationId,
+				);
+				await status(successor.executionId, "waiting");
+				await observeBusyCandidate(successor.executionId);
+				await status(preparedLifecycle.task.executionId, "unknown");
+				expect(
+					requests.filter(
+						(request) =>
+							request.executionId === successor.executionId &&
+							request.path.endsWith("/turns"),
+					),
+				).toHaveLength(0);
+				reconciliationGate.release();
+				wireBoundary = undefined;
+				await status(preparedLifecycle.task.executionId, "processing");
+				await status(successor.executionId, "waiting");
+				expect(
+					requests.filter(
+						(request) =>
+							request.executionId === successor.executionId &&
+							request.path.endsWith("/turns"),
+					),
+				).toHaveLength(0);
+				expect((await control()).pending).toBe(1);
+				expect(
+					(await binding(preparedLifecycle.task.executionId)).host_session_ref,
+				).toBe(preparedLifecycle.acceptedHostSessionRef);
+				await control("/release");
+				await completed(preparedLifecycle.task.executionId);
+				await completed(successor.executionId);
+				checks.push(
+					"formal-prepared-lifecycle-unknown-retains-original-occupancy",
+				);
+			} finally {
+				releaseDirectory(preparedLifecycle.gate);
+				reconciliationGate.release();
+				wireBoundary = undefined;
+				responseLoss = undefined;
+				await control("/release");
+				await restoreLifecycle();
+			}
+			for (const stage of ["waiting", "unknown"] as const) {
+				for (const reason of ["cancel", "subject-disable"] as const) {
+					const parked = await parkTask(
+						stage,
+						`promotion-race-${stage}-${reason}`,
+					);
+					const modelsBefore = (await control()).requests;
+					try {
+						if (reason === "cancel")
+							await checkedJson(
+								await taskRequest(
+									`${taskPath(parked.task)}/cancel`,
+									replacementCredential.credential,
+									{ schemaVersion: 1 },
+									`promotion-control-${stage}`,
+								),
+								202,
+							);
+						else nativeAccountStatus = "disabled";
+						responseLoss = undefined;
+						releaseDirectory(parked.gate);
+						await status(parked.task.executionId, "cancelled");
+						expect(await binding(parked.task.executionId)).toEqual(
+							stage === "waiting"
+								? parked.before
+								: {
+										...parked.before,
+										host_session_ref: parked.acceptedHostSessionRef,
+									},
+						);
+						expect((await control()).requests).toBe(modelsBefore);
+						expect(
+							requests.filter(
+								(request) =>
+									request.executionId === parked.task.executionId &&
+									request.path.endsWith("/turns"),
+							),
+						).toHaveLength(stage === "waiting" ? 0 : 1);
+						if (stage === "unknown") {
+							await waitUntil(
+								async () => (await control()).pending === 0,
+								"prepared cancellation closes actual original native connection",
+							);
+							expect(
+								requests.some(
+									(request) =>
+										request.executionId === parked.task.executionId &&
+										request.path.endsWith("/stops") &&
+										request.responseStatus === 200 &&
+										request.hostSessionRef === parked.acceptedHostSessionRef,
+								),
+							).toBe(true);
+						}
+						expect(
+							await sql`select 1 from platform.conversation_stops where execution_id=${parked.task.executionId}`,
+						).toHaveLength(stage === "unknown" || reason === "cancel" ? 1 : 0);
+						if (stage === "waiting") {
+							expect(
+								requests.filter(
+									(request) =>
+										request.executionId === parked.task.executionId &&
+										request.path.endsWith("/stops"),
+								),
+							).toHaveLength(0);
+							expect(
+								await sql`select 1 from platform.outbox_items where payload->>'executionId'=${parked.task.executionId} and operation='conversation.turn.stop.v1'`,
+							).toHaveLength(0);
+							if (reason === "cancel")
+								expect(
+									await sql`select 1 from platform.conversation_stops where execution_id=${parked.task.executionId} and status='completed'`,
+								).toHaveLength(1);
+						}
+						expect(
+							await sql`select 1 from platform.conversation_events where execution_id=${parked.task.executionId} and event_type='task.status' and event_payload->>'status'='cancelled'`,
+						).toHaveLength(1);
+						expect(
+							await sql`select 1 from platform.audit_events where target_id=${parked.task.executionId} and action='task.status.changed' and details->>'status'='cancelled'`,
+						).toHaveLength(1);
+						checks.push(
+							`formal-promotion-control-${stage}-${reason}-original-operation-only`,
+						);
+					} finally {
+						nativeAccountStatus = "active";
+						releaseDirectory(parked.gate);
+						responseLoss = undefined;
+						await control("/release");
+					}
+				}
+			}
+			await control("/hold");
+			const natural = await submit(
+				replacementCredential.credential,
+				"natural-completion-cancel-race",
+			);
+			await status(natural.executionId, "processing");
+			const naturalBinding = await binding(natural.executionId);
+			const naturalGate = boundaryGate();
+			wireBoundary = {
+				executionId: natural.executionId,
+				path: "/stops",
+				gate: naturalGate,
+			};
+			try {
+				await checkedJson(
+					await taskRequest(
+						`${taskPath(natural)}/cancel`,
+						replacementCredential.credential,
+						{ schemaVersion: 1 },
+						"natural-completion-cancel",
+					),
+					202,
+				);
+				await waitUntil(
+					async () => naturalGate.entered,
+					"real signed stop delayed before original Host",
+				);
+				const [pendingModel] = (await control()).pendingIds;
+				if (pendingModel === undefined)
+					throw new Error("TASK_NATIVE_PENDING_MODEL_REQUIRED");
+				await control(`/release/${pendingModel}`);
+				await waitUntil(
+					async () =>
+						requests.some(
+							(request) =>
+								request.executionId === natural.executionId &&
+								request.path.endsWith("/ack") &&
+								request.responseStatus === 200 &&
+								request.confirmedCursor !== undefined,
+						) &&
+						(
+							await sql`select 1 from platform.conversation_events where execution_id=${natural.executionId} and source='runtime' and event_type='execution.status' and event_payload->>'status'='completed'`
+						).length === 1,
+					"real original native completion persists while cancellation is in flight",
+				);
+				naturalGate.release();
+				wireBoundary = undefined;
+				await completed(natural.executionId);
+				expect(await binding(natural.executionId)).toEqual(naturalBinding);
+				expect(
+					await sql`select 1 from platform.conversation_events where execution_id=${natural.executionId} and event_payload->>'status'='cancelled'`,
+				).toHaveLength(0);
+				expect(
+					await sql`select 1 from platform.conversation_events where execution_id=${natural.executionId} and event_payload->>'reason'='STOP_CONFIRMATION_TIMEOUT'`,
+				).toHaveLength(0);
+				checks.push(
+					"formal-running-cancel-preserves-real-natural-terminal-completion",
+				);
+			} finally {
+				naturalGate.release();
+				wireBoundary = undefined;
+				await control("/release");
+			}
+			await control("/hold");
+			const lateTask = await submit(
+				replacementCredential.credential,
+				"late-old-worker-renewal",
+			);
+			await status(lateTask.executionId, "processing");
+			const lateBinding = await binding(lateTask.executionId);
+			const lateGate = boundaryGate();
+			const lateBoundary: WireBoundary = {
+				executionId: lateTask.executionId,
+				path: "/renew",
+				gate: lateGate,
+				late: true,
+			};
+			let lateWireObservation:
+				| { rejectedBeforeExpiry: boolean; expiryMarginMs: number }
+				| undefined;
+			wireBoundary = lateBoundary;
+			try {
+				await waitUntil(
+					async () => lateGate.entered,
+					"original signed Worker renewal delayed in transport",
+				);
+				const oldRenewal = requests[lateBoundary.observedIndex ?? -1];
+				if (!oldRenewal?.deliveryFence)
+					throw new Error("TASK_NATIVE_OLD_WIRE_FENCE_REQUIRED");
+				await stopWorkers();
+				await sql`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where payload->>'executionId'=${lateTask.executionId} and status='processing'`;
+				const beforeTakeover = requests.length;
+				start();
+				start();
+				await waitUntil(
+					async () =>
+						requests
+							.slice(beforeTakeover)
+							.some(
+								(request) =>
+									request.executionId === lateTask.executionId &&
+									request.path.endsWith("/status") &&
+									request.responseStatus === 200 &&
+									(request.deliveryFence ?? 0) >
+										(oldRenewal.deliveryFence ?? 0),
+							),
+					"replacement packaged Worker adopts current Host fence",
+				);
+				lateGate.release();
+				wireBoundary = undefined;
+				await waitUntil(
+					async () => oldRenewal.responseStatus !== 0,
+					"late original Worker wire request is rejected by real Host",
+				);
+				expect(oldRenewal.responseStatus).toBe(403);
+				expect(oldRenewal.responseCode).toBe("RUNTIME_GRANT_INVALID");
+				const rejectionMargin =
+					(lateBoundary.grantExpiresAt ?? Number.NaN) -
+					(lateBoundary.rejectedAt ?? Number.NaN);
+				expect(Number.isFinite(rejectionMargin)).toBe(true);
+				expect(rejectionMargin).toBeGreaterThan(0);
+				lateWireObservation = {
+					rejectedBeforeExpiry: true,
+					expiryMarginMs: rejectionMargin,
+				};
+				expect(await binding(lateTask.executionId)).toEqual(lateBinding);
+				expect(
+					requests.filter(
+						(request) =>
+							request.executionId === lateTask.executionId &&
+							request.path.endsWith("/turns") &&
+							request.responseStatus === 200,
+					),
+				).toHaveLength(1);
+				await control("/release");
+				await completed(lateTask.executionId);
+				checks.push(
+					"formal-actual-old-worker-wire-denied-after-native-fence-takeover",
+				);
+			} finally {
+				lateGate.release();
+				wireBoundary = undefined;
+				await control("/release");
+			}
+			for (const principal of ["user", "application"] as const) {
+				for (const change of [
+					"credential-expiry",
+					"credential-revoke",
+					"subject-disable",
+					"use-revoke",
+				] as const) {
+					await checkedJson(
+						await management(`/agents/${desired.agentId}/grants`, {
+							schemaVersion: 1,
+							principal: {
+								kind: principal,
+								id:
+									principal === "user"
+										? user.userId
+										: application.applicationId,
+							},
+							grantType: "use",
+						}),
+						200,
+					);
+					const credentialPath =
+						principal === "user"
+							? "/api-credentials"
+							: `/applications/${application.applicationId}/credentials`;
+					const issued = await checkedJson<Issued>(
+						await management(credentialPath, issue),
+						201,
+					);
+					const modelBefore = await control();
+					expect(modelBefore.pending).toBe(0);
+					await control("/hold");
+					const task = await submit(
+						issued.credential,
+						`live-sse-${principal}-${change}`,
+					);
+					liveNativeExecutionIds.push(task.executionId);
+					await status(task.executionId, "processing");
+					await waitUntil(async () => {
+						const actual = await control();
+						return (
+							actual.requests > modelBefore.requests && actual.pending === 1
+						);
+					}, "live SSE original native model request reaches actual held transport");
+					const original = await binding(task.executionId);
+					const beforeControl = await control();
+					expect(beforeControl.requests - modelBefore.requests).toBe(1);
+					const controller = new AbortController();
+					const timeout = setTimeout(() => controller.abort(), 20_000);
+					try {
+						const response = await taskRequest(
+							`${taskPath(task)}/events`,
+							issued.credential,
+							undefined,
+							"live-sse",
+							controller.signal,
+						);
+						expect(response.status).toBe(200);
+						const reader = response.body?.getReader();
+						if (!reader) throw new Error("TASK_NATIVE_SSE_BODY_REQUIRED");
+						let text = "";
+						while (!text.includes('"type":"heartbeat"')) {
+							const next = await reader.read();
+							if (next.done)
+								throw new Error("TASK_NATIVE_SSE_INITIAL_HEARTBEAT_REQUIRED");
+							text += new TextDecoder().decode(next.value);
+						}
+						const heldAtRevocation = await control();
+						expect(heldAtRevocation.pendingIds).toEqual(
+							beforeControl.pendingIds,
+						);
+						expect(heldAtRevocation.pending).toBe(1);
+						liveModelObservations.push({
+							executionId: task.executionId,
+							principal,
+							change,
+							requestsBefore: modelBefore.requests,
+							requestsAtRevocation: heldAtRevocation.requests,
+							pendingAtRevocation: heldAtRevocation.pending,
+						});
+						if (change === "credential-expiry")
+							await sql`update platform.platform_api_credentials set expires_at=clock_timestamp()+interval '1 second' where id=${issued.metadata.credentialId}`;
+						else if (change === "credential-revoke")
+							expect(
+								(
+									await management(
+										`${credentialPath}/${issued.metadata.credentialId}`,
+										undefined,
+										"DELETE",
+									)
+								).status,
+							).toBe(204);
+						else if (change === "subject-disable") {
+							if (principal === "user") nativeAccountStatus = "disabled";
+							else
+								await sql`update platform.platform_applications set status='disabled' where id=${application.applicationId}`;
+						} else
+							expect(
+								(
+									await management(
+										`/agents/${desired.agentId}/grants`,
+										{
+											schemaVersion: 1,
+											principal: {
+												kind: principal,
+												id:
+													principal === "user"
+														? user.userId
+														: application.applicationId,
+											},
+											grantType: "use",
+										},
+										"DELETE",
+									)
+								).status,
+							).toBe(204);
+						let after = "";
+						for (;;) {
+							const next = await reader.read();
+							if (next.done) break;
+							after += new TextDecoder().decode(next.value);
+						}
+						expect(after).not.toContain("synthetic native task answer");
+						expect(after).toContain('"type":"authorization.revoked"');
+						expect(
+							(await taskRequest(taskPath(task), issued.credential)).status,
+						).not.toBe(200);
+						await waitUntil(
+							async () =>
+								(
+									await sql`select 1 from platform.audit_events where target_id=${task.executionId} and action='task.api.subscription.ended'`
+								).length === 1,
+							"live native subscription end is durably audited",
+						);
+						const [subscriptionEnd] =
+							await sql`select outcome,details->>'reason' as reason from platform.audit_events where target_id=${task.executionId} and action='task.api.subscription.ended'`;
+						expect(subscriptionEnd).toEqual({
+							outcome: "rejected",
+							reason: "authorization_revoked",
+						});
+						if (change.startsWith("credential-")) {
+							await status(task.executionId, "processing");
+							const replacement = await checkedJson<Issued>(
+								await management(credentialPath, issue),
+								201,
+							);
+							expect(
+								(await taskRequest(taskPath(task), replacement.credential))
+									.status,
+							).toBe(200);
+							expect(
+								await sql`select 1 from platform.task_control_records where execution_id=${task.executionId}`,
+							).toHaveLength(0);
+							await control("/release");
+							await completed(task.executionId);
+						} else {
+							await status(task.executionId, "cancelled");
+							await waitUntil(
+								async () =>
+									(await control()).pending === 0 &&
+									(await control()).closed > beforeControl.closed,
+								"subject or use revocation closes original native model connection",
+							);
+							expect(
+								await sql`select 1 from platform.task_control_records where execution_id=${task.executionId} and reason='authorization_revoked'`,
+							).toHaveLength(1);
+						}
+						const current = await binding(task.executionId);
+						// Host ref and wait binding remain original; no replay or new Turn.
+						expect(current).toEqual(original);
+						expect(
+							requests.filter(
+								(request) =>
+									request.executionId === task.executionId &&
+									request.path.endsWith("/turns") &&
+									request.responseStatus === 200,
+							),
+						).toHaveLength(1);
+						checks.push(`formal-live-native-sse-${principal}-${change}`);
+					} finally {
+						clearTimeout(timeout);
+						controller.abort();
+						nativeAccountStatus = "active";
+						await sql`update platform.platform_applications set status='active' where id=${application.applicationId}`;
+						await checkedJson(
+							await management(`/agents/${desired.agentId}/grants`, {
+								schemaVersion: 1,
+								principal: {
+									kind: principal,
+									id:
+										principal === "user"
+											? user.userId
+											: application.applicationId,
+								},
+								grantType: "use",
+							}),
+							200,
+						);
+						await control("/release");
+					}
+				}
+			}
 			await control("/hold");
 			const grantRevoked = await submit(
 				applicationCredential.credential,
@@ -2253,11 +3464,15 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				"HTTP cancellation closes actual native model stream",
 			);
 			checks.push("http-cancel-confirmed-by-native-terminal-event");
+			const lostModelBefore = await control();
+			expect(lostModelBefore.pending).toBe(0);
 			await control("/hold");
+			const acceptanceGate = boundaryGate();
 			const lostInput = "synthetic accepted native input with lost responses";
 			responseLoss = {
 				inputDigest: createHash("sha256").update(lostInput).digest("hex"),
 				dropped: 0,
+				acceptanceGate,
 			};
 			const lostTask = await submit(
 				replacementCredential.credential,
@@ -2266,6 +3481,22 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				lostInput,
 			);
 			uncertaintyIds = [lostTask.executionId];
+			await waitUntil(async () => {
+				const actual = await control();
+				return (
+					acceptanceGate.entered &&
+					actual.pending === 1 &&
+					actual.requests === lostModelBefore.requests + 1 &&
+					requests.filter(
+						(request) =>
+							request.executionId === lostTask.executionId &&
+							request.path.endsWith("/turns") &&
+							request.responseStatus === 200 &&
+							request.responseOutcome === "accepted",
+					).length === 1
+				);
+			}, "original native model starts before accepted response transport loss");
+			acceptanceGate.release();
 			await waitUntil(
 				async () =>
 					(await control()).pending === 1 &&
@@ -2698,6 +3929,9 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				nativeUpgrade,
 				responseLoss: responseLossMetadata,
 				stopConfirmation,
+				lateWireObservation,
+				preparedCandidateObservation,
+				liveModelObservations,
 				waiting: {
 					policy: {
 						maximumWaitingTasksPerAgent: 3,
@@ -2730,6 +3964,27 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			}
 			console.info(JSON.stringify(evidence));
 		} catch (error) {
+			const metadataExecutionIds = [
+				...new Set([
+					...liveNativeExecutionIds.slice(-1),
+					...uncertaintyIds.slice(-2),
+				]),
+			];
+			const hostMetadata = controlOrigin
+				? await Promise.all(
+						metadataExecutionIds.map(async (executionId) => ({
+							executionId,
+							metadata: await fetch(
+								`${controlOrigin}/metadata/${executionId}`,
+								{ signal: AbortSignal.timeout(2000) },
+							)
+								.then((response) =>
+									response.ok ? response.json() : { unavailable: true },
+								)
+								.catch(() => ({ unavailable: true })),
+						})),
+					)
+				: undefined;
 			const uncertainty = uncertaintyIds.length
 				? {
 						requests: requests
@@ -2769,7 +4024,24 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 					error instanceof Error && /^Timed out: [\w .-]+$/.test(error.message)
 						? error.message
 						: "TASK_NATIVE_VALIDATION_FAILED",
+				hostMetadata,
+				checks,
 				uncertainty,
+				directoryGateObservations,
+				preparedCandidateObservation,
+				liveModelObservations,
+				liveNativeExecutionIds,
+				liveNativeRequests: requests
+					.filter((request) =>
+						liveNativeExecutionIds.includes(request.executionId ?? ""),
+					)
+					.slice(-100),
+				liveNativeStates: liveNativeExecutionIds.length
+					? await sql`select e.execution_id,e.status,e.delivery_fence::int as fence,r.revoked_at is not null as authorization_revoked,a.authorization_revision=r.boundary->>'agentAuthorizationRevision' as agent_authorization_current,case when r.boundary#>>'{principal,kind}'='application' then p.status='active' end as application_active,case when r.boundary#>>'{principal,kind}'='application' then p.authorization_revision=r.boundary->>'identityRevision' end as application_identity_current,exists(select 1 from platform.agent_principal_grants g where g.agent_id=e.agent_id and g.principal_type=r.boundary#>>'{principal,kind}' and g.principal_id=r.boundary#>>'{principal,id}' and g.grant_type='use' and g.revoked_at is null and g.authorization_revision=a.authorization_revision) as current_use_grant from platform.conversation_executions e join platform.task_authorization_records r on r.execution_id=e.execution_id join platform.agents a on a.id=e.agent_id left join platform.platform_applications p on p.id=e.actor_id and r.boundary#>>'{principal,kind}'='application' where e.execution_id in ${sql(liveNativeExecutionIds)} order by e.created_at`
+					: undefined,
+				nativeTerminalEvents: liveNativeExecutionIds.length
+					? await sql`select execution_id,event_type,event_payload->>'status' as status,event_payload#>>'{fact,phase}' as phase,case when event_payload->>'code' in ('RUNTIME_EXECUTION_FAILED','RUNTIME_DEPENDENCY_UNAVAILABLE') then event_payload->>'code' end as error_code,case when event_payload#>>'{fact,failureCode}' in ('authorization_denied','authorization_unavailable','dependency_unavailable','request_rejected','response_incomplete','operation_failed','persistence_unavailable','interrupted','recovery_unconfirmed') then event_payload#>>'{fact,failureCode}' end as failure_code from platform.conversation_events where source='runtime' and execution_id in ${sql(liveNativeExecutionIds)} and event_type in ('execution.status','conversation.error','execution.operation') order by execution_id,conversation_cursor`
+					: undefined,
 				traces: traces.slice(-20),
 				control: controlMetadata,
 				processes: children.map((child) => ({
@@ -2810,6 +4082,10 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				);
 			throw new Error(JSON.stringify(failure), { cause: error });
 		} finally {
+			responseLoss?.acceptanceGate?.release();
+			directoryBoundary?.gate.release();
+			wireBoundary?.gate.release();
+			nativeAccountStatus = "active";
 			for (const child of children)
 				if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
 			await Promise.all(
@@ -2819,7 +4095,14 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 						: once(child, "exit"),
 				),
 			);
+			if (controlOrigin)
+				await fetch(`${controlOrigin}/release`, {
+					method: "POST",
+					signal: AbortSignal.timeout(2000),
+				}).catch(() => {});
 			if (running) await createPlatformApiShutdown(running)();
+			if (webUpgradeRunning)
+				await createPlatformApiShutdown(webUpgradeRunning)();
 			runtimeServer.closeAllConnections();
 			kube.closeAllConnections();
 			await Promise.all([
@@ -2836,10 +4119,12 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			await database.stop();
 			await upgradeSql?.end({ timeout: 0 });
 			await upgradeDatabase?.stop();
+			await webUpgradeSql?.end({ timeout: 0 });
+			await webUpgradeDatabase?.stop();
 			if (moduleDirectory)
 				await rm(moduleDirectory, { recursive: true, force: true });
 			await rm(directoryPath, { recursive: true, force: true });
 		}
 	},
-	300_000,
+	600_000,
 );

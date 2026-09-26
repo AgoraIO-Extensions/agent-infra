@@ -1,5 +1,6 @@
 // Container-only test fixture. It never admits tasks, signs grants or dispatches work.
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: container-only fixture, never a cached Turbo task.
@@ -11,6 +12,131 @@ const pending = new Set();
 let host;
 let ready = false;
 let startupCode;
+
+const failureCodes = new Set([
+	"authorization_denied",
+	"authorization_unavailable",
+	"dependency_unavailable",
+	"request_rejected",
+	"response_incomplete",
+	"operation_failed",
+	"persistence_unavailable",
+	"interrupted",
+	"recovery_unconfirmed",
+]);
+const finiteValue = (value, allowed) =>
+	allowed.includes(value) ? value : undefined;
+
+// Select metadata from the real durable journals; never return input, proof,
+// credentials, native frames, operation payloads or callback request identities.
+async function executionMetadata(executionId) {
+	try {
+		const [hostState, driverState] = await Promise.all(
+			["host.json", "codex-driver.json"].map(async (name) =>
+				JSON.parse(await readFile(`/var/lib/agent-runtime/${name}`, "utf8")),
+			),
+		);
+		const hostSessions = Object.values(hostState.sessions ?? {}).filter(
+			(session) => session.operations?.[executionId]?.kind === "submit-turn",
+		);
+		const driverSessions = Object.values(driverState.sessions ?? {}).filter(
+			(session) => Object.hasOwn(session.executions ?? {}, executionId),
+		);
+		const nativeSessionRef = driverSessions[0]?.nativeSessionRef;
+		return {
+			observedAt: Date.now(),
+			host: hostSessions.map((session) => {
+				const authority = session.executionAuthorities?.[executionId];
+				return {
+					nativeSessionBound: typeof session.nativeSessionRef === "string",
+					nativeSessionMatchesDriver:
+						typeof nativeSessionRef === "string" &&
+						session.nativeSessionRef === nativeSessionRef,
+					authorityPresent: authority !== undefined,
+					authorizationRecordBound:
+						typeof authority?.authorizationRecordId === "string",
+					stopped: authority?.stopped === true,
+					controlled: authority?.control !== undefined,
+					controlReason: finiteValue(authority?.control?.reason, [
+						"stop",
+						"authorization_revoked",
+						"recovery",
+						"generation_isolation",
+					]),
+					queryOnly: authority?.queryOnly === true,
+					evidenceQueryPresent: authority?.evidenceQuery !== undefined,
+					grantUnexpired: authority?.expiresAt > Date.now(),
+					grantIssued: authority?.issuedAt <= Date.now(),
+					currentExecutionFence:
+						authority?.executionDeliveryFence ===
+						session.highestFences?.[`execution:${executionId}`],
+					generationBarrierPresent: session.generationBarrier !== undefined,
+				};
+			}),
+			driver: driverSessions.map((session) => {
+				const execution = session.executions[executionId];
+				const journal = session.journals?.[execution.nativeTurnId];
+				return {
+					status: finiteValue(execution.status, [
+						"running",
+						"completed",
+						"failed",
+						"cancelled",
+					]),
+					nativeSessionBound: typeof session.nativeSessionRef === "string",
+					activeExecutionMatches: session.activeExecutionId === executionId,
+					journalPresent: journal !== undefined,
+					externalActionsBlocked: journal?.externalActionsBlocked === true,
+					model: (journal?.events ?? [])
+						.filter(
+							(event) =>
+								event.type === "operation" && event.payload?.kind === "model",
+						)
+						.map((event) => ({
+							phase: finiteValue(event.payload.phase, [
+								"intent",
+								"started",
+								"completed",
+								"failed",
+								"unknown",
+							]),
+							failureCode: failureCodes.has(event.payload.failureCode)
+								? event.payload.failureCode
+								: undefined,
+						})),
+					sources: Object.values(journal?.nativeSources ?? {}).map(
+						(source) => ({
+							reserveAuthorized: source.reserveAuthorized === true,
+							reserveDenied: finiteValue(source.reserveDenied, [
+								"authorization_denied",
+								"authorization_unavailable",
+							]),
+							bound: source.bind !== undefined,
+							bindPending: source.bindPending !== undefined,
+							bindDenied: finiteValue(source.bindDenied, [
+								"authorization_denied",
+								"authorization_unavailable",
+							]),
+							notStartedStage: finiteValue(source.notStartedStage, [
+								"not_queued",
+								"not_routed",
+								"gate_rejected",
+							]),
+							notStartedReason: finiteValue(source.notStartedReason, [
+								"queue_closed",
+								"routing_rejected",
+								"cancelled_before_start",
+								"binding_denied",
+							]),
+						}),
+					),
+				};
+			}),
+		};
+	} catch {
+		return { unavailable: true };
+	}
+}
 
 function answer(response, id) {
 	const text = "synthetic native task answer";
@@ -137,8 +263,26 @@ function launch() {
 launch();
 
 const control = createServer(async (request, response) => {
+	const metadataMatch = /^\/metadata\/([a-f0-9-]{36})$/.exec(request.url ?? "");
+	if (request.method === "GET" && metadataMatch) {
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(JSON.stringify(await executionMetadata(metadataMatch[1])));
+		return;
+	}
 	if (request.method === "POST" && request.url === "/hold") holding = true;
-	else if (request.method === "POST" && request.url === "/release") {
+	else if (
+		request.method === "POST" &&
+		/^\/release\/\d+$/.test(request.url ?? "")
+	) {
+		const id = Number(request.url.slice("/release/".length));
+		const held = [...pending].find((item) => item.id === id);
+		if (!held) {
+			response.writeHead(404).end();
+			return;
+		}
+		answer(held.response, held.id);
+		pending.delete(held);
+	} else if (request.method === "POST" && request.url === "/release") {
 		holding = false;
 		for (const { response: held, id } of pending) answer(held, id);
 		pending.clear();
@@ -157,6 +301,7 @@ const control = createServer(async (request, response) => {
 		JSON.stringify({
 			requests: sequence,
 			pending: pending.size,
+			pendingIds: [...pending].map(({ id }) => id),
 			closed,
 			ready,
 			startupCode,

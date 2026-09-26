@@ -1119,6 +1119,21 @@ export class RuntimeHost {
 			this.options.store.nativeSessionRef(hostSessionRef),
 		);
 		await this.options.afterDriverResult?.(operation.operationId);
+		if (
+			operation.kind === "submit-turn" &&
+			driverRecord.result.outcome === "accepted" &&
+			driverRecord.result.status === "running" &&
+			!this.options.store.nativeSessionRef(hostSessionRef)
+		) {
+			// Status observation can admit the first model request. Bind its
+			// validated native receipt before that request crosses Host authority.
+			await this.options.store.resolveOperation(
+				hostSessionRef,
+				operation.operationId,
+				driverRecord.result,
+				driverRecord.nativeSessionRef,
+			);
+		}
 		const result = await this.currentDriverResult(driverRecord, operation);
 		if (isInterruption(operation) && result.outcome === "unknown") {
 			return unknownOperationResponse(hostSessionRef, operation);

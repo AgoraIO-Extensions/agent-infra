@@ -371,9 +371,21 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 			return { authority: await control(context, "recovery", signal), record };
 		}
+		const currentControl = async (reason: "stop" | "authorization_revoked") => {
+			const authority = await control(context, reason, signal);
+			// A lost acceptance response needs authenticated original-operation lookup
+			// before stop/revocation control can address the recovered Host Session.
+			if (
+				command === "session.status" &&
+				state.hostSessionRef === null &&
+				["processing", "unknown"].includes(state.executionStatus)
+			)
+				return control(context, "recovery", signal);
+			return authority;
+		};
 		if (record.revokedAt)
 			return {
-				authority: await control(context, "authorization_revoked", signal),
+				authority: await currentControl("authorization_revoked"),
 				record,
 			};
 		const user =
@@ -396,12 +408,12 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			})
 		)
 			return {
-				authority: await control(context, "authorization_revoked", signal),
+				authority: await currentControl("authorization_revoked"),
 				record: latest,
 			};
 		if (state.stopPending || command === "turn.stop")
 			return {
-				authority: await control(context, "stop", signal),
+				authority: await currentControl("stop"),
 				record: latest,
 			};
 		if (

@@ -560,7 +560,7 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		let waitingFinished = false;
-		let fencedStop = false;
+		let leaseRescheduled = false;
 		try {
 			const prepared = await transactionResult(
 				this.#client,
@@ -590,10 +590,26 @@ export class PostgresConversationDispatchStoreV1
 				`;
 					if (!agent)
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
-					const state = await ownedState(transaction, input.claim);
+					const state = await ownedState(transaction, input.claim, true);
 					if (!state) {
-						fencedStop = await retryFencedStop(transaction, input.claim);
-						if (fencedStop) return;
+						leaseRescheduled = await retryFencedStop(transaction, input.claim);
+						if (leaseRescheduled) return;
+						throw new StaleDispatchLease();
+					}
+					const stop = await readStop(transaction, input.claim.executionId);
+					if ((stop?.status === "submitted") !== input.claim.stopPending) {
+						if (isTurn(input.claim.operation) && stop?.status === "submitted") {
+							// Keep the original occupancy; a fresh claim must authorize its stop.
+							await retryOutbox(
+								transaction,
+								state,
+								input.claim,
+								0,
+								"STOP_PENDING_CHANGED",
+							);
+							leaseRescheduled = true;
+							return;
+						}
 						throw new StaleDispatchLease();
 					}
 					const pendingIsolation = await readGenerationIsolation(
@@ -737,7 +753,7 @@ export class PostgresConversationDispatchStoreV1
 					await renewLease(transaction, input.claim, input.leaseDurationMs);
 				},
 			);
-			return prepared && !waitingFinished && !fencedStop;
+			return prepared && !waitingFinished && !leaseRescheduled;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;
@@ -940,7 +956,8 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("RuntimeHost Session reference is invalid");
 		}
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			// Cancellation cannot discard a receipt from the original in-flight call.
+			const state = await ownedState(transaction, input.claim, true);
 			if (
 				!state ||
 				(state.conversation.host_session_ref !== null &&

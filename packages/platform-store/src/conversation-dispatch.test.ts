@@ -1340,11 +1340,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					leaseDurationMs: 30_000,
 				}),
 			).resolves.toBe(false);
-			await client`
-				update platform.outbox_items
-				set lease_expires_at = clock_timestamp() - interval '1 second'
-				where id = ${work.itemId}
-			`;
 			const takeover = await claim(work.itemId, "worker-2");
 			try {
 				expect(takeover.decision).toEqual({ outcome: "succeeded" });
@@ -1359,6 +1354,118 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			}
 		} finally {
 			await store.close();
+		}
+	});
+
+	it("immediately reclaims the original unknown Turn after cancellation changes a live claim", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+		});
+		const first = await claim(work.itemId);
+		try {
+			if (first.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const original = first.decision.claim;
+			await seedStop(work);
+			const before = await dispatchState(work);
+			expect(
+				await first.store.prepareRuntimeDispatch({
+					claim: { ...original, actorId: "substituted-principal" },
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect(await dispatchState(work)).toEqual(before);
+			expect(
+				await first.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "unknown",
+				execution_fence: original.executionDeliveryFence,
+			});
+			const [lease] =
+				await client`select lease_owner, lease_expires_at from platform.outbox_items where id = ${work.itemId}`;
+			expect(lease).toEqual({ lease_owner: null, lease_expires_at: null });
+			const next = await claim(work.itemId, "worker-2");
+			try {
+				expect(next.decision).toMatchObject({
+					outcome: "claimed",
+					claim: {
+						executionId: original.executionId,
+						turnId: original.turnId,
+						stopPending: true,
+						hostSessionRef: null,
+						executionDeliveryFence: original.executionDeliveryFence + 1,
+					},
+				});
+				if (next.decision.outcome !== "claimed")
+					throw new Error("Expected reclaim");
+				const current = next.decision.claim;
+				const currentState = await dispatchState(work);
+				expect(
+					await first.store.prepareRuntimeDispatch({
+						claim: original,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(false);
+				expect(await dispatchState(work)).toEqual(currentState);
+				expect(
+					await next.store.prepareRuntimeDispatch({
+						claim: current,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+			} finally {
+				await next.store.close();
+			}
+		} finally {
+			await first.store.close();
+		}
+	});
+
+	it("persists an actual acceptance receipt when cancellation arrives during the Host response", async () => {
+		const work = await seed();
+		const first = await claim(work.itemId);
+		try {
+			if (first.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const original = first.decision.claim;
+			expect(
+				await first.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			await seedStop(work);
+			expect(
+				await first.store.recordRuntimeResponse({
+					claim: original,
+					hostSessionRef: "actual-original-host",
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				execution_status: "processing",
+				execution_fence: original.executionDeliveryFence,
+			});
+			const [state] =
+				await client`select c.host_session_ref, s.stop_request_id, s.status
+				from platform.conversations c join platform.conversation_stops s on s.execution_id = ${work.executionId}
+				where c.id = ${work.conversationId}`;
+			expect(state).toEqual({
+				host_session_ref: "actual-original-host",
+				stop_request_id: work.stopRequestId,
+				status: "submitted",
+			});
+		} finally {
+			await first.store.close();
 		}
 	});
 
