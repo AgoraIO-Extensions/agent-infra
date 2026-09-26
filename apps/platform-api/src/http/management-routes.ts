@@ -4,7 +4,9 @@ import {
 	AgentApplicationUpdateRequestV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 	ApprovalDecisionRequestV1Schema,
+	pilotBrowserHttpOpenApiPathsV2,
 } from "@agent-infra/contracts/pilot";
 import type {
 	AgentConfigurationModelInputV1,
@@ -239,7 +241,8 @@ async function projectAgent(
 	agent: AgentManagementAgentProjectionV1,
 	identity: IdentityContext,
 	metadata: RequestMetadata,
-): Promise<AgentProjection> {
+	version: 1 | 2 = 1,
+): Promise<AgentProjection | ReturnType<typeof AgentProjectionV2Schema.parse>> {
 	let value: unknown;
 	try {
 		value = await dependencies.readAgentProjection({
@@ -252,7 +255,13 @@ async function projectAgent(
 	}
 	const parsed = AgentProjectionV1Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-	return parsed.data;
+	if (version === 1) return parsed.data;
+	const { actions: _actions, ...configuration } = parsed.data.configuration;
+	return AgentProjectionV2Schema.parse({
+		...parsed.data,
+		schemaVersion: 2,
+		configuration,
+	});
 }
 
 async function applicationOrUnavailable(
@@ -766,47 +775,73 @@ export function registerManagementRoutes(
 			}),
 	);
 
-	app.get("/api/v1/agents", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() => dependencies.query.listAgents(userScope(identity), queryPage),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectAgent(dependencies, item, identity, metadata),
+	for (const version of [1, 2] as const) {
+		app.get(`/api/v${version}/agents`, (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				let queryPage: AgentManagementPageInputV1;
+				let requestedScope: "owner" | undefined;
+				if (version === 2) {
+					const search = new URL(context.req.url).searchParams;
+					const parsed = pilotBrowserHttpOpenApiPathsV2[
+						"/api/v2/agents"
+					].get.requestParams.query.safeParse(Object.fromEntries(search));
+					if (!parsed.success || new Set(search.keys()).size !== search.size)
+						fail("INVALID_REQUEST", metadata.traceId);
+					queryPage = {
+						limit: parsed.data.limit ?? 50,
+						...(parsed.data.cursor === undefined
+							? {}
+							: { afterId: parsed.data.cursor }),
+					};
+					requestedScope = parsed.data.scope;
+				} else {
+					queryPage = pageInput(context.req.raw, metadata.traceId);
+				}
+				const page = await queryOrUnavailable(
+					() =>
+						dependencies.query.listAgents(
+							requestedScope === "owner"
+								? ownerScope(identity)
+								: userScope(identity),
+							queryPage,
+						),
+					metadata.traceId,
+				);
+				return context.json({
+					items: await Promise.all(
+						page.items.map((item) =>
+							projectAgent(dependencies, item, identity, metadata, version),
+						),
 					),
-				),
-				nextCursor: page.nextAfterId,
-			});
-		}),
-	);
+					nextCursor: page.nextAfterId,
+				});
+			}),
+		);
 
-	app.get("/api/v1/agents/:agentId", (context) =>
-		boundary(context, async (metadata) => {
-			const identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
-			);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				userScope(identity),
-				context.req.param("agentId"),
-				metadata.traceId,
-			);
-			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
-			);
-		}),
-	);
+		app.get(`/api/v${version}/agents/:agentId`, (context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				const agent = await agentOrUnavailable(
+					dependencies,
+					userScope(identity),
+					context.req.param("agentId"),
+					metadata.traceId,
+				);
+				return context.json(
+					await projectAgent(dependencies, agent, identity, metadata, version),
+				);
+			}),
+		);
+	}
 
 	app.post("/api/v1/agents/:agentId/lifecycle", (context) =>
 		boundary(context, async (metadata) => {
