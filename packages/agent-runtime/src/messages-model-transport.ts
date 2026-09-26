@@ -4,6 +4,8 @@ import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
+export type RuntimeMessagesRequest = "messages" | "count_tokens";
+
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly endpoint: string;
@@ -12,8 +14,8 @@ export interface RuntimeMessagesTransportOptions {
 	readonly model: string;
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
-	readonly beforeSend?: () => Promise<void>;
-	readonly started?: () => Promise<void>;
+	readonly beforeSend?: (request: RuntimeMessagesRequest) => Promise<void>;
+	readonly started?: (request: RuntimeMessagesRequest) => Promise<void>;
 	readonly toolRequestStarted?: (tool: {
 		readonly toolCallId: string;
 		readonly name: string;
@@ -25,11 +27,12 @@ export interface RuntimeMessagesTransportOptions {
 		state: "sent" | "completed" | "failed" | "unknown",
 		endTurn?: boolean,
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		request?: RuntimeMessagesRequest,
 	) => Promise<void>;
 }
 
 const allowedBetas = new Set(
-	"structured-outputs-2025-11-13,fine-grained-tool-streaming-2025-05-14,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01".split(
+	"token-counting-2024-11-01,structured-outputs-2025-11-13,fine-grained-tool-streaming-2025-05-14,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01".split(
 		",",
 	),
 );
@@ -70,13 +73,16 @@ export async function openRuntimeMessagesTransport(
 	let admitted = false;
 	let active = false;
 	let failure: "failed" | "unknown" | undefined;
+	let countUnconfirmed = false;
 	const server = createServer((request, response) => {
+		let counting = false;
 		const operation = (async () => {
 			if (
 				request.method === "POST" &&
 				request.url === "/internal/tool-intent" &&
 				!closed &&
 				!failure &&
+				!countUnconfirmed &&
 				request.headers["x-api-key"] === token
 			) {
 				try {
@@ -120,6 +126,7 @@ export async function openRuntimeMessagesTransport(
 			if (
 				closed ||
 				failure ||
+				countUnconfirmed ||
 				request.method !== "POST" ||
 				(options.client === "opencode" || options.client === "pi"
 					? request.headers["x-api-key"] !== token
@@ -141,7 +148,8 @@ export async function openRuntimeMessagesTransport(
 				return;
 			}
 			active = true;
-			const counting = request.url?.includes("/count_tokens");
+			counting = request.url?.includes("/count_tokens") ?? false;
+			const requestKind = counting ? "count_tokens" : "messages";
 			const controller = new AbortController();
 			controllers.add(controller);
 			response.once("close", () => {
@@ -149,6 +157,7 @@ export async function openRuntimeMessagesTransport(
 			});
 			let sent = false;
 			let intentPrepared = false;
+			let requestFailure: "failed" | "unknown" | undefined;
 			try {
 				const chunks: Buffer[] = [];
 				let size = 0;
@@ -201,12 +210,10 @@ export async function openRuntimeMessagesTransport(
 				if (options.authentication === "api-key")
 					headers["x-api-key"] = access.credential;
 				else headers.authorization = `Bearer ${access.credential}`;
-				if (!counting) {
-					await options.beforeSend?.();
-					intentPrepared = true;
-					sent = true;
-					await options.receipt?.("sent");
-				}
+				await options.beforeSend?.(requestKind);
+				intentPrepared = true;
+				sent = true;
+				await options.receipt?.("sent", undefined, undefined, requestKind);
 				const upstreamPromise = (options.fetch ?? fetch)(
 					`${access.endpoint.replace(/\/$/, "")}${request.url}`,
 					{
@@ -221,14 +228,20 @@ export async function openRuntimeMessagesTransport(
 				// awaited. Attach an eager rejection handler so closing the transport
 				// during that window cannot create an unhandled abort rejection.
 				void upstreamPromise.catch(() => {});
-				if (counting) sent = true;
-				if (!counting) await options.started?.();
+				await options.started?.(requestKind);
 				const upstream = await upstreamPromise;
 
 				if (!upstream.ok) {
 					void upstream.body?.cancel().catch(() => {});
-					failure = upstream.status >= 500 ? "unknown" : "failed";
-					if (!counting) await options.receipt?.(failure);
+					requestFailure = upstream.status >= 500 ? "unknown" : "failed";
+					if (!counting) failure = requestFailure;
+					else if (requestFailure === "unknown") countUnconfirmed = true;
+					await options.receipt?.(
+						requestFailure,
+						undefined,
+						undefined,
+						requestKind,
+					);
 					reject(response);
 					return;
 				}
@@ -254,6 +267,12 @@ export async function openRuntimeMessagesTransport(
 						value.input_tokens < 0
 					)
 						throw new Error();
+					await options.receipt?.(
+						"completed",
+						undefined,
+						undefined,
+						requestKind,
+					);
 					response.writeHead(200, { "content-type": "application/json" });
 					response.end(JSON.stringify({ input_tokens: value.input_tokens }));
 					return;
@@ -274,17 +293,32 @@ export async function openRuntimeMessagesTransport(
 					[access.credential, access.endpoint],
 					controller.signal,
 					async (reason, usage) => {
-						await options.receipt?.("completed", reason === "end_turn", usage);
+						await options.receipt?.(
+							"completed",
+							reason === "end_turn",
+							usage,
+							requestKind,
+						);
 					},
 				);
 			} catch {
 				controller.abort();
-				if (!closed && !failure) failure = sent ? "unknown" : "failed";
-				if (failure && !counting && intentPrepared) {
+				// Closing an admitted count still needs its durable terminal receipt.
+				if (!requestFailure && (!closed || counting))
+					requestFailure = sent ? "unknown" : "failed";
+				if (!counting && requestFailure) failure = requestFailure;
+				else if (requestFailure === "unknown") countUnconfirmed = true;
+				if (requestFailure && intentPrepared) {
 					try {
-						await options.receipt?.(failure);
+						await options.receipt?.(
+							requestFailure,
+							undefined,
+							undefined,
+							requestKind,
+						);
 					} catch {
-						failure = "unknown";
+						if (counting) countUnconfirmed = true;
+						else failure = "unknown";
 					}
 				}
 				reject(response);
@@ -297,7 +331,8 @@ export async function openRuntimeMessagesTransport(
 		void operation.then(
 			() => pending.delete(operation),
 			() => {
-				failure = "unknown";
+				if (counting) countUnconfirmed = true;
+				else failure = "unknown";
 				response.destroy();
 				pending.delete(operation);
 			},

@@ -95,10 +95,13 @@ export function completeClaudeResponse(
 		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 	response.end();
 }
-export async function claudeNativeFixture() {
+export async function claudeNativeFixture(
+	beforeResponse?: (url: string | undefined) => Promise<void>,
+) {
 	const path = await mkdtemp(join(tmpdir(), "claude-native-"));
 	const calls: {
 		endpoint: number;
+		url: string | undefined;
 		headers: IncomingHttpHeaders;
 		body: Record<string, unknown>;
 		response: ServerResponse;
@@ -110,16 +113,31 @@ export async function claudeNativeFixture() {
 			request.on("data", (chunk) => {
 				body += chunk;
 			});
-			request.on("end", () => {
+			request.on("end", async () => {
 				const value = JSON.parse(body);
 				calls.push({
 					endpoint,
+					url: request.url,
 					headers: request.headers,
 					body: value,
 					response,
 				});
-				if (respond)
-					completeClaudeResponse(response, `msg_${calls.length}`, value.model);
+				try {
+					await beforeResponse?.(request.url);
+				} catch {
+					response.writeHead(500).end();
+					return;
+				}
+				if (respond && !response.writableEnded) {
+					if (request.url?.includes("count_tokens"))
+						response.end('{"input_tokens":100}');
+					else
+						completeClaudeResponse(
+							response,
+							`msg_${calls.length}`,
+							value.model,
+						);
+				}
 			});
 		}),
 	);
@@ -160,12 +178,17 @@ export async function claudeNativeFixture() {
 		release() {
 			respond = true;
 			for (const call of calls)
-				if (!call.response.destroyed && !call.response.writableEnded)
+				if (!call.response.destroyed && !call.response.writableEnded) {
+					if (call.url?.includes("count_tokens")) {
+						call.response.end('{"input_tokens":100}');
+						continue;
+					}
 					completeClaudeResponse(
 						call.response,
 						`msg_${calls.indexOf(call)}`,
 						String(call.body.model),
 					);
+				}
 		},
 		async settled(ref: string, executionId: string) {
 			await vi.waitFor(

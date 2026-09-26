@@ -77,6 +77,105 @@ function messages(text: string[]) {
 		.join("");
 }
 
+it.each(["completed", "failed", "unknown"])(
+	"keeps confirmed count failure separate from a %s generation and its tool boundary",
+	async (generation) => {
+		const receipts: {
+			state: string;
+			request: string | undefined;
+			usage: unknown;
+		}[] = [];
+		let requests = 0;
+		let tools = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			toolRequestStarted: async () => {
+				tools++;
+			},
+			receipt: async (state, _endTurn, usage, request) => {
+				receipts.push({ state, request, usage });
+			},
+			fetch: async (url) => {
+				requests++;
+				if (String(url).includes("count_tokens"))
+					return new Response("", { status: 403 });
+				if (generation === "unknown") throw Error("Synthetic response lost");
+				return generation === "failed"
+					? new Response("", { status: 403 })
+					: new Response(messages(["OK"]), {
+							headers: { "content-type": "text/event-stream" },
+						});
+			},
+		});
+		try {
+			const request = (counting: boolean) =>
+				fetch(
+					`${transport.modelAccess.endpoint}/v1/messages${counting ? "/count_tokens" : ""}`,
+					{
+						method: "POST",
+						headers: {
+							authorization: `Bearer ${transport.modelAccess.credential}`,
+						},
+						body: JSON.stringify({
+							model: "claude-opus-5",
+							messages: [],
+							...(!counting
+								? {
+										stream: true,
+										thinking: { type: "adaptive" },
+										output_config: { effort: "high" },
+									}
+								: {}),
+						}),
+					},
+				);
+			const tool = () =>
+				fetch(transport.toolPermit.endpoint, {
+					method: "POST",
+					headers: { "x-api-key": transport.toolPermit.credential },
+					body: JSON.stringify({ toolCallId: "call-one", name: "read" }),
+				});
+			const count = await request(true);
+			expect(count.ok).toBe(false);
+			await count.text();
+			expect(transport.failure()).toBeUndefined();
+			expect(receipts).toEqual([
+				{ state: "sent", request: "count_tokens", usage: undefined },
+				{ state: "failed", request: "count_tokens", usage: undefined },
+			]);
+			expect((await tool()).status).toBe(204);
+			expect(tools).toBe(1);
+			const generated = await request(false);
+			await generated.text();
+			expect(generated.ok).toBe(generation === "completed");
+			expect(requests).toBe(2);
+			expect(transport.failure()).toBe(
+				generation === "completed" ? undefined : generation,
+			);
+			expect(receipts.at(-1)).toMatchObject({
+				state: generation,
+				request: "messages",
+			});
+			if (generation === "completed")
+				expect(receipts.at(-1)?.usage).toEqual({
+					inputTokens: 10,
+					outputTokens: 2,
+				});
+			else {
+				expect((await tool()).ok).toBe(false);
+				expect(tools).toBe(1);
+			}
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
 it("forwards Messages usage without inventing missing counters", async () => {
 	const receipts: unknown[] = [];
 	const transport = await openRuntimeMessagesTransport({
@@ -352,14 +451,18 @@ it.each([200, 404, 501, 401])(
 					method: "POST",
 					headers: {
 						authorization: `Bearer ${transport.modelAccess.credential}`,
+						"anthropic-beta": "token-counting-2024-11-01",
 					},
 					body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
 				},
 			);
 			expect(admitted).toBe(true);
 			expect(await response.text()).not.toContain("synthetic-provider");
-			expect(transport.failure()).toBeDefined();
-			expect(receipts).toEqual([]);
+			expect(transport.failure()).toBeUndefined();
+			expect(receipts).toEqual([
+				"sent",
+				status === 404 || status === 401 ? "failed" : "unknown",
+			]);
 		} finally {
 			await transport.close();
 		}
@@ -453,7 +556,7 @@ it("does not deliver escaped credentials in streamed tool arguments to the nativ
 	}
 });
 
-it.each(["admission", "unknown-beta"])(
+it.each(["admission", "unknown-beta", "durable-intent"])(
 	"blocks count_tokens before upstream side effects on %s failure",
 	async (reason) => {
 		let requests = 0;
@@ -466,6 +569,10 @@ it.each(["admission", "unknown-beta"])(
 			admit: async () => {
 				if (reason === "admission")
 					throw Error("synthetic persistence failure");
+			},
+			beforeSend: async () => {
+				if (reason === "durable-intent")
+					throw Error("synthetic intent persistence failure");
 			},
 			fetch: async () => {
 				requests++;
@@ -585,3 +692,78 @@ it("blocks a second model request when its durable intent cannot be prepared", a
 		await transport.close();
 	}
 });
+
+it.each([
+	"completed",
+	"failed",
+	"unknown",
+	"malformed",
+	"started-write",
+	"result-write",
+])(
+	"records count_tokens %s without treating the estimate as billed usage or retrying",
+	async (outcome) => {
+		const phases: string[] = [];
+		let requests = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			beforeSend: async (request) => {
+				phases.push(`intent:${request}`);
+			},
+			started: async (request) => {
+				phases.push(`started:${request}`);
+				if (outcome === "started-write") throw Error("synthetic write failure");
+			},
+			receipt: async (state, endTurn, usage, request) => {
+				expect(endTurn).toBeUndefined();
+				expect(usage).toBeUndefined();
+				phases.push(`${state}:${request}`);
+				if (state === "completed" && outcome === "result-write")
+					throw Error("synthetic write failure");
+			},
+			fetch: async () => {
+				requests++;
+				expect(phases).toEqual(["intent:count_tokens", "sent:count_tokens"]);
+				if (outcome === "unknown") throw Error("synthetic lost response");
+				return new Response(
+					outcome === "malformed"
+						? '{"input_tokens":-1}'
+						: '{"input_tokens":123}',
+					{ status: outcome === "failed" ? 400 : 200 },
+				);
+			},
+		});
+		try {
+			const request = () =>
+				fetch(`${transport.modelAccess.endpoint}/v1/messages/count_tokens`, {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+						"anthropic-beta": "token-counting-2024-11-01",
+					},
+					body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+				});
+			const response = await request();
+			expect(response.ok).toBe(outcome === "completed");
+			if (outcome === "completed")
+				expect(await response.json()).toEqual({ input_tokens: 123 });
+			else if (outcome !== "failed") expect((await request()).ok).toBe(false);
+			expect(transport.failure()).toBeUndefined();
+			expect(requests).toBe(1);
+			expect(phases).toEqual([
+				"intent:count_tokens",
+				"sent:count_tokens",
+				"started:count_tokens",
+				...(outcome === "result-write" ? ["completed:count_tokens"] : []),
+				`${outcome === "completed" ? "completed" : outcome === "failed" ? "failed" : "unknown"}:count_tokens`,
+			]);
+		} finally {
+			await transport.close();
+		}
+	},
+);

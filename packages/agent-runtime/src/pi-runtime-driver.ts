@@ -28,7 +28,7 @@ export interface PiRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
-		modelRequestIntent?: () => Promise<void>,
+		modelRequestIntent?: NativeSessionOptions["modelRequestIntent"],
 		modelRequestStarted?: () => Promise<void>,
 		modelUsage?: NativeSessionOptions["modelUsage"],
 		toolRequestStarted?: (tool: {
@@ -69,8 +69,8 @@ export const PiRuntimeDriver = {
 					session.directory,
 					session.selection,
 					() => callbacks.admit(),
-					async () => {
-						await callbacks.modelRequestIntent?.();
+					async (request) => {
+						await callbacks.modelRequestIntent?.(request);
 					},
 					async () => {
 						await callbacks.modelRequestStarted?.();

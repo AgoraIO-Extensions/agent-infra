@@ -74,8 +74,8 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				effort: selection.reasoningLevel,
 				admit,
 				client: "opencode",
-				beforeSend: async () => {
-					await currentModelRequestIntent?.();
+				beforeSend: async (request) => {
+					await currentModelRequestIntent?.(request);
 				},
 				started: async () => {
 					await currentModelRequestStarted?.();

@@ -26,7 +26,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
-		modelRequestIntent?: () => Promise<void>,
+		modelRequestIntent?: NativeSessionOptions["modelRequestIntent"],
 		modelRequestStarted?: () => Promise<void>,
 		modelUsage?: (
 			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],

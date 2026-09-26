@@ -69,13 +69,34 @@ jobs:
 
       - name: Verify native Claude conformance in the pinned Linux image
         run: |
+          install -d -m 0777 "$RUNNER_TEMP/claude-count"
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --mount "type=bind,source=$RUNNER_TEMP/claude-count,target=/evidence" \
+            --env AGENT_INFRA_CLAUDE_COUNT_EVIDENCE_PATH=/evidence/native.json \
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/claude-native.test.ts src/claude-runtime-driver.test.ts \
+            src/claude-count-tokens.native.test.ts \
             src/runtime-driver-conformance.test.ts --cache=false
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = `${process.env.RUNNER_TEMP}/claude-count/native.json`;
+          const native = JSON.parse(readFileSync(path, 'utf8'));
+          const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+          const imageId = execFileSync('docker', ['image', 'inspect', 'agent-infra-codex-native-test', '--format', '{{.Id}}'], { encoding: 'utf8' }).trim();
+          writeFileSync(`${process.env.RUNNER_TEMP}/claude-count/evidence.json`, JSON.stringify({ ...native, head: process.env.SCAN_COMMIT, sourceTree: tree, imageId }, null, 2));
+          NODE
+
+      - name: Preserve native Claude token count evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: claude-count-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/claude-count/evidence.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
         run: |
