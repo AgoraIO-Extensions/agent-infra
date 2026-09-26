@@ -2761,36 +2761,54 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				})
 					.then((response) => response.json())
 					.catch(() => ({ unavailable: true }));
-			throw new Error(
-				JSON.stringify({
-					uncertainty,
-					traces: traces.slice(-20),
-					control: controlMetadata,
-					processes: children.map((child) => ({
-						exitCode: child.exitCode,
-						signalCode: child.signalCode,
-					})),
-					stopRequests: requests
-						.filter((request) => request.path.endsWith("/stops"))
-						.slice(-20),
-					stops:
-						await sql`select execution_id,status,confirmation_deadline,confirmation_timed_out_at from platform.conversation_stops`,
-					executions:
-						await sql`select status,delivery_fence::int as fence,model_configuration_revision from platform.conversation_executions`,
-					audit:
-						await sql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`,
-					upgradeExecutions: upgradeSql
-						? await upgradeSql`select execution_id,status,delivery_fence::int as fence from platform.conversation_executions order by execution_id`
-						: undefined,
-					upgradeOutbox: upgradeSql
-						? await upgradeSql`select operation,status,delivery_fence::int as fence from platform.outbox_items order by id`
-						: undefined,
-					upgradeErrors: upgradeSql
-						? await upgradeSql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`
-						: undefined,
-				}),
-				{ cause: error },
-			);
+			const failure = {
+				head: head.trim(),
+				sourceTree,
+				runtimeImage: { imageDigest, imageDigestSource, revision },
+				cause:
+					error instanceof Error && /^Timed out: [\w .-]+$/.test(error.message)
+						? error.message
+						: "TASK_NATIVE_VALIDATION_FAILED",
+				uncertainty,
+				traces: traces.slice(-20),
+				control: controlMetadata,
+				processes: children.map((child) => ({
+					exitCode: child.exitCode,
+					signalCode: child.signalCode,
+				})),
+				stopRequests: requests
+					.filter((request) => request.path.endsWith("/stops"))
+					.slice(-20),
+				requests: requests.slice(-100),
+				outboxes:
+					await sql`select id,operation,status,payload->>'executionId' as execution_id,delivery_fence::int as fence,lease_owner,lease_expires_at,available_at,attempt_count from platform.outbox_items order by id`,
+				controls:
+					await sql`select execution_id,reason,created_at from platform.task_control_records order by created_at`,
+				databaseWaits:
+					await sql`select pid,state,wait_event_type,wait_event,pg_blocking_pids(pid) as blockers from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid()`,
+				stops:
+					await sql`select execution_id,status,confirmation_deadline,confirmation_timed_out_at from platform.conversation_stops`,
+				executions:
+					await sql`select status,delivery_fence::int as fence,model_configuration_revision from platform.conversation_executions`,
+				audit:
+					await sql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`,
+				upgradeExecutions: upgradeSql
+					? await upgradeSql`select execution_id,status,delivery_fence::int as fence from platform.conversation_executions order by execution_id`
+					: undefined,
+				upgradeOutbox: upgradeSql
+					? await upgradeSql`select operation,status,delivery_fence::int as fence from platform.outbox_items order by id`
+					: undefined,
+				upgradeErrors: upgradeSql
+					? await upgradeSql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`
+					: undefined,
+			};
+			if (diagnosticPath)
+				await writeFile(
+					`${diagnosticPath}.failure.json`,
+					`${JSON.stringify(failure, null, 2)}\n`,
+					{ mode: 0o600 },
+				);
+			throw new Error(JSON.stringify(failure), { cause: error });
 		} finally {
 			for (const child of children)
 				if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");

@@ -143,11 +143,11 @@ jobs:
             src/task-worker-native.integration.test.ts --maxWorkers=1 --cache=false
 
       - name: Preserve native task evidence
-        if: ${{ !cancelled() && steps.task_native.outcome == 'success' }}
+        if: ${{ !cancelled() && (steps.task_native.outcome == 'success' || steps.task_native.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: task-native-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/task-native.json
+          path: ${{ runner.temp }}/task-native.json*
           if-no-files-found: error
           retention-days: 14
 

@@ -41,6 +41,7 @@ import {
 	readMessage,
 	readStop,
 	renewLease,
+	retryFencedStop,
 	retryOutbox,
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
@@ -92,7 +93,10 @@ export class PostgresConversationDispatchStoreV1
 			this.#client.begin(async (transaction) => {
 				await transaction`select set_config('lock_timeout', '5s', true)`;
 				const state = await ownedState(transaction, claim, true);
-				if (!state) return null;
+				if (!state) {
+					await retryFencedStop(transaction, claim);
+					return null;
+				}
 				const payload = exactPayload(state.outbox.payload, claim.operation);
 				if (!payload) return null;
 				const stop = await readStop(transaction, claim.executionId);
@@ -556,6 +560,7 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		let waitingFinished = false;
+		let fencedStop = false;
 		try {
 			const prepared = await transactionResult(
 				this.#client,
@@ -586,7 +591,11 @@ export class PostgresConversationDispatchStoreV1
 					if (!agent)
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
 					const state = await ownedState(transaction, input.claim);
-					if (!state) throw new StaleDispatchLease();
+					if (!state) {
+						fencedStop = await retryFencedStop(transaction, input.claim);
+						if (fencedStop) return;
+						throw new StaleDispatchLease();
+					}
 					const pendingIsolation = await readGenerationIsolation(
 						transaction,
 						input.claim.conversationId,
@@ -728,7 +737,7 @@ export class PostgresConversationDispatchStoreV1
 					await renewLease(transaction, input.claim, input.leaseDurationMs);
 				},
 			);
-			return prepared && !waitingFinished;
+			return prepared && !waitingFinished && !fencedStop;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;
@@ -1083,7 +1092,10 @@ export class PostgresConversationDispatchStoreV1
 		}
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim, true);
-			if (!state) throw new StaleDispatchLease();
+			if (!state) {
+				if (await retryFencedStop(transaction, input.claim)) return;
+				throw new StaleDispatchLease();
+			}
 			// A concurrent stop can commit a terminal response before the original
 			// event stream fails. Release its lease without undoing that response or
 			// changing the Conversation now owned by a later Execution.

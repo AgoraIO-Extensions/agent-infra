@@ -1505,6 +1505,177 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it.each(["read", "prepare", "retry"])(
+		"promptly retries a stop fenced by Turn recovery at %s without using stale authority",
+		async (boundary) => {
+			const work = await seed(undefined, {
+				executionStatus: "processing",
+				executionFence: 1,
+				hostSessionRef: "host-original",
+			});
+			await client`update platform.outbox_items set delivery_fence=1,status='retry_scheduled' where id=${work.itemId}`;
+			await seedStop(work);
+			const stop = await claim(`conversation:stop:${work.stopRequestId}`);
+			const recovery = await claim(work.itemId, "recovery-worker");
+			try {
+				if (
+					stop.decision.outcome !== "claimed" ||
+					recovery.decision.outcome !== "claimed"
+				)
+					throw new Error("Expected independent stop and Turn claims");
+				const stale = stop.decision.claim;
+				expect(stale.executionDeliveryFence).toBe(1);
+				expect(recovery.decision.claim.executionDeliveryFence).toBe(2);
+				const originalStop =
+					await client`select * from platform.conversation_stops where execution_id=${work.executionId}`;
+				const originalLease =
+					await client`select status,lease_owner,lease_expires_at from platform.outbox_items where id=${stale.itemId}`;
+				for (const substituted of [
+					{ ...stale, actorId: "another-actor" },
+					{ ...stale, sessionGeneration: stale.sessionGeneration + 1 },
+					{ ...stale, stopRequestId: "another-stop" },
+				]) {
+					expect(
+						await stop.store.readRuntimeState({ claim: substituted }),
+					).toBeNull();
+					expect(
+						await client`select status,lease_owner,lease_expires_at from platform.outbox_items where id=${stale.itemId}`,
+					).toEqual(originalLease);
+				}
+				if (boundary === "read")
+					expect(
+						await stop.store.readRuntimeState({ claim: stale }),
+					).toBeNull();
+				else if (boundary === "prepare")
+					expect(
+						await stop.store.prepareRuntimeDispatch({
+							claim: stale,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+				else
+					expect(
+						await stop.store.retry({
+							claim: stale,
+							retryDelayMs: 0,
+							errorCode: "RUNTIME_GRANT_INVALID",
+							transition: { executionStatus: "unknown" },
+						}),
+					).toBe(true);
+				expect(
+					await client`select status,lease_owner,lease_expires_at from platform.outbox_items where id=${stale.itemId}`,
+				).toEqual([
+					{
+						status: "retry_scheduled",
+						lease_owner: null,
+						lease_expires_at: null,
+					},
+				]);
+				expect((await dispatchState(work))?.execution_status).toBe(
+					"processing",
+				);
+				expect(
+					await client`select * from platform.conversation_stops where execution_id=${work.executionId}`,
+				).toEqual(originalStop);
+				expect(
+					await client`select payload->>'errorCode' as error_code from platform.persisted_events where stream_id=${`outbox:${stale.itemId}`} and event_type='outbox.retry_scheduled'`,
+				).toEqual([{ error_code: "EXECUTION_FENCE_CHANGED" }]);
+				expect(
+					await stop.store.findDispatchable({ limit: 256 }),
+				).toContainEqual({
+					itemId: stale.itemId,
+					operation: "conversation.turn.stop.v1",
+				});
+				const fresh = await stop.store.claim({
+					schemaVersion: 1,
+					itemId: stale.itemId,
+					workerId: "fresh-control-worker",
+					leaseDurationMs: 30_000,
+				});
+				if (fresh.outcome !== "claimed") throw new Error("Expected fresh stop");
+				expect(fresh.claim.executionDeliveryFence).toBe(2);
+				expect(fresh.claim.deliveryFence).toBe(stale.deliveryFence + 1);
+				expect(
+					await stop.store.prepareRuntimeDispatch({
+						claim: fresh.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(await stop.store.readRuntimeState({ claim: stale })).toBeNull();
+				expect(
+					await client`select status,lease_owner,delivery_fence::int as fence from platform.outbox_items where id=${stale.itemId}`,
+				).toEqual([
+					{
+						status: "processing",
+						lease_owner: "fresh-control-worker",
+						fence: fresh.claim.deliveryFence,
+					},
+				]);
+			} finally {
+				await Promise.all([stop.store.close(), recovery.store.close()]);
+			}
+		},
+	);
+
+	it("rejects a substituted fenced stop without observing its expired deadline", async () => {
+		const work = await seed(undefined, {
+			executionStatus: "processing",
+			executionFence: 1,
+			hostSessionRef: "host-original",
+		});
+		await client`update platform.outbox_items set delivery_fence=1,status='retry_scheduled' where id=${work.itemId}`;
+		await seedStop(work);
+		const stop = await claim(`conversation:stop:${work.stopRequestId}`);
+		const recovery = await claim(work.itemId, "recovery-worker");
+		try {
+			if (
+				stop.decision.outcome !== "claimed" ||
+				recovery.decision.outcome !== "claimed"
+			)
+				throw new Error("Expected independent stop and Turn claims");
+			await client`update platform.conversation_stops set confirmation_deadline=clock_timestamp()-interval '1 second' where execution_id=${work.executionId}`;
+			const before =
+				await client`select * from platform.conversation_stops where execution_id=${work.executionId}`;
+			const auditBefore =
+				await client`select * from platform.audit_events where target_id=${work.executionId} order by id`;
+			const lease =
+				await client`select status,lease_owner,lease_expires_at from platform.outbox_items where id=${stop.decision.claim.itemId}`;
+			const substituted = {
+				...stop.decision.claim,
+				stopRequestId: "another-stop",
+			};
+			expect(
+				await stop.store.readRuntimeState({ claim: substituted }),
+			).toBeNull();
+			expect(
+				await stop.store.prepareRuntimeDispatch({
+					claim: substituted,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+			expect(
+				await stop.store.retry({
+					claim: substituted,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_GRANT_INVALID",
+					transition: {},
+				}),
+			).toBe(false);
+			expect(
+				await client`select * from platform.conversation_stops where execution_id=${work.executionId}`,
+			).toEqual(before);
+			expect(
+				await client`select status,lease_owner,lease_expires_at from platform.outbox_items where id=${stop.decision.claim.itemId}`,
+			).toEqual(lease);
+			expect((await dispatchState(work))?.execution_status).toBe("processing");
+			expect(
+				await client`select * from platform.audit_events where target_id=${work.executionId} order by id`,
+			).toEqual(auditBefore);
+		} finally {
+			await Promise.all([stop.store.close(), recovery.store.close()]);
+		}
+	});
+
 	it("keeps supplementary and stop fences independent from the Execution fence", async () => {
 		for (const operation of [
 			"conversation.turn.supplement.v1",

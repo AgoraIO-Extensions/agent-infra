@@ -421,6 +421,43 @@ export async function ownedState(
 		: undefined;
 }
 
+export async function retryFencedStop(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+): Promise<boolean> {
+	if (claim.operation !== "conversation.turn.stop.v1") return false;
+	const [execution] = await transaction<{ delivery_fence: string | number }[]>`
+		select delivery_fence from platform.conversation_executions
+		where execution_id = ${claim.executionId} and conversation_id = ${claim.conversationId}
+	`;
+	if (!execution) return false;
+	const currentFence = safeCounter(execution.delivery_fence);
+	if (
+		currentFence === undefined ||
+		currentFence <= claim.executionDeliveryFence
+	)
+		return false;
+	const outbox = await lockOutbox(transaction, claim.itemId);
+	const payload = outbox && exactPayload(outbox.payload, claim.operation);
+	const stop = await readStop(transaction, claim.executionId);
+	if (
+		payload?.stopRequestId !== claim.stopRequestId ||
+		stop?.stop_request_id !== claim.stopRequestId ||
+		stop.status !== "submitted"
+	)
+		return false;
+	// Check the independent stop lease and every other binding; never return
+	// authority for the new Execution fence to this stale caller.
+	const state = await ownedState(
+		transaction,
+		{ ...claim, executionDeliveryFence: currentFence },
+		true,
+	);
+	if (!state) return false;
+	await retryOutbox(transaction, state, claim, 0, "EXECUTION_FENCE_CHANGED");
+	return true;
+}
+
 function transitionAllowed(
 	state: DispatchState,
 	transition: ConversationDispatchStateTransitionV1,
