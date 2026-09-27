@@ -133,8 +133,11 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	errorCode: string | undefined;
 	renewable = true;
 	recordable = true;
-	capacity: "available" | "capacity_wait" | "capacity_unavailable" =
-		"available";
+	capacity:
+		| "available"
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "agent_not_running" = "available";
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -183,6 +186,12 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		leaseDurationMs: number;
 	}) {
 		if (!(await this.renew())) return false;
+		if (this.capacity === "agent_not_running") {
+			this.current = { ...this.current, executionStatus: "failed" };
+			this.outboxStatus = "failed";
+			this.errorCode = "AGENT_NOT_RUNNING";
+			return this.capacity;
+		}
 		if (this.capacity !== "available") return this.capacity;
 		if (
 			(input.claim.operation === "conversation.turn.submit.v1" ||
@@ -559,6 +568,16 @@ describe("Conversation Worker dispatch", () => {
 			expect(runtimeHost.sideEffectCount()).toBe(1);
 		},
 	);
+	it("fails an unstarted Turn when lifecycle stop wins before dispatch", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const f = setup({ runtimeHost });
+		f.store.capacity = "agent_not_running";
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "rejected" });
+		expect(f.store.current.executionStatus).toBe("failed");
+		expect(f.store.outboxStatus).toBe("failed");
+		expect(f.store.errorCode).toBe("AGENT_NOT_RUNNING");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
 	it.each(["found", "not_found"] as const)(
 		"recovers a historical control-only task with %s evidence without business dispatch or renewal",
 		async (outcome) => {

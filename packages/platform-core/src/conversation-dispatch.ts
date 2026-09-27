@@ -728,6 +728,9 @@ export function createConversationDispatchUseCaseV1(
 					claim,
 					leaseDurationMs,
 				});
+				if (preparation === "agent_not_running") {
+					return { schemaVersion: 1, outcome: "rejected" };
+				}
 				if (
 					preparation === "capacity_wait" ||
 					preparation === "capacity_unavailable"

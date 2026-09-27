@@ -60,6 +60,14 @@ function snapshot(
 }
 
 describe("Core dispatch capacity decision", () => {
+	it.each(["stopped", "disabled", "creation_failed"])(
+		"terminates unsent work when the Agent is %s",
+		(status) => {
+			expect(
+				decideConversationDispatchCapacityV1({ ...snapshot(), status }),
+			).toBe("agent_not_running");
+		},
+	);
 	it("admits a custom Agent without a Platform model configuration", () => {
 		expect(decideConversationDispatchCapacityV1(snapshot("custom"))).toBe(
 			"admit",

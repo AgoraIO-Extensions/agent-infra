@@ -496,29 +496,34 @@ export class PostgresConversationDispatchStoreV1
 	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean | "capacity_wait" | "capacity_unavailable"> {
+	}): Promise<
+		boolean | "capacity_wait" | "capacity_unavailable" | "agent_not_running"
+	> {
 		requireClaim(input.claim);
 		if (input.claim.metadataRecovery)
 			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		try {
-			return await transactionResult(this.#client, async (transaction) => {
-				// Agent first: management/configuration/reconciliation use this same row.
-				// Never hold another Conversation's execution lock while waiting for it.
-				await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
-				// Read only after acquiring the lock: a join evaluated while waiting could
-				// retain a pre-lock snapshot of application or reconciliation state.
-				const [agent] = await transaction<
-					{
-						current_configuration_revision: string;
-						status: string | null;
-						desired_state: string | null;
-						service_availability: string | null;
-						workload_revision: string | null;
-						fence: string | null;
-						state: unknown;
-					}[]
-				>`
+			let stopped = false;
+			const prepared = await transactionResult(
+				this.#client,
+				async (transaction) => {
+					// Agent first: management/configuration/reconciliation use this same row.
+					// Never hold another Conversation's execution lock while waiting for it.
+					await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
+					// Read only after acquiring the lock: a join evaluated while waiting could
+					// retain a pre-lock snapshot of application or reconciliation state.
+					const [agent] = await transaction<
+						{
+							current_configuration_revision: string;
+							status: string | null;
+							desired_state: string | null;
+							service_availability: string | null;
+							workload_revision: string | null;
+							fence: string | null;
+							state: unknown;
+						}[]
+					>`
 				select a.current_configuration_revision::text, ap.status, ap.desired_state,
 					ap.service_availability, ap.workload_revision::text, ap.fence::text, w.state
 				from platform.agents a
@@ -526,42 +531,42 @@ export class PostgresConversationDispatchStoreV1
 				left join platform.workload_reconciliations w on w.agent_id = a.id
 					where a.id = ${input.claim.agentId}
 				`;
-				if (!agent)
-					throw new DispatchCapacityUnavailable("capacity_unavailable");
-				const state = await ownedState(transaction, input.claim);
-				if (!state) throw new StaleDispatchLease();
-				const pendingIsolation = await readGenerationIsolation(
-					transaction,
-					input.claim.conversationId,
-					input.claim.sessionGeneration,
-				);
-				if (
-					pendingIsolation &&
-					input.claim.operation !== "conversation.turn.stop.v1"
-				)
-					throw new StaleDispatchLease();
-				if (
-					isTurn(input.claim.operation) &&
-					state.execution.status === "submitted"
-				) {
-					let workload: WorkloadReconciliationStateV1;
-					let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
-					try {
-						const decoded = decodePersistedWorkloadStateV1(
-							agent?.state,
-							input.claim.agentId,
-						);
-						if (!agent || !decoded || decoded.legacy) throw new Error();
-						workload = decoded.state;
-						desired = validateAgentWorkloadDesiredV1(
-							workload.verified?.deployment,
-						);
-					} catch {
+					if (!agent)
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
-					}
-					const [occupancy] = await transaction<
-						{ processing: string; unknown: string }[]
-					>`
+					const state = await ownedState(transaction, input.claim);
+					if (!state) throw new StaleDispatchLease();
+					const pendingIsolation = await readGenerationIsolation(
+						transaction,
+						input.claim.conversationId,
+						input.claim.sessionGeneration,
+					);
+					if (
+						pendingIsolation &&
+						input.claim.operation !== "conversation.turn.stop.v1"
+					)
+						throw new StaleDispatchLease();
+					if (
+						isTurn(input.claim.operation) &&
+						state.execution.status === "submitted"
+					) {
+						let workload: WorkloadReconciliationStateV1;
+						let desired: ReturnType<typeof validateAgentWorkloadDesiredV1>;
+						try {
+							const decoded = decodePersistedWorkloadStateV1(
+								agent?.state,
+								input.claim.agentId,
+							);
+							if (!agent || !decoded || decoded.legacy) throw new Error();
+							workload = decoded.state;
+							desired = validateAgentWorkloadDesiredV1(
+								workload.verified?.deployment,
+							);
+						} catch {
+							throw new DispatchCapacityUnavailable("capacity_unavailable");
+						}
+						const [occupancy] = await transaction<
+							{ processing: string; unknown: string }[]
+						>`
 							select count(*) filter (where status = 'processing')::text as processing,
 									count(*) filter (where status = 'unknown' or (status <> 'processing' and exists (
 										select 1 from platform.conversation_generation_tombstones t
@@ -571,44 +576,75 @@ export class PostgresConversationDispatchStoreV1
 							from platform.conversation_executions where agent_id = ${input.claim.agentId}
 								and (status in ('processing', 'unknown') or exists (select 1 from platform.conversation_generation_tombstones t where t.execution_id = conversation_executions.execution_id and t.status = 'pending'))
 						`;
-					let capacityDecision: ReturnType<
-						typeof decideConversationDispatchCapacityV1
-					>;
-					try {
-						// The Core decision consumes this locked snapshot, before any occupied state is written.
-						capacityDecision = decideConversationDispatchCapacityV1({
-							agentId: input.claim.agentId,
-							modelConfigurationRevision:
-								input.claim.modelConfigurationRevision,
-							configurationRevision: requireSafeCounter(
-								agent.current_configuration_revision,
-								1,
-							),
-							status: agent.status,
-							desiredState: agent.desired_state,
-							serviceAvailability: agent.service_availability,
-							workloadRevision: requireSafeCounter(agent.workload_revision, 1),
-							fence: requireSafeCounter(agent.fence, 1),
-							workload,
-							deployment: {
-								agentId: desired.agentId,
-								configurationRevision: desired.configRevision,
-								interactionMode: desired.runtimeManifest.interactionMode,
-								imageDigest: desired.imageDigest,
-								resourceProfileRef: desired.resourceProfileRef,
-							},
-							occupancy: {
-								processing: requireSafeCounter(occupancy?.processing),
-								unknown: requireSafeCounter(occupancy?.unknown),
-							},
-						});
-					} catch (error) {
-						if (error instanceof DispatchCapacityUnavailable) throw error;
-						throw new DispatchCapacityUnavailable("capacity_unavailable");
-					}
-					if (capacityDecision !== "admit")
-						throw new DispatchCapacityUnavailable(capacityDecision);
-					const rows = await transaction<{ execution_id: string }[]>`
+						let capacityDecision: ReturnType<
+							typeof decideConversationDispatchCapacityV1
+						>;
+						try {
+							// The Core decision consumes this locked snapshot, before any occupied state is written.
+							capacityDecision = decideConversationDispatchCapacityV1({
+								agentId: input.claim.agentId,
+								modelConfigurationRevision:
+									input.claim.modelConfigurationRevision,
+								configurationRevision: requireSafeCounter(
+									agent.current_configuration_revision,
+									1,
+								),
+								status: agent.status,
+								desiredState: agent.desired_state,
+								serviceAvailability: agent.service_availability,
+								workloadRevision: requireSafeCounter(
+									agent.workload_revision,
+									1,
+								),
+								fence: requireSafeCounter(agent.fence, 1),
+								workload,
+								deployment: {
+									agentId: desired.agentId,
+									configurationRevision: desired.configRevision,
+									interactionMode: desired.runtimeManifest.interactionMode,
+									imageDigest: desired.imageDigest,
+									resourceProfileRef: desired.resourceProfileRef,
+								},
+								occupancy: {
+									processing: requireSafeCounter(occupancy?.processing),
+									unknown: requireSafeCounter(occupancy?.unknown),
+								},
+							});
+						} catch (error) {
+							if (error instanceof DispatchCapacityUnavailable) throw error;
+							throw new DispatchCapacityUnavailable("capacity_unavailable");
+						}
+						if (capacityDecision === "agent_not_running") {
+							await applyTransition(transaction, state, input.claim, {
+								executionStatus: "failed",
+								conversationStatus: "ready",
+							});
+							if (input.claim.messageId) {
+								const messages = await transaction<{ message_id: string }[]>`
+								update platform.conversation_messages
+								set status = 'failed', failure_code = 'AGENT_NOT_RUNNING',
+									updated_at = clock_timestamp()
+								where message_id = ${input.claim.messageId}
+									and execution_id = ${input.claim.executionId}
+									and conversation_id = ${input.claim.conversationId}
+									and status = 'submitted'
+								returning message_id
+							`;
+								if (messages.length !== 1) throw new StaleDispatchLease();
+							}
+							await closeOutbox(
+								transaction,
+								state,
+								input.claim,
+								"failed",
+								"AGENT_NOT_RUNNING",
+							);
+							stopped = true;
+							return;
+						}
+						if (capacityDecision !== "admit")
+							throw new DispatchCapacityUnavailable(capacityDecision);
+						const rows = await transaction<{ execution_id: string }[]>`
 					update platform.conversation_executions
 					set status = 'unknown', updated_at = clock_timestamp()
 					where execution_id = ${input.claim.executionId}
@@ -618,10 +654,12 @@ export class PostgresConversationDispatchStoreV1
 						and status = 'submitted'
 					returning execution_id
 				`;
-					if (rows.length !== 1) throw new StaleDispatchLease();
-				}
-				await renewLease(transaction, input.claim, input.leaseDurationMs);
-			});
+						if (rows.length !== 1) throw new StaleDispatchLease();
+					}
+					await renewLease(transaction, input.claim, input.leaseDurationMs);
+				},
+			);
+			return prepared && stopped ? "agent_not_running" : prepared;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;

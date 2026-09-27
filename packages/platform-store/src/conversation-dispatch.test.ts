@@ -51,6 +51,11 @@ afterEach(async () => {
 	await client.unsafe(
 		"drop function if exists platform.conversation_dispatch_failure()",
 	);
+	await client.unsafe(`drop trigger if exists stopped_dispatch_failure
+		on platform.outbox_items`);
+	await client.unsafe(
+		"drop function if exists platform.stopped_dispatch_failure()",
+	);
 	await client`truncate platform.conversation_generation_tombstones,
 		platform.task_control_records, platform.task_authorization_records,
 		platform.file_accesses, platform.files, platform.conversation_events,
@@ -647,13 +652,78 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						claim: decision.claim,
 						leaseDurationMs: 30_000,
 					}),
-				).toBe("capacity_unavailable");
-				expect((await dispatchState(work))?.execution_status).toBe("submitted");
+				).toBe(
+					drift === "stopped" ? "agent_not_running" : "capacity_unavailable",
+				);
+				const observed = await dispatchState(work);
+				expect(observed?.execution_status).toBe(
+					drift === "stopped" ? "failed" : "submitted",
+				);
+				expect(observed?.status).toBe(
+					drift === "stopped" ? "failed" : "processing",
+				);
+				if (drift === "stopped") {
+					const [message] = await client<
+						{ status: string; failure_code: string }[]
+					>`
+						select status, failure_code from platform.conversation_messages
+						where message_id = ${work.messageId}
+					`;
+					expect(message).toMatchObject({
+						status: "failed",
+						failure_code: "AGENT_NOT_RUNNING",
+					});
+				}
 			} finally {
 				await store.close();
 			}
 		},
 	);
+
+	it("rolls back the stopped Agent failure if the outbox cannot close", async () => {
+		const work = await seed();
+		await client`update platform.agent_applications set status = 'stopped',
+			desired_state = 'stopped', service_availability = null
+			where agent_id = 'agent-dispatch'`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await client.unsafe(`create function platform.stopped_dispatch_failure() returns trigger language plpgsql as $$ begin
+				if new.status = 'failed' then raise exception 'synthetic outbox failure'; end if; return new; end $$`);
+			await client.unsafe(`create trigger stopped_dispatch_failure before update on platform.outbox_items
+				for each row execute function platform.stopped_dispatch_failure()`);
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).rejects.toThrow("Conversation dispatch store is unavailable");
+			expect((await dispatchState(work))?.execution_status).toBe("submitted");
+			expect((await dispatchState(work))?.status).toBe("processing");
+			const [message] = await client<
+				{ status: string; failure_code: string | null }[]
+			>`
+				select status, failure_code from platform.conversation_messages
+				where message_id = ${work.messageId}
+			`;
+			expect(message).toMatchObject({
+				status: "submitted",
+				failure_code: null,
+			});
+			await client.unsafe(
+				"drop trigger stopped_dispatch_failure on platform.outbox_items",
+			);
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe("agent_not_running");
+			expect((await dispatchState(work))?.execution_status).toBe("failed");
+		} finally {
+			await store.close();
+		}
+	});
 
 	it("allows occupied execution recovery and controls without a remaining capacity profile", async () => {
 		const work = await seed(undefined, { executionStatus: "processing" });

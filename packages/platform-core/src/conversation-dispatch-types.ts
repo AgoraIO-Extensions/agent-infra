@@ -164,7 +164,9 @@ export interface ConversationDispatchStorePortV1 {
 	prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean | "capacity_wait" | "capacity_unavailable">;
+	}): Promise<
+		boolean | "capacity_wait" | "capacity_unavailable" | "agent_not_running"
+	>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;

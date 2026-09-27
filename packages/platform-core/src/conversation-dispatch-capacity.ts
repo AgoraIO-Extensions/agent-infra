@@ -29,7 +29,9 @@ interface CapacityState {
 /** Recovery and controls do not call this new-execution admission decision. */
 export function decideConversationDispatchCapacityV1(
 	state: CapacityState,
-): "admit" | "capacity_wait" | "capacity_unavailable" {
+): "admit" | "capacity_wait" | "capacity_unavailable" | "agent_not_running" {
+	if (["stopped", "disabled", "creation_failed"].includes(state.status ?? ""))
+		return "agent_not_running";
 	const { workload, deployment } = state;
 	const verified = workload.verified;
 	const capacity = verified?.executionCapacity;
