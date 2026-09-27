@@ -128,8 +128,11 @@ export function ConnectionsPage() {
 		prepareAttempted.current = accessRequestId;
 		prepareConnect.mutate(accessRequestId);
 	}, [accessRequestId, requestReady, prepareConnect.mutate]);
+	const [completedAccessRequestId, setCompletedAccessRequestId] =
+		useState<string>();
 	const approvedAccessRequestId =
 		requestReady &&
+		completedAccessRequestId !== accessRequestId &&
 		prepareConnect.data?.requestId === accessRequestId &&
 		prepareConnect.data?.providerId === approvedProvider &&
 		Date.parse(prepareConnect.data?.connectExpiresAt ?? "") > Date.now()
@@ -140,8 +143,6 @@ export function ConnectionsPage() {
 		queryFn: connectionApi.getConnections,
 	});
 	const [newCredentialRequestId, setNewCredentialRequestId] =
-		useState<string>();
-	const [completedAccessRequestId, setCompletedAccessRequestId] =
 		useState<string>();
 	const reusableConnections = (
 		overview.data?.overview.connections ?? []
@@ -234,36 +235,45 @@ export function ConnectionsPage() {
 			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
 		},
 	});
+	async function completeAccessRequest(requestId: string) {
+		setCompletedAccessRequestId(requestId);
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: ["approved-connection-request", requestId],
+			}),
+			queryClient.invalidateQueries({
+				queryKey: ["connection-access-requests"],
+			}),
+			queryClient.invalidateQueries({
+				queryKey: ["connection-access-options"],
+			}),
+		]);
+	}
 	const approvedUpgrade = useMutation({
 		mutationFn: connectionApi.upgradeApprovedConnection,
 		onSuccess: async (_result, variables) => {
-			setCompletedAccessRequestId(variables.accessRequestId);
+			await completeAccessRequest(variables.accessRequestId);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-			await queryClient.invalidateQueries({
-				queryKey: ["connection-access-requests"],
-			});
-			await queryClient.invalidateQueries({
-				queryKey: ["connection-access-options"],
-			});
-			await queryClient.invalidateQueries({
-				queryKey: ["approved-connection-request", variables.accessRequestId],
-			});
 			setUpgradeNotice("已使用现有凭证完成连接，可以确认客户端授权。");
 		},
 	});
-	const connectCredential = (
+	const connectCredential = async (
 		body: ProviderCredentialRequest,
 		targetId = reconnectTargetId,
-	) =>
-		targetId
-			? connectionApi.reauthorizeProviderConnection({
-					connectionId: targetId,
-					body,
-				})
-			: connectionApi.connectProviderCredential({
-					...body,
-					accessRequestId: approvedAccessRequestId,
-				});
+	) => {
+		if (targetId)
+			return connectionApi.reauthorizeProviderConnection({
+				connectionId: targetId,
+				body,
+			});
+		const requestId = approvedAccessRequestId;
+		const result = await connectionApi.connectProviderCredential({
+			...body,
+			accessRequestId: requestId,
+		});
+		if (requestId) await completeAccessRequest(requestId);
+		return result;
+	};
 	const connectBitbucket = async (accessToken: string) => {
 		setBitbucketPending(true);
 		setBitbucketError(null);

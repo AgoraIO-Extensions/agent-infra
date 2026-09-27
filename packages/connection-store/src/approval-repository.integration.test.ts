@@ -583,6 +583,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					"disclaimer",
 					"approvers",
 					"default-duration",
+					"provider-disclaimer",
 				] as const) {
 					const incompleteId = `incomplete-${missing}-${suffix}`;
 					const incompleteDraft: ApprovalPolicyDraft = {
@@ -621,6 +622,26 @@ describe("PostgreSQL Connection access approval catalog", () => {
 							},
 						],
 					};
+					if (missing === "provider-disclaimer") {
+						const foreignDisclaimerId = `foreign-disclaimer-${suffix}`;
+						await repository.createDisclaimerDraft({
+							id: foreignDisclaimerId,
+							kind: "PROVIDER",
+							providerId: "another-provider",
+							content: "Terms for another Provider",
+							locale: "zh-CN",
+							materialChange: false,
+							ownerMetadata: { owner: "integration" },
+						});
+						await repository.publishDisclaimer({
+							actorPrincipalId: adminId,
+							disclaimerVersionId: foreignDisclaimerId,
+						});
+						incompleteDraft.disclaimerVersionIds = [
+							disclaimerId,
+							foreignDisclaimerId,
+						];
+					}
 					await repository.createPolicyDraft(incompleteDraft);
 					expect(await repository.getPolicyDraft(incompleteId)).toMatchObject({
 						...incompleteDraft,

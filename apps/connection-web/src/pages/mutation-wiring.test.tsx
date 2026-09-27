@@ -1000,6 +1000,50 @@ describe("Connection 管理 mutation wiring", () => {
 		);
 	});
 
+	it("新凭证连接完成后不因账号列表刷新重新打开窗口或复用已消费申请", async () => {
+		const initial = await api.getConnections();
+		const updated = await api.getConnections();
+		const existing = updated.overview.connections.find(
+			(connection) => connection.providerId === "confluence",
+		);
+		if (!existing) throw new Error("Confluence fixture missing");
+		updated.overview.connections.push({
+			...existing,
+			id: "connection-confluence-new",
+			displayName: "New Confluence",
+		});
+		api.getConnections
+			.mockResolvedValueOnce(initial)
+			.mockResolvedValueOnce(updated);
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=confluence&intent=connect&accessRequestId=request-approved",
+		);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "连接其他账号" }),
+		);
+		fireEvent.change(await screen.findByLabelText("Confluence 密码"), {
+			target: { value: "fixture-password" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		await waitFor(() =>
+			expect(api.getConnectionAccessRequest).toHaveBeenCalledTimes(2),
+		);
+		await waitFor(() =>
+			expect(screen.queryByLabelText("Confluence 密码")).toBeNull(),
+		);
+		expect(screen.queryByRole("heading", { name: "选择已有连接" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /Confluence 已连接/ }));
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		expect(screen.queryByLabelText("Confluence 密码")).toBeNull();
+		expect(api.connectProviderCredential).toHaveBeenCalledOnce();
+	});
+
 	it("不接受 URL 中伪造或不匹配的批准申请", async () => {
 		approvedFor("jira");
 		api.getConnectionAccessRequest.mockResolvedValueOnce({

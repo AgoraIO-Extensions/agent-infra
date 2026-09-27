@@ -855,7 +855,11 @@ export class PostgresConnectionApprovalRepository {
 					 JOIN connection_disclaimer_versions disclaimer
 						ON disclaimer.id = link.disclaimer_version_id
 					 WHERE link.policy_version_id = ${input.policyVersionId}
-						AND disclaimer.status <> 'PUBLISHED') AS invalid_disclaimer_count,
+						AND (disclaimer.status <> 'PUBLISHED' OR (
+							disclaimer.kind = 'PROVIDER' AND disclaimer.provider_id IS DISTINCT FROM (
+								SELECT provider FROM connection_provider_releases WHERE id = ${policy.provider_release_id}
+							)
+						))) AS invalid_disclaimer_count,
 					(SELECT count(*)::int FROM connection_approval_stages stage
 					 WHERE stage.policy_version_id = ${input.policyVersionId}
 						AND (
