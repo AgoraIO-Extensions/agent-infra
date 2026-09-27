@@ -882,6 +882,50 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					selfReviewOption.presentationId,
 				);
 				const blockedRequestId = `approval-blocked-${suffix}`;
+				if (!otherPrincipalOption)
+					throw new Error("Applicant option is missing");
+				await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${approverId}`;
+				const inactiveRequestId = `inactive-approver-${suffix}`;
+				await requestRepository.createRequest({
+					applicantPrincipalId: applicantId,
+					capabilityProfileId: profileId,
+					disclaimerConfirmations: [
+						{
+							contentSha256: disclaimerDigest,
+							disclaimerVersionId: disclaimerId,
+							locale: "zh-CN",
+						},
+					],
+					duration: { days: 90, kind: "FINITE" },
+					id: inactiveRequestId,
+					policyVersionId: policyId,
+					presentationId: otherPrincipalOption.presentationId,
+					providerReleaseId: releaseId,
+					purpose: "Inactive approver needs rerouting",
+				});
+				expect(
+					(await requestRepository.getRequest(applicantId, inactiveRequestId))
+						.state,
+				).toBe("ROUTING_BLOCKED");
+				expect(
+					(await requestRepository.listRoutingBlocked(adminId)).some(
+						(request) => request.id === inactiveRequestId,
+					),
+				).toBe(true);
+				await requestRepository.cancelRequest({
+					principalId: applicantId,
+					requestId: inactiveRequestId,
+				});
+				for (const recipient of [adminId, applicantId]) {
+					await requestRepository.markNotifications(
+						recipient,
+						(await requestRepository.listNotifications(recipient)).items
+							.filter((item) => item.businessId === inactiveRequestId)
+							.map((item) => item.id),
+						true,
+					);
+				}
+				await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${approverId}`;
 				await requestRepository.createRequest({
 					applicantPrincipalId: approverId,
 					capabilityProfileId: profileId,

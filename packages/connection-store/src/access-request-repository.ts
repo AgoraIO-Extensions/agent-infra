@@ -80,6 +80,7 @@ type StageApproverRow = {
 	ordinal: number;
 	policy_stage_id: string;
 	principal_id: string;
+	principal_status: string;
 	quorum_count: number | null;
 	quorum_type: "ALL" | "ANY" | "AT_LEAST_N";
 	timeout_seconds: number;
@@ -1525,12 +1526,14 @@ export class PostgresConnectionAccessRequestRepository
 				SELECT stage.id AS policy_stage_id, stage.ordinal, stage.name,
 					stage.quorum_type, stage.quorum_count, stage.timeout_seconds,
 					approver.approver_principal_id AS principal_id,
-					approver.display_snapshot
+					approver.display_snapshot, principal.status AS principal_status
 				FROM connection_approval_stages stage
 				JOIN connection_approval_stage_approvers approver
 					ON approver.stage_id = stage.id
+				JOIN connection_principals principal ON principal.id = approver.approver_principal_id
 				WHERE stage.policy_version_id = ${input.policyVersionId}
 				ORDER BY stage.ordinal, approver.approver_principal_id
+				FOR SHARE OF principal
 			`;
 			const stages = [...new Set(stageRows.map((row) => row.ordinal))];
 			if (stages.length < 1 || stages[0] !== 1) {
@@ -1540,7 +1543,9 @@ export class PostgresConnectionAccessRequestRepository
 			for (const ordinal of stages) {
 				const rows = stageRows.filter((row) => row.ordinal === ordinal);
 				const eligible = rows.filter(
-					(row) => row.principal_id !== input.applicantPrincipalId,
+					(row) =>
+						row.principal_id !== input.applicantPrincipalId &&
+						row.principal_status === "ACTIVE",
 				);
 				const first = rows[0];
 				if (!first) invalid("Approval stage is unavailable");
@@ -1585,7 +1590,9 @@ export class PostgresConnectionAccessRequestRepository
 			for (const ordinal of stages) {
 				const rows = stageRows.filter((row) => row.ordinal === ordinal);
 				const eligible = rows.filter(
-					(row) => row.principal_id !== input.applicantPrincipalId,
+					(row) =>
+						row.principal_id !== input.applicantPrincipalId &&
+						row.principal_status === "ACTIVE",
 				);
 				const first = rows[0];
 				if (!first) invalid("Approval stage is unavailable");

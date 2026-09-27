@@ -1404,7 +1404,9 @@ function ConnectorManagementWorkspace(props: {
 		selected?.status === "ACTIVE" &&
 		!selected.requiresReconnect &&
 		(!selected.accessAuthorization ||
-			(selected.accessAuthorization.state === "ACTIVE" &&
+			(["ACTIVE", "REAPPROVAL_REQUIRED"].includes(
+				selected.accessAuthorization.state,
+			) &&
 				(!selected.accessAuthorization.validUntil ||
 					Date.parse(selected.accessAuthorization.validUntil) > Date.now())));
 

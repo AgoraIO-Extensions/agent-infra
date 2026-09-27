@@ -455,36 +455,52 @@ describe("Connection 管理 mutation wiring", () => {
 		).toBe("连接已升级，可以重新确认客户端授权。");
 	});
 
-	it("审批到期后不再提供客户端授权，并显示重新申请入口", async () => {
-		const overview = await api.getConnections();
-		api.getConnections.mockResolvedValueOnce({
-			...overview,
-			overview: {
-				...overview.overview,
-				connections: overview.overview.connections.map((connection) =>
-					connection.id === "connection-personal"
-						? {
-								...connection,
-								accessAuthorization: {
-									state: "EXPIRED",
-									validityKind: "FINITE",
-									validUntil: "2026-01-01T00:00:00.000Z",
-								},
-							}
-						: connection,
-				),
-			},
-		});
-		renderPage(<ConnectionsPage />);
-		fireEvent.click(
-			await screen.findByRole("button", { name: /GitHub 已连接/ }),
-		);
-		expect(
-			(screen.getByRole("button", { name: "授权客户端" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
-		expect(screen.getByRole("button", { name: "重新申请" })).toBeTruthy();
-	});
+	it.each(["EXPIRED", "REAPPROVAL_REQUIRED"])(
+		"按 %s 资格状态展示客户端授权入口",
+		async (state) => {
+			const overview = await api.getConnections();
+			api.getConnections.mockResolvedValueOnce({
+				...overview,
+				overview: {
+					...overview.overview,
+					connections: overview.overview.connections.map((connection) =>
+						connection.id === "connection-personal"
+							? {
+									...connection,
+									accessAuthorization: {
+										state,
+										validityKind: "FINITE",
+										validUntil:
+											state === "EXPIRED"
+												? "2026-01-01T00:00:00.000Z"
+												: "2030-01-01T00:00:00.000Z",
+									},
+								}
+							: connection,
+					),
+				},
+			});
+			renderPage(<ConnectionsPage />);
+			fireEvent.click(
+				await screen.findByRole("button", { name: /GitHub 已连接/ }),
+			);
+			expect(
+				(
+					screen.getByRole("button", {
+						name: "授权客户端",
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(state === "EXPIRED");
+			if (state === "EXPIRED")
+				expect(screen.getByRole("button", { name: "重新申请" })).toBeTruthy();
+			else {
+				fireEvent.click(screen.getByRole("button", { name: "授权客户端" }));
+				await waitFor(() =>
+					expect(api.createAuthorizationPreview).toHaveBeenCalled(),
+				);
+			}
+		},
+	);
 
 	it("有效期内断开的原账号走同账号重连 API", async () => {
 		const overview = await api.getConnections();
