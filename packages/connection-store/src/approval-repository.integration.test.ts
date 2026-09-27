@@ -811,6 +811,13 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					],
 				});
 				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now(), revision = revision + 1 WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+				await expect(sql`
+					INSERT INTO connection_access_policy_durations (id, policy_version_id, duration_kind, duration_days)
+					VALUES (${`invalid-duration-${suffix}`}, ${policyId}, 'FINITE', NULL)
+				`).rejects.toMatchObject({
+					code: "23514",
+					constraint_name: "connection_access_policy_durations_check",
+				});
 				await expect(
 					repository.publishPolicy({
 						actorPrincipalId: adminId,
@@ -842,6 +849,18 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					FROM connection_access_policy_versions WHERE id = ${policyId}
 				`;
 				expect(policy).toEqual({ revision: "2", status: "PUBLISHED" });
+				await expect(sql`
+					INSERT INTO connection_access_requests (
+						id, applicant_principal_id, provider_release_id, capability_profile_id, policy_version_id,
+						purpose, duration_kind, duration_days, state, expires_at
+					) VALUES (
+						${`invalid-duration-request-${suffix}`}, ${applicantId}, ${releaseId}, ${profileId}, ${policyId},
+						'Invalid finite duration', 'FINITE', NULL, 'CANCELED', now() + interval '1 day'
+					)
+				`).rejects.toMatchObject({
+					code: "23514",
+					constraint_name: "connection_access_requests_check",
+				});
 				await expect(repository.getPolicyDraft(policyId)).rejects.toThrow(
 					"Policy draft is unavailable",
 				);

@@ -186,7 +186,7 @@ CREATE TABLE connection_access_policy_durations (
   duration_kind TEXT NOT NULL CHECK (duration_kind IN ('FINITE', 'PERMANENT')),
   duration_days INTEGER,
   CHECK (
-    (duration_kind = 'FINITE' AND duration_days BETWEEN 1 AND 3650)
+    (duration_kind = 'FINITE' AND duration_days IS NOT NULL AND duration_days BETWEEN 1 AND 3650)
     OR (duration_kind = 'PERMANENT' AND duration_days IS NULL)
   )
 );
@@ -296,7 +296,7 @@ CREATE TABLE connection_access_requests (
     id, applicant_principal_id, provider_release_id, capability_profile_id
   ),
   CHECK (
-    (duration_kind = 'FINITE' AND duration_days BETWEEN 1 AND 3650)
+    (duration_kind = 'FINITE' AND duration_days IS NOT NULL AND duration_days BETWEEN 1 AND 3650)
     OR (duration_kind = 'PERMANENT' AND duration_days IS NULL)
   ),
   CHECK (state <> 'APPROVED_PENDING_CONNECTION' OR connect_expires_at IS NOT NULL)
