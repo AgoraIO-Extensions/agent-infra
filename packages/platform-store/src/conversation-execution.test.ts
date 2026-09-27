@@ -1246,6 +1246,64 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
+	it("accepts only one of two distinct messages racing into an idle conversation", async () => {
+		const noSupplement = {
+			...authority,
+			supportsSupplementaryInstruction: false,
+		};
+		const first = createConversation(noSupplement);
+		const second = createConversation(noSupplement);
+		try {
+			await first.useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_distinct_race",
+				requestId: "request_create_distinct_race",
+				traceId: "trace_create_distinct_race",
+			});
+			const messages = ["first contender", "second contender"];
+			const results = await Promise.all(
+				messages.map((text, index) =>
+					(index === 0 ? first : second).useCase.accept({
+						schemaVersion: 1,
+						command: "message",
+						conversationId: "conversation_id_1",
+						text,
+						idempotencyKey: `message_distinct_race_${index}`,
+						requestId: `request_message_distinct_race_${index}`,
+						traceId: `trace_message_distinct_race_${index}`,
+					}),
+				),
+			);
+			expect(results.map(({ outcome }) => outcome).toSorted()).toEqual([
+				"accepted",
+				"busy",
+			]);
+			const winner = results.findIndex(({ outcome }) => outcome === "accepted");
+			expect(
+				await client`select text from platform.conversation_messages`,
+			).toEqual([{ text: messages[winner] }]);
+			expect(
+				await client`select idempotency_key from platform.idempotency_records
+					where command_type = 'message'`,
+			).toEqual([{ idempotency_key: `message_distinct_race_${winner}` }]);
+			expect(await commandEffectCounts()).toEqual({
+				conversations: 1,
+				messages: 1,
+				executions: 1,
+				stops: 0,
+				outbox: 1,
+				audit: 1,
+				idempotency: 2,
+			});
+		} finally {
+			await Promise.all([
+				first.transaction.close(),
+				second.transaction.close(),
+			]);
+		}
+	});
+
 	it("serializes concurrent same-key conversation creation", async () => {
 		const first = createConversation();
 		const second = createConversation();
