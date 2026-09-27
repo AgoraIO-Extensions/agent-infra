@@ -350,6 +350,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							data: JSON.stringify(event),
 						});
 					}
+				} catch (error) {
+					if (
+						!(error instanceof RuntimeHostError) ||
+						error.code !== "RUNTIME_GRANT_EXPIRED"
+					)
+						throw error;
 				} finally {
 					abort.abort();
 				}

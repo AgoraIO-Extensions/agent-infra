@@ -188,6 +188,46 @@ describe("Runtime V3 authenticated HTTP", () => {
 			).status,
 		).toBe(403);
 	});
+	it("closes the real Host stream at grant expiry without a Hono error frame", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(fixtureNow);
+		const { app, host } = await setup();
+		try {
+			const fixture = submitV3Fixture();
+			const accepted = await app.request(
+				"/internal/runtime/v3/turns",
+				post(signV3Fixture(fixture, "turn.submit")),
+			);
+			expect(accepted.status).toBe(200);
+			const { hostSessionRef } = (await accepted.json()) as {
+				hostSessionRef: string;
+			};
+			const query = signV3Fixture(
+				{
+					...fixture,
+					input: undefined,
+					hostSessionRef,
+					consumer: "platform_worker_persistence" as const,
+					afterCursor: null,
+				},
+				"events.persist",
+			);
+			const response = await app.request(
+				"/internal/runtime/v3/events/stream",
+				post(query),
+			);
+			expect(response.status).toBe(200);
+			const body = response.text();
+			await vi.advanceTimersByTimeAsync(30_000);
+			const stream = await body;
+			expect(stream).toContain("event: status\n");
+			expect(stream).toContain("id: ");
+			expect(stream).not.toContain("event: error\n");
+		} finally {
+			await host.close();
+			vi.useRealTimers();
+		}
+	});
 	it("rejects foreign transport/Worker identities and forged bodies before execution", async () => {
 		const { app, driver } = await setup();
 		const submit = signV3Fixture(submitV3Fixture(), "turn.submit");
