@@ -1328,6 +1328,42 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("DataLego 即时重连显式使用目标账号而不是新建接口", async () => {
+		const overview = await api.getConnections();
+		api.getConnections.mockResolvedValueOnce({
+			...overview,
+			overview: {
+				...overview.overview,
+				connections: overview.overview.connections.map((connection) =>
+					connection.id === "connection-datalego-old"
+						? {
+								...connection,
+								requiresReconnect: true,
+								accessAuthorization: {
+									state: "DISCONNECTED",
+									validityKind: "PERMANENT",
+									validUntil: null,
+								},
+							}
+						: connection,
+				),
+			},
+		});
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "DataLego 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+		await waitFor(() =>
+			expect(api.reauthorizeProviderConnection).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.reauthorizeProviderConnection)[0]?.[0]).toEqual({
+			connectionId: "connection-datalego-old",
+			body: { providerId: "datalego" },
+		});
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+	});
+
 	it("连接页使用浏览器会话调用 DataLego credential API", async () => {
 		approvedFor("datalego");
 		renderPage(<ConnectionsPage />);

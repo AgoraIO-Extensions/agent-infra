@@ -211,10 +211,13 @@ export function ConnectionsPage() {
 			setUpgradeNotice("连接已升级，可以重新确认客户端授权。");
 		},
 	});
-	const connectCredential = (body: ProviderCredentialRequest) =>
-		reconnectTargetId
+	const connectCredential = (
+		body: ProviderCredentialRequest,
+		targetId = reconnectTargetId,
+	) =>
+		targetId
 			? connectionApi.reauthorizeProviderConnection({
-					connectionId: reconnectTargetId,
+					connectionId: targetId,
 					body,
 				})
 			: connectionApi.connectProviderCredential({
@@ -323,10 +326,10 @@ export function ConnectionsPage() {
 			setConfluencePending(false);
 		}
 	};
-	const connectDatalego = async () => {
+	const connectDatalego = async (targetId: string | null = null) => {
 		setDatalegoError(null);
 		try {
-			await connectCredential({ providerId: "datalego" });
+			await connectCredential({ providerId: "datalego" }, targetId);
 			setReconnectTargetId(null);
 			await queryClient.invalidateQueries({ queryKey: ["connections"] });
 		} catch (error) {
@@ -399,9 +402,12 @@ export function ConnectionsPage() {
 	});
 
 	const beginOAuth = () => oauth.begin(undefined, approvedAccessRequestId);
-	const openProviderCredential = (providerId: ConnectorProviderId) => {
+	const openProviderCredential = (
+		providerId: ConnectorProviderId,
+		targetId: string | null = null,
+	) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
-		else if (providerId === "datalego") void connectDatalego();
+		else if (providerId === "datalego") void connectDatalego(targetId);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "manhattan") setManhattanOpen(true);
 		else if (providerId === "jira") setJiraOpen(true);
@@ -788,6 +794,7 @@ export function ConnectionsPage() {
 								else
 									openProviderCredential(
 										connection.providerId as ConnectorProviderId,
+										connection.id,
 									);
 							} else
 								connectProvider(connection.providerId as ConnectorProviderId);
