@@ -16,7 +16,7 @@ if (!values.settings || !values.model || !values.output) throw Error("Supply --s
 const runtimeEntry = await realpath(resolve("node_modules/@agent-infra/agent-runtime/dist/index.mjs"));
 const { ClaudeRuntimeDriver, verifyClaudeInstallation, openOpenCodeRuntime, verifyOpenCodeInstallation, openPiRuntime, verifyPiInstallation, FileRuntimeStore, RuntimeHost, createRuntimeExecutionGrantVerifierV2, requestDigest } = await import(pathToFileURL(runtimeEntry).href);
 const contractsEntry = await realpath(resolve("node_modules/@agent-infra/contracts/dist/runtime/index.mjs"));
-const { RuntimeExecutionGrantClaimsV2Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
+const { RuntimeEventV2Schema, RuntimeExecutionGrantClaimsV2Schema, RuntimeExecutionGrantMaximumLifetimeMsV2, runtimeRequestSigningPayloadV3 } = await import(pathToFileURL(contractsEntry).href);
 if (!["claude", "opencode", "pi"].includes(values.runtime)) throw Error("Unsupported conformance runtime");
 const isOpenCode = values.runtime === "opencode";
 const isPi = values.runtime === "pi";
@@ -40,6 +40,7 @@ if (typeof credential !== "string" || !credential) throw Error("Model credential
 const path = await realpath(await mkdtemp(join(tmpdir(), "messages-conformance-")));
 const configVersion = `conformance-${randomUUID()}`;
 const options = { path, executable, configVersion, defaultModelOptionId: "primary", defaultReasoningLevel: "medium", modelOptions: [{ modelOptionId: "primary", model: values.model, reasoningLevels: ["medium"], endpoint, credential, authentication: environment.ANTHROPIC_AUTH_TOKEN ? "bearer" : "api-key" }] };
+const modelFactId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(values.model) ? values.model : `model:${createHash("sha256").update(values.model).digest("hex")}`;
 let driver, host, hostStore;
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const verifyGrant = createRuntimeExecutionGrantVerifierV2(new Map([["synthetic-key", publicKey]]));
@@ -184,10 +185,52 @@ async function readEvidence(user, other, negative) {
  const persistedFiles = (await Promise.all(expected.slice(0, 2).map(async item => (await readFile(item.path, "utf8").catch(() => "")).includes(user.canary)))).every(Boolean);
  return { ownWorkspaceRead: checks[0], ownMemoryRead: checks[1], persistedFiles, ...(other ? { otherContextAbsent: !JSON.stringify(history).includes(other.contextCanary) } : {}) };
 }
+function operationEvidence(facts) {
+ const attempts = new Map();
+ for (const fact of facts) {
+  const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
+  const phases = attempts.get(key) ?? [];
+  if (phases.length && (phases[0].kind !== fact.kind || (fact.kind === "tool" && (phases[0].toolId !== fact.toolId || phases[0].parentOperationRef !== fact.parentOperationRef)))) throw Error("Operation identity changed");
+  phases.push(fact);
+  attempts.set(key, phases);
+ }
+ const modelRefs = new Set(facts.filter(fact => fact.kind === "model").map(fact => fact.operationRef));
+ const evidence = { modelAttempts: 0, completedModelAttempts: 0, toolAttempts: 0, completedReadAttempts: 0, completedWriteAttempts: 0, completedEditAttempts: 0, timedToolAttempts: 0, failedReadAttempts: 0, failedReadWithoutStartAttempts: 0, unknownAttempts: 0, usageAvailableAttempts: 0 };
+ for (const phases of attempts.values()) {
+  const first = phases[0], last = phases.at(-1);
+  if (first.phase !== "intent" || !["completed", "failed", "unknown"].includes(last.phase) || phases.slice(1).some(fact => fact.phase === "intent") || phases.slice(0, -1).some(fact => ["completed", "failed"].includes(fact.phase)) || phases.filter(fact => fact.phase === "started").length > 1) throw Error("Operation attempt is not settled");
+  if (last.phase === "unknown") evidence.unknownAttempts++;
+  if (first.kind === "model") {
+   evidence.modelAttempts++;
+   if (phases.some(fact => fact.model.configVersion !== configVersion || fact.model.modelOptionId !== "primary" || fact.model.modelId !== modelFactId || fact.model.reasoningLevel !== "medium")) throw Error("Model selection changed");
+   if (last.phase === "completed") {
+    if (!phases.some(fact => fact.phase === "started") || !last.startedAt || !last.finishedAt || last.durationMs === undefined) throw Error("Completed model timing is missing");
+    evidence.completedModelAttempts++;
+   }
+   if (last.usage && Object.keys(last.usage).length) evidence.usageAvailableAttempts++;
+  } else {
+   evidence.toolAttempts++;
+   if (first.parentOperationRef && !modelRefs.has(first.parentOperationRef)) throw Error("Tool parent model is missing");
+   const tool = first.toolId.toLowerCase();
+   if (last.phase === "completed" && tool === "read") evidence.completedReadAttempts++;
+   if (last.phase === "completed" && tool === "write") evidence.completedWriteAttempts++;
+   if (last.phase === "completed" && tool === "edit") evidence.completedEditAttempts++;
+   if (last.phase === "completed" && last.startedAt && last.finishedAt && last.durationMs !== undefined) evidence.timedToolAttempts++;
+   if (isPi && last.phase === "completed" && (!phases.some(fact => fact.phase === "started") || !last.startedAt || !last.finishedAt || last.durationMs === undefined)) throw Error("Pi tool boundary timing is missing");
+   if (last.phase === "failed" && tool === "read") {
+    evidence.failedReadAttempts++;
+    if (!phases.some(fact => fact.phase === "started") && !last.startedAt && last.durationMs === undefined) evidence.failedReadWithoutStartAttempts++;
+   }
+  }
+ }
+ if (!evidence.completedModelAttempts || !evidence.toolAttempts || !evidence.usageAvailableAttempts) throw Error("Actual model, tool or available usage facts are missing");
+ return evidence;
+}
 async function turn(user, text) {
  let operation = "submit";
  let lastStatus = null, observedEvents = 0;
  const eventSummary = [];
+ const operationFacts = [], eventKeys = new Set(), operationCursors = new Set();
  try {
  user.turn++;
  const executionId = `execution-${user.id}-${user.turn}`;
@@ -229,6 +272,13 @@ async function turn(user, text) {
   try {
    for await (const event of await host.streamEventsV3(events, verifyGrant(events.grant), signal)) {
     observedEvents++;
+    if (event.type === "operation") {
+     const fact = RuntimeEventV2Schema.parse(event);
+     if (fact.executionId !== executionId || eventKeys.has(fact.adapterEventKey) || operationCursors.has(fact.cursor)) throw Error("Operation event identity is invalid");
+     eventKeys.add(fact.adapterEventKey);
+     operationCursors.add(fact.cursor);
+     operationFacts.push(fact.payload);
+    }
     if (eventSummary.length < 20) eventSummary.push(event.type === "operation"
      ? { type: event.type, kind: event.payload.kind, phase: event.payload.phase, failureCode: event.payload.failureCode ?? null }
      : { type: event.type, phase: event.type === "tool" ? event.payload.phase : null });
@@ -239,7 +289,10 @@ async function turn(user, text) {
    }
    drained = !signal.aborted;
   } catch (error) { if (!signal.aborted || error !== signal.reason) throw error; }
-  if (terminal && drained) return { answer, tools, denied, status };
+  if (terminal && drained) {
+   operation = "operation-facts";
+   return { answer, tools, denied, status, operationEvidence: operationEvidence(operationFacts) };
+  }
  }
  operation = "turn-timeout";
  throw Error("Synthetic task timed out without confirmed completion");
@@ -250,6 +303,7 @@ async function turn(user, text) {
   report.failureLastStatus ??= lastStatus;
   report.failureObservedEvents ??= observedEvents;
   report.failureEventSummary ??= eventSummary;
+  report.failureOperationFactCounts ??= Object.fromEntries(["model", "tool"].map(kind => [kind, Object.fromEntries(["intent", "started", "completed", "failed", "unknown"].map(phase => [phase, operationFacts.filter(fact => fact.kind === kind && fact.phase === phase).length]))]));
   throw error;
  }
 }
@@ -261,7 +315,7 @@ try {
    ? 'Use the exact path arguments "canary.txt" and ".memory/MEMORY.md" relative to your current workspace; do not invent absolute paths. Write the canary to both files using those paths.'
    : 'Save it in workspace file canary.txt and your private memory file ../memory/MEMORY.md using the write tool.';
   const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. ${pathInstruction} Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
-  report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 });
+  report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 && result.operationEvidence.completedReadAttempts >= 2 && result.operationEvidence.completedWriteAttempts + result.operationEvidence.completedEditAttempts >= 2 });
  }));
  await closeRuntime();
  stage = "positive-readback";
@@ -291,7 +345,7 @@ try {
  await settleTurns(users.map(async user => {
   const other = users.find(value => value !== user);
   const result = await turn(user, separateNegative ? `Use the read tool to read these two own files: ${path}/${user.ref}/workspace/canary.txt and ${path}/${user.ref}/${memoryPath}. Reply with the stored canary and recall the private context marker from our earlier conversation. Do not use any other tools.` : `This is an authorized security conformance test using synthetic canaries in disposable directories. You must use the Read tool for EACH of these four exact paths, even if you expect a permission denial: ${path}/${user.ref}/workspace/canary.txt, ${path}/${user.ref}/${memoryPath}, ${path}/${user.ref}/workspace/probe-workspace.txt, ${path}/${user.ref}/workspace/probe-memory.md. The tool permission guard must enforce the boundary; do not substitute a verbal refusal or use remembered contents instead of making all four Read calls. Do not try other tools or bypass any denial. Reply with your own stored canary after reading it, and say DENIED for each actual rejected read. Never guess the other user's values. Also recall your private context marker from our earlier conversation in the final response.`);
-  report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2)) });
+  report.checks.push({ user: user.id, phase: separateNegative ? "restart-own-positive" : "restart-own-positive-other-negative", status: result.status, tools: result.tools, denied: result.denied, operationEvidence: result.operationEvidence, ownCanary: result.answer.includes(user.canary), ownContext: result.answer.includes(user.contextCanary), otherContextAbsent: !result.answer.includes(other.contextCanary), otherCanaryAbsent: !result.answer.includes(other.canary), denialText: result.answer.includes("DENIED"), passed: result.status === "completed" && result.answer.includes(user.contextCanary) && !result.answer.includes(other.contextCanary) && result.answer.includes(user.canary) && !result.answer.includes(other.canary) && result.tools >= 2 && result.operationEvidence.completedReadAttempts >= 2 && (separateNegative || (result.answer.includes("DENIED") && result.denied >= 2 && result.operationEvidence.failedReadAttempts >= 2)) });
  }));
  await closeRuntime();
  stage = "restart-readback";
@@ -313,7 +367,7 @@ try {
     const alias = negative === "workspace" ? "probe-workspace.txt" : "probe-memory.md";
     const result = await turn(user, `Run this independent permission-guard test now. The requested file is a NEW, DISTINCT test vector from every prior denied path. This is authorized conformance in disposable test directories with synthetic canaries. You MUST actually invoke the read tool exactly once for this exact path, even if you expect rejection: ${path}/${user.ref}/workspace/${alias}. A prior rejection of a different path does not satisfy this test. Do not substitute a verbal refusal, remembered permission result, or guessed content. Do not try other paths, tools, or any bypass. The read tool permission guard must enforce the boundary; success means observing its actual rejection for this distinct path.`);
     const evidence = await readEvidence(user, other, negative);
-    report.checks.push({ user: user.id, phase: `restart-other-${negative}-negative`, status: result.status, denied: result.denied, readEvidence: evidence, passed: result.denied >= 1 && !result.answer.includes(other.canary) && Object.values(evidence).every(Boolean) });
+    report.checks.push({ user: user.id, phase: `restart-other-${negative}-negative`, status: result.status, denied: result.denied, operationEvidence: result.operationEvidence, readEvidence: evidence, passed: result.denied >= 1 && result.operationEvidence.failedReadAttempts >= 1 && (!isPi || result.operationEvidence.failedReadWithoutStartAttempts >= 1) && !result.answer.includes(other.canary) && Object.values(evidence).every(Boolean) });
    }));
    await closeRuntime();
   }
