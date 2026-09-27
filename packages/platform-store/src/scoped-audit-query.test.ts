@@ -854,7 +854,10 @@ describe("controlled PostgreSQL audit query", () => {
 			{ transaction: adapter },
 			{ newId: randomUUID },
 		);
-		const command = (phase: "intent" | "unknown", key: string) => ({
+		const command = (
+			phase: "intent" | "unknown" | "completed",
+			key: string,
+		) => ({
 			schemaVersion: 1 as const,
 			conversationId: f.conversationId,
 			executionId: f.executionId,
@@ -872,6 +875,9 @@ describe("controlled PostgreSQL audit query", () => {
 					operationRef: "operation-1",
 					attemptRef: "attempt-1",
 					phase,
+					...(phase === "completed"
+						? { finishedAt: new Date().toISOString(), resultRef: "result-1" }
+						: {}),
 					connection: {
 						serviceRef: "connection-service",
 						callRef: "bounded-call",
@@ -884,6 +890,12 @@ describe("controlled PostgreSQL audit query", () => {
 		try {
 			await events.persist(command("intent", "intent"));
 			await events.persist(command("unknown", "unknown"));
+			const [originalUnknown] =
+				await sql`select id, details from platform.audit_events where target_id = ${f.executionId} and action = 'execution.operation.observed' and details -> 'fact' ->> 'phase' = 'unknown'`;
+			if (!originalUnknown)
+				throw new Error("Original unknown audit is missing");
+			await events.persist(command("completed", "completed"));
+			const unknownQuery = request();
 			const result = await query.listAudit(
 				f.scope,
 				{
@@ -894,7 +906,7 @@ describe("controlled PostgreSQL audit query", () => {
 						result: "unknown",
 					},
 				},
-				request(),
+				unknownQuery,
 			);
 			expect(result.items).toHaveLength(1);
 			expect(result.items[0]).toMatchObject({
@@ -912,6 +924,60 @@ describe("controlled PostgreSQL audit query", () => {
 				},
 			});
 			expect(result.items[0]?.operation?.fact).not.toHaveProperty("finishedAt");
+			expect(result.items[0]?.auditId).toBe(originalUnknown.id);
+			expect(result.items[0]?.operation?.fact).toMatchObject({
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+			});
+			const terminalQuery = request();
+			const terminal = await query.listAudit(
+				f.scope,
+				{
+					...page,
+					filters: {
+						executionId: f.executionId,
+						action: "execution.operation.observed",
+						result: "completed",
+					},
+				},
+				terminalQuery,
+			);
+			expect(terminal.items).toHaveLength(1);
+			expect(terminal.items[0]).toMatchObject({
+				result: "completed",
+				operation: {
+					fact: {
+						operationRef: "operation-1",
+						attemptRef: "attempt-1",
+						phase: "completed",
+						resultRef: "result-1",
+					},
+				},
+			});
+			const terminalAuditId = terminal.items[0]?.auditId;
+			if (!terminalAuditId) throw new Error("Terminal audit is missing");
+			await expect(
+				query.getAudit(f.scope, originalUnknown.id, detail, request()),
+			).resolves.toMatchObject({ result: "unknown" });
+			const other = await fixture(
+				{ kind: "user", id: randomUUID() },
+				f.agentId,
+			);
+			for (const auditId of [originalUnknown.id, terminalAuditId])
+				await expect(
+					query.getAudit(other.scope, auditId, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+			const [count] =
+				await sql`select count(*)::int as total from platform.audit_events where target_id = ${f.executionId} and action = 'execution.operation.observed'`;
+			expect(count?.total).toBe(3);
+			const [unchangedUnknown] =
+				await sql`select details from platform.audit_events where id = ${originalUnknown.id}`;
+			expect(unchangedUnknown?.details).toEqual(originalUnknown.details);
+			for (const metadata of [unknownQuery, terminalQuery]) {
+				const [queryAudit] =
+					await sql`select count(*)::int as total from platform.audit_events where request_id = ${metadata.requestId} and action = 'audit.query.completed'`;
+				expect(queryAudit?.total).toBe(1);
+			}
 			const [stored] =
 				await sql`select outcome, details from platform.audit_events where id = ${result.items[0]?.auditId ?? "missing"}`;
 			expect(stored?.outcome).toBe("succeeded");

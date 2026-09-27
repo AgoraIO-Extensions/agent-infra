@@ -151,7 +151,7 @@ test.describe("audit page over assembled HTTP and PostgreSQL", () => {
 			databaseUrl: database.databaseUrl,
 		});
 		const producer = createConversationEventUseCaseV1({ transaction: events });
-		for (const phase of ["intent", "unknown"] as const) {
+		for (const phase of ["intent", "unknown", "completed"] as const) {
 			const key = `audit-tool-${phase}`;
 			const persisted = await producer.persist({
 				schemaVersion: 1,
@@ -170,6 +170,12 @@ test.describe("audit page over assembled HTTP and PostgreSQL", () => {
 						attemptRef: "audit-attempt",
 						toolId: "controlled-tool",
 						phase,
+						...(phase === "completed"
+							? {
+									finishedAt: new Date().toISOString(),
+									resultRef: "audit-result",
+								}
+							: {}),
 						connection: {
 							serviceRef: "connection-service",
 							callRef: "bounded-call",
@@ -242,7 +248,7 @@ test.describe("audit page over assembled HTTP and PostgreSQL", () => {
 		).toBeVisible();
 	}
 
-	test("pages actual producer attempts, keeps original Execution and separates an unknown tool", async ({
+	test("keeps an unknown tool fact and later terminal fact on the original Execution", async ({
 		page,
 	}, info) => {
 		await open(page);
@@ -290,6 +296,8 @@ test.describe("audit page over assembled HTTP and PostgreSQL", () => {
 		await expect(page.getByRole("dialog")).toContainText("platform_worker");
 		await expect(page.getByRole("dialog")).toContainText("关联未核实");
 		await expect(page.getByRole("dialog")).toContainText("未采集");
+		await expect(page.getByRole("dialog")).toContainText("audit-operation");
+		await expect(page.getByRole("dialog")).toContainText("audit-attempt");
 		await expect(page.locator("body")).not.toContainText(
 			"PRIVATE_SYNTHETIC_AUDIT_BODY",
 		);
@@ -298,6 +306,23 @@ test.describe("audit page over assembled HTTP and PostgreSQL", () => {
 			path: info.outputPath("audit-postgres-detail.png"),
 			animations: "disabled",
 		});
+		await page.keyboard.press("Escape");
+		await page.getByLabel("结果", { exact: true }).selectOption("completed");
+		await page.getByRole("button", { name: "查询", exact: true }).click();
+		await expect(
+			page.getByRole("button", { name: "查看审计详情" }),
+		).toHaveCount(1);
+		await page.getByRole("button", { name: "查看审计详情" }).click();
+		await expect(page.getByRole("dialog")).toContainText("操作已完成");
+		await expect(page.getByRole("dialog")).toContainText("audit-operation");
+		await expect(page.getByRole("dialog")).toContainText("audit-attempt");
+		await expect(page.getByRole("dialog")).toContainText("audit-result");
+		await page.keyboard.press("Escape");
+		await page.getByLabel("结果", { exact: true }).selectOption("");
+		await page.getByRole("button", { name: "查询", exact: true }).click();
+		await expect(
+			page.getByRole("button", { name: "查看审计详情" }),
+		).toHaveCount(3);
 		expect(
 			await page.evaluate(
 				() => document.documentElement.scrollWidth <= window.innerWidth,
