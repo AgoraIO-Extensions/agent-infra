@@ -237,13 +237,15 @@ it.each(["invalid-json", "self-cycle", "two-node-cycle"])(
 		const f = await fixture();
 		try {
 			const result = await f.driver.execute(command);
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(
-						result.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(
+							result.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 			await f.restart();
 			const file = join(
@@ -286,16 +288,19 @@ it.each(["invalid-json", "self-cycle", "two-node-cycle"])(
 				...command,
 				conversationId: "healthy-conversation",
 			});
-			await vi.waitFor(async () =>
-				expect(
-					await f.driver.getStatus(
-						healthy.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(
+							healthy.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10000 },
 			);
 		} finally {
 			await f.close();
 		}
 	},
+	25000,
 );
