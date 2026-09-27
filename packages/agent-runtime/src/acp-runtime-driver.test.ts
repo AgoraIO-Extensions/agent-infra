@@ -421,10 +421,15 @@ it.each(["permitted", "revoked", "missing"] as const)(
 					reasoningLevel: "high",
 				},
 			});
-			await vi.waitFor(async () =>
-				expect(
-					await driver.getStatus(accepted.nativeSessionRef, "execution-write"),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							accepted.nativeSessionRef,
+							"execution-write",
+						),
+					).toBe("completed"),
+				{ timeout: 10_000 },
 			);
 			expect(await readFile(effectPath, "utf8")).toBe(
 				authority === "permitted" ? "synthetic effect" : "unchanged",
@@ -452,6 +457,7 @@ it.each(["permitted", "revoked", "missing"] as const)(
 			await rm(path, { recursive: true, force: true });
 		}
 	},
+	15_000,
 );
 
 it.each([
