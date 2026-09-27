@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { connectionApi } from "../api";
 import { Button } from "../components/ui/button";
 import { ConsoleShell, PageError } from "../shell";
 import { EmptyState, PageHeader } from "../views";
 import "./approval-policies-page.css";
+
+function selectionId(item: { id: string; approverPrincipalId: string }) {
+	return JSON.stringify([item.id, item.approverPrincipalId]);
+}
 
 export function ApprovalQueuePage() {
 	const queryClient = useQueryClient();
@@ -17,14 +21,19 @@ export function ApprovalQueuePage() {
 	});
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [comment, setComment] = useState("");
-	const [decision, setDecision] = useState<"APPROVE" | "REJECT" | null>(null);
+	const [confirmation, setConfirmation] = useState<{
+		target: string;
+		decision: "APPROVE" | "REJECT";
+	} | null>(null);
 	const selected =
-		queue.data?.requests.find((item) => item.id === selectedId) ??
-		queue.data?.requests[0];
+		selectedId === null
+			? queue.data?.requests[0]
+			: queue.data?.requests.find((item) => selectionId(item) === selectedId);
 	const submit = useMutation({
 		mutationFn: connectionApi.decideConnectionAccessRequest,
 		onSuccess: async () => {
-			setDecision(null);
+			setConfirmation(null);
+			setSelectedId(null);
 			setComment("");
 			await queryClient.invalidateQueries({
 				queryKey: ["connection-approval-queue"],
@@ -34,6 +43,29 @@ export function ApprovalQueuePage() {
 	const stage = selected?.stages.find(
 		(item) => item.ordinal === selected.currentStageOrdinal,
 	);
+	const target =
+		selected && stage
+			? JSON.stringify([
+					selectionId(selected),
+					selected.currentRequestStageId,
+					selected.revision,
+					stage.revision,
+					stage.routingRevision,
+				])
+			: null;
+	const decision =
+		confirmation?.target === target ? confirmation?.decision : null;
+	useEffect(() => {
+		if (confirmation?.target === target) return;
+		setConfirmation(null);
+		setComment("");
+	}, [target, confirmation]);
+
+	function beginDecision(value: "APPROVE" | "REJECT") {
+		if (!selected || !target) return;
+		setSelectedId(selectionId(selected));
+		setConfirmation({ target, decision: value });
+	}
 
 	function confirm() {
 		if (
@@ -77,11 +109,15 @@ export function ApprovalQueuePage() {
 						{queue.data.requests.map((item) => (
 							<button
 								type="button"
-								key={item.id}
-								className={selected?.id === item.id ? "active" : ""}
+								key={selectionId(item)}
+								className={
+									selected && selectionId(selected) === selectionId(item)
+										? "active"
+										: ""
+								}
 								onClick={() => {
-									setSelectedId(item.id);
-									setDecision(null);
+									setSelectedId(selectionId(item));
+									setConfirmation(null);
 									setComment("");
 								}}
 							>
@@ -127,7 +163,7 @@ export function ApprovalQueuePage() {
 									<div>
 										<Button
 											variant="secondary"
-											onClick={() => setDecision(null)}
+											onClick={() => setConfirmation(null)}
 										>
 											取消
 										</Button>
@@ -146,12 +182,12 @@ export function ApprovalQueuePage() {
 								<div className="approval-decision-actions">
 									<Button
 										variant="secondary"
-										onClick={() => setDecision("REJECT")}
+										onClick={() => beginDecision("REJECT")}
 									>
 										<X size={16} />
 										拒绝
 									</Button>
-									<Button onClick={() => setDecision("APPROVE")}>
+									<Button onClick={() => beginDecision("APPROVE")}>
 										<Check size={16} />
 										通过
 									</Button>

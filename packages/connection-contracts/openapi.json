@@ -2485,8 +2485,11 @@
 				}
 			},
 			"AccessRequest": {
+				"allOf": [{ "$ref": "#/components/schemas/AccessRequestFields" }],
+				"unevaluatedProperties": false
+			},
+			"AccessRequestFields": {
 				"type": "object",
-				"additionalProperties": false,
 				"required": [
 					"id",
 					"providerId",
@@ -2544,8 +2547,9 @@
 				"properties": { "requestId": { "type": "string" } }
 			},
 			"ApprovalQueueItem": {
+				"unevaluatedProperties": false,
 				"allOf": [
-					{ "$ref": "#/components/schemas/AccessRequest" },
+					{ "$ref": "#/components/schemas/AccessRequestFields" },
 					{
 						"type": "object",
 						"required": [
@@ -2774,8 +2778,9 @@
 					"requests": {
 						"type": "array",
 						"items": {
+							"unevaluatedProperties": false,
 							"allOf": [
-								{ "$ref": "#/components/schemas/AccessRequest" },
+								{ "$ref": "#/components/schemas/AccessRequestFields" },
 								{
 									"type": "object",
 									"required": ["applicantDisplayName"],

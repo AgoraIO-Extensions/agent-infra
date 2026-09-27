@@ -120,6 +120,13 @@ it("requires consent to each current disclaimer after the option bundle refreshe
 	fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 	expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
 	fireEvent.click(screen.getByRole("checkbox", { name: "Updated terms" }));
+	const unconsumed = structuredClone(refreshed);
+	const nextPresentation = unconsumed.options.find(
+		(item) => item.policyVersionId === "policy-1",
+	);
+	if (!nextPresentation) throw new Error("Next presentation is missing");
+	nextPresentation.presentationId = "presentation-3";
+	api.getConnectionAccessOptions.mockResolvedValue(unconsumed);
 	fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 	await waitFor(() =>
 		expect(api.submitConnectionAccessRequest).toHaveBeenCalledOnce(),
@@ -135,6 +142,23 @@ it("requires consent to each current disclaimer after the option bundle refreshe
 				locale: "en",
 			},
 		],
+	});
+	await waitFor(() =>
+		expect(client.getQueryData(["connection-access-options"])).toEqual(
+			unconsumed,
+		),
+	);
+	fireEvent.click(await screen.findByRole("button", { name: /Jira Read/ }));
+	fireEvent.change(screen.getByLabelText("用途"), {
+		target: { value: "Fresh application" },
+	});
+	fireEvent.click(screen.getByRole("checkbox", { name: "Updated terms" }));
+	fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+	await waitFor(() =>
+		expect(api.submitConnectionAccessRequest).toHaveBeenCalledTimes(2),
+	);
+	expect(api.submitConnectionAccessRequest.mock.calls[1]?.[0]).toMatchObject({
+		presentationId: "presentation-3",
 	});
 	client.clear();
 });

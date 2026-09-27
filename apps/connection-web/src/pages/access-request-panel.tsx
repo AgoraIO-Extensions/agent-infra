@@ -126,9 +126,10 @@ export function AccessRequestPanel(props: {
 			setPurpose("");
 			setConfirmed([]);
 			props.onSubmitted();
-			await client.invalidateQueries({
-				queryKey: ["connection-access-requests"],
-			});
+			await Promise.all([
+				client.invalidateQueries({ queryKey: ["connection-access-requests"] }),
+				client.invalidateQueries({ queryKey: ["connection-access-options"] }),
+			]);
 		},
 	});
 	const cancel = useMutation({

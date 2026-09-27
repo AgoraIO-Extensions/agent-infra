@@ -302,7 +302,9 @@ export type AccessRequestStage = {
     }>;
 };
 
-export type AccessRequest = {
+export type AccessRequest = AccessRequestFields;
+
+export type AccessRequestFields = {
     id: string;
     providerId: string;
     providerReleaseId: string;
@@ -327,7 +329,7 @@ export type AccessRequestCreated = {
     requestId: string;
 };
 
-export type ApprovalQueueItem = AccessRequest & {
+export type ApprovalQueueItem = AccessRequestFields & {
     applicantDisplayName: string;
     approverPrincipalId: string;
     currentRequestStageId: string;
@@ -408,7 +410,7 @@ export type AdminAccessAuthorizationsResponse = {
 };
 
 export type ApprovalRoutingBlockedResponse = {
-    requests: Array<AccessRequest & {
+    requests: Array<AccessRequestFields & {
         applicantDisplayName: string;
     }>;
 };
