@@ -165,6 +165,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		operationRef: string;
 		attemptRef: string;
 	}[] = [];
+	let withheldAck:
+		| {
+				response: import("node:http").ServerResponse;
+				executionId: string;
+				confirmedCursor: string;
+		  }
+		| undefined;
 	let modelServer: ReturnType<typeof createServer> | undefined;
 	let modelPort: number | undefined;
 	let releaseModelResponse: (() => void) | undefined;
@@ -624,6 +631,21 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			observedRequest.responseStatus = response.status;
 			if (req.url?.endsWith("/ack") && response.ok) ackCount++;
 			traces.push(`response:${req.url}:${response.status}`);
+			if (
+				realCodexE2e &&
+				req.url?.endsWith("/ack") &&
+				response.ok &&
+				!withheldAck
+			) {
+				// Host has committed the ACK; keep its HTTP response off the wire
+				// until both original Worker processes have been killed.
+				withheldAck = {
+					response: res,
+					executionId: parsed.executionId,
+					confirmedCursor: parsed.confirmedCursor,
+				};
+				return;
+			}
 			res.writeHead(response.status, Object.fromEntries(response.headers));
 			if (response.body) {
 				const stream = Readable.fromWeb(response.body as never);
@@ -1048,25 +1070,58 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			expect(intent.operationRef).toBeTruthy();
 			expect(intent.attemptRef).toBeTruthy();
 			expect(intent.operationRef).not.toBe(intent.attemptRef);
-			await waitUntil(async () => {
-				const facts = await sql<{ phase: string }[]>`
-						select event_payload->'fact'->>'phase' as phase
-						from platform.conversation_events
-						where execution_id=${active.execution_id}
-						  and event_type='execution.operation'
-					`;
-				const phases = new Set(facts.map((fact) => fact.phase));
-				return phases.has("intent") && phases.has("started");
-			}, "persisted Codex model operation start facts");
 		}
-		// Kill both process owners, expire only this test's owned lease, and recover
-		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
+		// The first ACK committed in Host, but its HTTP response never reached the
+		// original Worker. Kill both owners and recover through automatic discovery.
 		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
+		if (realCodexE2e) {
+			expect(ackCount).toBe(1);
+			expect(withheldAck?.executionId).toBe(active.execution_id);
+			expect(withheldAck?.response.headersSent).toBe(false);
+			const [confirmed] = await sql<{ cursor: string | null }[]>`
+				select last_runtime_cursor as cursor from platform.conversation_executions
+				where execution_id=${active.execution_id}
+			`;
+			expect(withheldAck?.confirmedCursor).toBe(confirmed?.cursor);
+			const hostState = JSON.parse(
+				await readFile(join(directory, "host.json"), "utf8"),
+			) as {
+				sessions: Record<
+					string,
+					{
+						executionAuthorities?: Record<string, { confirmedCursor?: string }>;
+					}
+				>;
+			};
+			expect(
+				Object.values(hostState.sessions).find(
+					(session) => session.executionAuthorities?.[active.execution_id],
+				)?.executionAuthorities?.[active.execution_id]?.confirmedCursor,
+			).toBe(confirmed?.cursor);
+		}
 		const [before] =
-			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
+			await sql`select delivery_fence::int as fence, host_session_ref, turn_id from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
+		const readPersistedIds = async () => {
+			const [row] = await sql<{ eventIds: string[]; auditIds: string[] }[]>`
+				select array(select event_id from platform.conversation_events
+				             where execution_id=${active.execution_id} order by sequence) as "eventIds",
+				       array(select id from platform.audit_events
+				             where target_id=${active.execution_id} order by id) as "auditIds"
+			`;
+			if (!row) throw Error("Persisted event IDs are unavailable");
+			return row;
+		};
+		const beforeIds = realCodexE2e ? await readPersistedIds() : undefined;
+		if (realCodexE2e) expect(beforeIds?.eventIds).toHaveLength(1);
 		const priorRequests = requests.length;
 		for (const child of children) child.kill("SIGKILL");
 		await Promise.all(children.map((child) => once(child, "exit")));
+		if (realCodexE2e) {
+			await waitUntil(
+				async () => withheldAck?.response.destroyed === true,
+				"withheld ACK response socket closes after both Workers die",
+			);
+		}
 		const [target] = await sql<
 			{ id: string; attemptCount: number; fence: number }[]
 		>`
@@ -1210,12 +1265,23 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			fence: target.fence + 1,
 		});
 		expect(await dispatchCount()).toBe(1);
+		if (realCodexE2e) {
+			if (!beforeIds) throw Error("Pre-kill event IDs are unavailable");
+			const afterIds = await readPersistedIds();
+			expect(afterIds.eventIds.slice(0, beforeIds.eventIds.length)).toEqual(
+				beforeIds.eventIds,
+			);
+			expect(afterIds.auditIds).toEqual(
+				expect.arrayContaining(beforeIds.auditIds),
+			);
+		}
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
 		).toHaveLength(1);
 		const [after] =
-			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
+			await sql`select delivery_fence::int as fence, host_session_ref, turn_id from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		expect(after?.host_session_ref).toBe(before?.host_session_ref);
+		expect(after?.turn_id).toBe(before?.turn_id);
 		expect(after?.fence).toBeGreaterThan(before?.fence);
 		expect(
 			requests
@@ -1270,9 +1336,11 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				  and e.event_type='execution.operation'
 				order by e.sequence
 			`;
-			expect(operationFacts.map((fact) => fact.phase)).toEqual(
-				expect.arrayContaining(["intent", "started", "completed"]),
-			);
+			expect(operationFacts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				"completed",
+			]);
 			expect(operationFacts.every((fact) => fact.kind === "model")).toBe(true);
 			expect(
 				operationFacts.every(
