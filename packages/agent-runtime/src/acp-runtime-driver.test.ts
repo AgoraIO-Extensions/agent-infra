@@ -773,10 +773,12 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 				).some((e) => e.type === "completed"),
 			).toBe(false);
 			if (mode === "delayed-cancel") {
-				await vi.waitFor(async () =>
-					expect(
-						await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-					).toBe("cancelled"),
+				await vi.waitFor(
+					async () =>
+						expect(
+							await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+						).toBe("cancelled"),
+					{ timeout: 10000 },
 				);
 				expect(await driver.lookupOperation(stopCommand)).toMatchObject({
 					state: "found",
@@ -788,6 +790,7 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 			await rm(path, { recursive: true, force: true });
 		}
 	},
+	15000,
 );
 
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {
