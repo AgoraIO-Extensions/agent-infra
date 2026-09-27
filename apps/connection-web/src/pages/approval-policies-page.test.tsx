@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type {
 	AccessPolicyDraftResponse,
 	ApprovalDelegationsResponse,
@@ -123,6 +125,41 @@ afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
 	vi.restoreAllMocks();
+});
+
+it("does not clip employee candidates at the approval panel boundary", async () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		resolve(import.meta.dirname, "approval-policies-page.css"),
+		"utf8",
+	);
+	document.head.append(style);
+	try {
+		const { container } = render(
+			<QueryClientProvider
+				client={
+					new QueryClient({ defaultOptions: { queries: { retry: false } } })
+				}
+			>
+				<ApprovalPoliciesPage />
+			</QueryClientProvider>,
+		);
+		fireEvent.change(
+			screen.getByRole("combobox", { name: "审批人" }),
+			{ target: { value: "guo" } },
+		);
+		await screen.findByRole("option", { name: "guo" });
+		const panel = container.querySelector(".approval-layout");
+		const dropdown = container.querySelector(".employee-picker-dropdown");
+		if (!panel || !dropdown)
+			throw new Error("Employee dropdown must be inside the approval editor");
+		expect(panel.contains(dropdown)).toBe(true);
+		expect(getComputedStyle(panel).overflow).toBe("visible");
+		expect(getComputedStyle(dropdown).overflowY).toBe("auto");
+		expect(getComputedStyle(dropdown).maxHeight).toBe("260px");
+	} finally {
+		style.remove();
+	}
 });
 
 it.each([
