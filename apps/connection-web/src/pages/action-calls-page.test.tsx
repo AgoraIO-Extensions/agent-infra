@@ -135,3 +135,49 @@ it("does not present query failure as an empty result", async () => {
 	expect(screen.queryByText("没有符合条件的操作")).toBeNull();
 	expect(mocks.detail).not.toHaveBeenCalled();
 });
+
+it("shows no-parameter state and collapsed diagnostics without replay or export controls", async () => {
+	mocks.list.mockResolvedValue({ items: [call], nextCursor: null });
+	mocks.detail.mockResolvedValue({
+		...call,
+		input: [],
+		inputState: "NO_PARAMETERS",
+		output: [{ label: "账号名称", value: "已脱敏", state: "REDACTED" }],
+		outputState: "REDACTED",
+		timeline: [],
+		diagnosticsTruncated: false,
+		diagnostics: [
+			{
+				executionId: "123e4567-e89b-12d3-a456-426614174000",
+				phase: "EXECUTE",
+				droppedRequests: 0,
+				requests: [
+					{
+						sequence: 1,
+						service: "bitbucket",
+						method: "GET",
+						origin: "https://bitbucket.example.invalid",
+						pathTemplate: "/rest/api/1.0/users/{segment}",
+						startedAt: "2026-09-26T06:00:00.001Z",
+						finishedAt: "2026-09-26T06:00:00.021Z",
+						durationMs: 20,
+						status: 200,
+						outcome: "RESPONSE_HEADERS",
+						errorCategory: null,
+						requestIds: [{ name: "x-arequestid", value: "123x456x1" }],
+					},
+				],
+			},
+		],
+	});
+	mount();
+	await screen.findByText("此操作无需输入参数");
+	const summary = screen.getByText("后端排查信息");
+	expect((summary.closest("details") as HTMLDetailsElement).open).toBe(false);
+	fireEvent.click(summary);
+	expect((summary.closest("details") as HTMLDetailsElement).open).toBe(true);
+	expect(screen.getByText("123x456x1")).toBeTruthy();
+	expect(screen.getByText("响应头耗时")).toBeTruthy();
+	expect(screen.getByText("20 ms")).toBeTruthy();
+	expect(document.body.textContent).not.toMatch(/curl|复制|重放|导出/);
+});

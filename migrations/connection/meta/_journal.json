@@ -232,6 +232,13 @@
       "when": 1790424000000,
       "tag": "0033_audit_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790467200000,
+      "tag": "0034_call_diagnostics",
+      "breakpoints": true
     }
   ]
 }

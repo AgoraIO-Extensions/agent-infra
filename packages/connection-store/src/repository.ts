@@ -12,6 +12,7 @@ import {
 	type AuditFilter,
 	type AuditRawDetail,
 	authorizationSnapshotMatches,
+	type CallDiagnostics,
 	type CallStatus,
 	ConnectionError,
 	type ConnectionOverview,
@@ -26,6 +27,7 @@ import {
 	normalizeSharedScopeDisplayName,
 	type OAuthTransaction,
 	type ProviderUpgradeCampaignSummary,
+	projectCallDiagnostics,
 	type ReconciliationJob,
 	type StoredCall,
 } from "@agent-infra/connection-core";
@@ -780,6 +782,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					call.consumer_id AS "consumerId", consumer.display_name AS consumer, call.instance_id AS "instanceId", call.actor_key AS "actorKey",
 					call.connection_id AS "connectionId", account.provider_id AS "providerId", action.name AS action,
 					call.action_version_id AS "actionVersionId", call.status, call.request_input AS "requestInput", call.result
+					, action.input_schema AS "inputSchema"
 				FROM connection_calls call
 				JOIN connection_principals principal ON principal.id = call.principal_id
 				JOIN connection_consumers consumer ON consumer.id = call.consumer_id
@@ -797,7 +800,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					: [];
 				await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
 				VALUES (${principalId}, 'AUDIT_CALL_DETAIL_QUERIED', ${sql.json({ callIdHash: createHash("sha256").update(callId).digest("hex"), found: Boolean(row) })})`;
-				return row ? { ...row, timeline } : undefined;
+				const diagnosticRows = row
+					? await sql<{ diagnostic: unknown }[]>`
+					SELECT diagnostic FROM connection_call_diagnostics
+					WHERE call_id = ${callId} ORDER BY created_at DESC, execution_id DESC LIMIT 21
+				`
+					: [];
+				return row
+					? {
+							...row,
+							timeline,
+							diagnosticRecords: diagnosticRows
+								.slice(0, 20)
+								.map((item) => item.diagnostic),
+							diagnosticsTruncated: diagnosticRows.length > 20,
+						}
+					: undefined;
 			})
 			.then((row) => {
 				if (!row)
@@ -4173,6 +4191,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async setCallResult(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
@@ -4188,6 +4207,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE OF call
 			`;
 			if (!call) return;
+			await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
 			if (call.effect === "WRITE") {
 				const effectStatus =
 					input.status === "DENIED_LOCAL" ? "FAILED" : input.status;
@@ -4282,6 +4302,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async completeReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		result: Record<string, unknown>;
@@ -4294,6 +4315,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR UPDATE
 			`;
 			if (!job) return;
+			await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
 			await sql`
 				UPDATE connection_dispatches dispatch SET status = 'SUCCEEDED'
 				FROM connection_effects effect
@@ -4318,17 +4340,36 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async rescheduleReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		reason: string;
 	}) {
-		await this.sql`
+		await this.sql.begin(async (sql) => {
+			const rows = await sql`
 			UPDATE connection_reconciliation_jobs
 			SET status = 'PENDING', lease_id = NULL, leased_at = NULL,
 				lease_expires_at = NULL, next_attempt_at = now() + interval '30 seconds',
 					reason = ${input.reason.slice(0, 500)}, updated_at = now()
 				WHERE call_id = ${input.callId} AND lease_id = ${input.leaseId}
 					AND status = 'LEASED' AND lease_expires_at > now()
+				RETURNING call_id
 			`;
+			if (rows.length)
+				await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
+		});
+	}
+
+	private async persistCallDiagnostics(
+		sql: postgres.TransactionSql,
+		callId: string,
+		value?: CallDiagnostics,
+	) {
+		if (!value) return;
+		const diagnostic = projectCallDiagnostics(value);
+		if (!diagnostic) throw new Error("Invalid call diagnostic");
+		await sql`INSERT INTO connection_call_diagnostics (execution_id, call_id, diagnostic)
+			VALUES (${diagnostic.executionId}, ${callId}, ${sql.json(diagnostic)})
+			ON CONFLICT (execution_id) DO NOTHING`;
 	}
 }
