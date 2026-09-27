@@ -89,6 +89,7 @@
 	font-size: 13px;
 }
 .audit-table th {
+	z-index: 2;
 	position: sticky;
 	top: 0;
 	background: var(--surface-muted);
@@ -112,6 +113,26 @@
 }
 .audit-table tr.selected {
 	background: var(--accent-soft);
+}
+.audit-table tbody tr {
+	position: relative;
+}
+.audit-table tbody tr:not(.selected):hover {
+	background: var(--surface-muted);
+}
+/* Stretch the native button hit area without replacing table or keyboard semantics. */
+.audit-row-hit-area {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	cursor: pointer;
+}
+.audit-table button:focus-visible {
+	outline: none;
+}
+.audit-table button:focus-visible .audit-row-hit-area {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
 }
 .audit-table button {
 	border: 0;

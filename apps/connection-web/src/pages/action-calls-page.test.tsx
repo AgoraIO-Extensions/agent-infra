@@ -136,6 +136,42 @@ it("does not present query failure as an empty result", async () => {
 	expect(mocks.detail).not.toHaveBeenCalled();
 });
 
+it("selects a record through the full-row hit area and keeps the native button", async () => {
+	const second = {
+		...call,
+		callId: "call-2",
+		person: "李四",
+		action: "jira.get_issue",
+	};
+	mocks.list.mockResolvedValue({ items: [call, second], nextCursor: null });
+	mocks.detail.mockImplementation(async (callId: string) => ({
+		...(callId === second.callId ? second : call),
+		input: [],
+		output: [],
+		inputState: "NO_PARAMETERS",
+		outputState: "EMPTY_OUTPUT",
+		timeline: [],
+		diagnostics: [],
+		diagnosticsTruncated: false,
+	}));
+	mount();
+	const button = await screen.findByRole("button", { name: "读取工单" });
+	const hitArea = button.querySelector(".audit-row-hit-area");
+	expect(hitArea).not.toBeNull();
+	fireEvent.click(hitArea as HTMLElement);
+	await waitFor(() => expect(mocks.detail).toHaveBeenLastCalledWith("call-2"));
+	expect(button.getAttribute("aria-pressed")).toBe("true");
+	expect(button.closest("tr")?.classList.contains("selected")).toBe(true);
+	const callsBeforeHeaderClick = mocks.detail.mock.calls.length;
+	fireEvent.click(screen.getByRole("columnheader", { name: "发起人 / 时间" }));
+	expect(mocks.detail.mock.calls.length).toBe(callsBeforeHeaderClick);
+	const first = screen.getByRole("button", { name: "创建工单" });
+	first.focus();
+	expect(document.activeElement).toBe(first);
+	fireEvent.click(first);
+	await waitFor(() => expect(first.getAttribute("aria-pressed")).toBe("true"));
+});
+
 it("shows no-parameter state and collapsed diagnostics without replay or export controls", async () => {
 	mocks.list.mockResolvedValue({ items: [call], nextCursor: null });
 	mocks.detail.mockResolvedValue({

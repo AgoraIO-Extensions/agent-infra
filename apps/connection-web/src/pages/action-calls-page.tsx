@@ -574,6 +574,10 @@ export function ActionCallsPage() {
 														aria-pressed={selected?.callId === row.callId}
 													>
 														{actionLabel(row.action)}
+														<span
+															className="audit-row-hit-area"
+															aria-hidden="true"
+														/>
 													</button>
 													<small>
 														{row.providerId} · {row.consumer}
