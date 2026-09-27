@@ -161,7 +161,7 @@ tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 man
 升级回归必须覆盖仅含审计索引的基线升级至审批版本，并验证重复迁移幂等。
 
 允许先部署管理模块、后配置启用。正式目录与免责声明尚未就绪时，保持
-`CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可保存和编辑不含员工候选的策略草稿，
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED=false`，管理员可搜索、选择并保存已完成唯一 LDAP 身份映射的员工候选草稿，
 但不得发布 Policy 或为新连接绕过审批。免责声明通过管理界面补充，目录参数通过部署配置与
 Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号、scope 或 Grant。迁移评审、
 代码评审与适用于本次部署的人工验证仍须完成，不能用此分阶段安排豁免下述启用门禁。
@@ -172,9 +172,11 @@ Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号
 服务端使用 `agora-service-key` 请求头；响应为含 `name`、`email`、`iamId` 的数组。
 管理员请求不能覆盖地址或请求头；不跟随重定向，不关闭 TLS 验证，响应限制为 5 MiB。
 服务端按姓名和邮箱做不区分大小写的包含匹配，最多处理 20 个匹配员工；没有 `iamId`
-的记录不参与候选搜索。员工邮箱仅用于精确查找 LDAP 在职账号，审批身份仍取 LDAP
-issuer + uid；没有对应在职账号的员工不返回，映射歧义或上游异常时拒绝搜索，不能降级为
+的记录不参与候选搜索。员工邮箱仅用于精确查找 LDAP 账号，身份关联仍取 LDAP
+issuer + uid；没有对应账号的员工不返回，映射歧义或上游异常时拒绝搜索，不能降级为
 以邮箱或外部 `iamId` 授权。未配置该数据源时保留现有 LDAP 搜索。
+搜索和保存草稿不要求在职属性配置，也不恢复已停用身份；发布与实际审批仍遵循
+[HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 的严格校验。
 该配置不替代 Identity Owner 对唯一邮箱映射、在职属性与稳定 uid 的确认，也不自动开启
 `CONNECTION_APPROVAL_DIRECTORY_ENABLED`。上线前需验证公司员工列表实际响应、服务密钥权限、
 LDAP 映射与重名、离职和重复邮箱负向场景；不得复用源码中的历史硬编码密钥。

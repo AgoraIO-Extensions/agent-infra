@@ -18,6 +18,110 @@ const integrationTest = databaseUrl ? it : it.skip;
 
 describe("PostgreSQL Connection OAuth", () => {
 	integrationTest(
+		"draft candidates preserve disabled identities, scope and expiry without granting approval authority",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionOAuthRepository(databaseUrl);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			let activeChecks = 0;
+			const service = new ConnectionOAuthService({
+				consumer: { id: "consumer-test", name: "Test" },
+				identityRealm: "urn:test:draft",
+				identityKey: Buffer.alloc(32, 21),
+				resource: "https://connection.example/mcp",
+				repository,
+				directory: {
+					authenticate: async (username) => ({
+						issuer: "urn:test:draft",
+						subject: username,
+						displayName: username,
+						email: null,
+					}),
+					isActive: async () => {
+						activeChecks++;
+						return false;
+					},
+					searchEmployees: async () => [
+						{
+							issuer: "urn:test:draft",
+							subject: `employee-${suffix}`,
+							displayName: "Employee",
+							email: null,
+							alias: null,
+						},
+					],
+				},
+			});
+			try {
+				const admin = (
+					await service.loginBrowserSession({
+						username: `admin-${suffix}`,
+						password: "test-password",
+					})
+				).account.principalId;
+				const employee = (
+					await service.loginBrowserSession({
+						username: `employee-${suffix}`,
+						password: "test-password",
+					})
+				).account.principalId;
+				await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source) VALUES (${admin}, 'CONNECTION_ADMIN', 'ACTIVE', 'BOOTSTRAP')`;
+				await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${employee}`;
+				await sql`UPDATE connection_principal_identities SET status = 'DISABLED' WHERE principal_id = ${employee}`;
+				const candidate = (
+					await service.searchEmployeeCandidates(admin, "employee")
+				)[0];
+				expect(candidate).toBeDefined();
+				const candidateId = candidate?.candidateId ?? "";
+				await expect(
+					service.resolveEmployeeCandidateForDraft(admin, candidateId),
+				).resolves.toMatchObject({ principalId: employee });
+				expect(activeChecks).toBe(0);
+				const [status] =
+					await sql`SELECT p.status AS principal_status, i.status AS identity_status FROM connection_principals p JOIN connection_principal_identities i ON i.principal_id = p.id WHERE p.id = ${employee}`;
+				expect(status).toMatchObject({
+					principal_status: "DISABLED",
+					identity_status: "DISABLED",
+				});
+				await expect(
+					repository.getEmployeePrincipalIdentity(employee),
+				).resolves.toBeUndefined();
+				await expect(
+					service.prepareEmployeeCandidatesForPrincipals(admin, [employee]),
+				).resolves.toHaveLength(1);
+				await expect(
+					service.ensureActiveEmployeePrincipal(employee),
+				).rejects.toMatchObject({ status: 403 });
+				await expect(
+					service.resolveEmployeeCandidate(admin, candidateId),
+				).rejects.toMatchObject({ status: 403 });
+				expect(activeChecks).toBe(1);
+				await expect(
+					service.resolveEmployeeCandidateForDraft(employee, candidateId),
+				).rejects.toMatchObject({ status: 403 });
+				await sql`UPDATE connection_employee_candidates SET created_at = now() - interval '5 minutes', expires_at = now() - interval '1 second' WHERE id = ${candidateId}`;
+				await expect(
+					service.resolveEmployeeCandidateForDraft(admin, candidateId),
+				).rejects.toMatchObject({ status: 403 });
+				const fresh =
+					(await service.searchEmployeeCandidates(admin, "employee"))[0]
+						?.candidateId ?? "";
+				await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now(), revoked_by_principal_id = ${admin} WHERE principal_id = ${admin}`;
+				await expect(
+					service.resolveEmployeeCandidateForDraft(admin, fresh),
+				).rejects.toMatchObject({ status: 403 });
+			} finally {
+				await repository.close();
+				await sql.end();
+			}
+		},
+	);
+	integrationTest(
 		"issues hash-only portable PATs for one LDAP Principal with independent revocation",
 		async () => {
 			if (!databaseUrl) return;

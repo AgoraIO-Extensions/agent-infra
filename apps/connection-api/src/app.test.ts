@@ -731,10 +731,11 @@ describe("Connection API", () => {
 		expect(JSON.stringify(calls)).not.toContain("actorPrincipalId");
 	});
 
-	it("saves incomplete drafts with the directory disabled but blocks candidates and publication", async () => {
+	it("searches and saves verified draft candidates with approval disabled but blocks publication", async () => {
 		const saved: unknown[] = [];
 		const updated: unknown[] = [];
 		const candidateRequests: unknown[] = [];
+		const resolutions: string[] = [];
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
 			resource: "https://connection.example/mcp",
@@ -768,6 +769,38 @@ describe("Connection API", () => {
 				} as never,
 			},
 			service: {
+				searchEmployeeCandidates: async (
+					administrator: string,
+					query: string,
+				) => {
+					expect(administrator).toBe("admin-1");
+					expect(query).toBe("reviewer");
+					return [
+						{
+							candidateId: "opaque-candidate",
+							displayName: "Reviewer",
+							email: null,
+							alias: null,
+						},
+					];
+				},
+				resolveEmployeeCandidateForDraft: async (
+					administrator: string,
+					candidateId: string,
+				) => {
+					expect(administrator).toBe("admin-1");
+					if (candidateId !== "opaque-candidate")
+						throw new OAuthProtocolError(
+							"access_denied",
+							"Employee candidate is unavailable",
+							403,
+						);
+					resolutions.push(candidateId);
+					return {
+						principalId: "internal-approver",
+						displaySnapshot: { displayName: "Reviewer", email: null },
+					};
+				},
 				prepareEmployeeCandidatesForPrincipals: async (
 					administrator: string,
 					principals: string[],
@@ -816,6 +849,12 @@ describe("Connection API", () => {
 			"content-type": "application/json",
 			"idempotency-key": "draft-disabled-directory",
 		};
+		const searched = await app.request(
+			"/api/v1/connection/admin/employee-candidates?query=reviewer",
+			{ headers },
+		);
+		expect(searched.status).toBe(200);
+		expect(searched.headers.get("cache-control")).toBe("no-store");
 		const created = await app.request(
 			"/api/v1/connection/admin/access-policies",
 			{
@@ -887,7 +926,7 @@ describe("Connection API", () => {
 				body: JSON.stringify(body),
 			},
 		);
-		expect(withCandidate.status).toBe(503);
+		expect(withCandidate.status).toBe(400);
 		expect(saved).toHaveLength(1);
 		const editedWithCandidate = await app.request(
 			"/api/v1/connection/admin/access-policies/draft-1",
@@ -897,8 +936,28 @@ describe("Connection API", () => {
 				headers: { ...headers, "if-match": '"2"' },
 			},
 		);
-		expect(editedWithCandidate.status).toBe(503);
+		expect(editedWithCandidate.status).toBe(400);
 		expect(updated).toHaveLength(1);
+		body.stages[0]?.approverCandidateIds.splice(0, 1, "opaque-candidate");
+		for (const method of ["POST", "PUT"]) {
+			const savedWithCandidate = await app.request(
+				`/api/v1/connection/admin/access-policies${method === "PUT" ? "/draft-1" : ""}`,
+				{
+					method,
+					headers: {
+						...headers,
+						"if-match": '"2"',
+						"idempotency-key": `verified-${method}`,
+					},
+					body: JSON.stringify(body),
+				},
+			);
+			expect(savedWithCandidate.status).toBe(method === "POST" ? 201 : 200);
+		}
+		expect(resolutions).toEqual(["opaque-candidate", "opaque-candidate"]);
+		expect(saved[1]).toMatchObject({
+			stages: [{ approvers: [{ principalId: "internal-approver" }] }],
+		});
 		const published = await app.request(
 			"/api/v1/connection/admin/access-policies/draft-1/publish",
 			{

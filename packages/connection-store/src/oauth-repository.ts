@@ -105,6 +105,7 @@ const legacyPrincipalIdPattern = /^principal-[0-9a-f]{64}$/;
 async function upsertPrincipalIdentity(
 	sql: postgres.TransactionSql,
 	input: PrincipalIdentityInput,
+	preserveExistingIdentity = false,
 ) {
 	await sql`
 		SELECT pg_advisory_xact_lock(
@@ -128,6 +129,8 @@ async function upsertPrincipalIdentity(
 		throw new OAuthProtocolError("access_denied", "Authentication failed", 401);
 	}
 	const mapping = mappings[0];
+	// Candidate selection is not authentication and must not reactivate an account.
+	if (mapping && preserveExistingIdentity) return mapping.principal_id;
 	let principalId = mapping?.principal_id ?? input.principalId;
 	if (mapping && legacyPrincipalIdPattern.test(principalId)) {
 		const [remapped] = await sql<{ id: string }[]>`
@@ -267,7 +270,10 @@ export class PostgresConnectionOAuthRepository
 		return row ? { identityReference: row.identity_reference } : undefined;
 	}
 
-	async getEmployeePrincipalIdentity(principalId: string) {
+	async getEmployeePrincipalIdentity(
+		principalId: string,
+		includeInactiveForDraft = false,
+	) {
 		const rows = await this.sql<
 			{
 				identity_reference: string;
@@ -280,7 +286,7 @@ export class PostgresConnectionOAuthRepository
 			JOIN connection_principals principal
 				ON principal.id = identity.principal_id
 			WHERE identity.principal_id = ${principalId}
-				AND identity.status = 'ACTIVE' AND principal.status = 'ACTIVE'
+				AND (${includeInactiveForDraft} OR (identity.status = 'ACTIVE' AND principal.status = 'ACTIVE'))
 			ORDER BY identity.verified_at DESC LIMIT 2
 		`;
 		const [identity] = rows;
@@ -330,15 +336,19 @@ export class PostgresConnectionOAuthRepository
 					403,
 				);
 			}
-			const principalId = await upsertPrincipalIdentity(sql, {
-				displayName: candidate.display_name,
-				email: candidate.email,
-				identityIssuer: candidate.identity_issuer,
-				identityReference: candidate.identity_reference,
-				identitySubjectHash: candidate.identity_subject_hash,
-				legacyIdentitySubjectHash: candidate.legacy_identity_subject_hash,
-				principalId: randomUUID(),
-			});
+			const principalId = await upsertPrincipalIdentity(
+				sql,
+				{
+					displayName: candidate.display_name,
+					email: candidate.email,
+					identityIssuer: candidate.identity_issuer,
+					identityReference: candidate.identity_reference,
+					identitySubjectHash: candidate.identity_subject_hash,
+					legacyIdentitySubjectHash: candidate.legacy_identity_subject_hash,
+					principalId: randomUUID(),
+				},
+				true,
+			);
 			return {
 				displaySnapshot: {
 					displayName: candidate.display_name,

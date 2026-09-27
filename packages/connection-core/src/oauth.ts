@@ -165,6 +165,7 @@ export interface ConnectionOAuthRepository {
 	}): Promise<{ identityReference: string } | undefined>;
 	getEmployeePrincipalIdentity?(
 		principalId: string,
+		includeInactiveForDraft?: boolean,
 	): Promise<
 		| { identityReference: string; displayName?: string; email?: string | null }
 		| undefined
@@ -737,7 +738,7 @@ export class ConnectionOAuthService {
 			);
 		const candidates = [];
 		for (const principalId of new Set(principalIds)) {
-			const record = await get.call(this.options.repository, principalId);
+			const record = await get.call(this.options.repository, principalId, true);
 			if (!record?.displayName)
 				throw new OAuthProtocolError(
 					"access_denied",
@@ -777,6 +778,21 @@ export class ConnectionOAuthService {
 		administratorPrincipalId: string,
 		candidateId: string,
 	) {
+		return this.resolveCandidate(administratorPrincipalId, candidateId, true);
+	}
+
+	async resolveEmployeeCandidateForDraft(
+		administratorPrincipalId: string,
+		candidateId: string,
+	) {
+		return this.resolveCandidate(administratorPrincipalId, candidateId, false);
+	}
+
+	private async resolveCandidate(
+		administratorPrincipalId: string,
+		candidateId: string,
+		requireActive: boolean,
+	) {
 		const get = this.options.repository.getEmployeeCandidate;
 		const resolve = this.options.repository.resolveEmployeeCandidate;
 		if (!get || !resolve) {
@@ -800,7 +816,8 @@ export class ConnectionOAuthService {
 		const identity = this.protector.unprotect(candidate.identityReference);
 		let active: boolean;
 		try {
-			active = await this.options.directory.isActive(identity);
+			active =
+				!requireActive || (await this.options.directory.isActive(identity));
 		} catch {
 			throw new OAuthProtocolError(
 				"invalid_request",

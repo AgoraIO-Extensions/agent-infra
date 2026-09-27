@@ -244,12 +244,7 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 
 	async searchEmployees(query: string) {
 		const normalized = query.trim();
-		if (
-			!this.options.activeAttribute ||
-			!this.options.activeValue ||
-			normalized.length < 2 ||
-			normalized.length > 64
-		) {
+		if (normalized.length < 2 || normalized.length > 64) {
 			throw new DirectoryAuthenticationError();
 		}
 		const deadline = Date.now() + this.options.operationTimeoutMs;
@@ -266,7 +261,7 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 				for (const employee of employees) {
 					// Email is only a lookup hint; LDAP remains the identity authority.
 					const entries = await this.searchEntries(
-						this.accountFilter(this.options.emailAttribute, employee.email),
+						`(${this.options.emailAttribute}=${escapeLdapFilterValue(employee.email)})`,
 						deadline,
 					);
 					if (entries.length === 0) continue;
@@ -300,7 +295,7 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 			this.options.emailAttribute,
 			...(this.options.aliasAttribute ? [this.options.aliasAttribute] : []),
 		];
-		const filter = `(&(${this.options.activeAttribute}=${escapeLdapFilterValue(this.options.activeValue)})(|${fields.map((field) => `(${field}=*${escaped}*)`).join("")}))`;
+		const filter = `(|${fields.map((field) => `(${field}=*${escaped}*)`).join("")})`;
 		const client = await this.createClient(deadline);
 		try {
 			await beforeDeadline(
