@@ -631,6 +631,29 @@ describe("Conversation HTTP routes", () => {
 		}
 	});
 
+	it.each([
+		"/api/v2/conversations/conversation-1",
+		"/api/v2/conversations/conversation-1/executions/execution-1",
+	])("does not read another user's V2 resource at %s", async (path) => {
+		const input = dependencies();
+		input.identity.resolve = vi.fn().mockResolvedValue({
+			...identity,
+			userId: "user-other",
+		});
+		input.commands(identity).readConversation = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+
+		const response = await testApp(input).app.request(path);
+
+		expect(response.status).toBe(404);
+		expect(await response.json()).toMatchObject({
+			code: "RESOURCE_UNAVAILABLE",
+		});
+		expect(input.query.get).not.toHaveBeenCalled();
+		expect(input.query.getExecution).not.toHaveBeenCalled();
+	});
+
 	it("fails closed when an authorization Adapter changes the trusted actor", async () => {
 		const input = dependencies({
 			authorization: {
@@ -873,22 +896,25 @@ describe("Conversation persisted SSE", () => {
 		expect(input.authorization.authorize).toHaveBeenCalledTimes(3);
 	});
 
-	it("stops before the next push when current access is revoked", async () => {
-		const authorize = vi
-			.fn()
-			.mockResolvedValueOnce({ outcome: "allowed", authority })
-			.mockResolvedValueOnce({ outcome: "denied" });
-		const input = dependencies({ authorization: { authorize } });
-		const response = await testApp(input).app.request(
-			"/api/v1/conversations/conversation-1/events",
-		);
-		const body = await response.text();
+	it.each(["v1", "v2"])(
+		"stops the %s stream before the next push when current access is revoked",
+		async (version) => {
+			const authorize = vi
+				.fn()
+				.mockResolvedValueOnce({ outcome: "allowed", authority })
+				.mockResolvedValueOnce({ outcome: "denied" });
+			const input = dependencies({ authorization: { authorize } });
+			const response = await testApp(input).app.request(
+				`/api/${version}/conversations/conversation-1/events`,
+			);
+			const body = await response.text();
 
-		expect(body).not.toContain("id: event-1");
-		expect(body).toContain('"type":"authorization.revoked"');
-		expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
-		expect(body).not.toContain("user-1");
-	});
+			expect(body).not.toContain("id: event-1");
+			expect(body).toContain('"type":"authorization.revoked"');
+			expect(body).toContain('"code":"AUTHORIZATION_REVOKED"');
+			expect(body).not.toContain("user-1");
+		},
+	);
 
 	it("fails closed without misreporting a temporary authorization outage", async () => {
 		const authorize = vi
@@ -905,26 +931,30 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("private identity dependency detail");
 	});
 
-	it("rejects ambiguous replay selectors and non-enumerates initial access", async () => {
-		const ambiguous = await testApp().app.request(
-			"/api/v1/conversations/conversation-1/events?cursor=cursor-1",
-			{ headers: { "Last-Event-ID": "event-1" } },
-		);
-		expect(ambiguous.status).toBe(400);
+	it.each(["v1", "v2"])(
+		"rejects ambiguous %s replay selectors and non-enumerates initial access",
+		async (version) => {
+			const ambiguous = await testApp().app.request(
+				`/api/${version}/conversations/conversation-1/events?cursor=cursor-1`,
+				{ headers: { "Last-Event-ID": "event-1" } },
+			);
+			expect(ambiguous.status).toBe(400);
 
-		const denied = dependencies({
-			authorization: {
-				authorize: vi.fn().mockResolvedValue({ outcome: "denied" }),
-			},
-		});
-		const forbidden = await testApp(denied).app.request(
-			"/api/v1/conversations/conversation-private/events",
-		);
-		expect(forbidden.status).toBe(403);
-		expect(await forbidden.json()).toMatchObject({
-			code: "RESOURCE_UNAVAILABLE",
-		});
-	});
+			const denied = dependencies({
+				authorization: {
+					authorize: vi.fn().mockResolvedValue({ outcome: "denied" }),
+				},
+			});
+			const forbidden = await testApp(denied).app.request(
+				`/api/${version}/conversations/conversation-private/events`,
+			);
+			expect(forbidden.status).toBe(403);
+			expect(await forbidden.json()).toMatchObject({
+				code: "RESOURCE_UNAVAILABLE",
+			});
+			expect(denied.query.replay).not.toHaveBeenCalled();
+		},
+	);
 
 	it("never accepts malformed persisted data as an SSE event", async () => {
 		const query = dependencies().query;
