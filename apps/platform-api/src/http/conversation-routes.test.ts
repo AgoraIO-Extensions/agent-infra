@@ -650,6 +650,89 @@ describe("Conversation HTTP routes", () => {
 });
 
 describe("Conversation persisted SSE", () => {
+	it("keeps V1 replay available when persisted V2 operation facts are present", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent, persistedOperationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-2",
+			});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("id: event-1");
+		expect(body).toContain('"type":"timeline.reload"');
+		expect(body).not.toContain("operation-event-1");
+		expect(body).not.toContain('"type":"execution.operation"');
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			2,
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			{ kind: "cursor", value: "cursor-2" },
+		);
+	});
+
+	it("continues a V1 stream after a live V2 fact and delivers the next V1 event", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedOperationEvent],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [
+					{
+						...persistedEvent,
+						eventId: "event-3",
+						sequence: 3,
+						conversationCursor: "cursor-3",
+						eventPayload: { type: "text.delta", text: "After" },
+					},
+				],
+				resumeCursor: "cursor-3",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-3",
+			});
+
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(body).toContain("id: event-1");
+		expect(body).toContain("id: event-3");
+		expect(body).not.toContain("operation-event-1");
+		expect(input.query.replay).toHaveBeenNthCalledWith(
+			3,
+			{ actorId: "user-1", channelId: "web" },
+			"conversation-1",
+			{ kind: "cursor", value: "cursor-2" },
+		);
+	});
+
 	it("replays V2 operation facts with their durable event identity", async () => {
 		const input = dependencies();
 		input.query.replay = vi

@@ -410,6 +410,16 @@ function eventProjectionV2(input: ConversationQueryEventV1): SseMessageV2 {
 	return ConversationSseMessageV2Schema.parse(eventProjection(input));
 }
 
+function eventProjectionForV1(
+	input: ConversationQueryEventV1,
+): SseMessage | undefined {
+	if (input.eventSchemaVersion === 2) {
+		eventProjectionV2(input);
+		return undefined;
+	}
+	return eventProjection(input);
+}
+
 function failure(
 	traceId: string | null,
 	code:
@@ -595,7 +605,7 @@ async function streamConversationEvents(
 	conversationId: string,
 	traceId: string,
 	initialReplay: ConversationReplayResultV1,
-	projectEvent: (event: ConversationQueryEventV1) => unknown,
+	projectEvent: (event: ConversationQueryEventV1) => unknown | undefined,
 	writeMessage: (
 		stream: ConversationSseStream,
 		message: unknown,
@@ -651,7 +661,8 @@ async function streamConversationEvents(
 							await writeRevoked(stream, traceId);
 						return;
 					}
-					await writeMessage(stream, projectEvent(persisted));
+					const message = projectEvent(persisted);
+					if (message !== undefined) await writeMessage(stream, message);
 					cursor = persisted.conversationCursor;
 				}
 				await stream.sleep(dependencies.streamPollIntervalMs ?? 1000);
@@ -1075,7 +1086,7 @@ export function registerConversationRoutes(
 			if (!initialReplay) return fail("FORBIDDEN", metadata.traceId);
 			if (initialReplay.outcome === "events") {
 				try {
-					initialReplay.events.forEach(eventProjection);
+					initialReplay.events.forEach(eventProjectionForV1);
 				} catch {
 					return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 				}
@@ -1087,7 +1098,7 @@ export function registerConversationRoutes(
 				conversationId,
 				metadata.traceId,
 				initialReplay,
-				eventProjection,
+				eventProjectionForV1,
 				(stream, message) => writeSseMessage(stream, message as SseMessage),
 				writeAuthorizationRevoked,
 			);
