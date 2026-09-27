@@ -257,7 +257,7 @@ let stage = "positive-turns";
 try {
  await openRuntime();
  await settleTurns(users.map(async user => {
-  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Save it in workspace file canary.txt and your private memory file ${separateNegative ? ".memory/MEMORY.md" : "../memory/MEMORY.md"} using the write tool. Read both files to verify them, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
+  const result = await turn(user, `Use only the native write and read tools, with exactly four calls: write canary.txt, write the memory file, read canary.txt, read the memory file. Do not invoke bash, a terminal, task, todo, skills, or any other tool. My private canary is ${user.canary}. Use the exact path arguments "canary.txt" and "${separateNegative ? ".memory/MEMORY.md" : "../memory/MEMORY.md"}" relative to your current workspace; do not invent absolute paths. Write the canary to both, read both to verify, then reply with that exact canary. Also remember the private context marker ${user.contextCanary} in this conversation, but do not write that marker to either file.`);
   report.checks.push({ user: user.id, phase: "positive-write-read", status: result.status, tools: result.tools, denied: result.denied, passed: result.status === "completed" && result.answer.includes(user.canary) && result.tools >= 4 });
  }));
  await closeRuntime();
