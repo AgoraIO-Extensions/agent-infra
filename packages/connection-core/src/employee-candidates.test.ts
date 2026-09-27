@@ -164,5 +164,24 @@ describe("approval employee candidate identity", () => {
 				Array(501).fill("principal-alice"),
 			),
 		).rejects.toMatchObject({ status: 400 });
+		directoryFailure = true;
+		const resolutionsBeforeDraft = candidateResolutions;
+		await expect(
+			service.resolveEmployeeCandidateForDraft(
+				"editing-admin",
+				restored[0]?.candidateId ?? "",
+			),
+		).resolves.toMatchObject({ principalId: "principal-alice" });
+		expect(candidateResolutions).toBe(resolutionsBeforeDraft + 1);
+		await expect(
+			service.resolveEmployeeCandidateForDraft("other-admin", candidateId),
+		).rejects.toMatchObject({ error: "access_denied" });
+		await expect(
+			service.resolveEmployeeCandidate(
+				"editing-admin",
+				restored[0]?.candidateId ?? "",
+			),
+		).rejects.toMatchObject({ status: 503 });
+		expect(candidateResolutions).toBe(resolutionsBeforeDraft + 1);
 	});
 });

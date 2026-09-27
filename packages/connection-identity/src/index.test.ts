@@ -151,7 +151,7 @@ describe("LDAP directory boundary", () => {
 		);
 		vi.stubGlobal("fetch", fetchEmployees);
 		const directory = new LdapDirectoryAuthenticator({
-			...validOptions,
+			...validOptionsWithoutActiveState,
 			employeeDirectory: {
 				url: "https://employees.example/users",
 				serviceKey: "test-key",
@@ -176,9 +176,7 @@ describe("LDAP directory boundary", () => {
 				},
 			}),
 		);
-		expect(ldapSearches[0]?.filter).toBe(
-			"(&(mail=alice@example.com)(employeeStatus=active))",
-		);
+		expect(ldapSearches[0]?.filter).toBe("(mail=alice@example.com)");
 	});
 
 	it("rejects mismatched LDAP email and does not fall back on upstream failure", async () => {
@@ -374,7 +372,7 @@ describe("LDAP directory boundary", () => {
 		]);
 	});
 
-	it("searches a bounded active employee projection without exposing LDAP filters", async () => {
+	it("searches a bounded employee projection without filtering active state", async () => {
 		const authenticator = new LdapDirectoryAuthenticator({
 			...validOptions,
 			aliasAttribute: "alias",
@@ -393,7 +391,7 @@ describe("LDAP directory boundary", () => {
 		expect(ldapSearches[0]).toEqual({
 			attributes: ["uid", "displayName", "mail", "alias"],
 			filter:
-				"(&(employeeStatus=active)(|(displayName=*ali\\2a\\29\\28uid=\\2a\\29*)(mail=*ali\\2a\\29\\28uid=\\2a\\29*)(alias=*ali\\2a\\29\\28uid=\\2a\\29*)))",
+				"(|(displayName=*ali\\2a\\29\\28uid=\\2a\\29*)(mail=*ali\\2a\\29\\28uid=\\2a\\29*)(alias=*ali\\2a\\29\\28uid=\\2a\\29*))",
 			paged: { pageSize: 10 },
 			sizeLimit: 21,
 		});
@@ -435,13 +433,19 @@ describe("LDAP directory boundary", () => {
 		}
 	});
 
-	it("does not search employees without a confirmed active-state mapping", async () => {
+	it("searches employees without an active-state mapping but still validates query bounds", async () => {
 		const authenticator = new LdapDirectoryAuthenticator(
 			validOptionsWithoutActiveState,
 		);
-		await expect(authenticator.searchEmployees("alice")).rejects.toThrow(
-			"Directory authentication failed",
+		await expect(authenticator.searchEmployees("alice")).resolves.toMatchObject(
+			[{ subject: "alice-id" }],
 		);
-		expect(ldapSearches).toHaveLength(0);
+		expect(ldapSearches).toHaveLength(1);
+		for (const query of ["a", "a".repeat(65)]) {
+			await expect(authenticator.searchEmployees(query)).rejects.toThrow(
+				"Directory authentication failed",
+			);
+		}
+		expect(ldapSearches).toHaveLength(1);
 	});
 });

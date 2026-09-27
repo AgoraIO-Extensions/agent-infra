@@ -975,12 +975,6 @@ export function createConnectionOAuthApp(
 		app.get("/api/v1/connection/admin/employee-candidates", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
-			if (!management.approvalDirectoryEnabled) {
-				throw new ConnectionError(
-					"PROVIDER_UNAVAILABLE",
-					"Employee directory approval gate is unavailable",
-				);
-			}
 			const query = context.req.query("query")?.trim() ?? "";
 			if (query.length < 2 || query.length > 64) {
 				throw new ConnectionError(
@@ -1292,14 +1286,6 @@ export function createConnectionOAuthApp(
 				accessPolicyDraftSchema,
 				await context.req.json().catch(() => undefined),
 			);
-			if (
-				!management.approvalDirectoryEnabled &&
-				body.stages.some((stage) => stage.approverCandidateIds.length > 0)
-			)
-				throw new ConnectionError(
-					"PROVIDER_UNAVAILABLE",
-					"Employee directory approval gate is unavailable",
-				);
 			const result = await browserApiOperation(context, () =>
 				browserCommand(
 					options,
@@ -1319,7 +1305,7 @@ export function createConnectionOAuthApp(
 							const approvers = [];
 							for (const candidateId of stage.approverCandidateIds) {
 								approvers.push(
-									await options.service.resolveEmployeeCandidate(
+									await options.service.resolveEmployeeCandidateForDraft(
 										session.account.principalId,
 										candidateId,
 									),
