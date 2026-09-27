@@ -2307,6 +2307,7 @@
 			"OAuthTransactionRequest": {
 				"type": "object",
 				"additionalProperties": false,
+				"not": { "required": ["accessRequestId", "sharedScopeId"] },
 				"properties": {
 					"accessRequestId": { "type": "string" },
 					"sharedScopeId": { "type": "string" }

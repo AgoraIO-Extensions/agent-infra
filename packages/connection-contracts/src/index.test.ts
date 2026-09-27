@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { connectionBrowserOpenApi } from "./index";
+import {
+	connectionBrowserOpenApi,
+	oauthTransactionRequestSchema,
+} from "./index";
 
 describe("Connection Browser OpenAPI", () => {
+	it("declares mutually exclusive OAuth targets while allowing either target or neither", () => {
+		expect(
+			connectionBrowserOpenApi.components.schemas.OAuthTransactionRequest.not,
+		).toEqual({ required: ["accessRequestId", "sharedScopeId"] });
+		for (const input of [
+			{},
+			{ accessRequestId: "request-1" },
+			{ sharedScopeId: "shared-1" },
+		]) {
+			expect(oauthTransactionRequestSchema.safeParse(input).success).toBe(true);
+		}
+		expect(
+			oauthTransactionRequestSchema.safeParse({
+				accessRequestId: "request-1",
+				sharedScopeId: "shared-1",
+			}).success,
+		).toBe(false);
+	});
 	it("keeps the versioned browser surface free of caller identity selectors", () => {
 		expect(connectionBrowserOpenApi.openapi).toBe("3.1.0");
 		const serialized = JSON.stringify(connectionBrowserOpenApi);

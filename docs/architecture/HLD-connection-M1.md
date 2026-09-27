@@ -1181,6 +1181,9 @@ type ConnectionAccessAuthorizationState =
 
 ApprovalDecision 只接受 current Stage 的合格审批人，以 Request、Stage 和 routing revision 做事务内 CAS；Decision 不可修改。全部 Stage 满足 quorum 后产生服务端一次性 Connect Permit。OAuth/PAT/API Key validation 成功、稳定外部账号已证明、Connection 与 Access Authorization 已持久化时，Permit 才在同一事务消费。
 
+阶段处理时限 `timeoutSeconds` 用于提醒当前审批人与管理员，不是 Decision 的硬截止，不跳级也不自动批准。
+Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 Request 未过期时，合格审批人仍可提交决定。
+
 有限期 Access Authorization 的 Renewal Request 是例外：仅在已发布 PolicyVersion 的续期窗口内，固定同一 Principal、外部账号、ProviderRelease 和 Capability Profile，且原资格尚未自然到期时发起。它复用顺序 Stage 和免责声明确认，但最终通过时不生成 Connect Permit、不收集 Provider Credential，而是在同一事务将原 `validUntil` 从 `GREATEST(validUntil, now())` 起延长所选有限时长，记录 Renewal 和 Authorization revision。待审不产生宽限；原期限先到时仍阻断调用并暂停 Grant，之后审批通过才恢复同一资格。`PERMANENT`、换号、扩权或不兼容 ProviderRelease 不进入续期路径。
 
 续期跨越原到期时间时，沿用 15 节同账号恢复的 replacement Grant 规则：只对仍为 current 且原 Consent、账号证明、scope 与 Action 集合一致的 Grant 创建冻结新 fence 的替代版本；旧 Grant 标记 REPLACED，禁止暂停版本原地恢复 ACTIVE。续期与替代 Grant 必须同事务提交，不恢复撤销、终结或需要重新同意的授权。
