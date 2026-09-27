@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
@@ -9,6 +9,16 @@ let count = 0;
 let model = "provider/model";
 let effort = "high";
 let finishPrompt;
+const waitForGate = async (suffix) => {
+	const path = `${process.env.ACP_TEST_GATE_PATH}.${suffix}`;
+	while (
+		!(await access(path).then(
+			() => true,
+			() => false,
+		))
+	)
+		await new Promise((resolve) => setTimeout(resolve, 10));
+};
 const configOptions = () => [
 	{
 		id: "model",
@@ -143,6 +153,7 @@ const connection = new AgentSideConnection(
 					"tool-permission-hold",
 					"tool-permission-completed-hold",
 					"tool-permission-concurrent",
+					"tool-permission-gated-completion",
 				].includes(process.env.ACP_TEST_MODE)
 			) {
 				const kind =
@@ -212,7 +223,11 @@ const connection = new AgentSideConnection(
 					await new Promise((resolve) => {
 						finishPrompt = resolve;
 					});
+				if (process.env.ACP_TEST_MODE === "tool-permission-gated-completion")
+					await waitForGate("complete");
 				await updateTool(allowed ? "completed" : "failed");
+				if (process.env.ACP_TEST_MODE === "tool-permission-gated-completion")
+					await waitForGate("finish");
 				if (process.env.ACP_TEST_MODE === "tool-permission-completed-hold")
 					await new Promise((resolve) => {
 						finishPrompt = resolve;

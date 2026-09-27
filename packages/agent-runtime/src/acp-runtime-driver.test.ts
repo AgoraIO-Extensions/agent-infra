@@ -284,6 +284,133 @@ it.each([
 	},
 );
 
+it("waits for the ACP tool completion fact before the next model request", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-model-after-tool-"));
+	const gatePath = join(path, "tool-gate");
+	let nextModelIntent: (() => Promise<void>) | undefined;
+	let nextModelStarted: (() => Promise<void>) | undefined;
+	let nextModelFinished:
+		| ((state: "completed" | "failed" | "unknown") => Promise<void>)
+		| undefined;
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		authorizeExternalAction: (action) => driver.validateExternalAction(action),
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (
+			_directory,
+			_selection,
+			admit,
+			modelRequestIntent,
+			modelRequestStarted,
+			_modelUsage,
+			_toolRequestStarted,
+			modelRequestFinished,
+		) => {
+			nextModelIntent = modelRequestIntent;
+			nextModelStarted = modelRequestStarted;
+			nextModelFinished = modelRequestFinished;
+			return {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: {
+					ACP_TEST_MODE: "tool-permission-gated-completion",
+					ACP_TEST_GATE_PATH: gatePath,
+				},
+				authorize: async () => {
+					await admit();
+					await modelRequestIntent?.();
+					await modelRequestStarted?.();
+					await modelRequestFinished?.("completed");
+					return true;
+				},
+			};
+		},
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		const phases = async () =>
+			(
+				await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
+			).flatMap((event) =>
+				event.type === "operation"
+					? [`${event.payload.kind}:${event.payload.phase}`]
+					: [],
+			);
+		await vi.waitFor(async () =>
+			expect(await phases()).toContain("tool:started"),
+		);
+		let settled = false;
+		const intent = nextModelIntent?.().then(
+			() => {
+				settled = true;
+				return true;
+			},
+			() => {
+				settled = true;
+				return false;
+			},
+		);
+		expect(intent).toBeDefined();
+		await new Promise((resolve) => setTimeout(resolve, 5_100));
+		expect(settled).toBe(false);
+		expect(
+			(await phases()).filter((phase) => phase === "model:intent"),
+		).toHaveLength(1);
+		await writeFile(`${gatePath}.complete`, "ready");
+		expect(await intent).toBe(true);
+		await nextModelStarted?.();
+		await nextModelFinished?.("completed");
+		await writeFile(`${gatePath}.finish`, "ready");
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		expect(await phases()).toEqual([
+			"model:intent",
+			"model:started",
+			"model:completed",
+			"tool:intent",
+			"tool:started",
+			"tool:completed",
+			"model:intent",
+			"model:started",
+			"model:completed",
+		]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}, 15_000);
+
 it("permits a second native tool while the first authorized tool is still in progress", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-concurrent-tools-"));
 	const driver = await GenericAcpRuntimeDriver.open({
