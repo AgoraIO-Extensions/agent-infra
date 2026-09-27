@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -19,6 +20,24 @@ import {
 import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
 import { RuntimeHost } from "./runtime-host.js";
+
+const piProcess = vi.hoisted(() => ({
+	capture: false,
+	child: undefined as ChildProcess | undefined,
+}));
+vi.mock("./native-process.js", async (importOriginal) => {
+	const native = await importOriginal<typeof import("./native-process.js")>();
+	return {
+		...native,
+		spawnNativeProcess: async (
+			...args: Parameters<typeof native.spawnNativeProcess>
+		) => {
+			const owned = await native.spawnNativeProcess(...args);
+			if (piProcess.capture) piProcess.child = owned.child;
+			return owned;
+		},
+	};
+});
 
 it("preserves an unconfirmed model request after the native turn fails on HTTP 503", async () => {
 	const path = await mkdtemp(join(tmpdir(), "pi-native-503-"));
@@ -102,6 +121,7 @@ it("keeps an in-flight model request unknown after the pinned Pi process dies", 
 		false,
 		"pi",
 	);
+	piProcess.capture = true;
 	try {
 		const command = {
 			schemaVersion: 2 as const,
@@ -122,14 +142,34 @@ it("keeps an in-flight model request unknown after the pinned Pi process dies", 
 		const accepted = await fixture.driver.execute(command);
 		expect(accepted.result.outcome).toBe("accepted");
 		expect(await fixture.createdTurnCount()).toBe(1);
-		const owner = JSON.parse(
-			await readFile(
-				join(path, accepted.nativeSessionRef, "process.json"),
-				"utf8",
-			),
-		).owner;
-		expect(owner.pid).toEqual(expect.any(Number));
-		process.kill(owner.pid, "SIGKILL");
+		await vi.waitFor(async () =>
+			expect(
+				await fixture.driver.getStatus(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("running"),
+		);
+		await vi.waitFor(async () =>
+			expect(
+				(
+					await fixture.driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					)
+				).flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual(["intent", "started"]),
+		);
+		const child = piProcess.child;
+		if (!child) throw new Error("Pi process was not captured");
+		expect(child.exitCode).toBeNull();
+		expect(child.signalCode).toBeNull();
+		expect(child.kill("SIGKILL")).toBe(true);
+		await vi.waitFor(() => expect(child.signalCode).toBe("SIGKILL"));
 		await vi.waitFor(
 			async () =>
 				expect(
@@ -153,6 +193,7 @@ it("keeps an in-flight model request unknown after the pinned Pi process dies", 
 		).toEqual(["intent", "started", "unknown"]);
 		expect(await fixture.driver.execute(command)).toEqual(accepted);
 		await fixture.restart();
+		expect(await fixture.driver.execute(command)).toEqual(accepted);
 		expect(
 			await fixture.driver.getStatus(
 				accepted.nativeSessionRef,
@@ -178,6 +219,8 @@ it("keeps an in-flight model request unknown after the pinned Pi process dies", 
 	} finally {
 		await fixture.close();
 		await rm(path, { recursive: true, force: true });
+		piProcess.capture = false;
+		piProcess.child = undefined;
 	}
 }, 30_000);
 
