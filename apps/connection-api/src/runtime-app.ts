@@ -96,7 +96,7 @@ export async function createConnectionRuntime(
 	const approvalCatalog = new PostgresConnectionApprovalRepository(
 		config.databaseUrl,
 	);
-	for (const catalog of [
+	const catalogs = [
 		githubConnectionCatalog,
 		bitbucketServerConnectionCatalog,
 		jiraServerConnectionCatalog,
@@ -106,7 +106,8 @@ export async function createConnectionRuntime(
 		jenkinsReleaseConnectionCatalog,
 		manhattanConnectionCatalog,
 		rehoboamConnectionCatalog,
-	]) {
+	] as const;
+	for (const catalog of catalogs) {
 		await repository.publishProviderCatalog(catalog, {
 			mode: "USER_ACTION_REQUIRED",
 			reason: `${catalog.provider} Provider authorization contract changed`,
@@ -117,17 +118,7 @@ export async function createConnectionRuntime(
 		{ id: portablePatConsumerId, name: "Portable Connection PAT" },
 		rehoboamAiConsumer,
 	]) {
-		for (const catalog of [
-			githubConnectionCatalog,
-			bitbucketServerConnectionCatalog,
-			jiraServerConnectionCatalog,
-			confluenceServerConnectionCatalog,
-			datalegoConnectionCatalog,
-			jenkinsCiConnectionCatalog,
-			jenkinsReleaseConnectionCatalog,
-			manhattanConnectionCatalog,
-			rehoboamConnectionCatalog,
-		]) {
+		for (const catalog of catalogs) {
 			await repository.publishConsumerDeclaration({
 				actionVersionIds: catalog.actions.map((action) => action.id),
 				consumer,
@@ -282,16 +273,7 @@ export async function createConnectionRuntime(
 				approvalService,
 				notificationDispatcher,
 				approvalDirectoryEnabled: config.approvalDirectoryEnabled,
-				catalogs: [
-					githubConnectionCatalog,
-					bitbucketServerConnectionCatalog,
-					jiraServerConnectionCatalog,
-					confluenceServerConnectionCatalog,
-					datalegoConnectionCatalog,
-					jenkinsCiConnectionCatalog,
-					jenkinsReleaseConnectionCatalog,
-					rehoboamConnectionCatalog,
-				],
+				catalogs,
 				githubRedirectUri: config.github.redirectUri,
 				service,
 			},
