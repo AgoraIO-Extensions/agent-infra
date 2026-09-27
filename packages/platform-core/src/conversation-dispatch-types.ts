@@ -161,6 +161,10 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<boolean>;
+	/** Fail a confirmed unsent Turn only when the locked Agent is stopped. */
+	terminalizeStoppedUnsentTurn(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<true | false | "agent_not_running">;
 	prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;

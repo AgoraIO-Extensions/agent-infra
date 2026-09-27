@@ -8,11 +8,12 @@ import {
 	type ConversationDispatchStorePortV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	isAgentDispatchStoppedV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
+	planStoppedAgentDispatchV1,
 	planTaskSystemControlV1,
-	stoppedAgentDispatchPlanV1,
 	type TaskPrincipalV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
@@ -21,12 +22,14 @@ import { claimWork } from "./conversation-dispatch-claim.js";
 import {
 	type Client,
 	DispatchCapacityUnavailable,
+	type DispatchState,
 	databaseOperation,
 	type OutboxRow,
 	requireSafeCounter,
 	StaleDispatchLease,
 	safeCounter,
 	symbolicCode,
+	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
 import {
@@ -57,6 +60,35 @@ import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
 	readonly databaseUrl: string;
+}
+
+async function failStoppedUnsentTurn(
+	transaction: Transaction,
+	state: DispatchState,
+	claim: ConversationDispatchClaimV1,
+) {
+	const plan = planStoppedAgentDispatchV1(claim.operation);
+	await applyTransition(transaction, state, claim, plan.transition);
+	if (claim.messageId && plan.messageStatus) {
+		const messages = await transaction<{ message_id: string }[]>`
+			update platform.conversation_messages
+			set status = ${plan.messageStatus}, failure_code = ${plan.failureCode},
+				updated_at = clock_timestamp()
+			where message_id = ${claim.messageId}
+				and execution_id = ${claim.executionId}
+				and conversation_id = ${claim.conversationId}
+				and status = 'submitted'
+			returning message_id
+		`;
+		if (messages.length !== 1) throw new StaleDispatchLease();
+	}
+	await closeOutbox(
+		transaction,
+		state,
+		claim,
+		plan.outboxStatus,
+		plan.failureCode,
+	);
 }
 
 export class PostgresConversationDispatchStoreV1
@@ -494,6 +526,44 @@ export class PostgresConversationDispatchStoreV1
 		});
 	}
 
+	async terminalizeStoppedUnsentTurn(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<true | false | "agent_not_running"> {
+		requireClaim(input.claim);
+		if (
+			!isTurn(input.claim.operation) ||
+			input.claim.executionStatus !== "submitted" ||
+			input.claim.stopPending ||
+			input.claim.metadataRecovery ||
+			input.claim.generationIsolation
+		)
+			throw new TypeError("Only an unsent Turn can be terminalized");
+		let stopped = false;
+		const owned = await transactionResult(this.#client, async (transaction) => {
+			// Serialize against lifecycle updates before locking the Conversation.
+			await transaction`select id from platform.agents where id = ${input.claim.agentId} for update`;
+			const state = await ownedState(transaction, input.claim);
+			if (state?.execution.status !== "submitted")
+				throw new StaleDispatchLease();
+			if (
+				await readGenerationIsolation(
+					transaction,
+					input.claim.conversationId,
+					input.claim.sessionGeneration,
+				)
+			)
+				throw new StaleDispatchLease();
+			const [agent] = await transaction<{ status: string | null }[]>`
+				select status from platform.agent_applications
+				where agent_id = ${input.claim.agentId}
+			`;
+			if (!isAgentDispatchStoppedV1(agent?.status ?? null)) return;
+			await failStoppedUnsentTurn(transaction, state, input.claim);
+			stopped = true;
+		});
+		return owned ? (stopped ? "agent_not_running" : true) : false;
+	}
+
 	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
@@ -616,33 +686,7 @@ export class PostgresConversationDispatchStoreV1
 							throw new DispatchCapacityUnavailable("capacity_unavailable");
 						}
 						if (capacityDecision === "agent_not_running") {
-							const plan = stoppedAgentDispatchPlanV1;
-							await applyTransition(
-								transaction,
-								state,
-								input.claim,
-								plan.transition,
-							);
-							if (input.claim.messageId) {
-								const messages = await transaction<{ message_id: string }[]>`
-								update platform.conversation_messages
-								set status = ${plan.messageStatus}, failure_code = ${plan.failureCode},
-									updated_at = clock_timestamp()
-								where message_id = ${input.claim.messageId}
-									and execution_id = ${input.claim.executionId}
-									and conversation_id = ${input.claim.conversationId}
-									and status = 'submitted'
-								returning message_id
-							`;
-								if (messages.length !== 1) throw new StaleDispatchLease();
-							}
-							await closeOutbox(
-								transaction,
-								state,
-								input.claim,
-								plan.outboxStatus,
-								plan.failureCode,
-							);
+							await failStoppedUnsentTurn(transaction, state, input.claim);
 							stopped = true;
 							return;
 						}

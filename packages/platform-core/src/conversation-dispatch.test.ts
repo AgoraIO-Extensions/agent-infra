@@ -181,6 +181,17 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return this.renewable && this.outboxStatus === "processing";
 	}
 
+	async terminalizeStoppedUnsentTurn(input: {
+		claim: ConversationDispatchClaimV1;
+	}): Promise<true | false | "agent_not_running"> {
+		if (!this.#owned(input.claim)) return false;
+		if (this.capacity !== "agent_not_running") return true;
+		this.current = { ...this.current, executionStatus: "failed" };
+		this.outboxStatus = "failed";
+		this.errorCode = "AGENT_NOT_RUNNING";
+		return "agent_not_running";
+	}
+
 	async prepareRuntimeDispatch(input: {
 		claim: ConversationDispatchClaimV1;
 		leaseDurationMs: number;
@@ -568,14 +579,43 @@ describe("Conversation Worker dispatch", () => {
 			expect(runtimeHost.sideEffectCount()).toBe(1);
 		},
 	);
-	it("fails an unstarted Turn when lifecycle stop wins before dispatch", async () => {
+	it("fails an unstarted Turn before consulting unavailable authorization when Agent stop wins", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
-		const f = setup({ runtimeHost });
+		let authorizationCalls = 0;
+		const f = setup({
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					authorizationCalls++;
+					throw new Error("Identity service unavailable");
+				},
+			},
+		});
 		f.store.capacity = "agent_not_running";
 		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "rejected" });
 		expect(f.store.current.executionStatus).toBe("failed");
 		expect(f.store.outboxStatus).toBe("failed");
 		expect(f.store.errorCode).toBe("AGENT_NOT_RUNNING");
+		expect(authorizationCalls).toBe(0);
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+	it("keeps a live Agent's unsent Turn retryable when authorization is unavailable", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		const f = setup({
+			runtimeHost,
+			authorization: {
+				async authorize() {
+					throw new Error("Identity service unavailable");
+				},
+			},
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(f.store.current.executionStatus).toBe("submitted");
+		expect(f.store.outboxStatus).toBe("retry_scheduled");
+		expect(f.store.errorCode).toBe("AUTHORIZATION_UNAVAILABLE");
 		expect(runtimeHost.sideEffectCount()).toBe(0);
 	});
 	it.each(["found", "not_found"] as const)(

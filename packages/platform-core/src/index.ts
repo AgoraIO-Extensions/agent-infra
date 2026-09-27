@@ -51,7 +51,8 @@ export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";
 export {
 	decideConversationDispatchCapacityV1,
-	stoppedAgentDispatchPlanV1,
+	isAgentDispatchStoppedV1,
+	planStoppedAgentDispatchV1,
 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";

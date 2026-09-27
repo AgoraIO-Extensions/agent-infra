@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { ConversationDispatchOperationV1 } from "./conversation-dispatch-types.js";
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 /** Narrow current-state projection, read under the same Agent lock as the reservation. */
@@ -26,20 +27,33 @@ interface CapacityState {
 	};
 }
 
-/** Terminal result for a stopped Agent's confirmed unsent Turn. */
-export const stoppedAgentDispatchPlanV1 = {
-	transition: { executionStatus: "failed", conversationStatus: "ready" },
-	messageStatus: "failed",
-	outboxStatus: "failed",
-	failureCode: "AGENT_NOT_RUNNING",
-} as const;
+/** Regeneration reuses its source Message; only a new submit can fail that Message. */
+export function planStoppedAgentDispatchV1(
+	operation: ConversationDispatchOperationV1,
+) {
+	if (
+		operation !== "conversation.turn.submit.v1" &&
+		operation !== "conversation.turn.regenerate.v1"
+	)
+		throw new TypeError("Only an unsent Turn can be terminalized");
+	return {
+		transition: { executionStatus: "failed", conversationStatus: "ready" },
+		messageStatus:
+			operation === "conversation.turn.submit.v1" ? "failed" : null,
+		outboxStatus: "failed",
+		failureCode: "AGENT_NOT_RUNNING",
+	} as const;
+}
+
+export function isAgentDispatchStoppedV1(status: string | null): boolean {
+	return ["stopped", "disabled", "creation_failed"].includes(status ?? "");
+}
 
 /** Recovery and controls do not call this new-execution admission decision. */
 export function decideConversationDispatchCapacityV1(
 	state: CapacityState,
 ): "admit" | "capacity_wait" | "capacity_unavailable" | "agent_not_running" {
-	if (["stopped", "disabled", "creation_failed"].includes(state.status ?? ""))
-		return "agent_not_running";
+	if (isAgentDispatchStoppedV1(state.status)) return "agent_not_running";
 	const { workload, deployment } = state;
 	const verified = workload.verified;
 	const capacity = verified?.executionCapacity;

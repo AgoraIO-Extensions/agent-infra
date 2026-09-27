@@ -336,6 +336,24 @@ export function createConversationDispatchUseCaseV1(
 			) {
 				return unavailable();
 			}
+			if (
+				isTurnOperation(claim.operation) &&
+				claim.executionStatus === "submitted" &&
+				!claim.stopPending &&
+				!claim.metadataRecovery &&
+				!claim.generationIsolation
+			) {
+				try {
+					const stopped = await dependencies.store.terminalizeStoppedUnsentTurn(
+						{ claim },
+					);
+					if (stopped === "agent_not_running")
+						return { schemaVersion: 1, outcome: "rejected" };
+					if (!stopped) return { schemaVersion: 1, outcome: "stale" };
+				} catch {
+					return { schemaVersion: 1, outcome: "retry", retryScheduled: false };
+				}
+			}
 
 			let authorityDecision: Awaited<
 				ReturnType<ConversationDispatchAuthorizationPortV1["authorize"]>

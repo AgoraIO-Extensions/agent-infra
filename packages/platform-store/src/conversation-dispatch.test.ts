@@ -708,9 +708,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			await client.unsafe(`create trigger stopped_dispatch_failure before update on platform.outbox_items
 				for each row execute function platform.stopped_dispatch_failure()`);
 			await expect(
-				store.prepareRuntimeDispatch({
+				store.terminalizeStoppedUnsentTurn({
 					claim: decision.claim,
-					leaseDurationMs: 30_000,
 				}),
 			).rejects.toThrow("Conversation dispatch store is unavailable");
 			expect((await dispatchState(work))?.execution_status).toBe("submitted");
@@ -729,12 +728,91 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				"drop trigger stopped_dispatch_failure on platform.outbox_items",
 			);
 			expect(
-				await store.prepareRuntimeDispatch({
+				await store.terminalizeStoppedUnsentTurn({
 					claim: decision.claim,
-					leaseDurationMs: 30_000,
 				}),
 			).toBe("agent_not_running");
 			expect((await dispatchState(work))?.execution_status).toBe("failed");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps an unstarted Turn untouched until the locked Agent is confirmed stopped", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.terminalizeStoppedUnsentTurn({ claim: decision.claim }),
+			).toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "processing",
+				execution_status: "submitted",
+			});
+			await client`update platform.agent_applications set status = 'stopped',
+				desired_state = 'stopped', service_availability = null
+				where agent_id = 'agent-dispatch'`;
+			expect(
+				await store.terminalizeStoppedUnsentTurn({
+					claim: {
+						...decision.claim,
+						deliveryFence: decision.claim.deliveryFence + 1,
+					},
+				}),
+			).toBe(false);
+			expect((await dispatchState(work))?.execution_status).toBe("submitted");
+			expect(
+				await store.terminalizeStoppedUnsentTurn({ claim: decision.claim }),
+			).toBe("agent_not_running");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("fails a stopped regeneration without changing its source Message", async () => {
+		const work = await seed("conversation.turn.regenerate.v1");
+		const sourceExecutionId = `source-${work.executionId}`;
+		await client`
+			insert into platform.conversation_executions
+				(execution_id, conversation_id, agent_id, actor_id, channel_id,
+				turn_id, status, session_generation, delivery_fence,
+				authorization_revision, model_configuration_revision,
+				model_option_id, reasoning_level, created_at, updated_at)
+			select ${sourceExecutionId}, conversation_id, agent_id, actor_id,
+				channel_id, ${`source-${work.turnId}`}, 'completed', session_generation,
+				0, authorization_revision, model_configuration_revision,
+				model_option_id, reasoning_level, now(), now()
+			from platform.conversation_executions
+			where execution_id = ${work.executionId}
+		`;
+		await client`update platform.conversation_messages
+			set execution_id = ${sourceExecutionId} where message_id = ${work.messageId}`;
+		await client`update platform.agent_applications
+			set status = 'stopped', desired_state = 'stopped', service_availability = null
+			where agent_id = 'agent-dispatch'`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.terminalizeStoppedUnsentTurn({ claim: decision.claim }),
+			).toBe("agent_not_running");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			const [source] = await client<
+				{ execution_id: string; status: string }[]
+			>`select execution_id, status from platform.conversation_messages
+				where message_id = ${work.messageId}`;
+			expect(source).toMatchObject({
+				execution_id: sourceExecutionId,
+				status: "submitted",
+			});
 		} finally {
 			await store.close();
 		}

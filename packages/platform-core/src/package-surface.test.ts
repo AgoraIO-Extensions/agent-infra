@@ -68,6 +68,7 @@ describe("platform-core package surface", () => {
 			"decideConversationDispatchRetryTransitionV1",
 			"immutableSecretNameV1",
 			"isAgentAccessAllowedV1",
+			"isAgentDispatchStoppedV1",
 			"isAgentOwnerV1",
 			"isAgentRuntimePresentationVisibleV1",
 			"isConfirmedResultFileV1",
@@ -87,6 +88,7 @@ describe("platform-core package surface", () => {
 			"parseWorkloadSecretRecoveriesV1",
 			"planConversationGenerationConfirmationV1",
 			"planConversationGenerationIsolationV1",
+			"planStoppedAgentDispatchV1",
 			"planTaskSystemControlV1",
 			"platformIdempotencyV1",
 			"projectConversationExecutionV1",
@@ -98,7 +100,6 @@ describe("platform-core package surface", () => {
 			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
-			"stoppedAgentDispatchPlanV1",
 			"workloadManagementObservationV1",
 		]);
 		const testingSurface = await import(

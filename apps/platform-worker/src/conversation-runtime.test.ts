@@ -1081,6 +1081,9 @@ describe("Trusted conversation Runtime adapter", () => {
 				async prepareRuntimeDispatch() {
 					return owned;
 				},
+				async terminalizeStoppedUnsentTurn() {
+					return owned;
+				},
 				async cancelUnaccepted() {
 					throw new Error("The original Turn was accepted");
 				},
