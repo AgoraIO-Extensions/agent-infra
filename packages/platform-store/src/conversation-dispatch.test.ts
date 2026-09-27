@@ -408,7 +408,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (accepted.outcome !== "accepted")
 				throw new Error("Expected custom message acceptance");
-			const [work] = await store.findDispatchable({ limit: 1 });
+			let [work] = await store.findDispatchable({ limit: 1 });
+			const deadline = Date.now() + 5_000;
+			while (!work && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				[work] = await store.findDispatchable({ limit: 1 });
+			}
 			if (!work) throw new Error("Expected accepted message outbox");
 			const decision = await store.claim({
 				schemaVersion: 1,
@@ -724,6 +729,72 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			await store.close();
 		}
 	});
+
+	it("serializes a lifecycle stop ahead of an unstarted Turn", async () => {
+		const work = await seed();
+		await seedCapacityAgent();
+		const { store, decision } = await claim(work.itemId);
+		if (decision.outcome !== "claimed") throw new Error("Expected claim");
+		let releaseStop = () => {};
+		let stopLocked = () => {};
+		const release = new Promise<void>((resolve) => {
+			releaseStop = resolve;
+		});
+		const locked = new Promise<void>((resolve) => {
+			stopLocked = resolve;
+		});
+		const stop = client.begin(async (transaction) => {
+			await transaction`select id from platform.agents where id = 'agent-dispatch' for update`;
+			stopLocked();
+			await release;
+			await transaction`update platform.agent_applications
+				set status = 'stopped', desired_state = 'stopped', service_availability = null
+				where agent_id = 'agent-dispatch'`;
+		});
+		let preparation:
+			| ReturnType<typeof store.prepareRuntimeDispatch>
+			| undefined;
+		try {
+			await locked;
+			preparation = store.prepareRuntimeDispatch({
+				claim: decision.claim,
+				leaseDurationMs: 30_000,
+			});
+			let waiting = false;
+			const deadline = Date.now() + 5_000;
+			while (!waiting && Date.now() < deadline) {
+				const [activity] = await client<{ waiting: boolean }[]>`
+					select exists (
+						select 1 from pg_stat_activity
+						where datname = current_database()
+							and wait_event_type = 'Lock'
+							and query like '%from platform.agents%'
+						) as waiting`;
+				waiting = activity?.waiting === true;
+				if (!waiting) await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(waiting).toBe(true);
+			releaseStop();
+			await stop;
+			expect(await preparation).toBe("agent_not_running");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			const [message] = await client<
+				{ status: string; failure_code: string }[]
+			>`select status, failure_code from platform.conversation_messages
+				where message_id = ${work.messageId}`;
+			expect(message).toMatchObject({
+				status: "failed",
+				failure_code: "AGENT_NOT_RUNNING",
+			});
+		} finally {
+			releaseStop();
+			await Promise.allSettled([stop, preparation]);
+			await store.close();
+		}
+	}, 15_000);
 
 	it("allows occupied execution recovery and controls without a remaining capacity profile", async () => {
 		const work = await seed(undefined, { executionStatus: "processing" });
