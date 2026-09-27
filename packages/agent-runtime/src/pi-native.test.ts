@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeEvent } from "@agent-infra/contracts/runtime";
 import { expect, it, vi } from "vitest";
 import type {
 	RuntimeDriverOperationRecord,
@@ -245,7 +246,7 @@ async function nativeToolsFixture(
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error();
 	let host: RuntimeHost | undefined;
-	const driver = await openPiRuntime({
+	const runtimeOptions: Parameters<typeof openPiRuntime>[0] = {
 		path,
 		configVersion: "pi-tools-test",
 		defaultModelOptionId: "primary",
@@ -274,7 +275,8 @@ async function nativeToolsFixture(
 				authentication: "bearer",
 			},
 		],
-	});
+	};
+	let driver = await openPiRuntime(runtimeOptions);
 	const command = {
 		schemaVersion: 2 as const,
 		kind: "submit-turn" as const,
@@ -330,7 +332,9 @@ async function nativeToolsFixture(
 	} else record = await driver.execute(command);
 	const workspace = join(path, record.nativeSessionRef, "workspace");
 	return {
-		driver,
+		get driver() {
+			return driver;
+		},
 		host,
 		record,
 		workspace,
@@ -353,6 +357,11 @@ async function nativeToolsFixture(
 		},
 		facts: () =>
 			driver.replayEvents(record.nativeSessionRef, command.executionId),
+		async reopen() {
+			await driver.close();
+			driver = await openPiRuntime(runtimeOptions);
+			return driver.execute(command);
+		},
 		async close() {
 			await host?.close();
 			await driver.close();
@@ -458,17 +467,21 @@ it("gates actual pinned Pi read/write/edit and rejects re-execution of a complet
 		);
 		expect(facts.map((fact) => fact.phase)).toEqual([
 			"intent",
+			"started",
 			"completed",
 			"intent",
+			"started",
 			"completed",
 			"intent",
+			"started",
 			"completed",
 			"intent",
 			"failed",
 		]);
-		for (const fact of facts) {
-			expect(fact).not.toHaveProperty("startedAt");
-			expect(fact).not.toHaveProperty("durationMs");
+		for (const fact of facts.filter((fact) => fact.phase === "completed")) {
+			expect(fact.startedAt).toEqual(expect.any(String));
+			expect(fact.finishedAt).toEqual(expect.any(String));
+			expect(fact.durationMs).toBeGreaterThanOrEqual(0);
 		}
 		const originalAction = permit.mock.calls[0]?.[0];
 		if (!originalAction) throw new Error("Missing tool permit");
@@ -607,6 +620,181 @@ it.each(["write", "edit"])(
 	30_000,
 );
 
+it.each(["read", "write", "edit"] as const)(
+	"waits for durable completion before delivering the actual Pi %s result",
+	async (name) => {
+		const blocked = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const fixture = await nativeToolsFixture(
+			[
+				{
+					id: "held-result",
+					name,
+					input: {
+						path: "owner.txt",
+						content: "changed",
+						edits: [{ oldText: "prefix", newText: "changed" }],
+					},
+				},
+			],
+			async (action) => fixture.driver.validateExternalAction(action),
+		);
+		const original = DurableJsonFile.prototype.update;
+		const writes = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+				return original.call(this, async (draft) => {
+					const result = await change(draft);
+					const state = draft as { turns?: { events?: RuntimeEvent[] }[] };
+					if (
+						state.turns?.some((turn) =>
+							turn.events?.some(
+								(event) =>
+									event.type === "operation" &&
+									event.payload.kind === "tool" &&
+									event.payload.phase === "completed",
+							),
+						)
+					) {
+						blocked.resolve();
+						await release.promise;
+					}
+					return result;
+				});
+			});
+		try {
+			await writeFile(
+				join(fixture.workspace, "owner.txt"),
+				"prefix SYNTHETIC_OWNER_CANARY",
+			);
+			await fixture.start();
+			await blocked.promise;
+			expect(fixture.requests).toHaveLength(1);
+			expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
+				name === "read"
+					? "prefix SYNTHETIC_OWNER_CANARY"
+					: name === "write"
+						? "changed"
+						: "changed SYNTHETIC_OWNER_CANARY",
+			);
+			release.resolve();
+			await fixture.complete();
+			expect(fixture.requests).toHaveLength(2);
+		} finally {
+			release.resolve();
+			writes.mockRestore();
+			await fixture.close();
+		}
+	},
+	30_000,
+);
+
+it.each(
+	(["read", "write", "edit"] as const).flatMap((name) =>
+		(["before commit", "after commit"] as const).map(
+			(failure) => [name, failure] as const,
+		),
+	),
+)(
+	"does not repeat actual Pi %s after a result acknowledgement fails %s",
+	async (name, failure) => {
+		const fixture = await nativeToolsFixture(
+			[
+				{
+					id: "unconfirmed-result",
+					name,
+					input: {
+						path: "owner.txt",
+						content: "changed",
+						edits: [{ oldText: "prefix", newText: "changed" }],
+					},
+				},
+				{
+					id: "must-not-execute",
+					name: "write",
+					input: { path: "owner.txt", content: "forbidden replay" },
+				},
+			],
+			async (action) => fixture.driver.validateExternalAction(action),
+		);
+		let injected = false;
+		const original = DurableJsonFile.prototype.update;
+		const writes = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+				let inject = false;
+				const operation = original.call(this, async (draft) => {
+					const result = await change(draft);
+					const state = draft as { turns?: { events?: RuntimeEvent[] }[] };
+					if (
+						!injected &&
+						state.turns?.some((turn) =>
+							turn.events?.some(
+								(event) =>
+									event.type === "operation" &&
+									event.payload.kind === "tool" &&
+									event.payload.phase === "completed",
+							),
+						)
+					) {
+						injected = inject = true;
+						if (failure === "before commit")
+							throw new Error("SYNTHETIC_TOOL_RESULT_COMMIT_FAILURE");
+					}
+					return result;
+				});
+				return operation.then((result) => {
+					if (inject) throw new Error("SYNTHETIC_TOOL_RESULT_ACK_LOST");
+					return result;
+				});
+			});
+		try {
+			await writeFile(
+				join(fixture.workspace, "owner.txt"),
+				"prefix SYNTHETIC_OWNER_CANARY",
+			);
+			await fixture.start();
+			await fixture.complete("blocked");
+			expect(injected).toBe(true);
+			expect(fixture.requests).toHaveLength(1);
+			const facts = (await fixture.facts()).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(facts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				failure === "before commit" ? "unknown" : "completed",
+			]);
+			expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
+			expect(facts.at(-1)?.startedAt).toEqual(expect.any(String));
+			writes.mockRestore();
+			const recovered = await fixture.reopen();
+			expect(recovered.nativeSessionRef).toBe(fixture.record.nativeSessionRef);
+			expect(
+				(await fixture.facts()).flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "tool"
+						? [event.payload]
+						: [],
+				),
+			).toEqual(facts);
+			expect(fixture.requests).toHaveLength(1);
+			expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
+				name === "read"
+					? "prefix SYNTHETIC_OWNER_CANARY"
+					: name === "write"
+						? "changed"
+						: "changed SYNTHETIC_OWNER_CANARY",
+			);
+		} finally {
+			writes.mockRestore();
+			await fixture.close();
+		}
+	},
+	30_000,
+);
+
 it.each(["read", "write", "edit"])(
 	"blocks actual pinned Pi %s when current authorization denies",
 	async (name) => {
@@ -736,3 +924,83 @@ it.each(["read", "write", "edit"])(
 	},
 	30_000,
 );
+
+it("excludes a delayed durable start acknowledgement from actual pinned Pi tool timing", async () => {
+	const blocked = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const fixture = await nativeToolsFixture(
+		[
+			{
+				id: "delayed-start",
+				name: "write",
+				input: { path: "owner.txt", content: "changed" },
+			},
+		],
+		async (action) => fixture.driver.validateExternalAction(action),
+	);
+	const original = DurableJsonFile.prototype.update;
+	let injected = false;
+	const writes = vi
+		.spyOn(DurableJsonFile.prototype, "update")
+		.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+			let hold = false;
+			return original
+				.call(this, async (draft) => {
+					const result = await change(draft);
+					const state = draft as { turns?: { events?: RuntimeEvent[] }[] };
+					if (
+						!injected &&
+						state.turns?.some((turn) =>
+							turn.events?.some(
+								(event) =>
+									event.type === "operation" &&
+									event.payload.kind === "tool" &&
+									event.payload.phase === "started",
+							),
+						)
+					)
+						injected = hold = true;
+					return result;
+				})
+				.then(async (result) => {
+					if (hold) {
+						blocked.resolve();
+						await release.promise;
+					}
+					return result;
+				});
+		});
+	try {
+		await fixture.start();
+		await blocked.promise;
+		await vi.waitFor(async () =>
+			expect(await readFile(join(fixture.workspace, "owner.txt"), "utf8")).toBe(
+				"changed",
+			),
+		);
+		await new Promise<void>((done) => setTimeout(done, 100));
+		expect(fixture.requests).toHaveLength(1);
+		const acknowledgedAt = Date.now();
+		release.resolve();
+		await fixture.complete();
+		const facts = (await fixture.facts()).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload]
+				: [],
+		);
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		const result = facts.at(-1);
+		expect(Date.parse(result?.finishedAt ?? "")).toBeLessThan(acknowledgedAt);
+		expect(result?.durationMs).toBeLessThan(
+			acknowledgedAt - Date.parse(result?.startedAt ?? ""),
+		);
+	} finally {
+		release.resolve();
+		writes.mockRestore();
+		await fixture.close();
+	}
+}, 30_000);

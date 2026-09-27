@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
+import type { NativeToolReceipt } from "./session-runtime-driver.js";
 
 export type RuntimeMessagesRequest = "messages" | "count_tokens";
 
@@ -22,6 +23,7 @@ export interface RuntimeMessagesTransportOptions {
 		/** Pi calls this endpoint from each real ToolDefinition.execute invocation. */
 		readonly executionBoundary?: true;
 	}) => Promise<void>;
+	readonly toolReceipt?: (receipt: NativeToolReceipt) => Promise<void>;
 	readonly fetch?: typeof fetch;
 	readonly receipt?: (
 		state: "sent" | "completed" | "failed" | "unknown",
@@ -51,6 +53,68 @@ function reject(response: ServerResponse, status = 400) {
 	} else response.end(`event: error\ndata: ${failureBody}\n\n`);
 }
 
+function toolReceipt(value: unknown): NativeToolReceipt {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error();
+	const body = value as Record<string, unknown>;
+	if (
+		Object.keys(body).some(
+			(key) =>
+				![
+					"toolCallId",
+					"name",
+					"phase",
+					"startedAt",
+					"finishedAt",
+					"durationMs",
+				].includes(key),
+		) ||
+		typeof body.toolCallId !== "string" ||
+		!body.toolCallId ||
+		body.toolCallId.length > 512 ||
+		typeof body.name !== "string" ||
+		!["read", "write", "edit"].includes(body.name) ||
+		typeof body.phase !== "string" ||
+		!["started", "completed", "failed", "unknown"].includes(body.phase)
+	)
+		throw new Error();
+	for (const key of ["startedAt", "finishedAt"]) {
+		const time = body[key];
+		if (
+			time !== undefined &&
+			(typeof time !== "string" ||
+				!Number.isFinite(Date.parse(time)) ||
+				new Date(time).toISOString() !== time)
+		)
+			throw new Error();
+	}
+	if (
+		body.phase === "started" &&
+		(!body.startedAt ||
+			body.finishedAt !== undefined ||
+			body.durationMs !== undefined)
+	)
+		throw new Error();
+	if (
+		body.phase === "unknown" &&
+		(body.finishedAt !== undefined || body.durationMs !== undefined)
+	)
+		throw new Error();
+	if (["completed", "failed"].includes(String(body.phase))) {
+		if (!body.finishedAt || (body.phase === "completed" && !body.startedAt))
+			throw new Error();
+		if (body.startedAt !== undefined) {
+			if (
+				!Number.isSafeInteger(body.durationMs) ||
+				(body.durationMs as number) < 0 ||
+				Date.parse(String(body.finishedAt)) < Date.parse(String(body.startedAt))
+			)
+				throw new Error();
+		} else if (body.durationMs !== undefined) throw new Error();
+	}
+	return body as unknown as NativeToolReceipt;
+}
+
 /** One Query, one fixed option. No discovery, routing, retries, or user-supplied upstream headers. */
 export async function openRuntimeMessagesTransport(
 	options: RuntimeMessagesTransportOptions,
@@ -77,6 +141,50 @@ export async function openRuntimeMessagesTransport(
 	const server = createServer((request, response) => {
 		let counting = false;
 		const operation = (async () => {
+			if (
+				request.method === "POST" &&
+				request.url === "/internal/tool-receipt" &&
+				options.client === "pi" &&
+				!closed &&
+				request.headers["x-api-key"] === token
+			) {
+				let receipt: NativeToolReceipt | undefined;
+				try {
+					const chunks: Buffer[] = [];
+					let size = 0;
+					for await (const chunk of request) {
+						size += chunk.length;
+						if (size > 4096) throw new Error();
+						chunks.push(chunk);
+					}
+					receipt = toolReceipt(
+						JSON.parse(
+							new TextDecoder("utf-8", { fatal: true }).decode(
+								Buffer.concat(chunks),
+							),
+						),
+					);
+					if (!options.toolReceipt || (failure && receipt.phase === "started"))
+						throw new Error();
+					await options.toolReceipt(receipt);
+					if (receipt.phase === "unknown") failure = "unknown";
+					response.writeHead(204).end();
+				} catch {
+					if (receipt) {
+						failure = "unknown";
+						await options
+							.toolReceipt?.({
+								toolCallId: receipt.toolCallId,
+								name: receipt.name,
+								phase: "unknown",
+								...(receipt.startedAt ? { startedAt: receipt.startedAt } : {}),
+							})
+							.catch(() => {});
+					}
+					reject(response, 403);
+				}
+				return;
+			}
 			if (
 				request.method === "POST" &&
 				request.url === "/internal/tool-intent" &&

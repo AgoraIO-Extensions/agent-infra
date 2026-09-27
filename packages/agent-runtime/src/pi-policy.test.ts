@@ -10,9 +10,13 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	createWriteToolDefinition,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
 import { createPiWorkspaceTools } from "./pi-policy.js";
+import type { NativeToolReceipt } from "./session-runtime-driver.js";
 
 it.each(["read", "write", "edit"] as const)(
 	"guards the real Pi %s operation after path transformations",
@@ -25,7 +29,11 @@ it.each(["read", "write", "edit"] as const)(
 		const foreign = join(root, "foreign.txt");
 		const canary = "prefix SYNTHETIC_FOREIGN_CANARY";
 		await writeFile(foreign, canary);
-		const tool = createPiWorkspaceTools(workspace, async () => {})[name];
+		const tool = createPiWorkspaceTools(
+			workspace,
+			async () => {},
+			async () => {},
+		)[name];
 		const execute = (path: string) =>
 			tool.execute(
 				"synthetic-tool-call",
@@ -68,6 +76,95 @@ it.each(["read", "write", "edit"] as const)(
 	},
 );
 
+it("does not report starts for rejected paths, invalid edits or tools still in the native mutation queue", async () => {
+	const workspace = await realpath(
+		await mkdtemp(join(tmpdir(), "pi-tool-timing-")),
+	);
+	const phases: NativeToolReceipt[] = [];
+	const waiting = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const tools = createPiWorkspaceTools(
+		workspace,
+		async () => {},
+		async (receipt) => {
+			phases.push(receipt);
+		},
+	);
+	const queuedWrite = createWriteToolDefinition(workspace, {
+		operations: {
+			writeFile: async (path, content) => {
+				await writeFile(path, content, "utf8");
+			},
+			mkdir: async (directory) => {
+				waiting.resolve();
+				await release.promise;
+				await mkdir(directory, { recursive: true });
+			},
+		},
+	});
+	const context = { cwd: workspace } as ExtensionContext;
+	let first: Promise<unknown> | undefined;
+	let second: Promise<unknown> | undefined;
+	try {
+		await expect(
+			tools.read.execute(
+				"denied",
+				{ path: "../foreign.txt" },
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow();
+		await expect(
+			tools.edit.execute(
+				"invalid",
+				{ path: "owner.txt", edits: [] },
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow();
+		expect(
+			phases.map((receipt) => [receipt.toolCallId, receipt.phase]),
+		).toEqual([
+			["denied", "failed"],
+			["invalid", "failed"],
+		]);
+		for (const receipt of phases) expect(receipt.startedAt).toBeUndefined();
+		first = queuedWrite.execute(
+			"first",
+			{ path: "owner.txt", content: "first" },
+			undefined,
+			undefined,
+			context,
+		);
+		await waiting.promise;
+		second = tools.edit.execute(
+			"second",
+			{ path: "owner.txt", edits: [{ oldText: "first", newText: "second" }] },
+			undefined,
+			undefined,
+			context,
+		);
+		await new Promise<void>((done) => setImmediate(done));
+		expect(phases.some((receipt) => receipt.toolCallId === "second")).toBe(
+			false,
+		);
+		release.resolve();
+		await Promise.all([first, second]);
+		expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe("second");
+		expect(
+			phases
+				.filter((receipt) => receipt.toolCallId === "second")
+				.map((receipt) => receipt.phase),
+		).toEqual(["started", "completed"]);
+	} finally {
+		release.resolve();
+		await Promise.allSettled([first, second]);
+		await rm(workspace, { recursive: true, force: true });
+	}
+});
+
 it.each(["read", "write", "edit"] as const)(
 	"requires a fresh durable permit in the real %s execute boundary without a tool_call event",
 	async (name) => {
@@ -79,7 +176,9 @@ it.each(["read", "write", "edit"] as const)(
 		const permit = vi.fn(async () => {
 			if (!allowed) throw new Error("SYNTHETIC_INTENT_UNAVAILABLE");
 		});
-		const tool = createPiWorkspaceTools(workspace, permit)[name];
+		const tool = createPiWorkspaceTools(workspace, permit, async () => {})[
+			name
+		];
 		const execute = () =>
 			tool.execute(
 				"same-native-call",

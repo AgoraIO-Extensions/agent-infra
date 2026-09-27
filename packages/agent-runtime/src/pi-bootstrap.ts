@@ -58,6 +58,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 	return PiRuntimeDriver.open({
 		...options,
 		modelLifecycleAtTransport: true,
+		toolLifecycleAtBoundary: true,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `configured/${option.model}`,
@@ -73,6 +74,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			modelUsage,
 			toolRequestStarted,
 			modelRequestFinished,
+			toolReceipt,
 		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
@@ -98,6 +100,15 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 							.update(tool.toolCallId)
 							.digest("hex"),
 					}),
+				toolReceipt: async (receipt) => {
+					if (!toolReceipt) throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+					await toolReceipt({
+						...receipt,
+						toolCallId: createHash("sha256")
+							.update(receipt.toolCallId)
+							.digest("hex"),
+					});
+				},
 			});
 			try {
 				for (const name of [

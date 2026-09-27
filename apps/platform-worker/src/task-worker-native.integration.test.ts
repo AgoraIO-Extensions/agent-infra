@@ -1381,11 +1381,27 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			const [beforeTakeover] =
 				await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${held.executionId}`;
 			const priorRequests = requests.length;
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from platform.outbox_items where payload->>'executionId'=${queued.executionId} and status='processing'`
+					).length === 1,
+				"queued task claimed before Worker crash",
+			);
+			const queuedBindingBeforeCrash =
+				await sql`select execution_id,conversation_id,turn_id,task_wait_order,task_wait_deadline from platform.conversation_executions where execution_id=${queued.executionId}`;
 			for (const child of children) child.kill("SIGKILL");
 			await Promise.all(children.map((child) => once(child, "exit")));
-			// Only this test-owned Execution's lease is expired. The replacement
-			// processes must discover it without test dispatch or renewed admission.
-			await sql`update platform.outbox_items set lease_expires_at=now()-interval '1 second' where payload->>'executionId'=${held.executionId} and status='processing'`;
+			await waitUntil(
+				async () =>
+					(
+						await sql`select 1 from pg_stat_activity where datname=current_database() and application_name='task-native-worker'`
+					).length === 0,
+				"crashed Workers release database connections before lease recovery",
+			);
+			// Recover both test-owned claims before the unchanged waiting deadline.
+			// Replacement Workers discover the original work without renewed admission.
+			await sql`update platform.outbox_items set lease_expires_at=clock_timestamp()-interval '1 second' where payload->>'executionId' in (${held.executionId},${queued.executionId}) and status='processing'`;
 			start();
 			start();
 			await waitUntil(
@@ -1438,6 +1454,9 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 			await control("/release");
 			await completed(held.executionId);
 			await completed(queued.executionId);
+			expect(
+				await sql`select execution_id,conversation_id,turn_id,task_wait_order,task_wait_deadline from platform.conversation_executions where execution_id=${queued.executionId}`,
+			).toEqual(queuedBindingBeforeCrash);
 			expect((await control()).requests).toBe(4);
 			expect(
 				TaskProjectionV1Schema.parse(
@@ -4241,7 +4260,11 @@ export function createPlatformApiAssemblyInput() { return { ...production(), tas
 				stops:
 					await sql`select execution_id,status,confirmation_deadline,confirmation_timed_out_at from platform.conversation_stops`,
 				executions:
-					await sql`select status,delivery_fence::int as fence,model_configuration_revision from platform.conversation_executions`,
+					await sql`select execution_id,status,delivery_fence::int as fence,model_configuration_revision,created_at,updated_at,task_wait_deadline,clock_timestamp() as observed_at from platform.conversation_executions`,
+				platformTaskEvents:
+					await sql`select execution_id,event_type,event_payload->>'status' as status,event_payload->>'code' as code,event_payload->>'reason' as reason,persisted_at from platform.conversation_events where source='platform' and event_type in ('task.status','execution.status','conversation.error') order by persisted_at`,
+				taskStatusAudit:
+					await sql`select target_id,details->>'status' as status,details->>'reason' as reason,occurred_at from platform.audit_events where action='task.status.changed' order by occurred_at`,
 				audit:
 					await sql`select event_type,payload->>'errorCode' as error_code from platform.persisted_events`,
 				upgradeExecutions: upgradeSql
