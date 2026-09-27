@@ -63,7 +63,7 @@ M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
-标准 Runtime 只接收 Platform 当前 active 的模型 endpoint、模型、reasoning 和注入到本 Agent 的运行凭证。获准 endpoint 与 Owner 配置、Secret 密文和候选修订的权威边界见工程 Spec 10.6 和 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
+标准 Runtime 的 active 配置只包含获准 Relay endpoint、模型、reasoning 和 Driver 能力，不含个人或 Agent 默认 Relay Key。Worker 按 Execution 从其已固化的 Key 版本解密，经受认证的私有接口交付本次 Key；Host/Driver 仅在该执行内存中使用，不能跨用户或执行复用。模板只有真实镜像、Driver 和模型链路各自验证后才标记就绪；未就绪时目录显示原因并拒绝申请。权威配置与迁移边界见工程 Spec 10.7；RuntimeHost 不读取 ModelCatalog、SecretRef、Platform DB 或部署解密 keyring。
 
 标准模板的模型协议与原生 Driver 协议是不同边界。Codex Native 当前消费 Responses，Claude
 Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生协议不能证明模型端点可用。Host 只消费 Worker 已验证的
@@ -124,9 +124,11 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
-RuntimeHost submit V2 在 `RuntimeInputV1` 之外携带必填的 `RuntimeSelectionV1`，其中只有 Execution 接受时固化的 `modelOptionId` 和 `reasoningLevel`。`platform-worker` 必须从该 Execution 的 durable outbox 转发原值；RuntimeHost 和 Driver 不查询 ModelCatalog、Platform DB、Conversation 当前选择或默认项，也不在重试时重新解析。Host 在任何 Driver 副作用前校验选择，把完整选择纳入请求摘要并原样放入 Driver submit command；同一 `executionId` 只有选择和其他请求内容全部相同时才重放原结果，任一选择字段变化都返回操作冲突。原 submit V1 在兼容期继续服务已有调用和持久恢复，并在每次原生执行入口显式应用已配置的默认模型和 reasoning；新接受的 Execution 必须使用 V2。取舍见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)，V1 退役需要独立的 breaking-change 决策。
+标准模板新 Execution 使用 `RuntimeHostV4` submit：保留 `RuntimeInputV1` 和 `RuntimeSelectionV1` 的 `modelOptionId`/`reasoningLevel`，继承 V3 的 Session 恢复与 Grant 屏障，另由 Worker 在受认证、具传输保密的私有字段交付本次 Relay Key。持久 Execution、outbox、业务 Grant 和 Host 请求摘要只绑定 Key 用途、引用与版本，不保存原值或摘要。Host 在 Driver 副作用前校验选择、Grant、Execution、版本和 operation/fence；重投必须使用相同选择与 Key 版本，否则冲突。RuntimeHost/Driver 不查询 Platform DB、当前默认项或个人设置。旧 submit V1–V3 仅处理已受理执行及历史恢复，不能以静态 Pod Key 接纳新业务执行；版本退役遵守独立兼容门禁。原模型选择语义见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)。
 
 固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
+
+OpenCode/Generic ACP 与 Pi 的原生会话若在启动时固定模型认证，相邻 Execution 即使选择同一模型也必须检查 Key 版本。不能在已验证传输边界内为本次执行换 Key 时，先退役并排空旧原生 handle，再用原 Session 与本次 Key 重建；不能证明排空或保留原 Session 时拒绝，不将旧 handle 的 K1 用于新执行 K2 或另一用户。Codex/Claude 的本地传输也按原 Turn/Query 及 Key 版本验证，不能仅凭模型选项相同复用父进程中的旧 Key。
 
 Codex 的模型切换前置压缩继续使用上述有效选择，具体要求见 [8.5.2](#852-codex-模型切换前置压缩)。
 提交前的选择校验拒绝与原生 Turn 接受后的压缩失败分别记录：后者按真实 Turn 的失败或
@@ -135,11 +137,11 @@ unknown 收敛，不能回填为未创建 Turn 的 rejected，也不能因零模
 Claude Native 使用固定版本的官方 Claude Agent SDK。每个 Conversation/generation 的 Query、
 工作区和原生持久目录保持独立；SDK 的用户配置、权限默认值及产品 Session 管理不能覆盖本仓
 身份和隔离要求。每次 submit 显式应用有效选项的模型和 reasoning，并绑定其 endpoint 与
-认证配置；只调用 `setModel()` 不构成 endpoint/credential 已切换的证明。需要重建 Query 时，
-在无活跃 Turn 的边界退役并排空旧 Query/进程，再携带新配置恢复原 native Session，保持原生
+本次 Execution Key 版本；只调用 `setModel()` 不构成 endpoint/Key 已切换的证明。需要重建 Query 时，
+在无活跃 Turn 的边界退役并排空旧 Query/进程，再携带新模型配置恢复原 native Session，保持原生
 Session ID、Host 映射和平台 Conversation 连续；退役失败时拒绝新 Turn。旧 Query 的迟到退出
-与事件不能改变新 Query 的状态。配置版本变化时按持久执行选择拒绝不匹配的恢复，不能用新
-配置重放尚未确定结果的旧操作。
+与事件不能改变新 Query 的状态。模型配置或 Key 版本变化时按原执行持久绑定拒绝不匹配的恢复，不能用新
+配置或新 Key 重放尚未确定结果的旧操作。
 
 Claude 的真实凭证和供应商错误正文在原生持久化前处理，具体准入、传输与退役规则见
 [工程 Spec §10.10](SPEC-agent-infra-M1-engineering-architecture.md#1010-claude-原生模型传输边界)。
@@ -192,6 +194,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 
 - Generic ACP 使用未修改的原生 Runtime。原 Session 映射、已确认请求结果和首次转发前持久化的事件日志按 §§8.1–8.2 恢复；原生 `session/prompt` 的最终响应先持久化，才能发布对应终态。原生进程退出或最终响应丢失且没有可靠结果证据时，原 Turn 保持 `unknown`，不把进程退出、`cancel` 通知发送成功或 `loadSession` 成功推断为原任务完成、失败或取消。后续查询和同请求重放不重发 prompt，未知 Turn 仍占用该 Conversation 的活跃位置；只有取得可靠终态证据才能接受下一 Turn。用户可以明确新建 Conversation，平台不自动替换 Session。单次结果未知不等于 Session 无法恢复，不因此执行代次隔离；只有实际 Session 或持久状态恢复失败才进入本节的隔离流程。该边界不要求维护原生源码 fork 或增加专用协议扩展；Conformance 必须同时证明已确认终态、事件和游标可恢复，以及不确定窗口不会被伪造为确定结果。
 - `platform-worker` 重启后从 Platform DB 恢复 Execution、outbox 和不透明 Host Session Ref；未开始的 API 任务保留原顺序与等待期限，按当前授权继续调度。运行中任务沿原 Execution/Session 查询，不能因进程重启生成新任务。
+- 标准模板运行中 Execution 的 Key 用途、引用与版本从原受理记录恢复；Worker 在当前业务 Grant 与原执行一致时重交同一版本，Host 只恢复该执行的内存传输能力。Key 替换不改变旧执行；旧密文已被错误回收、Key 用途不符或原授权不能确认时拒绝模型转发，不用 Pod 静态 Key、当前个人 Key 或 Agent 默认 Key 补位。历史事件与无正文控制查询仍按原执行权限读取。
 - Worker 的 Runtime 调用、Adapter 恢复查询、规范化事件和 Execution 状态写入必须携带 outbox 保存的 `sessionGeneration` 与当前 Execution `deliveryFence`；补充指令和 stop 调用还分别携带自身的 `messageId` fence 或 `stopRequestId` fence。Platform DB 对规范化事件按 8.2 的重复事件优先规则处理，仅允许当前 Conversation 代次和相应 fence 产生新事件或状态写；Agent Service、Runtime Host 或 Bridge 在 PVC 中按 Session 和投递标识持久化已见的最高 token，并拒绝更低 token 的迟到调用。
 - Agent Pod 重启后复用原 PVC；Pod 就绪后，RuntimeHost 必须使用已保存的 Host-to-native Session 映射恢复原 Session，并查询未完成 Turn 状态。
 - 恢复成功后继续接收事件。恢复失败时，`platform-worker` 必须先在 Conversation 锁内保持当前 `sessionGeneration`，将 Conversation 标记为“代次隔离中”，暂停新命令和业务 outbox，并持久化携带目标代次的内部 generation tombstone；当前代次在隔离期间已被 Agent Service 接受的调用、事件和状态仍按原规则保存，不能形成不可见执行。Agent Service 必须幂等持久化并激活目标代次的 cancellation barrier，拒绝新的旧代次调用，并等待或取消已接受的旧代次调用，直到它们不能再产生 Runtime 副作用、事件或状态后才确认 tombstone。只有收到该确认后，Worker 才能再次取得 Conversation 锁，原子提升 `sessionGeneration`、将 Conversation 标记为“会话不可用”，并把活跃 Execution、该 Conversation 尚未开始的 API 任务和业务 outbox 置为带可审计原因的失败终态；Platform DB 从该事务提交起拒绝旧代次的事件和状态写。任一步失败或 Worker 重启都从持久化状态重试；Agent Service 未确认时保持“代次隔离中”，不能恢复业务投递或创建新 Session。当前 Host Session Ref、Host-to-native 映射和平台历史保留只读，其他 Conversation 和 Agent 服务保持正常。
@@ -396,7 +399,7 @@ Driver 仍只准入本次 Execution 冻结的 B；压缩与后续普通采样都
 
 ### 8.6 Eval 复用
 
-Eval 在 Platform 管理数据集/标准版本、实验、规则/人工/模型评分、复核与反馈；Runtime 不保存另一份实验状态，也不负责汇总质量分。每个样本复用原发起主体获准的任务用例，默认使用独立 Conversation，正常执行/查询/取消和实际模型/工具采集均遵守本 HLD。
+Eval 在 Platform 管理数据集/标准版本、实验、规则/人工/模型评分、复核与反馈；Runtime 不保存另一份实验状态，也不负责汇总质量分。每个样本复用原发起主体获准的任务用例，默认使用独立 Conversation；模型调用和独立模型评分使用 Agent 默认 Relay Key，展示费用归属，Key 不可用时对应执行或评分失败而不重跑已完成样本。正常执行/查询/取消和实际模型/工具采集均遵守本 HLD。
 
 Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权和独立 Eval 用途授权；Worker 不能用服务身份或 Owner/应用责任人角色扩大权限。Runtime 只消费已获准的任务输入和模型选择，受信执行事实回传实际模型/配置、时间及可获得的用量，由 Platform 关联实际模板/镜像及数据集/评分器版本。评分重试不重跑业务任务；标准模板历史版本对比不赋予 Owner 锁定生产旧版本的能力。
 
@@ -406,7 +409,7 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 身份解析、Execution Grant、Connection 独立直连和自有交互入口的 Auth Gateway 以工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)、[Connection 架构](SPEC-agent-infra-M1-engineering-architecture.md#13-connection-架构)和[自有交互入口](SPEC-agent-infra-M1-engineering-architecture.md#143-自有交互入口)为唯一权威。Runtime 和 Adapter 只消费这些边界：
 
-- 每个 Turn 和每条补充指令只接受投递前按当前权限签发的短期 Execution Grant，绑定用户/应用类型及稳定主体、Agent、Conversation、Execution、渠道、命令与附件范围。固定 env、API/浏览器身份字段和 Runtime 返回值不能替代当前身份或扩大原受理范围；应用任务不能映射为自然人责任人的任务。
+- 每个 Turn 和每条补充指令只接受投递前按当前权限签发的短期 Execution Grant，绑定用户/应用类型及稳定主体、Agent、Conversation、Execution、渠道、命令与附件范围；标准模板业务 Grant 还按[平台 PRD 第 8 节](../prd/PRD-agent-platform-M1.md#8-标准模板的模型配置)绑定本次 Key 用途、引用和版本而不含原值。固定 env、API/浏览器身份字段和 Runtime 返回值不能替代当前身份或扩大原受理范围；应用任务不能映射为自然人责任人的任务。
 - API 凭证只在平台入口校验，不送入 Runtime。单个凭证过期/撤销时平台关闭该凭证的访问与订阅，已受理任务继续；同主体另一有效凭证可以按当前权限查询/取消，其他主体不能接管。任务详情、SSE、附件及自身审计匹配提交主体，Owner/责任人无额外内容访问权。
 - 主体禁用或 Agent 使用权撤销时，平台取消等待任务并为活跃执行持久发出系统 stop；RuntimeHost 执行已确认撤权控制后阻止该执行的后续受控命令和模型/工具操作，直到按 8.1/7.3 确认停止或隔离。控制操作独立于调用方权限，已发生效果保留；短期 Grant 不能被用于绕过已接收的停止/屏障。
 - Agent/客户端使用原执行用户或应用在 Connection 独立取得的客户端访问凭据直连 MCP/API；后台执行同样遵守，Pod/workload、Runtime Execution Grant 和平台服务身份均不用于替代 Connection 授权。凭据缺失/失效时拒绝调用，不能回退到 Owner 或应用责任人的身份。平台不代理、签发 assertion、校验 Owner Action policy 或复制 Connection 目录/状态/审计，外部账号原始凭证始终留在 Connection。
@@ -464,6 +467,8 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 ### 11.1 通用 Runtime 与 Driver 验证
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
+- 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
+- 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web/企微与全部 API/Eval 费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。
 - 取消故障注入覆盖等待与认领并发、API/Web 同时受理、Agent 启动/更新/停止/停用/故障与准入/实际发送竞态、投递前后崩溃、旧 Worker 迟到提交、unknown、停止未确认与自然完成竞态、停止确认超时及重启/重复取消不延长期限、代次隔离和等待任务收敛；必须证明旧 Turn 无剩余副作用才启动下一任务，不能用超时/换 executionId/新 Session 掩盖不确定结果。
 - API 授权负向验证主体类型/ID、Agent/Conversation/Execution 替换、应用冒用责任人权限、Owner/责任人读取/订阅/取消他人任务。凭证失效关闭旧流但任务继续，同主体新凭证可访问；主体撤权取消等待/活跃任务并阻止后续受控操作，两种失效不得混同。
@@ -476,7 +481,7 @@ Codex Driver 按可信 Agent/Conversation/generation 派生的存储键，为每
 - 启用私有 native lane 的 Codex 屏障故障注入覆盖双方在 permit 与结果确认前后重启、跨会话/重复/迟到 response、等待期间撤权/stop/fence、ACK 丢失和并发状态查询。证明原 Session/Turn/attempt 不重建、不重执行；旧终态仍可读，不兼容 active/unknown 及回滚目标拒绝准入，原 PVC 与核实证据保留。
 - Codex 模型切换压缩使用生产 Driver、真实 pinned native 和受控 provider，分别触发
   CompHashChanged 与 ModelDownshift，核对 A 正常请求 → B 实际压缩 → B 回答、精确
-  B endpoint/credential/reasoning、意图/attempt/用量和同一 Session。覆盖 A 从当前清单删除、
+  B endpoint/原 Execution Key 版本/reasoning、意图/attempt/用量和同一 Session。覆盖 A 从当前清单删除、
   等窗口与异窗口、B 窗口缩小、既有 context-overflow 行为及原 Session 重启恢复；
   未解决的触发路径继续拒绝 A，明确记录整体模型切换尚未完成，不能只凭首个案例签收。
 - 压缩输入覆盖已有文本、工具调用/输出、reasoning/加密项及允许存在的旧 compaction；
@@ -509,7 +514,7 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 ### 12.1 Module、Interface 与依赖方向
 
 - `apps/agent-runtime-host` 保持薄入口，只处理进程启动、依赖装配、配置读取和 HTTP/SSE 协议接入；Runtime 生命周期、Session mapping、Driver 选择、事件归一化、fence、恢复和错误语义属于 `packages/agent-runtime`。
-- worker-facing HTTP/SSE 是外部 Seam。其 Interface 只包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、Execution 已固化的版本化有效模型选择、fence、capability、状态和规范化事件。模型选择与用户消息输入分离，且不包含 endpoint、credential 或默认解析信息。Host 不通过引用回读 Platform DB 或 Connection DB；Grant 的权威结构和校验规则见工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，Host 必须在读取附件或产生 Runtime 副作用前验证其签名、签发方、audience、有效期，以及 Agent、Conversation、Execution、附件引用和操作绑定，不能信任单独提交的身份或对象 ID。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
+- worker-facing HTTP/SSE 是外部 Seam。其业务 Interface 包含平台 ID、命令、经过当前 Execution Grant 授权且按 Runtime 输入 Schema 校验的用户内容或短期附件引用、Execution 已固化的版本化有效模型选择和 Key 版本引用、fence、capability、状态和规范化事件。模型选择与用户消息输入分离，不包含 endpoint 或默认解析信息；标准模板 Key 原值仅经独立受认证且具传输保密的执行私有字段交付，不进入业务 Schema、Grant、持久请求摘要或响应。Host 不通过引用回读 Platform DB 或 Connection DB；Grant 的权威结构和校验规则见工程 Spec 的[服务端授权上下文](SPEC-agent-infra-M1-engineering-architecture.md#93-服务端授权上下文)，Host 必须在读取附件或产生 Runtime 副作用前验证其签名、签发方、audience、有效期，以及 Agent、Conversation、Execution、附件引用和操作绑定，不能信任单独提交的身份或对象 ID。Native Session ID、stdio、ACP method、vendor 配置对象和原生事件不能跨出 RuntimeHost。
 - Runtime Driver 是内部 Seam。Codex Native、Claude Native、Generic ACP 和 Pi RPC Driver 满足同一个小型 Interface；Driver 只能由已部署且校验通过的标准模板 Registry 或自定义 Agent Manifest 固定绑定，不能由请求方选择或覆盖。上游差异只能留在对应 Adapter 内，不能通过条件分支扩散到 Host Client 或产品调用方。
 - `packages/agent-runtime` 只能依赖 Node.js/TypeScript 标准能力、经过批准且版本固定的 runtime/protocol library，以及 `packages/contracts` 中的 Host/Driver 契约。它不能依赖 `platform-core`、`platform-store`、`identity`、Connection Module、`kubernetes-runtime`、Web/Channel 或应用入口。
 - Platform 主体/Agent 授权在 RuntimeHost 外解析；Host 只消费当前 Runtime Grant 和已裁剪 capability。Connection 独立校验自己的客户端身份与授权，Host 不代替 Connection 作结论，也不能读取 IdentityAdapter、Platform DB、Connection DB、部署解密 keyring 或 Kubernetes API。
