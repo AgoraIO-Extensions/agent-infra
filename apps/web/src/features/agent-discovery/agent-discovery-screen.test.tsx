@@ -220,11 +220,16 @@ describe("AgentDiscoveryScreen", () => {
 
 	it("renders an explicit loading state", async () => {
 		await renderWithAgentRouter(
-			<AgentDiscoveryScreen state={{ kind: "loading" }} />,
+			<AgentDiscoveryScreen query="Release" state={{ kind: "loading" }} />,
 		);
 
 		expect(screen.getByText("正在加载 Agent…").getAttribute("aria-live")).toBe(
 			"polite",
 		);
+		const search = screen.getByRole("searchbox", {
+			name: "搜索 Agent",
+		}) as HTMLInputElement;
+		expect(search.value).toBe("Release");
+		expect(screen.queryByRole("status")).toBeNull();
 	});
 });

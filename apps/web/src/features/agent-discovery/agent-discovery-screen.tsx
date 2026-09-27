@@ -66,6 +66,38 @@ export function AgentDiscoveryScreen({
 					</p>
 				</div>
 			</header>
+			{state.kind !== "unavailable" && (
+				<div className="flex list-tools flex-wrap items-end justify-between gap-4 border-border border-b pb-6">
+					<div className="field w-full space-y-2 sm:max-w-sm">
+						<Label htmlFor={searchId}>搜索 Agent</Label>
+						<div className="search relative">
+							<Search
+								aria-hidden="true"
+								className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
+							/>
+							<Input
+								id={searchId}
+								className="pl-10"
+								type="search"
+								placeholder="按名称或用途搜索"
+								maxLength={agentDiscoveryQueryMaxLength}
+								value={query}
+								onChange={(event) => {
+									const nextQuery = event.target.value;
+									if (!isControlled) setLocalQuery(nextQuery);
+									onQueryChange?.(nextQuery);
+								}}
+							/>
+						</div>
+					</div>
+					{state.kind === "ready" && (
+						<p className="hint text-muted-foreground text-sm" role="status">
+							{agents.length} 个获授权 Agent
+							{search ? `，匹配 ${visible.length} 个` : ""}
+						</p>
+					)}
+				</div>
+			)}
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Agent…</p>
 			) : state.kind === "unavailable" ? (
@@ -78,34 +110,6 @@ export function AgentDiscoveryScreen({
 				</Alert>
 			) : (
 				<>
-					<div className="flex list-tools flex-wrap items-end justify-between gap-4 border-border border-b pb-6">
-						<div className="field w-full space-y-2 sm:max-w-sm">
-							<Label htmlFor={searchId}>搜索 Agent</Label>
-							<div className="search relative">
-								<Search
-									aria-hidden="true"
-									className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
-								/>
-								<Input
-									id={searchId}
-									className="pl-10"
-									type="search"
-									placeholder="按名称或用途搜索"
-									maxLength={agentDiscoveryQueryMaxLength}
-									value={query}
-									onChange={(event) => {
-										const nextQuery = event.target.value;
-										if (!isControlled) setLocalQuery(nextQuery);
-										onQueryChange?.(nextQuery);
-									}}
-								/>
-							</div>
-						</div>
-						<p className="hint text-muted-foreground text-sm" role="status">
-							{agents.length} 个获授权 Agent
-							{search ? `，匹配 ${visible.length} 个` : ""}
-						</p>
-					</div>
 					{!agents.length ? (
 						<Empty className="py-8">
 							<EmptyDescription>暂无你有权访问的 Agent。</EmptyDescription>
