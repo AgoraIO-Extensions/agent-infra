@@ -3108,7 +3108,11 @@
 					"revision": { "type": "string" },
 					"draft": { "$ref": "#/components/schemas/AccessPolicyDraft" },
 					"candidates": {
-						"$ref": "#/components/schemas/EmployeeCandidatesResponse/properties/candidates"
+						"type": "array",
+						"maxItems": 500,
+						"items": {
+							"$ref": "#/components/schemas/EmployeeCandidatesResponse/properties/candidates/items"
+						}
 					}
 				}
 			},

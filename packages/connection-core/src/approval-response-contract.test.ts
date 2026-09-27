@@ -25,6 +25,31 @@ const request = {
 	stages: [],
 };
 
+it("allows 500 draft candidates without expanding the 20-result search limit", () => {
+	const draftCandidates = new Validator({
+		...document,
+		$ref: "#/components/schemas/AccessPolicyDraftResponse/properties/candidates",
+	});
+	const search = new Validator({
+		...document,
+		$ref: "#/components/schemas/EmployeeCandidatesResponse",
+	});
+	for (const count of [0, 20, 21, 500, 501]) {
+		const candidates = Array.from({ length: count }, (_, index) => ({
+			candidateId: `candidate-${index}`,
+			displayName: `Employee ${index}`,
+			email: null,
+			alias: null,
+		}));
+		expect(draftCandidates.validate(candidates).valid, `draft ${count}`).toBe(
+			count <= 500,
+		);
+		expect(search.validate({ candidates }).valid, `search ${count}`).toBe(
+			count <= 20,
+		);
+	}
+});
+
 it("validates composed approval responses without accepting unknown fields", () => {
 	const examples = [
 		["AccessRequest", request, { ...request, unexpected: true }],

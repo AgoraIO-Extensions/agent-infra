@@ -821,6 +821,17 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					revision: "1",
 				});
 				await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL, revision = revision + 1 WHERE principal_id = ${adminId} AND role = 'CONNECTION_ADMIN'`;
+				await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${approverId}`;
+				await expect(
+					repository.publishPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: policyId,
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				expect(await repository.getPolicyDraft(policyId)).toMatchObject({
+					revision: "1",
+				});
+				await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${approverId}`;
 				await repository.publishPolicy({
 					actorPrincipalId: adminId,
 					policyVersionId: policyId,

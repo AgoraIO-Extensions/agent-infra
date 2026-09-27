@@ -816,6 +816,15 @@ export class PostgresConnectionApprovalRepository {
 			if (policy?.status !== "DRAFT") {
 				invalid("Approval policy is not publishable");
 			}
+			const approvers = await sql<{ status: string }[]>`
+				SELECT principal.status FROM connection_approval_stage_approvers approver
+				JOIN connection_principals principal ON principal.id = approver.approver_principal_id
+				WHERE approver.policy_version_id = ${input.policyVersionId}
+				ORDER BY principal.id
+				FOR SHARE OF principal
+			`;
+			if (approvers.some((principal) => principal.status !== "ACTIVE"))
+				invalid("Approval policy approvers are inactive");
 			const [previous] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_access_policy_versions
 				WHERE provider_release_id = ${policy.provider_release_id}
