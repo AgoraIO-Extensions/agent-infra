@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -19,6 +20,24 @@ import {
 import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
 import { RuntimeHost } from "./runtime-host.js";
+
+const piProcess = vi.hoisted(() => ({
+	capture: false,
+	child: undefined as ChildProcess | undefined,
+}));
+vi.mock("./native-process.js", async (importOriginal) => {
+	const native = await importOriginal<typeof import("./native-process.js")>();
+	return {
+		...native,
+		spawnNativeProcess: async (
+			...args: Parameters<typeof native.spawnNativeProcess>
+		) => {
+			const owned = await native.spawnNativeProcess(...args);
+			if (piProcess.capture) piProcess.child = owned.child;
+			return owned;
+		},
+	};
+});
 
 it("preserves an unconfirmed model request after the native turn fails on HTTP 503", async () => {
 	const path = await mkdtemp(join(tmpdir(), "pi-native-503-"));
@@ -92,6 +111,116 @@ it("preserves an unconfirmed model request after the native turn fails on HTTP 5
 	} finally {
 		await fixture.close();
 		await rm(path, { recursive: true, force: true });
+	}
+}, 30_000);
+
+it("keeps an in-flight model request unknown after the pinned Pi process dies", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-native-in-flight-exit-"));
+	const fixture = await openMessagesRuntimeDriverConformanceFixture(
+		path,
+		false,
+		"pi",
+	);
+	piProcess.capture = true;
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-in-flight",
+			turnId: "turn-in-flight",
+			operationId: "operation-in-flight",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-primary",
+				reasoningLevel: "high",
+			},
+		};
+		const accepted = await fixture.driver.execute(command);
+		expect(accepted.result.outcome).toBe("accepted");
+		expect(await fixture.createdTurnCount()).toBe(1);
+		await vi.waitFor(async () =>
+			expect(
+				await fixture.driver.getStatus(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("running"),
+		);
+		await vi.waitFor(async () =>
+			expect(
+				(
+					await fixture.driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					)
+				).flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload.phase]
+						: [],
+				),
+			).toEqual(["intent", "started"]),
+		);
+		const child = piProcess.child;
+		if (!child) throw new Error("Pi process was not captured");
+		expect(child.exitCode).toBeNull();
+		expect(child.signalCode).toBeNull();
+		expect(child.kill("SIGKILL")).toBe(true);
+		await vi.waitFor(() => expect(child.signalCode).toBe("SIGKILL"));
+		await vi.waitFor(
+			async () =>
+				expect(
+					await fixture.driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("unknown"),
+			{ timeout: 10_000 },
+		);
+		const events = await fixture.driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "model"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "started", "unknown"]);
+		expect(await fixture.driver.execute(command)).toEqual(accepted);
+		await fixture.restart();
+		expect(await fixture.driver.execute(command)).toEqual(accepted);
+		expect(
+			await fixture.driver.getStatus(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("unknown");
+		expect(
+			await fixture.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			),
+		).toEqual(events);
+		const blocked = await fixture.driver.execute({
+			...command,
+			nativeSessionRef: accepted.nativeSessionRef,
+			executionId: "execution-after-exit",
+			turnId: "turn-after-exit",
+			operationId: "operation-after-exit",
+		});
+		expect(blocked.result).toEqual({ outcome: "busy" });
+		expect(blocked.nativeSessionRef).toBe(accepted.nativeSessionRef);
+		expect(await fixture.createdTurnCount()).toBe(1);
+	} finally {
+		await fixture.close();
+		await rm(path, { recursive: true, force: true });
+		piProcess.capture = false;
+		piProcess.child = undefined;
 	}
 }, 30_000);
 

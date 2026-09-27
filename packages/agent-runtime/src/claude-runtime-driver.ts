@@ -86,6 +86,8 @@ interface Turn {
 		status: "completed" | "failed";
 		failure?: "failed" | "unknown";
 	};
+	/** A tool result crossed the native boundary without a durable receipt. */
+	toolResultUnconfirmed?: true;
 	events: RuntimeEvent[];
 	toolOperations?: Record<
 		string,
@@ -159,6 +161,17 @@ function latestFact(
 		)
 			return event.payload;
 	}
+}
+
+function hasUnconfirmedToolFact(turn: Turn) {
+	return Object.values(turn.toolOperations ?? {}).some((identity) => {
+		const fact = latestFact(turn, "tool", identity.operationRef);
+		return (
+			!fact ||
+			fact.attemptRef !== identity.attemptRef ||
+			!["completed", "failed"].includes(fact.phase)
+		);
+	});
 }
 
 // The first model intent belongs to generation; auxiliary requests own separate operations.
@@ -240,6 +253,7 @@ function readUsage(value: unknown) {
 }
 
 export class ClaudeRuntimeDriver implements RuntimeDriver {
+	private readonly failedToolGates = new WeakSet<DurableJsonFile<Session>>();
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
@@ -491,6 +505,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								!["failed", "unknown"].includes(turn.nativeResult.failure)))
 					)
 						unavailable();
+					if (
+						turn.toolResultUnconfirmed !== undefined &&
+						turn.toolResultUnconfirmed !== true
+					)
+						unavailable();
 					turns.add(turn.turnId);
 					users.add(turn.userMessageId);
 					if (
@@ -551,6 +570,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					if (turn.status === "unknown")
 						await this.recoverUnknownOperationFacts(file, turn.executionId);
 				for (const turn of file.read().turns) {
+					if (turn.toolResultUnconfirmed) continue;
 					if (turn.nativeResult && auxiliaryRequestState(turn) !== "settled")
 						continue;
 					if (
@@ -691,8 +711,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 		if (
 			this.closed ||
+			this.failedToolGates.has(file) ||
 			state.cancelled ||
 			turn?.status !== "running" ||
+			turn.toolResultUnconfirmed ||
 			turn.nativeResult ||
 			state.turns.at(-1) !== turn ||
 			!record ||
@@ -728,6 +750,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		// and do not queue another durable read after the current authority gate.
 		await this.validateExternalAction(action);
 		await this.options.authorizeExternalAction(action);
+		if (intent.kind === "tool") {
+			const current = file
+				.read()
+				.turns.find((entry) => entry.executionId === executionId);
+			if (this.failedToolGates.has(file) || current?.toolResultUnconfirmed)
+				unavailable();
+		}
 	}
 	private exclusive<T>(ref: string, action: () => Promise<T>): Promise<T> {
 		const task = (this.locks.get(ref) ?? Promise.resolve())
@@ -926,11 +955,66 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const admission = new Promise<void>((resolve) => {
 			admitted = resolve;
 		});
+		const pendingToolResults = new Set<string>();
+		const releaseToolResult = (toolCallId: string) => {
+			pendingToolResults.delete(toolCallId);
+			for (const wake of this.waiters.get(ref) ?? []) wake();
+		};
 		let currentModelOperationRef: string | undefined;
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
 			beforeSend: async (request) => {
+				if (this.failedToolGates.has(file)) unavailable();
+				try {
+					await this.waitForToolResults(
+						file,
+						command.executionId,
+						pendingToolResults,
+					);
+				} catch (error) {
+					const retiring = this.closed || this.handles.get(ref)?.retiring;
+					let toolsConfirmed = false;
+					if (retiring && pendingToolResults.size === 0) {
+						try {
+							const turn = file
+								.read()
+								.turns.find(
+									(entry) => entry.executionId === command.executionId,
+								);
+							toolsConfirmed =
+								!!turn &&
+								!turn.toolResultUnconfirmed &&
+								!hasUnconfirmedToolFact(turn);
+						} catch {
+							// Unreadable state cannot prove the original tool result.
+						}
+					}
+					if (retiring && toolsConfirmed) throw error;
+					// Latch before any delayed native receipt can release the waiters.
+					this.failedToolGates.add(file);
+					const mark = this.markUnconfirmedToolResult(
+						file,
+						command.executionId,
+					).catch(() => {});
+					if (this.closed || this.handles.get(ref)?.retiring) {
+						void mark;
+						throw error;
+					}
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						await Promise.race([
+							mark,
+							new Promise<void>((resolve) => {
+								timer = setTimeout(resolve, 2_000);
+							}),
+						]);
+					} finally {
+						clearTimeout(timer);
+					}
+					throw error;
+				}
+				if (this.failedToolGates.has(file)) unavailable();
 				currentModelOperationRef = await this.modelRequestIntent(
 					file,
 					command.executionId,
@@ -1013,6 +1097,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				toolUseID: string,
 				permitted: boolean,
 			) => {
+				if (this.failedToolGates.has(file)) unavailable();
 				const toolCallId = createHash("sha256").update(toolUseID).digest("hex");
 				const intent = await this.toolRequestStarted(
 					file,
@@ -1022,6 +1107,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						name,
 					},
 				);
+				if (
+					this.failedToolGates.has(file) ||
+					file
+						.read()
+						.turns.find((entry) => entry.executionId === command.executionId)
+						?.toolResultUnconfirmed
+				)
+					unavailable();
+				pendingToolResults.add(toolCallId);
 				if (!permitted) {
 					await this.toolPhase(file, command.executionId, {
 						toolCallId,
@@ -1029,6 +1123,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						phase: "failed",
 						failureCode: "authorization_denied",
 					});
+					releaseToolResult(toolCallId);
 					return;
 				}
 				try {
@@ -1040,6 +1135,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						phase: "failed",
 						failureCode: "authorization_denied",
 					});
+					releaseToolResult(toolCallId);
 					throw error;
 				}
 			};
@@ -1078,6 +1174,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								toolOptions.toolUseID,
 								permission.behavior === "allow",
 							);
+							if (
+								this.failedToolGates.has(file) ||
+								file
+									.read()
+									.turns.find(
+										(entry) => entry.executionId === command.executionId,
+									)?.toolResultUnconfirmed
+							)
+								unavailable();
 						} catch {
 							return {
 								behavior: "deny" as const,
@@ -1166,19 +1271,22 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					) {
 						for (const block of message.message.content) {
 							if (block.type !== "tool_result") continue;
+							if (this.failedToolGates.has(file)) unavailable();
 							const name = tools.get(block.tool_use_id);
 							if (!name) unavailable();
-							tools.delete(block.tool_use_id);
+							const toolCallId = createHash("sha256")
+								.update(block.tool_use_id)
+								.digest("hex");
 							await this.event(file, command.executionId, {
 								type: "tool",
 								payload: {
-									toolCallId: createHash("sha256")
-										.update(block.tool_use_id)
-										.digest("hex"),
+									toolCallId,
 									name,
 									phase: block.is_error ? "failed" : "completed",
 								},
 							});
+							tools.delete(block.tool_use_id);
+							releaseToolResult(toolCallId);
 						}
 					}
 					if (
@@ -1304,10 +1412,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const turn = state.turns.find(
 				(entry) => entry.executionId === executionId,
 			);
+			if (
+				fact.kind === "tool" &&
+				["completed", "failed"].includes(fact.phase) &&
+				(this.failedToolGates.has(file) || turn?.toolResultUnconfirmed)
+			)
+				unavailable();
 			// Model admission and its durable intent share this update lock.
 			if (
 				requireAdmission &&
 				(!turn ||
+					this.failedToolGates.has(file) ||
+					turn.toolResultUnconfirmed ||
 					terminal(turn.status) ||
 					turn.nativeResult ||
 					state.turns.at(-1) !== turn)
@@ -1397,9 +1513,75 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					}),
 		});
 	}
+	private async waitForToolResults(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		pending: ReadonlySet<string>,
+	) {
+		const ref = file.read().binding.ref;
+		if (this.closed || this.handles.get(ref)?.retiring) unavailable();
+		if (!pending.size) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(
+				() => reject(Error("Tool result unavailable")),
+				30_000,
+			);
+		});
+		try {
+			while (pending.size) {
+				let wake = () => {};
+				const changed = new Promise<void>((resolve) => {
+					wake = resolve;
+				});
+				const waiters = this.waiters.get(ref) ?? new Set<() => void>();
+				this.waiters.set(ref, waiters);
+				waiters.add(wake);
+				try {
+					if (this.closed || this.handles.get(ref)?.retiring) unavailable();
+					const committed = await Promise.race([
+						file.readCommitted(),
+						changed.then(() => undefined),
+						timeout,
+					]);
+					if (!committed) continue;
+					const turn = committed.turns.find(
+						(entry) => entry.executionId === executionId,
+					);
+					if (
+						this.closed ||
+						this.handles.get(ref)?.retiring ||
+						turn?.status !== "running"
+					)
+						unavailable();
+					if (!pending.size) return;
+					await Promise.race([changed, timeout]);
+				} finally {
+					waiters.delete(wake);
+				}
+			}
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	private async markUnconfirmedToolResult(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+	) {
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status)) return;
+			turn.toolResultUnconfirmed = true;
+		});
+		await this.recoverUnknownOperationFacts(file, executionId, "tool");
+		await this.status(file, executionId, "unknown");
+	}
 	private async recoverUnknownOperationFacts(
 		file: DurableJsonFile<Session>,
 		executionId: string,
+		kind?: RuntimeOperationFactV2["kind"],
 	) {
 		const turn = file
 			.read()
@@ -1409,7 +1591,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const seen = new Set<string>();
 		for (let index = turn.events.length - 1; index >= 0; index--) {
 			const event = turn.events[index];
-			if (event?.type !== "operation") continue;
+			if (event?.type !== "operation" || (kind && event.payload.kind !== kind))
+				continue;
 			const key = `${event.payload.operationRef}:${event.payload.attemptRef}`;
 			if (seen.has(key)) continue;
 			seen.add(key);
@@ -1557,7 +1740,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const current = state.turns.find(
 				(entry) => entry.executionId === executionId,
 			);
-			if (!current || terminal(current.status)) unavailable();
+			if (
+				!current ||
+				terminal(current.status) ||
+				this.failedToolGates.has(file) ||
+				current.toolResultUnconfirmed
+			)
+				unavailable();
 			current.toolOperations ??= {};
 			current.toolOperations[value.toolCallId] = {
 				operationRef: created.operationRef,
@@ -1640,6 +1829,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (
+				value.type === "tool" &&
+				["completed", "failed"].includes(value.payload.phase) &&
+				(this.failedToolGates.has(file) || turn.toolResultUnconfirmed)
+			)
+				return;
 			state.sequence++;
 			const legacyCursor = nextLegacyCursor(state.turns, "claude");
 			turn.events.push(
@@ -1663,6 +1858,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
+		if (
+			this.failedToolGates.has(file) ||
+			turn?.toolResultUnconfirmed ||
+			(turn && hasUnconfirmedToolFact(turn))
+		)
+			return "unknown";
 		return turn?.nativeResult && auxiliaryRequestState(turn) !== "settled"
 			? "unknown"
 			: (failure ?? "unknown");
@@ -1673,18 +1874,31 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		receipt: NonNullable<Turn["nativeResult"]>,
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) {
-		await file.update((state) => {
+		const retained = await file.update((state) => {
 			const turn = state.turns.find(
 				(entry) => entry.executionId === executionId,
 			);
-			if (!turn || terminal(turn.status)) return;
+			if (!turn || terminal(turn.status)) return undefined;
+			if (
+				this.failedToolGates.has(file) ||
+				turn.toolResultUnconfirmed ||
+				hasUnconfirmedToolFact(turn)
+			)
+				return false;
 			if (
 				turn.nativeResult &&
 				JSON.stringify(turn.nativeResult) !== JSON.stringify(receipt)
 			)
 				unavailable();
 			turn.nativeResult = receipt;
+			return true;
 		});
+		if (retained === undefined) return;
+		if (!retained) {
+			this.failedToolGates.add(file);
+			await this.markUnconfirmedToolResult(file, executionId);
+			return;
+		}
 		const ref = file.read().binding.ref;
 		for (;;) {
 			let wake = () => {};
@@ -1699,6 +1913,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					(entry) => entry.executionId === executionId,
 				);
 				if (!turn || terminal(turn.status)) return;
+				if (
+					this.failedToolGates.has(file) ||
+					turn.toolResultUnconfirmed ||
+					hasUnconfirmedToolFact(turn)
+				) {
+					this.failedToolGates.add(file);
+					await this.markUnconfirmedToolResult(file, executionId);
+					return;
+				}
 				const counts = auxiliaryRequestState(turn);
 				if (counts === "pending") {
 					await changed;
@@ -1730,10 +1953,26 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private async status(
 		file: DurableJsonFile<Session>,
 		executionId: string,
-		status: RuntimeStatusV1,
+		requestedStatus: RuntimeStatusV1,
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 		markModel = true,
 	) {
+		let status = requestedStatus;
+		const current = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		if (
+			requestedStatus !== "running" &&
+			current &&
+			!current.toolResultUnconfirmed &&
+			hasUnconfirmedToolFact(current)
+		) {
+			this.failedToolGates.add(file);
+			await this.markUnconfirmedToolResult(file, executionId);
+			return;
+		}
+		if (this.failedToolGates.has(file) || current?.toolResultUnconfirmed)
+			status = "unknown";
 		if (markModel && status === "running")
 			await this.modelPhase(file, executionId, "started");
 		else if (status === "completed")
@@ -1755,9 +1994,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				"unknown",
 				"recovery_unconfirmed",
 			);
+		let markToolUnknown = false;
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (terminal(status) && hasUnconfirmedToolFact(turn)) {
+				this.failedToolGates.add(file);
+				turn.toolResultUnconfirmed = true;
+				markToolUnknown = true;
+			}
+			if (this.failedToolGates.has(file) || turn.toolResultUnconfirmed)
+				status = "unknown";
 			// Completion cannot make an admitted count receipt unwritable.
 			if (
 				terminal(status) &&
@@ -1781,12 +2028,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 			turn.status = status;
 		});
+		if (markToolUnknown)
+			await this.recoverUnknownOperationFacts(file, executionId, "tool");
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
 	private async retire(ref: string) {
 		const handle = this.handles.get(ref);
 		if (!handle) return;
 		handle.retiring = true;
+		for (const wake of this.waiters.get(ref) ?? []) wake();
 		await handle.transport.close();
 		await handle.native.close();
 		await handle.pump;
@@ -1795,6 +2045,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	close() {
 		this.closing ??= (async () => {
 			this.closed = true;
+			for (const values of this.waiters.values())
+				for (const wake of values) wake();
 			await Promise.all(
 				[...this.handles.keys()].map((ref) => this.retire(ref)),
 			);

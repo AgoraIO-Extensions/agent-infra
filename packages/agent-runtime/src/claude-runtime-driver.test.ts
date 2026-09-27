@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	claudeCommand,
@@ -15,7 +15,9 @@ import { DurableJsonFile } from "./durable-json.js";
 
 // Exercise the real Driver and HTTP transport; this mock is not native barrier evidence.
 const source = vi.hoisted(() => ({
-	run: undefined as ((options: Options) => Promise<void>) | undefined,
+	run: undefined as
+		| ((options: Options) => Promise<void> | AsyncGenerator<SDKMessage, void>)
+		| undefined,
 }));
 vi.mock("./claude-query.js", async (importOriginal) => {
 	const original = await importOriginal<typeof import("./claude-query.js")>();
@@ -26,7 +28,9 @@ vi.mock("./claude-query.js", async (importOriginal) => {
 			const [options] = args;
 			return {
 				query: (async function* () {
-					await source.run?.(options);
+					const run = source.run?.(options);
+					if (run && Symbol.asyncIterator in run) yield* run;
+					else await run;
 					yield {
 						type: "result",
 						subtype: "success",
@@ -45,7 +49,10 @@ afterEach(() => {
 
 type ClaudeSourceRequest = (counting?: boolean) => Promise<Response>;
 async function withClaudeSource(
-	program: (request: ClaudeSourceRequest, options: Options) => Promise<void>,
+	program: (
+		request: ClaudeSourceRequest,
+		options: Options,
+	) => Promise<void> | AsyncGenerator<SDKMessage, void>,
 	authorize:
 		| false
 		| ((
@@ -58,6 +65,7 @@ async function withClaudeSource(
 		command: ReturnType<typeof claudeCommand>;
 		requests: () => number;
 		path: string;
+		options: Options;
 	}) => Promise<void>,
 ) {
 	const path = await mkdtemp(join(tmpdir(), "claude-current-authority-"));
@@ -75,8 +83,10 @@ async function withClaudeSource(
 	const address = server.address();
 	if (!address || typeof address === "string") throw Error();
 	let driver: ClaudeRuntimeDriver;
-	source.run = (options) =>
-		program(
+	let currentOptions: Options | undefined;
+	source.run = (options) => {
+		currentOptions = options;
+		return program(
 			async (counting = false) =>
 				fetch(
 					`${options.env?.ANTHROPIC_BASE_URL}/v1/messages${counting ? "/count_tokens" : ""}`,
@@ -100,6 +110,7 @@ async function withClaudeSource(
 				),
 			options,
 		);
+	};
 	driver = await ClaudeRuntimeDriver.open({
 		path,
 		configVersion: "configuration-a",
@@ -126,12 +137,14 @@ async function withClaudeSource(
 	try {
 		const command = claudeCommand();
 		const accepted = await driver.execute(command);
+		if (!currentOptions) throw Error("Native options missing");
 		await verify({
 			driver,
 			ref: accepted.nativeSessionRef,
 			command,
 			requests: () => requests,
 			path,
+			options: currentOptions,
 		});
 	} finally {
 		await driver.close();
@@ -427,6 +440,454 @@ it("retains an unknown Claude dispatch and refuses retry after started and recei
 	} finally {
 		inject = false;
 		spy.mockRestore();
+	}
+});
+
+it.each(["pending", "failed"] as const)(
+	"waits for the durable Claude tool result before the next model request when receipt is %s",
+	async (receipt) => {
+		let holdReceipt = false;
+		let receiptEntered = false;
+		let injectedFailure = false;
+		let toolAuthorizations = 0;
+		let secondAuthorizationEntered = false;
+		let releaseSecondAuthorization = () => {};
+		const secondAuthorization = new Promise<void>((resolve) => {
+			releaseSecondAuthorization = resolve;
+		});
+		let secondPermission:
+			| Promise<{ behavior: string } | null | undefined>
+			| undefined;
+		let release = () => {};
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let continuation: Promise<number> | undefined;
+		const update = DurableJsonFile.prototype.update;
+		const spy = vi.spyOn(DurableJsonFile.prototype, "update");
+		spy.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+			return update.call(this, async (draft) => {
+				const result = await change(draft);
+				const last = (
+					draft as {
+						turns?: {
+							events?: {
+								type: string;
+								payload: { kind?: string; phase?: string };
+							}[];
+						}[];
+					}
+				).turns?.[0]?.events?.at(-1);
+				if (
+					holdReceipt &&
+					last?.type === "operation" &&
+					last.payload.kind === "tool" &&
+					last.payload.phase === "completed"
+				) {
+					holdReceipt = false;
+					receiptEntered = true;
+					await barrier;
+					if (receipt === "failed") {
+						injectedFailure = true;
+						throw Error("Synthetic durable tool result failure");
+					}
+				}
+				return result;
+			});
+		});
+		try {
+			await withClaudeSource(
+				async function* (request, options) {
+					const first = await request();
+					expect(first.ok).toBe(true);
+					await first.text();
+					const input = {
+						file_path: join(String(options.cwd), "synthetic.txt"),
+					};
+					const permission = await options.canUseTool?.("Write", input, {
+						signal: new AbortController().signal,
+						toolUseID: "synthetic-tool",
+						requestId: "synthetic-tool-request",
+					});
+					expect(permission?.behavior).toBe("allow");
+					yield {
+						type: "stream_event",
+						session_id: options.sessionId,
+						parent_tool_use_id: null,
+						event: {
+							type: "content_block_start",
+							index: 0,
+							content_block: {
+								type: "tool_use",
+								id: "synthetic-tool",
+								name: "Write",
+								input: {},
+							},
+						},
+					} as SDKMessage;
+					if (receipt === "failed") {
+						secondPermission = options.canUseTool?.(
+							"Write",
+							{ file_path: join(String(options.cwd), "second.txt") },
+							{
+								signal: new AbortController().signal,
+								toolUseID: "second-tool",
+								requestId: "second-tool-request",
+							},
+						);
+						await vi.waitFor(() =>
+							expect(secondAuthorizationEntered).toBe(true),
+						);
+					}
+					continuation = request().then(
+						async (response) => {
+							await response.text();
+							return response.status;
+						},
+						() => 0,
+					);
+					holdReceipt = true;
+					yield {
+						type: "user",
+						session_id: options.sessionId,
+						parent_tool_use_id: null,
+						message: {
+							role: "user",
+							content: [
+								{
+									type: "tool_result",
+									tool_use_id: "synthetic-tool",
+									content: "ok",
+								},
+							],
+						},
+					} as SDKMessage;
+					await continuation;
+				},
+				async (action, driver) => {
+					if (action.kind === "tool") toolAuthorizations++;
+					await driver.validateExternalAction(action);
+					if (receipt === "failed" && toolAuthorizations === 2) {
+						secondAuthorizationEntered = true;
+						await secondAuthorization;
+					}
+				},
+				async ({ driver, ref, command, requests, path, options }) => {
+					try {
+						await vi.waitFor(() => expect(receiptEntered).toBe(true));
+						expect(requests()).toBe(1);
+					} finally {
+						release();
+					}
+					await vi.waitFor(() => expect(continuation).toBeDefined());
+					if (receipt === "failed")
+						expect([0, 400]).toContain(await continuation);
+					else expect(await continuation).toBe(200);
+					expect(requests()).toBe(receipt === "failed" ? 1 : 2);
+					if (receipt === "failed") {
+						expect(injectedFailure).toBe(true);
+						releaseSecondAuthorization();
+						expect(
+							(secondPermission && (await secondPermission))?.behavior,
+						).toBe("deny");
+						const hook = options.hooks?.PreToolUse?.[0]?.hooks[0];
+						const late = await hook?.(
+							{
+								hook_event_name: "PreToolUse",
+								session_id: String(options.sessionId),
+								transcript_path: "synthetic-unused",
+								cwd: String(options.cwd),
+								tool_name: "Write",
+								tool_input: {
+									file_path: join(String(options.cwd), "second.txt"),
+								},
+								tool_use_id: "second-tool",
+							},
+							"second-tool",
+							{ signal: new AbortController().signal },
+						);
+						expect(
+							late &&
+								"hookSpecificOutput" in late &&
+								late.hookSpecificOutput &&
+								"permissionDecision" in late.hookSpecificOutput &&
+								late.hookSpecificOutput.permissionDecision,
+						).toBe("deny");
+						expect(toolAuthorizations).toBe(2);
+						await driver.execute(command);
+						await driver.close();
+						expect(await driver.getStatus(ref, command.executionId)).toBe(
+							"unknown",
+						);
+						expect(requests()).toBe(1);
+						const events = await driver.replayEvents(ref, command.executionId);
+						const toolFacts = events.flatMap((event) =>
+							event.type === "operation" && event.payload.kind === "tool"
+								? [event.payload]
+								: [],
+						);
+						expect(toolFacts.map((fact) => fact.phase)).toContain("unknown");
+						expect(toolFacts.map((fact) => fact.phase)).not.toContain(
+							"completed",
+						);
+						expect(events.some((event) => event.type === "completed")).toBe(
+							false,
+						);
+						expect(
+							events.filter(
+								(event) =>
+									event.type === "operation" &&
+									event.payload.kind === "model" &&
+									event.payload.phase === "started",
+							),
+						).toHaveLength(1);
+						const recovered = await ClaudeRuntimeDriver.open({
+							path,
+							configVersion: "configuration-a",
+							defaultModelOptionId: "option-one",
+							defaultReasoningLevel: "high",
+							modelOptions: [
+								{
+									modelOptionId: "option-one",
+									model: "claude-opus-5",
+									reasoningLevels: ["high"],
+									authentication: "bearer",
+									endpoint: "http://127.0.0.1:1",
+									credential: "synthetic-credential",
+								},
+							],
+							authorizeExternalAction: (action) =>
+								recovered.validateExternalAction(action),
+						});
+						try {
+							expect(await recovered.getStatus(ref, command.executionId)).toBe(
+								"unknown",
+							);
+							await recovered.execute(command);
+							expect(requests()).toBe(1);
+						} finally {
+							await recovered.close();
+						}
+					}
+				},
+			);
+		} finally {
+			release();
+			releaseSecondAuthorization();
+			spy.mockRestore();
+		}
+	},
+);
+
+it.each(["close", "stop"] as const)(
+	"wakes a Claude tool-result gate promptly on %s",
+	async (kind) => {
+		let continuation: Promise<unknown> | undefined;
+		let continuationSettled = false;
+		let stallRead = false;
+		let readEntered = false;
+		let releaseRead = () => {};
+		const readCommitted = DurableJsonFile.prototype.readCommitted;
+		const spy = vi.spyOn(DurableJsonFile.prototype, "readCommitted");
+		spy.mockImplementation(function (this: DurableJsonFile<unknown>) {
+			if (stallRead) {
+				stallRead = false;
+				readEntered = true;
+				return new Promise((resolve, reject) => {
+					releaseRead = () => {
+						void readCommitted.call(this).then(resolve, reject);
+					};
+				});
+			}
+			return readCommitted.call(this);
+		});
+		try {
+			await withClaudeSource(
+				async function* (request, options) {
+					const first = await request();
+					await first.text();
+					const permission = await options.canUseTool?.(
+						"Write",
+						{ file_path: join(String(options.cwd), "synthetic.txt") },
+						{
+							signal: new AbortController().signal,
+							toolUseID: "blocked-tool",
+							requestId: "blocked-tool-request",
+						},
+					);
+					expect(permission?.behavior).toBe("allow");
+					stallRead = true;
+					continuation = request()
+						.then(
+							(response) => response.text(),
+							() => "closed",
+						)
+						.finally(() => {
+							continuationSettled = true;
+						});
+					await continuation;
+				},
+				(action, driver) => driver.validateExternalAction(action),
+				async ({ driver, ref, command, requests }) => {
+					await vi.waitFor(() => expect(continuation).toBeDefined());
+					await vi.waitFor(() => expect(readEntered).toBe(true));
+					expect(continuationSettled).toBe(false);
+					expect(requests()).toBe(1);
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						await Promise.race([
+							kind === "close"
+								? driver.close()
+								: driver.execute({
+										schemaVersion: 1,
+										kind: "stop",
+										agentId: command.agentId,
+										conversationId: command.conversationId,
+										sessionGeneration: command.sessionGeneration,
+										nativeSessionRef: ref,
+										executionId: command.executionId,
+										turnId: command.turnId,
+										operationId: "stop-blocked-tool",
+									}),
+							new Promise<never>((_, reject) => {
+								timer = setTimeout(
+									() => reject(Error("Gate did not wake on retirement")),
+									1_000,
+								);
+							}),
+						]);
+					} finally {
+						clearTimeout(timer);
+					}
+					expect(continuationSettled).toBe(true);
+					expect(requests()).toBe(1);
+				},
+			);
+		} finally {
+			releaseRead();
+			spy.mockRestore();
+		}
+	},
+);
+
+it("does not turn a confirmed Claude tool result into unknown when stop retires its model continuation", async () => {
+	let proceed = () => {};
+	const ready = new Promise<void>((resolve) => {
+		proceed = resolve;
+	});
+	let continuation: Promise<unknown> | undefined;
+	try {
+		await withClaudeSource(
+			async function* (request, options) {
+				const first = await request();
+				await first.text();
+				await ready;
+				const permission = await options.canUseTool?.(
+					"Write",
+					{ file_path: join(String(options.cwd), "synthetic.txt") },
+					{
+						signal: new AbortController().signal,
+						toolUseID: "confirmed-tool",
+						requestId: "confirmed-tool-request",
+					},
+				);
+				expect(permission?.behavior).toBe("allow");
+				yield {
+					type: "stream_event",
+					session_id: options.sessionId,
+					parent_tool_use_id: null,
+					event: {
+						type: "content_block_start",
+						index: 0,
+						content_block: {
+							type: "tool_use",
+							id: "confirmed-tool",
+							name: "Write",
+							input: {},
+						},
+					},
+				} as SDKMessage;
+				continuation = request().then(
+					(response) => response.text(),
+					() => "closed",
+				);
+				yield {
+					type: "user",
+					session_id: options.sessionId,
+					parent_tool_use_id: null,
+					message: {
+						role: "user",
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: "confirmed-tool",
+								content: "ok",
+							},
+						],
+					},
+				} as SDKMessage;
+				await continuation;
+			},
+			(action, driver) => driver.validateExternalAction(action),
+			async ({ driver, ref, command, requests }) => {
+				const waiters = (
+					driver as unknown as {
+						waiters: Map<string, Set<() => void>>;
+					}
+				).waiters;
+				const held = new Set<() => void>();
+				let released = false;
+				const iterate = held[Symbol.iterator].bind(held);
+				Object.defineProperty(held, Symbol.iterator, {
+					value: () => (released ? iterate() : [][Symbol.iterator]()),
+				});
+				waiters.set(ref, held);
+				proceed();
+				await vi.waitFor(() => expect(continuation).toBeDefined());
+				await vi.waitFor(async () => {
+					const events = await driver.replayEvents(ref, command.executionId);
+					expect(
+						events.some(
+							(event) =>
+								event.type === "tool" && event.payload.phase === "completed",
+						),
+					).toBe(true);
+				});
+				expect(requests()).toBe(1);
+				const stop = driver.execute({
+					schemaVersion: 1,
+					kind: "stop",
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					nativeSessionRef: ref,
+					executionId: command.executionId,
+					turnId: command.turnId,
+					operationId: "stop-confirmed-tool",
+				});
+				try {
+					await vi.waitFor(() =>
+						expect(
+							(
+								driver as unknown as {
+									handles: Map<string, { retiring: boolean }>;
+								}
+							).handles.get(ref)?.retiring,
+						).toBe(true),
+					);
+				} finally {
+					released = true;
+					for (const wake of held) wake();
+				}
+				await stop;
+				expect(await driver.getStatus(ref, command.executionId)).toBe(
+					"cancelled",
+				);
+				expect(requests()).toBe(1);
+			},
+		);
+	} finally {
+		proceed();
 	}
 });
 

@@ -1312,7 +1312,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		request?: "messages" | "count_tokens",
 	) {
 		const ref = file.read().binding.ref;
-		// Native tools may finish before their terminal fact has committed.
+		// Native clients may ask for the next model response before the tool receipt commits.
 		for (;;) {
 			let wake = () => {};
 			const changed = new Promise<void>((resolve) => {
@@ -1333,7 +1333,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					turn.nativeResult
 				)
 					unavailable();
-				if (auxiliaryRequestState(turn) !== "pending") break;
+				const auxiliary = auxiliaryRequestState(turn);
+				if (auxiliary === "unconfirmed") unavailable();
+				if (auxiliary === "settled") break;
 				await changed;
 			} finally {
 				waiters.delete(wake);
