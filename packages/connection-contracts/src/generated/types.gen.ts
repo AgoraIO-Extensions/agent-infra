@@ -4,6 +4,31 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AuditSummaryState = 'AVAILABLE' | 'REDACTED' | 'NO_PARAMETERS' | 'EMPTY_INPUT' | 'EMPTY_OUTPUT' | 'UNSUPPORTED' | 'NOT_RECORDED';
+
+export type CallDiagnostics = {
+    executionId: string;
+    phase: 'EXECUTE' | 'RECONCILE';
+    requests: Array<{
+        sequence: number;
+        service: string;
+        method: string;
+        origin: string;
+        pathTemplate: string;
+        startedAt: string;
+        finishedAt: string | null;
+        durationMs: number | null;
+        status: number | null;
+        outcome: 'STARTED' | 'RESPONSE_HEADERS' | 'TRANSPORT_ERROR';
+        errorCategory: 'TIMEOUT' | 'ABORTED' | 'TRANSPORT_ERROR' | null;
+        requestIds: Array<{
+            name: string;
+            value: string;
+        }>;
+    }>;
+    droppedRequests: number;
+};
+
 export type AuditCall = {
     callId: string;
     createdAt: string;
@@ -55,6 +80,10 @@ export type AuditDetail = {
         event: string;
         occurredAt: string;
     }>;
+    inputState: AuditSummaryState;
+    outputState: AuditSummaryState;
+    diagnosticsTruncated: boolean;
+    diagnostics: Array<CallDiagnostics>;
 };
 
 export type Error = {

@@ -236,7 +236,14 @@
     {
       "idx": 33,
       "version": "7",
-      "when": 1790424001000,
+      "when": 1790467200000,
+      "tag": "0034_call_diagnostics",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790467201000,
       "tag": "0032_connection_access_approval",
       "breakpoints": true
     }

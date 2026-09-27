@@ -89,6 +89,7 @@
 	font-size: 13px;
 }
 .audit-table th {
+	z-index: 2;
 	position: sticky;
 	top: 0;
 	background: var(--surface-muted);
@@ -112,6 +113,26 @@
 }
 .audit-table tr.selected {
 	background: var(--accent-soft);
+}
+.audit-table tbody tr {
+	position: relative;
+}
+.audit-table tbody tr:not(.selected):hover {
+	background: var(--surface-muted);
+}
+/* Stretch the native button hit area without replacing table or keyboard semantics. */
+.audit-row-hit-area {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	cursor: pointer;
+}
+.audit-table button:focus-visible {
+	outline: none;
+}
+.audit-table button:focus-visible .audit-row-hit-area {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
 }
 .audit-table button {
 	border: 0;
@@ -275,4 +296,41 @@
 	.audit-table td {
 		padding: 13px 6px;
 	}
+}
+
+.audit-backend {
+	border-block: 1px solid var(--border);
+	margin-bottom: 18px;
+	font-size: 12px;
+}
+.audit-backend summary {
+	cursor: pointer;
+	padding: 14px 0;
+	font-weight: 600;
+}
+.audit-backend summary > span {
+	float: right;
+	font-size: 11px;
+	color: var(--text-muted);
+	font-weight: 400;
+}
+.audit-backend-content {
+	padding-bottom: 14px;
+}
+.audit-diagnostic-group {
+	border-top: 1px solid var(--border);
+	padding-top: 14px;
+	margin-top: 12px;
+}
+.audit-http-request {
+	padding: 12px 0;
+	border-top: 1px solid var(--border);
+}
+.audit-http-request h4 {
+	margin: 0 0 8px;
+	font-size: 12px;
+}
+.audit-http-request small {
+	font-size: 10px;
+	overflow-wrap: anywhere;
 }

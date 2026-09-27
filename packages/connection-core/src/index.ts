@@ -13,7 +13,14 @@ import {
 
 export * from "./access-approval";
 export * from "./audit";
+export * from "./call-diagnostics";
 export * from "./oauth";
+
+import {
+	type CallDiagnostics,
+	newCallDiagnostics,
+	withCallDiagnostics,
+} from "./call-diagnostics";
 
 export const forbiddenSelectorNames = new Set([
 	"accountId",
@@ -686,6 +693,7 @@ export interface ConnectionRepository {
 	}): Promise<{ call: StoredCall; created: boolean }>;
 	claimReconciliationJob(): Promise<ReconciliationJob | undefined>;
 	completeReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		result: Record<string, unknown>;
@@ -827,6 +835,7 @@ export interface ConnectionRepository {
 		principalId: string;
 	}): Promise<InvocationContext[]>;
 	setCallResult(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
@@ -838,6 +847,7 @@ export interface ConnectionRepository {
 	}): Promise<void>;
 	revokeGrant(input: { grantId: string; principalId: string }): Promise<void>;
 	rescheduleReconciliationJob(input: {
+		diagnostics?: CallDiagnostics;
 		callId: string;
 		leaseId: string;
 		reason: string;
@@ -1898,6 +1908,7 @@ export class ConnectionApplicationService {
 		}
 		let providerResponded = false;
 		let submissionStarted = false;
+		const diagnostics = newCallDiagnostics("EXECUTE");
 		try {
 			const credential = await this.repository.getCredential(invocation);
 			await this.repository.verifyInvocation({ ...invocation, action });
@@ -1909,16 +1920,19 @@ export class ConnectionApplicationService {
 				});
 				submissionStarted = true;
 			}
-			const result = await this.executor.execute({
-				action,
-				actionVersionId: actionDefinition.id,
-				credential,
-				input: delegatedRequestInput(input),
-				providerId: invocation.providerId,
-				providerReleaseId: invocation.providerReleaseId,
-			});
+			const result = await withCallDiagnostics(diagnostics, () =>
+				this.executor.execute({
+					action,
+					actionVersionId: actionDefinition.id,
+					credential,
+					input: delegatedRequestInput(input),
+					providerId: invocation.providerId,
+					providerReleaseId: invocation.providerReleaseId,
+				}),
+			);
 			providerResponded = true;
 			await this.repository.setCallResult({
+				diagnostics,
 				callId: call.callId,
 				result,
 				status: "SUCCEEDED",
@@ -1937,7 +1951,11 @@ export class ConnectionApplicationService {
 						? "DENIED_LOCAL"
 						: "FAILED";
 			try {
-				await this.repository.setCallResult({ callId: call.callId, status });
+				await this.repository.setCallResult({
+					callId: call.callId,
+					status,
+					diagnostics,
+				});
 			} catch {
 				if (!providerResponded && !submissionStarted) throw error;
 			}
@@ -2082,23 +2100,29 @@ export class ConnectionRecoveryService {
 	async runOnce(): Promise<boolean> {
 		const job = await this.repository.claimReconciliationJob();
 		if (!job) return false;
+		const diagnostics = newCallDiagnostics("RECONCILE");
 		try {
-			const result = await this.reconciler.reconcile({
-				action: job.action,
-				actionVersionId: job.actionVersionId,
-				credential: await this.repository.getCredential(job.invocation),
-				input: job.input,
-				providerId: job.invocation.providerId,
-				providerReleaseId: job.invocation.providerReleaseId,
-			});
+			const credential = await this.repository.getCredential(job.invocation);
+			const result = await withCallDiagnostics(diagnostics, () =>
+				this.reconciler.reconcile({
+					action: job.action,
+					actionVersionId: job.actionVersionId,
+					credential,
+					input: job.input,
+					providerId: job.invocation.providerId,
+					providerReleaseId: job.invocation.providerReleaseId,
+				}),
+			);
 			if (result) {
 				await this.repository.completeReconciliationJob({
+					diagnostics,
 					callId: job.callId,
 					leaseId: job.leaseId,
 					result,
 				});
 			} else {
 				await this.repository.rescheduleReconciliationJob({
+					diagnostics,
 					callId: job.callId,
 					leaseId: job.leaseId,
 					reason: "Provider evidence is not yet available",
@@ -2106,6 +2130,7 @@ export class ConnectionRecoveryService {
 			}
 		} catch (error) {
 			await this.repository.rescheduleReconciliationJob({
+				diagnostics,
 				callId: job.callId,
 				leaseId: job.leaseId,
 				reason:
