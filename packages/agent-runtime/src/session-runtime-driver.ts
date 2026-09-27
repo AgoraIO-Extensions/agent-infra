@@ -1308,6 +1308,38 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		request?: "messages" | "count_tokens",
 	) {
+		const ref = file.read().binding.ref;
+		// Native tools may finish before their terminal fact has committed.
+		const deadline = Date.now() + 5_000;
+		for (;;) {
+			let wake = () => {};
+			const changed = new Promise<void>((resolve) => {
+				wake = resolve;
+			});
+			const waiters = this.waiters.get(ref) ?? new Set<() => void>();
+			this.waiters.set(ref, waiters);
+			waiters.add(wake);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				const state = await file.readCommitted();
+				const turn = state.turns.find(
+					(entry) => entry.executionId === executionId,
+				);
+				if (turn?.status !== "running" || turn.nativeResult) unavailable();
+				if (auxiliaryRequestState(turn) !== "pending") break;
+				const remaining = deadline - Date.now();
+				if (remaining <= 0) unavailable();
+				await Promise.race([
+					changed,
+					new Promise<void>((resolve) => {
+						timer = setTimeout(resolve, remaining);
+					}),
+				]);
+			} finally {
+				clearTimeout(timer);
+				waiters.delete(wake);
+			}
+		}
 		const turn = file
 			.read()
 			.turns.find((entry) => entry.executionId === executionId);
