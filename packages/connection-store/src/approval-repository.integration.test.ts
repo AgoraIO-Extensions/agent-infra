@@ -1077,6 +1077,31 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					providerReleaseId: releaseId,
 					purpose: "Approval integration request",
 				});
+				const ordinaryRequest = await requestRepository.getRequest(
+					applicantId,
+					requestId,
+				);
+				const ordinaryStage = ordinaryRequest.stages[0];
+				if (!ordinaryStage) throw new Error("Ordinary stage is missing");
+				await expect(
+					requestRepository.reroute({
+						actorPrincipalId: adminId,
+						requestId,
+						approvers: [
+							{
+								principalId: adminId,
+								displaySnapshot: { displayName: "Admin" },
+							},
+						],
+						expectedRequestRevision: ordinaryRequest.revision,
+						expectedStageRevision: ordinaryStage.revision,
+						expectedRoutingRevision: ordinaryStage.routingRevision,
+						reason: "Cannot replace a healthy approval route",
+					}),
+				).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+				expect(
+					await requestRepository.getRequest(applicantId, requestId),
+				).toEqual(ordinaryRequest);
 				const [submittedProjection] = await sql<
 					{
 						notifications: number;
@@ -1486,6 +1511,18 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						(connection) => connection.id === connectionId,
 					)?.accessAuthorization,
 				).toMatchObject({ id: accessAuthorizationId, state: "ACTIVE" });
+				const historicalExpiredId = `historical-expired-${suffix}`;
+				await sql`
+					INSERT INTO connection_access_authorizations (
+						id, principal_id, connection_id, provider_release_id, capability_profile_id,
+						source, source_request_id, external_account_fingerprint, state,
+						validity_kind, valid_until, created_at, updated_at
+					)
+					SELECT ${historicalExpiredId}, principal_id, connection_id, provider_release_id,
+						capability_profile_id, source, source_request_id, external_account_fingerprint,
+						'EXPIRED', 'FINITE', now() - interval '1 day', created_at - interval '1 day', updated_at
+					FROM connection_access_authorizations WHERE id = ${accessAuthorizationId}
+				`;
 				await sql`
 					INSERT INTO connection_consumers (id, display_name, status)
 					VALUES (${consumerId}, 'Approval test Consumer', 'ACTIVE')
@@ -1706,6 +1743,27 @@ describe("PostgreSQL Connection access approval catalog", () => {
 							previewId: beforeLatePreview.previewId,
 							principalId: applicantId,
 						});
+					if (cycle === 0) {
+						const [beforeHistoricalRevoke] = await sql`
+							SELECT account.revision, account.execution_fence, grant_version.status
+							FROM connection_accounts account JOIN connection_grants grant_version ON grant_version.connection_id = account.id
+							WHERE grant_version.id = ${beforeLateGrant.grantId}
+						`;
+						expect(beforeHistoricalRevoke?.status).toBe("ACTIVE");
+						await expect(
+							requestRepository.revokeAuthorization({
+								actorPrincipalId: adminId,
+								authorizationId: historicalExpiredId,
+								expectedRevision: "1",
+							}),
+						).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+						const [afterHistoricalRevoke] = await sql`
+							SELECT account.revision, account.execution_fence, grant_version.status
+							FROM connection_accounts account JOIN connection_grants grant_version ON grant_version.connection_id = account.id
+							WHERE grant_version.id = ${beforeLateGrant.grantId}
+						`;
+						expect(afterHistoricalRevoke).toEqual(beforeHistoricalRevoke);
+					}
 					await sql`
 					UPDATE connection_access_authorizations
 					SET valid_until = now() + interval '4 seconds'
@@ -1882,6 +1940,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					await requestRepository.listAccessOptions(applicantId)
 				).find((item) => item.policyVersionId === policyId);
 				if (!renewalOption) throw new Error("Renewal option is missing");
+				await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${approverId}`;
 				await requestRepository.createRequest({
 					applicantPrincipalId: applicantId,
 					capabilityProfileId: profileId,
@@ -1899,6 +1958,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					providerReleaseId: releaseId,
 					purpose: "Expiry test",
 				});
+				await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${approverId}`;
 				const beforeReroute = await requestRepository.getRequest(
 					applicantId,
 					expiringRequestId,
@@ -1906,6 +1966,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				const activeStage = beforeReroute.stages.find(
 					(stage) => stage.ordinal === 1,
 				);
+				expect(beforeReroute.state).toBe("ROUTING_BLOCKED");
 				if (!activeStage) throw new Error("Active approval stage is missing");
 				expect(
 					await requestRepository.reroute({

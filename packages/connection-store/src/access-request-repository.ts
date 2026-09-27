@@ -593,7 +593,7 @@ export class PostgresConnectionAccessRequestRepository
 				JOIN connection_approval_stages policy_stage
 					ON policy_stage.id = stage.policy_stage_id
 				WHERE request.id = ${input.requestId}
-					AND request.state IN ('IN_REVIEW', 'ROUTING_BLOCKED')
+					AND request.state = 'ROUTING_BLOCKED'
 					AND request.expires_at > now() AND stage.state = 'PENDING'
 				FOR UPDATE OF request, stage
 			`;
@@ -1010,9 +1010,15 @@ export class PostgresConnectionAccessRequestRepository
 			`;
 			if (!account) forbidden();
 			const [authorization] = await sql<{ revision: string; state: string }[]>`
-				SELECT revision::text, state FROM connection_access_authorizations
-				WHERE id = ${input.authorizationId} AND connection_id = ${account.id}
-				FOR UPDATE
+				SELECT access.revision::text, access.state FROM connection_access_authorizations access
+				WHERE access.id = ${input.authorizationId} AND access.connection_id = ${account.id}
+					AND NOT EXISTS (
+						SELECT 1 FROM connection_access_authorizations newer
+						WHERE newer.connection_id = access.connection_id AND newer.id <> access.id
+							AND (newer.created_at > access.created_at
+								OR newer.state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED'))
+					)
+				FOR UPDATE OF access
 			`;
 			if (
 				!authorization ||
