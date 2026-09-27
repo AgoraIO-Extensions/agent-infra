@@ -712,6 +712,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			return undefined;
 		});
 		if (previous) return previous;
+		for (const wake of this.waiters.get(binding.ref) ?? []) wake();
 		// The barrier does not depend on recoverable Turn history. Retire every owned
 		// effect source and drain in-flight events before confirming this control operation.
 		await this.files.get(binding.ref)?.catch(() => {});
@@ -741,6 +742,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(action: RuntimeExternalActionAuthorization) {
 		if (
 			this.closed ||
+			this.cancelled(action.nativeSessionRef) ||
 			!["model", "tool"].includes(action.kind) ||
 			action.purpose
 		)
@@ -764,6 +766,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.at(-1);
 		if (
 			this.closed ||
+			this.cancelled(action.nativeSessionRef) ||
 			state.cancelled ||
 			turn?.status !== "running" ||
 			(action.kind === "model" &&
@@ -1323,7 +1326,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				const turn = state.turns.find(
 					(entry) => entry.executionId === executionId,
 				);
-				if (this.closed || turn?.status !== "running" || turn.nativeResult)
+				if (
+					this.closed ||
+					this.cancelled(ref) ||
+					turn?.status !== "running" ||
+					turn.nativeResult
+				)
 					unavailable();
 				if (auxiliaryRequestState(turn) !== "pending") break;
 				await changed;
