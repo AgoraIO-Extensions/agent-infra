@@ -98,6 +98,7 @@ describe("platform-core package surface", () => {
 			"snapshotAgentRuntimePresentationExpectationV1",
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
+			"stoppedAgentDispatchPlanV1",
 			"workloadManagementObservationV1",
 		]);
 		const testingSurface = await import(

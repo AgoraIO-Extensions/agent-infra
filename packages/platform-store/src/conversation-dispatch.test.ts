@@ -678,6 +678,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						status: "failed",
 						failure_code: "AGENT_NOT_RUNNING",
 					});
+					const [event] = await client<
+						{ event_type: string; payload: unknown }[]
+					>`
+						select event_type, payload from platform.persisted_events
+						where event_id = ${`outbox:${work.itemId}:${decision.claim.deliveryFence}`}
+					`;
+					expect(event).toMatchObject({
+						event_type: "outbox.failed",
+						payload: { errorCode: "AGENT_NOT_RUNNING" },
+					});
 				}
 			} finally {
 				await store.close();

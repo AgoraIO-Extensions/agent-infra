@@ -26,6 +26,14 @@ interface CapacityState {
 	};
 }
 
+/** Terminal result for a stopped Agent's confirmed unsent Turn. */
+export const stoppedAgentDispatchPlanV1 = {
+	transition: { executionStatus: "failed", conversationStatus: "ready" },
+	messageStatus: "failed",
+	outboxStatus: "failed",
+	failureCode: "AGENT_NOT_RUNNING",
+} as const;
+
 /** Recovery and controls do not call this new-execution admission decision. */
 export function decideConversationDispatchCapacityV1(
 	state: CapacityState,

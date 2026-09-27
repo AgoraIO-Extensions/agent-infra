@@ -49,7 +49,10 @@ export * from "./agent-runtime-presentation.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./conversation-dispatch.js";
-export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
+export {
+	decideConversationDispatchCapacityV1,
+	stoppedAgentDispatchPlanV1,
+} from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
 export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";

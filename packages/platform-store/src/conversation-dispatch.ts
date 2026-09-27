@@ -12,6 +12,7 @@ import {
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
+	stoppedAgentDispatchPlanV1,
 	type TaskPrincipalV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
@@ -615,14 +616,17 @@ export class PostgresConversationDispatchStoreV1
 							throw new DispatchCapacityUnavailable("capacity_unavailable");
 						}
 						if (capacityDecision === "agent_not_running") {
-							await applyTransition(transaction, state, input.claim, {
-								executionStatus: "failed",
-								conversationStatus: "ready",
-							});
+							const plan = stoppedAgentDispatchPlanV1;
+							await applyTransition(
+								transaction,
+								state,
+								input.claim,
+								plan.transition,
+							);
 							if (input.claim.messageId) {
 								const messages = await transaction<{ message_id: string }[]>`
 								update platform.conversation_messages
-								set status = 'failed', failure_code = 'AGENT_NOT_RUNNING',
+								set status = ${plan.messageStatus}, failure_code = ${plan.failureCode},
 									updated_at = clock_timestamp()
 								where message_id = ${input.claim.messageId}
 									and execution_id = ${input.claim.executionId}
@@ -636,8 +640,8 @@ export class PostgresConversationDispatchStoreV1
 								transaction,
 								state,
 								input.claim,
-								"failed",
-								"AGENT_NOT_RUNNING",
+								plan.outboxStatus,
+								plan.failureCode,
 							);
 							stopped = true;
 							return;
