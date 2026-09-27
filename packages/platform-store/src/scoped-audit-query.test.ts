@@ -265,6 +265,29 @@ describe("controlled PostgreSQL audit query", () => {
 					query.getAudit(other.scope, auditId, detail, request()),
 				).rejects.toMatchObject({ code: "access_denied" });
 			}
+			const otherAuditId = randomUUID();
+			await createTaskApiAuditV1(producer).record({
+				schemaVersion: 1,
+				auditId: otherAuditId,
+				operation: "submit",
+				phase: "submit.result",
+				result: "rejected",
+				reason: "capacity_full",
+				principal: other.principal,
+				target: { kind: "agent", agentId: f.agentId },
+				...request(),
+			});
+			await sql`update platform.audit_events set occurred_at = now() + interval '1 minute' where id = ${otherAuditId}`;
+			const first = await query.listAudit(
+				f.scope,
+				{
+					limit: 1,
+					filters: { agentId: f.agentId, action: "task.api.submit.result" },
+				},
+				request(),
+			);
+			expect(first.items).toHaveLength(1);
+			expect(auditIds).toContain(first.items[0]?.auditId);
 			const associated = await query.listAudit(
 				f.scope,
 				{ ...page, filters: { executionId: f.executionId } },
@@ -1015,6 +1038,135 @@ describe("controlled PostgreSQL audit query", () => {
 				request(),
 			),
 		).rejects.toMatchObject({ code: "access_denied" });
+	});
+
+	it("filters a string schema version before limiting a page of unbound attempts", async () => {
+		const f = await fixture();
+		const producer = new PostgresTaskApiAuditStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const invalidId = randomUUID();
+		const validId = randomUUID();
+		try {
+			for (const auditId of [invalidId, validId])
+				await createTaskApiAuditV1(producer).record({
+					schemaVersion: 1,
+					auditId,
+					operation: "submit",
+					phase: "submit.result",
+					result: "rejected",
+					reason: "capacity_full",
+					principal: f.principal,
+					target: { kind: "agent", agentId: f.agentId },
+					...request(),
+				});
+			await sql`update platform.audit_events
+				set details = jsonb_set(details, '{schemaVersion}', '"1"'::jsonb),
+					occurred_at = now() + interval '2 minutes' where id = ${invalidId}`;
+			await sql`update platform.audit_events
+				set occurred_at = now() + interval '1 minute' where id = ${validId}`;
+			const first = await query.listAudit(
+				f.scope,
+				{
+					limit: 1,
+					filters: {
+						agentId: f.agentId,
+						action: "task.api.submit.result",
+					},
+				},
+				request(),
+			);
+			expect(first.items.map((item) => item.auditId)).toEqual([validId]);
+		} finally {
+			await producer.close();
+		}
+	});
+
+	it("holds current Web availability through audit query commit before revocation", async () => {
+		const f = await fixture();
+		const context = request();
+		const blocker = postgres(database.databaseUrl, { max: 1 });
+		const revoker = postgres(database.databaseUrl, { max: 1 });
+		let releaseBlocker: (() => void) | undefined;
+		const released = new Promise<void>((resolve) => {
+			releaseBlocker = resolve;
+		});
+		let markLocked: (() => void) | undefined;
+		const locked = new Promise<void>((resolve) => {
+			markLocked = resolve;
+		});
+		await sql.unsafe(`create function platform.block_scoped_audit_query() returns trigger language plpgsql as $$
+			begin
+				if new.request_id = '${context.requestId}' then
+					perform pg_advisory_xact_lock(484, 1);
+				end if;
+				return new;
+			end $$`);
+		await sql.unsafe(`create trigger block_scoped_audit_query before insert on platform.audit_events
+			for each row execute function platform.block_scoped_audit_query()`);
+		const blockerTask = Promise.resolve(
+			blocker.begin(async (transaction) => {
+				await transaction`select pg_advisory_xact_lock(484, 1)`;
+				markLocked?.();
+				await released;
+			}),
+		);
+		let queryTask: ReturnType<typeof query.listAudit> | undefined;
+		let revokeTask: Promise<unknown> | undefined;
+		try {
+			await locked;
+			queryTask = query.listAudit(
+				f.scope,
+				{ limit: 1, filters: { agentId: f.agentId } },
+				context,
+			);
+			async function waitFor(check: () => Promise<boolean>) {
+				const deadline = Date.now() + 10_000;
+				while (Date.now() < deadline) {
+					if (await check()) return;
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+				throw new Error("Expected PostgreSQL lock wait");
+			}
+			await waitFor(async () => {
+				const [row] = await sql<{ waiting: number }[]>`
+					select count(*)::int as waiting from pg_locks
+					where locktype = 'advisory' and classid = 484 and objid = 1 and not granted`;
+				return row?.waiting === 1;
+			});
+			const [backend] = await revoker<
+				{ pid: number }[]
+			>`select pg_backend_pid() as pid`;
+			if (!backend) throw new Error("Missing PostgreSQL backend");
+			revokeTask = Promise.resolve(
+				revoker`delete from platform.agent_availability
+					where agent_id = ${f.agentId} and target_type = 'user' and target_id = ${f.principal.id}`,
+			);
+			await waitFor(async () => {
+				const [row] = await sql<{ blockers: number }[]>`
+					select cardinality(pg_blocking_pids(${backend.pid})) as blockers`;
+				return (row?.blockers ?? 0) > 0;
+			});
+			releaseBlocker?.();
+			expect((await queryTask).items).toHaveLength(1);
+			await revokeTask;
+			await expect(
+				query.getAudit(f.scope, f.auditId, detail, request()),
+			).rejects.toMatchObject({ code: "access_denied" });
+		} finally {
+			releaseBlocker?.();
+			await Promise.allSettled([
+				blockerTask,
+				...(queryTask ? [queryTask] : []),
+				...(revokeTask ? [revokeTask] : []),
+			]);
+			await sql.unsafe(
+				"drop trigger block_scoped_audit_query on platform.audit_events",
+			);
+			await sql.unsafe("drop function platform.block_scoped_audit_query()");
+			await blocker.end();
+			await revoker.end();
+		}
 	});
 
 	it("keeps mixed-table equal-time page anchors stable and applies detail filters", async () => {

@@ -21,6 +21,7 @@ import {
 	projectPlatformAuditQuerySummaryV1,
 	projectPlatformOperationAuditV1,
 	projectPlatformTaskAuditSummaryV1,
+	requirePlatformAuditCandidateAccessV1,
 	requirePlatformExecutionAuditBindingV1,
 	type TaskApiAuditInputV1,
 	type TaskAuthorizationBoundaryV1,
@@ -90,6 +91,7 @@ type Row = AuditRow & {
 	acceptedAuthorizationRecordId: string | null;
 	acceptanceCount: number | null;
 	boundConversationId: string | null;
+	executionConversationId: string | null;
 };
 
 function deny(): never {
@@ -200,7 +202,7 @@ function candidates(
 			and ((a.action = 'task.api.access' and a.details ->> 'phase' = 'access')
 				or (a.action = 'task.api.submit.result' and a.details ->> 'phase' = 'submit.result'))
 			and a."actorType" = ${scope.principal.kind} and a."actorId" = ${scope.principal.id}
-			and a.details ->> 'schemaVersion' = '1' and a.details ->> 'operation' = 'submit'
+			and a.details -> 'schemaVersion' = '1'::jsonb and a.details ->> 'operation' = 'submit'
 			and a.details -> 'target' ->> 'kind' = 'agent'
 			and a.details -> 'target' ->> 'agentId' = a."agentId" and a."targetId" = a."agentId"
 			and agent.authorization_revision is not null
@@ -230,6 +232,7 @@ function candidates(
 			from platform.conversation_audit_events
 		), controlled as (
 			select a.*, coalesce(a."conversationId", e.conversation_id) as "boundConversationId",
+				e.conversation_id as "executionConversationId",
 				e.actor_id as "executionActorId", e.agent_id as "executionAgentId", e.channel_id as "channelId",
 				r.id as "authorizationRecordId", r.boundary,
 				accepted.actor_type as "acceptedActorType", accepted.actor_id as "acceptedActorId",
@@ -288,6 +291,49 @@ function executionBinding(row: Row): PlatformExecutionAuditBindingV1 | null {
 		acceptedAgentId: row.acceptedAgentId,
 		acceptedAuthorizationRecordId: row.acceptedAuthorizationRecordId,
 	};
+}
+
+function requireCandidateAccess(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): void {
+	const details =
+		row.details &&
+		typeof row.details === "object" &&
+		!Array.isArray(row.details)
+			? (row.details as Record<string, unknown>)
+			: null;
+	const target =
+		details?.target &&
+		typeof details.target === "object" &&
+		!Array.isArray(details.target)
+			? (details.target as Record<string, unknown>)
+			: null;
+	requirePlatformAuditCandidateAccessV1(
+		{
+			source: row.source,
+			action: row.action,
+			actorType: row.actorType,
+			actorId: row.actorId,
+			targetType: row.targetType,
+			targetId: row.targetId,
+			agentId: row.agentId,
+			conversationId: row.conversationId,
+			executionId: row.executionId,
+			executionConversationId: row.executionConversationId,
+			binding: executionBinding(row),
+			attempt: details
+				? {
+						schemaVersion: details.schemaVersion,
+						operation: details.operation,
+						phase: details.phase,
+						targetKind: target?.kind,
+						targetAgentId: target?.agentId,
+					}
+				: null,
+		},
+		scope,
+	);
 }
 
 const executionActions = new Set([
@@ -532,6 +578,19 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		>`
 			select authorization_revision from platform.agents where id = ${agentId} for share`;
 		if (!agent?.authorization_revision) deny();
+		if (!scope.credential && scope.principal.kind === "user") {
+			await transaction`
+				select owner_id from platform.agent_owners
+				where agent_id = ${agentId} and owner_id = ${scope.principal.id} for share
+			`;
+			await transaction`
+				select target_id from platform.agent_availability
+				where agent_id = ${agentId}
+					and ((target_type = 'user' and target_id = ${scope.principal.id})
+						or (target_type = 'organization' and target_id = any(${[...(scope.user?.organizationIds ?? [])]}::text[])))
+				for share
+			`;
+		}
 		const management = await readAgentManagementState(
 			this.#managementDatabase,
 			agentId,
@@ -642,8 +701,8 @@ export class PostgresScopedPlatformAuditQueryV1 {
 					if (!owned) deny();
 					const binding = executionBinding(owned);
 					if (!binding) deny();
-					requirePlatformExecutionAuditBindingV1(binding, scope);
 					await this.#requireAgent(transaction, scope, binding.agentId);
+					requireCandidateAccess(owned, scope);
 				}
 				const cte = candidates(transaction, scope, query);
 				let rows: Row[];
@@ -659,6 +718,7 @@ export class PostgresScopedPlatformAuditQueryV1 {
 					if (!anchor) deny();
 					if (anchor.agentId)
 						await this.#requireAgent(transaction, scope, anchor.agentId);
+					requireCandidateAccess(anchor, scope);
 					// Keep PostgreSQL's full timestamp precision at the keyset boundary.
 					rows = await transaction<Row[]>`${cte}, anchor as (
 						select "occurredAt", source, "auditId" from controlled
@@ -674,6 +734,7 @@ export class PostgresScopedPlatformAuditQueryV1 {
 					rows.flatMap((row) => (row.agentId ? [row.agentId] : [])),
 				))
 					await this.#requireAgent(transaction, scope, agentId);
+				for (const row of rows) requireCandidateAccess(row, scope);
 				const visible = rows.slice(0, query.limit);
 				const items = visible.map((row) =>
 					project({ ...row, conversationId: row.boundConversationId }, scope),

@@ -109,7 +109,7 @@ describe("scoped audit HTTP adapter", () => {
 				requestedScope: "administrator",
 				operation: "list",
 				result: "rejected",
-				reason: "RESOURCE_UNAVAILABLE",
+				reason: "access_denied",
 			},
 			expect.objectContaining({
 				requestId: expect.any(String),

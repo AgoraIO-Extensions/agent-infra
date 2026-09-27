@@ -278,6 +278,27 @@ export function parsePlatformAuditQueryScopeV1(
 	}
 }
 
+export function authorizePlatformAuditAdministratorV1(input: {
+	readonly userId: string;
+	readonly roles: readonly string[];
+}): PlatformAuditQueryScopeV1 {
+	try {
+		const identity = exact(input, ["userId", "roles"]);
+		if (
+			!snapshotAgentManagementDenseArray(identity.roles).includes(
+				"system_admin",
+			)
+		)
+			throw new TypeError("Audit administrator role required");
+		return parsePlatformAuditQueryScopeV1({
+			kind: "administrator",
+			administratorId: identity.userId,
+		});
+	} catch {
+		throw new PlatformAuditScopeErrorV1("access_denied");
+	}
+}
+
 export function parsePlatformAuditQueryInputV1(
 	input: unknown,
 	scope: PlatformAuditQueryScopeV1,

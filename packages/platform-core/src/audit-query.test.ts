@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	authorizePlatformAuditAdministratorV1,
 	type PlatformAuditQueryScopeV1,
 	type PlatformExecutionAuditBindingV1,
 	parsePlatformAuditQueryInputV1,
@@ -73,6 +74,20 @@ const operation = {
 };
 
 describe("scoped audit domain", () => {
+	it("authorizes administrator queries from a trusted role snapshot", () => {
+		const roles = ["employee", "system_admin"];
+		expect(
+			authorizePlatformAuditAdministratorV1({ userId: "admin-a", roles }),
+		).toEqual(admin);
+		roles.length = 0;
+		expect(() =>
+			authorizePlatformAuditAdministratorV1({
+				userId: "admin-a",
+				roles: ["employee"],
+			}),
+		).toThrowError(expect.objectContaining({ code: "access_denied" }));
+	});
+
 	it("distinguishes durable task control reasons and retains the control reference", () => {
 		for (const reason of [
 			"stop",

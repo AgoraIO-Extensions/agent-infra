@@ -67,6 +67,7 @@ export * from "./api-identity-management.js";
 export * from "./application-foundation.js";
 export * from "./application-revision.js";
 export * from "./audit-query.js";
+export * from "./audit-query-access.js";
 export * from "./conversation-dispatch.js";
 export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";

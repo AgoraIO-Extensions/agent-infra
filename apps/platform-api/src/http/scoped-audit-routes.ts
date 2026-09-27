@@ -4,6 +4,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import {
 	type ApiPrincipalV1,
+	authorizePlatformAuditAdministratorV1,
 	type PlatformAuditQueryDenialReasonV1,
 	type PlatformAuditQueryScopeV1,
 	PlatformAuditScopeErrorV1,
@@ -42,11 +43,9 @@ async function queryScope(
 	if (administrator) {
 		const user = await resolveIdentity(identity, request, traceId);
 		capturePrincipal({ kind: "user", id: user.userId });
-		if (!user.roles.includes("system_admin"))
-			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
-		return parsePlatformAuditQueryScopeV1({
-			kind: "administrator",
-			administratorId: user.userId,
+		return authorizePlatformAuditAdministratorV1({
+			userId: user.userId,
+			roles: user.roles,
 		});
 	}
 	if (request.headers.has("authorization")) {
