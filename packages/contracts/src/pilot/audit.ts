@@ -67,6 +67,8 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"conversation.model_selection.updated",
 	"conversation.model_selection.fell_back",
 	"conversation.task.status",
+	"conversation.generation.isolation.started",
+	"conversation.generation.isolation.confirmed",
 	"secret.decrypt",
 	"secret.activate",
 	"secret.rewrap",

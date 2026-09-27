@@ -348,6 +348,8 @@ const executionActions = new Set([
 	"conversation.model_selection.updated",
 	"conversation.model_selection.fell_back",
 	"conversation.task.status",
+	"conversation.generation.isolation.started",
+	"conversation.generation.isolation.confirmed",
 	"audit.query.completed",
 	"audit.query.failed",
 ]);

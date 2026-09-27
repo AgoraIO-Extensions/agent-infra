@@ -1006,6 +1006,68 @@ describe("controlled PostgreSQL audit query", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
+	it("pages existing generation isolation audit beside old governance records", async () => {
+		const f = await fixture();
+		const governanceId = randomUUID();
+		const startedId = randomUUID();
+		const confirmedId = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, occurred_at)
+			values (${governanceId}, 'legacy-governance-trace', 'user', 'governance-user', 'agent.application.rejected', 'agent_application', 'legacy-application', 'rejected', '2024-01-02T10:00:00Z')`;
+		for (const [id, action, time] of [
+			[
+				startedId,
+				"conversation.generation.isolation.started",
+				"2024-01-02T10:01:00Z",
+			],
+			[
+				confirmedId,
+				"conversation.generation.isolation.confirmed",
+				"2024-01-02T10:02:00Z",
+			],
+		] as const) {
+			await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, occurred_at, details)
+				values (${id}, 'isolation-trace', 'system', 'platform-worker', ${action}, 'conversation', ${f.conversationId}, 'succeeded', ${f.agentId}, ${time}, ${sql.json({ executionId: f.executionId })})`;
+		}
+		const filters = {
+			from: "2024-01-02T10:00:00Z",
+			until: "2024-01-02T10:03:00Z",
+		};
+		const ids: string[] = [];
+		let cursor: string | null = null;
+		for (let index = 0; index < 3; index++) {
+			const result = await query.listAudit(
+				admin,
+				{ limit: 1, filters, ...(cursor ? { cursor } : {}) },
+				request(),
+			);
+			ids.push(...result.items.map((item) => item.auditId));
+			cursor = result.nextCursor;
+		}
+		expect(ids).toEqual([confirmedId, startedId, governanceId]);
+		expect(cursor).toBeNull();
+		for (const [id, action] of [
+			[startedId, "conversation.generation.isolation.started"],
+			[confirmedId, "conversation.generation.isolation.confirmed"],
+		] as const) {
+			await expect(
+				query.getAudit(admin, id, detail, request()),
+			).resolves.toMatchObject({
+				action,
+				result: "succeeded",
+				subject: { kind: "conversation", subjectId: f.conversationId },
+			});
+			const filtered = await query.listAudit(
+				admin,
+				{ limit: 1, filters: { ...filters, action } },
+				request(),
+			);
+			expect(filtered.items.map((item) => item.auditId)).toEqual([id]);
+			await expect(
+				query.getAudit(f.scope, id, detail, request()),
+			).rejects.toMatchObject({ code: "access_denied" });
+		}
+	});
+
 	it("durably records malformed/rebound requests without persisting caller filters, cursors, IDs or secret sentinels", async () => {
 		const context = request();
 		await expect(
