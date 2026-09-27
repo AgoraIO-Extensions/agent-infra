@@ -705,3 +705,43 @@
 		border-bottom: 1px solid var(--border);
 	}
 }
+.employee-picker {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	position: relative;
+	min-width: 0;
+	display: grid;
+	gap: 7px;
+}
+.employee-picker-dropdown {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	z-index: 20;
+	max-height: 260px;
+	overflow-y: auto;
+	background: var(--surface-raised);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	box-shadow: 0 4px 12px #00000014;
+}
+.employee-picker-dropdown p {
+	padding: 8px 12px;
+	margin: 0;
+	font-size: 13px;
+}
+.employee-picker-dropdown .approval-candidate {
+	width: 100%;
+	text-align: left;
+	flex-wrap: wrap;
+}
+.employee-picker-dropdown .approval-candidate[aria-selected="true"] {
+	background: var(--accent-soft);
+}
+.employee-picker-dropdown small,
+.employee-picker-dropdown span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}

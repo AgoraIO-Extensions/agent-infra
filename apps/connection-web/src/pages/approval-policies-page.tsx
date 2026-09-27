@@ -5,7 +5,6 @@ import {
 	ChevronRight,
 	Pencil,
 	Plus,
-	Search,
 	ShieldX,
 	Trash2,
 	X,
@@ -13,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { connectionApi } from "../api";
+import { EmployeePicker } from "../components/employee-picker";
 import { Button } from "../components/ui/button";
 import {
 	Dialog,
@@ -56,7 +56,6 @@ export function ApprovalPoliciesPage() {
 	const [candidateLabels, setCandidateLabels] = useState<
 		Record<string, string>
 	>({});
-	const [query, setQuery] = useState("");
 	const [allowPermanent, setAllowPermanent] = useState(false);
 	const [durationDays, setDurationDays] = useState<number | "">(90);
 	const [disclaimerIds, setDisclaimerIds] = useState<string[]>([]);
@@ -70,7 +69,6 @@ export function ApprovalPoliciesPage() {
 	);
 	const [notice, setNotice] = useState("");
 	const [blockedId, setBlockedId] = useState("");
-	const [rerouteSearch, setRerouteSearch] = useState("");
 	const [rerouteCandidateIds, setRerouteCandidateIds] = useState<string[]>([]);
 	const [rerouteLabels, setRerouteLabels] = useState<Record<string, string>>(
 		{},
@@ -180,11 +178,7 @@ export function ApprovalPoliciesPage() {
 	const blockedStage = selectedBlocked?.stages.find(
 		(item) => item.ordinal === selectedBlocked.currentStageOrdinal,
 	);
-	const rerouteCandidates = useQuery({
-		queryKey: ["approval-employees", rerouteSearch],
-		queryFn: () => connectionApi.searchApprovalEmployees(rerouteSearch),
-		enabled: rerouteSearch.trim().length >= 2,
-	});
+
 	const reroute = useMutation({
 		mutationFn: connectionApi.rerouteApprovalRequest,
 		onSuccess: async () => {
@@ -220,11 +214,7 @@ export function ApprovalPoliciesPage() {
 		enabled: Boolean(policyId),
 	});
 	const savedStage = savedStages.data?.stages[stageIndex];
-	const candidates = useQuery({
-		queryKey: ["approval-employees", query],
-		queryFn: () => connectionApi.searchApprovalEmployees(query),
-		enabled: query.trim().length >= 2 && !published,
-	});
+
 	const refresh = () =>
 		client.invalidateQueries({ queryKey: ["approval-catalog"] });
 	const loadDraft = useMutation({
@@ -247,7 +237,6 @@ export function ApprovalPoliciesPage() {
 			setAllowPermanent(result.draft.allowPermanent);
 			setDurationDays(result.draft.defaultDurationDays ?? "");
 			setStageIndex(0);
-			setQuery("");
 		},
 	});
 	const updatePolicy = useMutation({
@@ -595,47 +584,26 @@ export function ApprovalPoliciesPage() {
 												}
 											/>
 										</label>
-										<label>
-											审批人
-											<div className="approval-search">
-												<Search size={15} />
-												<input
-													placeholder="姓名或邮箱"
-													value={query}
-													onChange={(event) => setQuery(event.target.value)}
-												/>
-											</div>
-										</label>
-										{candidates.data?.candidates.map((candidate) => (
-											<button
-												type="button"
-												className="approval-candidate"
-												key={candidate.candidateId}
-												onClick={() => {
-													if (
-														!stages.some((stage) =>
-															stage.approverCandidateIds.includes(
-																candidate.candidateId,
-															),
-														)
-													)
-														updateStage({
-															approverCandidateIds: [
-																...activeStage.approverCandidateIds,
-																candidate.candidateId,
-															],
-														});
-													setCandidateLabels((value) => ({
-														...value,
-														[candidate.candidateId]: candidate.displayName,
-													}));
-													setQuery("");
-												}}
-											>
-												{candidate.displayName}
-												<small>{candidate.email}</small>
-											</button>
-										))}
+										<EmployeePicker
+											key={`${policyId}:${stageIndex}`}
+											label="审批人"
+											disabled={published}
+											excludedIds={stages.flatMap(
+												(stage) => stage.approverCandidateIds,
+											)}
+											onSelect={(candidate) => {
+												updateStage({
+													approverCandidateIds: [
+														...activeStage.approverCandidateIds,
+														candidate.candidateId,
+													],
+												});
+												setCandidateLabels((value) => ({
+													...value,
+													[candidate.candidateId]: candidate.displayName,
+												}));
+											}}
+										/>
 										<div className="approval-chips">
 											{activeStage.approverCandidateIds.map((id) => (
 												<span key={id}>
@@ -984,39 +952,21 @@ export function ApprovalPoliciesPage() {
 						{selectedBlocked && blockedStage ? (
 							<div className="approval-routing-form">
 								<h3>{blockedStage.name}</h3>
-								<label>
-									重新选择审批人
-									<div className="approval-search">
-										<Search size={15} />
-										<input
-											value={rerouteSearch}
-											placeholder="姓名或邮箱"
-											onChange={(event) => setRerouteSearch(event.target.value)}
-										/>
-									</div>
-								</label>
-								{rerouteCandidates.data?.candidates.map((candidate) => (
-									<button
-										type="button"
-										className="approval-candidate"
-										key={candidate.candidateId}
-										onClick={() => {
-											setRerouteCandidateIds((ids) =>
-												ids.includes(candidate.candidateId)
-													? ids
-													: [...ids, candidate.candidateId],
-											);
-											setRerouteLabels((labels) => ({
-												...labels,
-												[candidate.candidateId]: candidate.displayName,
-											}));
-											setRerouteSearch("");
-										}}
-									>
-										{candidate.displayName}
-										<small>{candidate.email}</small>
-									</button>
-								))}
+								<EmployeePicker
+									key={selectedBlocked.id}
+									label="重新选择审批人"
+									excludedIds={rerouteCandidateIds}
+									onSelect={(candidate) => {
+										setRerouteCandidateIds((ids) => [
+											...ids,
+											candidate.candidateId,
+										]);
+										setRerouteLabels((labels) => ({
+											...labels,
+											[candidate.candidateId]: candidate.displayName,
+										}));
+									}}
+								/>
 								<div className="approval-chips">
 									{rerouteCandidateIds.map((id) => (
 										<span key={id}>
@@ -1448,31 +1398,18 @@ function ApprovalDelegationsPanel() {
 		queryKey: ["approval-delegations"],
 		queryFn: connectionApi.listApprovalDelegations,
 	});
-	const [approverSearch, setApproverSearch] = useState("");
-	const [delegateSearch, setDelegateSearch] = useState("");
 	const [approver, setApprover] = useState<{ id: string; name: string }>();
 	const [delegate, setDelegate] = useState<{ id: string; name: string }>();
 	const [startsAt, setStartsAt] = useState("");
 	const [endsAt, setEndsAt] = useState("");
 	const [notice, setNotice] = useState("");
-	const approverCandidates = useQuery({
-		queryKey: ["approval-employees", approverSearch],
-		queryFn: () => connectionApi.searchApprovalEmployees(approverSearch),
-		enabled: approverSearch.trim().length >= 2 && !approver,
-	});
-	const delegateCandidates = useQuery({
-		queryKey: ["approval-employees", delegateSearch],
-		queryFn: () => connectionApi.searchApprovalEmployees(delegateSearch),
-		enabled: delegateSearch.trim().length >= 2 && !delegate,
-	});
+
 	const create = useMutation({
 		mutationFn: connectionApi.createApprovalDelegation,
 		onSuccess: async () => {
 			setNotice("审批代理已创建。");
 			setApprover(undefined);
 			setDelegate(undefined);
-			setApproverSearch("");
-			setDelegateSearch("");
 			await client.invalidateQueries({ queryKey: ["approval-delegations"] });
 		},
 	});
@@ -1510,54 +1447,28 @@ function ApprovalDelegationsPanel() {
 					[
 						{
 							label: "原审批人",
-							value: approverSearch,
-							setValue: setApproverSearch,
 							selected: approver,
 							setSelected: setApprover,
-							candidates: approverCandidates,
 						},
 						{
 							label: "代理审批人",
-							value: delegateSearch,
-							setValue: setDelegateSearch,
 							selected: delegate,
 							setSelected: setDelegate,
-							candidates: delegateCandidates,
 						},
 					] as const
 				).map((field) => (
 					<div className="approval-delegation-person" key={field.label}>
-						<label>
-							{field.label}
-							<input
-								value={field.value}
-								placeholder="搜索员工"
-								onChange={(event) => {
-									field.setValue(event.target.value);
-									field.setSelected(undefined);
-								}}
-							/>
-						</label>
-						{!field.selected && field.candidates.data?.candidates.length ? (
-							<div className="approval-delegation-candidates">
-								{field.candidates.data.candidates.map((candidate) => (
-									<button
-										type="button"
-										key={candidate.candidateId}
-										onClick={() => {
-											field.setSelected({
-												id: candidate.candidateId,
-												name: candidate.displayName,
-											});
-											field.setValue(candidate.displayName);
-										}}
-									>
-										{candidate.displayName}
-										{candidate.email ? ` · ${candidate.email}` : ""}
-									</button>
-								))}
-							</div>
-						) : null}
+						<EmployeePicker
+							label={field.label}
+							onQueryChange={() => field.setSelected(undefined)}
+							onSelect={(candidate) =>
+								field.setSelected({
+									id: candidate.candidateId,
+									name: candidate.displayName,
+								})
+							}
+						/>
+						{field.selected ? <p>{field.selected.name}</p> : null}
 					</div>
 				))}
 				<label>

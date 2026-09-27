@@ -3,8 +3,14 @@ import type {
 	DirectoryIdentity,
 } from "@agent-infra/connection-core";
 import { Client, type Entry } from "ldapts";
+import {
+	type EmployeeDirectoryOptions,
+	searchDirectoryEmployees,
+	validateEmployeeDirectory,
+} from "./employee-directory";
 
 export type LdapDirectoryOptions = {
+	employeeDirectory?: EmployeeDirectoryOptions;
 	activeAttribute?: string;
 	activeValue?: string;
 	aliasAttribute?: string;
@@ -113,6 +119,8 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 		LdapDirectoryOptions;
 
 	constructor(options: LdapDirectoryOptions) {
+		if (options.employeeDirectory)
+			validateEmployeeDirectory(options.employeeDirectory);
 		const { activeAttribute, activeValue, ...baseOptions } = options;
 		if ((activeAttribute === undefined) !== (activeValue === undefined)) {
 			throw new Error(
@@ -246,6 +254,47 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 		}
 		const deadline = Date.now() + this.options.operationTimeoutMs;
 		const escaped = escapeLdapFilterValue(normalized);
+		if (this.options.employeeDirectory) {
+			try {
+				const employees = await searchDirectoryEmployees(
+					this.options.employeeDirectory,
+					normalized,
+					AbortSignal.timeout(remainingMilliseconds(deadline)),
+				);
+				const candidates = [];
+				const subjects = new Set<string>();
+				for (const employee of employees) {
+					// Email is only a lookup hint; LDAP remains the identity authority.
+					const entries = await this.searchEntries(
+						this.accountFilter(this.options.emailAttribute, employee.email),
+						deadline,
+					);
+					if (entries.length === 0) continue;
+					if (entries.length !== 1) throw new DirectoryAuthenticationError();
+					const entry = entries[0] as Entry;
+					const subject = singleAttribute(entry, this.options.uidAttribute);
+					const email = singleAttribute(entry, this.options.emailAttribute);
+					if (
+						!subject ||
+						email?.toLowerCase() !== employee.email ||
+						subjects.has(subject)
+					) {
+						throw new DirectoryAuthenticationError();
+					}
+					subjects.add(subject);
+					candidates.push({
+						alias: null,
+						displayName: employee.name,
+						email,
+						issuer: this.options.issuer,
+						subject,
+					});
+				}
+				return candidates;
+			} catch {
+				throw new DirectoryAuthenticationError();
+			}
+		}
 		const fields = [
 			this.options.displayNameAttribute,
 			this.options.emailAttribute,
