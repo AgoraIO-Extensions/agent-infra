@@ -52,10 +52,20 @@ export interface SessionRuntimeDriverOptions {
 	readonly retireSession: (directory: string) => Promise<void>;
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
 	readonly modelLifecycleAtTransport?: boolean;
+	readonly toolLifecycleAtBoundary?: boolean;
 	readonly authorizeExternalAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<void>;
 }
+export interface NativeToolReceipt {
+	readonly toolCallId: string;
+	readonly name: string;
+	readonly phase: "started" | "completed" | "failed" | "unknown";
+	readonly startedAt?: string;
+	readonly finishedAt?: string;
+	readonly durationMs?: number;
+}
+
 export interface NativeSessionOptions {
 	directory: string;
 	cwd: string;
@@ -80,6 +90,7 @@ export interface NativeSessionOptions {
 		readonly permitted?: boolean;
 		readonly executionBoundary?: true;
 	}) => Promise<void>;
+	toolReceipt?: (receipt: NativeToolReceipt) => Promise<void>;
 	update: (event?: RuntimeEventInput) => Promise<void>;
 }
 export interface NativeSession {
@@ -213,7 +224,7 @@ function generationFact(turn: Turn) {
 		: undefined;
 }
 
-function auxiliaryRequestState(turn: Turn) {
+function auxiliaryRequestState(turn: Turn, ignorePendingTools = false) {
 	const generationRef = generationFact(turn)?.operationRef;
 	const seen = new Set<string>();
 	let pending = false;
@@ -222,17 +233,21 @@ function auxiliaryRequestState(turn: Turn) {
 		const event = turn.events[index];
 		if (
 			event?.type !== "operation" ||
-			event.payload.kind !== "model" ||
-			event.payload.operationRef === generationRef
+			(event.payload.kind === "model" &&
+				event.payload.operationRef === generationRef)
 		)
 			continue;
 		const key = `${event.payload.operationRef}:${event.payload.attemptRef}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		if (["intent", "started"].includes(event.payload.phase)) pending = true;
+		if (
+			["intent", "started"].includes(event.payload.phase) &&
+			!(ignorePendingTools && event.payload.kind === "tool")
+		)
+			pending = true;
 		else if (event.payload.phase === "unknown") unconfirmed = true;
 	}
-	return pending ? "pending" : unconfirmed ? "unconfirmed" : "settled";
+	return unconfirmed ? "unconfirmed" : pending ? "pending" : "settled";
 }
 
 const nextLegacyCursor = (turns: Turn[], prefix: string) =>
@@ -1000,6 +1015,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				toolRequestStarted: (tool) =>
 					this.toolRequestStarted(file, command.executionId, tool),
+				toolReceipt: (receipt) =>
+					this.toolReceipt(file, command.executionId, receipt),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -1274,9 +1291,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				durationMs: _durationMs,
 				...withoutTiming
 			} = fact;
-			const base = fact.kind === "tool" ? withoutTiming : fact;
+			// Only Pi currently confirms tool timing at the filesystem execute boundary.
+			const recovered =
+				fact.kind === "tool" && this.options.cursorPrefix !== "pi"
+					? withoutTiming
+					: fact;
 			await this.appendOperationFact(file, executionId, {
-				...base,
+				...recovered,
 				phase: "unknown",
 				failureCode: "recovery_unconfirmed",
 			});
@@ -1292,6 +1313,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.turns.find((entry) => entry.executionId === executionId);
 		const previous = turn && generationFact(turn);
 		if (previous?.kind !== "model") unavailable();
+		if (turn && auxiliaryRequestState(turn) !== "settled") unavailable();
 		let intent: RuntimeOperationFactV2;
 		if (request === "count_tokens") {
 			intent = {
@@ -1388,7 +1410,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		value: RuntimeEventInput,
 	) {
-		if (value.type === "tool")
+		if (value.type === "tool" && !this.options.toolLifecycleAtBoundary)
 			await this.toolPhase(file, executionId, value.payload);
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
@@ -1427,6 +1449,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				.read()
 				.turns.find((entry) => entry.executionId === executionId);
 			if (!turn || terminal(turn.status)) unavailable();
+			if (auxiliaryRequestState(turn, true) !== "settled") unavailable();
 			const identity = turn.toolOperations?.[value.toolCallId];
 			// A repeated execute may already have caused effects even if its native
 			// terminal was lost. It must never receive a second business permit.
@@ -1522,6 +1545,51 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				throw error;
 			}
 		}
+	}
+	private async toolReceipt(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		value: NativeToolReceipt,
+	) {
+		await this.toolExclusive(file.read().binding.ref, async () => {
+			const turn = file
+				.read()
+				.turns.find((entry) => entry.executionId === executionId);
+			const identity = turn?.toolOperations?.[value.toolCallId];
+			if (!turn || !identity) unavailable();
+			const previous = latestFact(turn, "tool", identity.operationRef);
+			if (!previous || previous.attemptRef !== identity.attemptRef)
+				unavailable();
+			if (
+				previous.kind !== "tool" ||
+				previous.toolId !== metadataId(value.name, "tool")
+			)
+				unavailable();
+			// A lost HTTP acknowledgement cannot undo an already committed result.
+			if (["completed", "failed"].includes(previous.phase)) return;
+			if (previous.phase === "unknown" && value.phase !== "unknown")
+				unavailable();
+			if (previous.startedAt && value.startedAt !== previous.startedAt)
+				unavailable();
+			if (value.phase === "completed" && previous.phase !== "started")
+				unavailable();
+			await this.appendOperationFact(file, executionId, {
+				...previous,
+				phase: value.phase,
+				...(value.startedAt ? { startedAt: value.startedAt } : {}),
+				...(value.finishedAt ? { finishedAt: value.finishedAt } : {}),
+				...(value.durationMs === undefined
+					? {}
+					: { durationMs: value.durationMs }),
+				...(value.phase === "unknown"
+					? { failureCode: "recovery_unconfirmed" as const }
+					: value.phase === "failed"
+						? { failureCode: "operation_failed" as const }
+						: {}),
+			});
+			if (value.phase === "unknown")
+				await this.status(file, executionId, "unknown");
+		});
 	}
 	private async toolPhase(
 		file: DurableJsonFile<Session>,

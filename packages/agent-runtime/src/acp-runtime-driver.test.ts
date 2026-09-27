@@ -248,13 +248,15 @@ it.each([
 				},
 			};
 			const accepted = await driver.execute(command);
-			await vi.waitFor(async () =>
-				expect(
-					await driver.getStatus(
-						accepted.nativeSessionRef,
-						command.executionId,
-					),
-				).toBe("completed"),
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							accepted.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 3_000 },
 			);
 			const tools = (
 				await driver.replayEvents(
@@ -281,6 +283,79 @@ it.each([
 		}
 	},
 );
+
+it("permits a second native tool while the first authorized tool is still in progress", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-concurrent-tools-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		authorizeExternalAction: (action) => driver.validateExternalAction(action),
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (_directory, _selection, admit) => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "tool-permission-concurrent" },
+			authorize: async () => {
+				await admit();
+				return true;
+			},
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-concurrent",
+			turnId: "turn-concurrent",
+			operationId: "operation-concurrent",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						"execution-concurrent",
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		const phases = (
+			await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-concurrent",
+			)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload.phase]
+				: [],
+		);
+		expect(phases.filter((phase) => phase === "intent")).toHaveLength(2);
+		expect(phases.filter((phase) => phase === "started")).toHaveLength(2);
+		expect(phases.filter((phase) => phase === "completed")).toHaveLength(2);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}, 15_000);
 
 it.each(["permitted", "revoked", "missing"] as const)(
 	"ACP checks %s current authority before permitting a file write",

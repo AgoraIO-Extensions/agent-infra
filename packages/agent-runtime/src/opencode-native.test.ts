@@ -425,12 +425,19 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 							: [],
 					);
 					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual(
-						runtime === "OpenCode" && toolName === "edit"
+						runtime === "Pi" || toolName === "edit"
 							? ["intent", "started", "completed"]
 							: ["intent", "completed"],
 					);
-					expect(ownerToolFacts.at(-1)?.startedAt).toBeUndefined();
-					expect(ownerToolFacts.at(-1)?.durationMs).toBeUndefined();
+					if (runtime === "Pi") {
+						expect(ownerToolFacts.at(-1)?.startedAt).toEqual(
+							expect.any(String),
+						);
+						expect(ownerToolFacts.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
+					} else {
+						expect(ownerToolFacts.at(-1)?.startedAt).toBeUndefined();
+						expect(ownerToolFacts.at(-1)?.durationMs).toBeUndefined();
+					}
 					expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe(
 						toolName === "write"
 							? "synthetic replacement"

@@ -142,19 +142,20 @@ const connection = new AgentSideConnection(
 					"tool-status-before-permission",
 					"tool-permission-hold",
 					"tool-permission-completed-hold",
+					"tool-permission-concurrent",
 				].includes(process.env.ACP_TEST_MODE)
 			) {
 				const kind =
 					process.env.ACP_TEST_MODE === "tool-permission-write"
 						? "edit"
 						: "read";
-				const updateTool = (status) =>
+				const updateTool = (status, toolCallId = "tool-permission") =>
 					connection.sessionUpdate({
 						sessionId,
 						update: {
 							sessionUpdate:
 								status === "pending" ? "tool_call" : "tool_call_update",
-							toolCallId: "tool-permission",
+							toolCallId,
 							kind,
 							status,
 						},
@@ -179,6 +180,32 @@ const connection = new AgentSideConnection(
 					permission.outcome?.outcome === "selected" &&
 					permission.outcome.optionId === "allow";
 				if (allowed) await updateTool("in_progress");
+				if (
+					allowed &&
+					process.env.ACP_TEST_MODE === "tool-permission-concurrent"
+				) {
+					await updateTool("pending", "tool-permission-second");
+					const second = await connection.requestPermission({
+						sessionId,
+						toolCall: {
+							toolCallId: "tool-permission-second",
+							kind,
+							status: "pending",
+							title: "Read another synthetic file",
+						},
+						options: [
+							{ optionId: "allow", name: "Allow", kind: "allow_once" },
+							{ optionId: "reject", name: "Reject", kind: "reject_once" },
+						],
+					});
+					if (
+						second.outcome?.outcome !== "selected" ||
+						second.outcome.optionId !== "allow"
+					)
+						throw new Error("Second native tool was denied");
+					await updateTool("in_progress", "tool-permission-second");
+					await updateTool("completed", "tool-permission-second");
+				}
 				if (allowed && process.env.ACP_TEST_MODE === "tool-permission-write")
 					await writeFile(process.env.ACP_TEST_EFFECT_PATH, "synthetic effect");
 				if (process.env.ACP_TEST_MODE === "tool-permission-hold")

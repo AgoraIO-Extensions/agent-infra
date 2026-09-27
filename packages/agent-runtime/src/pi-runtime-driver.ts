@@ -24,6 +24,7 @@ export interface PiRuntimeDriverOptions {
 	defaultReasoningLevel: string;
 	modelOptions: readonly SessionRuntimeModelOption[];
 	modelLifecycleAtTransport?: boolean;
+	toolLifecycleAtBoundary?: boolean;
 	launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
@@ -36,6 +37,7 @@ export interface PiRuntimeDriverOptions {
 			readonly name: string;
 		}) => Promise<void>,
 		modelRequestFinished?: NativeSessionOptions["modelRequestFinished"],
+		toolReceipt?: NativeSessionOptions["toolReceipt"],
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -63,6 +65,7 @@ export const PiRuntimeDriver = {
 					modelRequestFinished: session.modelRequestFinished,
 					modelUsage: session.modelUsage,
 					toolRequestStarted: session.toolRequestStarted,
+					toolReceipt: session.toolReceipt,
 					update: session.update,
 				};
 				const launch = await options.launch(
@@ -84,6 +87,11 @@ export const PiRuntimeDriver = {
 					async (state, usage) => {
 						await callbacks.modelRequestFinished?.(state, usage);
 					},
+					async (receipt) => {
+						if (!callbacks.toolReceipt)
+							throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+						await callbacks.toolReceipt(receipt);
+					},
 				);
 				const native = await openPiSession({
 					...session,
@@ -99,6 +107,7 @@ export const PiRuntimeDriver = {
 						callbacks.modelRequestFinished = next.modelRequestFinished;
 						callbacks.modelUsage = next.modelUsage;
 						callbacks.toolRequestStarted = next.toolRequestStarted;
+						callbacks.toolReceipt = next.toolReceipt;
 						callbacks.update = next.update;
 						launch.onTurn?.({
 							modelUsage: next.modelUsage,

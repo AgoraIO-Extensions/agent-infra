@@ -40,6 +40,135 @@ it("admits Pi tool execution only after the token-protected intent callback", as
 	}
 });
 
+it("blocks fresh Pi actions when an actual tool result cannot be confirmed", async () => {
+	const receipts: string[] = [];
+	let upstream = 0;
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-model-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		client: "pi",
+		admit: async () => {},
+		toolRequestStarted: async () => {},
+		toolReceipt: async (receipt) => {
+			receipts.push(receipt.phase);
+			if (receipt.phase === "completed")
+				throw Error("Synthetic durable commit failed");
+		},
+		fetch: async () => {
+			upstream++;
+			return new Response(messages(["unexpected"]));
+		},
+	});
+	try {
+		const send = (path: string, body: unknown) =>
+			fetch(`${transport.modelAccess.endpoint}${path}`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-api-key": transport.toolPermit.credential,
+				},
+				body: JSON.stringify(body),
+			});
+		expect(
+			(
+				await send("/internal/tool-receipt", {
+					toolCallId: "tool-a",
+					name: "write",
+					phase: "completed",
+					startedAt: "2026-09-27T00:00:00.000Z",
+					finishedAt: "2026-09-27T00:00:00.010Z",
+					durationMs: 10,
+				})
+			).status,
+		).toBe(403);
+		expect(receipts).toEqual(["completed", "unknown"]);
+		expect(transport.failure()).toBe("unknown");
+		expect(
+			(
+				await send("/internal/tool-intent", {
+					toolCallId: "tool-b",
+					name: "write",
+				})
+			).status,
+		).toBe(400);
+		expect(
+			(await send("/v1/messages", { model: "claude-opus-5", messages: [] }))
+				.status,
+		).toBe(400);
+		expect(upstream).toBe(0);
+	} finally {
+		await transport.close();
+	}
+});
+
+it.each([
+	{
+		startedAt: "not-a-time",
+		finishedAt: "2026-09-27T00:00:00.010Z",
+		durationMs: 10,
+	},
+	{
+		startedAt: "2026-09-27T00:00:00.010Z",
+		finishedAt: "2026-09-27T00:00:00.000Z",
+		durationMs: 10,
+	},
+	{
+		startedAt: "2026-09-27T00:00:00.000Z",
+		finishedAt: "2026-09-27T00:00:00.010Z",
+		durationMs: -1,
+	},
+	{ finishedAt: "2026-09-27T00:00:00.010Z", durationMs: 10 },
+	{
+		startedAt: "2026-09-27T00:00:00.000Z",
+		finishedAt: "2026-09-27T00:00:00.010Z",
+		durationMs: 10,
+		input: "private body",
+	},
+])(
+	"rejects malformed Pi execution timing before the journal callback (%j)",
+	async (timing) => {
+		let calls = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-model-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			client: "pi",
+			admit: async () => {},
+			toolReceipt: async () => {
+				calls++;
+			},
+		});
+		try {
+			const response = await fetch(
+				`${transport.modelAccess.endpoint}/internal/tool-receipt`,
+				{
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"x-api-key": transport.toolPermit.credential,
+					},
+					body: JSON.stringify({
+						toolCallId: "tool-a",
+						name: "read",
+						phase: "completed",
+						...timing,
+					}),
+				},
+			);
+			expect(response.status).toBe(403);
+			expect(calls).toBe(0);
+			expect(transport.failure()).toBeUndefined();
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
 function messages(text: string[]) {
 	return [
 		{
