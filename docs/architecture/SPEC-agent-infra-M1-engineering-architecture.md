@@ -549,6 +549,8 @@ Action 执行装配到同一个进程，不额外暴露或部署上游 Runtime S
 
 Connection DB 是 `Principal -> Consumer -> Actor? -> Connection -> 已确认 Action 集合`、外部账号归属、Credential 和 Action 执行的权威来源。Platform DB 只保存 Agent 内部 policy、任务状态和 Connection `callId` 引用。
 
+个人 Connection 的公司准入资格独立于 Consumer Grant；前置审批、有效期以及兼容 Provider 升级继承批准的边界统一遵循 [Connection HLD 16.7](HLD-connection-M1.md#167-connection-access-approval)。升级保留原批准来源，不得扩大获批能力或自动延长有效期。
+
 一次 Action 调用的有效能力为以下集合的交集：
 
 ```text

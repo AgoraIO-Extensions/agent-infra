@@ -5,6 +5,19 @@ import { parse } from "yaml";
 
 const read = (path) => readFile(path, "utf8");
 
+test("Turbo forwards every CI Connection integration database", async () => {
+	const workflow = parse(await read(".github/workflows/ci.yml"));
+	const turbo = JSON.parse(await read("turbo.json"));
+	const databaseVariables = Object.values(workflow.jobs)
+		.flatMap((job) => job.steps ?? [])
+		.flatMap((step) => Object.keys(step.env ?? {}))
+		.filter((name) => /^CONNECTION_.*TEST_DATABASE_URL$/.test(name));
+	assert.equal(new Set(databaseVariables).size, 6);
+	for (const name of databaseVariables) {
+		assert.ok(turbo.tasks.test.env.includes(name), `${name} must reach tests`);
+	}
+});
+
 test("production code reaches PostgreSQL only through connection-store", async () => {
 	const apiManifest = JSON.parse(
 		await read("apps/connection-api/package.json"),

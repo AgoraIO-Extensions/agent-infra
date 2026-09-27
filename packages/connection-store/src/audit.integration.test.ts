@@ -11,6 +11,7 @@ import {
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import postgres from "postgres";
 import { expect, it } from "vitest";
+import { seedApprovedConnectPermit } from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionRepository } from "./repository";
 import { assertIsolatedTestDatabaseUrl } from "./test-database";
@@ -46,6 +47,17 @@ if (process.env.CI && !url)
 			});
 			await sql`INSERT INTO connection_consumer_instances (id, consumer_id, kind, auth_subject, status, principal_id) VALUES (${instance}, ${consumer}, 'DEVICE', ${suffix}, 'ACTIVE', ${user})`;
 			const { connectionId } = await repo.storeGithubOAuthCredential({
+				accessRequestId: await seedApprovedConnectPermit(sql, {
+					principalId: user,
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
+					scopes: [
+						"delete_repo",
+						"read:user",
+						"repo",
+						"user:email",
+						"workflow",
+					],
+				}),
 				accessToken: "AUDIT-TOKEN-CANARY",
 				displayName: "Test account",
 				externalAccount: suffix,

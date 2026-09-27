@@ -10,17 +10,24 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ConnectionApprovalsRouteImport } from './routes/connection.approvals'
 import { Route as ConnectionConnectionsRouteImport } from './routes/connection.connections'
 import { Route as ConnectionLoginRouteImport } from './routes/connection.login'
 import { Route as ConnectionTokensRouteImport } from './routes/connection.tokens'
 import { Route as ConnectionAdminActionCallsRouteImport } from './routes/connection.admin.action-calls'
 import { Route as ConnectionAdminAdministratorsRouteImport } from './routes/connection.admin.administrators'
 import { Route as ConnectionAdminAgentsRouteImport } from './routes/connection.admin.agents'
+import { Route as ConnectionAdminApprovalRouteImport } from './routes/connection.admin.approval'
 import { Route as ConnectionAdminSharedConnectionsRouteImport } from './routes/connection.admin.shared-connections'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectionApprovalsRoute = ConnectionApprovalsRouteImport.update({
+  id: '/connection/approvals',
+  path: '/connection/approvals',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectionConnectionsRoute = ConnectionConnectionsRouteImport.update({
@@ -55,6 +62,11 @@ const ConnectionAdminAgentsRoute = ConnectionAdminAgentsRouteImport.update({
   path: '/connection/admin/agents',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConnectionAdminApprovalRoute = ConnectionAdminApprovalRouteImport.update({
+  id: '/connection/admin/approval',
+  path: '/connection/admin/approval',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectionAdminSharedConnectionsRoute =
   ConnectionAdminSharedConnectionsRouteImport.update({
     id: '/connection/admin/shared-connections',
@@ -64,76 +76,90 @@ const ConnectionAdminSharedConnectionsRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
+  '/connection/admin/approval': typeof ConnectionAdminApprovalRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
+  '/connection/admin/approval': typeof ConnectionAdminApprovalRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
   '/connection/admin/administrators': typeof ConnectionAdminAdministratorsRoute
   '/connection/admin/agents': typeof ConnectionAdminAgentsRoute
+  '/connection/admin/approval': typeof ConnectionAdminApprovalRoute
   '/connection/admin/shared-connections': typeof ConnectionAdminSharedConnectionsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/connection/approvals'
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
+    | '/connection/admin/approval'
     | '/connection/admin/shared-connections'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/connection/approvals'
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
+    | '/connection/admin/approval'
     | '/connection/admin/shared-connections'
   id:
     | '__root__'
     | '/'
+    | '/connection/approvals'
     | '/connection/connections'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
     | '/connection/admin/administrators'
     | '/connection/admin/agents'
+    | '/connection/admin/approval'
     | '/connection/admin/shared-connections'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ConnectionApprovalsRoute: typeof ConnectionApprovalsRoute
   ConnectionConnectionsRoute: typeof ConnectionConnectionsRoute
   ConnectionLoginRoute: typeof ConnectionLoginRoute
   ConnectionTokensRoute: typeof ConnectionTokensRoute
   ConnectionAdminActionCallsRoute: typeof ConnectionAdminActionCallsRoute
   ConnectionAdminAdministratorsRoute: typeof ConnectionAdminAdministratorsRoute
   ConnectionAdminAgentsRoute: typeof ConnectionAdminAgentsRoute
+  ConnectionAdminApprovalRoute: typeof ConnectionAdminApprovalRoute
   ConnectionAdminSharedConnectionsRoute: typeof ConnectionAdminSharedConnectionsRoute
 }
 
@@ -144,6 +170,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connection/approvals': {
+      id: '/connection/approvals'
+      path: '/connection/approvals'
+      fullPath: '/connection/approvals'
+      preLoaderRoute: typeof ConnectionApprovalsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connection/connections': {
@@ -188,6 +221,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectionAdminAgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/connection/admin/approval': {
+      id: '/connection/admin/approval'
+      path: '/connection/admin/approval'
+      fullPath: '/connection/admin/approval'
+      preLoaderRoute: typeof ConnectionAdminApprovalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connection/admin/shared-connections': {
       id: '/connection/admin/shared-connections'
       path: '/connection/admin/shared-connections'
@@ -200,12 +240,14 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ConnectionApprovalsRoute: ConnectionApprovalsRoute,
   ConnectionConnectionsRoute: ConnectionConnectionsRoute,
   ConnectionLoginRoute: ConnectionLoginRoute,
   ConnectionTokensRoute: ConnectionTokensRoute,
   ConnectionAdminActionCallsRoute: ConnectionAdminActionCallsRoute,
   ConnectionAdminAdministratorsRoute: ConnectionAdminAdministratorsRoute,
   ConnectionAdminAgentsRoute: ConnectionAdminAgentsRoute,
+  ConnectionAdminApprovalRoute: ConnectionAdminApprovalRoute,
   ConnectionAdminSharedConnectionsRoute: ConnectionAdminSharedConnectionsRoute,
 }
 export const routeTree = rootRouteImport
