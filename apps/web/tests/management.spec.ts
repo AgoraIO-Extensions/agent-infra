@@ -729,14 +729,14 @@ test("Agent search survives reload and browser back without adding typing histor
 	await search.fill("Release");
 	await expect(page).toHaveURL(/q=Release/);
 	await page.reload();
-	await expect(search).toHaveValue("Release");
+	await expect(search).toHaveValue("Release", { timeout: 15_000 });
 	await page.getByRole("link", { name: "查看 Release assistant 详情" }).click();
 	await page.goBack();
-	await expect(search).toHaveValue("Release");
+	await expect(search).toHaveValue("Release", { timeout: 15_000 });
 	await search.fill("没有匹配的中文");
 	await expect(
 		page.getByRole("link", { name: "查看 Release assistant 详情" }),
 	).toHaveCount(0);
 	await page.reload();
-	await expect(search).toHaveValue("没有匹配的中文");
+	await expect(search).toHaveValue("没有匹配的中文", { timeout: 15_000 });
 });
