@@ -1905,6 +1905,14 @@ export class PostgresConnectionAccessRequestRepository
 						WHERE id = ${target.request_stage_id}
 					`;
 					if (next) {
+						const activeCandidates = await sql<{ id: string }[]>`
+							SELECT principal.id FROM connection_request_stages stage
+							JOIN connection_request_routing_revisions routing ON routing.request_stage_id = stage.id AND routing.revision = stage.routing_revision
+							JOIN connection_request_stage_approvers candidate ON candidate.routing_revision_id = routing.id
+							JOIN connection_principals principal ON principal.id = candidate.approver_principal_id
+							WHERE stage.id = ${next.id} AND principal.status = 'ACTIVE'
+							FOR SHARE OF principal
+						`;
 						const [routing] = await sql<
 							{
 								candidate_count: number;
@@ -1930,12 +1938,13 @@ export class PostgresConnectionAccessRequestRepository
 						`;
 						const blocked =
 							!routing ||
-							routing.candidate_count === 0 ||
+							activeCandidates.length === 0 ||
 							(routing.quorum_type === "AT_LEAST_N" &&
-								(routing.quorum_count ?? 0) > routing.candidate_count) ||
+								(routing.quorum_count ?? 0) > activeCandidates.length) ||
 							(routing.quorum_type === "ALL" &&
-								routing.routing_revision === 1 &&
-								routing.candidate_count !== routing.original_count);
+								(activeCandidates.length !== routing.candidate_count ||
+									(routing.routing_revision === 1 &&
+										routing.candidate_count !== routing.original_count)));
 						await sql`
 							UPDATE connection_request_stages
 							SET state = 'PENDING', opened_at = now(), revision = revision + 1

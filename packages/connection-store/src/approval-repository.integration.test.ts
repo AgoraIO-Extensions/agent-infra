@@ -2271,6 +2271,105 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						}
 					}
 				}
+				for (const quorumType of ["ANY", "ALL", "AT_LEAST_N"] as const) {
+					const transitionSuffix = `${quorumType}-${suffix}`;
+					await sql`UPDATE connection_principals SET status = 'ACTIVE' WHERE id = ${delegateId}`;
+					const transitionProfile = `transition-profile-${transitionSuffix}`;
+					const transitionPolicy = `transition-policy-${transitionSuffix}`;
+					const transitionRequest = `transition-request-${transitionSuffix}`;
+					await repository.createCapabilityProfileDraft({
+						id: transitionProfile,
+						name: "Stage transition",
+						providerReleaseId: releaseId,
+						actionVersionIds: [actionId],
+					});
+					await repository.publishCapabilityProfile({
+						actorPrincipalId: adminId,
+						capabilityProfileId: transitionProfile,
+					});
+					await repository.createPolicyDraft({
+						...quorumTemplate,
+						id: transitionPolicy,
+						capabilityProfileId: transitionProfile,
+						durations: [
+							{
+								id: `transition-duration-${transitionSuffix}`,
+								kind: "FINITE",
+								days: 90,
+							},
+						],
+						stages: [approverId, delegateId].map((principalId, index) => ({
+							id: `transition-stage-${index}-${transitionSuffix}`,
+							name: `Stage ${index + 1}`,
+							quorumType: index === 0 ? "ANY" : quorumType,
+							...(index === 1 && quorumType === "AT_LEAST_N"
+								? { quorumCount: 2 }
+								: {}),
+							timeoutSeconds: 86400,
+							approvers: (index === 1 && quorumType !== "ANY"
+								? [principalId, adminId]
+								: [principalId]
+							).map((candidateId) => ({
+								principalId: candidateId,
+								displaySnapshot: { displayName: "Transition reviewer" },
+							})),
+						})),
+					});
+					await repository.publishPolicy({
+						actorPrincipalId: adminId,
+						policyVersionId: transitionPolicy,
+					});
+					const transitionOption = (
+						await requestRepository.listAccessOptions(applicantId)
+					).find((item) => item.policyVersionId === transitionPolicy);
+					if (!transitionOption)
+						throw new Error("Transition option is missing");
+					await requestRepository.createRequest({
+						id: transitionRequest,
+						applicantPrincipalId: applicantId,
+						providerReleaseId: releaseId,
+						capabilityProfileId: transitionProfile,
+						policyVersionId: transitionPolicy,
+						presentationId: transitionOption.presentationId,
+						purpose: "Check next-stage eligibility",
+						duration: { kind: "FINITE", days: 90 },
+						disclaimerConfirmations: transitionOption.disclaimers.map(
+							(item) => ({
+								disclaimerVersionId: item.id,
+								contentSha256: item.contentSha256,
+								locale: item.locale,
+							}),
+						),
+					});
+					await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${delegateId}`;
+					const transition = await requestRepository.getRequest(
+						applicantId,
+						transitionRequest,
+					);
+					const firstStage = transition.stages[0];
+					if (!firstStage) throw new Error("Transition stage is missing");
+					await requestRepository.decide({
+						id: `transition-decision-${transitionSuffix}`,
+						requestId: transitionRequest,
+						actorPrincipalId: approverId,
+						approverPrincipalId: approverId,
+						decision: "APPROVE",
+						expectedRequestRevision: transition.revision,
+						expectedStageRevision: firstStage.revision,
+						expectedRoutingRevision: firstStage.routingRevision,
+					});
+					expect(
+						await requestRepository.getRequest(applicantId, transitionRequest),
+					).toMatchObject({ state: "ROUTING_BLOCKED", currentStageOrdinal: 2 });
+					expect(
+						(await requestRepository.listRoutingBlocked(adminId)).some(
+							(item) => item.id === transitionRequest,
+						),
+					).toBe(true);
+					const [transitionPermit] =
+						await sql`SELECT count(*)::int AS count FROM connection_connect_permits WHERE request_id = ${transitionRequest}`;
+					expect(transitionPermit?.count).toBe(0);
+				}
 			} finally {
 				await connections.close();
 				await dispatcher.close();
