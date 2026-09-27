@@ -166,6 +166,19 @@ tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 man
 Secret 补充；该阶段不执行 cutoff，也不自动扩张旧连接的账号、scope 或 Grant。迁移评审、
 代码评审与适用于本次部署的人工验证仍须完成，不能用此分阶段安排豁免下述启用门禁。
 
+审批人搜索可使用与 Rehoboam 相同的公司员工列表契约：配置
+`CONNECTION_EMPLOYEE_DIRECTORY_URL` 为经过批准的 HTTPS 员工列表完整地址，配置
+`CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY` 为 Secret 中的专用服务密钥，两项必须同时配置。
+服务端使用 `agora-service-key` 请求头；响应为含 `name`、`email`、`iamId` 的数组。
+管理员请求不能覆盖地址或请求头；不跟随重定向，不关闭 TLS 验证，响应限制为 5 MiB。
+服务端按姓名和邮箱做不区分大小写的包含匹配，最多处理 20 个匹配员工；没有 `iamId`
+的记录不参与候选搜索。员工邮箱仅用于精确查找 LDAP 在职账号，审批身份仍取 LDAP
+issuer + uid；没有对应在职账号的员工不返回，映射歧义或上游异常时拒绝搜索，不能降级为
+以邮箱或外部 `iamId` 授权。未配置该数据源时保留现有 LDAP 搜索。
+该配置不替代 Identity Owner 对唯一邮箱映射、在职属性与稳定 uid 的确认，也不自动开启
+`CONNECTION_APPROVAL_DIRECTORY_ENABLED`。上线前需验证公司员工列表实际响应、服务密钥权限、
+LDAP 映射与重名、离职和重复邮箱负向场景；不得复用源码中的历史硬编码密钥。
+
 启用 `ENFORCED` 前，Data Owner 必须确认个人 Connection 清单和 baseline 适用性，DBA/SRE 必须完成
 0032 迁移重放及兼容回滚演练，Identity/Security/QA 必须确认正式目录、免责声明和真实 Provider
 验收，并提供 cutoff 后只准部署审批兼容镜像的集群级控制及审计证据。当前 guard 只覆盖上述正常

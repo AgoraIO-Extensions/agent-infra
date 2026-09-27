@@ -10,6 +10,7 @@ export type ConnectionApiRuntimeConfig = {
 	identityKey: Uint8Array;
 	identityRealm: string;
 	ldap: {
+		employeeDirectory?: { url: string; serviceKey: string };
 		activeAttribute?: string;
 		activeValue?: string;
 		aliasAttribute?: string;
@@ -212,6 +213,14 @@ export function connectionApiRuntimeConfig(
 ): ConnectionApiRuntimeConfig {
 	const activeAttribute = environment.LDAP_ACTIVE_ATTRIBUTE || undefined;
 	const activeValue = environment.LDAP_ACTIVE_VALUE || undefined;
+	const employeeDirectoryUrl = environment.CONNECTION_EMPLOYEE_DIRECTORY_URL;
+	const employeeDirectoryKey =
+		environment.CONNECTION_EMPLOYEE_DIRECTORY_SERVICE_KEY;
+	if (Boolean(employeeDirectoryUrl) !== Boolean(employeeDirectoryKey)) {
+		throw new Error(
+			"Employee directory URL and service key must be configured together",
+		);
+	}
 	const directoryEnabled =
 		environment.CONNECTION_APPROVAL_DIRECTORY_ENABLED === "true";
 	if (
@@ -270,6 +279,17 @@ export function connectionApiRuntimeConfig(
 		identityRealm: requireValue(environment, "CONNECTION_IDENTITY_REALM"),
 		jenkinsReleaseRoute: jenkinsReleaseRoute(environment),
 		ldap: {
+			...(employeeDirectoryUrl && employeeDirectoryKey
+				? {
+						employeeDirectory: {
+							url: requireHttps(
+								employeeDirectoryUrl,
+								"CONNECTION_EMPLOYEE_DIRECTORY_URL",
+							),
+							serviceKey: employeeDirectoryKey,
+						},
+					}
+				: {}),
 			...(environment.LDAP_ALIAS_ATTRIBUTE
 				? { aliasAttribute: environment.LDAP_ALIAS_ATTRIBUTE }
 				: {}),

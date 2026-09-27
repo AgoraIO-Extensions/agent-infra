@@ -305,11 +305,11 @@ it("selects employee candidates and creates a bounded delegation", async () => {
 	fireEvent.change(screen.getByLabelText("原审批人"), {
 		target: { value: "张三" },
 	});
-	fireEvent.click(await screen.findByRole("button", { name: "张三" }));
+	fireEvent.click(await screen.findByRole("option", { name: "张三" }));
 	fireEvent.change(screen.getByLabelText("代理审批人"), {
 		target: { value: "李四" },
 	});
-	fireEvent.click(await screen.findByRole("button", { name: "李四" }));
+	fireEvent.click(await screen.findByRole("option", { name: "李四" }));
 	fireEvent.change(screen.getByLabelText("开始时间"), {
 		target: { value: "2030-01-01T00:00" },
 	});

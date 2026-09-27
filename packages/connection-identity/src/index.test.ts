@@ -11,6 +11,9 @@ const ldapSearches = vi.hoisted(
 		}>,
 );
 const ldapDelays = vi.hoisted(() => ({ bindMs: 0, searchMs: 0, unbindMs: 0 }));
+const ldapOverride = vi.hoisted(() => ({
+	entries: undefined as Array<Record<string, string>> | undefined,
+}));
 const employeePages = vi.hoisted(
 	() => [] as Array<Array<Record<string, string>>>,
 );
@@ -43,7 +46,7 @@ vi.mock("ldapts", () => ({
 				filter: options.filter,
 			});
 			return {
-				searchEntries: [
+				searchEntries: ldapOverride.entries ?? [
 					{
 						displayName: "Alice",
 						dn: "cn=alice,ou=users,dc=example,dc=com",
@@ -127,13 +130,117 @@ describe("LDAP directory boundary", () => {
 		ldapDelays.bindMs = 0;
 		ldapDelays.searchMs = 0;
 		ldapDelays.unbindMs = 0;
+		ldapOverride.entries = undefined;
 	});
 
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("uses the company employee list for discovery and LDAP for the stable identity", async () => {
+		const fetchEmployees = vi.fn(async () =>
+			Response.json([
+				{
+					name: "Alice Employee",
+					email: "alice@example.com",
+					iamId: "not-the-ldap-uid",
+				},
+				{ name: "Bob", email: "bob@example.com", iamId: "other" },
+			]),
+		);
+		vi.stubGlobal("fetch", fetchEmployees);
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptions,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		await expect(directory.searchEmployees("ALICE")).resolves.toEqual([
+			{
+				alias: null,
+				displayName: "Alice Employee",
+				email: "alice@example.com",
+				issuer: validOptions.issuer,
+				subject: "alice-id",
+			},
+		]);
+		expect(fetchEmployees).toHaveBeenCalledWith(
+			"https://employees.example/users",
+			expect.objectContaining({
+				redirect: "error",
+				headers: {
+					"agora-service-key": "test-key",
+					Accept: "application/json",
+				},
+			}),
+		);
+		expect(ldapSearches[0]?.filter).toBe(
+			"(&(mail=alice@example.com)(employeeStatus=active))",
+		);
+	});
+
+	it("rejects mismatched LDAP email and does not fall back on upstream failure", async () => {
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptions,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json([
+					{ name: "Bob", email: "bob@example.com", iamId: "bob" },
+				]),
+			),
+		);
+		await expect(directory.searchEmployees("bob")).rejects.toThrow(
+			"Directory authentication failed",
+		);
+		ldapSearches.length = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("private diagnostic", { status: 503 })),
+		);
+		await expect(directory.searchEmployees("alice")).rejects.toThrow(
+			"Directory authentication failed",
+		);
+		expect(ldapSearches).toHaveLength(0);
+	});
 
 	it("escapes every RFC4515 special filter byte", () => {
 		expect(escapeLdapFilterValue("alice*)(uid=*)\\\0")).toBe(
 			"alice\\2a\\29\\28uid=\\2a\\29\\5c\\00",
+		);
+	});
+
+	it("omits missing active LDAP identities and rejects ambiguous email mappings", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json([
+					{ name: "Alice", email: "alice@example.com", iamId: "external" },
+				]),
+			),
+		);
+		const directory = new LdapDirectoryAuthenticator({
+			...validOptions,
+			employeeDirectory: {
+				url: "https://employees.example/users",
+				serviceKey: "test-key",
+			},
+		});
+		ldapOverride.entries = [];
+		await expect(directory.searchEmployees("alice")).resolves.toEqual([]);
+		ldapOverride.entries = [
+			{ uid: "first", mail: "alice@example.com" },
+			{ uid: "second", mail: "alice@example.com" },
+		];
+		await expect(directory.searchEmployees("alice")).rejects.toThrow(
+			"Directory authentication failed",
 		);
 	});
 
