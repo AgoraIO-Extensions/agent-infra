@@ -1713,12 +1713,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private async status(
 		file: DurableJsonFile<Session>,
 		executionId: string,
-		status: RuntimeStatusV1,
+		nativeStatus: RuntimeStatusV1,
 		nativeStopReason?: string,
 		nativeTerminalCheckpoint?: string,
 		markModel = true,
 		usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
 	) {
+		const turn = file
+			.read()
+			.turns.find((entry) => entry.executionId === executionId);
+		const preserveUnknownModel =
+			this.options.modelLifecycleAtTransport &&
+			turn &&
+			latestFact(turn, "model")?.phase === "unknown";
+		const status =
+			nativeStatus === "failed" && preserveUnknownModel
+				? "unknown"
+				: nativeStatus;
 		if (markModel && status === "running")
 			await this.modelPhase(file, executionId, "started");
 		else if (status === "completed")
@@ -1733,7 +1744,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			);
 		else if (status === "failed")
 			await this.modelPhase(file, executionId, "failed", "operation_failed");
-		else if (status === "cancelled")
+		else if (status === "cancelled" && !preserveUnknownModel)
 			await this.modelPhase(file, executionId, "failed", "interrupted");
 		else if (status === "unknown")
 			await this.modelPhase(
@@ -1745,6 +1756,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (status === "unknown" && turn.status === "unknown") return;
 			// Completion cannot make an admitted count receipt unwritable.
 			if (
 				terminal(status) &&
