@@ -14,6 +14,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	path: string,
 	loseFirstResult = false,
 	runtime: "claude" | "opencode" | "pi" = "claude",
+	upstreamStatus?: number,
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
@@ -49,6 +50,10 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 							: "model-option-alternate",
 					reasoningLevel: value.output_config.effort,
 				});
+				if (upstreamStatus) {
+					response.writeHead(upstreamStatus).end();
+					return;
+				}
 				response.writeHead(200, { "content-type": "text/event-stream" });
 				response.write(
 					encode({

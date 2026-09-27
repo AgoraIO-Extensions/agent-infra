@@ -20,6 +20,81 @@ import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-
 import { openPiRuntime } from "./pi-bootstrap.js";
 import { RuntimeHost } from "./runtime-host.js";
 
+it("preserves an unconfirmed model request after the native turn fails on HTTP 503", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-native-503-"));
+	const fixture = await openMessagesRuntimeDriverConformanceFixture(
+		path,
+		false,
+		"pi",
+		503,
+	);
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-503",
+			turnId: "turn-503",
+			operationId: "operation-503",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-option-primary",
+				reasoningLevel: "high",
+			},
+		};
+		const record = await fixture.driver.execute(command);
+		await vi.waitFor(async () =>
+			expect(
+				await fixture.driver.getStatus(
+					record.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("unknown"),
+		);
+		const events = await fixture.driver.replayEvents(
+			record.nativeSessionRef,
+			command.executionId,
+		);
+		const facts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload.phase]
+				: [],
+		);
+		expect(facts).toEqual(["intent", "started", "unknown"]);
+		expect(
+			(
+				await fixture.driver.execute({
+					...command,
+					nativeSessionRef: record.nativeSessionRef,
+					executionId: "execution-after-503",
+					turnId: "turn-after-503",
+					operationId: "operation-after-503",
+				})
+			).result,
+		).toEqual({ outcome: "busy" });
+		await fixture.restart();
+		expect(
+			await fixture.driver.getStatus(
+				record.nativeSessionRef,
+				command.executionId,
+			),
+		).toBe("unknown");
+		expect(
+			await fixture.driver.replayEvents(
+				record.nativeSessionRef,
+				command.executionId,
+			),
+		).toEqual(events);
+		expect(await fixture.createdTurnCount()).toBe(1);
+	} finally {
+		await fixture.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}, 30_000);
+
 it("runs the pinned Pi CLI against Messages and persists the confirmed result", async () => {
 	const path = await mkdtemp(join(tmpdir(), "pi-native-"));
 	const fixture = await openMessagesRuntimeDriverConformanceFixture(
