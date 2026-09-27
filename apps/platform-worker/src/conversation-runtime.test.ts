@@ -2101,15 +2101,41 @@ it.each(["stop", "authorization_revoked"] as const)(
 				}),
 			).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
 			expect(h.fetcher).toHaveBeenCalledTimes(beforeDenied);
-			await taskStore.recordControl({
+			const continued = await taskStore.recordControl({
 				...controlRequest,
 				reason: reason === "stop" ? "authorization_revoked" : "stop",
 			});
+			expect(continued).toEqual(originalControl);
 			const controls =
 				await sql`select id,reason from platform.task_control_records order by reason`;
-			await expect(
-				taskStore.recordControl({ ...controlRequest, reason: "recovery" }),
-			).rejects.toThrow("Task authorization persistence is unavailable");
+			expect(controls).toHaveLength(2);
+			expect(
+				await taskStore.recordControl({
+					...controlRequest,
+					reason: "recovery",
+				}),
+			).toEqual(originalControl);
+			expect(
+				(
+					await sql`select revoked_at from platform.task_authorization_records where id='original-authorization'`
+				)[0]?.revoked_at,
+			).toBeInstanceOf(Date);
+			expect(
+				await sql`select action from platform.audit_events where action='task.control.promoted'`,
+			).toHaveLength(reason === "stop" ? 1 : 0);
+			const promoted = await h.authorize();
+			await h.runtime.runtimeHost.acknowledge?.({
+				...h.events(promoted),
+				confirmedCursor: terminal.value.cursor,
+			});
+			expect(
+				JSON.parse(await readFile(storePath, "utf8")).sessions[
+					accepted.hostSessionRef
+				].executionAuthorities.execution.control,
+			).toEqual({
+				controlRecordId: originalControl.controlRecordId,
+				reason,
+			});
 			expect(
 				await sql`select id,reason from platform.task_control_records order by reason`,
 			).toEqual(controls);

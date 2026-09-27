@@ -249,7 +249,11 @@ export class PostgresTaskAuthorizationStoreV1 {
 						`;
 					}
 				}
-				if (input.reason === "recovery") {
+				if (
+					input.reason === "recovery" ||
+					input.reason === "stop" ||
+					input.reason === "authorization_revoked"
+				) {
 					const controls = await transaction<
 						{ id: string; reason: "stop" | "authorization_revoked" }[]
 					>`
@@ -258,12 +262,26 @@ export class PostgresTaskAuthorizationStoreV1 {
 							and authorization_record_id = ${record.id}
 							and reason in ('stop', 'authorization_revoked')
 					`;
-					// A recovery query continues the original durable control. Several
-					// records do not prove which authority the Host has latched.
+					// Keep the Host's original control binding across stop, revocation and
+					// recovery. Two historical bindings cannot identify the latched one.
 					if (controls.length > 1) throw new TaskAuthorizationStoreError();
 					const [control] = controls;
-					if (control)
+					if (control) {
+						if (plan.revokeAuthorization) {
+							const newlyRevoked = await transaction<{ id: string }[]>`
+								update platform.task_authorization_records
+								set revoked_at = now()
+								where id = ${record.id} and revoked_at is null
+								returning id
+							`;
+							if (newlyRevoked.length)
+								await transaction`
+									insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+									values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, 'task.control.promoted', 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId: control.id, authorizationRecordId: record.id, reason: input.reason } as unknown as JsonValue)})
+								`;
+						}
 						return { controlRecordId: control.id, reason: control.reason };
+					}
 				}
 				const [existing] = await transaction<{ id: string }[]>`
 					select id from platform.task_control_records where execution_id = ${input.executionId}

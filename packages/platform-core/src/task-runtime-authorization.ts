@@ -268,6 +268,10 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			!(
 				reason === "recovery" &&
 				["stop", "authorization_revoked"].includes(record.reason)
+			) &&
+			!(
+				["stop", "authorization_revoked"].includes(reason) &&
+				["stop", "authorization_revoked"].includes(record.reason)
 			)
 		)
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
