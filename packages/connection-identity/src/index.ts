@@ -280,13 +280,10 @@ export class LdapDirectoryAuthenticator implements DirectoryAuthenticator {
 				const page = await beforeDeadline(paginator.next(), deadline);
 				if (page.done) break;
 				entries.push(...page.value.searchEntries);
-				if (entries.length >= 21) break;
-			}
-			if (entries.length > 20) {
-				throw new DirectoryAuthenticationError();
+				if (entries.length >= 20) break;
 			}
 			const subjects = new Set<string>();
-			return entries.map((entry) => {
+			return entries.slice(0, 20).map((entry) => {
 				const subject = singleAttribute(entry, this.options.uidAttribute);
 				const displayName = singleAttribute(
 					entry,

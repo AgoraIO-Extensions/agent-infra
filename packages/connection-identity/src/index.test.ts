@@ -11,6 +11,9 @@ const ldapSearches = vi.hoisted(
 		}>,
 );
 const ldapDelays = vi.hoisted(() => ({ bindMs: 0, searchMs: 0, unbindMs: 0 }));
+const employeePages = vi.hoisted(
+	() => [] as Array<Array<Record<string, string>>>,
+);
 
 vi.mock("ldapts", () => ({
 	Client: class {
@@ -67,6 +70,13 @@ vi.mock("ldapts", () => ({
 				paged: options.paged,
 				sizeLimit: options.sizeLimit,
 			});
+			if (employeePages.length) {
+				for (const searchEntries of employeePages) {
+					ldapEvents.push("employee-page");
+					yield { searchEntries };
+				}
+				return;
+			}
 			yield {
 				searchEntries: [
 					{
@@ -280,6 +290,42 @@ describe("LDAP directory boundary", () => {
 			paged: { pageSize: 10 },
 			sizeLimit: 21,
 		});
+	});
+
+	it("returns twenty candidates without reading the next page for broad searches", async () => {
+		const page = (offset: number, count: number) =>
+			Array.from({ length: count }, (_, index) => ({
+				uid: `employee-${offset + index}`,
+				displayName: "Common name",
+			}));
+		employeePages.push(page(0, 10), page(10, 10), page(20, 10));
+		try {
+			const candidates = await new LdapDirectoryAuthenticator(
+				validOptions,
+			).searchEmployees("Common");
+			expect(candidates).toHaveLength(20);
+			expect(candidates[19]?.subject).toBe("employee-19");
+			expect(
+				ldapEvents.filter((event) => event === "employee-page"),
+			).toHaveLength(2);
+			expect(ldapEvents.at(-1)).toBe("unbind");
+		} finally {
+			employeePages.length = 0;
+		}
+	});
+
+	it("still rejects ambiguous employee identities in a bounded page", async () => {
+		employeePages.push([
+			{ uid: "same-id", displayName: "First" },
+			{ uid: "same-id", displayName: "Second" },
+		]);
+		try {
+			await expect(
+				new LdapDirectoryAuthenticator(validOptions).searchEmployees("Common"),
+			).rejects.toThrow("Directory authentication failed");
+		} finally {
+			employeePages.length = 0;
+		}
 	});
 
 	it("does not search employees without a confirmed active-state mapping", async () => {
